@@ -961,13 +961,38 @@ def admin_users():
             return json_resp({"ok":False,"msg":"權限不足"}), 403
         conn = get_db()
         try:
-            rows = conn.execute(
-                "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until "
-                "FROM users ORDER BY id ASC"
-            ).fetchall()
+            now = datetime.now()
+            if actor_role == "super_admin":
+                rows = conn.execute(
+                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until "
+                    "FROM users ORDER BY id ASC"
+                ).fetchall()
+                data = [user_public_payload(r) for r in rows]
+            else:
+                rows = conn.execute(
+                    "SELECT id, username, status, role, blocked_until FROM users ORDER BY id ASC"
+                ).fetchall()
+                data = []
+                for r in rows:
+                    blocked_until = r["blocked_until"]
+                    blocked = False
+                    if blocked_until:
+                        try:
+                            blocked = datetime.fromisoformat(blocked_until) > now
+                        except Exception:
+                            blocked = False
+                    data.append({
+                        "id": r["id"],
+                        "username": r["username"],
+                        "nickname": "",
+                        "real_name": "",
+                        "status": r["status"],
+                        "role": r["role"],
+                        "blocked_until": r["blocked_until"],
+                        "blocked": blocked,
+                    })
         finally:
             conn.close()
-        data = [user_public_payload(r) for r in rows]
         return json_resp({
             "ok": True,
             "users": data,
@@ -1036,6 +1061,8 @@ def admin_users():
             (cur.lastrowid, hash_password(password), now)
         )
         conn.commit()
+        audit("ADMIN_CREATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+              detail=f"target={username}, role={role}")
         return json_resp({"ok":True,"msg":"帳號已建立"})
     finally:
         conn.close()
@@ -1061,6 +1088,8 @@ def admin_user_item(user_id):
                 return json_resp({"ok":False,"msg":"不可刪除最高管理者帳號"}), 403
             conn.execute("DELETE FROM users WHERE id=?", (user_id,))
             conn.commit()
+            audit("ADMIN_DELETE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"target_id={user_id}")
             return json_resp({"ok":True,"msg":"帳號已刪除"})
 
         try:
@@ -1128,6 +1157,8 @@ def admin_user_item(user_id):
             sql = "UPDATE users SET " + ", ".join(updates) + " WHERE id=?"
             conn.execute(sql, params)
             conn.commit()
+        audit("ADMIN_UPDATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+              detail=f"target_id={user_id}")
         return json_resp({"ok":True,"msg":"帳號已更新"})
     finally:
         conn.close()
@@ -1170,11 +1201,15 @@ def admin_user_block(user_id):
         if action == "unblock":
             conn.execute("UPDATE users SET status='active', blocked_until=NULL WHERE id=?", (user_id,))
             conn.commit()
+            audit("ADMIN_UNBLOCK_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"target_id={user_id}")
             return json_resp({"ok":True,"msg":"帳號已解除封鎖"})
 
         blocked_until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
         conn.execute("UPDATE users SET status='inactive', blocked_until=? WHERE id=?", (blocked_until, user_id))
         conn.commit()
+        audit("ADMIN_BLOCK_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+              detail=f"target_id={user_id}, minutes={minutes}")
         return json_resp({"ok":True,"msg":f"帳號已封鎖 {minutes} 分鐘"})
     finally:
         conn.close()
