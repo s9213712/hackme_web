@@ -4,3 +4,9 @@
 {"ts": "2026-04-25T14:09:34.329", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "Werkzeug/3.1.8", "detail": "-"}
 {"ts": "2026-04-25T14:09:50.634", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started"}
 {"ts": "2026-04-25T14:10:12.258", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started"}
+{"ts": "2026-04-25T14:12:20.038", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started"}
+{"ts": "2026-04-25T14:12:20.380", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T14:12:23.931", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T14:31:24.676", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started (normalized schema)"}
+{"ts": "2026-04-25T14:33:19.792", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started (normalized schema)"}
+{"ts": "2026-04-25T15:00:22.846", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started — hardened edition"}

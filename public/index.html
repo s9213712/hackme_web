@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>html_learning — 登入系統</title>
+  <!-- Content Security Policy — strict, no inline scripts -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self';" />
+  <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+  <meta http-equiv="X-Frame-Options" content="DENY" />
   <style>
     /* ── Reset & base ─────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -115,6 +120,33 @@
 
     input:focus { border-color: var(--accent); }
 
+    /* ── Password field with toggle ──────────────────────── */
+    .pw-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .pw-wrap input {
+      padding-right: 2.8rem;
+    }
+
+    .pw-toggle {
+      position: absolute;
+      right: .6rem;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: .2rem;
+      color: var(--muted);
+      transition: color .2s;
+      user-select: none;
+      line-height: 1;
+    }
+
+    .pw-toggle:hover { color: var(--accent); }
+
     .pw-rules {
       font-size: .72rem;
       color: var(--muted);
@@ -195,6 +227,19 @@
       font-size: .72rem;
       color: var(--muted);
     }
+
+    /* ── Spinner ──────────────────────────────────────────── */
+    .spinner {
+      display: none;
+      width: 20px; height: 20px;
+      border: 2.5px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      margin: .6rem auto 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .btn.loading { opacity: .7; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -219,9 +264,13 @@
     </div>
     <div class="field">
       <label>密碼</label>
-      <input type="password" id="li-pw" placeholder="請輸入密碼" autocomplete="current-password" />
+      <div class="pw-wrap">
+        <input type="password" id="li-pw" placeholder="請輸入密碼" autocomplete="current-password" />
+        <button class="pw-toggle" id="li-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+      </div>
     </div>
-    <button class="btn btn-primary" onclick="doLogin()">登入</button>
+    <button class="btn btn-primary" id="li-btn" onclick="doLogin()">登入</button>
+    <div class="spinner" id="li-spinner"></div>
     <div class="msg" id="li-msg"></div>
   </div>
 
@@ -233,7 +282,10 @@
     </div>
     <div class="field">
       <label>密碼</label>
-      <input type="password" id="reg-pw" placeholder="請設定密碼" autocomplete="new-password" />
+      <div class="pw-wrap">
+        <input type="password" id="reg-pw" placeholder="請設定密碼" autocomplete="new-password" />
+        <button class="pw-toggle" id="reg-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+      </div>
       <div class="pw-rules">
         密碼強度要求：<br>
         <span>✓</span> 至少 8 個字元<br>
@@ -242,7 +294,8 @@
         <span>✓</span> 包含符號（!@#$%…）<p style="margin-top:.4rem; color:#ff4f6d" id="reg-pw-hint"></p>
       </div>
     </div>
-    <button class="btn btn-primary" onclick="doRegister()">註冊</button>
+    <button class="btn btn-primary" id="reg-btn" onclick="doRegister()">註冊</button>
+    <div class="spinner" id="reg-spinner"></div>
     <div class="msg" id="reg-msg"></div>
   </div>
 
@@ -261,8 +314,37 @@
 
 <!-- ════════════════════ LOGIC ════════════════════ -->
 <script>
+(function() {
+'use strict';
+
 const API = "/api";
 
+// ── Sanitization (XSS defense — defense in depth, CSP is primary) ─────────────
+function sanitize(str) {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
+
+// ── CSRF token management ─────────────────────────────────────────────────────
+let _csrfToken = null;
+
+async function fetchCsrfToken() {
+  try {
+    const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
+    const json = await res.json();
+    if (json.ok) _csrfToken = json.csrf_token;
+  } catch (_) { _csrfToken = null; }
+}
+
+function getCsrfToken() { return _csrfToken; }
+
+// ── DOM helpers ───────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
 
 function showTab(tab) {
@@ -273,7 +355,40 @@ function showTab(tab) {
   clearMsg();
 }
 
-// ── Password strength checker (visual hint) ──────────────────────────────
+// ── Password visibility toggle ─────────────────────────────────────────────
+function setupPwToggle(inputId, btnId) {
+  const input = $(inputId);
+  const btn   = $(btnId);
+  if (!input || !btn) return;
+
+  btn.addEventListener("mousedown", () => {
+    input.type = "text";
+    btn.textContent = "🙈";
+  });
+  btn.addEventListener("mouseup", () => {
+    input.type = "password";
+    btn.textContent = "👁";
+  });
+  btn.addEventListener("mouseleave", () => {
+    input.type = "password";
+    btn.textContent = "👁";
+  });
+  btn.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    input.type = "text";
+    btn.textContent = "🙈";
+  }, { passive: false });
+  btn.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    input.type = "password";
+    btn.textContent = "👁";
+  }, { passive: false });
+}
+
+setupPwToggle("li-pw", "li-pw-toggle");
+setupPwToggle("reg-pw", "reg-pw-toggle");
+
+// ── Password strength checker ──────────────────────────────────────────────
 $("reg-pw").addEventListener("input", function () {
   const v = this.value;
   const hints = [];
@@ -284,7 +399,7 @@ $("reg-pw").addEventListener("input", function () {
   $("reg-pw-hint").textContent = hints.length ? "❌ " + hints.join(" · ") : "✓ 符合強度要求";
 });
 
-// ── Generic message display ────────────────────────────────────────────────
+// ── Message display ────────────────────────────────────────────────────────────
 function flash(el, text, ok) {
   el.textContent = text;
   el.className = "msg show " + (ok ? "ok" : "err");
@@ -295,60 +410,141 @@ function clearMsg() {
   $("reg-msg").className = "msg";
 }
 
-// ── Login ──────────────────────────────────────────────────────────────────
+// ── Loading state ─────────────────────────────────────────────────────────────
+function setLoading(btnId, spinnerId, on) {
+  const btn = $(btnId);
+  const sp  = $(spinnerId);
+  if (!btn || !sp) return;
+  btn.classList.toggle("loading", on);
+  sp.style.display = on ? "block" : "none";
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
 async function doLogin() {
-  const user = $("li-user").value.trim();
+  const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
   if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
 
-  const res  = await fetch(API + "/login", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ username: user, password: pw })
-  });
-  const json = await res.json();
+  // Ensure CSRF token is fresh before every login
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
 
-  if (json.ok) {
-    $("auth-card").style.display = "none";
-    $("success-screen").classList.add("show");
-  } else {
-    flash($("li-msg"), json.msg || "登入失敗", false);
+  setLoading("li-btn", "li-spinner", true);
+  clearMsg();
+
+  try {
+    const res = await fetch(API + "/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || ""
+      },
+      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf })
+    });
+    const json = await res.json();
+
+    if (json.ok) {
+      // Refresh CSRF token on successful login for subsequent actions
+      _csrfToken = null;
+      $("auth-card").style.display = "none";
+      $("success-screen").classList.add("show");
+    } else {
+      // Re-fetch CSRF token on failure (server may have rotated it)
+      _csrfToken = null;
+      flash($("li-msg"), json.msg || "登入失敗", false);
+    }
+  } catch (e) {
+    flash($("li-msg"), "網路錯誤，請稍後再試", false);
+  } finally {
+    setLoading("li-btn", "li-spinner", false);
   }
 }
 
-// ── Register ──────────────────────────────────────────────────────────────
+// ── Register ─────────────────────────────────────────────────────────────────
 async function doRegister() {
-  const user = $("reg-user").value.trim();
+  const user = sanitize($("reg-user").value.trim());
   const pw   = $("reg-pw").value;
   if (!user) { flash($("reg-msg"), "請填寫帳號", false); return; }
   if (user.length < 3) { flash($("reg-msg"), "帳號至少需要 3 個字元", false); return; }
+  // Username charset enforced server-side, but enforce client-side too
+  if (!/^[a-zA-Z0-9_\-]+$/.test(user)) {
+    flash($("reg-msg"), "帳號只能包含英文、數字、底線、減號", false);
+    return;
+  }
 
-  const res  = await fetch(API + "/register", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ username: user, password: pw })
-  });
-  const json = await res.json();
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
 
-  if (json.ok) {
-    flash($("reg-msg"), "✓ " + json.msg, true);
-    // Switch to login tab after short delay
-    setTimeout(() => { $("reg-pw").value = ""; $("reg-pw-hint").textContent = ""; }, 1500);
-    setTimeout(() => showTab("login"), 2000);
-  } else {
-    flash($("reg-msg"), json.msg || "註冊失敗", false);
+  setLoading("reg-btn", "reg-spinner", true);
+  clearMsg();
+
+  try {
+    const res = await fetch(API + "/register", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || ""
+      },
+      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf })
+    });
+    const json = await res.json();
+
+    if (json.ok) {
+      _csrfToken = null;
+      flash($("reg-msg"), "✓ " + sanitize(json.msg), true);
+      setTimeout(() => { $("reg-pw").value = ""; $("reg-pw-hint").textContent = ""; }, 1500);
+      setTimeout(() => showTab("login"), 2000);
+    } else {
+      _csrfToken = null;
+      flash($("reg-msg"), json.msg || "註冊失敗", false);
+    }
+  } catch (e) {
+    flash($("reg-msg"), "網路錯誤，請稍後再試", false);
+  } finally {
+    setLoading("reg-btn", "reg-spinner", false);
   }
 }
 
-// ── Logout ─────────────────────────────────────────────────────────────────
+// ── Logout ─────────────────────────────────────────────────────────────────────
 async function doLogout() {
-  await fetch(API + "/logout", { method: "POST" });
+  try {
+    await fetch(API + "/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" }
+    });
+  } catch (_) {}
+  _csrfToken = null;
   $("success-screen").classList.remove("show");
   $("auth-card").style.display = "";
   $("li-user").value = "";
   $("li-pw").value   = "";
   clearMsg();
 }
+
+// ── Enter key support ─────────────────────────────────────────────────────────
+$("li-pw").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+$("reg-pw").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doRegister();
+});
+
+// ── Boot: check if already logged in ─────────────────────────────────────────
+(async function init() {
+  try {
+    const res = await fetch(API + "/me", { credentials: "same-origin" });
+    const json = await res.json();
+    if (json.ok) {
+      $("auth-card").style.display = "none";
+      $("success-screen").classList.add("show");
+    }
+  } catch (_) {}
+})();
+
+})();
 </script>
 </body>
 </html>
