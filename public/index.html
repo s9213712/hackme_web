@@ -4,11 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
-  <!-- Content Security Policy — strict, no inline scripts -->
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self';" />
-  <meta http-equiv="X-Content-Type-Options" content="nosniff" />
-  <meta http-equiv="X-Frame-Options" content="DENY" />
+  <!-- Security headers via HTTP (set by server/Talisman) -->
   <style>
     /* ── Reset & base ─────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -400,6 +396,14 @@
       </div>
     </div>
     <div class="field">
+      <label>確認密碼</label>
+      <div class="pw-wrap">
+        <input type="password" id="reg-pw-confirm" placeholder="請再次輸入密碼" autocomplete="new-password" />
+        <button class="pw-toggle" id="reg-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
+      </div>
+      <p style="margin-top:.4rem; color:#ff4f6d" id="reg-pw-confirm-hint"></p>
+    </div>
+    <div class="field">
       <label>暱稱</label>
       <input type="text" id="reg-nickname" placeholder="暱稱" autocomplete="nickname" />
     </div>
@@ -440,63 +444,122 @@
   <button class="btn" id="logout-btn">登出</button>
 
   <div class="admin-wrap" id="admin-wrap">
-    <div class="admin-tools">
-      <div class="mini-title">帳號管理</div>
-      <div class="admin-toolbar">
-        <button class="btn btn-primary" id="admin-refresh">重新整理帳號</button>
-      </div>
-      <table class="user-table" id="user-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>帳號</th>
-            <th>暱稱</th>
-            <th>真實姓名</th>
-            <th>角色</th>
-            <th>狀態</th>
-            <th>行為</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <!-- Tabs -->
+    <div class="tabs" style="margin-bottom:.6rem;">
+      <button class="tab active" id="tab-users">帳號管理</button>
+      <button class="tab" id="tab-audit">審計日誌</button>
+      <button class="tab" id="tab-violations">違規計次</button>
+      <button class="tab" id="tab-settings" style="display:none;">系統設定</button>
     </div>
 
-    <div class="admin-tools" style="margin-top:.9rem;" id="admin-manager-view">
-      <div class="mini-title">管理者操作（暫停/解除暫時封鎖）</div>
-      <p id="manager-help" style="font-size:.78rem; color:var(--muted); margin-bottom:.6rem;">僅最高權限可修改與刪除；管理者可封鎖與解除封鎖。</p>
-      <form id="admin-add-form">
+    <!-- ── 帳號管理 ── -->
+    <div class="form-section active" id="sec-users">
+      <div class="admin-tools">
+        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;">
+          <button class="btn btn-primary" id="admin-refresh">🔄 重新整理</button>
+          <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
+        </div>
+        <table class="user-table" id="user-table">
+          <thead>
+            <tr>
+              <th>ID</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
+              <th>角色</th><th>狀態</th><th>違規</th><th>行為</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="admin-manager-view">
+        <div class="mini-title" style="margin-top:.8rem;">➕ 新增帳號（最高管理者）</div>
+        <form id="admin-add-form">
+          <div class="field"><label>帳號</label><input type="text" id="admin-add-user" placeholder="a-z 0-9 _ -" /></div>
+          <div class="field">
+            <label>密碼</label>
+            <div class="pw-wrap">
+              <input type="password" id="admin-add-pw" placeholder="至少 8 字元" />
+              <button class="pw-toggle" id="admin-add-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>確認密碼</label>
+            <div class="pw-wrap">
+              <input type="password" id="admin-add-pw-confirm" placeholder="請再次輸入密碼" />
+              <button class="pw-toggle" id="admin-add-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
+            </div>
+            <p style="margin-top:.4rem; color:#ff4f6d" id="admin-add-pw-confirm-hint"></p>
+          </div>
+          <div class="field"><label>暱稱</label><input type="text" id="admin-add-nickname" placeholder="暱稱" /></div>
+          <div class="field"><label>真實姓名</label><input type="text" id="admin-add-realname" placeholder="真實姓名" /></div>
+          <div class="field"><label>身分證</label><input type="text" id="admin-add-idno" placeholder="身分證" /></div>
+          <div class="field"><label>生日</label><input type="date" id="admin-add-birthdate" /></div>
+          <div class="field"><label>電話</label><input type="tel" id="admin-add-phone" placeholder="09xx-xxx-xxx" /></div>
+          <div class="admin-toolbar">
+            <button class="btn btn-primary" type="button" id="admin-add-btn">建立帳號</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ── 審計日誌 ── -->
+    <div class="form-section" id="sec-audit">
+      <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <button class="btn btn-primary" id="audit-refresh">🔄 重新整理</button>
+        <span style="font-size:.75rem;color:var(--muted);">共 <span id="audit-total">0</span> 筆</span>
+        <span id="audit-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
+        <button class="btn" id="audit-prev" style="margin-left:auto;">← 上一頁</button>
+        <button class="btn" id="audit-next">下一頁 →</button>
+      </div>
+      <div id="audit-entries" style="max-height:420px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
+    </div>
+
+    <!-- ── 違規計次 ── -->
+    <div class="form-section" id="sec-violations">
+      <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <button class="btn btn-primary" id="violations-refresh">🔄 重新整理</button>
+        <span style="font-size:.75rem;color:var(--muted);">共 <span id="violations-total">0</span> 筆</span>
+        <span id="violations-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
+        <button class="btn" id="violations-prev" style="margin-left:auto;">← 上一頁</button>
+        <button class="btn" id="violations-next">下一頁 →</button>
+      </div>
+      <div id="violation-users" style="max-height:180px;overflow-y:auto;margin-bottom:.6rem;"></div>
+      <div id="violation-entries" style="max-height:320px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
+    </div>
+
+    <!-- ── 系統設定（super_admin only） ── -->
+    <div class="form-section" id="sec-settings">
+      <div class="mini-title">⚙️ 系統參數</div>
+      <form id="settings-form" style="margin-top:.6rem;">
         <div class="field">
-          <label>新增帳號（最高管理者）</label>
-          <input type="text" id="admin-add-user" placeholder="帳號" />
+          <label><input type="checkbox" id="s-allow-register" /> 允許一般用戶註冊</label>
         </div>
         <div class="field">
-          <label>預設密碼</label>
-          <input type="password" id="admin-add-pw" placeholder="至少 8 字元" />
+          <label><input type="checkbox" id="s-require-email" /> 需 email 驗證</label>
         </div>
         <div class="field">
-          <label>暱稱</label>
-          <input type="text" id="admin-add-nickname" placeholder="暱稱" />
+          <label>登入失敗鎖定次數</label>
+          <input type="number" id="s-max-fail" min="1" max="20" />
         </div>
         <div class="field">
-          <label>真實姓名</label>
-          <input type="text" id="admin-add-realname" placeholder="真實姓名" />
+          <label>封鎖時長（分鐘）</label>
+          <input type="number" id="s-block-dur" min="1" max="1440" />
         </div>
         <div class="field">
-          <label>身分證</label>
-          <input type="text" id="admin-add-idno" placeholder="身分證" />
+          <label>Session 有效期（小時）</label>
+          <input type="number" id="s-session-ttl" min="1" max="72" />
         </div>
-        <div class="field">
-          <label>生日</label>
-          <input type="date" id="admin-add-birthdate" />
+        <div class="admin-toolbar" style="margin-top:.6rem;">
+          <button class="btn btn-primary" type="button" id="settings-save-btn">💾 儲存設定</button>
         </div>
-        <div class="field">
-          <label>電話</label>
-          <input type="tel" id="admin-add-phone" placeholder="09xx-xxx-xxx" />
-        </div>
-        <div class="admin-toolbar">
-          <button class="btn btn-primary" type="button" id="admin-add-btn">建立新帳號</button>
-        </div>
+        <div id="settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
       </form>
+      <div class="mini-title" style="margin-top:1.2rem;color:#ff4f6d;">☠️ 危險區</div>
+      <div class="admin-toolbar" style="margin-top:.5rem;">
+        <button class="btn" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
+          🔁 重啟服務器
+        </button>
+        <span style="font-size:.72rem;color:var(--muted);margin-left:.4rem;">（超級管理者專屬）</span>
+      </div>
     </div>
   </div>
 </div>
@@ -624,6 +687,9 @@ function startClock() {
 
 setupPwToggle("li-pw", "li-pw-toggle");
 setupPwToggle("reg-pw", "reg-pw-toggle");
+setupPwToggle("reg-pw-confirm", "reg-pw-confirm-toggle");
+setupPwToggle("admin-add-pw", "admin-add-pw-toggle");
+setupPwToggle("admin-add-pw-confirm", "admin-add-pw-confirm-toggle");
 
 $("reg-pw").addEventListener("input", function () {
   const v = this.value;
@@ -634,6 +700,39 @@ $("reg-pw").addEventListener("input", function () {
   if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(v)) hints.push("需符號");
   $("reg-pw-hint").textContent = hints.length ? "❌ " + hints.join(" · ") : "✓ 符合強度要求";
 });
+function updateRegPwMatchHint() {
+  const pw = $("reg-pw").value;
+  const confirmPw = $("reg-pw-confirm").value;
+  const hintEl = $("reg-pw-confirm-hint");
+  if (!hintEl) return;
+  if (!confirmPw) {
+    hintEl.textContent = "";
+    return;
+  }
+  if (pw !== confirmPw) {
+    hintEl.textContent = "❌ 兩次輸入的密碼不一致";
+    return;
+  }
+  hintEl.textContent = "✓ 密碼一致";
+}
+$("reg-pw-confirm").addEventListener("input", updateRegPwMatchHint);
+
+function updateAdminPwMatchHint() {
+  const pw = $("admin-add-pw").value;
+  const confirmPw = $("admin-add-pw-confirm").value;
+  const hintEl = $("admin-add-pw-confirm-hint");
+  if (!hintEl) return;
+  if (!confirmPw) {
+    hintEl.textContent = "";
+    return;
+  }
+  if (pw !== confirmPw) {
+    hintEl.textContent = "❌ 兩次輸入的密碼不一致";
+    return;
+  }
+  hintEl.textContent = "✓ 密碼一致";
+}
+$("admin-add-pw-confirm").addEventListener("input", updateAdminPwMatchHint);
 
 function setAuthState(json) {
   currentUser = json.username || null;
@@ -652,8 +751,15 @@ function setAuthState(json) {
       adminWrap.classList.remove("show");
     }
   }
-  const addPanel = $("admin-manager-view");
+  const addPanel = $(\"admin-manager-view\");
   if (addPanel) addPanel.style.display = canManageUsers ? "block" : "none";
+
+  // Super admin: show settings tab + system tools
+  const settingsTab = $("tab-settings");
+  if (settingsTab) settingsTab.style.display = currentRole === "super_admin" ? "" : "none";
+  const restartBtn = $("restart-server-btn");
+  if (restartBtn) restartBtn.style.display = currentRole === "super_admin" ? "" : "none";
+
   if (currentRole === "manager" || currentRole === "super_admin") {
     loadUsers();
   }
@@ -680,29 +786,68 @@ function renderUsers() {
   tbody.innerHTML = "";
   for (const u of users) {
     const blocked = u.blocked_until && new Date(u.blocked_until) > new Date();
+    const isBlocked = blocked;
     const actionButtons = [];
     if (currentRole === "manager" || currentRole === "super_admin") {
       if (u.role !== "super_admin") {
         const blockBtn = document.createElement("button");
         blockBtn.className = "btn btn-primary";
         blockBtn.type = "button";
-        blockBtn.textContent = blocked ? "解除封鎖" : "封鎖 30 分鐘";
+        blockBtn.textContent = isBlocked ? "解除封鎖" : "封鎖";
         blockBtn.dataset.userId = String(u.id);
-        blockBtn.dataset.blocked = blocked ? "1" : "0";
-        blockBtn.classList.add("action-toggle-block");
-        blockBtn.addEventListener("click", () => toggleBlock(u.id, blocked));
+        blockBtn.addEventListener("click", () => toggleBlock(u.id, isBlocked));
         actionButtons.push(blockBtn);
+      }
+    }
+    // Promote button (manager/super_admin can promote user→manager)
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.role === "user") {
+      const promBtn = document.createElement("button");
+      promBtn.className = "btn";
+      promBtn.type = "button";
+      promBtn.textContent = "⬆ 升級";
+      promBtn.style.color = "#82b1ff";
+      promBtn.addEventListener("click", () => promoteUser(u.id, u.username));
+      actionButtons.push(promBtn);
+    }
+    // Demote button (super_admin only: manager→user, user→delete)
+    if (currentRole === "super_admin" && (u.role === "manager" || u.role === "user")) {
+      const demBtn = document.createElement("button");
+      demBtn.className = "btn";
+      demBtn.type = "button";
+      demBtn.textContent = "⬇ 降級";
+      demBtn.style.color = "#ff8a80";
+      demBtn.addEventListener("click", () => demoteUser(u.id, u.username, u.role));
+      actionButtons.push(demBtn);
+    }
+    // Violation controls (manager/super_admin)
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.role !== "super_admin") {
+      const violCount = u.violation_count || 0;
+      const violBtn = document.createElement("button");
+      violBtn.className = "btn";
+      violBtn.type = "button";
+      violBtn.textContent = `⚠ ${violCount}`;
+      violBtn.style.color = violCount > 0 ? "#ff4f6d" : "#888";
+      violBtn.addEventListener("click", () => addViolation(u.id));
+      actionButtons.push(violBtn);
+      if (violCount > 0) {
+        const resetBtn = document.createElement("button");
+        resetBtn.className = "btn";
+        resetBtn.type = "button";
+        resetBtn.textContent = "↺";
+        resetBtn.title = "歸零違規";
+        resetBtn.style.color = "#4caf50";
+        resetBtn.addEventListener("click", () => resetViolations(u.id));
+        actionButtons.push(resetBtn);
       }
     }
     if (canManageUsers && u.username !== "root") {
       const editBtn = document.createElement("button");
       editBtn.className = "btn btn-primary";
       editBtn.type = "button";
-      editBtn.textContent = "修改資料";
+      editBtn.textContent = "修改";
       editBtn.addEventListener("click", () => editUser(u.id));
       editBtn.classList.add("action-edit-user");
       actionButtons.push(editBtn);
-
       const delBtn = document.createElement("button");
       delBtn.className = "btn btn-danger";
       delBtn.type = "button";
@@ -712,21 +857,32 @@ function renderUsers() {
       actionButtons.push(delBtn);
     }
     const tr = document.createElement("tr");
+    if (isBlocked) tr.style.opacity = "0.5";
     const actions = document.createElement("div");
     actions.className = "action";
     actionButtons.forEach((btn) => actions.appendChild(btn));
+    const statusLabel = isBlocked ? `<span style="color:#ff4f6d;">封鎖中</span>` : `<span style="color:#4caf50;">正常</span>`;
+    const violDisplay = (u.violation_count || 0) > 0 ? `<span style="color:#ff4f6d;font-weight:bold;">${u.violation_count}</span>` : "0";
     tr.innerHTML = `
       <td>${u.id}</td>
       <td>${sanitize(u.username || "")}</td>
       <td>${sanitize(u.nickname || "")}</td>
       <td>${sanitize(u.real_name || "")}</td>
-      <td>${sanitize(u.role || "")}</td>
-      <td>${sanitize(u.status || "")}</td>
+      <td>${sanitize(u.role_label || u.role || "")}</td>
+      <td>${statusLabel}</td>
+      <td>${violDisplay}</td>
     `;
     const actionCell = document.createElement("td");
     actionCell.appendChild(actions);
     tr.appendChild(actionCell);
     tbody.appendChild(tr);
+  }
+  // Role quota info
+  const managerCount = users.filter(u => u.role === "manager").length;
+  const infoEl = $("role-limit-info");
+  if (infoEl) {
+    infoEl.textContent = `管理者 ${managerCount}/5 · 超級管理者 1/1`;
+    infoEl.style.color = managerCount >= 5 ? "#ff4f6d" : "#888";
   }
 }
 
@@ -793,6 +949,7 @@ async function doLogin() {
 async function doRegister() {
   const user = $("reg-user").value.trim();
   const pw   = $("reg-pw").value;
+  const pwConfirm = $("reg-pw-confirm").value;
   const nickname = $("reg-nickname").value.trim();
   const realName = $("reg-realname").value.trim();
   const idNo = $("reg-idno").value.trim();
@@ -801,6 +958,9 @@ async function doRegister() {
 
   if (!user) { flash($("reg-msg"), "請填寫帳號", false); return; }
   if (user.length < 3) { flash($("reg-msg"), "帳號至少 3 字元", false); return; }
+  if (!pw) { flash($("reg-msg"), "請輸入密碼", false); return; }
+  if (!pwConfirm) { flash($("reg-msg"), "請再次輸入密碼", false); return; }
+  if (pw !== pwConfirm) { flash($("reg-msg"), "兩次密碼輸入不一致", false); return; }
   if (!nickname) { flash($("reg-msg"), "暱稱不可為空", false); return; }
   if (!realName) { flash($("reg-msg"), "真實姓名不可為空", false); return; }
   if (!idNo) { flash($("reg-msg"), "身分證不可為空", false); return; }
@@ -830,6 +990,7 @@ async function doRegister() {
       body: JSON.stringify({
         username: user,
         password: pw,
+        password_confirm: pwConfirm,
         nickname,
         real_name: realName,
         id_number: idNo,
@@ -842,7 +1003,12 @@ async function doRegister() {
     if (json.ok) {
       _csrfToken = null;
       flash($("reg-msg"), "✓ " + sanitize(json.msg), true);
-      setTimeout(() => { $("reg-pw").value = ""; $("reg-pw-hint").textContent = ""; }, 1500);
+      setTimeout(() => {
+        $("reg-pw").value = "";
+        $("reg-pw-confirm").value = "";
+        $("reg-pw-hint").textContent = "";
+        $("reg-pw-confirm-hint").textContent = "";
+      }, 1500);
       setTimeout(() => showTab("login"), 2000);
     } else {
       _csrfToken = null;
@@ -856,12 +1022,17 @@ async function doRegister() {
 }
 
 async function doLogout() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
   try {
-    await fetch(API + "/logout", {
+    const res = await fetch(API + "/logout", {
       method: "POST",
       credentials: "same-origin",
-      headers: { "X-CSRF-Token": getCsrfToken() || "" }
+      headers: { "X-CSRF-Token": csrf || "" }
     });
+    if (!res.ok) {
+      flash($("li-msg"), "登出失敗，請稍後再試", false);
+    }
   } catch (_) {}
   _csrfToken = null;
   resetAuthState();
@@ -937,6 +1108,7 @@ async function createUserByAdmin() {
   const payload = {
     username: sanitize($("admin-add-user").value.trim()),
     password: $("admin-add-pw").value,
+    password_confirm: $("admin-add-pw-confirm").value,
     nickname: $("admin-add-nickname").value.trim(),
     real_name: $("admin-add-realname").value.trim(),
     id_number: $("admin-add-idno").value.trim(),
@@ -945,8 +1117,12 @@ async function createUserByAdmin() {
     role: "user",
     status: "active"
   };
-  if (!payload.username || !payload.password || !payload.nickname || !payload.real_name || !payload.id_number || !payload.birthdate || !payload.phone) {
+  if (!payload.username || !payload.password || !payload.password_confirm || !payload.nickname || !payload.real_name || !payload.id_number || !payload.birthdate || !payload.phone) {
     flash($("li-msg"), "請完整填寫新增欄位", false);
+    return;
+  }
+  if (payload.password !== payload.password_confirm) {
+    flash($("li-msg"), "兩次輸入的密碼不一致", false);
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -959,30 +1135,315 @@ async function createUserByAdmin() {
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
-    ["admin-add-user", "admin-add-pw", "admin-add-nickname", "admin-add-realname", "admin-add-idno", "admin-add-birthdate", "admin-add-phone"]
+    ["admin-add-user", "admin-add-pw", "admin-add-pw-confirm", "admin-add-nickname", "admin-add-realname", "admin-add-idno", "admin-add-birthdate", "admin-add-phone"]
       .forEach((id) => { const el = $(id); if (el) el.value = ""; });
+    const adminAddHint = $("admin-add-pw-confirm-hint");
+    if (adminAddHint) adminAddHint.textContent = "";
     loadUsers();
   } else {
     flash($("li-msg"), json.msg || "建立帳號失敗", false);
   }
 }
 
-function bindUiEvents() {
-  const tabLogin = $("tab-login");
-  const tabRegister = $("tab-register");
-  const liBtn = $("li-btn");
-  const regBtn = $("reg-btn");
-  const logoutBtn = $("logout-btn");
-  const adminRefresh = $("admin-refresh");
-  const adminAddBtn = $("admin-add-btn");
+async function promoteUser(userId, username) {
+  if (!confirm(`確定要將「${username}」升級為管理者？`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users/" + userId + "/promote", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    loadUsers();
+  } else {
+    alert(json.msg || "升級失敗");
+  }
+}
 
-  if (tabLogin) tabLogin.addEventListener("click", () => showTab("login"));
+async function demoteUser(userId, username, currentRole) {
+  const msg = currentRole === "manager"
+    ? `確定要將「${username}」降級為一般用戶？`
+    : `確定要刪除「${username}」（一般用戶，達違規上限）？`;
+  if (!confirm(msg)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users/" + userId + "/demote", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    loadUsers();
+  } else {
+    alert(json.msg || "降級失敗");
+  }
+}
+
+// ── Admin tab switching ─────────────────────────────────────
+let currentTab = "users";
+function switchTab(tab) {
+  currentTab = tab;
+  ["users","audit","violations","settings"].forEach(t => {
+    const sec = $("sec-" + t);
+    if (sec) sec.classList.toggle("active", t === tab);
+  });
+  ["tab-users","tab-audit","tab-violations","tab-settings"].forEach(id => {
+    const btn = $(id);
+    if (btn) btn.classList.toggle("active", id === "tab-" + tab);
+  });
+  if (tab === "audit") loadAudit(0);
+  if (tab === "violations") loadViolations(0);
+  if (tab === "settings") loadSettings();
+}
+
+// ── Audit log ───────────────────────────────────────────────
+let auditPage = 0;
+const AUDIT_PAGE_SIZE = 20;
+
+async function loadAudit(page) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/audit?page=" + page, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  auditPage = page;
+  $("audit-total").textContent = json.total || 0;
+  const integrity = json.integrity;
+  const integEl = $("audit-integrity");
+  if (integEl) {
+    integEl.textContent = integrity === true ? "🔗 鏈完整" : integrity === false ? "⚠️ 鏈已斷！" : "";
+    integEl.style.color = integrity === true ? "#4caf50" : integrity === false ? "#ff4f6d" : "var(--muted)";
+  }
+  const container = $("audit-entries");
+  if (!container) return;
+  if (!json.entries || json.entries.length === 0) {
+    container.innerHTML = "<p style='color:var(--muted);text-align:center;padding:1rem;'>暫無審計記錄</p>";
+    return;
+  }
+  container.innerHTML = json.entries.map(e => {
+    const isObj = typeof e === "object";
+    const ts = isObj ? e.timestamp || "" : "";
+    const action = isObj ? e.action || "" : e;
+    const actor = isObj ? e.actor || "" : "";
+    const detail = isObj && e.details ? JSON.stringify(e.details) : "";
+    const chain = isObj && e._chain_hash ? `<span style="color:#4caf50;">█</span>` : "·";
+    return `<div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
+      <span style="color:#888;">${ts}</span> ${chain}
+      <span style="color:#e0e0e0;">${sanitize(action)}</span>
+      ${actor ? `<span style="color:#82b1ff;"> by ${sanitize(actor)}</span>` : ""}
+      ${detail ? `<span style="color:#888;font-size:.68rem;"> ${sanitize(detail)}</span>` : ""}
+    </div>`;
+  }).join("");
+  $("audit-prev").disabled = page === 0;
+  $("audit-next").disabled = (page + 1) * AUDIT_PAGE_SIZE >= (json.total || 0);
+}
+
+// ── Violations ──────────────────────────────────────────────
+let violationsPage = 0;
+const VIOLATIONS_PAGE_SIZE = 20;
+let violationTargetUser = null;
+
+async function loadViolations(page, username) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const url = username
+    ? API + "/admin/violations?page=" + page + "&username=" + encodeURIComponent(username)
+    : API + "/admin/violations?page=" + page;
+  const res = await fetch(url, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  violationsPage = page;
+  $("violations-total").textContent = json.total || 0;
+  const integEl = $("violations-integrity");
+  if (integEl) {
+    integEl.textContent = json.integrity === true ? "🔗 鏈完整" : json.integrity === false ? "⚠️ 鏈已斷！" : "";
+    integEl.style.color = json.integrity === true ? "#4caf50" : json.integrity === false ? "#ff4f6d" : "var(--muted)";
+  }
+
+  // User pills
+  const usersEl = $("violation-users");
+  if (usersEl) {
+    const pills = (json.users || []).map(u => {
+      const sel = u.username === (username || violationTargetUser) ? "btn-primary" : "";
+      return `<button class="btn ${sel}" style="font-size:.72rem;padding:.2rem .5rem;margin:.1rem;" onclick="loadViolations(0,'${sanitize(u.username)}')">${sanitize(u.username)} (${u.violation_count})</button>`;
+    }).join("");
+    usersEl.innerHTML = "<div style='display:flex;flex-wrap:wrap;gap:.25rem;align-items:center;'>" +
+      `<button class="btn" style="font-size:.72rem;padding:.2rem .5rem;margin:.1rem;" onclick="loadViolations(0,null)">全部</button>` +
+      pills + "</div>";
+    violationTargetUser = username || null;
+  }
+
+  const container = $("violation-entries");
+  if (!container) return;
+  if (!json.entries || json.entries.length === 0) {
+    container.innerHTML = "<p style='color:var(--muted);text-align:center;padding:1rem;'>暫無違規記錄</p>";
+    return;
+  }
+  container.innerHTML = json.entries.map(e => {
+    const isObj = typeof e === "object";
+    const ts = isObj ? e.timestamp || "" : "";
+    const reason = isObj ? e.reason || "" : String(e);
+    const actor = isObj ? e.actor || "" : "";
+    const chain = isObj && e._chain_hash ? `<span style="color:#4caf50;">█</span>` : "·";
+    return `<div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
+      <span style="color:#888;">${ts}</span> ${chain}
+      <span style="color:#ff8a80;">${sanitize(reason)}</span>
+      ${actor ? `<span style="color:#82b1ff;"> by ${sanitize(actor)}</span>` : ""}
+    </div>`;
+  }).join("");
+  $("violations-prev").disabled = page === 0;
+  $("violations-next").disabled = (page + 1) * VIOLATIONS_PAGE_SIZE >= (json.total || 0);
+}
+
+async function addViolation(userId) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const reason = prompt("輸入違規原因：");
+  if (!reason) return;
+  const res = await fetch(API + "/admin/users/" + userId + "/violation", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    loadViolations(0, violationTargetUser);
+    loadUsers();
+  } else {
+    alert(json.msg || "新增違規失敗");
+  }
+}
+
+async function resetViolations(userId) {
+  if (!confirm("確定要歸零該用戶違規次數？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users/" + userId + "/reset-violations", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    loadViolations(0, violationTargetUser);
+    loadUsers();
+  } else {
+    alert(json.msg || "歸零失敗");
+  }
+}
+
+// ── Settings & restart ───────────────────────────────────────
+async function loadSettings() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/settings", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  const s = json.settings || {};
+  if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
+  if ($("s-require-email")) $("s-require-email").checked = !!s.require_email;
+  if ($("s-max-fail")) $("s-max-fail").value = s.max_login_fail || 5;
+  if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
+  if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
+}
+
+async function saveSettings() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    allow_register: !!$("s-allow-register")?.checked,
+    require_email: !!$("s-require-email")?.checked,
+    max_login_fail: parseInt($("s-max-fail")?.value || "5"),
+    block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
+    session_ttl_hours: parseInt($("s-session-ttl")?.value || "24")
+  };
+  const res = await fetch(API + "/admin/settings", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const el = $("settings-msg");
+  if (el) {
+    el.textContent = json.ok ? "✅ 設定已儲存" : (json.msg || "儲存失敗");
+    el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+}
+
+async function restartServer() {
+  if (!confirm("⚠️ 確定要重啟伺服器？所有連線將中斷。")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/restart", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    setTimeout(() => location.reload(), 3000);
+  } else {
+    alert(json.msg || "重啟失敗");
+  }
+}
+
+// ── Bind all UI events ───────────────────────────────────────
+function bindUiEvents() {
+  const tabLogin    = $("tab-login");
+  const tabRegister = $("tab-register");
+  const tabUsers    = $("tab-users");
+  const tabAudit    = $("tab-audit");
+  const tabViol     = $("tab-violations");
+  const tabSettings = $("tab-settings");
+  const liBtn       = $("li-btn");
+  const regBtn      = $("reg-btn");
+  const logoutBtn   = $("logout-btn");
+  const adminRefresh = $("admin-refresh");
+  const adminAddBtn  = $("admin-add-btn");
+  const auditRefresh = $("audit-refresh");
+  const violRefresh  = $("violations-refresh");
+  const settingsSave = $("settings-save-btn");
+  const restartBtn   = $("restart-server-btn");
+
+  if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
-  if (liBtn) liBtn.addEventListener("click", doLogin);
-  if (regBtn) regBtn.addEventListener("click", doRegister);
-  if (logoutBtn) logoutBtn.addEventListener("click", doLogout);
+  if (tabUsers)    tabUsers.addEventListener("click",    () => switchTab("users"));
+  if (tabAudit)    tabAudit.addEventListener("click",    () => switchTab("audit"));
+  if (tabViol)     tabViol.addEventListener("click",     () => switchTab("violations"));
+  if (tabSettings) tabSettings.addEventListener("click", () => switchTab("settings"));
+  if (liBtn)       liBtn.addEventListener("click",        doLogin);
+  if (regBtn)      regBtn.addEventListener("click",       doRegister);
+  if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
-  if (adminAddBtn) adminAddBtn.addEventListener("click", createUserByAdmin);
+  if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
+
+  // Audit pagination
+  if (auditRefresh) auditRefresh.addEventListener("click", () => loadAudit(auditPage));
+  if ($("audit-prev")) $("audit-prev").addEventListener("click", () => loadAudit(Math.max(0, auditPage - 1)));
+  if ($("audit-next")) $("audit-next").addEventListener("click", () => loadAudit(auditPage + 1));
+
+  // Violations
+  if (violRefresh) violRefresh.addEventListener("click", () => loadViolations(violationsPage, violationTargetUser));
+  if ($("violations-prev")) $("violations-prev").addEventListener("click", () => loadViolations(Math.max(0, violationsPage - 1), violationTargetUser));
+  if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
+
+  // Settings
+  if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
 }
 
 $("li-pw").addEventListener("keydown", (e) => {

@@ -11,4 +11,14 @@ server.log
 SECURITY.md
 
 # CSRF secret
+database.db
+database/
+
+# CSRF secret
 .csrfkey
+
+# Runtime data
+*.log
+*.json
+!attack_test/*.md
+!requirements.txt

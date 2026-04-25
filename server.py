@@ -5,7 +5,7 @@ Hardened edition: timing-noise, account-enumeration protection,
 CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys
 from ipaddress import ip_address
 from datetime import datetime, timedelta
 from functools import wraps
@@ -16,24 +16,48 @@ from flask_talisman import Talisman
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-DB_PATH    = os.path.join(BASE_DIR, "database.db")
+DB_PATH    = os.path.join(BASE_DIR, "database", "database.db")
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
-BLOCK_FILE = os.path.join(BASE_DIR, "blocked_ips.json")
-FAIL_FILE  = os.path.join(BASE_DIR, "fail_log.json")
-RATE_FILE  = os.path.join(BASE_DIR, "rate_limit.json")
-AUDIT_FILE = os.path.join(BASE_DIR, "audit.log")
+# ── Hash-chain integrity key (server-side only, not exposed to client) ───────
+# Seed derived from SECRET_KEY so it survives restarts (prevents chain-break on reboot)
+def _get_chain_seed():
+    # Try to read persisted seed
+    seed_file = os.path.join(BASE_DIR, ".chain_seed")
+    if os.path.exists(seed_file):
+        try:
+            with open(seed_file) as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    # First run — generate and persist
+    import secrets as _s
+    seed = _s.token_hex(24)
+    with open(seed_file, "w") as f:
+        f.write(seed)
+    os.chmod(seed_file, 0o600)  # readable only by owner
+    return seed
+
+CHAIN_SEED = _get_chain_seed()
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
 SECRET_KEY = os.environ.get("SESSION_SECRET",
     open(os.path.join(BASE_DIR, ".fkey")).read() if os.path.exists(os.path.join(BASE_DIR, ".fkey")) else secrets.token_hex(32)
 )
 
+_INTEGRITY_KEY = SECRET_KEY.encode()  # HMAC 金鑰（在 SECRET_KEY 之後定義）
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 _audit_lock = threading.Lock()
 
+def _chain_hash(prev_hash, entry_json):
+    """HMAC-SHA256(prev_hash || entry_json)，確保即使內容相同也不同"""
+    return hmac.new(_INTEGRITY_KEY, (prev_hash + entry_json).encode(), "sha256").hexdigest()
+
 def audit(action, ip, user="-", success=False, ua="-", detail="-"):
+    """寫入 secure_audit 表（hash chain）+ 可選 legacy JSON 檔（僅轉移期保留）"""
+    ts = datetime.now().isoformat(timespec="milliseconds")
     entry = {
-        "ts":      datetime.now().isoformat(timespec="milliseconds"),
+        "ts":      ts,
         "action":  action,
         "ip":      ip,
         "user":    user,
@@ -41,13 +65,68 @@ def audit(action, ip, user="-", success=False, ua="-", detail="-"):
         "ua":      ua[:200],
         "detail":  detail,
     }
-    line = json.dumps(entry, ensure_ascii=False)
+    entry_json = json.dumps(entry, ensure_ascii=False)
+
+    conn = get_db()
+    try:
+        # 取得上一筆記錄的 hash
+        prev_row = conn.execute(
+            "SELECT chain_hash FROM secure_audit ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        prev_hash = prev_row["chain_hash"] if prev_row else CHAIN_SEED
+
+        chain_hash = _chain_hash(prev_hash, entry_json)
+
+        conn.execute(
+            "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, chain_hash) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (ts, action, ip, user, 1 if success else 0, ua, detail, chain_hash)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 同步寫入 legacy JSON（allow override；廢除後可刪）
     _audit_lock.acquire()
     try:
-        with open(AUDIT_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with open(os.path.join(BASE_DIR, "audit.log"), "a", encoding="utf-8") as f:
+            f.write(entry_json + "\n")
     finally:
         _audit_lock.release()
+
+def verify_audit_integrity(start_id=None, end_id=None):
+    """驗證 secure_audit 的 hash chain 完整性。回傳 (ok, broken_at_or_None, details)"""
+    conn = get_db()
+    try:
+        if start_id is None:
+            rows = conn.execute(
+                "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
+                "FROM secure_audit ORDER BY id ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
+                "FROM secure_audit WHERE id>=? AND id<=? ORDER BY id ASC",
+                (start_id, end_id or start_id)
+            ).fetchall()
+
+        if not rows:
+            return True, None, "no entries"
+
+        prev_hash = CHAIN_SEED
+        for r in rows:
+            recomputed = _chain_hash(prev_hash,
+                json.dumps({
+                    "ts": r["ts"], "action": r["action"], "ip": r["ip"],
+                    "user": r["user"], "success": bool(r["success"]),
+                    "ua": r["ua"], "detail": r["detail"]
+                }, ensure_ascii=False))
+            if recomputed != r["chain_hash"]:
+                return False, r["id"], f"hash mismatch at id={r['id']} (篡改偵測)"
+            prev_hash = r["chain_hash"]
+        return True, None, f"integrity OK ({len(rows)} entries verified)"
+    finally:
+        conn.close()
 
 # ── JSON helpers ──────────────────────────────────────────────────────────────
 def load_json(path):
@@ -242,60 +321,250 @@ def get_client_ip():
 
 def get_ua(): return request.headers.get("User-Agent","-")[:200]
 
+# ══════════════════════════════════════════════════════════════════════
+#  安全事件追蹤（全部寫入 security_events 表，廢除 JSON 檔）
+# ══════════════════════════════════════════════════════════════════════
+
 def is_ip_blocked(ip):
-    if not IP_BLOCKING_ENABLED:
-        return False
-    data = load_json_with_lock(BLOCK_FILE)
-    entry = data.get(ip)
-    if not entry: return False
-    if datetime.now() < datetime.fromisoformat(entry["until"]): return True
-    del data[ip]; save_json_with_lock(BLOCK_FILE, data); return False
+    """查 security_events 表，回傳是否在封鎖中（root 永遠不通過）"""
+    if ip == "127.0.0.1" or ip == "::1":
+        return False          # localhost 不封鎖
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT detail FROM security_events "
+            "WHERE event_type='ip_block' AND ip_address=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (ip,)
+        ).fetchone()
+        if not row:
+            return False
+        # detail 格式：blocked_until=ISO時間
+        try:
+            until = datetime.fromisoformat(row["detail"].replace("blocked_until=",""))
+            return datetime.now() < until
+        except Exception:
+            return False
+    finally:
+        conn.close()
 
-def block_ip(ip, minutes=10):
-    if not IP_BLOCKING_ENABLED:
+def block_ip(ip, minutes=10, reason="multiple failures"):
+    """寫入 security_events（ip_block），超時後自動不算"""
+    if ip == "127.0.0.1" or ip == "::1":
         return
-    data = load_json_with_lock(BLOCK_FILE)
-    data[ip] = {"until": (datetime.now() + timedelta(minutes=minutes)).isoformat()}
-    save_json_with_lock(BLOCK_FILE, data)
-
-def record_failed_login(ip):
-    now = datetime.now()
-    data = load_json_with_lock(FAIL_FILE)
-    data = {k:v for k,v in data.items() if now < datetime.fromisoformat(v["until"])}
-    rec = data.get(ip, {"count":0})
-    count = rec["count"] + 1
-    data[ip] = {"count": count, "until": (now + timedelta(minutes=10)).isoformat()}
-    save_json_with_lock(FAIL_FILE, data)
-    return count
+    blocked_until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO security_events (event_type, ip_address, detail, created_at) "
+            "VALUES ('ip_block', ?, ?, ?)",
+            (ip, f"blocked_until={blocked_until}", datetime.now().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 def record_login_failure(ip, username="", ua="-", detail="-", lock_on=3):
-    failures = record_failed_login(ip)
+    """寫入 security_events（login_fail），累計超限自動封鎖"""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) "
+            "VALUES ('login_fail', ?, ?, ?, ?)",
+            (ip, username, detail, datetime.now().isoformat())
+        )
+        # 計算最近 N 分鐘內失敗次數
+        since = (datetime.now() - timedelta(minutes=10)).isoformat()
+        count = conn.execute(
+            "SELECT COUNT(*) as c FROM security_events "
+            "WHERE event_type='login_fail' AND ip_address=? AND created_at>=?",
+            (ip, since)
+        ).fetchone()["c"]
+        conn.commit()
+    finally:
+        conn.close()
+
     audit("LOGIN_FAIL", ip, username, ua=ua, detail=detail)
-    if failures >= lock_on and IP_BLOCKING_ENABLED:
-        block_ip(ip, 10)
-        audit("LOGIN_IP_BLOCKED", ip, username, ua=ua, detail="3 failures → 10 min block")
-    return failures
+
+    if count >= lock_on and IP_BLOCKING_ENABLED:
+        block_ip(ip, 10, f"{count} failures → 10 min block")
+        audit("LOGIN_IP_BLOCKED", ip, username, ua=ua,
+              detail=f"{count} failures → 10 min block")
+    return count
 
 def clear_failed_logins(ip):
-    data = load_json_with_lock(FAIL_FILE); data.pop(ip, None); save_json_with_lock(FAIL_FILE, data)
+    """清除該 IP 的失敗記錄（登入成功後呼叫）"""
+    conn = get_db()
+    try:
+        conn.execute(
+            "DELETE FROM security_events WHERE event_type='login_fail' AND ip_address=?",
+            (ip,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 def is_rate_limited(ip, max_req=30, window_sec=60):
-    now = datetime.now()
-    data = load_json_with_lock(RATE_FILE)
-    data = {k:v for k,v in data.items()
-            if now - datetime.fromisoformat(v["window_start"]) < timedelta(seconds=window_sec)}
-    entry = data.get(ip)
-    if not entry:
-        data[ip] = {"count":1, "window_start": now.isoformat()}
-        save_json_with_lock(RATE_FILE, data); return False, {"count":1,"limit":max_req}
-    count = entry["count"] + 1
-    entry["count"] = count
-    data[ip] = entry
-    save_json_with_lock(RATE_FILE, data)
-    if count > max_req: return True, {"count":count,"limit":max_req}
-    return False, {"count":count,"limit":max_req}
+    """寫入 security_events（rate_limit），計算視窗內次數"""
+    conn = get_db()
+    try:
+        since = (datetime.now() - timedelta(seconds=window_sec)).isoformat()
+        conn.execute(
+            "INSERT INTO security_events (event_type, ip_address, detail, created_at) "
+            "VALUES ('rate_limit', ?, ?, ?)",
+            (ip, f"window={window_sec}s", datetime.now().isoformat())
+        )
+        count = conn.execute(
+            "SELECT COUNT(*) as c FROM security_events "
+            "WHERE event_type='rate_limit' AND ip_address=? AND created_at>=?",
+            (ip, since)
+        ).fetchone()["c"]
+        conn.commit()
+        if count > max_req:
+            return True, {"count": count, "limit": max_req}
+        return False, {"count": count, "limit": max_req}
+    finally:
+        conn.close()
 
-# ── Constant-time delay (anti-timing-attack) ─────────────────────────────────
+def record_403_access(ip, path, username="-"):
+    """403 未授權存取寫入 security_events（可觸發違規計次）"""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) "
+            "VALUES ('403_access', ?, ?, ?, ?)",
+            (ip, username, f"path={path}", datetime.now().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+# ══════════════════════════════════════════════════════════════════════
+#  防竄改違規計次（hash chain）
+# ══════════════════════════════════════════════════════════════════════
+
+def _violation_chain_hash(prev_hash, entry_json):
+    return hmac.new(_INTEGRITY_KEY, (prev_hash + entry_json).encode(), "sha256").hexdigest()
+
+def secure_add_violation(user_id, username, role, points, reason, triggered_by, actor_username):
+    """
+    寫入 secure_violations（hash chain）。
+    回傳 (action, msg, new_count)。
+    不在這裡自動刪除/降級——由呼叫端處理。
+    """
+    ts = datetime.now().isoformat(timespec="milliseconds")
+    entry = {
+        "user_id": user_id, "username": username, "points": points,
+        "reason": reason, "triggered_by": triggered_by,
+        "actor_username": actor_username, "ts": ts,
+    }
+    entry_json = json.dumps(entry, ensure_ascii=False)
+
+    conn = get_db()
+    try:
+        prev_row = conn.execute(
+            "SELECT entry_hash FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (user_id,)
+        ).fetchone()
+        prev_hash = prev_row["entry_hash"] if prev_row else CHAIN_SEED
+
+        entry_hash  = _violation_chain_hash(prev_hash, entry_json)
+
+        conn.execute(
+            "INSERT INTO secure_violations "
+            "(user_id, username, points, reason, triggered_by, actor_username, created_at, prev_hash, entry_hash) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (user_id, username, points, reason, triggered_by, actor_username, ts, prev_hash, entry_hash)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 更新 users.violation_count
+    conn2 = get_db()
+    try:
+        new_count = conn2.execute(
+            "UPDATE users SET violation_count = violation_count + ? WHERE id = ? RETURNING violation_count",
+            (points, user_id)
+        ).fetchone()["violation_count"]
+        conn2.commit()
+    finally:
+        conn2.close()
+
+    return entry_hash, new_count
+
+def verify_violation_integrity(user_id):
+    """驗證某用戶的 violation chain。回傳 (ok, broken_at_or_None, details)"""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, username, points, reason, triggered_by, actor_username, created_at, prev_hash, entry_hash "
+            "FROM secure_violations WHERE user_id=? ORDER BY id ASC",
+            (user_id,)
+        ).fetchall()
+        if not rows:
+            return True, None, "no entries"
+
+        prev_hash = CHAIN_SEED
+        for r in rows:
+            recomputed = _violation_chain_hash(prev_hash,
+                json.dumps({
+                    "user_id": r["user_id"], "username": r["username"],
+                    "points": r["points"], "reason": r["reason"],
+                    "triggered_by": r["triggered_by"],
+                    "actor_username": r["actor_username"], "ts": r["created_at"]
+                }, ensure_ascii=False))
+            if recomputed != r["entry_hash"]:
+                return False, r["id"], f"篡改偵測 at id={r['id']}"
+            prev_hash = r["entry_hash"]
+        return True, None, f"integrity OK ({len(rows)} records verified)"
+    finally:
+        conn.close()
+
+# ══════════════════════════════════════════════════════════════════════
+#  自動違規觸發整合
+# ══════════════════════════════════════════════════════════════════════
+
+def check_and_apply_auto_violations(user_id, username, role, actor_username="system"):
+    """
+    檢查是否觸發自動違規。
+    傳入：user_id, username, role, actor（通常是 'system'）
+    回傳：(triggered, reason, new_total) 或 (False, None, current_count)
+    """
+    settings = SYSTEM_SETTINGS   # 全域
+    triggered = False
+    reason = None
+
+    # 1. 登入失敗超限觸發（由 record_login_failure 已在 security_events 寫log，
+    #    這裡只檢查累計次數）
+    if settings.get("login_violation_enabled", True):
+        threshold = settings.get("max_login_fails_for_violation", 5)
+        conn = get_db()
+        try:
+            since = (datetime.now() - timedelta(hours=1)).isoformat()
+            fail_count = conn.execute(
+                "SELECT COUNT(*) as c FROM security_events "
+                "WHERE event_type='login_fail' AND target_user=? AND created_at>=?",
+                (username, since)
+            ).fetchone()["c"]
+            # 每 threshold 次失敗計 1 點
+            if fail_count >= threshold:
+                points = fail_count // threshold
+                entry_hash, new_total = secure_add_violation(
+                    user_id, username, role, points,
+                    f"auto: 登入失敗 {fail_count} 次（閾值 {threshold}）",
+                    "system", actor_username
+                )
+                triggered = True
+                reason = f"登入失敗 {fail_count} 次 → +{points} 點"
+        finally:
+            conn.close()
+
+    return triggered, reason, None
+
+# ══════════════════════════════════════════════════════════════════════
+#  Constant-time delay (anti-timing-attack)
+# ══════════════════════════════════════════════════════════════════════
 MIN_DELAY = 0.25   # seconds — minimum to obscure real verify time
 MAX_DELAY = 0.90   # seconds — random extra delay
 
@@ -408,6 +677,26 @@ def require_csrf(f):
         return f(*args, **kwargs)
     return decorated
 
+def require_csrf_safe(f):
+    """Like @require_csrf but does NOT delete the token — safe for GET read-only endpoints.
+    Verifies the token is valid for the authenticated user, then leaves it intact so
+    the browser can reuse it for subsequent requests in the same session.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        csrf_tok = request.headers.get("X-CSRF-Token", "") or ""
+        if not isinstance(csrf_tok, str):
+            csrf_tok = ""
+        tok = request.cookies.get("session_token")
+        user = db_get_user_from_token(tok) if tok else None
+        if not user:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not verify_csrf_token(csrf_tok, user):
+            return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+        # NOTE: token is intentionally NOT deleted — safe for read-only GET
+        return f(*args, **kwargs)
+    return decorated
+
 # ── Password validation ────────────────────────────────────────────────────────
 PW_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]).{8,128}$")
 
@@ -440,6 +729,40 @@ ROLE_LABEL      = {
 }
 MAX_MANAGERS    = 5
 MAX_VIOLATIONS  = {"manager": 3, "user": 5}
+MAX_LOGIN_FAILS_FOR_VIOLATION = 5  # 登入失敗幾次後計點
+
+# ── System settings (可被超級管理者修改) ───────────────────────────────────
+SETTINGS_FILE = os.path.join(BASE_DIR, "system_settings.json")
+
+DEFAULT_SETTINGS = {
+    "max_login_fails_for_violation": 5,
+    "login_violation_enabled": True,
+    "rate_limit_violation_enabled": True,
+    "maintenance_mode": False,
+}
+
+def load_settings():
+    if not os.path.exists(SETTINGS_FILE):
+        save_settings(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS.copy()
+    try:
+        with open(SETTINGS_FILE) as f:
+            return {**DEFAULT_SETTINGS, **json.load(f)}
+    except Exception:
+        return DEFAULT_SETTINGS.copy()
+
+def save_settings(data):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+SYSTEM_SETTINGS = load_settings()
+
+# ── Server restart helper ────────────────────────────────────────────────────
+def restart_server():
+    """Send SIGTERM to this process — let the start-script handle restart."""
+    audit("SERVER_RESTART_REQUESTED", get_client_ip(), detail="graceful restart initiated")
+    os.kill(os.getpid(), signal.SIGTERM)
+
 
 def role_rank(role):
     return ROLE_RANK.get(role or "user", 0)
@@ -455,39 +778,36 @@ def count_role(role):
     finally:
         conn.close()
 
-def add_violation(user_id, username, role):
-    """增加違規計點，超過閾值自動降級/刪除。回傳 (action_taken, msg)"""
+def add_violation(user_id, username, role, points=1, reason="手動計點", triggered_by="super_admin", actor_username="admin"):
+    """
+    增加違規計點（寫入 secure_violations hash-chain），
+    超過閾值自動降級 / 刪除。回傳 (action_taken, msg, new_count)。
+    """
+    # 先寫入 secure_violations（會更新 users.violation_count）
+    entry_hash, new_count = secure_add_violation(
+        user_id, username, role, points, reason, triggered_by, actor_username
+    )
+
     conn = get_db()
     try:
-        target = conn.execute(
-            "SELECT id, username, role, violation_count FROM users WHERE id=?",
-            (user_id,)
-        ).fetchone()
-        if not target:
-            return None, "找不到帳號"
-        threshold = VIOLATION_THRESHOLDS.get(target["role"], 5)
-        new_count = target["violation_count"] + 1
-        conn.execute(
-            "UPDATE users SET violation_count=? WHERE id=?",
-            (new_count, user_id)
-        )
-        conn.commit()
+        threshold = MAX_VIOLATIONS.get(role, 5)
         if new_count >= threshold:
-            if target["role"] == "manager":
-                # 管理者降為一般用戶
-                conn.execute("UPDATE users SET role='user', violation_count=0 WHERE id=?", (user_id,))
+            if role == "manager":
+                conn.execute(
+                    "UPDATE users SET role='user', violation_count=0 WHERE id=?",
+                    (user_id,)
+                )
                 conn.commit()
                 audit("MANAGER_DEMOTED", get_client_ip(), user="system",
-                      detail=f"user_id={user_id} violated={new_count}")
-                return "demoted", f"管理者違規 {new_count} 次，已降級為一般用戶"
-            elif target["role"] == "user":
-                # 一般用戶刪除
+                      detail=f"user_id={user_id} violated={new_count} (secure_violations hash={entry_hash[:16]}...)")
+                return "demoted", f"管理者違規 {new_count} 次，已降級為一般用戶", new_count
+            elif role == "user":
                 audit("USER_DELETED_VIOLATION", get_client_ip(), user="system",
-                      detail=f"user_id={user_id} violated={new_count}")
+                      detail=f"user_id={user_id} violated={new_count} (secure_violations hash={entry_hash[:16]}...)")
                 conn.execute("DELETE FROM users WHERE id=?", (user_id,))
                 conn.commit()
-                return "deleted", f"一般用戶違規 {new_count} 次，帳號已刪除"
-        return "counted", f"違規計點 +1（{new_count}/{threshold}）"
+                return "deleted", f"一般用戶違規 {new_count} 次，帳號已刪除", new_count
+        return "counted", f"違規計點 +{points}（{new_count}/{threshold}）", new_count
     finally:
         conn.close()
 
@@ -556,7 +876,7 @@ def user_public_payload(row):
         "role": row["role"],
         "role_label": ROLE_LABEL.get(row["role"], row["role"]),
         "blocked_until": row["blocked_until"],
-        "violation_count": row.get("violation_count") or 0,
+        "violation_count": dict(row).get("violation_count") or 0,
     }
 
 def ensure_user_columns(conn):
@@ -627,6 +947,52 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    ON login_attempts(ip_address);
         CREATE INDEX IF NOT EXISTS idx_login_attempts_time  ON login_attempts(attempted_at);
         CREATE INDEX IF NOT EXISTS idx_csrf_token_hash      ON csrf_tokens(token_hash);
+
+        /* ── 防竄改審計日誌（hash chain）─── */
+        CREATE TABLE IF NOT EXISTS secure_audit (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT    NOT NULL,
+            action      TEXT    NOT NULL,
+            ip          TEXT,
+            user        TEXT,
+            success     INTEGER NOT NULL DEFAULT 0,
+            ua          TEXT,
+            detail      TEXT,
+            chain_hash  TEXT    NOT NULL   /* SHA256HMAC(prev_hash || entry_json) */
+        );
+        CREATE INDEX IF NOT EXISTS idx_secure_audit_ts    ON secure_audit(ts);
+        CREATE INDEX IF NOT EXISTS idx_secure_audit_action ON secure_audit(action);
+        CREATE INDEX IF NOT EXISTS idx_secure_audit_user   ON secure_audit(user);
+
+        /* ── 防竄改違規計次（hash chain）─── */
+        CREATE TABLE IF NOT EXISTS secure_violations (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            username       TEXT    NOT NULL,
+            points         INTEGER NOT NULL DEFAULT 1,
+            reason         TEXT    NOT NULL,
+            triggered_by   TEXT    NOT NULL,   /* 'system' | 'manager' | 'super_admin' */
+            actor_username TEXT    NOT NULL,   /* 操作者 */
+            created_at     TEXT    NOT NULL,
+            prev_hash      TEXT    NOT NULL,   /* 上一筆記錄的 chain_hash */
+            entry_hash     TEXT    NOT NULL    /* 本筆記錄的 hash */
+        );
+        CREATE INDEX IF NOT EXISTS idx_sec_viol_user   ON secure_violations(user_id);
+        CREATE INDEX IF NOT EXISTS idx_sec_viol_reason  ON secure_violations(reason);
+        CREATE INDEX IF NOT EXISTS idx_sec_viol_actor  ON secure_violations(actor_username);
+
+        /* ── 安全事件追蹤（廢除 blocked_ips.json / fail_log.json / rate_limit.json）─── */
+        CREATE TABLE IF NOT EXISTS security_events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type   TEXT    NOT NULL,   /* 'login_fail' | 'ip_block' | 'rate_limit' | '403_access' */
+            ip_address   TEXT    NOT NULL,
+            target_user  TEXT,
+            detail       TEXT,
+            created_at   TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
+        CREATE INDEX IF NOT EXISTS idx_sec_event_type  ON security_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_sec_event_time  ON security_events(created_at);
     """)
 
     ensure_user_columns(conn)
@@ -791,7 +1157,7 @@ def get_csrf_token():
     if not user:
         return json_resp({"ok":False,"msg":"未登入"}), 401
     token = make_csrf_token()
-    store_csrf_token(token, user)
+    store_csrf_token(token, user["username"])
     return json_resp({"ok":True,"csrf_token":token})
 
 @app.route("/api/register", methods=["POST"])
@@ -820,6 +1186,7 @@ def register():
 
     username = normalize_text(data.get("username"))
     password = data.get("password","") if isinstance(data.get("password"), str) else ""
+    password_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
     nickname = normalize_text(data.get("nickname"))
     real_name = normalize_text(data.get("real_name"))
     id_number = normalize_text(data.get("id_number"))
@@ -842,6 +1209,8 @@ def register():
         return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
     if not validate_phone(phone):
         return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
+    if password != password_confirm:
+        return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400
 
     ok, msg = validate_password(password)
     if not ok:
@@ -1027,9 +1396,9 @@ def api_audit():
     tok = request.cookies.get("session_token")
     user = db_get_user_from_token(tok) if tok else None
     if not user: return json_resp({"ok":False,"msg":"未授權"}), 401
-    if role_rank(db_get_user_role(user) or "user") < role_rank("super_admin"):
-        audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-admin attempted audit access")
-        return json_resp({"ok":False,"msg":"需要最高管理者權限"}), 403
+    if role_rank(db_get_user_role(user) or "user") < role_rank("manager"):
+        audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-manager attempted audit access")
+        return json_resp({"ok":False,"msg":"需要管理者或最高管理者權限"}), 403
 
     conn = get_db()
     try:
@@ -1053,7 +1422,7 @@ def api_audit():
     return json_resp({"ok":True,"entries":entries})
 
 @app.route("/api/admin/users", methods=["GET","POST"])
-@require_csrf
+@require_csrf_safe
 def admin_users():
     actor = get_current_user_ctx()
     if not actor:
@@ -1122,6 +1491,7 @@ def admin_users():
 
     username = normalize_text(data.get("username"))
     password = data.get("password", "") if isinstance(data.get("password"), str) else ""
+    password_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
     nickname = normalize_text(data.get("nickname"))
     real_name = normalize_text(data.get("real_name"))
     id_number = normalize_text(data.get("id_number"))
@@ -1150,10 +1520,19 @@ def admin_users():
         return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
     if not validate_phone(phone):
         return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
+    if password != password_confirm:
+        return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400
 
-    ok, msg = validate_password(password)
-    if not ok:
-        return json_resp({"ok":False,"msg":msg}), 400
+    # 超級管理者可指定任意密碼（繞過複雜度規則，但仍截斷長度）
+    is_super = actor_role == "super_admin"
+    if password:
+        password = password[:128]  # 截斷防止超長密碼
+        if not is_super:
+            ok, msg = validate_password(password)
+            if not ok:
+                return json_resp({"ok":False,"msg":msg}), 400
+    else:
+        return json_resp({"ok":False,"msg":"新建帳號必須指定密碼"}), 400
 
     conn = get_db()
     try:
@@ -1250,12 +1629,14 @@ def admin_user_item(user_id):
             updates.append("role=?")
             params.append(val)
         if "password" in data and isinstance(data["password"], str) and data["password"]:
-            ok, msg = validate_password(data["password"])
-            if not ok:
-                return json_resp({"ok":False,"msg":msg}), 400
+            pw = data["password"][:128]  # 截斷防止超長密碼
+            if actor_role != "super_admin":
+                ok, msg = validate_password(pw)
+                if not ok:
+                    return json_resp({"ok":False,"msg":msg}), 400
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-                (user_id, hash_password(data["password"]), datetime.now().isoformat())
+                (user_id, hash_password(pw), datetime.now().isoformat())
             )
         if "username" in data:
             return json_resp({"ok":False,"msg":"不允許變更帳號名稱"}), 400
@@ -1417,9 +1798,13 @@ def admin_user_violation(user_id):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(force=True) or {}
     except:
         return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+
+    points = max(1, int(data.get("points", 1)))
+    reason = str(data.get("reason", "手動計點"))[:200]
+    triggered_by = "super_admin" if actor_role == "super_admin" else "manager"
 
     conn = get_db()
     try:
@@ -1430,21 +1815,125 @@ def admin_user_violation(user_id):
             return json_resp({"ok":False,"msg":"找不到帳號"}), 404
         if target["username"] == "root":
             return json_resp({"ok":False,"msg":"無法對最高管理者計點"}), 403
-
-        # 管理者只能對一般用戶計點
         if actor_role == "manager" and target["role"] != "user":
             return json_resp({"ok":False,"msg":"無權對此角色計點"}), 403
 
-        action, msg = add_violation(user_id, target["username"], target["role"])
+        action, msg, new_count = add_violation(
+            user_id, target["username"], target["role"],
+            points=points, reason=reason,
+            triggered_by=triggered_by, actor_username=actor["username"]
+        )
         audit("VIOLATION_ADDED", get_client_ip(), user=actor["username"],
-              detail=f"target_id={user_id} action={action} by={'admin' if actor_role=='super_admin' else 'manager'}")
-        return json_resp({"ok":True,"msg":msg})
+              detail=f"target_id={user_id} action={action} points={points} reason={reason}")
+        return json_resp({"ok":True,"msg":msg,"new_count":new_count})
+    finally:
+        conn.close()
+
+# ── 查詢所有違規記錄（可驗證 integrity）──────────────────────────────────────
+@app.route("/api/admin/violations", methods=["GET"])
+@require_csrf_safe
+def admin_violations():
+    """列出所有用戶的最新違規狀態 + integrity 驗證結果"""
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("manager"):
+        return json_resp({"ok":False,"msg":"權限不足"}), 403
+
+    page  = abs(int(request.args.get("page",  1)))
+    limit = min(abs(int(request.args.get("limit", 50))), 200)
+    offset = (page - 1) * limit
+    username_filter = request.args.get("username", "").strip() or None
+
+    conn = get_db()
+    try:
+        # 用戶清單（含 violation_count）
+        base_query = "SELECT id, username, role, violation_count FROM users WHERE username<>'root' "
+        if username_filter:
+            base_query += "AND username=? "
+            count_query = "SELECT COUNT(*) as c FROM users WHERE username<>'root' AND username=? "
+            users_rows = conn.execute(base_query + "ORDER BY id ASC LIMIT ? OFFSET ?",
+                                      (username_filter, limit, offset)).fetchall()
+            total = conn.execute(count_query, (username_filter,)).fetchone()["c"]
+        else:
+            base_query += "ORDER BY id ASC LIMIT ? OFFSET ?"
+            count_query = "SELECT COUNT(*) as c FROM users WHERE username<>'root' "
+            users_rows = conn.execute(base_query, (limit, offset)).fetchall()
+            total = conn.execute(count_query).fetchone()["c"]
+
+        result = []
+        for u in users_rows:
+            uid = u["id"]
+            uname = u["username"]
+            ok, broken_at, details = verify_violation_integrity(uid)
+            last = conn.execute(
+                "SELECT entry_hash, created_at FROM secure_violations "
+                "WHERE user_id=? ORDER BY id DESC LIMIT 1",
+                (uid,)
+            ).fetchone()
+            result.append({
+                "user_id":         uid,
+                "username":        uname,
+                "role":            u["role"],
+                "violation_count": u["violation_count"],
+                "integrity": {
+                    "ok":         ok,
+                    "broken_at":  broken_at,
+                    "details":    details,
+                    "latest_hash": last["entry_hash"][:24] + "..." if last else None,
+                    "latest_ts":  last["created_at"] if last else None,
+                }
+            })
+
+        # 整體 audit chain integrity（用於顯示）
+        audit_ok, audit_broken, audit_details = verify_audit_integrity()
+
+        return json_resp({
+            "ok":      True,
+            "entries": result,
+            "total":   total,
+            "page":    page,
+            "limit":   limit,
+            "users":   [{"username": u["username"], "violation_count": u["violation_count"]} for u in
+                        conn.execute("SELECT username, violation_count FROM users WHERE username<>'root' ORDER BY id ASC").fetchall()],
+            "integrity": {
+                "ok":        audit_ok,
+                "broken_at": audit_broken,
+                "details":   audit_details,
+            }
+        })
+    finally:
+        conn.close()
+
+# ── 重置單一用戶違規計次（super_admin only）────────────────────────────────────
+@app.route("/api/admin/users/<int:user_id>/reset-violations", methods=["POST"])
+@require_csrf
+def admin_reset_violations(user_id):
+    """超級管理者將用戶違規歸零"""
+    actor = get_current_user_ctx()
+    if not actor or actor["username"] != "root":
+        return json_resp({"ok":False,"msg":"只有最高管理者可執行此操作"}), 403
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, role, violation_count FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if not target:
+            return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+
+        conn.execute("UPDATE users SET violation_count=0 WHERE id=?", (user_id,))
+        conn.commit()
+        audit("VIOLATIONS_RESET", get_client_ip(), user=actor["username"],
+              detail=f"target_id={user_id} previous_count={target['violation_count']}")
+        return json_resp({"ok":True,"msg":f"已重置 {target['username']} 的違規計次"})
     finally:
         conn.close()
 
 # ── 審計日誌（manager + super_admin 皆可檢視）────────────────────────────────
 @app.route("/api/admin/audit", methods=["GET"])
-@require_csrf
+@require_csrf_safe
 def admin_audit():
     actor = get_current_user_ctx()
     if not actor:
@@ -1453,30 +1942,50 @@ def admin_audit():
     if role_rank(actor_role) < role_rank("manager"):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
-    page = abs(int(request.args.get("page", 1)))
+    page  = abs(int(request.args.get("page",  1)))
     limit = min(abs(int(request.args.get("limit", 50))), 200)
     offset = (page - 1) * limit
 
-    entries = []
-    total = 0
-    if os.path.exists(AUDIT_FILE):
-        try:
-            with open(AUDIT_FILE, encoding="utf-8") as f:
-                all_lines = f.readlines()
-            total = len(all_lines)
-            for line in reversed(all_lines[offset:offset+limit]):
-                try:
-                    entries.append(json.loads(line.strip()))
-                except:
-                    continue
-        except Exception:
-            pass
+    # 讀取 secure_audit 表（hash chain）
+    conn = get_db()
+    try:
+        total = conn.execute("SELECT COUNT(*) as c FROM secure_audit").fetchone()["c"]
+        rows  = conn.execute(
+            "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
+            "FROM secure_audit ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+        entries = []
+        for r in rows:
+            entries.append({
+                "id":        r["id"],
+                "ts":        r["ts"],
+                "action":    r["action"],
+                "ip":        r["ip"],
+                "user":      r["user"],
+                "success":   bool(r["success"]),
+                "ua":        r["ua"],
+                "detail":    r["detail"],
+                "chain_hash": r["chain_hash"][:32] + "...",  # 只顯示前 32 字符
+            })
 
-    return json_resp({"ok":True,"entries":entries,"total":total,"page":page,"limit":limit})
+        # Integrity 驗證
+        ok, broken_at, details = verify_audit_integrity()
+
+        return json_resp({
+            "ok": True,
+            "entries": entries,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "integrity": {"ok": ok, "broken_at": broken_at, "details": details}
+        })
+    finally:
+        conn.close()
 
 # ── 系統參數（超級管理者 only）───────────────────────────────────────────────
 @app.route("/api/admin/settings", methods=["GET","PUT"])
-@require_csrf
+@require_csrf_safe
 def admin_settings():
     actor = get_current_user_ctx()
     if not actor:
@@ -1571,6 +2080,6 @@ if __name__ == "__main__":
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
     print(f"\n🌐  hackme_web server running at http://localhost:5000")
     print(f"    Default credentials: root / root")
-    print(f"    Audit log: {AUDIT_FILE}")
+    print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
