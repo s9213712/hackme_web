@@ -188,7 +188,7 @@ def hash_token(token):
 # ── Trusted proxies (prevent X-Forwarded-For spoofing) ───────────────────────
 TRUSTED_PROXY_IPS = {"127.0.0.1", "::1", "192.168.18.18"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
-IP_BLOCKING_ENABLED = False
+IP_BLOCKING_ENABLED = os.environ.get("IP_BLOCKING_ENABLED", "false").strip().lower() in {"1", "true", "on", "yes"}
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
 CSRF_SECRET_KEY = os.environ.get("CSRF_SECRET_KEY",
