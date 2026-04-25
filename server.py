@@ -69,6 +69,10 @@ def hash_password(pw):    return _hasher.hash(pw)
 def verify_password(h, p):
     try:    return _hasher.verify(h, p)
     except argon2.exceptions.VerifyMismatch: return False
+    except argon2.exceptions.VerificationError: return False
+    except argon2.exceptions.InvalidHash: return False
+    except (argon2.exceptions.DecodeError, ValueError, TypeError): return False
+    except Exception: return False
 
 # ── Fernet (session tokens) ───────────────────────────────────────────────────
 def _get_fernet_key():
@@ -104,9 +108,20 @@ def hash_token(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 # ── Security helpers ────────────────────────────────────────────────────────────
+# ── Trusted proxies (prevent X-Forwarded-For spoofing) ───────────────────────
+TRUSTED_PROXY_IPS = {"127.0.0.1", "::1", "192.168.18.18"}
+UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
+
 def get_client_ip():
-    if request.headers.get("X-Forwarded-For"):
-        return request.headers.get("X-Forwarded-For").split(",")[0].strip()
+    # Only trust X-Forwarded-For when the direct connection is from a trusted proxy
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        # Check that the immediate upstream is a trusted proxy
+        # In practice, your reverse proxy/Nginx sets X-Forwarded-For from the real client
+        # We only use X-FF when the direct requestor is in our trusted list
+        if request.remote_addr in TRUSTED_PROXY_IPS:
+            return xff.split(",")[0].strip()
+        # Direct connection from untrusted IP — ignore X-FF and use real remote_addr
     return request.remote_addr or "0.0.0.0"
 
 def get_ua(): return request.headers.get("User-Agent","-")[:200]
@@ -203,6 +218,40 @@ def verify_csrf_token(token, username):
     finally:
         conn.close()
 
+# ── CSRF require decorator ─────────────────────────────────────────────────────
+def require_csrf(f):
+    """Decorator: verify CSRF token from X-CSRF-Token header or body csrf_token field.
+    For login (no session): validates against __public__ placeholder.
+    For other routes: validates against the authenticated username.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Extract CSRF token from header (primary) or cookie (fallback)
+        csrf_tok = request.headers.get("X-CSRF-Token", "")
+        if not csrf_tok:
+            cookie_tok = request.cookies.get("csrf_token", "")
+            if cookie_tok:
+                csrf_tok = cookie_tok
+            elif request.is_json:
+                body = request.get_json(silent=True) or {}
+                csrf_tok = body.get("csrf_token", "")
+
+        # Determine which username to verify against
+        tok = request.cookies.get("session_token")
+        user = db_get_user_from_token(tok) if tok else None
+
+        if user:
+            # Authenticated routes — verify against real username
+            if not verify_csrf_token(csrf_tok, user):
+                return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+        else:
+            # Unauthenticated login — verify against __public__ placeholder
+            if not verify_csrf_token(csrf_tok, "__public__"):
+                return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+
+        return f(*args, **kwargs)
+    return decorated
+
 # ── Password validation ────────────────────────────────────────────────────────
 PW_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]).{8,128}$")
 
@@ -233,6 +282,7 @@ def init_db():
             id_number  TEXT,
             phone      TEXT,
             status     TEXT    NOT NULL DEFAULT 'active',
+            role       TEXT    NOT NULL DEFAULT 'user',
             created_at TEXT    NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -283,7 +333,7 @@ def init_db():
     if not row:
         now = datetime.now().isoformat()
         conn.execute(
-            "INSERT INTO users (username, status, created_at, updated_at) VALUES (?, 'active', ?, ?)",
+            "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'admin', ?, ?)",
             ("root", now, now)
         )
         user_row = conn.execute("SELECT id FROM users WHERE username=?", ("root",)).fetchone()
@@ -291,7 +341,16 @@ def init_db():
             "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
             (user_row["id"], hash_password("Admin@1234"), now)
         )
-        conn.commit()
+    else:
+        # Ensure existing root has admin role (migration for role column)
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+            conn.execute("UPDATE users SET role='admin' WHERE username='root'")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+            conn.execute("UPDATE users SET role='admin' WHERE username='root' AND role='user'")
+    conn.commit()
     conn.close()
 
 # ── Session helpers ─────────────────────────────────────────────────────────────
@@ -325,6 +384,14 @@ def db_get_user_from_token(token):
     ).fetchone()
     conn.close()
     return row["username"] if row else None
+
+def db_get_user_role(username):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT role FROM users WHERE username=?", (username,)
+    ).fetchone()
+    conn.close()
+    return row["role"] if row else None
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
@@ -372,7 +439,14 @@ def json_resp(data, status=200):
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.route("/")
-def index(): return send_from_directory(PUBLIC_DIR, "index.html")
+def index():
+    resp = make_response(send_from_directory(PUBLIC_DIR, "index.html"))
+    # Ship a CSRF token for login form — no session needed
+    tok = make_csrf_token()
+    store_csrf_token(tok, "__public__")
+    resp.set_cookie("csrf_token", tok, max_age=3600, httponly=False,
+                    samesite="Strict", secure=request.is_secure)
+    return resp
 
 # ── GET CSRF token ─────────────────────────────────────────────────────────────
 @app.route("/api/csrf-token", methods=["GET"])
@@ -445,6 +519,7 @@ def register():
         conn.close()
 
 @app.route("/api/login", methods=["POST"])
+@require_csrf
 def login():
     ip, ua = get_client_ip(), get_ua()
 
@@ -547,6 +622,7 @@ def login():
         conn.close()
 
 @app.route("/api/logout", methods=["POST"])
+@require_csrf
 def logout():
     ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
     user = db_get_user_from_token(tok) if tok else None
@@ -570,6 +646,9 @@ def api_audit():
     tok = request.cookies.get("session_token")
     user = db_get_user_from_token(tok) if tok else None
     if not user: return json_resp({"ok":False,"msg":"未授權"}), 401
+    if db_get_user_role(user) != "admin":
+        audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-admin attempted audit access")
+        return json_resp({"ok":False,"msg":"需要 admin 權限"}), 403
 
     conn = get_db()
     try:

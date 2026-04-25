@@ -4,7 +4,7 @@
 
 - ✅ 帳號註冊（密碼需 8+ 字元，含大小寫字母及符號）
 - ✅ 登入 / 登出
-- ✅ 密碼使用 **Fernet (AES-128-CBC+HMAC)** 加密儲存於 SQLite
+- ✅ 密碼使用 **Argon2id** 雜湊儲存（密碼學上更優於加密）
 - ✅ 同一 IP 連續輸入錯誤 3 次 → 鎖定 10 分鐘
 - ✅ 預設帳號：`root` / `Admin@1234`
 
@@ -23,7 +23,7 @@ python server.py
 
 ## 資料庫
 
-- `database.db` — SQLite，密碼欄位經 Fernet 加密
+- `database.db` — SQLite，密碼欄位經 Argon2id 雜湊
 - `blocked_ips.json` — 被鎖定的 IP 列表
 - `fail_log.json` — 登入失敗計數
 
