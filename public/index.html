@@ -34,6 +34,24 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    .clock {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      font-size: .88rem;
+      color: var(--muted);
+      background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      padding: .45rem .7rem;
+      z-index: 9;
+      min-width: 170px;
+      text-align: center;
+      letter-spacing: .02em;
     }
 
     /* ── Card ─────────────────────────────────────────────── */
@@ -191,6 +209,92 @@
     .msg.ok   { background: rgba(0,212,170,.18); color: var(--accent2); border: 1px solid rgba(0,212,170,.35); }
     .msg.err  { background: rgba(255,79,109,.18); color: var(--danger); border: 1px solid rgba(255,79,109,.35); }
 
+    .info-grid {
+      display: grid;
+      gap: .45rem;
+      grid-template-columns: 1fr;
+      margin: 1rem 0;
+      text-align: left;
+      font-size: .9rem;
+      color: var(--muted);
+    }
+
+    .admin-wrap {
+      display: none;
+      width: min(860px, 94vw);
+      margin-top: .8rem;
+    }
+
+    .admin-wrap.show { display: block; }
+
+    .admin-tools {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid rgba(255,255,255,.06);
+      padding: 1rem;
+      box-shadow: var(--shadow);
+      margin-top: .9rem;
+    }
+
+    .admin-toolbar {
+      display: grid;
+      gap: .55rem;
+      grid-template-columns: repeat(2, 1fr);
+      margin-bottom: .75rem;
+    }
+
+    .admin-toolbar .btn { width: 100%; }
+
+    .mini-title {
+      font-size: .82rem;
+      color: var(--muted);
+      margin-bottom: .45rem;
+    }
+
+    .user-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: .7rem;
+      font-size: .82rem;
+    }
+
+    .user-table th,
+    .user-table td {
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      padding: .45rem .45rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .user-table th {
+      color: var(--accent2);
+      font-weight: 600;
+      font-size: .74rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .user-table tr:last-child td { border-bottom: none; }
+
+    .action {
+      display: inline-flex;
+      gap: .4rem;
+      margin-top: .45rem;
+      flex-wrap: wrap;
+    }
+
+    .action .btn {
+      width: auto;
+      padding: .45rem .7rem;
+      font-size: .76rem;
+      font-weight: 600;
+    }
+
+    .btn-danger {
+      background: var(--danger);
+      color: #fff;
+    }
+
     /* ── Success screen ───────────────────────────────────── */
     #success-screen {
       display: none;
@@ -243,6 +347,7 @@
   </style>
 </head>
 <body>
+  <div class="clock" id="clock">⏰ 載入時間中...</div>
 
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
 <div class="card" id="auth-card">
@@ -294,6 +399,26 @@
         <span>✓</span> 包含符號（!@#$%…）<p style="margin-top:.4rem; color:#ff4f6d" id="reg-pw-hint"></p>
       </div>
     </div>
+    <div class="field">
+      <label>暱稱</label>
+      <input type="text" id="reg-nickname" placeholder="暱稱" autocomplete="nickname" />
+    </div>
+    <div class="field">
+      <label>真實姓名</label>
+      <input type="text" id="reg-realname" placeholder="請輸入真實姓名" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label>身分證</label>
+      <input type="text" id="reg-idno" placeholder="請輸入身分證" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label>生日</label>
+      <input type="date" id="reg-birthdate" />
+    </div>
+    <div class="field">
+      <label>電話</label>
+      <input type="tel" id="reg-phone" placeholder="09xx-xxx-xxx" autocomplete="tel" />
+    </div>
     <button class="btn btn-primary" id="reg-btn" onclick="doRegister()">註冊</button>
     <div class="spinner" id="reg-spinner"></div>
     <div class="msg" id="reg-msg"></div>
@@ -307,7 +432,73 @@
   <div class="success-icon">🎉</div>
   <h2>恭喜登入成功</h2>
   <p style="color:var(--muted); margin-top:.5rem">歡迎回來！</p>
+  <div class="info-grid">
+    <div>使用者：<span id="me-user">-</span></div>
+    <div>角色：<span id="me-role">-</span></div>
+    <div>暱稱：<span id="me-nickname">-</span></div>
+  </div>
   <button class="btn" id="logout-btn" onclick="doLogout()">登出</button>
+
+  <div class="admin-wrap" id="admin-wrap">
+    <div class="admin-tools">
+      <div class="mini-title">帳號管理</div>
+      <div class="admin-toolbar">
+        <button class="btn btn-primary" id="admin-refresh" onclick="loadUsers()">重新整理帳號</button>
+      </div>
+      <table class="user-table" id="user-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>帳號</th>
+            <th>暱稱</th>
+            <th>真實姓名</th>
+            <th>角色</th>
+            <th>狀態</th>
+            <th>行為</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="admin-tools" style="margin-top:.9rem;" id="admin-manager-view">
+      <div class="mini-title">管理者操作（暫停/解除暫時封鎖）</div>
+      <p id="manager-help" style="font-size:.78rem; color:var(--muted); margin-bottom:.6rem;">僅最高權限可修改與刪除；管理者可封鎖與解除封鎖。</p>
+      <form id="admin-add-form">
+        <div class="field">
+          <label>新增帳號（最高管理者）</label>
+          <input type="text" id="admin-add-user" placeholder="帳號" />
+        </div>
+        <div class="field">
+          <label>預設密碼</label>
+          <input type="password" id="admin-add-pw" placeholder="至少 8 字元" />
+        </div>
+        <div class="field">
+          <label>暱稱</label>
+          <input type="text" id="admin-add-nickname" placeholder="暱稱" />
+        </div>
+        <div class="field">
+          <label>真實姓名</label>
+          <input type="text" id="admin-add-realname" placeholder="真實姓名" />
+        </div>
+        <div class="field">
+          <label>身分證</label>
+          <input type="text" id="admin-add-idno" placeholder="身分證" />
+        </div>
+        <div class="field">
+          <label>生日</label>
+          <input type="date" id="admin-add-birthdate" />
+        </div>
+        <div class="field">
+          <label>電話</label>
+          <input type="tel" id="admin-add-phone" placeholder="09xx-xxx-xxx" />
+        </div>
+        <div class="admin-toolbar">
+          <button class="btn btn-primary" type="button" onclick="createUserByAdmin()">建立新帳號</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <div class="footer">hackme_web · 密碼使用 Argon2id 雜湊儲存</div>
@@ -318,8 +509,15 @@
 'use strict';
 
 const API = "/api";
+let _csrfToken = null;
+let currentUser = null;
+let currentRole = "user";
+let canManageUsers = false;
+let users = [];
 
-// ── Sanitization (XSS defense — defense in depth, CSP is primary) ─────────────
+function $(id) { return document.getElementById(id); }
+
+// ── Sanitization (XSS defense — defense in depth) ────────────
 function sanitize(str) {
   if (typeof str !== 'string') return '';
   return str
@@ -331,8 +529,7 @@ function sanitize(str) {
     .replace(/\//g, '&#x2F;');
 }
 
-// ── CSRF token management ─────────────────────────────────────────────────────
-let _csrfToken = null;
+function getCsrfToken() { return _csrfToken; }
 
 async function fetchCsrfToken() {
   try {
@@ -342,10 +539,24 @@ async function fetchCsrfToken() {
   } catch (_) { _csrfToken = null; }
 }
 
-function getCsrfToken() { return _csrfToken; }
+function flash(el, text, ok) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = "msg show " + (ok ? "ok" : "err");
+}
 
-// ── DOM helpers ───────────────────────────────────────────────────────────────
-function $(id) { return document.getElementById(id); }
+function clearMsg() {
+  $("li-msg").className = "msg";
+  $("reg-msg").className = "msg";
+}
+
+function setLoading(btnId, spinnerId, on) {
+  const btn = $(btnId);
+  const sp  = $(spinnerId);
+  if (!btn || !sp) return;
+  btn.classList.toggle("loading", on);
+  sp.style.display = on ? "block" : "none";
+}
 
 function showTab(tab) {
   $("sec-login").classList.toggle("active",    tab === "login");
@@ -355,12 +566,10 @@ function showTab(tab) {
   clearMsg();
 }
 
-// ── Password visibility toggle ─────────────────────────────────────────────
 function setupPwToggle(inputId, btnId) {
   const input = $(inputId);
   const btn   = $(btnId);
   if (!input || !btn) return;
-
   btn.addEventListener("mousedown", () => {
     input.type = "text";
     btn.textContent = "🙈";
@@ -385,50 +594,125 @@ function setupPwToggle(inputId, btnId) {
   }, { passive: false });
 }
 
+function pad2(v) { return String(v).padStart(2, "0"); }
+function startClock() {
+  const clock = $("clock");
+  if (!clock) return;
+  const tick = () => {
+    const now = new Date();
+    clock.textContent = `⏰ ${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
 setupPwToggle("li-pw", "li-pw-toggle");
 setupPwToggle("reg-pw", "reg-pw-toggle");
 
-// ── Password strength checker ──────────────────────────────────────────────
 $("reg-pw").addEventListener("input", function () {
   const v = this.value;
   const hints = [];
-  if (v.length < 8)                  hints.push("至少 8 字");
-  if (!/[A-Z]/.test(v))             hints.push("需大寫");
-  if (!/[a-z]/.test(v))             hints.push("需小寫");
+  if (v.length < 8)                      hints.push("至少 8 字");
+  if (!/[A-Z]/.test(v))                 hints.push("需大寫");
+  if (!/[a-z]/.test(v))                 hints.push("需小寫");
   if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(v)) hints.push("需符號");
   $("reg-pw-hint").textContent = hints.length ? "❌ " + hints.join(" · ") : "✓ 符合強度要求";
 });
 
-// ── Message display ────────────────────────────────────────────────────────────
-function flash(el, text, ok) {
-  el.textContent = text;
-  el.className = "msg show " + (ok ? "ok" : "err");
+function setAuthState(json) {
+  currentUser = json.username || null;
+  currentRole = json.role || "user";
+  canManageUsers = currentRole === "super_admin";
+  $("auth-card").style.display = "none";
+  $("success-screen").classList.add("show");
+  $("me-user").textContent = sanitize(currentUser || "-");
+  $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
+  $("me-nickname").textContent = sanitize(json.nickname || "-");
+  const adminWrap = $("admin-wrap");
+  if (adminWrap) {
+    if (currentRole === "manager" || currentRole === "super_admin") {
+      adminWrap.classList.add("show");
+    } else {
+      adminWrap.classList.remove("show");
+    }
+  }
+  const addPanel = $("admin-manager-view");
+  if (addPanel) addPanel.style.display = canManageUsers ? "block" : "none";
+  if (currentRole === "manager" || currentRole === "super_admin") {
+    loadUsers();
+  }
 }
 
-function clearMsg() {
-  $("li-msg").className = "msg";
-  $("reg-msg").className = "msg";
+function resetAuthState() {
+  currentUser = null;
+  currentRole = "user";
+  canManageUsers = false;
+  users = [];
+  $("success-screen").classList.remove("show");
+  $("admin-wrap").className = "admin-wrap";
+  $("me-user").textContent = "-";
+  $("me-role").textContent = "-";
+  $("me-nickname").textContent = "-";
+  $("auth-card").style.display = "";
+  const tb = $("user-table")?.querySelector("tbody");
+  if (tb) tb.innerHTML = "";
 }
 
-// ── Loading state ─────────────────────────────────────────────────────────────
-function setLoading(btnId, spinnerId, on) {
-  const btn = $(btnId);
-  const sp  = $(spinnerId);
-  if (!btn || !sp) return;
-  btn.classList.toggle("loading", on);
-  sp.style.display = on ? "block" : "none";
+function renderUsers() {
+  const tbody = $("user-table")?.querySelector("tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  for (const u of users) {
+    const blocked = u.blocked_until && new Date(u.blocked_until) > new Date();
+    const actionButtons = [];
+    if (currentRole === "manager" || currentRole === "super_admin") {
+      if (u.role !== "super_admin") {
+        actionButtons.push(`<button class="btn btn-primary" onclick="toggleBlock(${u.id}, ${blocked ? "true" : "false"})">${blocked ? "解除封鎖" : "封鎖 30 分鐘"}</button>`);
+      }
+    }
+    if (canManageUsers && u.username !== "root") {
+      actionButtons.push(`<button class="btn btn-danger" onclick="removeUser(${u.id})">刪除</button>`);
+      actionButtons.push(`<button class="btn btn-primary" onclick="editUser(${u.id})">修改資料</button>`);
+    }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${u.id}</td>
+      <td>${sanitize(u.username || "")}</td>
+      <td>${sanitize(u.nickname || "")}</td>
+      <td>${sanitize(u.real_name || "")}</td>
+      <td>${sanitize(u.role || "")}</td>
+      <td>${sanitize(u.status || "")}</td>
+      <td><div class="action">${actionButtons.join("")}</div></td>
+    `;
+    tbody.appendChild(tr);
+  }
 }
 
-// ── Login ─────────────────────────────────────────────────────────────────────
+async function loadUsers() {
+  if (!currentUser) return;
+  if (!["manager","super_admin"].includes(currentRole)) return;
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
+  try {
+    const res = await fetch(API + "/admin/users", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json();
+    if (!json.ok) return;
+    users = Array.isArray(json.users) ? json.users : [];
+    canManageUsers = !!json.can_manage;
+    renderUsers();
+  } catch (_) {}
+}
+
 async function doLogin() {
   const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
   if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
 
-  // Ensure CSRF token is fresh before every login
   await fetchCsrfToken();
   const csrf = getCsrfToken();
-
   setLoading("li-btn", "li-spinner", true);
   clearMsg();
 
@@ -443,17 +727,16 @@ async function doLogin() {
       body: JSON.stringify({ username: user, password: pw, csrf_token: csrf })
     });
     const json = await res.json();
-
-    if (json.ok) {
-      // Refresh CSRF token on successful login for subsequent actions
-      _csrfToken = null;
-      $("auth-card").style.display = "none";
-      $("success-screen").classList.add("show");
-    } else {
-      // Re-fetch CSRF token on failure (server may have rotated it)
+    if (!json.ok) {
       _csrfToken = null;
       flash($("li-msg"), json.msg || "登入失敗", false);
+      return;
     }
+    _csrfToken = null;
+    const meRes = await fetch(API + "/me", { credentials: "same-origin" });
+    const me = await meRes.json();
+    if (me.ok) setAuthState(me);
+    else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" });
   } catch (e) {
     flash($("li-msg"), "網路錯誤，請稍後再試", false);
   } finally {
@@ -461,13 +744,23 @@ async function doLogin() {
   }
 }
 
-// ── Register ─────────────────────────────────────────────────────────────────
 async function doRegister() {
   const user = sanitize($("reg-user").value.trim());
   const pw   = $("reg-pw").value;
+  const nickname = sanitize($("reg-nickname").value.trim());
+  const realName = sanitize($("reg-realname").value.trim());
+  const idNo = sanitize($("reg-idno").value.trim());
+  const birth = $("reg-birthdate").value;
+  const phone = sanitize($("reg-phone").value.trim());
+
   if (!user) { flash($("reg-msg"), "請填寫帳號", false); return; }
-  if (user.length < 3) { flash($("reg-msg"), "帳號至少需要 3 個字元", false); return; }
-  // Username charset enforced server-side, but enforce client-side too
+  if (user.length < 3) { flash($("reg-msg"), "帳號至少 3 字元", false); return; }
+  if (!nickname) { flash($("reg-msg"), "暱稱不可為空", false); return; }
+  if (!realName) { flash($("reg-msg"), "真實姓名不可為空", false); return; }
+  if (!idNo) { flash($("reg-msg"), "身分證不可為空", false); return; }
+  if (!birth) { flash($("reg-msg"), "請填寫生日", false); return; }
+  if (!phone) { flash($("reg-msg"), "請填寫電話", false); return; }
+
   if (!/^[a-zA-Z0-9_\-]+$/.test(user)) {
     flash($("reg-msg"), "帳號只能包含英文、數字、底線、減號", false);
     return;
@@ -475,7 +768,6 @@ async function doRegister() {
 
   await fetchCsrfToken();
   const csrf = getCsrfToken();
-
   setLoading("reg-btn", "reg-spinner", true);
   clearMsg();
 
@@ -483,14 +775,19 @@ async function doRegister() {
     const res = await fetch(API + "/register", {
       method: "POST",
       credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": csrf || ""
-      },
-      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf })
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({
+        username: user,
+        password: pw,
+        nickname,
+        real_name: realName,
+        id_number: idNo,
+        birthdate: birth,
+        phone,
+        csrf_token: csrf
+      })
     });
     const json = await res.json();
-
     if (json.ok) {
       _csrfToken = null;
       flash($("reg-msg"), "✓ " + sanitize(json.msg), true);
@@ -507,7 +804,6 @@ async function doRegister() {
   }
 }
 
-// ── Logout ─────────────────────────────────────────────────────────────────────
 async function doLogout() {
   try {
     await fetch(API + "/logout", {
@@ -517,14 +813,119 @@ async function doLogout() {
     });
   } catch (_) {}
   _csrfToken = null;
-  $("success-screen").classList.remove("show");
-  $("auth-card").style.display = "";
-  $("li-user").value = "";
-  $("li-pw").value   = "";
-  clearMsg();
+  resetAuthState();
 }
 
-// ── Enter key support ─────────────────────────────────────────────────────────
+async function toggleBlock(userId, isBlocked) {
+  if (!currentUser) return;
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
+  const body = isBlocked ? { action: "unblock" } : { action: "block", minutes: 30 };
+  const res = await fetch(API + `/admin/users/${userId}/block`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "操作失敗", false);
+  }
+}
+
+async function editUser(userId) {
+  const target = users.find((u) => String(u.id) === String(userId));
+  if (!target) return;
+  const nickname = window.prompt("修改暱稱", target.nickname || "");
+  if (nickname === null) return;
+  const realName = window.prompt("修改真實姓名", target.real_name || "");
+  if (realName === null) return;
+  const phone = window.prompt("修改電話", target.phone || "");
+  if (phone === null) return;
+
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${userId}`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({
+      nickname: nickname.trim(),
+      real_name: realName.trim(),
+      phone: phone.trim()
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "修改失敗", false);
+  }
+}
+
+async function removeUser(userId) {
+  if (!window.confirm("確定要刪除帳號？")) return;
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${userId}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "刪除失敗", false);
+  }
+}
+
+async function createUserByAdmin() {
+  const payload = {
+    username: sanitize($("admin-add-user").value.trim()),
+    password: $("admin-add-pw").value,
+    nickname: sanitize($("admin-add-nickname").value.trim()),
+    real_name: sanitize($("admin-add-realname").value.trim()),
+    id_number: sanitize($("admin-add-idno").value.trim()),
+    birthdate: $("admin-add-birthdate").value,
+    phone: sanitize($("admin-add-phone").value.trim()),
+    role: "user",
+    status: "active"
+  };
+  if (!payload.username || !payload.password || !payload.nickname || !payload.real_name || !payload.id_number || !payload.birthdate || !payload.phone) {
+    flash($("li-msg"), "請完整填寫新增欄位", false);
+    return;
+  }
+  await fetchCsrfToken();
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    ["admin-add-user", "admin-add-pw", "admin-add-nickname", "admin-add-realname", "admin-add-idno", "admin-add-birthdate", "admin-add-phone"]
+      .forEach((id) => { const el = $(id); if (el) el.value = ""; });
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "建立帳號失敗", false);
+  }
+}
+
+window.showTab = showTab;
+window.doLogin = doLogin;
+window.doRegister = doRegister;
+window.doLogout = doLogout;
+window.loadUsers = loadUsers;
+window.toggleBlock = toggleBlock;
+window.removeUser = removeUser;
+window.editUser = editUser;
+window.createUserByAdmin = createUserByAdmin;
+
 $("li-pw").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doLogin();
 });
@@ -532,15 +933,12 @@ $("reg-pw").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doRegister();
 });
 
-// ── Boot: check if already logged in ─────────────────────────────────────────
 (async function init() {
+  startClock();
   try {
     const res = await fetch(API + "/me", { credentials: "same-origin" });
     const json = await res.json();
-    if (json.ok) {
-      $("auth-card").style.display = "none";
-      $("success-screen").classList.add("show");
-    }
+    if (json.ok) setAuthState(json);
   } catch (_) {}
 })();
 
