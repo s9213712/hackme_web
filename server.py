@@ -6,6 +6,7 @@ CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
 import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl
+from ipaddress import ip_address
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
@@ -95,8 +96,10 @@ def verify_csrf_double_submit(body_token):
     Double-submit: body token must match cookie csrf_token.
     No session required — safe for /register.
     """
+    if not isinstance(body_token, str):
+        return False
     cookie_tok = request.cookies.get("csrf_token", "")
-    if not cookie_tok or not body_token:
+    if not isinstance(cookie_tok, str) or not cookie_tok or not body_token:
         return False
     if cookie_tok != body_token:
         return False
@@ -186,7 +189,22 @@ def hash_token(token):
 
 # ── Security helpers ────────────────────────────────────────────────────────────
 # ── Trusted proxies (prevent X-Forwarded-For spoofing) ───────────────────────
-TRUSTED_PROXY_IPS = {"127.0.0.1", "::1", "192.168.18.18"}
+def parse_ip_set(raw_value):
+    if not raw_value:
+        return set()
+    values = set()
+    for token in str(raw_value).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            values.add(str(ip_address(token)))
+        except Exception:
+            continue
+    return values
+
+TRUSTED_PROXY_IPS = parse_ip_set(os.environ.get("TRUSTED_PROXY_IPS", ""))
+USE_XFF = os.environ.get("USE_XFF", "false").strip().lower() in {"1", "true", "on", "yes"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
 IP_BLOCKING_ENABLED = os.environ.get("IP_BLOCKING_ENABLED", "false").strip().lower() in {"1", "true", "on", "yes"}
 
@@ -199,16 +217,28 @@ CSRF_SECRET_KEY = os.environ.get("CSRF_SECRET_KEY",
 
 
 def get_client_ip():
-    # Only trust X-Forwarded-For when the direct connection is from a trusted proxy
+    remote = request.remote_addr or ""
+    try:
+        remote = str(ip_address(remote))
+    except Exception:
+        remote = "0.0.0.0"
+
+    # By default, do not trust X-Forwarded-For unless explicitly enabled.
+    # This avoids spoofing when app is accessed directly (local tests / direct TLS).
+    if not USE_XFF or not TRUSTED_PROXY_IPS:
+        return remote
+
+    # Only trust XFF when request source is a trusted proxy in allow-list.
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
-        # Check that the immediate upstream is a trusted proxy
-        # In practice, your reverse proxy/Nginx sets X-Forwarded-For from the real client
-        # We only use X-FF when the direct requestor is in our trusted list
-        if request.remote_addr in TRUSTED_PROXY_IPS:
-            return xff.split(",")[0].strip()
-        # Direct connection from untrusted IP — ignore X-FF and use real remote_addr
-    return request.remote_addr or "0.0.0.0"
+        if remote in TRUSTED_PROXY_IPS:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if parts:
+                try:
+                    return str(ip_address(parts[0]))
+                except Exception:
+                    return remote
+    return remote
 
 def get_ua(): return request.headers.get("User-Agent","-")[:200]
 
@@ -237,6 +267,14 @@ def record_failed_login(ip):
     data[ip] = {"count": count, "until": (now + timedelta(minutes=10)).isoformat()}
     save_json_with_lock(FAIL_FILE, data)
     return count
+
+def record_login_failure(ip, username="", ua="-", detail="-", lock_on=3):
+    failures = record_failed_login(ip)
+    audit("LOGIN_FAIL", ip, username, ua=ua, detail=detail)
+    if failures >= lock_on and IP_BLOCKING_ENABLED:
+        block_ip(ip, 10)
+        audit("LOGIN_IP_BLOCKED", ip, username, ua=ua, detail="3 failures → 10 min block")
+    return failures
 
 def clear_failed_logins(ip):
     data = load_json_with_lock(FAIL_FILE); data.pop(ip, None); save_json_with_lock(FAIL_FILE, data)
@@ -297,7 +335,10 @@ def store_csrf_token(token, username):
     conn.close()
 
 def verify_csrf_token(token, username):
-    if not token: return False
+    if not isinstance(token, str) or not token:
+        return False
+    if not isinstance(username, str) or not username:
+        return False
     conn = get_db()
     try:
         row = conn.execute(
@@ -326,13 +367,23 @@ def require_csrf(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         # Extract CSRF token — try header first, then JSON body (never from cookie)
-        csrf_tok = request.headers.get("X-CSRF-Token", "")
+        csrf_tok = request.headers.get("X-CSRF-Token", "") or ""
+        if not isinstance(csrf_tok, str):
+            csrf_tok = ""
         body_username = None
         if request.is_json:
             body = request.get_json(silent=True) or {}
-            body_username = body.get("username", "").strip()
+            if isinstance(body, dict):
+                body_username = body.get("username", "")
+                if isinstance(body_username, str):
+                    body_username = body_username.strip()
+                else:
+                    body_username = ""
             if not csrf_tok:
-                csrf_tok = body.get("csrf_token", "")
+                if isinstance(body, dict):
+                    csrf_body = body.get("csrf_token", "")
+                    if isinstance(csrf_body, str):
+                        csrf_tok = csrf_body
 
         # Determine if user is authenticated
         tok = request.cookies.get("session_token")
@@ -789,16 +840,23 @@ def login():
         timing_delay()
         return json_resp({"ok":False,"msg":"請求太頻繁，請稍後再試"}), 429
 
-    try:    data = request.get_json(force=True)
-    except: return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
-    if not isinstance(data, dict): return json_resp({"ok":False,"msg":"Invalid request"}), 400
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        record_login_failure(ip, ua=ua, detail="invalid_json")
+        timing_delay()
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+    if not isinstance(data, dict):
+        record_login_failure(ip, ua=ua, detail="json_not_object")
+        timing_delay()
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
     username = (data.get("username","") if isinstance(data.get("username"), str) else "").strip()
     password = data.get("password","") if isinstance(data.get("password"), str) else ""
 
     # Generic blank check — same message regardless of which field
     if not username or not password:
-        audit("LOGIN_BLANK", ip, username, ua=ua, detail="blank field")
+        record_login_failure(ip, username, ua=ua, detail="blank_field")
         timing_delay()
         return json_resp({"ok":False,"msg":"請填寫帳號與密碼"}), 400
 
@@ -880,14 +938,9 @@ def login():
                 (user_id_for_log, ip, ua, now)
             )
             conn.commit()
-
-            failures = record_failed_login(ip)
-            audit("LOGIN_FAIL", ip, username, ua=ua, detail=f"failures={failures}")
+            record_login_failure(ip, username=username, ua=ua, detail="bad_credentials")
 
             # Generic message — never distinguish "no user" from "bad pw"
-            if failures >= 3 and IP_BLOCKING_ENABLED:
-                block_ip(ip, 10)
-                audit("LOGIN_IP_BLOCKED", ip, username, ua=ua, detail="3 failures → 10 min block")
             return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
     finally:
         conn.close()
