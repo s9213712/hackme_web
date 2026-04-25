@@ -1366,6 +1366,7 @@ def login():
         conn.close()
 
 @app.route("/api/logout", methods=["POST"])
+@require_csrf
 def logout():
     ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
     user = db_get_user_from_token(tok) if tok else None
