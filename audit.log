@@ -1559,3 +1559,38 @@
 {"ts": "2026-04-25T20:11:52.343", "action": "LOGIN_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
 {"ts": "2026-04-25T20:13:02.575", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "curl/7.81.0", "detail": "-"}
 {"ts": "2026-04-25T20:13:12.823", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:22:59.293", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started — hardened edition"}
+{"ts": "2026-04-25T20:23:10.320", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started — hardened edition"}
+{"ts": "2026-04-25T20:24:27.250", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:24:49.871", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:24:49.934", "action": "REGISTER_OK", "ip": "127.0.0.1", "user": "attack", "success": true, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:25:09.621", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:25.410", "action": "LOGIN_FAIL", "ip": "127.0.0.1", "user": "foo_not_exist_$(date +%s)", "success": false, "ua": "curl/7.81.0", "detail": "failures=1"}
+{"ts": "2026-04-25T20:26:32.982", "action": "LOGIN_FAIL", "ip": "127.0.0.1", "user": "\" OR 1=1 --", "success": false, "ua": "curl/7.81.0", "detail": "failures=2"}
+{"ts": "2026-04-25T20:26:42.407", "action": "LOGIN_FAIL", "ip": "127.0.0.1", "user": "root", "success": false, "ua": "curl/7.81.0", "detail": "failures=3"}
+{"ts": "2026-04-25T20:26:42.407", "action": "LOGIN_IP_BLOCKED", "ip": "127.0.0.1", "user": "root", "success": false, "ua": "curl/7.81.0", "detail": "3 failures → 10 min block"}
+{"ts": "2026-04-25T20:26:47.419", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.419", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.432", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.432", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.443", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.444", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.456", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.456", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.465", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.466", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.478", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.479", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.489", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.490", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.502", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.502", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.516", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.516", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.531", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.531", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.542", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.543", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:26:47.553", "action": "REGISTER_ATTEMPT", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "-"}
+{"ts": "2026-04-25T20:26:47.554", "action": "REGISTER_BLOCKED", "ip": "127.0.0.1", "user": "-", "success": false, "ua": "curl/7.81.0", "detail": "IP locked"}
+{"ts": "2026-04-25T20:34:02.624", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started — hardened edition"}
