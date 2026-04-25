@@ -5,12 +5,13 @@ Hardened edition: timing-noise, account-enumeration protection,
 CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
 from cryptography.fernet import Fernet
 import argon2
+from flask_talisman import Talisman
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -68,7 +69,7 @@ _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
 def hash_password(pw):    return _hasher.hash(pw)
 def verify_password(h, p):
     try:    return _hasher.verify(h, p)
-    except argon2.exceptions.VerifyMismatch: return False
+    except argon2.exceptions.VerifyMismatchError: return False
     except argon2.exceptions.VerificationError: return False
     except argon2.exceptions.InvalidHash: return False
     except (argon2.exceptions.DecodeError, ValueError, TypeError): return False
@@ -218,36 +219,51 @@ def verify_csrf_token(token, username):
     finally:
         conn.close()
 
+def delete_csrf_token(token):
+    """Remove a used CSRF token from DB to prevent replay."""
+    if not token: return
+    h = hashlib.sha256(token.encode()).hexdigest()
+    conn = get_db()
+    conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (h,))
+    conn.commit()
+    conn.close()
+
 # ── CSRF require decorator ─────────────────────────────────────────────────────
 def require_csrf(f):
-    """Decorator: verify CSRF token from X-CSRF-Token header or body csrf_token field.
-    For login (no session): validates against __public__ placeholder.
-    For other routes: validates against the authenticated username.
+    """Decorator: verify CSRF token, then DELETE it to prevent replay.
+    Checks __public__ for unauthenticated routes (login), username for authenticated ones.
+    Login: token MUST come from header or body (NOT cookie) to prevent browser-auto-submit bypass.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Extract CSRF token from header (primary) or cookie (fallback)
+        # Extract CSRF token — try header first, then JSON body (never from cookie)
         csrf_tok = request.headers.get("X-CSRF-Token", "")
-        if not csrf_tok:
-            cookie_tok = request.cookies.get("csrf_token", "")
-            if cookie_tok:
-                csrf_tok = cookie_tok
-            elif request.is_json:
-                body = request.get_json(silent=True) or {}
+        body_username = None
+        if request.is_json:
+            body = request.get_json(silent=True) or {}
+            body_username = body.get("username", "").strip()
+            if not csrf_tok:
                 csrf_tok = body.get("csrf_token", "")
 
-        # Determine which username to verify against
+        # Determine if user is authenticated
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
 
         if user:
-            # Authenticated routes — verify against real username
+            # Authenticated routes — verify against real username only
             if not verify_csrf_token(csrf_tok, user):
                 return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
         else:
-            # Unauthenticated login — verify against __public__ placeholder
-            if not verify_csrf_token(csrf_tok, "__public__"):
+            # Unauthenticated login — token must be in body or header (NOT cookie)
+            if not csrf_tok:
+                return json_resp({"ok": False, "msg": "CSRF token 缺失"}), 403
+            # Valid if token matches __public__ OR target username
+            if not verify_csrf_token(csrf_tok, "__public__") and \
+               not (body_username and verify_csrf_token(csrf_tok, body_username)):
                 return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+
+        # Delete immediately — token can only be used once (replay prevention)
+        delete_csrf_token(csrf_tok)
 
         return f(*args, **kwargs)
     return decorated
@@ -397,24 +413,34 @@ def db_get_user_role(username):
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
-# ── Security Headers (applied to ALL responses) ───────────────────────────────
+# ── Security Headers (via Flask-Talisman) ─────────────────────────────────────
+# CSP: restrict script-src to 'self' only — no inline JS, no eval, no external CDN
+talisman = Talisman(app,
+    content_security_policy={
+        "default-src": "'self'",
+        "script-src":  "'self'",
+        "style-src":   "'self' 'unsafe-inline'",   # allow inline styles (needed by the SPA)
+        "img-src":     "'self' data:",
+        "font-src":    "'self'",
+        "connect-src": "'self'",
+        "frame-ancestors": "'none'",
+        "form-action":  "'self'",
+        "base-uri":    "'self'",
+        "object-src":  "'none'",
+    },
+    referrer_policy="no-referrer",
+    feature_policy={},
+    force_https=False,        # SSL termination at proxy level
+)
+
+# ── Legacy security headers (supplement Talisman) ─────────────────────────────
 @app.after_request
-def security_headers(response):
-    # Prevent browser sniffing MIME type
+def extra_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
-    # Prevent clickjacking
-    response.headers["X-Frame-Options"] = "DENY"
-    # Force HTTPS (1 year)
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    # Referrer policy
-    response.headers["Referrer-Policy"] = "no-referrer"
-    # Disable features API
     response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
-    # Remove server fingerprint
+    # Talisman sets Server header; override to avoid fingerprinting
     response.headers["Server"] = "WebServer"
-    # Remove powered-by
     response.headers.pop("X-Powered-By", None)
-    # Cache control (no-store for auth pages)
     if request.path.startswith("/api"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
         response.headers["Pragma"] = "no-cache"
@@ -441,11 +467,15 @@ def json_resp(data, status=200):
 @app.route("/")
 def index():
     resp = make_response(send_from_directory(PUBLIC_DIR, "index.html"))
-    # Ship a CSRF token for login form — no session needed
-    tok = make_csrf_token()
-    store_csrf_token(tok, "__public__")
-    resp.set_cookie("csrf_token", tok, max_age=3600, httponly=False,
-                    samesite="Strict", secure=request.is_secure)
+    tok = request.cookies.get("session_token")
+    user = db_get_user_from_token(tok) if tok else None
+    if not user:
+        # Ship a CSRF token for login form — no session needed
+        tok = make_csrf_token()
+        store_csrf_token(tok, "__public__")
+        resp.set_cookie("csrf_token", tok, max_age=3600, httponly=False,
+                        samesite="Strict", secure=request.is_secure)
+    # Logged-in users keep their per-user csrf_token cookie (set at login)
     return resp
 
 # ── GET CSRF token ─────────────────────────────────────────────────────────────
@@ -568,11 +598,14 @@ def login():
         if pw_hash:
             verified = verify_password(pw_hash, password)
         else:
-            # Fake hash work — user doesn't exist, still burn time
-            verify_password(
-                "$argon2id$v=19$m=65536,t=3,p=4$abcdefghijklmnopqrstuv$abcdefghijklmnopqrstuvwxyz123456",
-                password
-            )
+            # Fake hash work — user doesn't exist, still burn same CPU time
+            # Properly formatted: 16-byte salt → 22 b64 chars, 32-byte hash → 43 b64 chars
+            fake_salt = base64.urlsafe_b64encode(b"fakesaltPASSSalt0").decode()[:22]
+            fake_hsh  = base64.urlsafe_b64encode(b"f" * 32).decode()[:43]
+            try:
+                verify_password(f"$argon2id$v=19$m=65536,t=3,p=4${fake_salt}${fake_hsh}", password)
+            except argon2.exceptions.VerifyMismatchError:
+                pass  # expected — always fails
             verified = False
 
         # ALWAYS add jitter delay to obscure timing differences
@@ -599,6 +632,12 @@ def login():
             resp = json_resp({"ok":True,"msg":"恭喜登入成功","token":token})
             resp.set_cookie("session_token", token, max_age=SESSION_TTL,
                             httponly=True, samesite="Strict",
+                            secure=request.is_secure)
+            # Invalidate the public CSRF token and issue a fresh per-user token
+            new_csrf = make_csrf_token()
+            store_csrf_token(new_csrf, username)
+            resp.set_cookie("csrf_token", new_csrf, max_age=CSRF_TOKEN_TTL,
+                            httponly=False, samesite="Strict",
                             secure=request.is_secure)
             return resp
         else:
@@ -628,7 +667,7 @@ def logout():
     user = db_get_user_from_token(tok) if tok else None
     if tok:
         db_delete_session(tok)
-    audit("LOGOUT", ip, username=user or "-", ua=ua, success=bool(user))
+    audit("LOGOUT", ip, user=user or "-", ua=ua, success=bool(user))
     resp = json_resp({"ok":True,"msg":"已登出"})
     resp.delete_cookie("session_token")
     return resp
