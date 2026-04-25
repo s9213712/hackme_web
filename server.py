@@ -188,6 +188,7 @@ def hash_token(token):
 # ── Trusted proxies (prevent X-Forwarded-For spoofing) ───────────────────────
 TRUSTED_PROXY_IPS = {"127.0.0.1", "::1", "192.168.18.18"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
+IP_BLOCKING_ENABLED = False
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
 CSRF_SECRET_KEY = os.environ.get("CSRF_SECRET_KEY",
@@ -212,6 +213,8 @@ def get_client_ip():
 def get_ua(): return request.headers.get("User-Agent","-")[:200]
 
 def is_ip_blocked(ip):
+    if not IP_BLOCKING_ENABLED:
+        return False
     data = load_json_with_lock(BLOCK_FILE)
     entry = data.get(ip)
     if not entry: return False
@@ -219,6 +222,8 @@ def is_ip_blocked(ip):
     del data[ip]; save_json_with_lock(BLOCK_FILE, data); return False
 
 def block_ip(ip, minutes=10):
+    if not IP_BLOCKING_ENABLED:
+        return
     data = load_json_with_lock(BLOCK_FILE)
     data[ip] = {"until": (datetime.now() + timedelta(minutes=minutes)).isoformat()}
     save_json_with_lock(BLOCK_FILE, data)
@@ -880,7 +885,7 @@ def login():
             audit("LOGIN_FAIL", ip, username, ua=ua, detail=f"failures={failures}")
 
             # Generic message — never distinguish "no user" from "bad pw"
-            if failures >= 3:
+            if failures >= 3 and IP_BLOCKING_ENABLED:
                 block_ip(ip, 10)
                 audit("LOGIN_IP_BLOCKED", ip, username, ua=ua, detail="3 failures → 10 min block")
             return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
