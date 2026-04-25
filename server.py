@@ -432,15 +432,64 @@ def get_db():
     return conn
 
 # RBAC / account status helpers
-ROLE_RANK = {"user": 0, "manager": 1, "super_admin": 2}
-ROLE_LABEL = {
+ROLE_RANK       = {"user": 0, "manager": 1, "super_admin": 2}
+ROLE_LABEL      = {
     "super_admin": "最高管理者",
     "manager": "管理者",
     "user": "一般用戶",
 }
+MAX_MANAGERS    = 5
+MAX_VIOLATIONS  = {"manager": 3, "user": 5}
 
 def role_rank(role):
     return ROLE_RANK.get(role or "user", 0)
+
+def count_role(role):
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE role=? AND username<>'root'",
+            (role,)
+        ).fetchone()
+        return row["c"] if row else 0
+    finally:
+        conn.close()
+
+def add_violation(user_id, username, role):
+    """增加違規計點，超過閾值自動降級/刪除。回傳 (action_taken, msg)"""
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, role, violation_count FROM users WHERE id=?",
+            (user_id,)
+        ).fetchone()
+        if not target:
+            return None, "找不到帳號"
+        threshold = VIOLATION_THRESHOLDS.get(target["role"], 5)
+        new_count = target["violation_count"] + 1
+        conn.execute(
+            "UPDATE users SET violation_count=? WHERE id=?",
+            (new_count, user_id)
+        )
+        conn.commit()
+        if new_count >= threshold:
+            if target["role"] == "manager":
+                # 管理者降為一般用戶
+                conn.execute("UPDATE users SET role='user', violation_count=0 WHERE id=?", (user_id,))
+                conn.commit()
+                audit("MANAGER_DEMOTED", get_client_ip(), user="system",
+                      detail=f"user_id={user_id} violated={new_count}")
+                return "demoted", f"管理者違規 {new_count} 次，已降級為一般用戶"
+            elif target["role"] == "user":
+                # 一般用戶刪除
+                audit("USER_DELETED_VIOLATION", get_client_ip(), user="system",
+                      detail=f"user_id={user_id} violated={new_count}")
+                conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+                conn.commit()
+                return "deleted", f"一般用戶違規 {new_count} 次，帳號已刪除"
+        return "counted", f"違規計點 +1（{new_count}/{threshold}）"
+    finally:
+        conn.close()
 
 def normalize_text(v):
     return (v or "").strip() if isinstance(v, str) else ""
@@ -507,6 +556,7 @@ def user_public_payload(row):
         "role": row["role"],
         "role_label": ROLE_LABEL.get(row["role"], row["role"]),
         "blocked_until": row["blocked_until"],
+        "violation_count": row.get("violation_count") or 0,
     }
 
 def ensure_user_columns(conn):
@@ -514,6 +564,7 @@ def ensure_user_columns(conn):
     for col, ddl in (
         ("nickname", "ALTER TABLE users ADD COLUMN nickname TEXT"),
         ("blocked_until", "ALTER TABLE users ADD COLUMN blocked_until TEXT"),
+        ("violation_count", "ALTER TABLE users ADD COLUMN violation_count INTEGER NOT NULL DEFAULT 0"),
     ):
         if col not in cols:
             conn.execute(ddl)
@@ -946,7 +997,6 @@ def login():
         conn.close()
 
 @app.route("/api/logout", methods=["POST"])
-@require_csrf
 def logout():
     ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
     user = db_get_user_from_token(tok) if tok else None
@@ -955,6 +1005,7 @@ def logout():
     audit("LOGOUT", ip, user=user or "-", ua=ua, success=bool(user))
     resp = json_resp({"ok":True,"msg":"已登出"})
     resp.delete_cookie("session_token")
+    resp.delete_cookie("csrf_token")
     return resp
 
 @app.route("/api/me", methods=["GET"])
@@ -1022,13 +1073,13 @@ def admin_users():
             now = datetime.now()
             if actor_role == "super_admin":
                 rows = conn.execute(
-                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until "
+                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
                 data = [user_public_payload(r) for r in rows]
             else:
                 rows = conn.execute(
-                    "SELECT id, username, status, role, blocked_until FROM users ORDER BY id ASC"
+                    "SELECT id, username, status, role, blocked_until, violation_count FROM users ORDER BY id ASC"
                 ).fetchall()
                 data = []
                 for r in rows:
@@ -1048,6 +1099,7 @@ def admin_users():
                         "role": r["role"],
                         "blocked_until": r["blocked_until"],
                         "blocked": blocked,
+                        "violation_count": r.get("violation_count") or 0,
                     })
         finally:
             conn.close()
@@ -1271,6 +1323,241 @@ def admin_user_block(user_id):
         return json_resp({"ok":True,"msg":f"帳號已封鎖 {minutes} 分鐘"})
     finally:
         conn.close()
+
+# ── 推廣 / 降級（promote / demote）───────────────────────────────────────────────
+@app.route("/api/admin/users/<int:user_id>/promote", methods=["POST"])
+@require_csrf
+def admin_user_promote(user_id):
+    """管理者或超級管理者可推廣一般用戶為管理者；超級管理者可推廣管理者為超級管理者"""
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("manager"):
+        return json_resp({"ok":False,"msg":"權限不足"}), 403
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, role FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if not target:
+            return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+
+        from_role = target["role"]
+        if from_role == "super_admin":
+            return json_resp({"ok":False,"msg":"最高管理者無需推廣"}), 400
+        if from_role == "manager" and role_rank(actor_role) < role_rank("super_admin"):
+            return json_resp({"ok":False,"msg":"只有最高管理者可推廣管理者"}), 403
+
+        to_role = "manager" if from_role == "user" else "super_admin"
+        if to_role == "manager":
+            limit = ROLE_LIMITS.get("manager", 5)
+            if count_role("manager") >= limit:
+                return json_resp({"ok":False,"msg":f"管理者已達上限（{limit} 人）"}), 400
+        # super_admin 限額 1 不需要檢查（root 不可變）
+
+        conn.execute("UPDATE users SET role=?, violation_count=0, updated_at=? WHERE id=?",
+                     (to_role, datetime.now().isoformat(), user_id))
+        conn.commit()
+        audit("USER_PROMOTED", get_client_ip(), user=actor["username"],
+              success=True, detail=f"user_id={user_id} {from_role}→{to_role}")
+        return json_resp({"ok":True,"msg":f"已升為 {ROLE_LABEL[to_role]}"})
+    finally:
+        conn.close()
+
+@app.route("/api/admin/users/<int:user_id>/demote", methods=["POST"])
+@require_csrf
+def admin_user_demote(user_id):
+    """超級管理者可將管理者降為一般用戶（再次降級＝刪除，由系統自動判斷）"""
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高管理者可降級帳號"}), 403
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, role FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if not target:
+            return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+        if target["username"] == "root":
+            return json_resp({"ok":False,"msg":"最高管理者帳號不可降級"}), 403
+        from_role = target["role"]
+        if from_role == "user":
+            # 一般用戶 → 刪除
+            audit("USER_DELETED_BY_ADMIN", get_client_ip(), user=actor["username"],
+                  detail=f"user_id={user_id} demoted from user (delete)")
+            conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+            conn.commit()
+            return json_resp({"ok":True,"msg":"一般用戶已刪除"})
+        # 管理者 → 一般用戶
+        conn.execute("UPDATE users SET role='user', violation_count=0, updated_at=? WHERE id=?",
+                     (datetime.now().isoformat(), user_id))
+        conn.commit()
+        audit("MANAGER_DEMOTED_BY_ADMIN", get_client_ip(), user=actor["username"],
+              detail=f"user_id={user_id} manager→user")
+        return json_resp({"ok":True,"msg":"已降級為一般用戶"})
+    finally:
+        conn.close()
+
+# ── 違規計點（系統自動 or 超級管理者手動）─────────────────────────────────────
+@app.route("/api/admin/users/<int:user_id>/violation", methods=["POST"])
+@require_csrf
+def admin_user_violation(user_id):
+    """管理者可對一般用戶計點；超級管理者可對任何帳號計點（root 除外）"""
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("manager"):
+        return json_resp({"ok":False,"msg":"權限不足"}), 403
+
+    try:
+        data = request.get_json(force=True)
+    except:
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, role FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if not target:
+            return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+        if target["username"] == "root":
+            return json_resp({"ok":False,"msg":"無法對最高管理者計點"}), 403
+
+        # 管理者只能對一般用戶計點
+        if actor_role == "manager" and target["role"] != "user":
+            return json_resp({"ok":False,"msg":"無權對此角色計點"}), 403
+
+        action, msg = add_violation(user_id, target["username"], target["role"])
+        audit("VIOLATION_ADDED", get_client_ip(), user=actor["username"],
+              detail=f"target_id={user_id} action={action} by={'admin' if actor_role=='super_admin' else 'manager'}")
+        return json_resp({"ok":True,"msg":msg})
+    finally:
+        conn.close()
+
+# ── 審計日誌（manager + super_admin 皆可檢視）────────────────────────────────
+@app.route("/api/admin/audit", methods=["GET"])
+@require_csrf
+def admin_audit():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("manager"):
+        return json_resp({"ok":False,"msg":"權限不足"}), 403
+
+    page = abs(int(request.args.get("page", 1)))
+    limit = min(abs(int(request.args.get("limit", 50))), 200)
+    offset = (page - 1) * limit
+
+    entries = []
+    total = 0
+    if os.path.exists(AUDIT_FILE):
+        try:
+            with open(AUDIT_FILE, encoding="utf-8") as f:
+                all_lines = f.readlines()
+            total = len(all_lines)
+            for line in reversed(all_lines[offset:offset+limit]):
+                try:
+                    entries.append(json.loads(line.strip()))
+                except:
+                    continue
+        except Exception:
+            pass
+
+    return json_resp({"ok":True,"entries":entries,"total":total,"page":page,"limit":limit})
+
+# ── 系統參數（超級管理者 only）───────────────────────────────────────────────
+@app.route("/api/admin/settings", methods=["GET","PUT"])
+@require_csrf
+def admin_settings():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    if actor["username"] != "root":
+        return json_resp({"ok":False,"msg":"只有最高管理者可修改系統參數"}), 403
+
+    SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
+
+    if request.method == "GET":
+        defaults = {
+            "allow_register": True,
+            "require_email_verification": False,
+            "max_login_failures": 3,
+            "block_duration_minutes": 10,
+            "session_ttl_hours": 4,
+        }
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE) as f:
+                current = json.load(f)
+            defaults.update(current)
+        return json_resp({"ok":True,"settings":defaults})
+
+    # PUT
+    try:
+        data = request.get_json(force=True)
+    except:
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+    if not isinstance(data, dict):
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
+
+    allowed_keys = {
+        "allow_register": bool,
+        "require_email_verification": bool,
+        "max_login_failures": int,
+        "block_duration_minutes": int,
+        "session_ttl_hours": int,
+    }
+    settings = {}
+    for key, val_type in allowed_keys.items():
+        if key in data:
+            try:
+                settings[key] = val_type(data[key])
+            except (ValueError, TypeError):
+                return json_resp({"ok":False,"msg":f"{key} 格式錯誤"}), 400
+
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+    audit("SETTINGS_CHANGED", get_client_ip(), user=actor["username"],
+          detail=str(settings))
+    return json_resp({"ok":True,"msg":"系統參數已更新","settings":settings})
+
+# ── 重啟服務器（超級管理者 only）─────────────────────────────────────────────
+@app.route("/api/admin/restart", methods=["POST"])
+@require_csrf
+def admin_restart():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    if actor["username"] != "root":
+        return json_resp({"ok":False,"msg":"只有最高管理者可重啟服務器"}), 403
+
+    audit("SERVER_RESTART", get_client_ip(), user=actor["username"], detail="initiated by admin")
+    # 非同步重啟，避免來不及回應
+    import threading, subprocess
+    def restart_delayed():
+        time.sleep(1.5)
+        # Kill old server on port 5000
+        subprocess.run(["fuser", "-k", "5000/tcp"],
+                       cwd=BASE_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+        # Start new server
+        subprocess.Popen(
+            ["python3", os.path.join(BASE_DIR, "server.py")],
+            cwd=BASE_DIR,
+            stdout=open("/tmp/hackme_server.log", "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True
+        )
+    threading.Thread(target=restart_delayed, daemon=True).start()
+    return json_resp({"ok":True,"msg":"服務器正在重啟，請稍後重新整理頁面"})
 
 @app.route("/<path:invalid>", methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
 def catch_all(invalid):
