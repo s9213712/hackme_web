@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-html_learning — Flask auth server
+hackme_web — Flask auth server
 Hardened edition: timing-noise, account-enumeration protection,
 CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
@@ -62,6 +62,61 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
 
+# ── Atomic JSON ops (thread/process safe via fcntl) ─────────────────────────────
+_json_locks = {}   # path → threading.Lock (held within a single process)
+def _get_json_lock(path):
+    if path not in _json_locks:
+        _json_locks[path] = threading.Lock()
+    return _json_locks[path]
+
+def load_json_with_lock(path):
+    with _get_json_lock(path):
+        if not os.path.exists(path): return {}
+        try:
+            with open(path) as f: return json.load(f)
+        except Exception:
+            return {}
+
+def save_json_with_lock(path, data):
+    with _get_json_lock(path):
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+
+# ── CSRF double-submit helpers ─────────────────────────────────────────────────
+def generate_csrf_dummy():
+    """Dummy value for double-submit verification (matches cookie token)."""
+    tok = request.cookies.get("csrf_token", "")
+    return tok
+
+def verify_csrf_double_submit(body_token):
+    """
+    Double-submit: body token must match cookie csrf_token.
+    No session required — safe for /register.
+    """
+    cookie_tok = request.cookies.get("csrf_token", "")
+    if not cookie_tok or not body_token:
+        return False
+    if cookie_tok != body_token:
+        return False
+    # Also verify it exists in DB and is not expired
+    tok_hash = hashlib.sha256(cookie_tok.encode()).hexdigest()
+    conn = get_db()
+    row = conn.execute(
+        "SELECT 1 FROM csrf_tokens WHERE token_hash=? AND expires_at>?",
+        (tok_hash, datetime.now().isoformat())
+    ).fetchone()
+    conn.close()
+    if not row:
+        return False
+    # Consume token (delete immediately — prevents replay)
+    conn = get_db()
+    conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (tok_hash,))
+    conn.commit()
+    conn.close()
+    return True
+
 # ── Argon2 hasher ─────────────────────────────────────────────────────────────
 _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
                                 parallelism=4, hash_len=32, salt_len=16)
@@ -113,6 +168,14 @@ def hash_token(token):
 TRUSTED_PROXY_IPS = {"127.0.0.1", "::1", "192.168.18.18"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
 
+# ── CSRF double-submit secret ─────────────────────────────────────────────────
+CSRF_SECRET_KEY = os.environ.get("CSRF_SECRET_KEY",
+    open(os.path.join(BASE_DIR, ".csrfkey")).read().strip()
+    if os.path.exists(os.path.join(BASE_DIR, ".csrfkey")) else None
+) or (lambda: (open(os.path.join(BASE_DIR, ".csrfkey"), "w").write(secrets.token_hex(32)),
+               secrets.token_hex(32)))()
+
+
 def get_client_ip():
     # Only trust X-Forwarded-For when the direct connection is from a trusted proxy
     xff = request.headers.get("X-Forwarded-For", "")
@@ -128,43 +191,43 @@ def get_client_ip():
 def get_ua(): return request.headers.get("User-Agent","-")[:200]
 
 def is_ip_blocked(ip):
-    data = load_json(BLOCK_FILE)
+    data = load_json_with_lock(BLOCK_FILE)
     entry = data.get(ip)
     if not entry: return False
     if datetime.now() < datetime.fromisoformat(entry["until"]): return True
-    del data[ip]; save_json(BLOCK_FILE, data); return False
+    del data[ip]; save_json_with_lock(BLOCK_FILE, data); return False
 
 def block_ip(ip, minutes=10):
-    data = load_json(BLOCK_FILE)
+    data = load_json_with_lock(BLOCK_FILE)
     data[ip] = {"until": (datetime.now() + timedelta(minutes=minutes)).isoformat()}
-    save_json(BLOCK_FILE, data)
+    save_json_with_lock(BLOCK_FILE, data)
 
 def record_failed_login(ip):
     now = datetime.now()
-    data = load_json(FAIL_FILE)
+    data = load_json_with_lock(FAIL_FILE)
     data = {k:v for k,v in data.items() if now < datetime.fromisoformat(v["until"])}
     rec = data.get(ip, {"count":0})
     count = rec["count"] + 1
     data[ip] = {"count": count, "until": (now + timedelta(minutes=10)).isoformat()}
-    save_json(FAIL_FILE, data)
+    save_json_with_lock(FAIL_FILE, data)
     return count
 
 def clear_failed_logins(ip):
-    data = load_json(FAIL_FILE); data.pop(ip, None); save_json(FAIL_FILE, data)
+    data = load_json_with_lock(FAIL_FILE); data.pop(ip, None); save_json_with_lock(FAIL_FILE, data)
 
 def is_rate_limited(ip, max_req=30, window_sec=60):
     now = datetime.now()
-    data = load_json(RATE_FILE)
+    data = load_json_with_lock(RATE_FILE)
     data = {k:v for k,v in data.items()
             if now - datetime.fromisoformat(v["window_start"]) < timedelta(seconds=window_sec)}
     entry = data.get(ip)
     if not entry:
         data[ip] = {"count":1, "window_start": now.isoformat()}
-        save_json(RATE_FILE, data); return False, {"count":1,"limit":max_req}
+        save_json_with_lock(RATE_FILE, data); return False, {"count":1,"limit":max_req}
     count = entry["count"] + 1
     entry["count"] = count
     data[ip] = entry
-    save_json(RATE_FILE, data)
+    save_json_with_lock(RATE_FILE, data)
     if count > max_req: return True, {"count":count,"limit":max_req}
     return False, {"count":count,"limit":max_req}
 
@@ -508,6 +571,11 @@ def register():
         audit("REGISTER_EMPTY", ip, ua=ua)
         return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
+    # CSRF double-submit check (no session required — safe for register)
+    if not verify_csrf_double_submit(data.get("csrf_token", "")):
+        audit("REGISTER_CSRF", ip, ua=ua)
+        return json_resp({"ok":False,"msg":"Invalid request"}), 403
+
     username = (data.get("username","")).strip()
     password = data.get("password","")
 
@@ -719,8 +787,8 @@ def catch_all(invalid):
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
-    audit("SERVER_START", "0.0.0.0", detail="html_learning server started — hardened edition")
-    print(f"\n🌐  html_learning server running at http://localhost:5000")
+    audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
+    print(f"\n🌐  hackme_web server running at http://localhost:5000")
     print(f"    Default credentials: root / Admin@1234")
     print(f"    Audit log: {AUDIT_FILE}")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")

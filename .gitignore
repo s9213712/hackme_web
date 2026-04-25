@@ -9,3 +9,6 @@ database.db
 .audit.log
 server.log
 SECURITY.md
+
+# CSRF secret
+.csrfkey
