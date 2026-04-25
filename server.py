@@ -617,11 +617,11 @@ app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 # ── Security Headers (via Flask-Talisman) ─────────────────────────────────────
-# CSP: restrict script-src to 'self' only — no inline JS, no eval, no external CDN
+# CSP: allow inline scripts for current single-page UI (testing mode)
 talisman = Talisman(app,
     content_security_policy={
         "default-src": "'self'",
-        "script-src":  "'self'",
+        "script-src":  "'self' 'unsafe-inline'",
         "style-src":   "'self' 'unsafe-inline'",   # allow inline styles (needed by the SPA)
         "img-src":     "'self' data:",
         "font-src":    "'self'",
