@@ -529,13 +529,29 @@ function sanitize(str) {
     .replace(/\//g, '&#x2F;');
 }
 
+function readCookie(name) {
+  const cookie = document.cookie || "";
+  const prefix = `${name}=`;
+  const item = cookie.split('; ').find((v) => v.startsWith(prefix));
+  return item ? decodeURIComponent(item.substring(prefix.length)) : "";
+}
+
 function getCsrfToken() { return _csrfToken; }
 
-async function fetchCsrfToken() {
+async function fetchCsrfToken({ force = false } = {}) {
+  if (!force) {
+    const cookieToken = readCookie("csrf_token");
+    if (cookieToken) {
+      _csrfToken = cookieToken;
+      return;
+    }
+  }
+
   try {
     const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
     const json = await res.json();
     if (json.ok) _csrfToken = json.csrf_token;
+    else _csrfToken = null;
   } catch (_) { _csrfToken = null; }
 }
 
@@ -691,7 +707,7 @@ function renderUsers() {
 async function loadUsers() {
   if (!currentUser) return;
   if (!["manager","super_admin"].includes(currentRole)) return;
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
     const res = await fetch(API + "/admin/users", {
@@ -711,8 +727,12 @@ async function doLogin() {
   const pw   = $("li-pw").value;
   if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
 
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: false });
   const csrf = getCsrfToken();
+  if (!csrf) {
+    flash($("li-msg"), "無法取得 CSRF token，請重新整理頁面", false);
+    return;
+  }
   setLoading("li-btn", "li-spinner", true);
   clearMsg();
 
@@ -745,13 +765,13 @@ async function doLogin() {
 }
 
 async function doRegister() {
-  const user = sanitize($("reg-user").value.trim());
+  const user = $("reg-user").value.trim();
   const pw   = $("reg-pw").value;
-  const nickname = sanitize($("reg-nickname").value.trim());
-  const realName = sanitize($("reg-realname").value.trim());
-  const idNo = sanitize($("reg-idno").value.trim());
+  const nickname = $("reg-nickname").value.trim();
+  const realName = $("reg-realname").value.trim();
+  const idNo = $("reg-idno").value.trim();
   const birth = $("reg-birthdate").value;
-  const phone = sanitize($("reg-phone").value.trim());
+  const phone = $("reg-phone").value.trim();
 
   if (!user) { flash($("reg-msg"), "請填寫帳號", false); return; }
   if (user.length < 3) { flash($("reg-msg"), "帳號至少 3 字元", false); return; }
@@ -766,8 +786,13 @@ async function doRegister() {
     return;
   }
 
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: false });
   const csrf = getCsrfToken();
+  if (!csrf) {
+    flash($("reg-msg"), "無法取得 CSRF token，請重新整理頁面", false);
+    setLoading("reg-btn", "reg-spinner", false);
+    return;
+  }
   setLoading("reg-btn", "reg-spinner", true);
   clearMsg();
 
@@ -818,7 +843,7 @@ async function doLogout() {
 
 async function toggleBlock(userId, isBlocked) {
   if (!currentUser) return;
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const body = isBlocked ? { action: "unblock" } : { action: "block", minutes: 30 };
   const res = await fetch(API + `/admin/users/${userId}/block`, {
@@ -845,7 +870,7 @@ async function editUser(userId) {
   const phone = window.prompt("修改電話", target.phone || "");
   if (phone === null) return;
 
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await fetch(API + `/admin/users/${userId}`, {
     method: "PUT",
@@ -867,7 +892,7 @@ async function editUser(userId) {
 
 async function removeUser(userId) {
   if (!window.confirm("確定要刪除帳號？")) return;
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await fetch(API + `/admin/users/${userId}`, {
     method: "DELETE",
@@ -886,11 +911,11 @@ async function createUserByAdmin() {
   const payload = {
     username: sanitize($("admin-add-user").value.trim()),
     password: $("admin-add-pw").value,
-    nickname: sanitize($("admin-add-nickname").value.trim()),
-    real_name: sanitize($("admin-add-realname").value.trim()),
-    id_number: sanitize($("admin-add-idno").value.trim()),
+    nickname: $("admin-add-nickname").value.trim(),
+    real_name: $("admin-add-realname").value.trim(),
+    id_number: $("admin-add-idno").value.trim(),
     birthdate: $("admin-add-birthdate").value,
-    phone: sanitize($("admin-add-phone").value.trim()),
+    phone: $("admin-add-phone").value.trim(),
     role: "user",
     status: "active"
   };
@@ -898,7 +923,7 @@ async function createUserByAdmin() {
     flash($("li-msg"), "請完整填寫新增欄位", false);
     return;
   }
-  await fetchCsrfToken();
+  await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await fetch(API + "/admin/users", {
     method: "POST",
@@ -935,6 +960,7 @@ $("reg-pw").addEventListener("keydown", (e) => {
 
 (async function init() {
   startClock();
+  _csrfToken = readCookie("csrf_token");
   try {
     const res = await fetch(API + "/me", { credentials: "same-origin" });
     const json = await res.json();
