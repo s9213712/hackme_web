@@ -1,3 +1,6 @@
 {"ts": "2026-04-25T14:05:46.930", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started"}
 {"ts": "2026-04-25T14:07:08.122", "action": "LOGIN_FAIL", "ip": "127.0.0.1", "user": "s92137", "success": false, "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36", "detail": "failures=1"}
 {"ts": "2026-04-25T14:07:27.387", "action": "LOGIN_FAIL", "ip": "127.0.0.1", "user": "s92137", "success": false, "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36", "detail": "failures=2"}
+{"ts": "2026-04-25T14:09:34.329", "action": "LOGIN_OK", "ip": "127.0.0.1", "user": "root", "success": true, "ua": "Werkzeug/3.1.8", "detail": "-"}
+{"ts": "2026-04-25T14:09:50.634", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started"}
+{"ts": "2026-04-25T14:10:12.258", "action": "SERVER_START", "ip": "0.0.0.0", "user": "-", "success": false, "ua": "-", "detail": "html_learning server started"}
