@@ -28,6 +28,14 @@
    - 測試內容：原始邊界整合腳本（CSRF、登入註冊、登出、路由列舉）
    - 對應風險：整體邊界回歸
 
+6. `06_medium_chat_feature_security_flow.sh`
+   - 測試內容：對話室新功能（聊天室建立、加入、讀取、違規訊息警告與計點）
+   - 對應風險：Medium（新功能邊界）
+
+7. `07_high_chat_feature_boundary_abuse.sh`
+   - 測試內容：聊天功能邊界與越權行為（未登入、跨帳號 CSRF、參數邊界、token 重放）
+   - 對應風險：High（聊天面向高風險操作）
+
 執行方式：
 
 - 單一腳本：`bash attack_test/<腳本名稱>.sh`
