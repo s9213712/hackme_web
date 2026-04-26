@@ -1175,17 +1175,7 @@ def get_schema_version(conn):
         return 0
 
 def _migration_002_compat_user_columns(conn):
-    for col_name, col_sql in (
-        ("prev_hash", "ALTER TABLE secure_audit ADD COLUMN prev_hash TEXT"),
-        ("entry_hash", "ALTER TABLE secure_audit ADD COLUMN entry_hash TEXT"),
-    ):
-        try:
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
-            if col_name not in cols:
-                conn.execute(col_sql)
-        except Exception:
-            pass
-
+    ensure_secure_audit_columns(conn)
     ensure_user_columns(conn)
 
 def _migration_003_compat_appeal_columns(conn):
@@ -1631,6 +1621,15 @@ def ensure_user_columns(conn):
         if col not in cols:
             conn.execute(ddl)
 
+def ensure_secure_audit_columns(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
+    for col, ddl in (
+        ("prev_hash", "ALTER TABLE secure_audit ADD COLUMN prev_hash TEXT"),
+        ("entry_hash", "ALTER TABLE secure_audit ADD COLUMN entry_hash TEXT"),
+    ):
+        if col not in cols:
+            conn.execute(ddl)
+
 def ensure_appeal_columns(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(violation_appeals)").fetchall()}
     for col, ddl in (
@@ -1832,6 +1831,7 @@ def init_db():
         );
     """)
 
+    ensure_secure_audit_columns(conn)
     ensure_user_columns(conn)
     ensure_appeal_columns(conn)
     init_system_settings_table(conn)
