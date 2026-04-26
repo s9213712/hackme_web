@@ -1,6 +1,7 @@
 let communityBoards = [];
 let communityAnnouncements = [];
 let communityBoardReviews = [];
+let communityThreadReviews = [];
 let selectedCommunityBoardId = null;
 let selectedCommunityThreadId = null;
 let communityThreads = [];
@@ -75,6 +76,38 @@ function renderCommunityBoardReviews() {
   });
 }
 
+function renderCommunityThreadReviews() {
+  const panel = $("community-thread-review-panel");
+  const list = $("community-thread-review-list");
+  const canReview = currentRole === "manager" || currentRole === "super_admin";
+  if (panel) panel.style.display = canReview ? "block" : "none";
+  if (!list || !canReview) return;
+  if (!communityThreadReviews.length) {
+    list.innerHTML = "<p style='color:var(--muted);'>目前沒有待審核主題</p>";
+    return;
+  }
+  list.innerHTML = communityThreadReviews.map((item) => `
+    <div class="community-card">
+      <div class="community-card-head">
+        <strong>${sanitize(item.title || "")}</strong>
+        <span class="community-badge pending">${communityStatusLabel(item.status)}</span>
+      </div>
+      <div class="community-meta">作者：${sanitize(item.author_username || "")} · ${sanitize(formatChatTime(item.created_at || ""))}</div>
+      <div class="community-body">${sanitize(item.content || "")}</div>
+      <div class="community-actions">
+        <button class="btn btn-primary" type="button" data-thread-review="${item.id}" data-thread-action="approve">核准公開</button>
+        <button class="btn" type="button" data-thread-review="${item.id}" data-thread-action="reject">駁回</button>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll("button[data-thread-review]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewCommunityThread(
+      parseInt(btn.getAttribute("data-thread-review"), 10),
+      btn.getAttribute("data-thread-action")
+    ));
+  });
+}
+
 function renderCommunityBoards() {
   const list = $("community-board-list");
   if (!list) return;
@@ -112,6 +145,7 @@ function renderCommunityThreads(board) {
   const pageInfo = $("community-thread-page-info");
   const prevBtn = $("community-thread-prev");
   const nextBtn = $("community-thread-next");
+  const submitBtn = $("community-thread-submit");
   if (heading) heading.textContent = board ? board.title : "請先選擇討論區";
   if (meta) {
     meta.textContent = board
@@ -131,6 +165,7 @@ function renderCommunityThreads(board) {
   if (prevBtn) prevBtn.disabled = communityThreadPage <= 0;
   if (nextBtn) nextBtn.disabled = ((communityThreadPage + 1) * communityThreadLimit) >= communityThreadTotal;
   if (creator) creator.style.display = board && board.status === "approved" ? "block" : "none";
+  if (submitBtn) submitBtn.textContent = (currentRole === "manager" || currentRole === "super_admin") ? "發布主題" : "送審主題";
   if (!list) return;
   if (!board) {
     list.innerHTML = "<p style='color:var(--muted);'>請先選擇左側討論區</p>";
@@ -144,6 +179,7 @@ function renderCommunityThreads(board) {
     <button class="community-thread-item${Number(selectedCommunityThreadId) === Number(thread.id) ? " active" : ""}" type="button" data-open-thread="${thread.id}">
       <strong>${sanitize(thread.title || "")}</strong>
       <div class="community-meta">${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))}</div>
+      <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       <div class="community-body">${sanitize((thread.content || "").slice(0, 140))}${(thread.content || "").length > 140 ? "..." : ""}</div>
       <div class="community-meta">回覆 ${thread.reply_count || 0}</div>
     </button>
@@ -160,7 +196,7 @@ function renderCommunityThreadDetail(thread, posts) {
   const lockTools = $("community-thread-lock-tools");
   const lockToggle = $("community-thread-lock-toggle");
   if (heading) heading.textContent = thread ? thread.title : "主題內容";
-  if (replyBox) replyBox.style.display = thread && thread.board_status === "approved" && !thread.is_locked ? "block" : "none";
+  if (replyBox) replyBox.style.display = thread && thread.board_status === "approved" && thread.status === "approved" && !thread.is_locked ? "block" : "none";
   if (lockTools) lockTools.style.display = thread && (currentRole === "manager" || currentRole === "super_admin") ? "flex" : "none";
   if (lockToggle && thread) lockToggle.textContent = thread.is_locked ? "解除鎖定" : "鎖定主題";
   if (!detail) return;
@@ -179,6 +215,7 @@ function renderCommunityThreadDetail(thread, posts) {
   detail.innerHTML = `
     <div class="community-card">
       <div class="community-meta">${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))} · ${sanitize(thread.board_title || "")}${thread.is_locked ? " · 已鎖定" : ""}</div>
+      <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       <div class="community-body">${sanitize(thread.content || "")}</div>
     </div>
     <div class="mini-title" style="margin:.8rem 0 .45rem;">留言區</div>
@@ -242,6 +279,8 @@ async function loadCommunityBoards() {
   const json = await res.json().catch(() => ({}));
   if (!json.ok) return;
   communityBoards = Array.isArray(json.boards) ? json.boards : [];
+  const requestPanel = $("community-board-request-panel");
+  if (requestPanel) requestPanel.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "block" : "none";
   renderCommunityBoards();
   selectedCommunityBoard = communityBoards.find((item) => Number(item.id) === Number(selectedCommunityBoardId)) || null;
   renderCommunityThreads(selectedCommunityBoard);
@@ -283,6 +322,19 @@ async function loadCommunityBoardReviews() {
   renderCommunityBoardReviews();
 }
 
+async function loadCommunityThreadReviews() {
+  if (!(currentRole === "manager" || currentRole === "super_admin")) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/threads/reviews", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  communityThreadReviews = Array.isArray(json.items) ? json.items : [];
+  renderCommunityThreadReviews();
+}
+
 async function reviewCommunityBoard(boardId, action) {
   await fetchCsrfToken({ force: true });
   const note = prompt(action === "approve" ? "核准備註（可留空）" : "駁回原因（可留空）", "") || "";
@@ -296,6 +348,23 @@ async function reviewCommunityBoard(boardId, action) {
   flash($("community-msg"), json.msg || "審核失敗", !!json.ok);
   if (json.ok) {
     await Promise.all([loadCommunityBoardReviews(), loadCommunityBoards()]);
+  }
+}
+
+async function reviewCommunityThread(threadId, action) {
+  await fetchCsrfToken({ force: true });
+  const note = prompt(action === "approve" ? "核准備註（可留空）" : "駁回原因（可留空）", "") || "";
+  const res = await fetch(API + "/community/threads/" + threadId + "/review", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ action, note })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "主題審核失敗", !!json.ok);
+  if (json.ok) {
+    await Promise.all([loadCommunityThreadReviews(), loadCommunityBoards()]);
+    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId);
   }
 }
 
@@ -346,6 +415,11 @@ async function createCommunityThread() {
     if ($("community-thread-title")) $("community-thread-title").value = "";
     if ($("community-thread-content")) $("community-thread-content").value = "";
     await openCommunityBoard(selectedCommunityBoardId);
+    if (currentRole !== "manager" && currentRole !== "super_admin") {
+      flash($("community-msg"), json.msg || "主題已送審", true);
+    } else {
+      await loadCommunityThreadReviews();
+    }
   }
 }
 
@@ -411,5 +485,6 @@ async function loadCommunityHome() {
     loadAnnouncements(),
     loadCommunityBoards(),
     (currentRole === "manager" || currentRole === "super_admin") ? loadCommunityBoardReviews() : Promise.resolve(),
+    (currentRole === "manager" || currentRole === "super_admin") ? loadCommunityThreadReviews() : Promise.resolve(),
   ]);
 }

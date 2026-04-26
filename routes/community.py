@@ -40,6 +40,10 @@ def register_community_routes(app, deps):
             board_id         INTEGER NOT NULL REFERENCES forum_boards(id) ON DELETE CASCADE,
             title            TEXT NOT NULL,
             content          TEXT NOT NULL,
+            status           TEXT NOT NULL DEFAULT 'approved',
+            review_note      TEXT,
+            reviewed_by      TEXT,
+            reviewed_at      TEXT,
             is_locked        INTEGER NOT NULL DEFAULT 0,
             author_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             author_username  TEXT NOT NULL,
@@ -69,6 +73,14 @@ def register_community_routes(app, deps):
         if "rules" not in cols:
             conn.execute("ALTER TABLE forum_boards ADD COLUMN rules TEXT")
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_threads)").fetchall()}
+        if "status" not in cols:
+            conn.execute("ALTER TABLE forum_threads ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'")
+        if "review_note" not in cols:
+            conn.execute("ALTER TABLE forum_threads ADD COLUMN review_note TEXT")
+        if "reviewed_by" not in cols:
+            conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_by TEXT")
+        if "reviewed_at" not in cols:
+            conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_at TEXT")
         if "is_locked" not in cols:
             conn.execute("ALTER TABLE forum_threads ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0")
 
@@ -90,6 +102,23 @@ def register_community_routes(app, deps):
             "review_note": row["review_note"],
             "reviewed_by": row["reviewed_by"],
             "reviewed_at": row["reviewed_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def thread_payload(row):
+        return {
+            "id": row["id"],
+            "board_id": row["board_id"],
+            "title": row["title"],
+            "content": row["content"],
+            "status": row["status"],
+            "review_note": row["review_note"],
+            "reviewed_by": row["reviewed_by"],
+            "reviewed_at": row["reviewed_at"],
+            "is_locked": bool(row["is_locked"]),
+            "author_user_id": row["author_user_id"],
+            "author_username": row["author_username"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -209,6 +238,8 @@ def register_community_routes(app, deps):
                 data = request.get_json(force=True)
             except Exception:
                 return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            if not can_manage_community(actor):
+                return json_resp({"ok": False, "msg": "目前只有管理員以上可建立討論版面"}), 403
             title = normalize_text(data.get("title"))[:80]
             description = normalize_text(data.get("description"))[:1200]
             rules = normalize_text(data.get("rules"))[:2000]
@@ -315,6 +346,14 @@ def register_community_routes(app, deps):
                 like = f"%{q}%"
                 where = "board_id=?"
                 params = [board_id]
+                if manageable:
+                    status_filter = normalize_text(request.args.get("status")) or ""
+                    if status_filter in ("pending", "approved", "rejected"):
+                        where += " AND status=?"
+                        params.append(status_filter)
+                else:
+                    where += " AND (status='approved' OR author_user_id=?)"
+                    params.append(actor["id"])
                 if q:
                     where += " AND (title LIKE ? OR content LIKE ? OR author_username LIKE ?)"
                     params.extend([like, like, like])
@@ -323,7 +362,8 @@ def register_community_routes(app, deps):
                     tuple(params)
                 ).fetchone()["c"]
                 rows = conn.execute(
-                    f"SELECT id, title, content, is_locked, author_username, created_at, updated_at "
+                    f"SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, is_locked, "
+                    f"author_user_id, author_username, created_at, updated_at "
                     f"FROM forum_threads WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     tuple(params + [limit, page * limit])
                 ).fetchall()
@@ -333,17 +373,19 @@ def register_community_routes(app, deps):
                         "SELECT COUNT(*) AS c FROM forum_posts WHERE thread_id=?",
                         (row["id"],)
                     ).fetchone()["c"]
-                    threads.append({
-                        "id": row["id"],
-                        "title": row["title"],
-                        "content": row["content"],
-                        "is_locked": bool(row["is_locked"]),
-                        "author_username": row["author_username"],
-                        "created_at": row["created_at"],
-                        "updated_at": row["updated_at"],
-                        "reply_count": reply_count or 0,
-                    })
-                return json_resp({"ok": True, "board": board_payload(board), "threads": threads, "total": total, "page": page, "limit": limit, "query": q})
+                    item = thread_payload(row)
+                    item["reply_count"] = reply_count or 0
+                    threads.append(item)
+                return json_resp({
+                    "ok": True,
+                    "board": board_payload(board),
+                    "threads": threads,
+                    "total": total,
+                    "page": page,
+                    "limit": limit,
+                    "query": q,
+                    "can_post_directly": manageable,
+                })
 
             if board["status"] != "approved":
                 return json_resp({"ok": False, "msg": "討論區尚未開放"}), 403
@@ -356,14 +398,91 @@ def register_community_routes(app, deps):
             if not title or not content:
                 return json_resp({"ok": False, "msg": "主題標題與內容不可為空"}), 400
             now = datetime.now().isoformat()
+            status = "approved" if manageable else "pending"
             conn.execute(
-                "INSERT INTO forum_threads (board_id, title, content, author_user_id, author_username, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (board_id, title, content, actor["id"], actor["username"], now, now)
+                "INSERT INTO forum_threads (board_id, title, content, status, author_user_id, author_username, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (board_id, title, content, status, actor["id"], actor["username"], now, now)
             )
             conn.commit()
-            audit("COMMUNITY_THREAD_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"board_id={board_id}, title={title}")
-            return json_resp({"ok": True, "msg": "主題已建立"})
+            audit(
+                "COMMUNITY_THREAD_CREATE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"board_id={board_id}, title={title}, status={status}"
+            )
+            return json_resp({"ok": True, "msg": "主題已建立" if manageable else "主題已送審，待管理員核准後公開"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/threads/reviews", methods=["GET"])
+    @require_csrf_safe
+    def community_thread_reviews():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not can_manage_community(actor):
+            return json_resp({"ok": False, "msg": "只有管理員以上可審核主題"}), 403
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            rows = conn.execute(
+                "SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, is_locked, "
+                "author_user_id, author_username, created_at, updated_at "
+                "FROM forum_threads WHERE status='pending' ORDER BY created_at ASC"
+            ).fetchall()
+            return json_resp({"ok": True, "items": [thread_payload(row) for row in rows]})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/threads/<int:thread_id>/review", methods=["POST"])
+    @require_csrf
+    def community_thread_review(thread_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not can_manage_community(actor):
+            return json_resp({"ok": False, "msg": "只有管理員以上可審核主題"}), 403
+
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        action = normalize_text(data.get("action"))
+        note = normalize_text(data.get("note"))[:200]
+        if action not in ("approve", "reject"):
+            return json_resp({"ok": False, "msg": "審核動作錯誤"}), 400
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            row = conn.execute(
+                "SELECT id, title, status FROM forum_threads WHERE id=?",
+                (thread_id,)
+            ).fetchone()
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            if row["status"] != "pending":
+                return json_resp({"ok": False, "msg": "此主題已審核"}), 409
+            new_status = "approved" if action == "approve" else "rejected"
+            now = datetime.now().isoformat()
+            conn.execute(
+                "UPDATE forum_threads SET status=?, review_note=?, reviewed_by=?, reviewed_at=?, updated_at=? WHERE id=?",
+                (new_status, note or None, actor["username"], now, now, thread_id)
+            )
+            conn.commit()
+            audit(
+                "COMMUNITY_THREAD_REVIEW",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"thread_id={thread_id}, action={new_status}"
+            )
+            return json_resp({"ok": True, "msg": "主題審核完成"})
         finally:
             conn.close()
 
@@ -378,8 +497,9 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             thread = conn.execute(
-                "SELECT t.id, t.board_id, t.title, t.content, t.author_username, t.created_at, t.updated_at, "
-                "t.is_locked, b.status AS board_status, b.owner_user_id, b.owner_username, b.title AS board_title "
+                "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, "
+                "t.author_user_id, t.author_username, t.created_at, t.updated_at, t.is_locked, "
+                "b.status AS board_status, b.owner_user_id, b.owner_username, b.title AS board_title "
                 "FROM forum_threads t JOIN forum_boards b ON b.id=t.board_id WHERE t.id=?",
                 (thread_id,)
             ).fetchone()
@@ -389,6 +509,8 @@ def register_community_routes(app, deps):
             accessible = thread["board_status"] == "approved" or manageable or thread["owner_user_id"] == actor["id"]
             if not accessible:
                 return json_resp({"ok": False, "msg": "權限不足"}), 403
+            if thread["status"] != "approved" and not manageable and thread["author_user_id"] != actor["id"]:
+                return json_resp({"ok": False, "msg": "此主題尚未公開"}), 403
             posts = conn.execute(
                 "SELECT id, content, author_username, created_at, updated_at FROM forum_posts WHERE thread_id=? ORDER BY created_at ASC",
                 (thread_id,)
@@ -401,7 +523,12 @@ def register_community_routes(app, deps):
                     "board_title": thread["board_title"],
                     "title": thread["title"],
                     "content": thread["content"],
+                    "status": thread["status"],
+                    "review_note": thread["review_note"],
+                    "reviewed_by": thread["reviewed_by"],
+                    "reviewed_at": thread["reviewed_at"],
                     "is_locked": bool(thread["is_locked"]),
+                    "author_user_id": thread["author_user_id"],
                     "author_username": thread["author_username"],
                     "created_at": thread["created_at"],
                     "updated_at": thread["updated_at"],
@@ -437,7 +564,7 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             thread = conn.execute(
-                "SELECT t.id, t.board_id, t.is_locked, b.status AS board_status FROM forum_threads t "
+                "SELECT t.id, t.board_id, t.status, t.is_locked, b.status AS board_status FROM forum_threads t "
                 "JOIN forum_boards b ON b.id=t.board_id WHERE t.id=?",
                 (thread_id,)
             ).fetchone()
@@ -445,6 +572,8 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
             if thread["board_status"] != "approved":
                 return json_resp({"ok": False, "msg": "此討論區尚未開放留言"}), 403
+            if thread["status"] != "approved":
+                return json_resp({"ok": False, "msg": "此主題尚未公開留言"}), 403
             if bool(thread["is_locked"]):
                 return json_resp({"ok": False, "msg": "此主題已鎖定，暫停留言"}), 403
             now = datetime.now().isoformat()
