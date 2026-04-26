@@ -23,3 +23,4 @@ key.pem
 attack_test/
 pentest_artifacts/
 reports/pentest/
+architecture_scan.md
