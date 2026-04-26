@@ -31,6 +31,15 @@ pip install -r requirements.txt
 python3 server.py
 ```
 
+### 生產啟動（建議）
+```bash
+cp .env.production.example .env
+# 編輯 .env（替換 SESSION_SECRET 與 CSRF_SECRET_KEY）
+source .env
+./scripts/run_prod.sh
+```
+> `.env.production.example` 內有 `SESSION_COOKIE_SECURE=true`、`IP_BLOCKING_ENABLED=true`、`FORCE_HTTPS=true` 等預設。
+
 - 預設帳號：`root` / `root`
 - 管理員帳號：`s92137` / `Manager@1234`
 
@@ -65,6 +74,7 @@ python3 server.py
 - `database/database.db`：SQLite
 - `logs/audit.log`, `logs/server.log`
 - `requirements.txt`
+- `scripts/run_prod.sh`
 - `README.md`、`SECURITY.md`、`upgrade_plan.md`
 - `attack_test/*`：滲透測試腳本與紀錄
 
@@ -72,3 +82,4 @@ python3 server.py
 - 前端已完成 CSS/JS 外部化，降低單檔集中。
 - 後端 `server.py` 仍是主集中點（2200+ 行）並已規劃下一版拆分為 `core/` 與 `routes/` 模組。
 - 每次交付前建議執行：`./scripts/pre_push_scan.sh`
+- 上線前建議先填好 `.env.production.example` 並以 `./scripts/run_prod.sh` 啟動（會自動 `init_db` 並以 Gunicorn 對外服務）

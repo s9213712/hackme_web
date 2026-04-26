@@ -289,10 +289,24 @@ def parse_ip_set(raw_value):
             continue
     return values
 
+def _env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "on", "yes"}
+
+def _env_session_samesite():
+    s = os.environ.get("SESSION_COOKIE_SAMESITE", "Strict").strip().lower()
+    return "Strict" if s in {"", "strict"} else ("Lax" if s == "lax" else "None")
+
 TRUSTED_PROXY_IPS = parse_ip_set(os.environ.get("TRUSTED_PROXY_IPS", ""))
 USE_XFF = os.environ.get("USE_XFF", "false").strip().lower() in {"1", "true", "on", "yes"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
-IP_BLOCKING_ENABLED = os.environ.get("IP_BLOCKING_ENABLED", "false").strip().lower() in {"1", "true", "on", "yes"}
+IP_BLOCKING_ENABLED = _env_bool("IP_BLOCKING_ENABLED", default=False)
+FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=False)
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=False)
+SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
+SESSION_COOKIE_SAMESITE = _env_session_samesite()
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
 CSRF_SECRET_KEY = os.environ.get("CSRF_SECRET_KEY",
@@ -1232,7 +1246,12 @@ def db_get_user_role(username):
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
+app.config["SECRET_KEY"] = SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+app.config["SESSION_COOKIE_SECURE"] = SESSION_COOKIE_SECURE
+app.config["SESSION_COOKIE_HTTPONLY"] = SESSION_COOKIE_HTTPONLY
+app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE
+app.config["PREFERRED_URL_SCHEME"] = "https" if FORCE_HTTPS else "http"
 
 # ── Security Headers (via Flask-Talisman) ─────────────────────────────────────
 # CSP: strict mode (no inline scripts/styles)
@@ -1251,7 +1270,7 @@ talisman = Talisman(app,
     },
     referrer_policy="no-referrer",
     feature_policy={},
-    force_https=False,        # SSL termination at proxy level
+    force_https=FORCE_HTTPS,        # SSL termination at proxy level
 )
 
 # ── Legacy security headers (supplement Talisman) ─────────────────────────────
@@ -1295,7 +1314,7 @@ def index():
         tok = make_csrf_token()
         store_csrf_token(tok, "__public__")
         resp.set_cookie("csrf_token", tok, max_age=3600, httponly=False,
-                        samesite="Strict", secure=request.is_secure)
+                        samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
     # Logged-in users keep their per-user csrf_token cookie (set at login)
     return resp
 
@@ -1491,14 +1510,14 @@ def login():
             audit("LOGIN_OK", ip, username, ua=ua, success=True)
             resp = json_resp({"ok":True,"msg":"恭喜登入成功","token":token})
             resp.set_cookie("session_token", token, max_age=SESSION_TTL,
-                            httponly=True, samesite="Strict",
-                            secure=request.is_secure)
+                            httponly=True, samesite=SESSION_COOKIE_SAMESITE,
+                            secure=SESSION_COOKIE_SECURE)
             # Invalidate the public CSRF token and issue a fresh per-user token
             new_csrf = make_csrf_token()
             store_csrf_token(new_csrf, username)
             resp.set_cookie("csrf_token", new_csrf, max_age=CSRF_TOKEN_TTL,
-                            httponly=False, samesite="Strict",
-                            secure=request.is_secure)
+                            httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                            secure=SESSION_COOKIE_SECURE)
             return resp
         else:
             # Log failed attempt
@@ -1524,8 +1543,8 @@ def logout():
         db_delete_session(tok)
     audit("LOGOUT", ip, user=user or "-", ua=ua, success=bool(user))
     resp = json_resp({"ok":True,"msg":"已登出"})
-    resp.delete_cookie("session_token")
-    resp.delete_cookie("csrf_token")
+    resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+    resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
     return resp
 
 @app.route("/api/me", methods=["GET"])
