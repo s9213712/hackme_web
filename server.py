@@ -467,12 +467,23 @@ def get_client_ip():
 
 def get_ua(): return request.headers.get("User-Agent","-")[:200]
 
+def is_audit_chain_enabled():
+    return bool(get_system_settings().get("audit_chain_enabled", False))
+
+def is_ip_blocking_enabled():
+    settings = get_system_settings()
+    if "ip_blocking_enabled" in settings:
+        return bool(settings.get("ip_blocking_enabled", False))
+    return bool(IP_BLOCKING_ENABLED)
+
 # ══════════════════════════════════════════════════════════════════════
 #  安全事件追蹤（全部寫入 security_events 表，廢除 JSON 檔）
 # ══════════════════════════════════════════════════════════════════════
 
 def is_ip_blocked(ip):
     """查 security_events 表，回傳是否在封鎖中（root 永遠不通過）"""
+    if not is_ip_blocking_enabled():
+        return False
     if ip == "127.0.0.1" or ip == "::1":
         return False          # localhost 不封鎖
     conn = get_db()
@@ -512,6 +523,9 @@ def block_ip(ip, minutes=10, reason="multiple failures"):
 
 def record_login_failure(ip, username="", ua="-", detail="-", lock_on=3):
     """寫入 security_events（login_fail），累計超限自動封鎖"""
+    settings = get_system_settings()
+    lock_limit = max(1, int(settings.get("max_login_failures", lock_on or 3)))
+    block_minutes = max(1, int(settings.get("block_duration_minutes", 10)))
     conn = get_db()
     try:
         conn.execute(
@@ -532,10 +546,10 @@ def record_login_failure(ip, username="", ua="-", detail="-", lock_on=3):
 
     audit("LOGIN_FAIL", ip, username, ua=ua, detail=detail)
 
-    if count >= lock_on and IP_BLOCKING_ENABLED:
-        block_ip(ip, 10, f"{count} failures → 10 min block")
+    if count >= lock_limit and is_ip_blocking_enabled():
+        block_ip(ip, block_minutes, f"{count} failures → {block_minutes} min block")
         audit("LOGIN_IP_BLOCKED", ip, username, ua=ua,
-              detail=f"{count} failures → 10 min block")
+              detail=f"{count} failures → {block_minutes} min block")
     return count
 
 def clear_failed_logins(ip):
@@ -1258,6 +1272,8 @@ SETTINGS_FILES = [
 
 DEFAULT_SETTINGS = {
     # 原有核心設定
+    "audit_chain_enabled": False,
+    "ip_blocking_enabled": False,
     "max_login_fails_for_violation": 5,
     "login_violation_enabled": True,
     "rate_limit_violation_enabled": True,
@@ -3610,9 +3626,13 @@ def admin_audit():
                 total = len(raw_lines)
 
         # Integrity 驗證
-        ok, broken_at, details = verify_audit_integrity()
-        if not ok:
-            activate_emergency_lockdown(f"audit_chain_broken_at={broken_at}; {details}")
+        if is_audit_chain_enabled():
+            ok, broken_at, details = verify_audit_integrity()
+            if not ok:
+                activate_emergency_lockdown(f"audit_chain_broken_at={broken_at}; {details}")
+            integrity = {"enabled": True, "ok": ok, "broken_at": broken_at, "details": details}
+        else:
+            integrity = {"enabled": False, "ok": None, "broken_at": None, "details": "audit chain disabled"}
 
         return json_resp({
             "ok": True,
@@ -3620,7 +3640,7 @@ def admin_audit():
             "total": total,
             "page": page,
             "limit": limit,
-            "integrity": {"ok": ok, "broken_at": broken_at, "details": details}
+            "integrity": integrity
         })
     finally:
         conn.close()
@@ -3745,10 +3765,14 @@ def admin_health():
         return json_resp({"ok":False,"msg":"只有最高管理者可查看伺服器健康度"}), 403
 
     settings = get_system_settings()
-    audit_ok, audit_broken, audit_details = verify_audit_integrity()
-    if not audit_ok:
-        activate_emergency_lockdown(f"audit_chain_broken_at={audit_broken}; {audit_details}")
-        settings = get_system_settings()
+    audit_enabled = is_audit_chain_enabled()
+    if audit_enabled:
+        audit_ok, audit_broken, audit_details = verify_audit_integrity()
+        if not audit_ok:
+            activate_emergency_lockdown(f"audit_chain_broken_at={audit_broken}; {audit_details}")
+            settings = get_system_settings()
+    else:
+        audit_ok, audit_broken, audit_details = None, None, "audit chain disabled"
 
     conn = get_db()
     try:
@@ -3766,12 +3790,12 @@ def admin_health():
     db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
     chat_files = [name for name in os.listdir(CHAT_DIR) if name.endswith(".jsonl")] if os.path.isdir(CHAT_DIR) else []
     chat_size = sum(os.path.getsize(os.path.join(CHAT_DIR, name)) for name in chat_files)
-    status = "critical" if not audit_ok or settings.get("maintenance_mode", False) else "ok"
+    status = "critical" if ((audit_enabled and audit_ok is False) or settings.get("maintenance_mode", False)) else "ok"
     return json_resp({
         "ok": True,
         "status": status,
         "maintenance_mode": settings.get("maintenance_mode", False),
-        "audit_integrity": {"ok": audit_ok, "broken_at": audit_broken, "details": audit_details},
+        "audit_integrity": {"enabled": audit_enabled, "ok": audit_ok, "broken_at": audit_broken, "details": audit_details},
         "counts": {
             "users_total": users_total,
             "active_users": active_users,

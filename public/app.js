@@ -1561,11 +1561,16 @@ async function loadAudit(page) {
   const integrity = json.integrity;
   const integEl = $("audit-integrity");
   if (integEl) {
-    const chainOk = integrity && integrity.ok;
-    integEl.textContent = chainOk ? "🔗 鏈完整" : "⚠️ 鏈已斷！";
-    integEl.style.color = chainOk ? "#4caf50" : "#ff4f6d";
+    if (integrity && integrity.enabled === false) {
+      integEl.textContent = "審計鏈檢查已停用";
+      integEl.style.color = "var(--muted)";
+    } else {
+      const chainOk = integrity && integrity.ok;
+      integEl.textContent = chainOk ? "🔗 鏈完整" : "⚠️ 鏈已斷！";
+      integEl.style.color = chainOk ? "#4caf50" : "#ff4f6d";
+    }
   }
-  if (currentRole === "super_admin" && integrity && integrity.ok === false && integrity.broken_at) {
+  if (currentRole === "super_admin" && integrity && integrity.enabled !== false && integrity.ok === false && integrity.broken_at) {
     alert(`審計紀錄異常：hash chain 在 #${integrity.broken_at} 斷裂，請立即檢查。`);
   }
   const container = $("audit-entries");
@@ -1740,6 +1745,8 @@ async function loadSettings() {
   if (!json.ok) return;
   const s = json.settings || {};
   if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
+  if ($("s-audit-chain-enabled")) $("s-audit-chain-enabled").checked = !!s.audit_chain_enabled;
+  if ($("s-ip-blocking-enabled")) $("s-ip-blocking-enabled").checked = !!s.ip_blocking_enabled;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
@@ -1774,10 +1781,11 @@ async function loadServerHealth() {
   const c = json.counts || {};
   const s = json.storage || {};
   const auditOk = json.audit_integrity && json.audit_integrity.ok;
+  const auditEnabled = !(json.audit_integrity && json.audit_integrity.enabled === false);
   const cards = [
     ["整體狀態", json.status === "ok" ? "正常" : "異常", json.status === "ok" ? "#4caf50" : "#ff4f6d"],
     ["維護模式", json.maintenance_mode ? "啟用" : "關閉", json.maintenance_mode ? "#ff4f6d" : "#4caf50"],
-    ["審計鏈", auditOk ? "完整" : "異常", auditOk ? "#4caf50" : "#ff4f6d"],
+    ["審計鏈", auditEnabled ? (auditOk ? "完整" : "異常") : "停用", auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e"],
     ["待審檢舉", String(c.pending_reports || 0), (c.pending_reports || 0) ? "#ffb74d" : "#4caf50"],
     ["待審申覆", String(c.pending_appeals || 0), (c.pending_appeals || 0) ? "#ffb74d" : "#4caf50"],
     ["活躍 Session", String(c.active_sessions || 0), "#82b1ff"],
@@ -1804,6 +1812,8 @@ async function saveSettings() {
   const csrf = getCsrfToken();
   const payload = {
     maintenance_mode: !!$("s-maintenance-mode")?.checked,
+    audit_chain_enabled: !!$("s-audit-chain-enabled")?.checked,
+    ip_blocking_enabled: !!$("s-ip-blocking-enabled")?.checked,
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
