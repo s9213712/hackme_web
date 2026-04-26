@@ -73,17 +73,36 @@ function readCookie(name) {
 
 function getCsrfToken() { return _csrfToken; }
 
+let _csrfTokenRequest = null;
+
 async function fetchCsrfToken({ force = false } = {}) {
+  const cookieToken = readCookie("csrf_token");
+  if (!force && (_csrfToken || cookieToken)) {
+    _csrfToken = _csrfToken || cookieToken || null;
+    return _csrfToken;
+  }
+  if (_csrfTokenRequest) {
+    await _csrfTokenRequest;
+    return _csrfToken;
+  }
+  _csrfTokenRequest = (async () => {
+    try {
+      const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
+      const json = await res.json().catch(() => ({}));
+      if (json && json.ok && typeof json.csrf_token === "string" && json.csrf_token) {
+        _csrfToken = json.csrf_token;
+        return;
+      }
+    } catch (_) {}
+    const latestCookieToken = readCookie("csrf_token");
+    _csrfToken = latestCookieToken || null;
+  })();
   try {
-    const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
-    const json = await res.json();
-    if (json.ok) {
-      _csrfToken = json.csrf_token;
-      return;
-    }
-    const cookieToken = readCookie("csrf_token");
-    _csrfToken = cookieToken || null;
-  } catch (_) { _csrfToken = null; }
+    await _csrfTokenRequest;
+  } finally {
+    _csrfTokenRequest = null;
+  }
+  return _csrfToken;
 }
 
 function flash(el, text, ok) {
