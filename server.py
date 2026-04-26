@@ -1012,6 +1012,79 @@ def get_db():
         pass
     return conn
 
+# ── Schema migration control ──────────────────────────────────────────────
+CURRENT_SCHEMA_VERSION = 4
+SCHEMA_MIGRATIONS = (
+    (1, "bootstrap schema_migrations metadata table"),
+    (2, "ensure legacy-compatible users columns"),
+    (3, "ensure violation_appeals columns"),
+    (4, "ensure system_settings baseline rows"),
+)
+
+def ensure_schema_migrations_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version     INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            applied_at  TEXT NOT NULL
+        )
+        """
+    )
+
+def get_schema_version(conn):
+    ensure_schema_migrations_table(conn)
+    try:
+        row = conn.execute("SELECT MAX(version) as v FROM schema_migrations").fetchone()
+        return int(row["v"]) if row and row["v"] is not None else 0
+    except Exception:
+        return 0
+
+def _migration_002_compat_user_columns(conn):
+    ensure_user_columns(conn)
+
+def _migration_003_compat_appeal_columns(conn):
+    ensure_appeal_columns(conn)
+
+def _migration_004_seed_system_settings(conn):
+    init_system_settings_table(conn)
+    _seed_missing_settings_to_db(conn)
+
+def apply_schema_migrations(conn):
+    current = get_schema_version(conn)
+    if current >= CURRENT_SCHEMA_VERSION:
+        return {
+            "previous": current,
+            "applied": [],
+            "current": current
+        }
+
+    applied = []
+    for version, name in SCHEMA_MIGRATIONS:
+        if version <= current:
+            continue
+        if version == 1:
+            # bootstrap table already ensured by get_schema_version
+            pass
+        elif version == 2:
+            _migration_002_compat_user_columns(conn)
+        elif version == 3:
+            _migration_003_compat_appeal_columns(conn)
+        elif version == 4:
+            _migration_004_seed_system_settings(conn)
+
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            (version, name, datetime.now().isoformat())
+        )
+        applied.append(version)
+
+    return {
+        "previous": current,
+        "applied": applied,
+        "current": max(current, applied[-1] if applied else current)
+    }
+
 # RBAC / account status helpers
 ROLE_RANK       = {"user": 0, "manager": 1, "super_admin": 2}
 ROLE_LABEL      = {
@@ -1351,6 +1424,12 @@ def ensure_appeal_columns(conn):
 def init_db():
     conn = get_db()
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version     INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            applied_at  TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS users (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             username   TEXT    NOT NULL UNIQUE,
@@ -1519,6 +1598,15 @@ def init_db():
     ensure_appeal_columns(conn)
     init_system_settings_table(conn)
     _seed_missing_settings_to_db(conn)
+    migration_plan = apply_schema_migrations(conn)
+    if migration_plan["applied"]:
+        audit(
+            "DB_SCHEMA_MIGRATION",
+            "127.0.0.1",
+            user="system",
+            detail=f"schema migrated from v{migration_plan['previous']} to v{migration_plan['current']}",
+        )
+
     migration_summary = migrate_legacy_json_artifacts(conn)
     if migration_summary["settings_imported"] or migration_summary["security_events_imported"] or migration_summary["secure_audit_imported"]:
         audit("DB_MIGRATION_APPLIED", "127.0.0.1", user="system", detail=str(migration_summary))
