@@ -498,7 +498,7 @@ def verify_violation_integrity(user_id):
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, username, points, reason, triggered_by, actor_username, created_at, prev_hash, entry_hash "
+            "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at, prev_hash, entry_hash "
             "FROM secure_violations WHERE user_id=? ORDER BY id ASC",
             (user_id,)
         ).fetchall()
@@ -823,6 +823,25 @@ def parse_birthdate(v):
         return v
     except Exception:
         return None
+
+def parse_positive_int(v, default=None, min_value=1, max_value=None):
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, float) and not v.is_integer():
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+    try:
+        value = int(v)
+    except (TypeError, ValueError):
+        return None
+    if value < min_value:
+        return None
+    if max_value is not None and value > max_value:
+        return None
+    return value
 
 def validate_id_number(v):
     if not isinstance(v, str):
@@ -1710,12 +1729,12 @@ def admin_user_block(user_id):
 @app.route("/api/admin/users/<int:user_id>/promote", methods=["POST"])
 @require_csrf
 def admin_user_promote(user_id):
-    """管理者或超級管理者可推廣一般用戶為管理者；超級管理者可推廣管理者為超級管理者"""
+    """僅超級管理者可推廣帳號"""
     actor = get_current_user_ctx()
     if not actor:
         return json_resp({"ok":False,"msg":"未登入"}), 401
     actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-    if role_rank(actor_role) < role_rank("manager"):
+    if role_rank(actor_role) < role_rank("super_admin"):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
     conn = get_db()
@@ -1803,7 +1822,11 @@ def admin_user_violation(user_id):
     except:
         return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
 
-    points = max(1, int(data.get("points", 1)))
+    if not isinstance(data, dict):
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
+    points = parse_positive_int(data.get("points", 1))
+    if points is None:
+        return json_resp({"ok":False,"msg":"違規點數格式錯誤"}), 400
     reason = str(data.get("reason", "手動計點"))[:200]
     triggered_by = "super_admin" if actor_role == "super_admin" else "manager"
 
@@ -1842,8 +1865,12 @@ def admin_violations():
     if role_rank(actor_role) < role_rank("manager"):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
-    page  = abs(int(request.args.get("page",  1)))
-    limit = min(abs(int(request.args.get("limit", 50))), 200)
+    page = parse_positive_int(request.args.get("page", 1))
+    if page is None:
+        return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
+    limit = parse_positive_int(request.args.get("limit", 50), max_value=200)
+    if limit is None:
+        return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
     offset = (page - 1) * limit
     username_filter = request.args.get("username", "").strip() or None
 
@@ -1943,8 +1970,12 @@ def admin_audit():
     if role_rank(actor_role) < role_rank("manager"):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
-    page  = abs(int(request.args.get("page",  1)))
-    limit = min(abs(int(request.args.get("limit", 50))), 200)
+    page = parse_positive_int(request.args.get("page", 1))
+    if page is None:
+        return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
+    limit = parse_positive_int(request.args.get("limit", 50), max_value=200)
+    if limit is None:
+        return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
     offset = (page - 1) * limit
 
     # 讀取 secure_audit 表（hash chain）
@@ -2078,9 +2109,20 @@ def catch_all(invalid):
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
+    KEY_FILE  = os.path.join(BASE_DIR, "key.pem")
+    has_ssl = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
+
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
-    print(f"\n🌐  hackme_web server running at http://localhost:5000")
-    print(f"    Default credentials: root / root")
+    scheme = "https" if has_ssl else "http"
+    print(f"\n🌐  hackme_web server running at {scheme}://localhost:5000")
+    print(f"    Default credentials: root / Admin@1234")
+    print(f"    SSL: {'enabled' if has_ssl else 'disabled (add cert.pem + key.pem to enable)'}")
     print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+
+    kwargs = {"host": "0.0.0.0", "port": 5000, "debug": False}
+    if has_ssl:
+        kwargs["ssl_context"] = (CERT_FILE, KEY_FILE)
+    app.run(**kwargs)

@@ -751,7 +751,7 @@ function setAuthState(json) {
       adminWrap.classList.remove("show");
     }
   }
-  const addPanel = $(\"admin-manager-view\");
+  const addPanel = $("admin-manager-view");
   if (addPanel) addPanel.style.display = canManageUsers ? "block" : "none";
 
   // Super admin: show settings tab + system tools
