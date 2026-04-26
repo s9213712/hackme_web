@@ -85,6 +85,7 @@ source .env
 ```bash
 python3 scripts/migrate_legacy_json.py
 ```
+- `migrate_legacy_json.py` 建議保留：平常啟動時已自動遷移，但此腳本可作為遺留檔案稽核、資料補償、疑難故障處理的手動工具；確認環境完全穩定後可視情況再移除。
 - 啟動時 `init_db()` 會自動偵測並嘗試補入 legacy JSON（`blocked_ips.json`、`fail_log.json`、`rate_limit.json`、`audit.log`）資料。
 ## 架構收斂與維運
 - 前端已完成 CSS/JS 外部化，降低單檔集中。
