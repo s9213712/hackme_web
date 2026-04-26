@@ -124,7 +124,11 @@ $("reg-pw").addEventListener("keydown", (e) => {
 });
 
 (async function init() {
-  startClock();
+  try {
+    startClock();
+  } catch (err) {
+    console.error("clock bootstrap failed", err);
+  }
   setupInactivityTracking();
   _csrfToken = readCookie("csrf_token");
   bindUiEvents();

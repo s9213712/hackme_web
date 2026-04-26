@@ -1,4 +1,3 @@
-(function() {
 'use strict';
 
 const API = "/api";
@@ -26,6 +25,7 @@ let chatPollTimer = null;
 const CHAT_POLL_MS = 2500;
 const INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
 let inactivityTimer = null;
+let clockTimer = null;
 
 function $(id) { return document.getElementById(id); }
 
@@ -275,13 +275,30 @@ function setupPwToggle(inputId, btnId) {
 function pad2(v) { return String(v).padStart(2, "0"); }
 function startClock() {
   const clock = $("clock");
-  if (!clock) return;
+  if (!clock) return false;
   const tick = () => {
-    const now = new Date();
-    clock.textContent = `⏰ ${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+    try {
+      const now = new Date();
+      clock.textContent = `⏰ ${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+    } catch (err) {
+      if (clockTimer) {
+        clearInterval(clockTimer);
+        clockTimer = null;
+      }
+      clock.textContent = "⏰ 時間載入失敗";
+      console.error("clock update failed", err);
+    }
   };
-  tick();
-  setInterval(tick, 1000);
+  try {
+    tick();
+    if (clockTimer) clearInterval(clockTimer);
+    clockTimer = setInterval(tick, 1000);
+    return true;
+  } catch (err) {
+    clock.textContent = "⏰ 時間載入失敗";
+    console.error("clock init failed", err);
+    return false;
+  }
 }
 
 setupPwToggle("li-pw", "li-pw-toggle");
@@ -455,4 +472,3 @@ function resetAuthState() {
   const tb = $("user-table")?.querySelector("tbody");
   if (tb) tb.innerHTML = "";
 }
-
