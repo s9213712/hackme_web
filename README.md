@@ -42,4 +42,4 @@ CSRF/SQLi/帳號枚舉/Session篡改/密碼儲存：✅ 已緩解
 詳見 攻防紀錄.md
 
 ## 專案結構
-server.py、public/index.html（SPA 4-tab 管理介面）、database/database.db（3NF SQLite）、logs/、.chain_seed（HMAC seed）、requirements.txt、README.md、SECURITY.md、攻防紀錄.md、attack_test/red_team_report.md、attack_test/blue_team_report.md
+server.py、public/index.html（SPA 4-tab 管理介面）、database/database.db（SQLite）、.chain_seed（HMAC seed）、requirements.txt、README.md、SECURITY.md、攻防紀錄.md、attack_test/red_team_report.md、attack_test/blue_team_report.md，以及專用資料夾 `logs/` 下的 audit.log / server.log

@@ -840,7 +840,7 @@ function renderUsers() {
         actionButtons.push(resetBtn);
       }
     }
-    if (canManageUsers && u.username !== "root") {
+    if (canManageUsers) {
       const editBtn = document.createElement("button");
       editBtn.className = "btn btn-primary";
       editBtn.type = "button";
@@ -1060,24 +1060,56 @@ async function toggleBlock(userId, isBlocked) {
 async function editUser(userId) {
   const target = users.find((u) => String(u.id) === String(userId));
   if (!target) return;
-  const nickname = window.prompt("修改暱稱", target.nickname || "");
-  if (nickname === null) return;
-  const realName = window.prompt("修改真實姓名", target.real_name || "");
-  if (realName === null) return;
-  const phone = window.prompt("修改電話", target.phone || "");
-  if (phone === null) return;
-
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+  let source = target;
+  const detailRes = await fetch(API + `/admin/users/${userId}`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  }).then((r) => r.json().catch(() => ({})));
+  if (detailRes && detailRes.ok && detailRes.user) {
+    source = detailRes.user;
+  }
+  const nickname = window.prompt("修改暱稱", source.nickname || "");
+  if (nickname === null) return;
+  const realName = window.prompt("修改真實姓名", source.real_name || "");
+  if (realName === null) return;
+  const idNumber = window.prompt("修改身分證", source.id_number || "");
+  if (idNumber === null) return;
+  const birthDate = window.prompt("修改生日（YYYY-MM-DD）", source.birthdate || "");
+  if (birthDate === null) return;
+  const phone = window.prompt("修改電話", source.phone || "");
+  if (phone === null) return;
+  const password = window.prompt("修改密碼（留空則不改）");
+  if (password === null) return;
+  let passwordConfirm = "";
+  if (password) {
+    passwordConfirm = window.prompt("再次輸入新密碼");
+    if (passwordConfirm === null) return;
+    if (password !== passwordConfirm) {
+      flash($("li-msg"), "兩次密碼輸入不一致", false);
+      return;
+    }
+  }
+
+  await fetchCsrfToken({ force: true });
+  const payload = {
+    nickname: nickname.trim(),
+    real_name: realName.trim(),
+    id_number: idNumber.trim(),
+    birthdate: birthDate.trim(),
+    phone: phone.trim()
+  };
+  if (password) {
+    payload.password = password;
+    payload.password_confirm = passwordConfirm;
+  }
   const res = await fetch(API + `/admin/users/${userId}`, {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({
-      nickname: nickname.trim(),
-      real_name: realName.trim(),
-      phone: phone.trim()
-    })
+    body: JSON.stringify(payload)
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
@@ -1217,8 +1249,9 @@ async function loadAudit(page) {
   const integrity = json.integrity;
   const integEl = $("audit-integrity");
   if (integEl) {
-    integEl.textContent = integrity === true ? "🔗 鏈完整" : integrity === false ? "⚠️ 鏈已斷！" : "";
-    integEl.style.color = integrity === true ? "#4caf50" : integrity === false ? "#ff4f6d" : "var(--muted)";
+    const chainOk = integrity && integrity.ok;
+    integEl.textContent = chainOk ? "🔗 鏈完整" : "⚠️ 鏈已斷！";
+    integEl.style.color = chainOk ? "#4caf50" : "#ff4f6d";
   }
   const container = $("audit-entries");
   if (!container) return;

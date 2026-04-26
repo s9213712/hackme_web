@@ -1,23 +1,15 @@
 __pycache__/
 *.pyc
-database.db
+database/database.db
+database/database.db.bak
 .blocked_ips.json
 .fail_log.json
 .rate_limit.json
 .attack_log.json
 .fkey
-.audit.log
-server.log
+.csrfkey
 SECURITY.md
 
-# CSRF secret
-database.db
-database/
-
-# CSRF secret
-.csrfkey
-
-# Runtime data
 *.log
 *.json
 !attack_test/*.md

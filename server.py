@@ -16,8 +16,15 @@ from flask_talisman import Talisman
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-DB_PATH    = os.path.join(BASE_DIR, "database", "database.db")
+DB_DIR = os.path.join(BASE_DIR, "database")
+DB_PATH = os.path.join(DB_DIR, "database.db")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
+SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
+
+os.makedirs(DB_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
 # ── Hash-chain integrity key (server-side only, not exposed to client) ───────
 # Seed derived from SECRET_KEY so it survives restarts (prevents chain-break on reboot)
 def _get_chain_seed():
@@ -86,10 +93,10 @@ def audit(action, ip, user="-", success=False, ua="-", detail="-"):
     finally:
         conn.close()
 
-    # 同步寫入 legacy JSON（allow override；廢除後可刪）
+    # 同步寫入 logs/audit.log（專用日誌目錄）
     _audit_lock.acquire()
     try:
-        with open(os.path.join(BASE_DIR, "audit.log"), "a", encoding="utf-8") as f:
+        with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(entry_json + "\n")
     finally:
         _audit_lock.release()
@@ -1402,11 +1409,12 @@ def me():
     ctx = get_current_user_ctx()
     if not ctx:
         return json_resp({"ok":False,"msg":"未登入"}), 401
+    role = "super_admin" if ctx["username"] == "root" else ctx["role"]
     return json_resp({
         "ok": True,
         "username": ctx["username"],
-        "role": ctx["role"],
-        "role_label": ROLE_LABEL.get(ctx["role"], ctx["role"]),
+        "role": role,
+        "role_label": ROLE_LABEL.get(role, role),
         "status": ctx["status"],
         "nickname": decrypt_field(ctx["nickname"]),
     })
@@ -1576,7 +1584,7 @@ def admin_users():
     finally:
         conn.close()
 
-@app.route("/api/admin/users/<int:user_id>", methods=["PUT","DELETE"])
+@app.route("/api/admin/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
 @require_csrf
 def admin_user_item(user_id):
     actor = get_current_user_ctx()
@@ -1588,9 +1596,30 @@ def admin_user_item(user_id):
 
     conn = get_db()
     try:
-        target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (user_id,)).fetchone()
+        target = conn.execute(
+            "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, blocked_until, violation_count FROM users WHERE id=?",
+            (user_id,)
+        ).fetchone()
         if not target:
             return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+
+        if request.method == "GET":
+            return json_resp({
+                "ok": True,
+                "user": {
+                    "id": target["id"],
+                    "username": target["username"],
+                    "nickname": decrypt_field(target["nickname"]),
+                    "real_name": decrypt_field(target["real_name"]),
+                    "birthdate": decrypt_field(target["birthdate"]),
+                    "id_number": decrypt_field(target["id_number"]),
+                    "phone": decrypt_field(target["phone"]),
+                    "role": target["role"],
+                    "status": target["status"],
+                    "blocked_until": target["blocked_until"],
+                    "violation_count": target["violation_count"] or 0,
+                }
+            })
 
         if request.method == "DELETE":
             if target["username"] == "root":
@@ -1650,6 +1679,9 @@ def admin_user_item(user_id):
             params.append(val)
         if "password" in data and isinstance(data["password"], str) and data["password"]:
             pw = data["password"][:128]  # 截斷防止超長密碼
+            pw_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
+            if pw_confirm and pw != pw_confirm:
+                return json_resp({"ok":False,"msg":"兩次密碼輸入不一致"}), 400
             if actor_role != "super_admin":
                 ok, msg = validate_password(pw)
                 if not ok:
@@ -1661,7 +1693,13 @@ def admin_user_item(user_id):
         if "username" in data:
             return json_resp({"ok":False,"msg":"不允許變更帳號名稱"}), 400
 
-        if updates:
+        pw_payload = "password" in data and isinstance(data["password"], str) and data["password"]
+        if not updates and not pw_payload:
+            return json_resp({"ok":False,"msg":"未提供可更新欄位"}), 400
+
+        if pw_payload and not updates:
+            conn.commit()
+        elif updates:
             updates.append("updated_at=?")
             params.append(datetime.now().isoformat())
             params.append(user_id)
@@ -1992,14 +2030,48 @@ def admin_audit():
             entries.append({
                 "id":        r["id"],
                 "ts":        r["ts"],
+                "timestamp": r["ts"],
                 "action":    r["action"],
+                "actor":     r["user"],
                 "ip":        r["ip"],
                 "user":      r["user"],
                 "success":   bool(r["success"]),
                 "ua":        r["ua"],
                 "detail":    r["detail"],
+                "details":   r["detail"],
                 "chain_hash": r["chain_hash"][:32] + "...",  # 只顯示前 32 字符
+                "_chain_hash": r["chain_hash"],
             })
+
+        # Legacy fallback：audit.log JSONL（避免 table 還沒同步時前端顯示空白）
+        if total == 0 and not entries:
+            if os.path.exists(AUDIT_LOG_PATH):
+                with open(AUDIT_LOG_PATH, "r", encoding="utf-8") as f:
+                    raw_lines = [ln.strip() for ln in f if ln.strip()]
+                normalized_lines = list(reversed(raw_lines))
+                page_lines = normalized_lines[offset:offset + limit]
+                for idx, line in enumerate(page_lines):
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    entries.append({
+                        "id":            total + idx + 1,
+                        "ts":            obj.get("ts", ""),
+                        "timestamp":     obj.get("ts", ""),
+                        "action":        obj.get("action", ""),
+                        "actor":         obj.get("user", ""),
+                        "ip":            obj.get("ip", ""),
+                        "user":          obj.get("user", ""),
+                        "success":       bool(obj.get("success", False)),
+                        "ua":            obj.get("ua", ""),
+                        "detail":        obj.get("detail", ""),
+                        "details":       obj.get("detail", ""),
+                        "chain_hash":    "",
+                        "_chain_hash":    "",
+                        "source":        "legacy_log",
+                    })
+                total = len(raw_lines)
 
         # Integrity 驗證
         ok, broken_at, details = verify_audit_integrity()
@@ -2093,7 +2165,7 @@ def admin_restart():
         subprocess.Popen(
             ["python3", os.path.join(BASE_DIR, "server.py")],
             cwd=BASE_DIR,
-            stdout=open("/tmp/hackme_server.log", "a"),
+            stdout=open(SERVER_LOG_PATH, "a"),
             stderr=subprocess.STDOUT,
             start_new_session=True
         )
