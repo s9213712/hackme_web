@@ -8,24 +8,22 @@
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
 `hackme_web` 是一個以安全性為核心的 Flask Web 應用，專門用來研究
-認證、RBAC、審計能力與實務部署中的防護收斂。
+認證、RBAC、moderation 狀態機、審計能力與單機服務的防護收斂。
 
-這個專案刻意設計在「教學系統」與「偏正式服務」之間：
+它刻意設計在教學靶場與偏正式服務之間：
 
-- 它有真實的帳號、審核、聊天、違規與審計流程
-- 它維持小型、單機、可直接理解的部署模型
-- 它強調防護機制與失敗模式的可觀測性
+- 有真實的帳號、審核、違規、申覆與聊天流程
+- 規模夠小，可以完整理解
+- 防護機制夠真實，可以做功能與安全測試
 
-## Fast Start
-
-如果你想用最短路徑把本機服務跑起來：
+## 快速開始
 
 ```bash
 python3 -m pip install -r requirements.txt
 python3 server.py
 ```
 
-然後打開：
+開啟：
 
 ```text
 https://127.0.0.1:5000/
@@ -37,183 +35,216 @@ https://127.0.0.1:5000/
 - `admin / admin` — `manager`
 - `test / test` — `user`
 
-## 為什麼有這個專案
+## 專案目的
 
 很多示範型登入系統只做到 login、logout 與少數保護路由。
 
-這個 repo 的價值在於，它還包含：
+這個 repo 的價值在於，它同時包含：
 
 - 基於角色的帳號管理
-- 需要審核的新帳號註冊流程
+- 需要審核的註冊流程
 - 違規計點與申覆流程
 - 聊天與訊息檢舉審核流程
-- 可驗證是否遭竄改的審計紀錄
-- 可在攻防測試中實際操作的系統設定與運維控制面
+- 可驗證完整性的審計鏈
+- 可實際操作的系統設定與防護開關
 
-## 專案定位
-
-`hackme_web` 不是完整的大型產品平台。
-
-它適合用在這些場景：
-
-- 想要一個精簡但有真實安全邊界的 Flask 練習目標
-- 想測 CSRF、session、RBAC、moderation、audit 等實戰流程
-- 想有一個可本機自建、可逐步補強的防守方樣本
-- 想研究小型服務在真實業務狀態機下的安全設計
-
-## 核心能力
+## 功能總覽
 
 ### 認證與 Session
 
 - Argon2id 密碼雜湊
-- 登入失敗追蹤與可選的 IP 封鎖
-- 伺服器持久化的 CSRF token 驗證
-- 加密 session token + DB 查驗
-- logout 後 session 失效與 token 旋轉
+- DB-backed session 驗證
+- 伺服器持久化的 CSRF token
+- logout 失效處理
+- 登入失敗追蹤與可選 IP 封鎖
+- 閒置自動登出
 
 ### 授權模型
 
 - `super_admin`、`manager`、`user` 三層角色
-- 所有管理路由都做 server-side RBAC 檢查
+- 敏感 API 一律做 server-side RBAC 檢查
+- 新帳號需審核後才可正式登入
 - 使用者可自助修改個資，但受欄位白名單限制
-- 新註冊帳號須經審核後才能正式登入
 
 ### Moderation 與狀態流程
 
 - 違規點數追蹤
-- 使用者申覆與管理審核
+- 申覆送出與管理審核
 - 訊息檢舉與管理審核
-- 帳號角色/狀態轉換的政策限制
+- 帳號角色與狀態的政策限制
 
 ### 審計與完整性
 
 - SQLite 內的 tamper-evident audit chain
-- 本機 `anchors/` 錨點快照
-- 安全事件、登入失敗、審核動作的記錄能力
+- `anchors/` 的 audit head 錨點快照
+- 認證與 moderation 安全事件記錄
+- 聊天紀錄 sidecar 檔案加密落盤
+
+## 目前架構
+
+後端已從單一巨石檔拆成 route modules 與 service modules。
+
+### 後端路由模組
+
+- `routes/public.py`
+- `routes/chat.py`
+- `routes/users.py`
+- `routes/appeals.py`
+- `routes/moderation.py`
+- `routes/system_admin.py`
+- `routes/operations.py`
+
+### 後端服務模組
+
+- `services/auth.py`
+- `services/audit.py`
+- `services/settings.py`
+- `services/violations.py`
+- `services/security_events.py`
+- `services/bootstrap.py`
+- `services/chat_support.py`
+
+### 前端結構
+
+前端不再依賴單一巨大 `app.js`。
+
+- `public/index.html` 依序載入 `public/js/` 內多個瀏覽器腳本
+- `public/js/00-core.js`：共享狀態與工具函式
+- `public/js/10-users.js`：帳號列表與顯示邏輯
+- `public/js/20-chat.js`：聊天相關 UI 邏輯
+- `public/js/30-appeals.js`：申覆與檢舉 UI 邏輯
+- `public/js/40-auth-users.js`：登入、註冊、個資操作
+- `public/js/50-admin.js`：管理端、審計、設定、健康度
+- `public/js/90-bootstrap.js`：DOM 綁定與啟動流程
+- `public/app.js`：僅保留相容性 stub
 
 ## 角色模型
 
-| 角色 | 目的 | 目前權限 |
+| 角色 | 目的 | 權限 |
 |---|---|---|
 | `super_admin` | 完整控制面 | 帳號生命週期、設定、審核、審計、伺服器操作 |
 | `manager` | 日常營運與 moderation | 查看帳號、審核註冊、處理一般用戶層級的管理動作 |
 | `user` | 一般使用 | 登入、改個資、聊天、送檢舉、送申覆 |
+
+## 資料保護模型
+
+### 靜態資料保護
+
+- 密碼使用 Argon2id 雜湊
+- 暱稱、真實姓名、生日、身分證、電話等 PII 欄位在入庫前加密
+- `chats/` 內的聊天 transcript sidecar 以 sealed 格式寫入
+- session token 只以 hash 形式儲存在 SQLite session table
+
+### 執行期儲存位置
+
+- `database/`：SQLite 狀態
+- `logs/`：runtime log
+- `anchors/`：audit chain 錨點
+- `chats/`：加密聊天 sidecar
+
+測試與 CI 可覆寫這些目錄：
+
+- `HTML_LEARNING_DB_DIR`
+- `HTML_LEARNING_LOG_DIR`
+- `HTML_LEARNING_CHAT_DIR`
+- `HTML_LEARNING_ANCHOR_DIR`
+- `HTML_LEARNING_HOST`
+- `HTML_LEARNING_PORT`
 
 ## 安全控制
 
 目前已有的防護包括：
 
 - Argon2id 密碼雜湊
-- 統一化的登入失敗訊息
+- 統一化登入失敗訊息
 - 公開敏感流程的 rate limit
 - 寫入路由 CSRF 驗證
-- authenticated write 的一次性 CSRF token 消耗
-- 資料庫支援的 session 驗證
+- DB-backed session 驗證
 - Flask-Talisman 提供的 CSP
 - audit chain 完整性驗證
 - server-side 角色授權檢查
+- 由 `system_settings` 控制的可選 IP 封鎖
+- 完整性異常可切入緊急維護模式
 
-## 安全測試覆蓋
+## 測試策略
 
-已做過的測試類型包括：
+### 本機靜態與 Smoke 檢查
 
-- CSRF：
-  missing token、invalid token、wrong header name、cross-session token、replay
-- Session：
-  login rotate、logout invalidation、old cookie reuse、fixation、多重登入
-- Authorization：
-  一般使用者對 admin route、review route、settings route、moderation route 的越權測試
-- Mass assignment：
-  top-level 與 nested 權限欄位偷渡
-- IDOR / BOLA：
-  self、peer、admin、malformed id、large id
-- State machine：
-  register review、appeal、message report、duplicate submit、review replay
-- Injection：
-  SQLi 探測、log payload、管理頁顯示路徑檢查
+專案內建一個正式的 pre-push quality gate：
 
-目前結果摘要：
+```bash
+python3 scripts/pre_push_checks.py
+```
 
-- 尚未確認可成功的一般使用者提權路徑
-- 尚未確認成功的 logout 後 session replay
-- 尚未確認成功的 session fixation
-- 尚未確認成功的 SQL injection
-- `self-update` 的 CSRF lifecycle 問題已被定位並對前端 token refresh 流程做穩定化修補
+這個 runner 會做：
 
-## API Surface
+- backend、scripts、tests 的 Python 語法編譯
+- 使用隔離 runtime 目錄啟動一次乾淨的 Flask 服務
+- 功能 smoke 測試
+- 安全 smoke 測試
 
-### 公開 API
+原本的 shell 入口仍保留：
 
-- `GET /api/csrf-token`
-- `POST /api/register`
-- `POST /api/login`
-- `POST /api/logout`
-- `GET /api/me`
+```bash
+./scripts/pre_push_scan.sh
+```
 
-### `manager` 以上
+### Smoke 測試覆蓋
 
-- `GET /api/admin/users`
-- `GET /api/admin/violations`
-- `GET /api/admin/audit`
+`tests/smoke_suite.py` 目前涵蓋：
 
-### `super_admin`
+- `root`、`admin`、`test` 預設帳號登入
+- `/api/me` 角色檢查
+- manager 可用管理 API
+- 一般使用者被正確拒於管理 API 之外
+- 聊天室列表與建立聊天室
+- 一般使用者的申覆列表讀取
+- 無 CSRF 的 login 被拒絕
+- 錯誤 CSRF 的 authenticated write 被拒絕
+- cross-session CSRF token 濫用被拒絕
+- logout 後 session 失效
 
-- `POST /api/admin/users`
-- `GET/PUT/DELETE /api/admin/users/<id>`
-- `POST /api/admin/users/<id>/promote`
-- `POST /api/admin/users/<id>/demote`
-- `POST /api/admin/users/<id>/violation`
-- `POST /api/admin/users/<id>/reset-violations`
-- `POST /api/admin/users/<id>/block`
-- `GET/PUT /api/admin/settings`
-- `GET /api/admin/environment`
-- `GET /api/admin/health`
-- `POST /api/admin/restart`
-- `GET /api/admin/appeals`
-- `POST /api/admin/appeals/<id>/review`
-- `GET /api/admin/message-reports`
-- `POST /api/admin/message-reports/<id>/review`
+### GitHub Actions CI
+
+CI 會在 `main` push 與 pull request 時執行。
+
+流程：
+
+- 安裝 Python 依賴
+- 執行 `python scripts/pre_push_checks.py --ci`
+
+這讓本機與 GitHub 走同一套隔離 smoke/security gate。
 
 ## Repository Layout
 
 | 路徑 | 用途 |
 |---|---|
-| `server.py` | 主 Flask 後端與路由層 |
+| `server.py` | Flask 入口與 app 組裝層 |
+| `routes/` | 路由模組 |
+| `services/` | domain / infra services |
 | `public/index.html` | 前端結構 |
-| `public/app.js` | 前端應用邏輯 |
+| `public/js/` | 拆分後的前端邏輯 |
 | `public/styles.css` | 前端樣式 |
+| `database/bootstrap.schema.sql` | bootstrap schema |
 | `scripts/run_prod.sh` | production 啟動腳本 |
-| `scripts/pre_push_scan.sh` | 本機 pre-push 檢查腳本 |
-| `scripts/migrate_legacy_json.py` | 舊 sidecar 資料匯入工具 |
-| `database/` | 本機 SQLite 資料目錄 |
-| `logs/` | runtime log 目錄 |
-| `anchors/` | 本機 audit head 錨點快照 |
+| `scripts/pre_push_scan.sh` | 靜態掃描 + quality gate wrapper |
+| `scripts/pre_push_checks.py` | 隔離的功能/安全 pre-push runner |
+| `tests/smoke_suite.py` | 端對端 smoke 與安全檢查 |
+| `.github/workflows/ci.yml` | GitHub Actions pipeline |
 
 ## 設定模型
 
-目前設定來源分三層：
+目前設定來源有三層：
 
 1. 環境變數
 2. DB-backed `system_settings`
-3. `server.py` 內的預設值
+3. application defaults
 
-這表示舊式 JSON 設定檔不再是主要真相來源。
-
-### Production 範本
-
-使用內建範本：
-
-```bash
-cp .env.production.example .env
-```
-
-然後填入真實值：
-
-- `SESSION_SECRET`
-- `CSRF_SECRET_KEY`
-- 若使用 reverse proxy，補上代理相關設定
+舊式 JSON 設定檔不再是主要真相來源。
 
 ## Production 啟動
+
+使用內建範本：
 
 ```bash
 cp .env.production.example .env
@@ -221,7 +252,7 @@ source .env
 ./scripts/run_prod.sh
 ```
 
-範本預設已開啟較合理的 production 選項，例如：
+建議的 production 預設值包括：
 
 - `FORCE_HTTPS=true`
 - `SESSION_COOKIE_SECURE=true`
@@ -229,52 +260,9 @@ source .env
 - `SESSION_COOKIE_SAMESITE=Strict`
 - `IP_BLOCKING_ENABLED=true`
 
-## 資料與遷移說明
+## 運維備註
 
-專案早期曾使用多個 JSON sidecar 檔案保存部分狀態，現在主體已轉入
-SQLite。
-
-仍保留的手動工具：
-
-```bash
-python3 scripts/migrate_legacy_json.py
-```
-
-用途是：
-
-- 受控的一次性 legacy 匯入
-- 疑難排查
-- 相容性補救
-
-## 維運說明
-
-- `server.py` 仍是目前主要集中點
-- 下一步值得做的是把 routing、auth、moderation、audit 拆成較小模組
-- 本機攻擊測試產物刻意不納入 Git 追蹤
-- secret、seed、runtime state 檔案刻意不納入 Git 追蹤
-
-## 建議的本機工作流程
-
-日常開發：
-
-```bash
-python3 server.py
-```
-
-準備發布前：
-
-```bash
-./scripts/pre_push_scan.sh
-```
-
-## 目前最值得投入的工程方向
-
-- 拆分 `server.py`
-- 持續擴充 RBAC 與 workflow regression tests
-- 持續補強 moderation 與 audit 的顯示路徑
-- 在真實 reverse proxy 後再驗一次 deployment-layer 行為
-
-## 授權與使用情境
-
-本 repo 只適合用於經授權的本機開發、安全測試與防守工程研究。不要把
-這裡的攻擊思路或測試方法用在非你擁有、或未明確授權的系統上。
+- 本機安全測試產物與攻擊腳本不進 Git
+- runtime secrets 與 local state 檔不進 Git
+- 這仍是一個單機 Flask 服務，不是分散式平台
+- 內建 quality gate 之所以可重複執行，是因為它永遠使用隔離 runtime 目錄

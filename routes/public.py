@@ -1,0 +1,286 @@
+import base64
+import re
+import time
+from datetime import datetime
+
+import argon2
+from flask import make_response, request, send_from_directory
+
+
+def register_public_routes(app, deps):
+    globals().update(deps)
+
+    @app.route("/")
+    def index():
+        resp = make_response(send_from_directory(PUBLIC_DIR, "index.html"))
+        tok = request.cookies.get("session_token")
+        user = db_get_user_from_token(tok) if tok else None
+        if not user:
+            # Ship a CSRF token for login form — no session needed
+            tok = make_csrf_token()
+            store_csrf_token(tok, "__public__")
+            resp.set_cookie("csrf_token", tok, max_age=3600, httponly=False,
+                            samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        # Logged-in users keep their per-user csrf_token cookie (set at login)
+        return resp
+
+    # ── GET CSRF token ─────────────────────────────────────────────────────────────
+    @app.route("/api/csrf-token", methods=["GET"])
+    def get_csrf_token():
+        tok = request.cookies.get("session_token")
+        username = db_get_user_from_token(tok) if tok else None
+        token = make_csrf_token()
+        if not username:
+            store_csrf_token(token, "__public__")
+            resp = json_resp({"ok":True,"csrf_token":token})
+            resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
+                            httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                            secure=SESSION_COOKIE_SECURE)
+            return resp
+        store_csrf_token(token, username)
+        resp = json_resp({"ok":True,"csrf_token":token})
+        resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
+                        httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                        secure=SESSION_COOKIE_SECURE)
+        return resp
+
+    @app.route("/api/register", methods=["POST"])
+    def register():
+        ip, ua = get_client_ip(), get_ua()
+        audit("REGISTER_ATTEMPT", ip, ua=ua)
+        settings = get_system_settings()
+        if not settings.get("allow_register", True):
+            audit("REGISTER_DISABLED", ip, ua=ua, detail="allow_register=false")
+            return json_resp({"ok":False,"msg":"目前暫停開放註冊"}), 403
+        if is_ip_blocked(ip):
+            audit("REGISTER_BLOCKED", ip, ua=ua, detail="IP locked")
+            return json_resp({"ok":False,"msg":"IP 已被鎖定，請稍後再試"}), 429
+
+        blocked, info = is_rate_limited(ip, max_req=10, window_sec=60)
+        if blocked:
+            audit("REGISTER_RATELIMIT", ip, ua=ua)
+            return json_resp({"ok":False,"msg":f"請求太頻繁（{info['limit']}次/分鐘）"}), 429
+
+        try:    data = request.get_json(force=True)
+        except: return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            audit("REGISTER_EMPTY", ip, ua=ua)
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+
+        # CSRF double-submit check (no session required — safe for register)
+        if not verify_csrf_double_submit(data.get("csrf_token", "")):
+            audit("REGISTER_CSRF", ip, ua=ua)
+            return json_resp({"ok":False,"msg":"Invalid request"}), 403
+
+        username = normalize_text(data.get("username"))
+        password = data.get("password","") if isinstance(data.get("password"), str) else ""
+        password_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
+        nickname = normalize_text(data.get("nickname"))
+        real_name = normalize_text(data.get("real_name"))
+        id_number = normalize_text(data.get("id_number"))
+        birthdate = parse_birthdate(data.get("birthdate"))
+        phone = normalize_text(data.get("phone"))
+
+        # Username validation
+        if not username:        return json_resp({"ok":False,"msg":"帳號不可為空"}), 400
+        if len(username) < 3:  return json_resp({"ok":False,"msg":"帳號至少需要 3 個字元"}), 400
+        if len(username) > 32: return json_resp({"ok":False,"msg":"帳號最長 32 字元"}), 400
+        if not re.fullmatch(r"[a-zA-Z0-9_\-]+", username):
+            return json_resp({"ok":False,"msg":"帳號只能包含英文、數字、底線、減號"}), 400
+        if not nickname:
+            return json_resp({"ok":False,"msg":"暱稱不可為空"}), 400
+        if not real_name:
+            return json_resp({"ok":False,"msg":"真實姓名不可為空"}), 400
+        if not validate_id_number(id_number):
+            return json_resp({"ok":False,"msg":"身分證格式錯誤"}), 400
+        if not birthdate:
+            return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
+        if not validate_phone(phone):
+            return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
+        if password != password_confirm:
+            return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400
+
+        ok, msg = validate_password(password)
+        if not ok:
+            audit("REGISTER_BAD_PW", ip, username, ua=ua, detail=msg)
+            return json_resp({"ok":False,"msg":msg}), 400
+
+        conn = get_db()
+        try:
+            existing = conn.execute("SELECT 1 FROM users WHERE username=?",(username,)).fetchone()
+            if existing:
+                time.sleep(0.3)
+                audit("REGISTER_DUP", ip, username, ua=ua, success=False)
+                # Return generic — don't reveal account exists
+                return json_resp({"ok":False,"msg":"註冊失敗，請稍後再試"}), 409
+
+            now = datetime.now().isoformat()
+            cur = conn.execute(
+                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', ?, ?)",
+                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), now, now)
+            )
+            conn.execute(
+                "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+                (cur.lastrowid, hash_password(password), now)
+            )
+            conn.commit()
+            audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
+            return json_resp({"ok":True,"msg":"註冊申請已送出，需經管理員或最高管理者審核後才能登入"})
+        finally:
+            conn.close()
+
+    @app.route("/api/login", methods=["POST"])
+    @require_csrf
+    def login():
+        ip, ua = get_client_ip(), get_ua()
+
+        # Check blocked BEFORE anything else
+        if is_ip_blocked(ip):
+            audit("LOGIN_BLOCKED", ip, ua=ua, detail="IP locked")
+            timing_delay()  # still do delay so blocked vs not-blocked timing looks same
+            return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 429
+
+        blocked, info = is_rate_limited(ip, max_req=30, window_sec=60)
+        if blocked:
+            audit("LOGIN_RATELIMIT", ip, ua=ua)
+            timing_delay()
+            return json_resp({"ok":False,"msg":"請求太頻繁，請稍後再試"}), 429
+
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            record_login_failure(ip, ua=ua, detail="invalid_json")
+            timing_delay()
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            record_login_failure(ip, ua=ua, detail="json_not_object")
+            timing_delay()
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+
+        username = (data.get("username","") if isinstance(data.get("username"), str) else "").strip()
+        password = data.get("password","") if isinstance(data.get("password"), str) else ""
+
+        # Generic blank check — same message regardless of which field
+        if not username or not password:
+            record_login_failure(ip, username, ua=ua, detail="blank_field")
+            timing_delay()
+            return json_resp({"ok":False,"msg":"請填寫帳號與密碼"}), 400
+
+        conn = get_db()
+        try:
+            user_row = conn.execute(
+                "SELECT id, username, status, blocked_until, role FROM users WHERE username=?", (username,)
+            ).fetchone()
+
+            # Always do timing-consuming verify to prevent timing oracles
+            pw_hash = None
+            if user_row:
+                pw_row = conn.execute(
+                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
+                    (user_row["id"],)
+                ).fetchone()
+                if pw_row:
+                    pw_hash = pw_row["password_hash"]
+
+            # Perform verify with constant-ish delay regardless of user existence
+            if pw_hash:
+                verified = verify_password(pw_hash, password)
+            else:
+                # Fake hash work — user doesn't exist, still burn same CPU time
+                # Properly formatted: 16-byte salt → 22 b64 chars, 32-byte hash → 43 b64 chars
+                fake_salt = base64.urlsafe_b64encode(b"fakesaltPASSSalt0").decode()[:22]
+                fake_hsh  = base64.urlsafe_b64encode(b"f" * 32).decode()[:43]
+                try:
+                    verify_password(f"$argon2id$v=19$m=65536,t=3,p=4${fake_salt}${fake_hsh}", password)
+                except argon2.exceptions.VerifyMismatchError:
+                    pass  # expected — always fails
+                verified = False
+
+            # ALWAYS add jitter delay to obscure timing differences
+            timing_delay()
+
+            now = datetime.now().isoformat()
+            if verified:
+                if user_row["blocked_until"]:
+                    try:
+                        blocked_until = datetime.fromisoformat(user_row["blocked_until"])
+                        if datetime.now() < blocked_until:
+                            audit("LOGIN_BLOCKED_TEMP", ip, username, ua=ua, detail=f"blocked_until={user_row['blocked_until']}")
+                            return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                    except Exception:
+                        pass
+                if user_row["status"] != "active":
+                    audit("LOGIN_INACTIVE", ip, username, ua=ua, success=False)
+                    return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+
+                # Log successful attempt
+                conn.execute(
+                    "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 1, ?)",
+                    (user_row["id"], ip, ua, now)
+                )
+                conn.commit()
+
+                # Create token + save session to DB
+                token = make_token(username)
+                db_save_session(user_row["id"], token, ip, ua)
+                ensure_user_official_room_membership(conn, user_row["id"])
+                conn.commit()
+
+                audit("LOGIN_OK", ip, username, ua=ua, success=True)
+                resp = json_resp({"ok":True,"msg":"恭喜登入成功","token":token})
+                resp.set_cookie("session_token", token, max_age=SESSION_TTL,
+                                httponly=True, samesite=SESSION_COOKIE_SAMESITE,
+                                secure=SESSION_COOKIE_SECURE)
+                # Invalidate the public CSRF token and issue a fresh per-user token
+                new_csrf = make_csrf_token()
+                store_csrf_token(new_csrf, username)
+                resp.set_cookie("csrf_token", new_csrf, max_age=CSRF_TOKEN_TTL,
+                                httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                                secure=SESSION_COOKIE_SECURE)
+                return resp
+            else:
+                # Log failed attempt
+                user_id_for_log = user_row["id"] if user_row else None
+                conn.execute(
+                    "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
+                    (user_id_for_log, ip, ua, now)
+                )
+                conn.commit()
+                record_login_failure(ip, username=username, ua=ua, detail="bad_credentials")
+
+                # Generic message — never distinguish "no user" from "bad pw"
+                return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+        finally:
+            conn.close()
+
+    @app.route("/api/logout", methods=["POST"])
+    @require_csrf
+    def logout():
+        ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
+        user = db_get_user_from_token(tok) if tok else None
+        if tok:
+            db_delete_session(tok)
+        audit("LOGOUT", ip, user=user or "-", ua=ua, success=bool(user))
+        resp = json_resp({"ok":True,"msg":"已登出"})
+        resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        return resp
+
+    @app.route("/api/me", methods=["GET"])
+    def me():
+        ctx = get_current_user_ctx()
+        if not ctx:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        role = "super_admin" if ctx["username"] == "root" else ctx["role"]
+        return json_resp({
+            "ok": True,
+            "id": ctx["id"],
+            "username": ctx["username"],
+            "role": role,
+            "role_label": ROLE_LABEL.get(role, role),
+            "status": ctx["status"],
+            "nickname": decrypt_field(ctx["nickname"]),
+            "birthdate": decrypt_field(ctx["birthdate"]),
+            "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
+        })

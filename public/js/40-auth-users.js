@@ -1,0 +1,390 @@
+async function doLogin() {
+  const user = sanitize($("li-user").value.trim());
+  const pw   = $("li-pw").value;
+  if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
+
+  await fetchCsrfToken({ force: false });
+  const csrf = getCsrfToken();
+  if (!csrf) {
+    flash($("li-msg"), "無法取得 CSRF token，請重新整理頁面", false);
+    return;
+  }
+  setLoading("li-btn", "li-spinner", true);
+  clearMsg();
+
+  try {
+    const res = await fetch(API + "/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf || ""
+      },
+      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf })
+    });
+    const json = await res.json();
+    if (!json.ok) {
+      _csrfToken = null;
+      flash($("li-msg"), json.msg || "登入失敗", false);
+      return;
+    }
+    _csrfToken = null;
+    const meRes = await fetch(API + "/me", { credentials: "same-origin" });
+    const me = await meRes.json();
+    if (me.ok) setAuthState(me, true);
+    else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
+  } catch (e) {
+    flash($("li-msg"), "網路錯誤，請稍後再試", false);
+  } finally {
+    setLoading("li-btn", "li-spinner", false);
+  }
+}
+
+async function doRegister() {
+  const user = $("reg-user").value.trim();
+  const pw   = $("reg-pw").value;
+  const pwConfirm = $("reg-pw-confirm").value;
+  const nickname = $("reg-nickname").value.trim();
+  const realName = $("reg-realname").value.trim();
+  const idNo = $("reg-idno").value.trim();
+  const birth = $("reg-birthdate").value;
+  const phone = $("reg-phone").value.trim();
+
+  if (!user) { flash($("reg-msg"), "請填寫帳號", false); return; }
+  if (user.length < 3) { flash($("reg-msg"), "帳號至少 3 字元", false); return; }
+  if (!pw) { flash($("reg-msg"), "請輸入密碼", false); return; }
+  if (!pwConfirm) { flash($("reg-msg"), "請再次輸入密碼", false); return; }
+  if (pw !== pwConfirm) { flash($("reg-msg"), "兩次密碼輸入不一致", false); return; }
+  if (!nickname) { flash($("reg-msg"), "暱稱不可為空", false); return; }
+  if (!realName) { flash($("reg-msg"), "真實姓名不可為空", false); return; }
+  if (!idNo) { flash($("reg-msg"), "身分證不可為空", false); return; }
+  if (!birth) { flash($("reg-msg"), "請填寫生日", false); return; }
+  if (!phone) { flash($("reg-msg"), "請填寫電話", false); return; }
+
+  if (!/^[a-zA-Z0-9_\-]+$/.test(user)) {
+    flash($("reg-msg"), "帳號只能包含英文、數字、底線、減號", false);
+    return;
+  }
+
+  await fetchCsrfToken({ force: false });
+  const csrf = getCsrfToken();
+  if (!csrf) {
+    flash($("reg-msg"), "無法取得 CSRF token，請重新整理頁面", false);
+    setLoading("reg-btn", "reg-spinner", false);
+    return;
+  }
+  setLoading("reg-btn", "reg-spinner", true);
+  clearMsg();
+
+  try {
+    const res = await fetch(API + "/register", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({
+        username: user,
+        password: pw,
+        password_confirm: pwConfirm,
+        nickname,
+        real_name: realName,
+        id_number: idNo,
+        birthdate: birth,
+        phone,
+        csrf_token: csrf
+      })
+    });
+    const json = await res.json();
+    if (json.ok) {
+      _csrfToken = null;
+      flash($("reg-msg"), "✓ " + sanitize(json.msg), true);
+      setTimeout(() => {
+        $("reg-pw").value = "";
+        $("reg-pw-confirm").value = "";
+        $("reg-pw-hint").textContent = "";
+        $("reg-pw-confirm-hint").textContent = "";
+      }, 1500);
+      setTimeout(() => showTab("login"), 2000);
+    } else {
+      _csrfToken = null;
+      flash($("reg-msg"), json.msg || "註冊失敗", false);
+    }
+  } catch (e) {
+    flash($("reg-msg"), "網路錯誤，請稍後再試", false);
+  } finally {
+    setLoading("reg-btn", "reg-spinner", false);
+  }
+}
+
+async function doLogout() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await fetch(API + "/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    if (!res.ok) {
+      flash($("li-msg"), "登出失敗，請稍後再試", false);
+    }
+  } catch (_) {}
+  _csrfToken = null;
+  resetAuthState();
+}
+
+async function toggleBlock(userId, isBlocked) {
+  if (!currentUser) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const body = isBlocked ? { action: "unblock" } : { action: "block", minutes: 30 };
+  const res = await fetch(API + `/admin/users/${userId}/block`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "操作失敗", false);
+  }
+}
+
+async function editUser(userId) {
+  const target = users.find((u) => String(u.id) === String(userId));
+  if (!target && String(currentUserId || "") !== String(userId)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+
+  let source = target || {};
+  if (csrf) {
+    const detailRes = await fetch(API + `/admin/users/${userId}`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    }).then((r) => r.json().catch(() => ({})));
+    if (detailRes && detailRes.ok && detailRes.user) {
+      source = detailRes.user;
+    }
+  }
+
+  editingUserIsSelf = String(currentUserId || "") === String(userId);
+  const current = {
+    username: source.username || currentUser || "",
+    nickname: source.nickname || "",
+    real_name: source.real_name || "",
+    id_number: source.id_number || "",
+    birthdate: source.birthdate || "",
+    phone: source.phone || "",
+    role: source.role || "user",
+    status: source.status || "active"
+  };
+
+  editingUserId = userId;
+  editingUserOriginal.nickname = current.nickname;
+  editingUserOriginal.real_name = current.real_name;
+  editingUserOriginal.id_number = current.id_number;
+  editingUserOriginal.birthdate = current.birthdate;
+  editingUserOriginal.phone = current.phone;
+  editingUserOriginal.role = current.role;
+  editingUserOriginal.status = current.status;
+
+  const usernameEl = $("user-edit-username");
+  if (usernameEl) usernameEl.textContent = current.username || String(userId);
+  setUserEditField("edit-user-nickname", current.nickname);
+  setUserEditField("edit-user-realname", current.real_name);
+  setUserEditField("edit-user-idno", current.id_number);
+  setUserEditField("edit-user-birthdate", current.birthdate);
+  setUserEditField("edit-user-phone", current.phone);
+  const editRole = $("edit-user-role");
+  if (editRole) editRole.value = current.role;
+  const editStatus = $("edit-user-status");
+  if (editStatus) editStatus.value = current.status;
+  const roleField = $("edit-user-role-field");
+  const statusField = $("edit-user-status-field");
+  if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
+  if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
+  setUserEditField("edit-user-pw", "");
+  setUserEditField("edit-user-pw-confirm", "");
+  setUserEditMsg("");
+
+  const overlay = $("user-edit-overlay");
+  if (overlay) overlay.classList.add("show");
+  const firstField = $("edit-user-nickname");
+  if (firstField) firstField.focus();
+}
+
+async function submitEditUser() {
+  if (!editingUserId) return;
+
+  const payload = {};
+  const nickname = $("edit-user-nickname")?.value.trim() || "";
+  const realName = $("edit-user-realname")?.value.trim() || "";
+  const idNo = $("edit-user-idno")?.value.trim() || "";
+  const birthdate = $("edit-user-birthdate")?.value || "";
+  const phone = $("edit-user-phone")?.value.trim() || "";
+  const role = $("edit-user-role")?.value || "";
+  const status = $("edit-user-status")?.value || "";
+  const password = $("edit-user-pw")?.value || "";
+  const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
+
+  if (nickname !== editingUserOriginal.nickname) payload.nickname = nickname;
+  if (realName !== editingUserOriginal.real_name) payload.real_name = realName;
+  if (idNo !== editingUserOriginal.id_number) payload.id_number = idNo;
+  if (birthdate !== editingUserOriginal.birthdate) payload.birthdate = birthdate;
+  if (phone !== editingUserOriginal.phone) payload.phone = phone;
+  if (!editingUserIsSelf && canManageUsers && role !== editingUserOriginal.role) payload.role = role;
+  if (!editingUserIsSelf && canManageUsers && status !== editingUserOriginal.status) payload.status = status;
+
+  if (password || passwordConfirm) {
+    if (password !== passwordConfirm) {
+      setUserEditMsg("兩次密碼輸入不一致", false);
+      return;
+    }
+    if (!password) {
+      setUserEditMsg("若要修改密碼，兩次都要輸入", false);
+      return;
+    }
+    payload.password = password;
+    payload.password_confirm = passwordConfirm;
+  }
+
+  if (!Object.keys(payload).length) {
+    setUserEditMsg("未變更任何欄位", false);
+    return;
+  }
+
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${editingUserId}`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    hideUserEditDialog();
+    if (["manager", "super_admin"].includes(currentRole)) loadUsers();
+    return;
+  }
+  setUserEditMsg(json.msg || "修改失敗", false);
+}
+
+async function removeUser(userId) {
+  if (!window.confirm("確定要刪除帳號？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${userId}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "刪除失敗", false);
+  }
+}
+
+async function createUserByAdmin() {
+  const payload = {
+    username: sanitize($("admin-add-user").value.trim()),
+    password: $("admin-add-pw").value,
+    password_confirm: $("admin-add-pw-confirm").value,
+    nickname: $("admin-add-nickname").value.trim(),
+    real_name: $("admin-add-realname").value.trim(),
+    id_number: $("admin-add-idno").value.trim(),
+    birthdate: $("admin-add-birthdate").value,
+    phone: $("admin-add-phone").value.trim(),
+    role: "user",
+    status: "active"
+  };
+  if (!payload.username || !payload.password || !payload.password_confirm || !payload.nickname || !payload.real_name || !payload.id_number || !payload.birthdate || !payload.phone) {
+    flash($("li-msg"), "請完整填寫新增欄位", false);
+    return;
+  }
+  if (payload.password !== payload.password_confirm) {
+    flash($("li-msg"), "兩次輸入的密碼不一致", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    ["admin-add-user", "admin-add-pw", "admin-add-pw-confirm", "admin-add-nickname", "admin-add-realname", "admin-add-idno", "admin-add-birthdate", "admin-add-phone"]
+      .forEach((id) => { const el = $(id); if (el) el.value = ""; });
+    const adminAddHint = $("admin-add-pw-confirm-hint");
+    if (adminAddHint) adminAddHint.textContent = "";
+    loadUsers();
+  } else {
+    flash($("li-msg"), json.msg || "建立帳號失敗", false);
+  }
+}
+
+async function reviewRegistration(userId, action) {
+  const label = action === "approve" ? "核准" : "駁回";
+  if (!confirm(`確定要${label}這筆註冊申請？`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${userId}/review-registration`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    alert(json.msg || "審核失敗");
+  }
+}
+
+async function promoteUser(userId, username) {
+  if (!confirm(`確定要將「${username}」升級為管理者？`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users/" + userId + "/promote", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    loadUsers();
+  } else {
+    alert(json.msg || "升級失敗");
+  }
+}
+
+async function demoteUser(userId, username, currentRole) {
+  const msg = currentRole === "manager"
+    ? `確定要將「${username}」降級為一般用戶？`
+    : `確定要刪除「${username}」（一般用戶，達違規上限）？`;
+  if (!confirm(msg)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/users/" + userId + "/demote", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    loadUsers();
+  } else {
+    alert(json.msg || "降級失敗");
+  }
+}
+
+// ── Module / admin tab switching ─────────────────────────────────────
+let currentAdminTab = "users";
