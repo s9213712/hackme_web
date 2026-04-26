@@ -502,16 +502,33 @@ async function editUser(userId) {
   if (detailRes && detailRes.ok && detailRes.user) {
     source = detailRes.user;
   }
-  const nickname = window.prompt("修改暱稱", source.nickname || "");
+  const current = {
+    nickname: source.nickname || "",
+    real_name: source.real_name || "",
+    id_number: source.id_number || "",
+    birthdate: source.birthdate || "",
+    phone: source.phone || ""
+  };
+
+  const nickname = window.prompt("修改暱稱", current.nickname);
   if (nickname === null) return;
-  const realName = window.prompt("修改真實姓名", source.real_name || "");
+  const realName = window.prompt("修改真實姓名", current.real_name);
   if (realName === null) return;
-  const idNumber = window.prompt("修改身分證", source.id_number || "");
+  const idNumber = window.prompt("修改身分證", current.id_number);
   if (idNumber === null) return;
-  const birthDate = window.prompt("修改生日（YYYY-MM-DD）", source.birthdate || "");
+  const birthDate = window.prompt("修改生日（YYYY-MM-DD）", current.birthdate);
   if (birthDate === null) return;
-  const phone = window.prompt("修改電話", source.phone || "");
+  const phone = window.prompt("修改電話", current.phone);
   if (phone === null) return;
+
+  const normalized = {
+    nickname: (nickname || "").trim(),
+    real_name: (realName || "").trim(),
+    id_number: (idNumber || "").trim(),
+    birthdate: (birthDate || "").trim(),
+    phone: (phone || "").trim()
+  };
+
   const password = window.prompt("修改密碼（留空則不改）");
   if (password === null) return;
   let passwordConfirm = "";
@@ -526,12 +543,19 @@ async function editUser(userId) {
 
   await fetchCsrfToken({ force: true });
   const payload = {
-    nickname: nickname.trim(),
-    real_name: realName.trim(),
-    id_number: idNumber.trim(),
-    birthdate: birthDate.trim(),
-    phone: phone.trim()
+    nickname: (normalized.nickname === current.nickname ? null : normalized.nickname),
+    real_name: (normalized.real_name === current.real_name ? null : normalized.real_name),
+    id_number: (normalized.id_number === current.id_number ? null : normalized.id_number),
+    birthdate: (normalized.birthdate === current.birthdate ? null : normalized.birthdate),
+    phone: (normalized.phone === current.phone ? null : normalized.phone)
   };
+  Object.keys(payload).forEach((k) => {
+    if (payload[k] === null) delete payload[k];
+  });
+  if (!Object.keys(payload).length && !password) {
+    flash($("li-msg"), "未變更任何欄位", false);
+    return;
+  }
   if (password) {
     payload.password = password;
     payload.password_confirm = passwordConfirm;

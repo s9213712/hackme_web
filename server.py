@@ -1032,19 +1032,35 @@ def init_db():
         pass
     conn.execute("UPDATE users SET role='user' WHERE role IS NULL OR role=''")
 
-    # Rebuild root account to the requested highest-privilege credential: root/root
+    # Ensure root account exists, keep existing root data/password across restarts.
+    # First start will create with root/root; later upgrades preserve edits.
     now = datetime.now().isoformat()
-    conn.execute("DELETE FROM user_passwords WHERE user_id IN (SELECT id FROM users WHERE username='root')")
-    conn.execute("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE username='root')")
-    conn.execute("DELETE FROM users WHERE username='root'")
-    root_cur = conn.execute(
-        "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)",
-        ("root", now, now)
-    )
-    conn.execute(
-        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-        (root_cur.lastrowid, hash_password("root"), now)
-    )
+    root_row = conn.execute("SELECT id FROM users WHERE username='root'").fetchone()
+    if root_row:
+        root_id = root_row["id"]
+        conn.execute(
+            "UPDATE users SET role='super_admin', status='active', updated_at=? WHERE id=?",
+            (now, root_id)
+        )
+    else:
+        root_cur = conn.execute(
+            "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)",
+            ("root", now, now)
+        )
+        root_id = root_cur.lastrowid
+        conn.execute(
+            "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+            (root_id, hash_password("root"), now)
+        )
+    # Only seed default root password if missing.
+    has_root_pw = conn.execute(
+        "SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (root_id,)
+    ).fetchone()
+    if not has_root_pw:
+        conn.execute(
+            "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+            (root_id, hash_password("root"), now)
+        )
 
     # Manager account: s92137 (keep password if already existed)
     row = conn.execute("SELECT id FROM users WHERE username='s92137'").fetchone()
