@@ -1263,7 +1263,7 @@ SETTINGS_FILES = [
 DEFAULT_SETTINGS = {
     # 原有核心設定
     "audit_chain_enabled": False,
-    "ip_blocking_enabled": False,
+    "ip_blocking_enabled": True,
     "max_login_fails_for_violation": 5,
     "login_violation_enabled": True,
     "rate_limit_violation_enabled": True,

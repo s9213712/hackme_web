@@ -1,5 +1,7 @@
 # hackme_web
 
+[繁體中文 README](README.zh-TW.md)
+
 ![status](https://img.shields.io/badge/status-active-2ea043)
 ![backend](https://img.shields.io/badge/backend-Flask-000000)
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
