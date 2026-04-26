@@ -2414,9 +2414,23 @@ def chat_room_join(room_id):
     actor_id = actor["id"]
     conn = get_db()
     try:
-        room = conn.execute("SELECT id, name FROM chat_rooms WHERE id=?", (room_id,)).fetchone()
+        room = conn.execute(
+            "SELECT r.id, r.name, r.owner_user_id, u.username AS owner_username "
+            "FROM chat_rooms r LEFT JOIN users u ON u.id=r.owner_user_id WHERE r.id=?",
+            (room_id,)
+        ).fetchone()
         if not room:
             return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
+        existing_member = conn.execute(
+            "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+            (room_id, actor_id)
+        ).fetchone()
+        if existing_member:
+            return json_resp({"ok":True,"msg":"已加入聊天室","room":{"id":room["id"],"name":room["name"]}})
+        is_public_official = room["name"] == OFFICIAL_CHAT_ROOM_NAME and room["owner_username"] == "root"
+        if not is_public_official:
+            audit("CHAT_JOIN_DENIED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},owner={room['owner_username'] or '-'}")
+            return json_resp({"ok":False,"msg":"你沒有權限加入此聊天室"}), 403
         conn.execute(
             "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
             (room_id, actor_id, datetime.now().isoformat())
