@@ -1584,8 +1584,8 @@ def admin_users():
     finally:
         conn.close()
 
-@app.route("/api/admin/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
-@require_csrf
+@app.route("/api/admin/users/<int:user_id>", methods=["GET"])
+@require_csrf_safe
 def admin_user_item(user_id):
     actor = get_current_user_ctx()
     if not actor:
@@ -1602,24 +1602,43 @@ def admin_user_item(user_id):
         ).fetchone()
         if not target:
             return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+        return json_resp({
+            "ok": True,
+            "user": {
+                "id": target["id"],
+                "username": target["username"],
+                "nickname": decrypt_field(target["nickname"]),
+                "real_name": decrypt_field(target["real_name"]),
+                "birthdate": decrypt_field(target["birthdate"]),
+                "id_number": decrypt_field(target["id_number"]),
+                "phone": decrypt_field(target["phone"]),
+                "role": target["role"],
+                "status": target["status"],
+                "blocked_until": target["blocked_until"],
+                "violation_count": target["violation_count"] or 0,
+            }
+        })
+    finally:
+        conn.close()
 
-        if request.method == "GET":
-            return json_resp({
-                "ok": True,
-                "user": {
-                    "id": target["id"],
-                    "username": target["username"],
-                    "nickname": decrypt_field(target["nickname"]),
-                    "real_name": decrypt_field(target["real_name"]),
-                    "birthdate": decrypt_field(target["birthdate"]),
-                    "id_number": decrypt_field(target["id_number"]),
-                    "phone": decrypt_field(target["phone"]),
-                    "role": target["role"],
-                    "status": target["status"],
-                    "blocked_until": target["blocked_until"],
-                    "violation_count": target["violation_count"] or 0,
-                }
-            })
+@app.route("/api/admin/users/<int:user_id>", methods=["PUT", "DELETE"])
+@require_csrf
+def admin_user_item_mutate(user_id):
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高權限可管理帳號"}), 403
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, blocked_until, violation_count FROM users WHERE id=?",
+            (user_id,)
+        ).fetchone()
+        if not target:
+            return json_resp({"ok":False,"msg":"找不到帳號"}), 404
 
         if request.method == "DELETE":
             if target["username"] == "root":
