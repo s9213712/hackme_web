@@ -14,6 +14,9 @@ SECURITY.md
 *.json
 chats/*.jsonl
 !chats/.gitkeep
+anchors/*.json
+anchors/*.jsonl
+!anchors/.gitkeep
 !attack_test/*.md
 !requirements.txt
 cert.pem

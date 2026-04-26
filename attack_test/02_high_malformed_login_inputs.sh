@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:5000}"
-PROJECT_ROOT="${PROJECT_ROOT:-/home/s92137/html_learning}"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COOKIE_JAR="$(mktemp)"
 RESP_FILE="$(mktemp)"
 cleanup() {

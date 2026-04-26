@@ -5,9 +5,10 @@ Hardened edition: timing-noise, account-enumeration protection,
 CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl
 from ipaddress import ip_address
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
 from cryptography.fernet import Fernet
@@ -20,13 +21,18 @@ DB_DIR = os.path.join(BASE_DIR, "database")
 DB_PATH = os.path.join(DB_DIR, "database.db")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 CHAT_DIR = os.path.join(BASE_DIR, "chats")
+ANCHOR_DIR = os.path.join(BASE_DIR, "anchors")
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
 SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
+AUDIT_ANCHOR_PATH = os.path.join(ANCHOR_DIR, "audit_head.jsonl")
+AUDIT_ANCHOR_LATEST_PATH = os.path.join(ANCHOR_DIR, "audit_head_latest.json")
+AUDIT_ANCHOR_INTERVAL_SECONDS = 60
 
 os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
+os.makedirs(ANCHOR_DIR, exist_ok=True)
 # ── Hash-chain integrity key (server-side only, not exposed to client) ───────
 # Seed derived from SECRET_KEY so it survives restarts (prevents chain-break on reboot)
 def _get_chain_seed():
@@ -57,10 +63,70 @@ _INTEGRITY_KEY = SECRET_KEY.encode()  # HMAC 金鑰（在 SECRET_KEY 之後定�
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 _audit_lock = threading.Lock()
+_anchor_lock = threading.Lock()
+_last_audit_anchor_at = 0.0
 
-def _chain_hash(prev_hash, entry_json):
-    """HMAC-SHA256(prev_hash || entry_json)，確保即使內容相同也不同"""
+def canonical_json(obj):
+    """Stable JSON representation used by tamper-evident hash chains."""
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+def _entry_hash(entry_json):
+    return hashlib.sha256(entry_json.encode("utf-8")).hexdigest()
+
+def _chain_hash(prev_hash, entry_hash):
+    """HMAC-SHA256(prev_chain_hash || entry_hash)."""
+    material = f"{prev_hash}:{entry_hash}".encode("utf-8")
+    return hmac.new(_INTEGRITY_KEY, material, "sha256").hexdigest()
+
+def _legacy_chain_hash(prev_hash, entry_json):
+    """Legacy verifier for records created before canonical entry_hash storage."""
     return hmac.new(_INTEGRITY_KEY, (prev_hash + entry_json).encode(), "sha256").hexdigest()
+
+def _write_audit_anchor(audit_id, chain_hash, entry_hash, reason="interval"):
+    """Append current audit head to a local anchor file.
+
+    This is still local storage, but it makes head movement explicit and gives us
+    a stable integration point for future remote/WORM/Git signed anchoring.
+    """
+    payload = {
+        "ts": datetime.now().isoformat(timespec="milliseconds"),
+        "audit_id": int(audit_id),
+        "entry_hash": entry_hash,
+        "chain_hash": chain_hash,
+        "reason": reason,
+    }
+    line = canonical_json(payload)
+    with _anchor_lock:
+        with open(AUDIT_ANCHOR_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        tmp = AUDIT_ANCHOR_LATEST_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(line + "\n")
+        os.replace(tmp, AUDIT_ANCHOR_LATEST_PATH)
+
+def _maybe_anchor_audit_head(audit_id, chain_hash, entry_hash, reason="interval"):
+    global _last_audit_anchor_at
+    now = time.time()
+    if _last_audit_anchor_at and now - _last_audit_anchor_at < AUDIT_ANCHOR_INTERVAL_SECONDS:
+        return
+    _write_audit_anchor(audit_id, chain_hash, entry_hash, reason)
+    _last_audit_anchor_at = now
+
+def _verify_latest_audit_anchor(rows_by_id):
+    if not os.path.exists(AUDIT_ANCHOR_LATEST_PATH):
+        return True, "no anchor yet"
+    try:
+        with open(AUDIT_ANCHOR_LATEST_PATH, encoding="utf-8") as f:
+            anchor = json.loads(f.read())
+        audit_id = int(anchor.get("audit_id", 0))
+        row = rows_by_id.get(audit_id)
+        if not row:
+            return False, f"latest anchor points to missing audit id={audit_id}"
+        if row["chain_hash"] != anchor.get("chain_hash"):
+            return False, f"latest anchor mismatch at audit id={audit_id}"
+        return True, f"latest anchor OK at audit id={audit_id}"
+    except Exception as exc:
+        return False, f"anchor unreadable: {exc}"
 
 def audit(action, ip, user="-", success=False, ua="-", detail="-"):
     """寫入 secure_audit 表（hash chain）+ 可選 legacy JSON 檔（僅轉移期保留）"""
@@ -74,9 +140,11 @@ def audit(action, ip, user="-", success=False, ua="-", detail="-"):
         "ua":      ua[:200],
         "detail":  detail,
     }
-    entry_json = json.dumps(entry, ensure_ascii=False)
+    entry_json = canonical_json(entry)
+    entry_hash = _entry_hash(entry_json)
 
     conn = get_db()
+    audit_id = None
     try:
         # 取得上一筆記錄的 hash
         prev_row = conn.execute(
@@ -84,37 +152,55 @@ def audit(action, ip, user="-", success=False, ua="-", detail="-"):
         ).fetchone()
         prev_hash = prev_row["chain_hash"] if prev_row else CHAIN_SEED
 
-        chain_hash = _chain_hash(prev_hash, entry_json)
+        chain_hash = _chain_hash(prev_hash, entry_hash)
 
-        conn.execute(
-            "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, chain_hash) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (ts, action, ip, user, 1 if success else 0, ua, detail, chain_hash)
-        )
+        try:
+            cur = conn.execute(
+                "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (ts, action, ip, user, 1 if success else 0, ua, detail, prev_hash, entry_hash, chain_hash)
+            )
+        except sqlite3.OperationalError:
+            cur = conn.execute(
+                "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, chain_hash) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (ts, action, ip, user, 1 if success else 0, ua, detail, chain_hash)
+            )
+        audit_id = cur.lastrowid
         conn.commit()
     finally:
         conn.close()
 
     # 同步寫入 logs/audit.log（專用日誌目錄）
+    file_entry = dict(entry)
+    file_entry["_entry_hash"] = entry_hash
+    file_entry["_chain_hash"] = chain_hash
     _audit_lock.acquire()
     try:
         with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(entry_json + "\n")
+            f.write(canonical_json(file_entry) + "\n")
     finally:
         _audit_lock.release()
+    if audit_id:
+        _maybe_anchor_audit_head(audit_id, chain_hash, entry_hash)
 
 def verify_audit_integrity(start_id=None, end_id=None):
     """驗證 secure_audit 的 hash chain 完整性。回傳 (ok, broken_at_or_None, details)"""
     conn = get_db()
     try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
+        has_extended = {"prev_hash", "entry_hash"}.issubset(cols)
+        col_list = "id, ts, action, ip, user, success, ua, detail, chain_hash"
+        if has_extended:
+            col_list = "id, ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash"
         if start_id is None:
             rows = conn.execute(
-                "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
+                f"SELECT {col_list} "
                 "FROM secure_audit ORDER BY id ASC"
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
+                f"SELECT {col_list} "
                 "FROM secure_audit WHERE id>=? AND id<=? ORDER BY id ASC",
                 (start_id, end_id or start_id)
             ).fetchall()
@@ -124,16 +210,31 @@ def verify_audit_integrity(start_id=None, end_id=None):
 
         prev_hash = CHAIN_SEED
         for r in rows:
-            recomputed = _chain_hash(prev_hash,
-                json.dumps({
-                    "ts": r["ts"], "action": r["action"], "ip": r["ip"],
-                    "user": r["user"], "success": bool(r["success"]),
-                    "ua": r["ua"], "detail": r["detail"]
-                }, ensure_ascii=False))
+            base_entry = {
+                "ts": r["ts"], "action": r["action"], "ip": r["ip"],
+                "user": r["user"], "success": bool(r["success"]),
+                "ua": r["ua"], "detail": r["detail"]
+            }
+            stored_entry_hash = r["entry_hash"] if has_extended else None
+            stored_prev_hash = r["prev_hash"] if has_extended else None
+            if stored_entry_hash:
+                if stored_prev_hash != prev_hash:
+                    return False, r["id"], f"prev_hash mismatch at id={r['id']} (篡改或刪除偵測)"
+                entry_json = canonical_json(base_entry)
+                recomputed_entry_hash = _entry_hash(entry_json)
+                if recomputed_entry_hash != stored_entry_hash:
+                    return False, r["id"], f"entry_hash mismatch at id={r['id']} (內容篡改偵測)"
+                recomputed = _chain_hash(prev_hash, recomputed_entry_hash)
+            else:
+                legacy_json = json.dumps(base_entry, ensure_ascii=False)
+                recomputed = _legacy_chain_hash(prev_hash, legacy_json)
             if recomputed != r["chain_hash"]:
                 return False, r["id"], f"hash mismatch at id={r['id']} (篡改偵測)"
             prev_hash = r["chain_hash"]
-        return True, None, f"integrity OK ({len(rows)} entries verified)"
+        anchor_ok, anchor_details = _verify_latest_audit_anchor({r["id"]: r for r in rows})
+        if not anchor_ok:
+            return False, None, anchor_details
+        return True, None, f"integrity OK ({len(rows)} entries verified); {anchor_details}"
     finally:
         conn.close()
 
@@ -899,7 +1000,7 @@ GENERIC_MSG = "登入失敗（帳號或密碼錯誤）"
 GENERIC_MSG_REG = "註冊失敗，請稍後再試"
 
 # ── CSRF token ────────────────────────────────────────────────────────────────
-CSRF_TOKEN_TTL = 3600  # 1 hour
+CSRF_TOKEN_TTL = SESSION_TTL
 
 def make_csrf_token():
     return secrets.token_hex(16)
@@ -1060,6 +1161,17 @@ def get_schema_version(conn):
         return 0
 
 def _migration_002_compat_user_columns(conn):
+    for col_name, col_sql in (
+        ("prev_hash", "ALTER TABLE secure_audit ADD COLUMN prev_hash TEXT"),
+        ("entry_hash", "ALTER TABLE secure_audit ADD COLUMN entry_hash TEXT"),
+    ):
+        try:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
+            if col_name not in cols:
+                conn.execute(col_sql)
+        except Exception:
+            pass
+
     ensure_user_columns(conn)
 
 def _migration_003_compat_appeal_columns(conn):
@@ -1113,7 +1225,7 @@ ROLE_LABEL      = {
 }
 MAX_MANAGERS    = 5
 MAX_VIOLATIONS  = {"manager": 3, "user": 5}
-NO_AUTO_PENALTY_USERS = {"s92137"}
+NO_AUTO_PENALTY_USERS = {"admin"}
 MAX_LOGIN_FAILS_FOR_VIOLATION = 5  # 登入失敗幾次後計點
 VIOLATION_APPEAL_WINDOW_HOURS = 24
 CHAT_MESSAGE_MAX_LEN = 500
@@ -1635,6 +1747,8 @@ def init_db():
             success     INTEGER NOT NULL DEFAULT 0,
             ua          TEXT,
             detail      TEXT,
+            prev_hash   TEXT,
+            entry_hash  TEXT,
             chain_hash  TEXT    NOT NULL   /* SHA256HMAC(prev_hash || entry_json) */
         );
         CREATE INDEX IF NOT EXISTS idx_secure_audit_ts    ON secure_audit(ts);
@@ -1759,21 +1873,21 @@ def init_db():
             (root_id, hash_password("root"), now)
         )
 
-    # Manager account: s92137 (keep password if already existed)
-    row = conn.execute("SELECT id FROM users WHERE username='s92137'").fetchone()
+    # Manager account: admin (keep password if already existed)
+    row = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()
     if row:
         conn.execute(
-            "UPDATE users SET role='manager', status='active', updated_at=? WHERE username='s92137'",
+            "UPDATE users SET role='manager', status='active', updated_at=? WHERE username='admin'",
             (now,)
         )
     else:
         mgr_cur = conn.execute(
             "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'manager', ?, ?)",
-            ("s92137", now, now)
+            ("admin", now, now)
         )
         conn.execute(
             "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-            (mgr_cur.lastrowid, hash_password("Manager@1234"), now)
+            (mgr_cur.lastrowid, hash_password("admin"), now)
         )
 
     ensure_official_chat_room(conn)
@@ -1919,16 +2033,29 @@ def index():
 def get_csrf_token():
     tok = request.cookies.get("session_token")
     username = db_get_user_from_token(tok) if tok else None
-    if not username:
-        return json_resp({"ok":False,"msg":"未登入"}), 401
     token = make_csrf_token()
+    if not username:
+        store_csrf_token(token, "__public__")
+        resp = json_resp({"ok":True,"csrf_token":token})
+        resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
+                        httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                        secure=SESSION_COOKIE_SECURE)
+        return resp
     store_csrf_token(token, username)
-    return json_resp({"ok":True,"csrf_token":token})
+    resp = json_resp({"ok":True,"csrf_token":token})
+    resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
+                    httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                    secure=SESSION_COOKIE_SECURE)
+    return resp
 
 @app.route("/api/register", methods=["POST"])
 def register():
     ip, ua = get_client_ip(), get_ua()
     audit("REGISTER_ATTEMPT", ip, ua=ua)
+    settings = get_system_settings()
+    if not settings.get("allow_register", True):
+        audit("REGISTER_DISABLED", ip, ua=ua, detail="allow_register=false")
+        return json_resp({"ok":False,"msg":"目前暫停開放註冊"}), 403
     if is_ip_blocked(ip):
         audit("REGISTER_BLOCKED", ip, ua=ua, detail="IP locked")
         return json_resp({"ok":False,"msg":"IP 已被鎖定，請稍後再試"}), 429
@@ -1994,18 +2121,16 @@ def register():
         now = datetime.now().isoformat()
         cur = conn.execute(
             "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'active', 'user', ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', ?, ?)",
             (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), now, now)
         )
-        user_id = cur.lastrowid
         conn.execute(
             "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-            (user_id, hash_password(password), now)
+            (cur.lastrowid, hash_password(password), now)
         )
-        ensure_user_official_room_membership(conn, user_id)
         conn.commit()
-        audit("REGISTER_OK", ip, username, ua=ua, success=True)
-        return json_resp({"ok":True,"msg":"註冊成功"})
+        audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
+        return json_resp({"ok":True,"msg":"註冊申請已送出，需經管理員或最高管理者審核後才能登入"})
     finally:
         conn.close()
 
@@ -2154,6 +2279,7 @@ def me():
     role = "super_admin" if ctx["username"] == "root" else ctx["role"]
     return json_resp({
         "ok": True,
+        "id": ctx["id"],
         "username": ctx["username"],
         "role": role,
         "role_label": ROLE_LABEL.get(role, role),
@@ -2491,43 +2617,18 @@ def admin_users():
             return json_resp({"ok":False,"msg":"權限不足"}), 403
         conn = get_db()
         try:
-            now = datetime.now()
-            if actor_role == "super_admin":
-                rows = conn.execute(
-                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, violation_count "
-                    "FROM users ORDER BY id ASC"
-                ).fetchall()
-                data = [user_public_payload(r) for r in rows]
-            else:
-                rows = conn.execute(
-                    "SELECT id, username, status, role, blocked_until, violation_count FROM users ORDER BY id ASC"
-                ).fetchall()
-                data = []
-                for r in rows:
-                    blocked_until = r["blocked_until"]
-                    blocked = False
-                    if blocked_until:
-                        try:
-                            blocked = datetime.fromisoformat(blocked_until) > now
-                        except Exception:
-                            blocked = False
-                    data.append({
-                        "id": r["id"],
-                        "username": r["username"],
-                        "nickname": "",
-                        "real_name": "",
-                        "status": r["status"],
-                        "role": r["role"],
-                        "blocked_until": r["blocked_until"],
-                        "blocked": blocked,
-                        "violation_count": (r["violation_count"] if "violation_count" in r.keys() else 0),
-                    })
+            rows = conn.execute(
+                "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, violation_count "
+                "FROM users ORDER BY id ASC"
+            ).fetchall()
+            data = [user_public_payload(r) for r in rows]
         finally:
             conn.close()
         return json_resp({
             "ok": True,
             "users": data,
-            "can_manage": role_rank(actor_role) >= role_rank("super_admin")
+            "can_manage": role_rank(actor_role) >= role_rank("super_admin"),
+            "can_review": role_rank(actor_role) >= role_rank("manager")
         })
 
     # POST — super_admin only
@@ -2615,8 +2716,9 @@ def admin_user_item(user_id):
     if not actor:
         return json_resp({"ok":False,"msg":"未登入"}), 401
     actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-    if role_rank(actor_role) < role_rank("super_admin"):
-        return json_resp({"ok":False,"msg":"只有最高權限可管理帳號"}), 403
+    is_self = actor["id"] == user_id
+    if role_rank(actor_role) < role_rank("manager") and not is_self:
+        return json_resp({"ok":False,"msg":"權限不足"}), 403
 
     conn = get_db()
     try:
@@ -2652,8 +2754,11 @@ def admin_user_item_mutate(user_id):
     if not actor:
         return json_resp({"ok":False,"msg":"未登入"}), 401
     actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-    if role_rank(actor_role) < role_rank("super_admin"):
-        return json_resp({"ok":False,"msg":"只有最高權限可管理帳號"}), 403
+    is_self = actor["id"] == user_id
+    if request.method == "DELETE" and role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高權限可刪除帳號"}), 403
+    if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高權限可修改他人帳號"}), 403
 
     conn = get_db()
     try:
@@ -2667,6 +2772,8 @@ def admin_user_item_mutate(user_id):
         if request.method == "DELETE":
             if target["username"] == "root":
                 return json_resp({"ok":False,"msg":"不可刪除最高管理者帳號"}), 403
+            if target["username"] == actor["username"]:
+                return json_resp({"ok":False,"msg":"不可刪除目前登入中的帳號"}), 403
             conn.execute("DELETE FROM users WHERE id=?", (user_id,))
             conn.commit()
             audit("ADMIN_DELETE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
@@ -2707,12 +2814,16 @@ def admin_user_item_mutate(user_id):
             updates.append("phone=?")
             params.append(encrypt_field(val))
         if "status" in data:
+            if is_self:
+                return json_resp({"ok":False,"msg":"不可自行變更帳號狀態"}), 403
             val = normalize_text(data["status"])
-            if val not in ("active","inactive"):
+            if val not in ("active","inactive","pending","rejected"):
                 return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
             updates.append("status=?")
             params.append(val)
         if "role" in data:
+            if is_self:
+                return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403
             val = normalize_text(data["role"])
             if val not in ROLE_RANK:
                 return json_resp({"ok":False,"msg":"不支援的角色"}), 400
@@ -2750,8 +2861,60 @@ def admin_user_item_mutate(user_id):
             conn.execute(sql, params)
             conn.commit()
         audit("ADMIN_UPDATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
-              detail=f"target_id={user_id}")
+              detail=f"target_id={user_id},self={is_self}")
         return json_resp({"ok":True,"msg":"帳號已更新"})
+    finally:
+        conn.close()
+
+@app.route("/api/admin/users/<int:user_id>/review-registration", methods=["POST"])
+@require_csrf
+def review_registration(user_id):
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("manager"):
+        return json_resp({"ok":False,"msg":"只有管理者以上可審核註冊"}), 403
+
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+    if not isinstance(data, dict):
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
+
+    action = normalize_text(data.get("action"))
+    if action not in ("approve", "reject"):
+        return json_resp({"ok":False,"msg":"不支援的審核動作"}), 400
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            "SELECT id, username, status FROM users WHERE id=?",
+            (user_id,)
+        ).fetchone()
+        if not target:
+            return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+        if target["status"] != "pending":
+            return json_resp({"ok":False,"msg":"此帳號目前不是待審核狀態"}), 409
+
+        new_status = "active" if action == "approve" else "rejected"
+        conn.execute(
+            "UPDATE users SET status=?, updated_at=? WHERE id=?",
+            (new_status, datetime.now().isoformat(), user_id)
+        )
+        if action == "approve":
+            ensure_user_official_room_membership(conn, user_id)
+        conn.commit()
+        audit(
+            "REGISTRATION_REVIEWED",
+            get_client_ip(),
+            user=actor["username"],
+            success=True,
+            ua=get_ua(),
+            detail=f"target={target['username']},action={action}"
+        )
+        return json_resp({"ok":True,"msg":"審核已完成","status":new_status})
     finally:
         conn.close()
 
@@ -3624,6 +3787,35 @@ def admin_health():
             "chat_files": len(chat_files),
             "chat_bytes": chat_size,
             "chat_dir": "chats/",
+        }
+    })
+
+@app.route("/api/admin/environment", methods=["GET"])
+@require_csrf_safe
+def admin_environment():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高管理者可查看系統環境"}), 403
+
+    db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    log_files = [name for name in os.listdir(LOG_DIR) if os.path.isfile(os.path.join(LOG_DIR, name))] if os.path.isdir(LOG_DIR) else []
+    chat_files = [name for name in os.listdir(CHAT_DIR) if os.path.isfile(os.path.join(CHAT_DIR, name))] if os.path.isdir(CHAT_DIR) else []
+    anchor_files = [name for name in os.listdir(ANCHOR_DIR) if os.path.isfile(os.path.join(ANCHOR_DIR, name))] if os.path.isdir(ANCHOR_DIR) else []
+    return json_resp({
+        "ok": True,
+        "environment": {
+            "platform": platform.platform(),
+            "python_version": sys.version.split()[0],
+            "base_dir": BASE_DIR,
+            "database_path": DB_PATH,
+            "database_bytes": db_size,
+            "log_files": len(log_files),
+            "chat_files": len(chat_files),
+            "anchor_files": len(anchor_files),
+            "pid": os.getpid(),
         }
     })
 

@@ -5,11 +5,14 @@
 const API = "/api";
 let _csrfToken = null;
 let currentUser = null;
+let currentUserId = null;
 let currentRole = "user";
 let canManageUsers = false;
 let currentModuleTab = "chat";
+let currentServerTab = "health";
 let users = [];
 let editingUserId = null;
+let editingUserIsSelf = false;
 let userAppeals = [];
 let adminAppeals = [];
 let adminAppealPage = 1;
@@ -71,19 +74,15 @@ function readCookie(name) {
 function getCsrfToken() { return _csrfToken; }
 
 async function fetchCsrfToken({ force = false } = {}) {
-  if (!force) {
-    const cookieToken = readCookie("csrf_token");
-    if (cookieToken) {
-      _csrfToken = cookieToken;
-      return;
-    }
-  }
-
   try {
     const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
     const json = await res.json();
-    if (json.ok) _csrfToken = json.csrf_token;
-    else _csrfToken = null;
+    if (json.ok) {
+      _csrfToken = json.csrf_token;
+      return;
+    }
+    const cookieToken = readCookie("csrf_token");
+    _csrfToken = cookieToken || null;
   } catch (_) { _csrfToken = null; }
 }
 
@@ -320,6 +319,7 @@ $("admin-add-pw-confirm").addEventListener("input", updateAdminPwMatchHint);
 
 function setAuthState(json, showLoginHero = false) {
   currentUser = json.username || null;
+  currentUserId = json.id || null;
   currentRole = json.role || "user";
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
@@ -334,6 +334,8 @@ function setAuthState(json, showLoginHero = false) {
   $("me-user").textContent = sanitize(currentUser || "-");
   $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
   $("me-nickname").textContent = sanitize(json.nickname || "-");
+  const selfEditBtn = $("self-edit-btn");
+  if (selfEditBtn) selfEditBtn.style.display = currentUser ? "" : "none";
   const welcomeMsg = $("welcome-msg");
   if (welcomeMsg) {
     welcomeMsg.classList.remove("birthday-greeting");
@@ -390,9 +392,12 @@ function setAuthState(json, showLoginHero = false) {
 
 function resetAuthState() {
   currentUser = null;
+  currentUserId = null;
   currentRole = "user";
   canManageUsers = false;
   users = [];
+  currentServerTab = "health";
+  editingUserIsSelf = false;
   stopInactivityTimer();
   stopChatPoll();
   hideUserEditDialog();
@@ -440,9 +445,26 @@ function renderUsers() {
   for (const u of users) {
     const blocked = u.blocked_until && new Date(u.blocked_until) > new Date();
     const isBlocked = blocked;
+    const isSelf = String(u.username || "") === String(currentUser || "");
     const actionButtons = [];
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.status === "pending" && !isSelf) {
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "btn btn-primary";
+      approveBtn.type = "button";
+      approveBtn.textContent = "核准";
+      approveBtn.addEventListener("click", () => reviewRegistration(u.id, "approve"));
+      actionButtons.push(approveBtn);
+
+      const rejectBtn = document.createElement("button");
+      rejectBtn.className = "btn";
+      rejectBtn.type = "button";
+      rejectBtn.textContent = "駁回";
+      rejectBtn.style.color = "#ff8a80";
+      rejectBtn.addEventListener("click", () => reviewRegistration(u.id, "reject"));
+      actionButtons.push(rejectBtn);
+    }
     if (currentRole === "manager" || currentRole === "super_admin") {
-      if (u.role !== "super_admin") {
+      if (u.role !== "super_admin" && !isSelf) {
         const blockBtn = document.createElement("button");
         blockBtn.className = "btn btn-primary";
         blockBtn.type = "button";
@@ -453,7 +475,7 @@ function renderUsers() {
       }
     }
     // Promote button (manager/super_admin can promote user→manager)
-    if ((currentRole === "manager" || currentRole === "super_admin") && u.role === "user") {
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.role === "user" && !isSelf) {
       const promBtn = document.createElement("button");
       promBtn.className = "btn";
       promBtn.type = "button";
@@ -463,7 +485,7 @@ function renderUsers() {
       actionButtons.push(promBtn);
     }
     // Demote button (super_admin only: manager→user, user→delete)
-    if (currentRole === "super_admin" && (u.role === "manager" || u.role === "user")) {
+    if (currentRole === "super_admin" && u.role === "manager" && !isSelf) {
       const demBtn = document.createElement("button");
       demBtn.className = "btn";
       demBtn.type = "button";
@@ -473,7 +495,7 @@ function renderUsers() {
       actionButtons.push(demBtn);
     }
     // Violation controls (manager/super_admin)
-    if ((currentRole === "manager" || currentRole === "super_admin") && u.role !== "super_admin") {
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.role !== "super_admin" && !isSelf) {
       const violCount = u.violation_count || 0;
       const violBtn = document.createElement("button");
       violBtn.className = "btn";
@@ -506,28 +528,34 @@ function renderUsers() {
         actionButtons.push(resetBtn);
       }
     }
-    if (canManageUsers) {
+    if (canManageUsers || isSelf) {
       const editBtn = document.createElement("button");
       editBtn.className = "btn btn-primary";
       editBtn.type = "button";
-      editBtn.textContent = "修改";
+      editBtn.textContent = isSelf ? "我的資料" : "修改";
       editBtn.addEventListener("click", () => editUser(u.id));
       editBtn.classList.add("action-edit-user");
       actionButtons.push(editBtn);
-      const delBtn = document.createElement("button");
-      delBtn.className = "btn btn-danger";
-      delBtn.type = "button";
-      delBtn.textContent = "刪除";
-      delBtn.addEventListener("click", () => removeUser(u.id));
-      delBtn.classList.add("action-remove-user");
-      actionButtons.push(delBtn);
+      if (canManageUsers && !isSelf) {
+        const delBtn = document.createElement("button");
+        delBtn.className = "btn btn-danger";
+        delBtn.type = "button";
+        delBtn.textContent = "刪除";
+        delBtn.addEventListener("click", () => removeUser(u.id));
+        delBtn.classList.add("action-remove-user");
+        actionButtons.push(delBtn);
+      }
     }
     const tr = document.createElement("tr");
     if (isBlocked) tr.style.opacity = "0.5";
     const actions = document.createElement("div");
     actions.className = "action";
     actionButtons.forEach((btn) => actions.appendChild(btn));
-    const statusLabel = isBlocked ? `<span style="color:#ff4f6d;">封鎖中</span>` : `<span style="color:#4caf50;">正常</span>`;
+    let statusLabel = `<span style="color:#4caf50;">正常</span>`;
+    if (u.status === "pending") statusLabel = `<span style="color:#ffb74d;">待審核</span>`;
+    else if (u.status === "rejected") statusLabel = `<span style="color:#ff4f6d;">已駁回</span>`;
+    else if (u.status === "inactive") statusLabel = `<span style="color:#9e9e9e;">停用</span>`;
+    if (isBlocked) statusLabel = `<span style="color:#ff4f6d;">封鎖中</span>`;
     const violDisplay = (u.violation_count || 0) > 0 ? `<span style="color:#ff4f6d;font-weight:bold;">${u.violation_count}</span>` : "0";
     tr.innerHTML = `
       <td>${u.id}</td>
@@ -1208,11 +1236,11 @@ async function toggleBlock(userId, isBlocked) {
 
 async function editUser(userId) {
   const target = users.find((u) => String(u.id) === String(userId));
-  if (!target) return;
+  if (!target && String(currentUserId || "") !== String(userId)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
 
-  let source = target;
+  let source = target || {};
   if (csrf) {
     const detailRes = await fetch(API + `/admin/users/${userId}`, {
       method: "GET",
@@ -1224,8 +1252,9 @@ async function editUser(userId) {
     }
   }
 
+  editingUserIsSelf = String(currentUserId || "") === String(userId);
   const current = {
-    username: source.username || "",
+    username: source.username || currentUser || "",
     nickname: source.nickname || "",
     real_name: source.real_name || "",
     id_number: source.id_number || "",
@@ -1255,6 +1284,10 @@ async function editUser(userId) {
   if (editRole) editRole.value = current.role;
   const editStatus = $("edit-user-status");
   if (editStatus) editStatus.value = current.status;
+  const roleField = $("edit-user-role-field");
+  const statusField = $("edit-user-status-field");
+  if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
+  if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   setUserEditField("edit-user-pw", "");
   setUserEditField("edit-user-pw-confirm", "");
   setUserEditMsg("");
@@ -1284,8 +1317,8 @@ async function submitEditUser() {
   if (idNo !== editingUserOriginal.id_number) payload.id_number = idNo;
   if (birthdate !== editingUserOriginal.birthdate) payload.birthdate = birthdate;
   if (phone !== editingUserOriginal.phone) payload.phone = phone;
-  if (role !== editingUserOriginal.role) payload.role = role;
-  if (status !== editingUserOriginal.status) payload.status = status;
+  if (!editingUserIsSelf && canManageUsers && role !== editingUserOriginal.role) payload.role = role;
+  if (!editingUserIsSelf && canManageUsers && status !== editingUserOriginal.status) payload.status = status;
 
   if (password || passwordConfirm) {
     if (password !== passwordConfirm) {
@@ -1316,7 +1349,7 @@ async function submitEditUser() {
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
     hideUserEditDialog();
-    loadUsers();
+    if (["manager", "super_admin"].includes(currentRole)) loadUsers();
     return;
   }
   setUserEditMsg(json.msg || "修改失敗", false);
@@ -1380,6 +1413,25 @@ async function createUserByAdmin() {
   }
 }
 
+async function reviewRegistration(userId, action) {
+  const label = action === "approve" ? "核准" : "駁回";
+  if (!confirm(`確定要${label}這筆註冊申請？`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${userId}/review-registration`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    loadUsers();
+  } else {
+    alert(json.msg || "審核失敗");
+  }
+}
+
 async function promoteUser(userId, username) {
   if (!confirm(`確定要將「${username}」升級為管理者？`)) return;
   await fetchCsrfToken({ force: true });
@@ -1419,6 +1471,22 @@ async function demoteUser(userId, username, currentRole) {
 
 // ── Module / admin tab switching ─────────────────────────────────────
 let currentAdminTab = "users";
+function switchServerTab(tab) {
+  currentServerTab = tab;
+  ["health", "settings", "env"].forEach((name) => {
+    const sec = $("sec-server-" + name);
+    if (sec) sec.classList.toggle("active", name === tab);
+  });
+  ["tab-server-health", "tab-server-settings", "tab-server-env"].forEach((id) => {
+    const btn = $(id);
+    if (!btn) return;
+    btn.classList.toggle("active", id === "tab-server-" + tab);
+  });
+  if (tab === "health") loadServerHealth();
+  if (tab === "settings") loadSettings();
+  if (tab === "env") loadServerEnv();
+}
+
 function switchModuleTab(tab) {
   const canAccessAccounts = currentRole === "manager" || currentRole === "super_admin";
   const canAccessServer = currentRole === "super_admin";
@@ -1449,7 +1517,7 @@ function switchModuleTab(tab) {
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
 
   if (normTab === "server" && canAccessServer) {
-    loadSettings();
+    switchServerTab(currentServerTab || "health");
   }
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
@@ -1671,12 +1739,12 @@ async function loadSettings() {
   const json = await res.json().catch(() => ({}));
   if (!json.ok) return;
   const s = json.settings || {};
+  if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
-  if ($("s-require-email")) $("s-require-email").checked = !!s.require_email;
-  if ($("s-max-fail")) $("s-max-fail").value = s.max_login_fail || 5;
+  if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
+  if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
-  loadServerHealth();
 }
 
 function formatBytes(bytes) {
@@ -1735,9 +1803,10 @@ async function saveSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const payload = {
+    maintenance_mode: !!$("s-maintenance-mode")?.checked,
     allow_register: !!$("s-allow-register")?.checked,
-    require_email: !!$("s-require-email")?.checked,
-    max_login_fail: parseInt($("s-max-fail")?.value || "5"),
+    require_email_verification: !!$("s-require-email")?.checked,
+    max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24")
   };
@@ -1753,6 +1822,41 @@ async function saveSettings() {
     el.textContent = json.ok ? "✅ 設定已儲存" : (json.msg || "儲存失敗");
     el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
+}
+
+async function loadServerEnv() {
+  if (!currentUser || currentRole !== "super_admin") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/environment", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  const summary = $("server-env-summary");
+  const details = $("server-env-details");
+  if (!summary || !details) return;
+  if (!json.ok) {
+    summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "系統環境讀取失敗")}</div>`;
+    details.textContent = "";
+    return;
+  }
+  const env = json.environment || {};
+  const cards = [
+    ["作業平台", env.platform || "-", "#82b1ff"],
+    ["Python", env.python_version || "-", "#82b1ff"],
+    ["資料庫", formatBytes(env.database_bytes || 0), "#82b1ff"],
+    ["程序 PID", String(env.pid || "-"), "#82b1ff"],
+    ["Log 檔數", String(env.log_files || 0), "#82b1ff"],
+    ["Anchor 檔數", String(env.anchor_files || 0), "#82b1ff"],
+  ];
+  summary.innerHTML = cards.map(([label, value, color]) => `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
+      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
+      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;">${sanitize(value)}</div>
+    </div>
+  `).join("");
+  details.innerHTML = `BASE_DIR：${sanitize(env.base_dir || "-")}<br>DB：${sanitize(env.database_path || "-")}<br>聊天檔數：${sanitize(String(env.chat_files || 0))}`;
 }
 
 async function restartServer() {
@@ -1780,6 +1884,9 @@ function bindUiEvents() {
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
+  const tabServerHealth = $("tab-server-health");
+  const tabServerSettings = $("tab-server-settings");
+  const tabServerEnv = $("tab-server-env");
   const tabUsers    = $("tab-users");
   const tabAudit    = $("tab-audit");
   const tabViol     = $("tab-violations");
@@ -1788,6 +1895,7 @@ function bindUiEvents() {
   const liBtn       = $("li-btn");
   const regBtn      = $("reg-btn");
   const logoutBtn   = $("logout-btn");
+  const selfEditBtn = $("self-edit-btn");
   const adminRefresh = $("admin-refresh");
   const adminAddBtn  = $("admin-add-btn");
   const auditRefresh = $("audit-refresh");
@@ -1814,6 +1922,9 @@ function bindUiEvents() {
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
+  if (tabServerHealth) tabServerHealth.addEventListener("click", () => switchServerTab("health"));
+  if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
+  if (tabServerEnv) tabServerEnv.addEventListener("click", () => switchServerTab("env"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
   if (tabAudit)    tabAudit.addEventListener("click",    () => switchAdminTab("audit"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
@@ -1822,6 +1933,9 @@ function bindUiEvents() {
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
+  if (selfEditBtn) selfEditBtn.addEventListener("click", () => {
+    if (currentUserId) editUser(currentUserId);
+  });
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
   if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
   if (chatCreateBtn) chatCreateBtn.addEventListener("click", createChatRoom);

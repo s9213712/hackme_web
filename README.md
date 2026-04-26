@@ -2,7 +2,7 @@
 
 A production-oriented single-page authentication server built with Flask, featuring defense-in-depth security controls, role-based access control (RBAC), tamper-evident audit logging, and automated violation tracking.
 
-> 本系統為 html_learning (https://github.com/s9213712/html_learning) 專案的核心認證與管理後端。
+> 本系統為 html_learning 專案的核心認證與管理後端。
 
 ## 系統定位
 專為「練習滲透測試」場景設計的合法目標系統。系統本身具備完整防御機制，並保留完整滲透測試與修補紀錄供後續回放。
@@ -40,8 +40,8 @@ source .env
 ```
 > `.env.production.example` 內有 `SESSION_COOKIE_SECURE=true`、`IP_BLOCKING_ENABLED=true`、`FORCE_HTTPS=true` 等預設。
 
-- 預設帳號：`root` / `root`
-- 管理員帳號：`s92137` / `Manager@1234`
+- 預設帳號：`root` / `admin`
+- 管理員帳號：`admin` / `admin`
 
 ## API（核心）
 公開：`GET /api/csrf-token`、`POST /api/register`、`POST /api/login`、`POST /api/logout`

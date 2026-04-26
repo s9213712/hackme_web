@@ -4,7 +4,7 @@
 
 - `BASE_URL`
 - `ROOT_USERNAME` / `ROOT_PASSWORD`（預設 `root/root`）
-- `MANAGER_USERNAME` / `MANAGER_PASSWORD`（預設 `s92137/Manager@1234`）
+- `MANAGER_USERNAME` / `MANAGER_PASSWORD`（預設 `admin/admin`）
 
 建議執行順序（由高到低）：
 

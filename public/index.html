@@ -109,6 +109,7 @@
     <div>暱稱：<span id="me-nickname">-</span></div>
   </div>
   <div class="success-toolbar">
+    <button class="btn" id="self-edit-btn">修改我的資料</button>
     <button class="btn" id="logout-btn">登出</button>
   </div>
 
@@ -300,41 +301,62 @@
   <div class="module-section" id="module-server">
     <div class="admin-tools">
       <div class="mini-title">⚙️ 伺服器管理</div>
-      <div class="mini-title" style="margin-top:.6rem;">健康度總覽</div>
-      <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
-        <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
+      <div class="tabs" style="margin-top:.65rem;margin-bottom:.7rem;">
+        <button class="tab active" id="tab-server-health">健康度</button>
+        <button class="tab" id="tab-server-settings">伺服器設定</button>
+        <button class="tab" id="tab-server-env">系統環境</button>
       </div>
-      <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
-      <div id="server-health-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;margin-bottom:.9rem;"></div>
-      <form id="settings-form" style="margin-top:.6rem;">
-        <div class="field">
-          <label><input type="checkbox" id="s-allow-register" /> 允許一般用戶註冊</label>
+
+      <div class="form-section active" id="sec-server-health">
+        <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
+          <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
         </div>
-        <div class="field">
-          <label><input type="checkbox" id="s-require-email" /> 需 email 驗證</label>
+        <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div id="server-health-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;margin-bottom:.9rem;"></div>
+      </div>
+
+      <div class="form-section" id="sec-server-settings">
+        <form id="settings-form" style="margin-top:.6rem;">
+          <div class="field">
+            <label><input type="checkbox" id="s-maintenance-mode" /> 維護模式（只允許 root 操作）</label>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="s-allow-register" /> 允許一般用戶註冊</label>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="s-require-email" /> 需 email 驗證</label>
+          </div>
+          <div class="field">
+            <label>登入失敗鎖定次數</label>
+            <input type="number" id="s-max-fail" min="1" max="20" />
+          </div>
+          <div class="field">
+            <label>封鎖時長（分鐘）</label>
+            <input type="number" id="s-block-dur" min="1" max="1440" />
+          </div>
+          <div class="field">
+            <label>Session 有效期（小時）</label>
+            <input type="number" id="s-session-ttl" min="1" max="72" />
+          </div>
+          <div class="admin-toolbar" style="margin-top:.6rem;">
+            <button class="btn btn-primary" type="button" id="settings-save-btn">儲存設定</button>
+          </div>
+          <div id="settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+        </form>
+        <div class="mini-title" style="margin-top:1.2rem;color:#ff4f6d;">危險區</div>
+        <div class="admin-toolbar" style="margin-top:.5rem;">
+          <button class="btn" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
+            重啟服務器
+          </button>
         </div>
-        <div class="field">
-          <label>登入失敗鎖定次數</label>
-          <input type="number" id="s-max-fail" min="1" max="20" />
+      </div>
+
+      <div class="form-section" id="sec-server-env">
+        <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
+          <button class="btn btn-primary" type="button" id="env-refresh-btn">重新整理系統環境</button>
         </div>
-        <div class="field">
-          <label>封鎖時長（分鐘）</label>
-          <input type="number" id="s-block-dur" min="1" max="1440" />
-        </div>
-        <div class="field">
-          <label>Session 有效期（小時）</label>
-          <input type="number" id="s-session-ttl" min="1" max="72" />
-        </div>
-        <div class="admin-toolbar" style="margin-top:.6rem;">
-          <button class="btn btn-primary" type="button" id="settings-save-btn">💾 儲存設定</button>
-        </div>
-        <div id="settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
-      </form>
-      <div class="mini-title" style="margin-top:1.2rem;color:#ff4f6d;">☠️ 危險區</div>
-      <div class="admin-toolbar" style="margin-top:.5rem;">
-        <button class="btn" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
-          🔁 重啟服務器
-        </button>
+        <div id="server-env-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div id="server-env-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;"></div>
       </div>
     </div>
   </div>
@@ -366,7 +388,7 @@
       <label>電話</label>
       <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
     </div>
-    <div class="field">
+    <div class="field" id="edit-user-role-field">
       <label>角色</label>
       <select id="edit-user-role">
         <option value="user">一般用戶</option>
@@ -374,11 +396,13 @@
         <option value="super_admin">超級管理者</option>
       </select>
     </div>
-    <div class="field">
+    <div class="field" id="edit-user-status-field">
       <label>帳號狀態</label>
       <select id="edit-user-status">
         <option value="active">啟用</option>
         <option value="inactive">停用</option>
+        <option value="pending">待審核</option>
+        <option value="rejected">已駁回</option>
       </select>
     </div>
     <div class="field">
