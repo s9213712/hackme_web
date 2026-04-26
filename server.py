@@ -1111,12 +1111,12 @@ app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 # ── Security Headers (via Flask-Talisman) ─────────────────────────────────────
-# CSP: allow inline scripts for current single-page UI (testing mode)
+# CSP: strict mode (no inline scripts/styles)
 talisman = Talisman(app,
     content_security_policy={
         "default-src": "'self'",
-        "script-src":  "'self' 'unsafe-inline'",
-        "style-src":   "'self' 'unsafe-inline'",   # allow inline styles (needed by the SPA)
+        "script-src":  "'self'",
+        "style-src":   "'self'",
         "img-src":     "'self' data:",
         "font-src":    "'self'",
         "connect-src": "'self'",
@@ -2189,7 +2189,7 @@ if __name__ == "__main__":
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
     scheme = "https" if has_ssl else "http"
     print(f"\n🌐  hackme_web server running at {scheme}://localhost:5000")
-    print(f"    Default credentials: root / Admin@1234")
+    print(f"    Default credentials: root / root")
     print(f"    SSL: {'enabled' if has_ssl else 'disabled (add cert.pem + key.pem to enable)'}")
     print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")

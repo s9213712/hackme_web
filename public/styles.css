@@ -1,0 +1,336 @@
+
+    /* ── Reset & base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f0f1a;
+      --surface:  #1a1a2e;
+      --accent:   #6c63ff;
+      --accent2:  #00d4aa;
+      --danger:   #ff4f6d;
+      --text:     #e0e0f0;
+      --muted:    #8888aa;
+      --radius:   12px;
+      --shadow:   0 8px 32px rgba(0,0,0,.45);
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    .clock {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      font-size: .88rem;
+      color: var(--muted);
+      background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      padding: .45rem .7rem;
+      z-index: 9;
+      min-width: 170px;
+      text-align: center;
+      letter-spacing: .02em;
+    }
+
+    /* ── Card ─────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 2.5rem 2rem;
+      width: min(420px, 90vw);
+      border: 1px solid rgba(255,255,255,.06);
+    }
+
+    .card h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: .2rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: var(--muted);
+      font-size: .82rem;
+      margin-bottom: 1.8rem;
+    }
+
+    /* ── Tabs ─────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      background: rgba(0,0,0,.35);
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 1.5rem;
+    }
+
+    .tab {
+      flex: 1;
+      padding: .55rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: .9rem;
+      font-weight: 600;
+      background: transparent;
+      color: var(--muted);
+      transition: background .2s, color .2s;
+    }
+
+    .tab.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    /* ── Form ─────────────────────────────────────────────── */
+    .form-section { display: none; }
+    .form-section.active { display: block; }
+
+    .field {
+      margin-bottom: 1rem;
+    }
+
+    label {
+      display: block;
+      font-size: .8rem;
+      color: var(--muted);
+      margin-bottom: .35rem;
+    }
+
+    input {
+      width: 100%;
+      padding: .65rem .9rem;
+      background: rgba(0,0,0,.3);
+      border: 1.5px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: .95rem;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    input:focus { border-color: var(--accent); }
+
+    /* ── Password field with toggle ──────────────────────── */
+    .pw-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .pw-wrap input {
+      padding-right: 2.8rem;
+    }
+
+    .pw-toggle {
+      position: absolute;
+      right: .6rem;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: .2rem;
+      color: var(--muted);
+      transition: color .2s;
+      user-select: none;
+      line-height: 1;
+    }
+
+    .pw-toggle:hover { color: var(--accent); }
+
+    .pw-rules {
+      font-size: .72rem;
+      color: var(--muted);
+      margin-top: .4rem;
+      line-height: 1.5;
+    }
+
+    .pw-rules span { color: var(--accent2); }
+
+    /* ── Button ───────────────────────────────────────────── */
+    .btn {
+      width: 100%;
+      padding: .75rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #8a80ff);
+      color: #fff;
+    }
+
+    .btn-primary:hover { opacity: .88; }
+    .btn-primary:active { transform: scale(.97); }
+
+    /* ── Message ───────────────────────────────────────────── */
+    .msg {
+      margin-top: .9rem;
+      padding: .65rem .85rem;
+      border-radius: 8px;
+      font-size: .85rem;
+      font-weight: 600;
+      text-align: center;
+      display: none;
+    }
+
+    .msg.show { display: block; }
+    .msg.ok   { background: rgba(0,212,170,.18); color: var(--accent2); border: 1px solid rgba(0,212,170,.35); }
+    .msg.err  { background: rgba(255,79,109,.18); color: var(--danger); border: 1px solid rgba(255,79,109,.35); }
+
+    .info-grid {
+      display: grid;
+      gap: .45rem;
+      grid-template-columns: 1fr;
+      margin: 1rem 0;
+      text-align: left;
+      font-size: .9rem;
+      color: var(--muted);
+    }
+
+    .admin-wrap {
+      display: none;
+      width: min(860px, 94vw);
+      margin-top: .8rem;
+    }
+
+    .admin-wrap.show { display: block; }
+
+    .admin-tools {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid rgba(255,255,255,.06);
+      padding: 1rem;
+      box-shadow: var(--shadow);
+      margin-top: .9rem;
+    }
+
+    .admin-toolbar {
+      display: grid;
+      gap: .55rem;
+      grid-template-columns: repeat(2, 1fr);
+      margin-bottom: .75rem;
+    }
+
+    .admin-toolbar .btn { width: 100%; }
+
+    .mini-title {
+      font-size: .82rem;
+      color: var(--muted);
+      margin-bottom: .45rem;
+    }
+
+    .user-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: .7rem;
+      font-size: .82rem;
+    }
+
+    .user-table th,
+    .user-table td {
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      padding: .45rem .45rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .user-table th {
+      color: var(--accent2);
+      font-weight: 600;
+      font-size: .74rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .user-table tr:last-child td { border-bottom: none; }
+
+    .action {
+      display: inline-flex;
+      gap: .4rem;
+      margin-top: .45rem;
+      flex-wrap: wrap;
+    }
+
+    .action .btn {
+      width: auto;
+      padding: .45rem .7rem;
+      font-size: .76rem;
+      font-weight: 600;
+    }
+
+    .btn-danger {
+      background: var(--danger);
+      color: #fff;
+    }
+
+    /* ── Success screen ───────────────────────────────────── */
+    #success-screen {
+      display: none;
+      text-align: center;
+    }
+
+    #success-screen.show { display: block; }
+
+    .success-icon {
+      font-size: 4rem;
+      margin-bottom: .5rem;
+    }
+
+    #success-screen h2 {
+      font-size: 1.6rem;
+      background: linear-gradient(135deg, var(--accent2), #7fffb2);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    #logout-btn {
+      margin-top: 1.5rem;
+      background: rgba(255,255,255,.08);
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,.1);
+      font-size: .85rem;
+    }
+
+    #logout-btn:hover { background: rgba(255,255,255,.14); color: var(--text); }
+
+    /* ── Footer ───────────────────────────────────────────── */
+    .footer {
+      margin-top: 1.2rem;
+      font-size: .72rem;
+      color: var(--muted);
+    }
+
+    /* ── Spinner ──────────────────────────────────────────── */
+    .spinner {
+      display: none;
+      width: 20px; height: 20px;
+      border: 2.5px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      margin: .6rem auto 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .btn.loading { opacity: .7; cursor: not-allowed; }
+  
