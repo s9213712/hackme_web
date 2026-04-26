@@ -17,7 +17,9 @@ chats/*.jsonl
 anchors/*.json
 anchors/*.jsonl
 !anchors/.gitkeep
-!attack_test/*.md
 !requirements.txt
 cert.pem
 key.pem
+attack_test/
+pentest_artifacts/
+reports/pentest/

@@ -62,9 +62,22 @@ source .env
 - `GET/PUT /api/admin/settings`
 - `POST /api/admin/restart`
 
-## 最新滲透掃描與修補
-- XSS/SQLi/CSRF/Session 篡改/帳號枚舉/密碼儲存：✅ 已防護
-- Type confusion 5xx：✅ 已緩解
+## 安全測試覆蓋摘要
+已完成並人工複核的測試類型：
+- CSRF：missing token、invalid token、wrong header name、cross-session token、single-use replay
+- Session：login rotate、logout invalidation、old cookie reuse、session fixation、multi-login 行為
+- Authorization：一般使用者對管理 API、帳號修改、審核流程、訊息檢舉審核的越權測試
+- Mass assignment：top-level / nested 權限欄位偷渡
+- IDOR / BOLA：self / peer / admin / malformed id / large id
+- State machine：register review、appeal、message report、duplicate submit、reverse review
+- Injection：SQLi、log payload、前端顯示層輸入污染檢查
+
+目前結果摘要：
+- 未重現成功的一般使用者提權
+- 未重現成功的 logout 後 session replay
+- 未重現成功的 session fixation
+- 未重現成功的 SQL injection
+- `self-update` 的 CSRF token lifecycle 曾出現狀態機異常，已列入後續修補重點
 
 ## 專案結構
 - `server.py`：核心後端
@@ -77,7 +90,6 @@ source .env
 - `scripts/run_prod.sh`
 - `scripts/migrate_legacy_json.py`
 - `README.md`、`SECURITY.md`、`upgrade_plan.md`
-- `attack_test/*`：滲透測試腳本與紀錄
 
 ### 資料層轉型（第 2 階段）
 - 系統設定由 JSON 檔 (`system_settings.json`、`settings.json`) 轉為 SQLite 的 `system_settings` 表。
