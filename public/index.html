@@ -1457,11 +1457,24 @@ $("reg-pw").addEventListener("keydown", (e) => {
   startClock();
   _csrfToken = readCookie("csrf_token");
   bindUiEvents();
+  // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死
+  async function safeFetch(url, opts = {}) {
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const res = await fetch(url, { ...opts, signal: ctrl.signal });
+      clearTimeout(id);
+      return res;
+    } catch (e) {
+      clearTimeout(id);
+      throw e;
+    }
+  }
   try {
-    const res = await fetch(API + "/me", { credentials: "same-origin" });
-    const json = await res.json();
+    const res = await safeFetch(API + "/me", { credentials: "same-origin" });
+    const json = await res.json().catch(() => ({}));
     if (json.ok) setAuthState(json);
-  } catch (_) {}
+  } catch (_) { /* 網路問題或 timeout，不影響操作 */ }
 })();
 
 })();

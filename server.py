@@ -1153,11 +1153,11 @@ def index():
 @app.route("/api/csrf-token", methods=["GET"])
 def get_csrf_token():
     tok = request.cookies.get("session_token")
-    user = db_get_user_from_token(tok) if tok else None
-    if not user:
+    username = db_get_user_from_token(tok) if tok else None
+    if not username:
         return json_resp({"ok":False,"msg":"未登入"}), 401
     token = make_csrf_token()
-    store_csrf_token(token, user["username"])
+    store_csrf_token(token, username)
     return json_resp({"ok":True,"csrf_token":token})
 
 @app.route("/api/register", methods=["POST"])
@@ -1469,7 +1469,7 @@ def admin_users():
                         "role": r["role"],
                         "blocked_until": r["blocked_until"],
                         "blocked": blocked,
-                        "violation_count": r.get("violation_count") or 0,
+                        "violation_count": (r["violation_count"] if "violation_count" in r.keys() else 0),
                     })
         finally:
             conn.close()
@@ -1734,7 +1734,7 @@ def admin_user_promote(user_id):
 
         to_role = "manager" if from_role == "user" else "super_admin"
         if to_role == "manager":
-            limit = ROLE_LIMITS.get("manager", 5)
+            limit = MAX_MANAGERS
             if count_role("manager") >= limit:
                 return json_resp({"ok":False,"msg":f"管理者已達上限（{limit} 人）"}), 400
         # super_admin 限額 1 不需要檢查（root 不可變）
