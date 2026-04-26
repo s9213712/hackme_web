@@ -75,9 +75,17 @@ source .env
 - `logs/audit.log`, `logs/server.log`
 - `requirements.txt`
 - `scripts/run_prod.sh`
+- `scripts/migrate_legacy_json.py`
 - `README.md`、`SECURITY.md`、`upgrade_plan.md`
 - `attack_test/*`：滲透測試腳本與紀錄
 
+### 資料層轉型（第 2 階段）
+- 系統設定由 JSON 檔 (`system_settings.json`、`settings.json`) 轉為 SQLite 的 `system_settings` 表。
+- 安全事件與舊版稽核紀錄可透過下列腳本一次性匯入：
+```bash
+python3 scripts/migrate_legacy_json.py
+```
+- 啟動時 `init_db()` 會自動偵測並嘗試補入 legacy JSON（`blocked_ips.json`、`fail_log.json`、`rate_limit.json`、`audit.log`）資料。
 ## 架構收斂與維運
 - 前端已完成 CSS/JS 外部化，降低單檔集中。
 - 後端 `server.py` 仍是主集中點（2200+ 行）並已規劃下一版拆分為 `core/` 與 `routes/` 模組。

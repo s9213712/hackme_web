@@ -171,6 +171,11 @@ def save_json_with_lock(path, data):
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, path)
 
+LEGACY_FAIL_LOG = os.path.join(BASE_DIR, "fail_log.json")
+LEGACY_BLOCKED_IPS = os.path.join(BASE_DIR, "blocked_ips.json")
+LEGACY_RATE_LIMIT = os.path.join(BASE_DIR, "rate_limit.json")
+LEGACY_AUDIT_LOG = AUDIT_LOG_PATH
+
 # ── CSRF double-submit helpers ─────────────────────────────────────────────────
 def generate_csrf_dummy():
     """Dummy value for double-submit verification (matches cookie token)."""
@@ -460,6 +465,256 @@ def record_403_access(ip, path, username="-"):
     finally:
         conn.close()
 
+def _safe_iso(value, fallback=None):
+    if not value:
+        return fallback
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value).isoformat()
+        except Exception:
+            return fallback
+    if isinstance(value, str):
+        v = value.strip()
+        if not v:
+            return fallback
+        for fm in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.fromisoformat(v).isoformat()
+            except Exception:
+                continue
+        # 嘗試直接回傳（如可被 SQLite 接受也可）
+        return v
+    return fallback
+
+def _coerce_count(v, default=0):
+    try:
+        n = int(v)
+        return n if n > 0 else default
+    except Exception:
+        return default
+
+def _migrate_legacy_fail_log_rows():
+    payload = load_json(LEGACY_FAIL_LOG)
+    now = datetime.now().isoformat()
+    rows = []
+    if isinstance(payload, list):
+        candidates = payload
+    elif isinstance(payload, dict):
+        candidates = []
+        for ip, item in payload.items():
+            if not isinstance(ip, str):
+                continue
+            if isinstance(item, dict):
+                count = _coerce_count(item.get("count", 1), 1)
+                created_at = _safe_iso(item.get("created_at") or item.get("ts") or item.get("time"), now)
+                username = normalize_text(item.get("username") or item.get("user") or item.get("target_user"))
+                detail = normalize_text(item.get("detail") or item.get("reason"))
+            else:
+                count = _coerce_count(item, 1)
+                created_at = now
+                username = ""
+                detail = "legacy fail_log"
+            count = max(1, count)
+            for _ in range(min(count, 1000)):
+                rows.append({
+                    "event_type": "login_fail",
+                    "ip_address": ip,
+                    "target_user": username or None,
+                    "detail": detail or "legacy fail_log",
+                    "created_at": created_at,
+                })
+    else:
+        candidates = []
+    if isinstance(payload, list):
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            ip = normalize_text(item.get("ip") or item.get("ip_address"))
+            if not ip:
+                continue
+            count = _coerce_count(item.get("count", 1), 1)
+            username = normalize_text(item.get("username") or item.get("target_user") or item.get("user"))
+            detail = normalize_text(item.get("detail") or item.get("reason"))
+            created_at = _safe_iso(item.get("created_at") or item.get("ts") or item.get("time"), now)
+            for _ in range(min(count, 1000)):
+                rows.append({
+                    "event_type": "login_fail",
+                    "ip_address": ip,
+                    "target_user": username or None,
+                    "detail": detail or "legacy fail_log",
+                    "created_at": created_at,
+                })
+    return rows
+
+def _migrate_legacy_blocked_ip_rows():
+    payload = load_json(LEGACY_BLOCKED_IPS)
+    now = datetime.now().isoformat()
+    rows = []
+    if not isinstance(payload, dict):
+        return rows
+    for ip, value in payload.items():
+        if not isinstance(ip, str):
+            continue
+        detail = ""
+        blocked_until = None
+        if isinstance(value, dict):
+            blocked_until = _safe_iso(value.get("blocked_until") or value.get("until") or value.get("expires_at"), None)
+            detail = normalize_text(value.get("detail") or value.get("reason"))
+        elif isinstance(value, str):
+            blocked_until = _safe_iso(value, None)
+            detail = "legacy blocked_ips.json"
+        elif isinstance(value, (int, float)):
+            blocked_until = _safe_iso(value, None)
+            detail = "legacy blocked_ips.json"
+        else:
+            detail = "legacy blocked_ips.json"
+        if not blocked_until:
+            blocked_until = now
+        rows.append({
+            "event_type": "ip_block",
+            "ip_address": ip,
+            "target_user": None,
+            "detail": f"blocked_until={blocked_until}" + (f" ({detail})" if detail else ""),
+            "created_at": now,
+        })
+    return rows
+
+def _migrate_legacy_rate_limit_rows():
+    payload = load_json(LEGACY_RATE_LIMIT)
+    now = datetime.now().isoformat()
+    rows = []
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            ip = normalize_text(item.get("ip") or item.get("ip_address"))
+            if not ip:
+                continue
+            rows.append({
+                "event_type": "rate_limit",
+                "ip_address": ip,
+                "target_user": normalize_text(item.get("target_user") or item.get("user")),
+                "detail": normalize_text(item.get("detail") or item.get("reason")) or "legacy rate_limit",
+                "created_at": _safe_iso(item.get("created_at") or item.get("ts") or item.get("time"), now),
+            })
+    elif isinstance(payload, dict):
+        for ip, entry in payload.items():
+            if not isinstance(ip, str):
+                continue
+            if isinstance(entry, dict):
+                detail = normalize_text(entry.get("detail") or entry.get("reason") or "legacy rate_limit")
+                created_at = _safe_iso(entry.get("created_at") or entry.get("ts") or entry.get("time"), now)
+            else:
+                detail = "legacy rate_limit"
+                created_at = now
+            rows.append({
+                "event_type": "rate_limit",
+                "ip_address": ip,
+                "target_user": "",
+                "detail": detail,
+                "created_at": created_at,
+            })
+    return rows
+
+def _migrate_legacy_audit_rows():
+    if not os.path.exists(LEGACY_AUDIT_LOG):
+        return []
+    rows = []
+    with open(LEGACY_AUDIT_LOG, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            rows.append({
+                "action": normalize_text(obj.get("action", "legacy_audit")),
+                "ip": normalize_text(obj.get("ip")),
+                "user": normalize_text(obj.get("user")),
+                "success": 1 if bool(obj.get("success")) else 0,
+                "ua": normalize_text(obj.get("ua")),
+                "detail": normalize_text(obj.get("detail")),
+                "ts": _safe_iso(obj.get("ts"), datetime.now().isoformat()),
+            })
+    return rows
+
+def migrate_legacy_json_artifacts(conn):
+    summary = {
+        "security_events_imported": 0,
+        "secure_audit_imported": 0,
+        "settings_imported": 0,
+    }
+
+    init_system_settings_table(conn)
+    existing_settings = {r["key"] for r in conn.execute("SELECT key FROM system_settings").fetchall()}
+    before_settings = len(existing_settings)
+    if len(existing_settings) < len(DEFAULT_SETTINGS):
+        _import_legacy_settings_files(conn)
+        _seed_missing_settings_to_db(conn)
+        conn.commit()
+        after_settings = {r["key"] for r in conn.execute("SELECT key FROM system_settings").fetchall()}
+        summary["settings_imported"] = max(0, len(after_settings) - before_settings)
+
+    has_security_rows = conn.execute("SELECT 1 FROM security_events LIMIT 1").fetchone()
+    if not has_security_rows:
+        security_rows = []
+        security_rows.extend(_migrate_legacy_fail_log_rows())
+        security_rows.extend(_migrate_legacy_blocked_ip_rows())
+        security_rows.extend(_migrate_legacy_rate_limit_rows())
+        security_rows.sort(key=lambda item: item.get("created_at", ""))
+        for row in security_rows:
+            conn.execute(
+                "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (row["event_type"], row["ip_address"], row["target_user"], row["detail"], row["created_at"])
+            )
+        summary["security_events_imported"] = len(security_rows)
+
+    has_audit_rows = conn.execute("SELECT 1 FROM secure_audit LIMIT 1").fetchone()
+    if not has_audit_rows:
+        prev_hash = CHAIN_SEED
+        for row in _migrate_legacy_audit_rows():
+            entry = {
+                "ts": row["ts"],
+                "action": row["action"],
+                "ip": row["ip"],
+                "user": row["user"],
+                "success": bool(row["success"]),
+                "ua": row["ua"],
+                "detail": row["detail"],
+            }
+            entry_json = json.dumps(entry, ensure_ascii=False)
+            chain_hash = _chain_hash(prev_hash, entry_json)
+            conn.execute(
+                "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, chain_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (row["ts"], row["action"], row["ip"] or "-", row["user"] or "-",
+                 1 if bool(row["success"]) else 0, row["ua"] or "-", row["detail"] or "-", chain_hash)
+            )
+            prev_hash = chain_hash
+            summary["secure_audit_imported"] += 1
+
+    _seed_missing_settings_to_db(conn)
+    conn.commit()
+    return summary
+
+def migrate_legacy_json_to_db():
+    """由獨立腳本呼叫：將舊 JSON 檔匯入 SQLite。"""
+    conn = get_db()
+    try:
+        init_system_settings_table(conn)
+        summary = migrate_legacy_json_artifacts(conn)
+        refresh_system_settings()
+        return summary
+    finally:
+        conn.close()
+
 # ══════════════════════════════════════════════════════════════════════
 #  防竄改違規計次（hash chain）
 # ══════════════════════════════════════════════════════════════════════
@@ -568,7 +823,7 @@ def check_and_apply_auto_violations(user_id, username, role, actor_username="sys
     傳入：user_id, username, role, actor（通常是 'system'）
     回傳：(triggered, reason, new_total) 或 (False, None, current_count)
     """
-    settings = SYSTEM_SETTINGS   # 全域
+    settings = get_system_settings()
     triggered = False
     reason = None
 
@@ -775,31 +1030,141 @@ CHAT_WARNING_CATEGORY_WORDS = {
     "自殺": ["自殺", "suicide", "想死", "死亡", "自殘", "我不想活", "結束生命"]
 }
 
-# ── System settings (可被超級管理者修改) ───────────────────────────────────
-SETTINGS_FILE = os.path.join(BASE_DIR, "system_settings.json")
+# ── System settings (可被超級管理者修改，資料主導) ─────────────────────────────
+SYSTEM_SETTINGS_TABLE = "system_settings"
+SETTINGS_FILES = [
+    os.path.join(BASE_DIR, "system_settings.json"),
+    os.path.join(BASE_DIR, "settings.json"),
+]
 
 DEFAULT_SETTINGS = {
+    # 原有核心設定
     "max_login_fails_for_violation": 5,
     "login_violation_enabled": True,
     "rate_limit_violation_enabled": True,
     "maintenance_mode": False,
+    # admin 頁面可調參數（歷史相容）
+    "allow_register": True,
+    "require_email_verification": False,
+    "max_login_failures": 3,
+    "block_duration_minutes": 10,
+    "session_ttl_hours": 4,
 }
 
-def load_settings():
-    if not os.path.exists(SETTINGS_FILE):
-        save_settings(DEFAULT_SETTINGS)
-        return DEFAULT_SETTINGS.copy()
+_SETTINGS_LOCK = threading.Lock()
+SYSTEM_SETTINGS = None
+
+def _coerce_setting_value(key, value):
+    default = DEFAULT_SETTINGS.get(key)
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+        if isinstance(value, int):
+            return value != 0
+        return bool(value)
+    if isinstance(default, int):
+        try:
+            return int(value)
+        except Exception:
+            return default
+    if default is None:
+        return value
+    return str(value)
+
+def init_system_settings_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key         TEXT PRIMARY KEY,
+            value       TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            updated_by  TEXT
+        )
+    """)
+
+def _load_settings_from_db(conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
     try:
-        with open(SETTINGS_FILE) as f:
-            return {**DEFAULT_SETTINGS, **json.load(f)}
-    except Exception:
-        return DEFAULT_SETTINGS.copy()
+        try:
+            rows = conn.execute(
+                f"SELECT key, value FROM {SYSTEM_SETTINGS_TABLE}"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        values = {r["key"]: _coerce_setting_value(r["key"], r["value"]) for r in rows}
+        merged = {**DEFAULT_SETTINGS, **values}
+        return merged
+    finally:
+        if close_conn:
+            conn.close()
+
+def _seed_missing_settings_to_db(conn):
+    now = datetime.now().isoformat()
+    existing = {r["key"] for r in conn.execute("SELECT key FROM system_settings").fetchall()}
+    for key, default in DEFAULT_SETTINGS.items():
+        if key not in existing:
+            conn.execute(
+                "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (key, str(default), now, "system")
+            )
+
+def _import_legacy_settings_files(conn):
+    for path in SETTINGS_FILES:
+        data = load_json(path)
+        if not isinstance(data, dict):
+            continue
+        for key in DEFAULT_SETTINGS:
+            if key in data:
+                conn.execute(
+                    "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    (key, str(_coerce_setting_value(key, data[key])), datetime.now().isoformat(), "migration")
+                )
+
+def get_system_settings():
+    with _SETTINGS_LOCK:
+        return (SYSTEM_SETTINGS.copy() if isinstance(SYSTEM_SETTINGS, dict) else _load_settings_from_db())
+
+def load_settings():
+    return get_system_settings()
+
+def refresh_system_settings():
+    with _SETTINGS_LOCK:
+        global SYSTEM_SETTINGS
+        SYSTEM_SETTINGS = _load_settings_from_db()
+        return SYSTEM_SETTINGS
 
 def save_settings(data):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    updates = {}
+    if not isinstance(data, dict):
+        return {}
+    for key, value in data.items():
+        if key not in DEFAULT_SETTINGS:
+            continue
+        updates[key] = _coerce_setting_value(key, value)
+    if not updates:
+        return {}
 
-SYSTEM_SETTINGS = load_settings()
+    conn = get_db()
+    try:
+        init_system_settings_table(conn)
+        now = datetime.now().isoformat()
+        for key, value in updates.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (key, str(value), now, "admin")
+            )
+        conn.commit()
+        _seed_missing_settings_to_db(conn)
+    finally:
+        conn.close()
+    refresh_system_settings()
+    return updates
+
+refresh_system_settings()
 
 # ── Server restart helper ────────────────────────────────────────────────────
 def restart_server():
@@ -1140,10 +1505,23 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
         CREATE INDEX IF NOT EXISTS idx_sec_event_type  ON security_events(event_type);
         CREATE INDEX IF NOT EXISTS idx_sec_event_time  ON security_events(created_at);
+
+        /* ── 系統參數（取代 system_settings.json / settings.json）─── */
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key         TEXT PRIMARY KEY,
+            value       TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            updated_by  TEXT
+        );
     """)
 
     ensure_user_columns(conn)
     ensure_appeal_columns(conn)
+    init_system_settings_table(conn)
+    _seed_missing_settings_to_db(conn)
+    migration_summary = migrate_legacy_json_artifacts(conn)
+    if migration_summary["settings_imported"] or migration_summary["security_events_imported"] or migration_summary["secure_audit_imported"]:
+        audit("DB_MIGRATION_APPLIED", "127.0.0.1", user="system", detail=str(migration_summary))
 
     # Keep role value consistent when coming from older schema
     try:
@@ -1201,6 +1579,7 @@ def init_db():
             (mgr_cur.lastrowid, hash_password("Manager@1234"), now)
         )
 
+    refresh_system_settings()
     conn.commit()
     conn.close()
 
@@ -2739,21 +3118,8 @@ def admin_settings():
     if actor["username"] != "root":
         return json_resp({"ok":False,"msg":"只有最高管理者可修改系統參數"}), 403
 
-    SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
-
     if request.method == "GET":
-        defaults = {
-            "allow_register": True,
-            "require_email_verification": False,
-            "max_login_failures": 3,
-            "block_duration_minutes": 10,
-            "session_ttl_hours": 4,
-        }
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE) as f:
-                current = json.load(f)
-            defaults.update(current)
-        return json_resp({"ok":True,"settings":defaults})
+        return json_resp({"ok":True,"settings":get_system_settings()})
 
     # PUT
     try:
@@ -2763,23 +3129,10 @@ def admin_settings():
     if not isinstance(data, dict):
         return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
-    allowed_keys = {
-        "allow_register": bool,
-        "require_email_verification": bool,
-        "max_login_failures": int,
-        "block_duration_minutes": int,
-        "session_ttl_hours": int,
-    }
-    settings = {}
-    for key, val_type in allowed_keys.items():
-        if key in data:
-            try:
-                settings[key] = val_type(data[key])
-            except (ValueError, TypeError):
-                return json_resp({"ok":False,"msg":f"{key} 格式錯誤"}), 400
+    settings = save_settings(data)
+    if not settings:
+        return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
 
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=2)
     audit("SETTINGS_CHANGED", get_client_ip(), user=actor["username"],
           detail=str(settings))
     return json_resp({"ok":True,"msg":"系統參數已更新","settings":settings})
