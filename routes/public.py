@@ -44,6 +44,31 @@ def register_public_routes(app, deps):
                         secure=SESSION_COOKIE_SECURE)
         return resp
 
+    @app.route("/api/site-config", methods=["GET"])
+    def get_site_config():
+        settings = get_system_settings()
+        return json_resp({
+            "ok": True,
+            "site_config": {
+                "site_bg": settings.get("site_bg"),
+                "site_surface": settings.get("site_surface"),
+                "site_accent": settings.get("site_accent"),
+                "site_accent2": settings.get("site_accent2"),
+                "site_text": settings.get("site_text"),
+                "site_muted": settings.get("site_muted"),
+                "site_layout_mode": settings.get("site_layout_mode"),
+                "site_density": settings.get("site_density"),
+                "module_chat_min_role": settings.get("module_chat_min_role"),
+                "module_community_min_role": settings.get("module_community_min_role"),
+                "module_appeals_min_role": settings.get("module_appeals_min_role"),
+                "module_accounts_min_role": settings.get("module_accounts_min_role"),
+            },
+            "server_meta": {
+                "version": SERVER_VERSION,
+                "started_at": SERVER_STARTED_AT,
+            },
+        })
+
     @app.route("/api/register", methods=["POST"])
     def register():
         ip, ua = get_client_ip(), get_ua()

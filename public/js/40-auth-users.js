@@ -324,10 +324,25 @@ async function createUserByAdmin() {
       .forEach((id) => { const el = $(id); if (el) el.value = ""; });
     const adminAddHint = $("admin-add-pw-confirm-hint");
     if (adminAddHint) adminAddHint.textContent = "";
+    hideAdminAddDialog();
     loadUsers();
   } else {
     flash($("li-msg"), json.msg || "建立帳號失敗", false);
   }
+}
+
+function showAdminAddDialog() {
+  const overlay = $("admin-add-overlay");
+  if (!overlay) return;
+  overlay.classList.add("show");
+  const firstField = $("admin-add-user");
+  if (firstField) firstField.focus();
+}
+
+function hideAdminAddDialog() {
+  const overlay = $("admin-add-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("show");
 }
 
 async function reviewRegistration(userId, action) {
@@ -346,6 +361,39 @@ async function reviewRegistration(userId, action) {
     loadUsers();
   } else {
     alert(json.msg || "審核失敗");
+  }
+}
+
+async function bulkReviewRegistrations(action) {
+  const ids = [...selectedPendingUserIds];
+  if (!ids.length) return;
+  const label = action === "approve" ? "核准" : "駁回";
+  if (!confirm(`確定要${label}這 ${ids.length} 筆註冊申請？`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  let success = 0;
+  let failed = 0;
+  for (const userId of ids) {
+    try {
+      const res = await fetch(API + `/admin/users/${userId}/review-registration`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+        body: JSON.stringify({ action })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (json && json.ok) success += 1;
+      else failed += 1;
+    } catch (_) {
+      failed += 1;
+    }
+  }
+  selectedPendingUserIds.clear();
+  await loadUsers();
+  if (failed === 0) {
+    flash($("li-msg"), `${label}完成，共 ${success} 筆`, true);
+  } else {
+    flash($("li-msg"), `${label}完成 ${success} 筆，失敗 ${failed} 筆`, false);
   }
 }
 

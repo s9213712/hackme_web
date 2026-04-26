@@ -16,6 +16,18 @@ DEFAULT_SETTINGS = {
     "max_login_failures": 3,
     "block_duration_minutes": 10,
     "session_ttl_hours": 4,
+    "site_bg": "#0f0f1a",
+    "site_surface": "#1a1a2e",
+    "site_accent": "#6c63ff",
+    "site_accent2": "#00d4aa",
+    "site_text": "#e0e0f0",
+    "site_muted": "#8888aa",
+    "site_layout_mode": "centered",
+    "site_density": "comfortable",
+    "module_chat_min_role": "user",
+    "module_community_min_role": "user",
+    "module_appeals_min_role": "user",
+    "module_accounts_min_role": "manager",
 }
 
 _SETTINGS_LOCK = threading.Lock()

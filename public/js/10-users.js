@@ -2,12 +2,17 @@ function renderUsers() {
   const tbody = $("user-table")?.querySelector("tbody");
   if (!tbody) return;
   tbody.innerHTML = "";
+  const allowedPendingIds = new Set();
   for (const u of users) {
     const blocked = u.blocked_until && new Date(u.blocked_until) > new Date();
     const isBlocked = blocked;
     const isSelf = String(u.username || "") === String(currentUser || "");
+    const canReviewPending = (currentRole === "manager" || currentRole === "super_admin") && u.status === "pending" && !isSelf;
+    if (canReviewPending) {
+      allowedPendingIds.add(String(u.id));
+    }
     const actionButtons = [];
-    if ((currentRole === "manager" || currentRole === "super_admin") && u.status === "pending" && !isSelf) {
+    if (canReviewPending) {
       const approveBtn = document.createElement("button");
       approveBtn.className = "btn btn-primary";
       approveBtn.type = "button";
@@ -108,6 +113,21 @@ function renderUsers() {
     }
     const tr = document.createElement("tr");
     if (isBlocked) tr.style.opacity = "0.5";
+    const selectCell = document.createElement("td");
+    if (canReviewPending) {
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selectedPendingUserIds.has(String(u.id));
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selectedPendingUserIds.add(String(u.id));
+        else selectedPendingUserIds.delete(String(u.id));
+        updatePendingSelectionUi();
+      });
+      selectCell.appendChild(checkbox);
+    } else {
+      selectCell.textContent = "—";
+      selectCell.style.color = "var(--muted)";
+    }
     const actions = document.createElement("div");
     actions.className = "action";
     actionButtons.forEach((btn) => actions.appendChild(btn));
@@ -126,11 +146,14 @@ function renderUsers() {
       <td>${statusLabel}</td>
       <td>${violDisplay}</td>
     `;
+    tr.insertBefore(selectCell, tr.firstChild);
     const actionCell = document.createElement("td");
     actionCell.appendChild(actions);
     tr.appendChild(actionCell);
     tbody.appendChild(tr);
   }
+  selectedPendingUserIds = new Set([...selectedPendingUserIds].filter((id) => allowedPendingIds.has(id)));
+  updatePendingSelectionUi();
   // Role quota info
   const managerCount = users.filter(u => u.role === "manager").length;
   const infoEl = $("role-limit-info");
@@ -138,6 +161,16 @@ function renderUsers() {
     infoEl.textContent = `管理者 ${managerCount}/5 · 超級管理者 1/1`;
     infoEl.style.color = managerCount >= 5 ? "#ff4f6d" : "#888";
   }
+}
+
+function updatePendingSelectionUi() {
+  const count = selectedPendingUserIds.size;
+  const info = $("pending-selection-info");
+  if (info) info.textContent = `已選 ${count} 筆待審核`;
+  const approveBtn = $("admin-bulk-approve");
+  const rejectBtn = $("admin-bulk-reject");
+  if (approveBtn) approveBtn.disabled = count === 0;
+  if (rejectBtn) rejectBtn.disabled = count === 0;
 }
 
 async function loadUsers() {
@@ -157,4 +190,3 @@ async function loadUsers() {
     renderUsers();
   } catch (_) {}
 }
-

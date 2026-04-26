@@ -115,6 +115,7 @@
 
   <div class="tabs" id="module-main-tabs" style="margin-top:.75rem;margin-bottom:.65rem;">
     <button class="tab active" id="tab-module-chat">聊天</button>
+    <button class="tab" id="tab-module-community">討論區</button>
     <button class="tab" id="tab-module-appeals">申覆</button>
     <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
     <button class="tab" id="tab-module-server" style="display:none;">伺服器管理</button>
@@ -163,6 +164,110 @@
     </div>
   </div>
 
+  <div class="module-section" id="module-community">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">📣 公告欄與討論區</div>
+      <div class="community-layout">
+        <div class="community-column">
+          <div class="community-panel">
+            <div class="mini-title">最新公告</div>
+            <div id="community-announcement-list" class="community-scroll"></div>
+            <div id="community-announcement-editor" style="display:none;margin-top:.75rem;">
+              <div class="field">
+                <label>公告標題</label>
+                <input type="text" id="community-announcement-title" maxlength="80" placeholder="公告標題" />
+              </div>
+              <div class="field">
+                <label>公告內容</label>
+                <textarea id="community-announcement-content" rows="4" maxlength="3000" placeholder="輸入公告內容"></textarea>
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="community-announcement-pinned" /> 置頂公告</label>
+              </div>
+              <button class="btn btn-primary" id="community-announcement-submit" type="button">發布公告</button>
+            </div>
+          </div>
+
+          <div class="community-panel">
+            <div class="mini-title">申請建立討論區</div>
+            <div class="field">
+              <label>討論區名稱</label>
+              <input type="text" id="community-board-title" maxlength="80" placeholder="例如：遊戲交流區" />
+            </div>
+            <div class="field">
+              <label>討論區說明</label>
+              <textarea id="community-board-description" rows="4" maxlength="1200" placeholder="說明討論主題、規則與用途"></textarea>
+            </div>
+            <div class="field">
+              <label>版規</label>
+              <textarea id="community-board-rules" rows="4" maxlength="2000" placeholder="例如：禁止人身攻擊、禁止外流個資、禁止洗版"></textarea>
+            </div>
+            <button class="btn btn-primary" id="community-board-request-btn" type="button">送出申請</button>
+            <div id="community-board-request-msg" class="msg"></div>
+          </div>
+
+          <div class="community-panel" id="community-board-review-panel" style="display:none;">
+            <div class="mini-title">待審核討論區</div>
+            <div id="community-board-review-list" class="community-scroll"></div>
+          </div>
+        </div>
+
+        <div class="community-column">
+          <div class="community-panel">
+            <div class="mini-title">討論區列表</div>
+            <div class="field">
+              <label>搜尋討論區</label>
+              <input type="search" id="community-board-search" placeholder="搜尋名稱、說明、版主" />
+            </div>
+            <div id="community-board-list" class="community-scroll"></div>
+          </div>
+
+          <div class="community-panel">
+            <div class="mini-title" id="community-board-heading">請先選擇討論區</div>
+            <div id="community-board-meta" style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem;"></div>
+            <div id="community-board-rules-view" class="community-rules" style="display:none;"></div>
+            <div id="community-thread-creator" style="display:none;">
+              <div class="field">
+                <label>新主題標題</label>
+                <input type="text" id="community-thread-title" maxlength="120" placeholder="輸入主題標題" />
+              </div>
+              <div class="field">
+                <label>內容</label>
+                <textarea id="community-thread-content" rows="4" maxlength="4000" placeholder="輸入主題內容"></textarea>
+              </div>
+              <button class="btn btn-primary" id="community-thread-submit" type="button">發布主題</button>
+            </div>
+            <div class="community-list-tools">
+              <input type="search" id="community-thread-search" placeholder="搜尋主題、內容、作者" />
+              <button class="btn community-mini-btn" id="community-thread-prev" type="button">上一頁</button>
+              <button class="btn community-mini-btn" id="community-thread-next" type="button">下一頁</button>
+              <span id="community-thread-page-info" style="font-size:.72rem;color:var(--muted);">第 1 頁</span>
+            </div>
+            <div id="community-thread-list" class="community-scroll"></div>
+          </div>
+        </div>
+
+        <div class="community-column">
+          <div class="community-panel">
+            <div class="mini-title" id="community-thread-heading">主題內容</div>
+            <div class="community-list-tools" id="community-thread-lock-tools" style="display:none;">
+              <button class="btn community-mini-btn" id="community-thread-lock-toggle" type="button">鎖定主題</button>
+            </div>
+            <div id="community-thread-detail" class="community-scroll"></div>
+            <div id="community-reply-box" style="display:none;margin-top:.75rem;">
+              <div class="field">
+                <label>留言回覆</label>
+                <textarea id="community-reply-content" rows="4" maxlength="3000" placeholder="輸入回覆內容"></textarea>
+              </div>
+              <button class="btn btn-primary" id="community-reply-submit" type="button">送出留言</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="community-msg" class="msg"></div>
+    </div>
+  </div>
+
   <div class="module-section" id="module-appeals">
     <div id="user-appeal-wrap" class="admin-tools" style="margin-top: .95rem; text-align: left;">
       <div class="mini-title">⚖️ 違規申覆</div>
@@ -189,14 +294,20 @@
       <!-- ── 帳號管理 ── -->
       <div class="form-section active" id="sec-users">
         <div class="admin-tools">
-          <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;">
-            <button class="btn btn-primary" id="admin-refresh">🔄 重新整理</button>
-            <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
-          </div>
+        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;">
+          <button class="btn btn-primary" id="admin-refresh">🔄 重新整理</button>
+          <button class="btn" id="admin-bulk-approve" type="button">一鍵通過</button>
+          <button class="btn" id="admin-bulk-reject" type="button">一鍵駁回</button>
+          <button class="btn" id="admin-select-page-pending" type="button">全選本頁</button>
+          <button class="btn" id="admin-clear-page-pending" type="button">清除選取</button>
+          <input type="search" id="admin-user-search" placeholder="搜尋帳號、暱稱、姓名" style="max-width:240px;" />
+          <span id="pending-selection-info" style="font-size:.75rem;color:var(--muted);">已選 0 筆待審核</span>
+          <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
+        </div>
           <table class="user-table" id="user-table">
             <thead>
               <tr>
-                <th>ID</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
+                <th>選取</th><th>ID</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
                 <th>角色</th><th>狀態</th><th>違規</th><th>行為</th>
               </tr>
             </thead>
@@ -205,33 +316,10 @@
         </div>
 
         <div id="admin-manager-view">
-          <div class="mini-title" style="margin-top:.8rem;">➕ 新增帳號（最高管理者）</div>
-          <form id="admin-add-form">
-            <div class="field"><label>帳號</label><input type="text" id="admin-add-user" placeholder="a-z 0-9 _ -" /></div>
-            <div class="field">
-              <label>密碼</label>
-              <div class="pw-wrap">
-                <input type="password" id="admin-add-pw" placeholder="至少 8 字元" />
-                <button class="pw-toggle" id="admin-add-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>確認密碼</label>
-              <div class="pw-wrap">
-                <input type="password" id="admin-add-pw-confirm" placeholder="請再次輸入密碼" />
-                <button class="pw-toggle" id="admin-add-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
-              </div>
-              <p style="margin-top:.4rem; color:#ff4f6d" id="admin-add-pw-confirm-hint"></p>
-            </div>
-            <div class="field"><label>暱稱</label><input type="text" id="admin-add-nickname" placeholder="暱稱" /></div>
-            <div class="field"><label>真實姓名</label><input type="text" id="admin-add-realname" placeholder="真實姓名" /></div>
-            <div class="field"><label>身分證</label><input type="text" id="admin-add-idno" placeholder="身分證" /></div>
-            <div class="field"><label>生日</label><input type="date" id="admin-add-birthdate" /></div>
-            <div class="field"><label>電話</label><input type="tel" id="admin-add-phone" placeholder="09xx-xxx-xxx" /></div>
-            <div class="admin-toolbar">
-              <button class="btn btn-primary" type="button" id="admin-add-btn">建立帳號</button>
-            </div>
-          </form>
+          <div class="admin-toolbar" style="margin-top:.8rem;">
+            <button class="btn btn-primary" type="button" id="admin-open-add-user">➕ 新增帳號</button>
+            <span style="font-size:.75rem;color:var(--muted);align-self:center;">新建立帳號預設為一般用戶</span>
+          </div>
         </div>
       </div>
 
@@ -264,11 +352,17 @@
       <div class="form-section" id="sec-appeals">
         <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;grid-template-columns:auto auto auto; margin-bottom:.65rem;">
           <button class="btn btn-primary" id="admin-appeals-refresh">🔄 重新整理</button>
+          <button class="btn" id="admin-appeals-bulk-approve" type="button">一鍵核准撤銷</button>
+          <button class="btn" id="admin-appeals-bulk-reject" type="button">一鍵維持處分</button>
+          <button class="btn" id="admin-appeals-select-page" type="button">全選本頁</button>
+          <button class="btn" id="admin-appeals-clear-selection" type="button">清除選取</button>
           <select id="admin-appeal-status" style="padding:.55rem;border-radius:8px; background:rgba(0,0,0,.3); border:1.5px solid rgba(255,255,255,.1); color:#e0e0f0; font-size:.85rem;">
             <option value="pending">待處理</option>
             <option value="approved">已核准</option>
             <option value="rejected">已駁回</option>
           </select>
+          <input type="search" id="admin-appeal-search" placeholder="搜尋帳號、原因、備註" style="max-width:240px;" />
+          <span id="appeal-selection-info" style="font-size:.72rem;color:var(--muted);">已選 0 筆申覆</span>
           <span style="margin-left:auto;font-size:.72rem;color:var(--muted);">共 <span id="admin-appeals-total">0</span> 筆</span>
         </div>
         <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
@@ -282,11 +376,17 @@
       <div class="form-section" id="sec-reports">
         <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;grid-template-columns:auto auto auto; margin-bottom:.65rem;">
           <button class="btn btn-primary" id="admin-reports-refresh">重新整理</button>
+          <button class="btn" id="admin-reports-bulk-approve" type="button">一鍵核准計點</button>
+          <button class="btn" id="admin-reports-bulk-reject" type="button">一鍵駁回</button>
+          <button class="btn" id="admin-reports-select-page" type="button">全選本頁</button>
+          <button class="btn" id="admin-reports-clear-selection" type="button">清除選取</button>
           <select id="admin-report-status" style="padding:.55rem;border-radius:8px; background:rgba(0,0,0,.3); border:1.5px solid rgba(255,255,255,.1); color:#e0e0f0; font-size:.85rem;">
             <option value="pending">待處理</option>
             <option value="approved">已核准</option>
             <option value="rejected">已駁回</option>
           </select>
+          <input type="search" id="admin-report-search" placeholder="搜尋帳號、訊息、理由" style="max-width:240px;" />
+          <span id="report-selection-info" style="font-size:.72rem;color:var(--muted);">已選 0 筆檢舉</span>
           <span style="margin-left:auto;font-size:.72rem;color:var(--muted);">共 <span id="admin-reports-total">0</span> 筆</span>
         </div>
         <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
@@ -317,32 +417,114 @@
 
       <div class="form-section" id="sec-server-settings">
         <form id="settings-form" style="margin-top:.6rem;">
-          <div class="field">
-            <label><input type="checkbox" id="s-maintenance-mode" /> 維護模式（只允許 root 操作）</label>
+          <div class="tabs" style="margin-bottom:.85rem;">
+            <button class="tab active" type="button" id="tab-settings-security">安全</button>
+            <button class="tab" type="button" id="tab-settings-appearance">外觀</button>
+            <button class="tab" type="button" id="tab-settings-system">系統</button>
           </div>
-          <div class="field">
-            <label><input type="checkbox" id="s-audit-chain-enabled" /> 啟用審計 hash chain 驗證與異常自動維護</label>
+          <div class="form-section active" id="sec-settings-security">
+            <div class="field">
+              <label><input type="checkbox" id="s-maintenance-mode" /> 維護模式（只允許 root 操作）</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-audit-chain-enabled" /> 啟用審計 hash chain 驗證與異常自動維護</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-ip-blocking-enabled" /> 啟用錯誤登入自動鎖 IP</label>
+            </div>
+            <div class="field">
+              <label>登入失敗鎖定次數</label>
+              <input type="number" id="s-max-fail" min="1" max="20" />
+            </div>
+            <div class="field">
+              <label>封鎖時長（分鐘）</label>
+              <input type="number" id="s-block-dur" min="1" max="1440" />
+            </div>
           </div>
-          <div class="field">
-            <label><input type="checkbox" id="s-ip-blocking-enabled" /> 啟用錯誤登入自動鎖 IP</label>
+          <div class="form-section" id="sec-settings-appearance">
+            <div class="mini-title" style="margin-bottom:.8rem;">站點外觀設定</div>
+            <div class="field">
+              <label>背景色</label>
+              <input type="color" id="s-site-bg" />
+            </div>
+            <div class="field">
+              <label>面板色</label>
+              <input type="color" id="s-site-surface" />
+            </div>
+            <div class="field">
+              <label>主色</label>
+              <input type="color" id="s-site-accent" />
+            </div>
+            <div class="field">
+              <label>輔助色</label>
+              <input type="color" id="s-site-accent2" />
+            </div>
+            <div class="field">
+              <label>文字色</label>
+              <input type="color" id="s-site-text" />
+            </div>
+            <div class="field">
+              <label>次要文字色</label>
+              <input type="color" id="s-site-muted" />
+            </div>
+            <div class="field">
+              <label>介面配置</label>
+              <select id="s-site-layout-mode">
+                <option value="centered">置中版面</option>
+                <option value="wide">寬版管理台</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>介面密度</label>
+              <select id="s-site-density">
+                <option value="comfortable">舒適</option>
+                <option value="compact">緊湊</option>
+              </select>
+            </div>
           </div>
-          <div class="field">
-            <label><input type="checkbox" id="s-allow-register" /> 允許一般用戶註冊</label>
-          </div>
-          <div class="field">
-            <label><input type="checkbox" id="s-require-email" /> 需 email 驗證</label>
-          </div>
-          <div class="field">
-            <label>登入失敗鎖定次數</label>
-            <input type="number" id="s-max-fail" min="1" max="20" />
-          </div>
-          <div class="field">
-            <label>封鎖時長（分鐘）</label>
-            <input type="number" id="s-block-dur" min="1" max="1440" />
-          </div>
-          <div class="field">
-            <label>Session 有效期（小時）</label>
-            <input type="number" id="s-session-ttl" min="1" max="72" />
+          <div class="form-section" id="sec-settings-system">
+            <div class="field">
+              <label><input type="checkbox" id="s-allow-register" /> 允許一般用戶註冊</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-require-email" /> 需 email 驗證</label>
+            </div>
+            <div class="field">
+              <label>Session 有效期（小時）</label>
+              <input type="number" id="s-session-ttl" min="1" max="72" />
+            </div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">模組開放層級</div>
+            <div class="field">
+              <label>聊天頁最低可用角色</label>
+              <select id="s-module-chat-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>討論區最低可用角色</label>
+              <select id="s-module-community-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>申覆頁最低可用角色</label>
+              <select id="s-module-appeals-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>帳號管理最低可用角色</label>
+              <select id="s-module-accounts-min-role">
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
           </div>
           <div class="admin-toolbar" style="margin-top:.6rem;">
             <button class="btn btn-primary" type="button" id="settings-save-btn">儲存設定</button>
@@ -433,11 +615,64 @@
   </div>
 </div>
 
-<div class="footer">hackme_web · 密碼使用 Argon2id 雜湊儲存</div>
+<div id="admin-add-overlay" class="user-edit-overlay">
+  <div class="user-edit-modal">
+    <div class="mini-title">新增帳號</div>
+    <form id="admin-add-form">
+      <div class="field"><label>帳號</label><input type="text" id="admin-add-user" placeholder="a-z 0-9 _ -" /></div>
+      <div class="field">
+        <label>密碼</label>
+        <div class="pw-wrap">
+          <input type="password" id="admin-add-pw" placeholder="至少 8 字元" />
+          <button class="pw-toggle" id="admin-add-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>確認密碼</label>
+        <div class="pw-wrap">
+          <input type="password" id="admin-add-pw-confirm" placeholder="請再次輸入密碼" />
+          <button class="pw-toggle" id="admin-add-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
+        </div>
+        <p style="margin-top:.4rem; color:#ff4f6d" id="admin-add-pw-confirm-hint"></p>
+      </div>
+      <div class="field"><label>暱稱</label><input type="text" id="admin-add-nickname" placeholder="暱稱" /></div>
+      <div class="field"><label>真實姓名</label><input type="text" id="admin-add-realname" placeholder="真實姓名" /></div>
+      <div class="field"><label>身分證</label><input type="text" id="admin-add-idno" placeholder="身分證" /></div>
+      <div class="field"><label>生日</label><input type="date" id="admin-add-birthdate" /></div>
+      <div class="field"><label>電話</label><input type="tel" id="admin-add-phone" placeholder="09xx-xxx-xxx" /></div>
+      <div class="edit-user-actions">
+        <button class="btn btn-primary" type="button" id="admin-add-btn">建立帳號</button>
+        <button class="btn" type="button" id="admin-add-cancel">取消</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="review-note-overlay" class="user-edit-overlay">
+  <div class="user-edit-modal">
+    <div class="mini-title" id="review-note-title">審核備註</div>
+    <div class="field">
+      <label>備註（非必填）</label>
+      <textarea id="review-note-input" rows="4" maxlength="200" placeholder="可留空"></textarea>
+    </div>
+    <div class="edit-user-actions">
+      <button class="btn btn-primary" type="button" id="review-note-confirm">確認</button>
+      <button class="btn" type="button" id="review-note-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-host" class="toast-host" aria-live="polite" aria-atomic="true"></div>
+
+<div class="footer">
+  hackme_web · 密碼使用 Argon2id 雜湊儲存
+  <span id="server-version-badge" style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">server: loading...</span>
+</div>
 
 <script src="/js/00-core.js" defer></script>
 <script src="/js/10-users.js" defer></script>
 <script src="/js/20-chat.js" defer></script>
+<script src="/js/25-community.js" defer></script>
 <script src="/js/30-appeals.js" defer></script>
 <script src="/js/40-auth-users.js" defer></script>
 <script src="/js/50-admin.js" defer></script>

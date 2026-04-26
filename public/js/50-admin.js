@@ -14,35 +14,59 @@ function switchServerTab(tab) {
   if (tab === "env") loadServerEnv();
 }
 
+function switchSettingsSection(tab) {
+  currentSettingsSection = tab;
+  ["security", "appearance", "system"].forEach((name) => {
+    const sec = $("sec-settings-" + name);
+    if (sec) sec.classList.toggle("active", name === tab);
+  });
+  ["tab-settings-security", "tab-settings-appearance", "tab-settings-system"].forEach((id) => {
+    const btn = $(id);
+    if (!btn) return;
+    btn.classList.toggle("active", id === "tab-settings-" + tab);
+  });
+}
+
 function switchModuleTab(tab) {
-  const canAccessAccounts = currentRole === "manager" || currentRole === "super_admin";
+  const canAccessAccounts = canAccessModule("accounts");
   const canAccessServer = currentRole === "super_admin";
-  const canAccessAppeals = currentRole !== "super_admin";
+  const canAccessAppeals = currentRole !== "super_admin" && canAccessModule("appeals");
+  const canAccessCommunity = !!currentUser && canAccessModule("community");
+  const canAccessChat = !!currentUser && canAccessModule("chat");
 
   let normTab = tab;
-  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessAppeals ? "appeals" : "chat";
-  if (tab === "server" && !canAccessServer) normTab = canAccessAppeals ? "appeals" : "chat";
-  if (tab === "appeals" && !canAccessAppeals) normTab = "chat";
+  if (tab === "chat" && !canAccessChat) normTab = canAccessCommunity ? "community" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"));
+  if (tab === "community" && !canAccessCommunity) normTab = canAccessChat ? "chat" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"));
+  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : "appeals");
+  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : (canAccessChat ? "chat" : (canAccessCommunity ? "community" : "appeals"));
+  if (tab === "appeals" && !canAccessAppeals) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : "accounts");
 
   currentModuleTab = normTab;
   const modChat = $("module-chat");
+  const modCommunity = $("module-community");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
+  const mCommunity = $("tab-module-community");
   const mAccounts = $("tab-module-accounts");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
+  if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
+  if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
 
+  if (normTab === "community" && canAccessCommunity) {
+    loadCommunityHome();
+  }
   if (normTab === "server" && canAccessServer) {
     switchServerTab(currentServerTab || "health");
   }
@@ -279,6 +303,20 @@ async function loadSettings() {
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
+  if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
+  if ($("s-module-community-min-role")) $("s-module-community-min-role").value = s.module_community_min_role || "user";
+  if ($("s-module-appeals-min-role")) $("s-module-appeals-min-role").value = s.module_appeals_min_role || "user";
+  if ($("s-module-accounts-min-role")) $("s-module-accounts-min-role").value = s.module_accounts_min_role || "manager";
+  if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
+  if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
+  if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
+  if ($("s-site-accent2")) $("s-site-accent2").value = s.site_accent2 || "#00d4aa";
+  if ($("s-site-text")) $("s-site-text").value = s.site_text || "#e0e0f0";
+  if ($("s-site-muted")) $("s-site-muted").value = s.site_muted || "#8888aa";
+  if ($("s-site-layout-mode")) $("s-site-layout-mode").value = s.site_layout_mode || "centered";
+  if ($("s-site-density")) $("s-site-density").value = s.site_density || "comfortable";
+  applySiteConfig(s);
+  switchSettingsSection(currentSettingsSection || "security");
 }
 
 function formatBytes(bytes) {
@@ -345,7 +383,19 @@ async function saveSettings() {
     require_email_verification: !!$("s-require-email")?.checked,
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
-    session_ttl_hours: parseInt($("s-session-ttl")?.value || "24")
+    session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
+    module_chat_min_role: $("s-module-chat-min-role")?.value || "user",
+    module_community_min_role: $("s-module-community-min-role")?.value || "user",
+    module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
+    module_accounts_min_role: $("s-module-accounts-min-role")?.value || "manager",
+    site_bg: $("s-site-bg")?.value || "#0f0f1a",
+    site_surface: $("s-site-surface")?.value || "#1a1a2e",
+    site_accent: $("s-site-accent")?.value || "#6c63ff",
+    site_accent2: $("s-site-accent2")?.value || "#00d4aa",
+    site_text: $("s-site-text")?.value || "#e0e0f0",
+    site_muted: $("s-site-muted")?.value || "#8888aa",
+    site_layout_mode: $("s-site-layout-mode")?.value || "centered",
+    site_density: $("s-site-density")?.value || "comfortable"
   };
   const res = await fetch(API + "/admin/settings", {
     method: "PUT",
@@ -358,6 +408,17 @@ async function saveSettings() {
   if (el) {
     el.textContent = json.ok ? "✅ 設定已儲存" : (json.msg || "儲存失敗");
     el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) {
+    applySiteConfig(payload);
+    if (currentUser) setAuthState({
+      username: currentUser,
+      id: currentUserId,
+      role: currentRole,
+      role_label: $("me-role")?.textContent || currentRole,
+      nickname: $("me-nickname")?.textContent || "",
+      birthdate: null
+    });
   }
 }
 

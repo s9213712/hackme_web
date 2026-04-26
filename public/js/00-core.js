@@ -19,6 +19,9 @@ let adminReports = [];
 let adminReportPage = 0;
 let adminReportStatus = "pending";
 const editingUserOriginal = {};
+let selectedPendingUserIds = new Set();
+let selectedAppealIds = new Set();
+let selectedReportIds = new Set();
 let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
@@ -26,6 +29,26 @@ const CHAT_POLL_MS = 2500;
 const INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
 let inactivityTimer = null;
 let clockTimer = null;
+let siteConfig = {};
+let serverMeta = {};
+let currentSettingsSection = "security";
+
+function clientRoleRank(role) {
+  if (role === "super_admin") return 3;
+  if (role === "manager") return 2;
+  return 1;
+}
+
+function getModuleMinRole(moduleKey, fallbackRole) {
+  const key = `module_${moduleKey}_min_role`;
+  const value = siteConfig && typeof siteConfig[key] === "string" ? siteConfig[key] : fallbackRole;
+  return ["user", "manager", "super_admin"].includes(value) ? value : fallbackRole;
+}
+
+function canAccessModule(moduleKey, role = currentRole) {
+  const fallback = moduleKey === "accounts" ? "manager" : "user";
+  return clientRoleRank(role || "user") >= clientRoleRank(getModuleMinRole(moduleKey, fallback));
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -68,6 +91,55 @@ function readCookie(name) {
   const prefix = `${name}=`;
   const item = cookie.split('; ').find((v) => v.startsWith(prefix));
   return item ? decodeURIComponent(item.substring(prefix.length)) : "";
+}
+
+function applySiteConfig(config) {
+  if (!config || typeof config !== "object") return;
+  siteConfig = { ...siteConfig, ...config };
+  const root = document.documentElement;
+  const mappings = {
+    site_bg: "--bg",
+    site_surface: "--surface",
+    site_accent: "--accent",
+    site_accent2: "--accent2",
+    site_text: "--text",
+    site_muted: "--muted",
+  };
+  Object.entries(mappings).forEach(([key, cssVar]) => {
+    const value = siteConfig[key];
+    if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) {
+      root.style.setProperty(cssVar, value);
+    }
+  });
+  const layoutMode = typeof siteConfig.site_layout_mode === "string" ? siteConfig.site_layout_mode : "centered";
+  const density = typeof siteConfig.site_density === "string" ? siteConfig.site_density : "comfortable";
+  document.body.dataset.layoutMode = layoutMode;
+  document.body.dataset.density = density;
+}
+
+function renderServerVersion(meta) {
+  if (!meta || typeof meta !== "object") return;
+  serverMeta = { ...serverMeta, ...meta };
+  const el = $("server-version-badge");
+  if (!el) return;
+  const version = typeof serverMeta.version === "string" && serverMeta.version ? serverMeta.version : "unknown";
+  const startedAt = typeof serverMeta.started_at === "string" && serverMeta.started_at ? formatChatTime(serverMeta.started_at) : "";
+  el.textContent = startedAt ? `server: ${version} · started ${startedAt}` : `server: ${version}`;
+}
+
+async function loadSiteConfig() {
+  try {
+    const res = await fetch(API + "/site-config", { credentials: "same-origin" });
+    const json = await res.json().catch(() => ({}));
+    if (json && json.ok && json.site_config) {
+      applySiteConfig(json.site_config);
+    }
+    if (json && json.ok && json.server_meta) {
+      renderServerVersion(json.server_meta);
+    }
+  } catch (err) {
+    console.error("site config load failed", err);
+  }
 }
 
 function getCsrfToken() { return _csrfToken; }
@@ -399,13 +471,15 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
+  const tabModuleCommunity = $("tab-module-community");
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
-  if (tabModuleAccounts) tabModuleAccounts.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
+  if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
-  if (tabModuleChat) tabModuleChat.style.display = "";
-  if (tabModuleAppeals) tabModuleAppeals.style.display = currentRole === "super_admin" ? "none" : "";
+  if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
+  if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
+  if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
   const restartBtn = $("restart-server-btn");
@@ -421,7 +495,14 @@ function setAuthState(json, showLoginHero = false) {
   if (currentRole !== "super_admin") {
     loadUserAppeals();
   }
-  switchModuleTab(currentRole === "user" ? "chat" : "accounts");
+  const initialModule = canAccessModule("accounts")
+    ? "accounts"
+    : canAccessModule("chat")
+      ? "chat"
+      : canAccessModule("community")
+        ? "community"
+        : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+  switchModuleTab(initialModule);
   resetInactivityTimer();
 }
 

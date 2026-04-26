@@ -134,10 +134,14 @@ async function loadAdminAppeals(page = 0, status = null) {
 
   const list = $("admin-appeal-list");
   if (!list) return;
+  const allowedAppealIds = new Set();
   if (!adminAppeals.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有符合條件的申覆</p>";
   } else {
     list.innerHTML = adminAppeals.map(a => {
+      const selectable = a.status === "pending";
+      if (selectable) allowedAppealIds.add(String(a.id));
+      const checked = selectable && selectedAppealIds.has(String(a.id)) ? "checked" : "";
       const statusColor = a.status === "pending" ? "#ffb74d" : a.status === "approved" ? "#4caf50" : "#ff4f6d";
       const action = a.status === "pending"
         ? `<div style=\"margin-top:.4rem;display:flex;gap:.4rem;\">
@@ -147,7 +151,10 @@ async function loadAdminAppeals(page = 0, status = null) {
         : "";
       return `
         <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
-          <div><strong>${sanitize(a.username || "")}</strong> · 違規 #${a.latest_violation_id || "-"}</div>
+          <div style="display:flex;align-items:center;gap:.5rem;">
+            ${selectable ? `<input type="checkbox" data-appeal-check="${a.id}" ${checked} />` : `<span style="color:var(--muted);">—</span>`}
+            <strong>${sanitize(a.username || "")}</strong> · 違規 #${a.latest_violation_id || "-"}
+          </div>
           <div style=\"color:${statusColor};font-size:.75rem;\">${a.status}</div>
           <div style=\"color:#aaa;font-size:.7rem;\">時間：${sanitize(a.created_at || "")} · 懲罰：${a.penalty_points || 0} 點</div>
           <div>原因：${sanitize(a.reason || "")}</div>
@@ -161,10 +168,30 @@ async function loadAdminAppeals(page = 0, status = null) {
       const action = btn.getAttribute("data-appeal-action");
       btn.addEventListener("click", () => reviewAppeal(appealId, action));
     });
+    list.querySelectorAll("input[data-appeal-check]").forEach((box) => {
+      box.addEventListener("change", () => {
+        const id = box.getAttribute("data-appeal-check");
+        if (box.checked) selectedAppealIds.add(String(id));
+        else selectedAppealIds.delete(String(id));
+        updateAppealSelectionUi();
+      });
+    });
   }
+  selectedAppealIds = new Set([...selectedAppealIds].filter((id) => allowedAppealIds.has(id)));
+  updateAppealSelectionUi();
 
   if ($("admin-appeals-prev")) $("admin-appeals-prev").disabled = targetPage <= 1;
   if ($("admin-appeals-next")) $("admin-appeals-next").disabled = (targetPage * 20) >= (json.total || 0);
+}
+
+function updateAppealSelectionUi() {
+  const count = selectedAppealIds.size;
+  const info = $("appeal-selection-info");
+  if (info) info.textContent = `已選 ${count} 筆申覆`;
+  const approveBtn = $("admin-appeals-bulk-approve");
+  const rejectBtn = $("admin-appeals-bulk-reject");
+  if (approveBtn) approveBtn.disabled = count === 0;
+  if (rejectBtn) rejectBtn.disabled = count === 0;
 }
 
 async function reviewAppeal(appealId, action) {
@@ -187,6 +214,38 @@ async function reviewAppeal(appealId, action) {
   }
 }
 
+async function bulkReviewAppeals(action) {
+  if (!currentUser || currentRole !== "super_admin") return;
+  const ids = [...selectedAppealIds];
+  if (!ids.length) return;
+  const label = action === "approve" ? "核准撤銷" : "維持處分";
+  if (!confirm(`確定要${label}這 ${ids.length} 筆申覆？`)) return;
+  const note = prompt("批次審核備註（非必填）", "");
+  if (note === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  let success = 0;
+  let failed = 0;
+  for (const appealId of ids) {
+    try {
+      const res = await fetch(API + "/admin/appeals/" + parseInt(appealId, 10) + "/review", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+        body: JSON.stringify({ action, note: (note || "").trim() })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (json && json.ok) success += 1;
+      else failed += 1;
+    } catch (_) {
+      failed += 1;
+    }
+  }
+  selectedAppealIds.clear();
+  await Promise.all([loadAdminAppeals(adminAppealPage, adminAppealStatus), loadUsers()]);
+  flash($("li-msg"), failed === 0 ? `${label}完成，共 ${success} 筆` : `${label}完成 ${success} 筆，失敗 ${failed} 筆`, failed === 0);
+}
+
 async function loadAdminReports(page = 0, status = null) {
   if (!currentUser || currentRole !== "super_admin") return;
   const targetStatus = status || adminReportStatus;
@@ -206,10 +265,14 @@ async function loadAdminReports(page = 0, status = null) {
   if ($("admin-reports-total")) $("admin-reports-total").textContent = json.total || 0;
   const list = $("admin-report-list");
   if (!list) return;
+  const allowedReportIds = new Set();
   if (!adminReports.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有符合條件的訊息檢舉</p>";
   } else {
     list.innerHTML = adminReports.map(r => {
+      const selectable = r.status === "pending";
+      if (selectable) allowedReportIds.add(String(r.id));
+      const checked = selectable && selectedReportIds.has(String(r.id)) ? "checked" : "";
       const action = r.status === "pending"
         ? `<div style="margin-top:.4rem;display:flex;gap:.4rem;">
             <button class="btn" data-report-action="approve" data-report-id="${r.id}" style="background:#1f9d57;color:#fff;border:1px solid #1f9d57;">核准計點</button>
@@ -218,7 +281,10 @@ async function loadAdminReports(page = 0, status = null) {
         : "";
       return `
         <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
-          <div><strong>檢舉 #${r.id}</strong> · 訊息 #${r.message_id} · room #${r.room_id}</div>
+          <div style="display:flex;align-items:center;gap:.5rem;">
+            ${selectable ? `<input type="checkbox" data-report-check="${r.id}" ${checked} />` : `<span style="color:var(--muted);">—</span>`}
+            <strong>檢舉 #${r.id}</strong> · 訊息 #${r.message_id} · room #${r.room_id}
+          </div>
           <div style="color:#aaa;font-size:.7rem;">${sanitize(r.created_at || "")} · 檢舉者：${sanitize(r.reporter_username || "")} · 被檢舉：${sanitize(r.reported_username || "")}</div>
           <div style="color:#ff8a80;">訊息：${sanitize(r.content || "")}</div>
           <div>檢舉原因：${sanitize(r.reason || "")}</div>
@@ -233,9 +299,29 @@ async function loadAdminReports(page = 0, status = null) {
         btn.getAttribute("data-report-action")
       ));
     });
+    list.querySelectorAll("input[data-report-check]").forEach((box) => {
+      box.addEventListener("change", () => {
+        const id = box.getAttribute("data-report-check");
+        if (box.checked) selectedReportIds.add(String(id));
+        else selectedReportIds.delete(String(id));
+        updateReportSelectionUi();
+      });
+    });
   }
+  selectedReportIds = new Set([...selectedReportIds].filter((id) => allowedReportIds.has(id)));
+  updateReportSelectionUi();
   if ($("admin-reports-prev")) $("admin-reports-prev").disabled = targetPage <= 0;
   if ($("admin-reports-next")) $("admin-reports-next").disabled = ((targetPage + 1) * 30) >= (json.total || 0);
+}
+
+function updateReportSelectionUi() {
+  const count = selectedReportIds.size;
+  const info = $("report-selection-info");
+  if (info) info.textContent = `已選 ${count} 筆檢舉`;
+  const approveBtn = $("admin-reports-bulk-approve");
+  const rejectBtn = $("admin-reports-bulk-reject");
+  if (approveBtn) approveBtn.disabled = count === 0;
+  if (rejectBtn) rejectBtn.disabled = count === 0;
 }
 
 async function reviewMessageReport(reportId, action) {
@@ -258,3 +344,34 @@ async function reviewMessageReport(reportId, action) {
   }
 }
 
+async function bulkReviewMessageReports(action) {
+  if (!currentUser || currentRole !== "super_admin") return;
+  const ids = [...selectedReportIds];
+  if (!ids.length) return;
+  const label = action === "approve" ? "核准計點" : "駁回";
+  if (!confirm(`確定要${label}這 ${ids.length} 筆訊息檢舉？`)) return;
+  const note = prompt("批次審核備註（非必填）", "");
+  if (note === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  let success = 0;
+  let failed = 0;
+  for (const reportId of ids) {
+    try {
+      const res = await fetch(API + "/admin/message-reports/" + parseInt(reportId, 10) + "/review", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+        body: JSON.stringify({ action, note: (note || "").trim() })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (json && json.ok) success += 1;
+      else failed += 1;
+    } catch (_) {
+      failed += 1;
+    }
+  }
+  selectedReportIds.clear();
+  await Promise.all([loadAdminReports(adminReportPage, adminReportStatus), loadUsers()]);
+  flash($("li-msg"), failed === 0 ? `${label}完成，共 ${success} 筆` : `${label}完成 ${success} 筆，失敗 ${failed} 筆`, failed === 0);
+}

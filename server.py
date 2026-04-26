@@ -92,6 +92,8 @@ from services.chat_support import (
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+SERVER_STARTED_AT = datetime.now().isoformat()
+SERVER_VERSION = os.environ.get("HTML_LEARNING_SERVER_VERSION", f"boot-{SERVER_STARTED_AT}")
 
 def _env_path(name, default_path):
     value = os.environ.get(name, "").strip()
@@ -633,6 +635,8 @@ register_public_routes(app, {
     "CSRF_TOKEN_TTL": CSRF_TOKEN_TTL,
     "PUBLIC_DIR": PUBLIC_DIR,
     "ROLE_LABEL": ROLE_LABEL,
+    "SERVER_STARTED_AT": SERVER_STARTED_AT,
+    "SERVER_VERSION": SERVER_VERSION,
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,
     "SESSION_COOKIE_SECURE": SESSION_COOKIE_SECURE,
     "SESSION_TTL": SESSION_TTL,
