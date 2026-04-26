@@ -19,12 +19,14 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "database")
 DB_PATH = os.path.join(DB_DIR, "database.db")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+CHAT_DIR = os.path.join(BASE_DIR, "chats")
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
 SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
 
 os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(CHAT_DIR, exist_ok=True)
 # ── Hash-chain integrity key (server-side only, not exposed to client) ───────
 # Seed derived from SECRET_KEY so it survives restarts (prevents chain-break on reboot)
 def _get_chain_seed():
@@ -170,6 +172,23 @@ def save_json_with_lock(path, data):
         with open(tmp, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, path)
+
+def append_chat_record(room_id, message_id, sender, content, created_at):
+    try:
+        safe_room_id = int(room_id)
+        path = os.path.join(CHAT_DIR, f"room_{safe_room_id}.jsonl")
+        entry = {
+            "message_id": message_id,
+            "room_id": safe_room_id,
+            "sender": sender,
+            "content": content,
+            "created_at": created_at,
+        }
+        with _get_json_lock(path):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 LEGACY_FAIL_LOG = os.path.join(BASE_DIR, "fail_log.json")
 LEGACY_BLOCKED_IPS = os.path.join(BASE_DIR, "blocked_ips.json")
@@ -1094,13 +1113,28 @@ ROLE_LABEL      = {
 }
 MAX_MANAGERS    = 5
 MAX_VIOLATIONS  = {"manager": 3, "user": 5}
+NO_AUTO_PENALTY_USERS = {"s92137"}
 MAX_LOGIN_FAILS_FOR_VIOLATION = 5  # 登入失敗幾次後計點
 VIOLATION_APPEAL_WINDOW_HOURS = 24
 CHAT_MESSAGE_MAX_LEN = 500
+OFFICIAL_CHAT_ROOM_NAME = "官方聊天室"
 CHAT_WARNING_CATEGORY_WORDS = {
-    "色情": ["色情", "性", "性行為", "裸體", "裸照", "porn", "pornhub", "xvideos", "sex"],
-    "血腥": ["血腥", "血", "暴力", "殺", "殺人", "刀", "槍", "肢解", "gore"],
-    "自殺": ["自殺", "suicide", "想死", "死亡", "自殘", "我不想活", "結束生命"]
+    "色情": [
+        "色情", "性", "性行為", "亂倫", "裸體", "裸照", "porn", "pornhub", "xvideos", "sex", "sexy",
+        "erotic", "sexual", "adult", "pornography", "露骨", "pussy", "摳穴", "口交", "肛交", "做愛"
+    ],
+    "血腥": [
+        "血腥", "血", "暴力", "殺", "殺人", "刀", "槍", "肢解", "gore", "weapon", "knife", "gun", "shoot", "殘忍", "毆打"
+    ],
+    "自殺": [
+        "自殺", "suicide", "想死", "死亡", "自殘", "我不想活", "結束生命", "hang", "自盡", "活著太累", "不想活", "結束自己"
+    ],
+    "辱罵": [
+        "白癡", "智障", "fuck", "fuckyou", "fuck you", "shit", "幹你", "幹妳", "低能", "腦殘"
+    ],
+    "敏感資訊": [
+        "密碼是", "password is", "passwd", "pwd="
+    ],
 }
 
 # ── System settings (可被超級管理者修改，資料主導) ─────────────────────────────
@@ -1239,6 +1273,23 @@ def save_settings(data):
 
 refresh_system_settings()
 
+def activate_emergency_lockdown(reason):
+    conn = get_db()
+    try:
+        init_system_settings_table(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+            ("maintenance_mode", "True", datetime.now().isoformat(), "audit_guard")
+        )
+        conn.commit()
+        refresh_system_settings()
+    finally:
+        conn.close()
+    try:
+        audit("EMERGENCY_LOCKDOWN_ENABLED", get_client_ip(), user="audit_guard", success=True, detail=reason)
+    except Exception:
+        pass
+
 # ── Server restart helper ────────────────────────────────────────────────────
 def restart_server():
     """Send SIGTERM to this process — let the start-script handle restart."""
@@ -1273,6 +1324,10 @@ def add_violation(user_id, username, role, points=1, reason="手動計點", trig
     conn = get_db()
     try:
         threshold = MAX_VIOLATIONS.get(role, 5)
+        if username in NO_AUTO_PENALTY_USERS:
+            audit("VIOLATION_TEST_ACCOUNT_NO_PENALTY", get_client_ip(), user="system",
+                  detail=f"user_id={user_id} username={username} count={new_count}/{threshold}")
+            return "test_counted", f"測試帳號違規計點 +{points}（{new_count}/{threshold}），不自動封鎖或降級", new_count
         if new_count >= threshold:
             conn.execute(
                 "UPDATE users SET status='inactive', violation_count=?, updated_at=? WHERE id=?",
@@ -1292,12 +1347,14 @@ def normalize_text(v):
 def detect_chat_violation(text):
     if not isinstance(text, str):
         return False, None
-    normalized = text.lower()
+    normalized = text.lower().strip()
+    compact = re.sub(r"\s+", "", normalized)
     for label, keys in CHAT_WARNING_CATEGORY_WORDS.items():
         for keyword in keys:
             if not keyword:
                 continue
-            if keyword.lower() in normalized:
+            kw = keyword.lower().strip()
+            if kw in normalized or kw in compact:
                 return True, label
     return False, None
 
@@ -1400,6 +1457,40 @@ def user_public_payload(row):
         "violation_count": dict(row).get("violation_count") or 0,
         "chat_violation_warned": dict(row).get("chat_violation_warned") or 0,
     }
+
+def ensure_official_chat_room(conn):
+    root_row = conn.execute("SELECT id FROM users WHERE username='root'").fetchone()
+    if not root_row:
+        return None
+    root_id = root_row["id"]
+    room = conn.execute(
+        "SELECT id FROM chat_rooms WHERE owner_user_id=? AND name=? LIMIT 1",
+        (root_id, OFFICIAL_CHAT_ROOM_NAME)
+    ).fetchone()
+    now = datetime.now().isoformat()
+    if room:
+        room_id = room["id"]
+    else:
+        room_id = conn.execute(
+            "INSERT INTO chat_rooms (name, owner_user_id, created_at) VALUES (?, ?, ?)",
+            (OFFICIAL_CHAT_ROOM_NAME, root_id, now)
+        ).lastrowid
+    conn.execute(
+        "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
+        (room_id, root_id, now)
+    )
+    return room_id
+
+def ensure_user_official_room_membership(conn, user_id):
+    if not user_id:
+        return
+    room_id = ensure_official_chat_room(conn)
+    if not room_id:
+        return
+    conn.execute(
+        "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
+        (room_id, user_id, datetime.now().isoformat())
+    )
 
 def ensure_user_columns(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -1506,6 +1597,21 @@ def init_db():
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS chat_message_reports (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id         INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+            room_id            INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+            reporter_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            reported_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            reason             TEXT    NOT NULL,
+            status             TEXT    NOT NULL DEFAULT 'pending',
+            reviewed_by        TEXT,
+            reviewed_at        TEXT,
+            review_note        TEXT,
+            created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(message_id, reporter_user_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
         CREATE INDEX IF NOT EXISTS idx_sessions_user_id     ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_login_attempts_user  ON login_attempts(user_id);
@@ -1516,6 +1622,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_chat_room_members_user ON chat_room_members(user_id);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_reports_status    ON chat_message_reports(status);
+        CREATE INDEX IF NOT EXISTS idx_chat_reports_message   ON chat_message_reports(message_id);
 
         /* ── 防竄改審計日誌（hash chain）─── */
         CREATE TABLE IF NOT EXISTS secure_audit (
@@ -1599,6 +1707,7 @@ def init_db():
     init_system_settings_table(conn)
     _seed_missing_settings_to_db(conn)
     migration_plan = apply_schema_migrations(conn)
+    conn.commit()
     if migration_plan["applied"]:
         audit(
             "DB_SCHEMA_MIGRATION",
@@ -1667,6 +1776,7 @@ def init_db():
             (mgr_cur.lastrowid, hash_password("Manager@1234"), now)
         )
 
+    ensure_official_chat_room(conn)
     refresh_system_settings()
     conn.commit()
     conn.close()
@@ -1762,6 +1872,25 @@ def restrict_cors():
         # Only allow same-origin
         if origin and origin != request.host_url.rstrip("/"):
             return ("", 204)
+
+    settings = get_system_settings()
+    if not settings.get("maintenance_mode", False):
+        return None
+    if not request.path.startswith("/api"):
+        return None
+    if request.path in ("/api/csrf-token", "/api/logout", "/api/me"):
+        return None
+    if request.path == "/api/login":
+        data = request.get_json(silent=True) if request.is_json else {}
+        username = normalize_text(data.get("username")) if isinstance(data, dict) else ""
+        if username == "root":
+            return None
+        return json_resp({"ok":False,"msg":"系統進入緊急維護模式，僅允許最高管理者登入"}, 503)
+
+    actor = get_current_user_ctx()
+    if actor and actor["username"] == "root":
+        return None
+    return json_resp({"ok":False,"msg":"系統進入緊急維護模式，請等待最高管理者處理"}, 503)
 
 # ── JSON response helper ───────────────────────────────────────────────────────
 def json_resp(data, status=200):
@@ -1873,6 +2002,7 @@ def register():
             "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
             (user_id, hash_password(password), now)
         )
+        ensure_user_official_room_membership(conn, user_id)
         conn.commit()
         audit("REGISTER_OK", ip, username, ua=ua, success=True)
         return json_resp({"ok":True,"msg":"註冊成功"})
@@ -1973,6 +2103,8 @@ def login():
             # Create token + save session to DB
             token = make_token(username)
             db_save_session(user_row["id"], token, ip, ua)
+            ensure_user_official_room_membership(conn, user_row["id"])
+            conn.commit()
 
             audit("LOGIN_OK", ip, username, ua=ua, success=True)
             resp = json_resp({"ok":True,"msg":"恭喜登入成功","token":token})
@@ -2031,7 +2163,7 @@ def me():
         "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
     })
 
-@app.route("/api/chat/rooms", methods=["GET", "POST"])
+@app.route("/api/chat/rooms", methods=["GET", "POST"], strict_slashes=False)
 @require_csrf_safe
 def chat_rooms():
     actor = get_current_user_ctx()
@@ -2043,6 +2175,8 @@ def chat_rooms():
     if request.method == "GET":
         conn = get_db()
         try:
+            ensure_user_official_room_membership(conn, urow_id)
+            conn.commit()
             rows = conn.execute(
                 "SELECT r.id, r.name, r.owner_user_id, r.created_at, u.username AS owner_username "
                 "FROM chat_rooms r "
@@ -2074,24 +2208,45 @@ def chat_rooms():
     if not isinstance(data, dict):
         return json_resp({"ok":False,"msg":"Invalid request"}), 400
     name = normalize_text(data.get("name"))
+    target_user = normalize_text(data.get("target_user"))
     if not name:
         return json_resp({"ok":False,"msg":"聊天室名稱不可為空"}), 400
     if len(name) > 48:
         return json_resp({"ok":False,"msg":"聊天室名稱最多 48 字元"}), 400
+    if target_user == actor["username"]:
+        return json_resp({"ok":False,"msg":"不能指定自己為對象"}), 400
 
     conn = get_db()
     try:
+        target_row = None
+        if target_user:
+            target_row = conn.execute(
+                "SELECT id, username FROM users WHERE username=? AND status='active'",
+                (target_user,)
+            ).fetchone()
+            if not target_row:
+                return json_resp({"ok":False,"msg":"找不到指定對象帳號"}), 404
         cur = conn.execute(
             "INSERT INTO chat_rooms (name, owner_user_id, created_at) VALUES (?, ?, ?)",
             (name, urow_id, datetime.now().isoformat())
         )
         room_id = cur.lastrowid
+        now = datetime.now().isoformat()
         conn.execute(
             "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
-            (room_id, urow_id, datetime.now().isoformat())
+            (room_id, urow_id, now)
         )
+        if target_row:
+            conn.execute(
+                "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
+                (room_id, target_row["id"], now)
+            )
         conn.commit()
-        audit("CHAT_ROOM_CREATED", ip, user=actor["username"], detail=f"room_id={room_id}, name={name}")
+        detail = f"room_id={room_id}, name={name}"
+        if target_row:
+            detail += f", target={target_row['username']}"
+        audit("CHAT_ROOM_CREATED", ip, user=actor["username"], detail=detail)
+        invite_username = target_row["username"] if target_row else None
         return json_resp({
             "ok": True,
             "msg": "聊天室已建立",
@@ -2099,7 +2254,8 @@ def chat_rooms():
                 "id": room_id,
                 "name": name,
                 "owner_user_id": urow_id,
-                "owner_username": actor["username"]
+                "owner_username": actor["username"],
+                "target_username": invite_username
             }
         })
     except Exception:
@@ -2107,7 +2263,7 @@ def chat_rooms():
     finally:
         conn.close()
 
-@app.route("/api/chat/rooms/<int:room_id>/join", methods=["POST"])
+@app.route("/api/chat/rooms/<int:room_id>/join", methods=["POST"], strict_slashes=False)
 @require_csrf
 def chat_room_join(room_id):
     actor = get_current_user_ctx()
@@ -2129,7 +2285,7 @@ def chat_room_join(room_id):
     finally:
         conn.close()
 
-@app.route("/api/chat/rooms/<int:room_id>/messages", methods=["GET", "POST"])
+@app.route("/api/chat/rooms/<int:room_id>/messages", methods=["GET", "POST"], strict_slashes=False)
 @require_csrf_safe
 def chat_messages(room_id):
     actor = get_current_user_ctx()
@@ -2138,6 +2294,8 @@ def chat_messages(room_id):
 
     conn = get_db()
     try:
+        ensure_user_official_room_membership(conn, actor["id"])
+        conn.commit()
         room = conn.execute("SELECT id, name FROM chat_rooms WHERE id=?", (room_id,)).fetchone()
         if not room:
             return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
@@ -2225,12 +2383,63 @@ def chat_messages(room_id):
                 "msg":msg
             }), 403
 
-        conn.execute(
+        created_at = datetime.now().isoformat()
+        cur = conn.execute(
             "INSERT INTO chat_messages (room_id, sender_id, content, created_at) VALUES (?, ?, ?, ?)",
-            (room_id, actor["id"], content, datetime.now().isoformat())
+            (room_id, actor["id"], content, created_at)
         )
         conn.commit()
+        append_chat_record(room_id, cur.lastrowid, actor["username"], content, created_at)
         return json_resp({"ok":True,"msg":"訊息已送出"})
+    finally:
+        conn.close()
+
+@app.route("/api/chat/messages/<int:message_id>/report", methods=["POST"], strict_slashes=False)
+@require_csrf
+def report_chat_message(message_id):
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+    if not isinstance(data, dict):
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
+    reason = normalize_text(data.get("reason")) or "使用者檢舉"
+    if len(reason) > 200:
+        return json_resp({"ok":False,"msg":"檢舉原因請控制在 200 字以內"}), 400
+
+    conn = get_db()
+    try:
+        msg = conn.execute(
+            "SELECT m.id, m.room_id, m.sender_id, m.content, u.username AS sender_username "
+            "FROM chat_messages m LEFT JOIN users u ON u.id=m.sender_id WHERE m.id=?",
+            (message_id,)
+        ).fetchone()
+        if not msg:
+            return json_resp({"ok":False,"msg":"找不到訊息"}), 404
+        if msg["sender_id"] == actor["id"]:
+            return json_resp({"ok":False,"msg":"不能檢舉自己的訊息"}), 400
+        member = conn.execute(
+            "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+            (msg["room_id"], actor["id"])
+        ).fetchone()
+        if not member:
+            return json_resp({"ok":False,"msg":"你不在此聊天室"}), 403
+        try:
+            conn.execute(
+                "INSERT INTO chat_message_reports "
+                "(message_id, room_id, reporter_user_id, reported_user_id, reason, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (message_id, msg["room_id"], actor["id"], msg["sender_id"], reason, datetime.now().isoformat())
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            return json_resp({"ok":False,"msg":"你已檢舉過這則訊息"}), 409
+        audit("CHAT_MESSAGE_REPORTED", get_client_ip(), user=actor["username"],
+              detail=f"message_id={message_id},reported={msg['sender_username']},reason={reason}")
+        return json_resp({"ok":True,"msg":"檢舉已送出，等待超級管理員審核"})
     finally:
         conn.close()
 
@@ -2731,7 +2940,7 @@ def _serialize_appeal_row(r):
     return {
         "id": r["id"],
         "user_id": r["user_id"] if "user_id" in r.keys() else None,
-        "username": r["username"],
+        "username": r["username"] if "username" in r.keys() else "",
         "latest_violation_id": r["latest_violation_id"],
         "violation_count_snapshot": r["violation_count_snapshot"],
         "penalty_points": r["penalty_points"],
@@ -2770,12 +2979,30 @@ def violation_appeals_list():
     try:
         user_id = actor["id"]
         actor_username = actor["username"]
+        user_row = conn.execute(
+            "SELECT violation_count FROM users WHERE id=?", (user_id,)
+        ).fetchone()
         latest_violation = get_latest_violation(conn, user_id)
+        violation_rows = conn.execute(
+            "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at "
+            "FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 50",
+            (user_id,)
+        ).fetchall()
         rows = conn.execute(
             "SELECT id, latest_violation_id, violation_count_snapshot, penalty_points, reason, status, reviewed_by, reviewed_at, review_note, created_at "
             "FROM violation_appeals WHERE user_id=? ORDER BY id DESC LIMIT 20",
             (user_id,)
         ).fetchall()
+        appeal_rows = conn.execute(
+            "SELECT id, latest_violation_id, violation_count_snapshot, penalty_points, reason, status, reviewed_by, reviewed_at, review_note, created_at "
+            "FROM violation_appeals WHERE user_id=? ORDER BY id DESC",
+            (user_id,)
+        ).fetchall()
+        appeal_by_violation = {}
+        for appeal in appeal_rows:
+            vid = appeal["latest_violation_id"]
+            if vid and vid not in appeal_by_violation:
+                appeal_by_violation[vid] = appeal
 
         now = datetime.now()
         latest_dt = parse_iso_to_datetime(latest_violation["created_at"]) if latest_violation else None
@@ -2791,13 +3018,33 @@ def violation_appeals_list():
             "SELECT 1 FROM violation_appeals WHERE user_id=? AND status='pending' LIMIT 1",
             (user_id,)
         ).fetchone()
+        violations = []
+        for row in violation_rows:
+            created_dt = parse_iso_to_datetime(row["created_at"])
+            row_remaining = 0
+            within_window = False
+            if created_dt:
+                elapsed = now - created_dt
+                if elapsed <= timedelta(hours=VIOLATION_APPEAL_WINDOW_HOURS):
+                    row_remaining = int((timedelta(hours=VIOLATION_APPEAL_WINDOW_HOURS) - elapsed).total_seconds())
+                    within_window = True
+            appeal = appeal_by_violation.get(row["id"])
+            item = _serialize_violation_row(row)
+            item["remaining_seconds"] = row_remaining
+            appeal_status = appeal["status"] if appeal else None
+            item["is_resolved"] = appeal_status == "approved"
+            item["can_appeal"] = bool(within_window and not appeal and actor_username != "root")
+            item["appeal"] = _serialize_appeal_row(appeal) if appeal else None
+            violations.append(item)
 
         return json_resp({
             "ok": True,
             "latest_violation": _serialize_violation_row(latest_violation),
             "can_appeal": bool(latest_violation and latest_ok and not pending_row and actor_username != "root"),
             "remaining_seconds": remaining_seconds,
+            "violation_count": user_row["violation_count"] if user_row else 0,
             "appeals": [_serialize_appeal_row(r) for r in rows],
+            "violations": violations,
         })
     finally:
         conn.close()
@@ -2815,27 +3062,35 @@ def submit_violation_appeal():
     conn = get_db()
     try:
         user_id = actor["id"]
-        latest_violation = get_latest_violation(conn, user_id)
-        if not latest_violation:
-            return json_resp({"ok":False,"msg":"沒有可申覆的違規紀錄"}), 400
-
-        latest_dt = parse_iso_to_datetime(latest_violation["created_at"])
-        if not latest_dt or datetime.now() - latest_dt > timedelta(hours=VIOLATION_APPEAL_WINDOW_HOURS):
-            return json_resp({"ok":False,"msg":"超過申覆時限（24 小時）"}), 409
-
-        existing = conn.execute(
-            "SELECT 1 FROM violation_appeals WHERE user_id=? AND status='pending' LIMIT 1",
-            (user_id,)
-        ).fetchone()
-        if existing:
-            return json_resp({"ok":False,"msg":"已有待審中的申覆"}), 409
-
         try:
             data = request.get_json(force=True)
         except Exception:
             return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
+
+        violation_id = parse_positive_int(data.get("violation_id"), default=None)
+        if violation_id is None:
+            latest_violation = get_latest_violation(conn, user_id)
+        else:
+            latest_violation = conn.execute(
+                "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at "
+                "FROM secure_violations WHERE id=? AND user_id=?",
+                (violation_id, user_id)
+            ).fetchone()
+        if not latest_violation:
+            return json_resp({"ok":False,"msg":"找不到可申覆的違規紀錄"}), 400
+
+        latest_dt = parse_iso_to_datetime(latest_violation["created_at"])
+        if not latest_dt or datetime.now() - latest_dt > timedelta(hours=VIOLATION_APPEAL_WINDOW_HOURS):
+            return json_resp({"ok":False,"msg":"超過申覆時限（24 小時）"}), 409
+
+        existing = conn.execute(
+            "SELECT 1 FROM violation_appeals WHERE user_id=? AND latest_violation_id=? LIMIT 1",
+            (user_id, latest_violation["id"])
+        ).fetchone()
+        if existing:
+            return json_resp({"ok":False,"msg":"這筆違規已提交過申覆"}), 409
         reason = normalize_text(data.get("reason"))
         if not reason:
             return json_resp({"ok":False,"msg":"請填寫申覆原因"}), 400
@@ -3012,57 +3267,67 @@ def admin_violations():
     if role_rank(actor_role) < role_rank("manager"):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
-    page = parse_positive_int(request.args.get("page", 1))
+    page = parse_positive_int(request.args.get("page", 0), min_value=0)
     if page is None:
         return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
     limit = parse_positive_int(request.args.get("limit", 50), max_value=200)
     if limit is None:
         return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
-    offset = (page - 1) * limit
+    offset = page * limit
     username_filter = request.args.get("username", "").strip() or None
 
     conn = get_db()
     try:
-        # 用戶清單（含 violation_count）
-        base_query = "SELECT id, username, role, violation_count FROM users WHERE username<>'root' "
+        users_all = conn.execute(
+            "SELECT username, violation_count FROM users WHERE username<>'root' ORDER BY id ASC"
+        ).fetchall()
+        where = "WHERE username<>'root'"
+        params = []
         if username_filter:
-            base_query += "AND username=? "
-            count_query = "SELECT COUNT(*) as c FROM users WHERE username<>'root' AND username=? "
-            users_rows = conn.execute(base_query + "ORDER BY id ASC LIMIT ? OFFSET ?",
-                                      (username_filter, limit, offset)).fetchall()
-            total = conn.execute(count_query, (username_filter,)).fetchone()["c"]
-        else:
-            base_query += "ORDER BY id ASC LIMIT ? OFFSET ?"
-            count_query = "SELECT COUNT(*) as c FROM users WHERE username<>'root' "
-            users_rows = conn.execute(base_query, (limit, offset)).fetchall()
-            total = conn.execute(count_query).fetchone()["c"]
+            where += " AND username=?"
+            params.append(username_filter)
+        total = conn.execute(
+            f"SELECT COUNT(*) as c FROM secure_violations {where}",
+            tuple(params)
+        ).fetchone()["c"]
+        rows = conn.execute(
+            "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at, entry_hash "
+            f"FROM secure_violations {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            tuple(params + [limit, offset])
+        ).fetchall()
+        result = [{
+            "id": r["id"],
+            "user_id": r["user_id"],
+            "username": r["username"],
+            "points": r["points"],
+            "reason": r["reason"],
+            "triggered_by": r["triggered_by"],
+            "actor": r["actor_username"],
+            "timestamp": r["created_at"],
+            "created_at": r["created_at"],
+            "chain_hash": r["entry_hash"][:32] + "...",
+            "_chain_hash": r["entry_hash"],
+        } for r in rows]
 
-        result = []
-        for u in users_rows:
-            uid = u["id"]
-            uname = u["username"]
-            ok, broken_at, details = verify_violation_integrity(uid)
-            last = conn.execute(
-                "SELECT entry_hash, created_at FROM secure_violations "
-                "WHERE user_id=? ORDER BY id DESC LIMIT 1",
-                (uid,)
+        integrity_ok = True
+        integrity_broken = None
+        integrity_details = "no entries"
+        if username_filter:
+            target = conn.execute(
+                "SELECT id FROM users WHERE username=?", (username_filter,)
             ).fetchone()
-            result.append({
-                "user_id":         uid,
-                "username":        uname,
-                "role":            u["role"],
-                "violation_count": u["violation_count"],
-                "integrity": {
-                    "ok":         ok,
-                    "broken_at":  broken_at,
-                    "details":    details,
-                    "latest_hash": last["entry_hash"][:24] + "..." if last else None,
-                    "latest_ts":  last["created_at"] if last else None,
-                }
-            })
-
-        # 整體 audit chain integrity（用於顯示）
-        audit_ok, audit_broken, audit_details = verify_audit_integrity()
+            if target:
+                integrity_ok, integrity_broken, integrity_details = verify_violation_integrity(target["id"])
+        else:
+            for u in conn.execute("SELECT id FROM users WHERE username<>'root' ORDER BY id ASC").fetchall():
+                ok, broken_at, details = verify_violation_integrity(u["id"])
+                if not ok:
+                    integrity_ok = False
+                    integrity_broken = broken_at
+                    integrity_details = details
+                    break
+            if integrity_ok:
+                integrity_details = "integrity OK"
 
         return json_resp({
             "ok":      True,
@@ -3070,12 +3335,11 @@ def admin_violations():
             "total":   total,
             "page":    page,
             "limit":   limit,
-            "users":   [{"username": u["username"], "violation_count": u["violation_count"]} for u in
-                        conn.execute("SELECT username, violation_count FROM users WHERE username<>'root' ORDER BY id ASC").fetchall()],
+            "users":   [{"username": u["username"], "violation_count": u["violation_count"]} for u in users_all],
             "integrity": {
-                "ok":        audit_ok,
-                "broken_at": audit_broken,
-                "details":   audit_details,
+                "ok":        integrity_ok,
+                "broken_at": integrity_broken,
+                "details":   integrity_details,
             }
         })
     finally:
@@ -3117,13 +3381,13 @@ def admin_audit():
     if role_rank(actor_role) < role_rank("manager"):
         return json_resp({"ok":False,"msg":"權限不足"}), 403
 
-    page = parse_positive_int(request.args.get("page", 1))
+    page = parse_positive_int(request.args.get("page", 0), min_value=0)
     if page is None:
         return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
     limit = parse_positive_int(request.args.get("limit", 50), max_value=200)
     if limit is None:
         return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
-    offset = (page - 1) * limit
+    offset = page * limit
 
     # 讀取 secure_audit 表（hash chain）
     conn = get_db()
@@ -3184,6 +3448,8 @@ def admin_audit():
 
         # Integrity 驗證
         ok, broken_at, details = verify_audit_integrity()
+        if not ok:
+            activate_emergency_lockdown(f"audit_chain_broken_at={broken_at}; {details}")
 
         return json_resp({
             "ok": True,
@@ -3195,6 +3461,171 @@ def admin_audit():
         })
     finally:
         conn.close()
+
+@app.route("/api/admin/message-reports", methods=["GET"])
+@require_csrf_safe
+def admin_message_reports():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高管理者可審核檢舉"}), 403
+    status = normalize_text(request.args.get("status")) or "pending"
+    if status not in ("pending", "approved", "rejected"):
+        return json_resp({"ok":False,"msg":"狀態參數錯誤"}), 400
+    page = parse_positive_int(request.args.get("page", 0), min_value=0)
+    if page is None:
+        return json_resp({"ok":False,"msg":"page 參數格式錯誤"}), 400
+    limit = parse_positive_int(request.args.get("limit", 30), min_value=1, max_value=100)
+    if limit is None:
+        return json_resp({"ok":False,"msg":"limit 參數格式錯誤"}), 400
+    offset = page * limit
+
+    conn = get_db()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) AS c FROM chat_message_reports WHERE status=?", (status,)
+        ).fetchone()["c"]
+        rows = conn.execute(
+            "SELECT r.id, r.message_id, r.room_id, r.reason, r.status, r.reviewed_by, r.reviewed_at, r.review_note, r.created_at, "
+            "reporter.username AS reporter_username, reported.username AS reported_username, m.content "
+            "FROM chat_message_reports r "
+            "LEFT JOIN users reporter ON reporter.id=r.reporter_user_id "
+            "LEFT JOIN users reported ON reported.id=r.reported_user_id "
+            "LEFT JOIN chat_messages m ON m.id=r.message_id "
+            "WHERE r.status=? ORDER BY r.id DESC LIMIT ? OFFSET ?",
+            (status, limit, offset)
+        ).fetchall()
+        return json_resp({
+            "ok": True,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "items": [{
+                "id": r["id"],
+                "message_id": r["message_id"],
+                "room_id": r["room_id"],
+                "reason": r["reason"],
+                "status": r["status"],
+                "reporter_username": r["reporter_username"] or "",
+                "reported_username": r["reported_username"] or "",
+                "content": r["content"] or "",
+                "reviewed_by": r["reviewed_by"],
+                "reviewed_at": r["reviewed_at"],
+                "review_note": r["review_note"],
+                "created_at": r["created_at"],
+            } for r in rows]
+        })
+    finally:
+        conn.close()
+
+@app.route("/api/admin/message-reports/<int:report_id>/review", methods=["POST"])
+@require_csrf
+def admin_message_report_review(report_id):
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高管理者可審核檢舉"}), 403
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+    if not isinstance(data, dict):
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
+    action = normalize_text(data.get("action"))
+    note = normalize_text(data.get("note"))
+    if action not in ("approve", "reject"):
+        return json_resp({"ok":False,"msg":"審核動作錯誤"}), 400
+
+    conn = get_db()
+    try:
+        report = conn.execute(
+            "SELECT r.*, u.username AS reported_username, u.role AS reported_role "
+            "FROM chat_message_reports r LEFT JOIN users u ON u.id=r.reported_user_id WHERE r.id=?",
+            (report_id,)
+        ).fetchone()
+        if not report:
+            return json_resp({"ok":False,"msg":"找不到檢舉"}), 404
+        if report["status"] != "pending":
+            return json_resp({"ok":False,"msg":"此檢舉已審核"}), 409
+        final_status = "approved" if action == "approve" else "rejected"
+        reviewed_at = datetime.now().isoformat()
+        msg = "已駁回檢舉"
+        if action == "approve":
+            role = "super_admin" if report["reported_username"] == "root" else (report["reported_role"] or "user")
+            _, msg, _ = add_violation(
+                report["reported_user_id"], report["reported_username"], role, points=1,
+                reason=f"訊息檢舉成立：{report['reason']}", triggered_by="message_report", actor_username=actor["username"]
+            )
+        conn.execute(
+            "UPDATE chat_message_reports SET status=?, reviewed_by=?, reviewed_at=?, review_note=? WHERE id=?",
+            (final_status, actor["username"], reviewed_at, note, report_id)
+        )
+        conn.commit()
+        audit("CHAT_MESSAGE_REPORT_REVIEWED", get_client_ip(), user=actor["username"],
+              detail=f"report_id={report_id},action={action},reported={report['reported_username']}")
+        return json_resp({"ok":True,"msg":msg})
+    finally:
+        conn.close()
+
+@app.route("/api/admin/health", methods=["GET"])
+@require_csrf_safe
+def admin_health():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+    if role_rank(actor_role) < role_rank("super_admin"):
+        return json_resp({"ok":False,"msg":"只有最高管理者可查看伺服器健康度"}), 403
+
+    settings = get_system_settings()
+    audit_ok, audit_broken, audit_details = verify_audit_integrity()
+    if not audit_ok:
+        activate_emergency_lockdown(f"audit_chain_broken_at={audit_broken}; {audit_details}")
+        settings = get_system_settings()
+
+    conn = get_db()
+    try:
+        users_total = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        active_users = conn.execute("SELECT COUNT(*) AS c FROM users WHERE status='active'").fetchone()["c"]
+        sessions_total = conn.execute("SELECT COUNT(*) AS c FROM sessions WHERE expires_at>?", (datetime.now().isoformat(),)).fetchone()["c"]
+        messages_total = conn.execute("SELECT COUNT(*) AS c FROM chat_messages").fetchone()["c"]
+        reports_pending = conn.execute("SELECT COUNT(*) AS c FROM chat_message_reports WHERE status='pending'").fetchone()["c"]
+        appeals_pending = conn.execute("SELECT COUNT(*) AS c FROM violation_appeals WHERE status='pending'").fetchone()["c"]
+        violations_total = conn.execute("SELECT COUNT(*) AS c FROM secure_violations").fetchone()["c"]
+        audit_total = conn.execute("SELECT COUNT(*) AS c FROM secure_audit").fetchone()["c"]
+    finally:
+        conn.close()
+
+    db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    chat_files = [name for name in os.listdir(CHAT_DIR) if name.endswith(".jsonl")] if os.path.isdir(CHAT_DIR) else []
+    chat_size = sum(os.path.getsize(os.path.join(CHAT_DIR, name)) for name in chat_files)
+    status = "critical" if not audit_ok or settings.get("maintenance_mode", False) else "ok"
+    return json_resp({
+        "ok": True,
+        "status": status,
+        "maintenance_mode": settings.get("maintenance_mode", False),
+        "audit_integrity": {"ok": audit_ok, "broken_at": audit_broken, "details": audit_details},
+        "counts": {
+            "users_total": users_total,
+            "active_users": active_users,
+            "active_sessions": sessions_total,
+            "chat_messages": messages_total,
+            "pending_reports": reports_pending,
+            "pending_appeals": appeals_pending,
+            "violations_total": violations_total,
+            "audit_entries": audit_total,
+        },
+        "storage": {
+            "database_bytes": db_size,
+            "chat_files": len(chat_files),
+            "chat_bytes": chat_size,
+            "chat_dir": "chats/",
+        }
+    })
 
 # ── 系統參數（超級管理者 only）───────────────────────────────────────────────
 @app.route("/api/admin/settings", methods=["GET","PUT"])

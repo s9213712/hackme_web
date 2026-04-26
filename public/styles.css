@@ -235,6 +235,14 @@
 
     .admin-wrap.show { display: block; }
 
+    .module-section {
+      display: none;
+    }
+
+    .module-section.active {
+      display: block;
+    }
+
     .admin-tools {
       background: var(--surface);
       border-radius: var(--radius);
@@ -358,6 +366,24 @@
       margin-bottom: .12rem;
       font-size: .68rem;
       letter-spacing: .01em;
+    }
+
+    .chat-report-btn {
+      display: inline-block;
+      margin-top: .32rem;
+      padding: .2rem .45rem;
+      width: auto;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+      color: var(--muted);
+      font-size: .68rem;
+      cursor: pointer;
+    }
+
+    .chat-report-btn:hover {
+      color: var(--text);
+      background: rgba(255,255,255,.12);
     }
 
     .chat-msg.warning {
@@ -504,9 +530,28 @@
     #success-screen {
       display: none;
       text-align: center;
+      position: relative;
+    }
+
+    .success-toolbar {
+      position: absolute;
+      right: .65rem;
+      top: .6rem;
+      margin: 0;
+      display: flex;
+      justify-content: flex-end;
+      z-index: 2;
     }
 
     #success-screen.show { display: block; }
+
+    .login-success-hero {
+      display: none;
+    }
+
+    .login-success-hero.show {
+      display: block;
+    }
 
     .success-icon {
       font-size: 4rem;
@@ -528,11 +573,17 @@
     }
 
     #logout-btn {
-      margin-top: 1.5rem;
+      width: auto;
+      margin-top: 0;
+      margin-left: 0;
+      padding: .28rem .58rem;
       background: rgba(255,255,255,.08);
       color: var(--muted);
       border: 1px solid rgba(255,255,255,.1);
-      font-size: .85rem;
+      font-size: .72rem;
+      line-height: 1.1rem;
+      min-height: auto;
+      min-width: 0;
     }
 
     @keyframes birthday-pop {

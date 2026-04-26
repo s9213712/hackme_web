@@ -7,19 +7,47 @@ let _csrfToken = null;
 let currentUser = null;
 let currentRole = "user";
 let canManageUsers = false;
+let currentModuleTab = "chat";
 let users = [];
 let editingUserId = null;
 let userAppeals = [];
 let adminAppeals = [];
 let adminAppealPage = 1;
 let adminAppealStatus = "pending";
+let adminReports = [];
+let adminReportPage = 0;
+let adminReportStatus = "pending";
 const editingUserOriginal = {};
 let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
 const CHAT_POLL_MS = 2500;
+const INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
+let inactivityTimer = null;
 
 function $(id) { return document.getElementById(id); }
+
+function stopInactivityTimer() {
+  if (inactivityTimer) {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+}
+
+function resetInactivityTimer() {
+  if (!currentUser) return;
+  stopInactivityTimer();
+  inactivityTimer = setTimeout(async () => {
+    alert("已超過 3 分鐘未操作，系統將自動登出。");
+    await doLogout();
+  }, INACTIVITY_LOGOUT_MS);
+}
+
+function setupInactivityTracking() {
+  ["click", "keydown", "mousemove", "touchstart", "scroll"].forEach((eventName) => {
+    window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+  });
+}
 
 // ── Sanitization (XSS defense — defense in depth) ────────────
 function sanitize(str) {
@@ -145,9 +173,13 @@ function renderChatMessages(messages) {
       <div class="${cls.join(" ")}">
         <span class="meta">${sanitize(formatChatTime(m.created_at))} · ${sanitize(m.sender || "系統")}</span>
         ${sanitize(m.content || "")}
+        ${!isSelf && m.id ? `<button class="chat-report-btn" type="button" data-report-message="${m.id}">檢舉</button>` : ""}
       </div>
     `;
   }).join("");
+  list.querySelectorAll("button[data-report-message]").forEach((btn) => {
+    btn.addEventListener("click", () => reportChatMessage(parseInt(btn.getAttribute("data-report-message"), 10)));
+  });
   list.scrollTop = list.scrollHeight;
 }
 
@@ -286,12 +318,19 @@ function updateAdminPwMatchHint() {
 }
 $("admin-add-pw-confirm").addEventListener("input", updateAdminPwMatchHint);
 
-function setAuthState(json) {
+function setAuthState(json, showLoginHero = false) {
   currentUser = json.username || null;
   currentRole = json.role || "user";
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
   $("success-screen").classList.add("show");
+  const loginHero = $("login-success-hero");
+  if (loginHero) {
+    loginHero.classList.toggle("show", !!showLoginHero);
+    if (showLoginHero) {
+      setTimeout(() => loginHero.classList.remove("show"), 2800);
+    }
+  }
   $("me-user").textContent = sanitize(currentUser || "-");
   $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
   $("me-nickname").textContent = sanitize(json.nickname || "-");
@@ -319,11 +358,19 @@ function setAuthState(json) {
   const addPanel = $("admin-manager-view");
   if (addPanel) addPanel.style.display = canManageUsers ? "block" : "none";
 
-  // Super admin: show settings tab + system tools
-  const settingsTab = $("tab-settings");
+  // Module access controls
+  const tabModuleAccounts = $("tab-module-accounts");
+  const tabModuleServer = $("tab-module-server");
+  const tabModuleChat = $("tab-module-chat");
+  const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
-  if (settingsTab) settingsTab.style.display = currentRole === "super_admin" ? "" : "none";
+  const reportsTab = $("tab-reports");
+  if (tabModuleAccounts) tabModuleAccounts.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
+  if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
+  if (tabModuleChat) tabModuleChat.style.display = "";
+  if (tabModuleAppeals) tabModuleAppeals.style.display = currentRole === "super_admin" ? "none" : "";
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
+  if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentRole === "super_admin" ? "" : "none";
 
@@ -337,10 +384,8 @@ function setAuthState(json) {
   if (currentRole !== "super_admin") {
     loadUserAppeals();
   }
-  const appealWrap = $("user-appeal-wrap");
-  if (appealWrap) {
-    appealWrap.style.display = currentRole === "super_admin" ? "none" : "";
-  }
+  switchModuleTab(currentRole === "user" ? "chat" : "accounts");
+  resetInactivityTimer();
 }
 
 function resetAuthState() {
@@ -348,6 +393,7 @@ function resetAuthState() {
   currentRole = "user";
   canManageUsers = false;
   users = [];
+  stopInactivityTimer();
   stopChatPoll();
   hideUserEditDialog();
   $("success-screen").classList.remove("show");
@@ -357,13 +403,18 @@ function resetAuthState() {
     welcomeMsg.textContent = "歡迎回來！";
   }
   $("admin-wrap").className = "admin-wrap";
+  const moduleChat = $("module-chat");
+  const moduleAccounts = $("module-accounts");
+  const moduleServer = $("module-server");
+  const moduleAppeals = $("module-appeals");
+  if (moduleChat) moduleChat.classList.remove("active");
+  if (moduleAccounts) moduleAccounts.classList.remove("active");
+  if (moduleServer) moduleServer.classList.remove("active");
+  if (moduleAppeals) moduleAppeals.classList.remove("active");
   $("me-user").textContent = "-";
   $("me-role").textContent = "-";
   $("me-nickname").textContent = "-";
   $("auth-card").style.display = "";
-  if ($("user-appeal-wrap")) {
-    $("user-appeal-wrap").style.display = "none";
-  }
   selectedChatRoomId = null;
   chatRooms = [];
   const chatWarn = $("chat-room-warn");
@@ -431,6 +482,19 @@ function renderUsers() {
       violBtn.style.color = violCount > 0 ? "#ff4f6d" : "#888";
       violBtn.addEventListener("click", () => addViolation(u.id));
       actionButtons.push(violBtn);
+      if (currentRole === "super_admin") {
+        const detailBtn = document.createElement("button");
+        detailBtn.className = "btn";
+        detailBtn.type = "button";
+        detailBtn.textContent = "明細";
+        detailBtn.title = "查看違規原因";
+        detailBtn.style.color = "#82b1ff";
+        detailBtn.addEventListener("click", () => {
+          switchAdminTab("violations");
+          loadViolations(0, u.username);
+        });
+        actionButtons.push(detailBtn);
+      }
       if (violCount > 0) {
         const resetBtn = document.createElement("button");
         resetBtn.className = "btn";
@@ -589,28 +653,41 @@ async function loadChatMessages(roomId, silent = false) {
 
 async function createChatRoom() {
   const name = ($("chat-room-name")?.value || "").trim();
+  const targetUser = ($("chat-room-target-user")?.value || "").trim();
+
   if (!name) {
     setChatMsg("chat-room-warn", "請輸入聊天室名稱", false);
     return;
   }
+  if (targetUser && targetUser === currentUser) {
+    setChatMsg("chat-room-warn", "不能指定自己為對象", false);
+    return;
+  }
+
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await fetch(API + "/chat/rooms", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ name })
+    body: JSON.stringify({ name, target_user: targetUser || null })
   });
-  const json = await res.json().catch(() => ({}));
-  if (json && json.ok) {
+  const raw = await res.text().catch(() => "");
+  const json = (() => {
+    try { return raw ? JSON.parse(raw) : {}; } catch (_) { return {}; }
+  })();
+  if (res.ok && json && json.ok) {
     $("chat-room-name").value = "";
+    if ($("chat-room-target-user")) $("chat-room-target-user").value = "";
     await loadChatRooms();
     if (json.room && json.room.id) {
       await openChatRoom(json.room.id, true);
-      setChatMsg("chat-room-warn", "聊天室建立完成", true);
+      const inviteInfo = json.room.target_username ? `（邀請 ${sanitize(json.room.target_username)}）` : "";
+      setChatMsg("chat-room-warn", `聊天室建立完成${inviteInfo}`, true);
     }
   } else {
-    setChatMsg("chat-room-warn", json.msg || "建立聊天室失敗", false);
+    const fallback = (raw || "").split("\n")[0].trim();
+    setChatMsg("chat-room-warn", `${res.ok ? "建立聊天室失敗" : "建立聊天室失敗（" + res.status + "）"} ${json.msg || fallback || "請稍後再試"}`, false);
   }
 }
 
@@ -627,8 +704,11 @@ async function joinChatRoom() {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" }
   });
-  const json = await res.json().catch(() => ({}));
-  if (json && json.ok) {
+  const raw = await res.text().catch(() => "");
+  const json = (() => {
+    try { return raw ? JSON.parse(raw) : {}; } catch (_) { return {}; }
+  })();
+  if (res.ok && json && json.ok) {
     if ($("chat-join-room-id")) $("chat-join-room-id").value = "";
     const roomExists = chatRooms.find((r) => r.id === roomId);
     await loadChatRooms();
@@ -639,7 +719,8 @@ async function joinChatRoom() {
     }
     setChatMsg("chat-room-warn", "已加入聊天室", true);
   } else {
-    setChatMsg("chat-room-warn", json.msg || "加入聊天室失敗", false);
+    const fallback = (raw || "").split("\n")[0].trim();
+    setChatMsg("chat-room-warn", `${res.ok ? "加入聊天室失敗" : "加入聊天室失敗（" + res.status + "）"} ${json.msg || fallback || "請稍後再試"}`, false);
   }
 }
 
@@ -680,7 +761,36 @@ async function sendChatMessage() {
 
   const reason = json.reason ? ` [${json.reason}]` : "";
   const suffix = json.violation_count ? `（違規計次：${json.violation_count}）` : "";
-  setChatMsg("chat-room-warn", `${json.msg || "發送失敗"}${reason}${suffix}`, false);
+  const message = `${json.msg || "發送失敗"}${reason}${suffix}`;
+  setChatMsg("chat-room-warn", message, false);
+  if (json.warned || json.reason || json.violation_count) {
+    alert(message);
+  }
+}
+
+async function reportChatMessage(messageId) {
+  if (!messageId) return;
+  const reason = prompt("請輸入檢舉原因（200 字內）：", "違規留言");
+  if (reason === null) return;
+  const cleanReason = reason.trim();
+  if (!cleanReason) {
+    setChatMsg("chat-room-warn", "請填寫檢舉原因", false);
+    return;
+  }
+  if (cleanReason.length > 200) {
+    setChatMsg("chat-room-warn", "檢舉原因請控制在 200 字以內", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/messages/${messageId}/report`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ reason: cleanReason })
+  });
+  const json = await res.json().catch(() => ({}));
+  setChatMsg("chat-room-warn", json.msg || (json.ok ? "檢舉已送出" : "檢舉失敗"), !!json.ok);
 }
 
 function appealCountdownText(totalSeconds) {
@@ -700,56 +810,79 @@ async function loadUserAppeals() {
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    const summaryEl = $("appeal-summary");
+    if (summaryEl) summaryEl.textContent = json.msg || "申覆資料讀取失敗";
+    return;
+  }
 
   userAppeals = Array.isArray(json.appeals) ? json.appeals : [];
+  const violations = Array.isArray(json.violations) ? json.violations : [];
+  const activeViolations = violations.filter(v => !v.is_resolved);
+  const resolvedViolations = violations.filter(v => v.is_resolved);
   const summaryEl = $("appeal-summary");
-  const latest = json.latest_violation || null;
   if (summaryEl) {
-    if (!latest) {
+    const appealableCount = activeViolations.filter(v => v.can_appeal).length;
+    const currentPoints = parseInt(json.violation_count || 0, 10);
+    if (!activeViolations.length) {
       summaryEl.textContent = "目前無可申覆違規記錄";
-    } else if (!json.can_appeal) {
-      const remaining = parseInt(json.remaining_seconds || 0, 10);
-      if (remaining <= 0) {
-        summaryEl.textContent = "申覆時限已超過（24 小時）";
-      } else {
-        summaryEl.textContent = `有可申覆違規，剩餘時間：${appealCountdownText(remaining)}`;
-      }
+    } else if (appealableCount > 0) {
+      summaryEl.textContent = `目前違規點數 ${currentPoints}，共有 ${activeViolations.length} 筆有效違規，其中 ${appealableCount} 筆仍可逐條申覆`;
     } else {
-      summaryEl.textContent = "可在剩餘時間內提交申覆；點擊下方提交申覆。";
+      summaryEl.textContent = `目前違規點數 ${currentPoints}，共有 ${activeViolations.length} 筆有效違規，目前沒有可提交的新申覆`;
     }
   }
 
   const listEl = $("appeal-entries");
   if (!listEl) return;
-  if (!userAppeals.length) {
-    listEl.innerHTML = "<p style='color:var(--muted);'>尚無申覆記錄</p>";
+  if (!violations.length) {
+    listEl.innerHTML = "<p style='color:var(--muted);'>尚無違規記錄</p>";
     return;
   }
-  listEl.innerHTML = userAppeals.map(a => {
-    const statusText = {
-      pending: "待審",
-      approved: "已核准",
-      rejected: "駁回"
-    };
-    const color = a.status === "approved" ? "#4caf50" : a.status === "rejected" ? "#ff4f6d" : "#ffb74d";
+  const statusText = {
+    pending: "待審",
+    approved: "已核准",
+    rejected: "駁回"
+  };
+  function renderAppealViolation(v) {
+    const appeal = v.appeal || null;
+    const status = appeal ? appeal.status : "";
+    const color = status === "approved" ? "#4caf50" : status === "rejected" ? "#ff4f6d" : "#ffb74d";
+    const remaining = parseInt(v.remaining_seconds || 0, 10);
+    const canAppeal = !!v.can_appeal;
+    const appealStatus = appeal
+      ? `<div style="color:${color};">申覆狀態：${statusText[status] || status}${appeal.review_note ? ` · 備註：${sanitize(appeal.review_note || "")}` : ""}</div>`
+      : canAppeal
+        ? `<div style="color:#82b1ff;">剩餘申覆時間：${appealCountdownText(remaining)}</div>`
+        : `<div style="color:var(--muted);">不可申覆或已超過 24 小時</div>`;
+    const controls = canAppeal
+      ? `<textarea data-appeal-reason="${v.id}" rows="2" maxlength="200" placeholder="針對違規 #${v.id} 填寫申覆原因" style="margin-top:.45rem;"></textarea>
+         <button class="btn btn-primary" type="button" data-appeal-submit="${v.id}" style="margin-top:.35rem;width:auto;padding:.45rem .75rem;">提交這筆申覆</button>`
+      : "";
     return `
-      <div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
-        <div><span style="color:${color};">[${statusText[a.status] || a.status}]</span> 違規 #${a.latest_violation_id || "-"}</div>
-        <div style="color:#888;font-size:.7rem;">${sanitize(a.created_at || "")} · 懲罰 ${a.penalty_points || 0} 點</div>
-        <div>原因：${sanitize(a.reason || "")}</div>
-        ${a.review_note ? `<div style="color:#bbb;">備註：${sanitize(a.review_note || "")}</div>` : ""}
+      <div style="border-bottom:1px solid #222;padding:.55rem .25rem;word-break:break-all;">
+        <div><strong>違規 #${v.id}</strong> · ${sanitize(v.created_at || "")} · 懲罰 ${v.points || 0} 點</div>
+        <div style="color:#ff8a80;">違規原因：${sanitize(v.reason || "")}</div>
+        ${appealStatus}
+        ${controls}
       </div>
     `;
-  }).join("");
-  const submitBtn = $("appeal-submit-btn");
-  if (submitBtn) submitBtn.disabled = !json.can_appeal;
-  const submitReason = $("appeal-reason");
-  if (submitReason) submitReason.disabled = !json.can_appeal;
+  }
+  const activeHtml = activeViolations.length
+    ? `<div style="color:var(--muted);font-size:.75rem;margin:.25rem 0;">目前有效違規</div>${activeViolations.map(renderAppealViolation).join("")}`
+    : "<p style='color:var(--muted);'>目前無有效違規</p>";
+  const historyHtml = resolvedViolations.length
+    ? `<div style="color:var(--muted);font-size:.75rem;margin:.75rem 0 .25rem;">已撤銷歷史</div>${resolvedViolations.map(renderAppealViolation).join("")}`
+    : "";
+  listEl.innerHTML = activeHtml + historyHtml;
+  listEl.querySelectorAll("button[data-appeal-submit]").forEach((btn) => {
+    btn.addEventListener("click", () => submitAppeal(parseInt(btn.getAttribute("data-appeal-submit"), 10)));
+  });
 }
 
-async function submitAppeal() {
-  const reason = ($("appeal-reason")?.value || "").trim();
+async function submitAppeal(violationId) {
+  const reasonEl = document.querySelector(`textarea[data-appeal-reason="${violationId}"]`);
+  const reason = (reasonEl?.value || "").trim();
   if (!reason) {
     flash($("appeal-msg"), "請填寫申覆原因", false);
     return;
@@ -764,11 +897,11 @@ async function submitAppeal() {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ violation_id: violationId, reason })
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
-    if ($("appeal-reason")) $("appeal-reason").value = "";
+    if (reasonEl) reasonEl.value = "";
     flash($("appeal-msg"), json.msg || "申覆已提交", true);
     await loadUserAppeals();
   } else {
@@ -849,6 +982,77 @@ async function reviewAppeal(appealId, action) {
   }
 }
 
+async function loadAdminReports(page = 0, status = null) {
+  if (!currentUser || currentRole !== "super_admin") return;
+  const targetStatus = status || adminReportStatus;
+  adminReportStatus = targetStatus;
+  const targetPage = Math.max(0, parseInt(page || 0, 10));
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/message-reports?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=30", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+
+  adminReportPage = targetPage;
+  adminReports = Array.isArray(json.items) ? json.items : [];
+  if ($("admin-reports-total")) $("admin-reports-total").textContent = json.total || 0;
+  const list = $("admin-report-list");
+  if (!list) return;
+  if (!adminReports.length) {
+    list.innerHTML = "<p style='color:var(--muted);'>目前沒有符合條件的訊息檢舉</p>";
+  } else {
+    list.innerHTML = adminReports.map(r => {
+      const action = r.status === "pending"
+        ? `<div style="margin-top:.4rem;display:flex;gap:.4rem;">
+            <button class="btn" data-report-action="approve" data-report-id="${r.id}" style="background:#1f9d57;color:#fff;border:1px solid #1f9d57;">核准計點</button>
+            <button class="btn" data-report-action="reject" data-report-id="${r.id}" style="background:#ff5252;color:#fff;border:1px solid #ff5252;">駁回</button>
+          </div>`
+        : "";
+      return `
+        <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
+          <div><strong>檢舉 #${r.id}</strong> · 訊息 #${r.message_id} · room #${r.room_id}</div>
+          <div style="color:#aaa;font-size:.7rem;">${sanitize(r.created_at || "")} · 檢舉者：${sanitize(r.reporter_username || "")} · 被檢舉：${sanitize(r.reported_username || "")}</div>
+          <div style="color:#ff8a80;">訊息：${sanitize(r.content || "")}</div>
+          <div>檢舉原因：${sanitize(r.reason || "")}</div>
+          ${r.review_note ? `<div style="color:#bbb;">備註：${sanitize(r.review_note || "")}</div>` : ""}
+          ${action}
+        </div>
+      `;
+    }).join("");
+    list.querySelectorAll("button[data-report-id]").forEach((btn) => {
+      btn.addEventListener("click", () => reviewMessageReport(
+        parseInt(btn.getAttribute("data-report-id"), 10),
+        btn.getAttribute("data-report-action")
+      ));
+    });
+  }
+  if ($("admin-reports-prev")) $("admin-reports-prev").disabled = targetPage <= 0;
+  if ($("admin-reports-next")) $("admin-reports-next").disabled = ((targetPage + 1) * 30) >= (json.total || 0);
+}
+
+async function reviewMessageReport(reportId, action) {
+  if (!currentUser || currentRole !== "super_admin") return;
+  const note = prompt("審核備註（非必填）", "");
+  if (note === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/message-reports/" + reportId + "/review", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action, note: (note || "").trim() })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    await Promise.all([loadAdminReports(adminReportPage, adminReportStatus), loadUsers()]);
+  } else {
+    alert(json.msg || "審核失敗");
+  }
+}
+
 async function doLogin() {
   const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
@@ -882,8 +1086,8 @@ async function doLogin() {
     _csrfToken = null;
     const meRes = await fetch(API + "/me", { credentials: "same-origin" });
     const me = await meRes.json();
-    if (me.ok) setAuthState(me);
-    else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" });
+    if (me.ok) setAuthState(me, true);
+    else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
   } catch (e) {
     flash($("li-msg"), "網路錯誤，請稍後再試", false);
   } finally {
@@ -1213,22 +1417,62 @@ async function demoteUser(userId, username, currentRole) {
   }
 }
 
-// ── Admin tab switching ─────────────────────────────────────
-let currentTab = "users";
-function switchTab(tab) {
-  currentTab = tab;
-  ["users","audit","violations","appeals","settings"].forEach(t => {
+// ── Module / admin tab switching ─────────────────────────────────────
+let currentAdminTab = "users";
+function switchModuleTab(tab) {
+  const canAccessAccounts = currentRole === "manager" || currentRole === "super_admin";
+  const canAccessServer = currentRole === "super_admin";
+  const canAccessAppeals = currentRole !== "super_admin";
+
+  let normTab = tab;
+  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessAppeals ? "appeals" : "chat";
+  if (tab === "server" && !canAccessServer) normTab = canAccessAppeals ? "appeals" : "chat";
+  if (tab === "appeals" && !canAccessAppeals) normTab = "chat";
+
+  currentModuleTab = normTab;
+  const modChat = $("module-chat");
+  const modAccounts = $("module-accounts");
+  const modServer = $("module-server");
+  const modAppeals = $("module-appeals");
+  const mChat = $("tab-module-chat");
+  const mAccounts = $("tab-module-accounts");
+  const mServer = $("tab-module-server");
+  const mAppeals = $("tab-module-appeals");
+
+  if (modChat) modChat.classList.toggle("active", normTab === "chat");
+  if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
+  if (modServer) modServer.classList.toggle("active", normTab === "server");
+  if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
+  if (mChat) mChat.classList.toggle("active", normTab === "chat");
+  if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
+  if (mServer) mServer.classList.toggle("active", normTab === "server");
+  if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
+
+  if (normTab === "server" && canAccessServer) {
+    loadSettings();
+  }
+  if (normTab === "appeals" && canAccessAppeals) {
+    loadUserAppeals();
+  }
+  if (normTab === "accounts" && canAccessAccounts && currentAdminTab) {
+    if (!$("sec-" + currentAdminTab)) switchAdminTab("users");
+  }
+}
+
+function switchAdminTab(tab) {
+  currentAdminTab = tab;
+  ["users","audit","violations","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-audit","tab-violations","tab-appeals","tab-settings"].forEach(id => {
+  ["tab-users","tab-audit","tab-violations","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
   if (tab === "audit") loadAudit(0);
   if (tab === "violations") loadViolations(0);
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
-  if (tab === "settings") loadSettings();
+  if (tab === "reports") loadAdminReports(0, adminReportStatus);
 }
 
 // ── Audit log ───────────────────────────────────────────────
@@ -1253,6 +1497,9 @@ async function loadAudit(page) {
     integEl.textContent = chainOk ? "🔗 鏈完整" : "⚠️ 鏈已斷！";
     integEl.style.color = chainOk ? "#4caf50" : "#ff4f6d";
   }
+  if (currentRole === "super_admin" && integrity && integrity.ok === false && integrity.broken_at) {
+    alert(`審計紀錄異常：hash chain 在 #${integrity.broken_at} 斷裂，請立即檢查。`);
+  }
   const container = $("audit-entries");
   if (!container) return;
   if (!json.entries || json.entries.length === 0) {
@@ -1264,10 +1511,19 @@ async function loadAudit(page) {
     const ts = isObj ? e.timestamp || "" : "";
     const action = isObj ? e.action || "" : e;
     const actor = isObj ? e.actor || "" : "";
-    const detail = isObj && e.details ? JSON.stringify(e.details) : "";
+    const detail = isObj && e.details ? (typeof e.details === "string" ? e.details : JSON.stringify(e.details)) : "";
     const chain = isObj && e._chain_hash ? `<span style="color:#4caf50;">█</span>` : "·";
-    return `<div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
+    const isBroken = integrity && integrity.broken_at && Number(e.id) === Number(integrity.broken_at);
+    const isFailure = isObj && e.success === false;
+    const rowStyle = isBroken
+      ? "background:rgba(255,79,109,.22);border:1px solid rgba(255,79,109,.45);"
+      : isFailure
+        ? "background:rgba(255,79,109,.08);"
+        : "";
+    const badge = isBroken ? `<span style="color:#ff4f6d;font-weight:bold;">審計異常</span> ` : "";
+    return `<div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;${rowStyle}">
       <span style="color:#888;">${ts}</span> ${chain}
+      ${badge}
       <span style="color:#e0e0e0;">${sanitize(action)}</span>
       ${actor ? `<span style="color:#82b1ff;"> by ${sanitize(actor)}</span>` : ""}
       ${detail ? `<span style="color:#888;font-size:.68rem;"> ${sanitize(detail)}</span>` : ""}
@@ -1298,8 +1554,10 @@ async function loadViolations(page, username) {
   $("violations-total").textContent = json.total || 0;
   const integEl = $("violations-integrity");
   if (integEl) {
-    integEl.textContent = json.integrity === true ? "🔗 鏈完整" : json.integrity === false ? "⚠️ 鏈已斷！" : "";
-    integEl.style.color = json.integrity === true ? "#4caf50" : json.integrity === false ? "#ff4f6d" : "var(--muted)";
+    const chainOk = json.integrity === true || (json.integrity && json.integrity.ok === true);
+    const chainBad = json.integrity === false || (json.integrity && json.integrity.ok === false);
+    integEl.textContent = chainOk ? "🔗 鏈完整" : chainBad ? "⚠️ 鏈已斷！" : "";
+    integEl.style.color = chainOk ? "#4caf50" : chainBad ? "#ff4f6d" : "var(--muted)";
   }
 
   // User pills
@@ -1348,11 +1606,15 @@ async function loadViolations(page, username) {
     const isObj = typeof e === "object";
     const ts = isObj ? e.timestamp || "" : "";
     const reason = isObj ? e.reason || "" : String(e);
+    const username = isObj ? e.username || "" : "";
     const actor = isObj ? e.actor || "" : "";
+    const points = isObj ? e.points || 0 : 0;
     const chain = isObj && e._chain_hash ? `<span style="color:#4caf50;">█</span>` : "·";
     return `<div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
       <span style="color:#888;">${ts}</span> ${chain}
+      ${username ? `<span style="color:#e0e0e0;">${sanitize(username)}</span>` : ""}
       <span style="color:#ff8a80;">${sanitize(reason)}</span>
+      ${points ? `<span style="color:#bbb;"> +${points}</span>` : ""}
       ${actor ? `<span style="color:#82b1ff;"> by ${sanitize(actor)}</span>` : ""}
     </div>`;
   }).join("");
@@ -1414,6 +1676,59 @@ async function loadSettings() {
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_fail || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
+  loadServerHealth();
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadServerHealth() {
+  if (!currentUser || currentRole !== "super_admin") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/health", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  const summary = $("server-health-summary");
+  const details = $("server-health-details");
+  if (!summary || !details) return;
+  if (!json.ok) {
+    summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "健康度讀取失敗")}</div>`;
+    details.textContent = "";
+    return;
+  }
+  const c = json.counts || {};
+  const s = json.storage || {};
+  const auditOk = json.audit_integrity && json.audit_integrity.ok;
+  const cards = [
+    ["整體狀態", json.status === "ok" ? "正常" : "異常", json.status === "ok" ? "#4caf50" : "#ff4f6d"],
+    ["維護模式", json.maintenance_mode ? "啟用" : "關閉", json.maintenance_mode ? "#ff4f6d" : "#4caf50"],
+    ["審計鏈", auditOk ? "完整" : "異常", auditOk ? "#4caf50" : "#ff4f6d"],
+    ["待審檢舉", String(c.pending_reports || 0), (c.pending_reports || 0) ? "#ffb74d" : "#4caf50"],
+    ["待審申覆", String(c.pending_appeals || 0), (c.pending_appeals || 0) ? "#ffb74d" : "#4caf50"],
+    ["活躍 Session", String(c.active_sessions || 0), "#82b1ff"],
+    ["聊天訊息", String(c.chat_messages || 0), "#82b1ff"],
+    ["資料庫大小", formatBytes(s.database_bytes), "#82b1ff"],
+  ];
+  summary.innerHTML = cards.map(([label, value, color]) => `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
+      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
+      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;">${sanitize(value)}</div>
+    </div>
+  `).join("");
+  details.innerHTML = `
+    使用者：${c.active_users || 0}/${c.users_total || 0} active ·
+    違規紀錄：${c.violations_total || 0} ·
+    審計紀錄：${c.audit_entries || 0} ·
+    聊天檔案：${s.chat_files || 0} 個 / ${formatBytes(s.chat_bytes)} ·
+    ${json.audit_integrity && json.audit_integrity.details ? sanitize(json.audit_integrity.details) : ""}
+  `;
 }
 
 async function saveSettings() {
@@ -1461,11 +1776,15 @@ async function restartServer() {
 function bindUiEvents() {
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
+  const tabModuleChat = $("tab-module-chat");
+  const tabModuleAccounts = $("tab-module-accounts");
+  const tabModuleServer = $("tab-module-server");
+  const tabModuleAppeals = $("tab-module-appeals");
   const tabUsers    = $("tab-users");
   const tabAudit    = $("tab-audit");
   const tabViol     = $("tab-violations");
   const tabAppeals  = $("tab-appeals");
-  const tabSettings = $("tab-settings");
+  const tabReports  = $("tab-reports");
   const liBtn       = $("li-btn");
   const regBtn      = $("reg-btn");
   const logoutBtn   = $("logout-btn");
@@ -1475,7 +1794,9 @@ function bindUiEvents() {
   const violRefresh  = $("violations-refresh");
   const appealSubmit = $("appeal-submit-btn");
   const appealRefresh = $("appeal-refresh-btn");
+  const reportRefresh = $("admin-reports-refresh");
   const settingsSave = $("settings-save-btn");
+  const healthRefresh = $("health-refresh-btn");
   const restartBtn   = $("restart-server-btn");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
@@ -1489,11 +1810,15 @@ function bindUiEvents() {
 
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
-  if (tabUsers)    tabUsers.addEventListener("click",    () => switchTab("users"));
-  if (tabAudit)    tabAudit.addEventListener("click",    () => switchTab("audit"));
-  if (tabViol)     tabViol.addEventListener("click",     () => switchTab("violations"));
-  if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchTab("appeals"));
-  if (tabSettings) tabSettings.addEventListener("click", () => switchTab("settings"));
+  if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
+  if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
+  if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
+  if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
+  if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
+  if (tabAudit)    tabAudit.addEventListener("click",    () => switchAdminTab("audit"));
+  if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
+  if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
+  if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
@@ -1537,6 +1862,13 @@ function bindUiEvents() {
   if ($("admin-appeals-prev")) $("admin-appeals-prev").addEventListener("click", () => loadAdminAppeals(Math.max(1, adminAppealPage - 1), adminAppealStatus));
   if ($("admin-appeals-next")) $("admin-appeals-next").addEventListener("click", () => loadAdminAppeals(adminAppealPage + 1, adminAppealStatus));
   if ($("admin-appeals-refresh")) $("admin-appeals-refresh").addEventListener("click", () => loadAdminAppeals(adminAppealPage, adminAppealStatus));
+  if ($("admin-report-status")) $("admin-report-status").addEventListener("change", (e) => {
+    adminReportStatus = e?.target?.value || "pending";
+    loadAdminReports(0, adminReportStatus);
+  });
+  if ($("admin-reports-prev")) $("admin-reports-prev").addEventListener("click", () => loadAdminReports(Math.max(0, adminReportPage - 1), adminReportStatus));
+  if ($("admin-reports-next")) $("admin-reports-next").addEventListener("click", () => loadAdminReports(adminReportPage + 1, adminReportStatus));
+  if (reportRefresh) reportRefresh.addEventListener("click", () => loadAdminReports(adminReportPage, adminReportStatus));
 
   // Violations
   if (violRefresh) violRefresh.addEventListener("click", () => loadViolations(violationsPage, violationTargetUser));
@@ -1545,6 +1877,7 @@ function bindUiEvents() {
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
 }
 
@@ -1557,6 +1890,7 @@ $("reg-pw").addEventListener("keydown", (e) => {
 
 (async function init() {
   startClock();
+  setupInactivityTracking();
   _csrfToken = readCookie("csrf_token");
   bindUiEvents();
   // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死
