@@ -6,6 +6,7 @@ database/database.db.bak
 .fail_log.json
 .rate_limit.json
 .attack_log.json
+.chain_seed
 .fkey
 .csrfkey
 SECURITY.md
