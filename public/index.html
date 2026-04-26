@@ -123,6 +123,46 @@
 
   <button class="btn" id="logout-btn">登出</button>
 
+  <div class="admin-tools" id="chat-section" style="margin-top: .95rem; text-align: left;">
+    <div class="mini-title">💬 即時聊天室</div>
+    <div class="chat-toolbar">
+      <div class="chat-room-create">
+        <input type="text" id="chat-room-name" placeholder="聊天室名稱（最多 48 字）" maxlength="48" />
+        <button class="btn btn-primary" id="chat-create-room-btn" type="button">建立聊天室</button>
+      </div>
+      <div class="chat-room-join">
+        <input type="number" id="chat-join-room-id" placeholder="聊天室 ID" min="1" />
+        <button class="btn" id="chat-join-room-btn" type="button">加入聊天室</button>
+      </div>
+      <div class="chat-refresh-wrap">
+        <button class="btn" id="chat-room-refresh-btn" type="button">重新整理聊天室</button>
+      </div>
+    </div>
+
+    <div class="chat-layout">
+      <div class="chat-room-list-wrap">
+        <div class="mini-title">我的聊天室</div>
+        <div id="chat-room-list"></div>
+      </div>
+
+      <div class="chat-room-main">
+        <div class="chat-room-header">
+          <strong id="chat-room-title">請先建立或加入聊天室</strong>
+          <span id="chat-room-member" style="font-size:.75rem;color:var(--muted);"></span>
+        </div>
+        <div id="chat-room-messages" class="chat-room-messages"></div>
+        <div id="chat-room-warn" class="msg" style="margin-top: .55rem;"></div>
+        <div class="chat-composer">
+          <textarea id="chat-message-input" rows="2" maxlength="500" placeholder="輸入訊息，最多 500 字"></textarea>
+          <button class="btn btn-primary" id="chat-send-btn" type="button">送出</button>
+        </div>
+        <div class="chat-composer-actions">
+          <button class="btn" id="chat-refresh-msg-btn" type="button">重新整理訊息</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="admin-wrap" id="admin-wrap">
     <!-- Tabs -->
     <div class="tabs" style="margin-bottom:.6rem;">

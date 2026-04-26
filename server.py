@@ -754,6 +754,12 @@ MAX_MANAGERS    = 5
 MAX_VIOLATIONS  = {"manager": 3, "user": 5}
 MAX_LOGIN_FAILS_FOR_VIOLATION = 5  # 登入失敗幾次後計點
 VIOLATION_APPEAL_WINDOW_HOURS = 24
+CHAT_MESSAGE_MAX_LEN = 500
+CHAT_WARNING_CATEGORY_WORDS = {
+    "色情": ["色情", "性", "性行為", "裸體", "裸照", "porn", "pornhub", "xvideos", "sex"],
+    "血腥": ["血腥", "血", "暴力", "殺", "殺人", "刀", "槍", "肢解", "gore"],
+    "自殺": ["自殺", "suicide", "想死", "死亡", "自殘", "我不想活", "結束生命"]
+}
 
 # ── System settings (可被超級管理者修改) ───────────────────────────────────
 SETTINGS_FILE = os.path.join(BASE_DIR, "system_settings.json")
@@ -831,6 +837,18 @@ def add_violation(user_id, username, role, points=1, reason="手動計點", trig
 def normalize_text(v):
     return (v or "").strip() if isinstance(v, str) else ""
 
+def detect_chat_violation(text):
+    if not isinstance(text, str):
+        return False, None
+    normalized = text.lower()
+    for label, keys in CHAT_WARNING_CATEGORY_WORDS.items():
+        for keyword in keys:
+            if not keyword:
+                continue
+            if keyword.lower() in normalized:
+                return True, label
+    return False, None
+
 def parse_birthdate(v):
     if not v:
         return None
@@ -860,6 +878,21 @@ def parse_positive_int(v, default=None, min_value=1, max_value=None):
         return None
     return value
 
+
+def get_request_csrf_token():
+    token = request.headers.get("X-CSRF-Token", "") or ""
+    if not isinstance(token, str):
+        token = ""
+    if token:
+        return token
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        if isinstance(body, dict):
+            req_token = body.get("csrf_token", "")
+            if isinstance(req_token, str):
+                return req_token
+    return ""
+
 def validate_id_number(v):
     if not isinstance(v, str):
         return False
@@ -880,7 +913,7 @@ def get_user_by_username(username):
     conn = get_db()
     try:
         return conn.execute(
-            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until "
+            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -913,6 +946,7 @@ def user_public_payload(row):
         "role_label": ROLE_LABEL.get(row["role"], row["role"]),
         "blocked_until": row["blocked_until"],
         "violation_count": dict(row).get("violation_count") or 0,
+        "chat_violation_warned": dict(row).get("chat_violation_warned") or 0,
     }
 
 def ensure_user_columns(conn):
@@ -921,6 +955,7 @@ def ensure_user_columns(conn):
         ("nickname", "ALTER TABLE users ADD COLUMN nickname TEXT"),
         ("blocked_until", "ALTER TABLE users ADD COLUMN blocked_until TEXT"),
         ("violation_count", "ALTER TABLE users ADD COLUMN violation_count INTEGER NOT NULL DEFAULT 0"),
+        ("chat_violation_warned", "ALTER TABLE users ADD COLUMN chat_violation_warned INTEGER NOT NULL DEFAULT 0"),
     ):
         if col not in cols:
             conn.execute(ddl)
@@ -949,6 +984,7 @@ def init_db():
             blocked_until TEXT,
             status     TEXT    NOT NULL DEFAULT 'active',
             role       TEXT    NOT NULL DEFAULT 'user',
+            chat_violation_warned INTEGER NOT NULL DEFAULT 0,
             created_at TEXT    NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -986,12 +1022,42 @@ def init_db():
             expires_at   TEXT    NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS chat_rooms (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            name           TEXT    NOT NULL,
+            owner_user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            is_active      INTEGER NOT NULL DEFAULT 1,
+            created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_room_members (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id    INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            joined_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(room_id, user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id        INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+            sender_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+            content        TEXT    NOT NULL,
+            is_blocked     INTEGER NOT NULL DEFAULT 0,
+            blocked_reason TEXT,
+            created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
         CREATE INDEX IF NOT EXISTS idx_sessions_user_id     ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_login_attempts_user  ON login_attempts(user_id);
         CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    ON login_attempts(ip_address);
         CREATE INDEX IF NOT EXISTS idx_login_attempts_time  ON login_attempts(attempted_at);
         CREATE INDEX IF NOT EXISTS idx_csrf_token_hash      ON csrf_tokens(token_hash);
+        CREATE INDEX IF NOT EXISTS idx_chat_room_members_room ON chat_room_members(room_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_room_members_user ON chat_room_members(user_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_at);
 
         /* ── 防竄改審計日誌（hash chain）─── */
         CREATE TABLE IF NOT EXISTS secure_audit (
@@ -1476,7 +1542,211 @@ def me():
         "status": ctx["status"],
         "nickname": decrypt_field(ctx["nickname"]),
         "birthdate": decrypt_field(ctx["birthdate"]),
+        "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
     })
+
+@app.route("/api/chat/rooms", methods=["GET", "POST"])
+@require_csrf_safe
+def chat_rooms():
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    ip = get_client_ip()
+    urow_id = actor["id"]
+
+    if request.method == "GET":
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT r.id, r.name, r.owner_user_id, r.created_at, u.username AS owner_username "
+                "FROM chat_rooms r "
+                "LEFT JOIN users u ON u.id = r.owner_user_id "
+                "INNER JOIN chat_room_members m ON m.room_id = r.id "
+                "WHERE m.user_id = ? "
+                "ORDER BY r.created_at DESC",
+                (urow_id,)
+            ).fetchall()
+            return json_resp({
+                "ok": True,
+                "rooms": [
+                    {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "owner_user_id": r["owner_user_id"],
+                        "owner_username": r["owner_username"] or "未知",
+                        "created_at": r["created_at"]
+                    } for r in rows
+                ]
+            })
+        finally:
+            conn.close()
+
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+    if not isinstance(data, dict):
+        return json_resp({"ok":False,"msg":"Invalid request"}), 400
+    name = normalize_text(data.get("name"))
+    if not name:
+        return json_resp({"ok":False,"msg":"聊天室名稱不可為空"}), 400
+    if len(name) > 48:
+        return json_resp({"ok":False,"msg":"聊天室名稱最多 48 字元"}), 400
+
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO chat_rooms (name, owner_user_id, created_at) VALUES (?, ?, ?)",
+            (name, urow_id, datetime.now().isoformat())
+        )
+        room_id = cur.lastrowid
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
+            (room_id, urow_id, datetime.now().isoformat())
+        )
+        conn.commit()
+        audit("CHAT_ROOM_CREATED", ip, user=actor["username"], detail=f"room_id={room_id}, name={name}")
+        return json_resp({
+            "ok": True,
+            "msg": "聊天室已建立",
+            "room": {
+                "id": room_id,
+                "name": name,
+                "owner_user_id": urow_id,
+                "owner_username": actor["username"]
+            }
+        })
+    except Exception:
+        return json_resp({"ok":False,"msg":"建立聊天室失敗"}), 500
+    finally:
+        conn.close()
+
+@app.route("/api/chat/rooms/<int:room_id>/join", methods=["POST"])
+@require_csrf
+def chat_room_join(room_id):
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+    actor_id = actor["id"]
+    conn = get_db()
+    try:
+        room = conn.execute("SELECT id, name FROM chat_rooms WHERE id=?", (room_id,)).fetchone()
+        if not room:
+            return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
+            (room_id, actor_id, datetime.now().isoformat())
+        )
+        conn.commit()
+        audit("CHAT_ROOM_JOIN", get_client_ip(), user=actor["username"], detail=f"room_id={room_id}")
+        return json_resp({"ok":True,"msg":"已加入聊天室","room":{"id":room["id"],"name":room["name"]}})
+    finally:
+        conn.close()
+
+@app.route("/api/chat/rooms/<int:room_id>/messages", methods=["GET", "POST"])
+@require_csrf_safe
+def chat_messages(room_id):
+    actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok":False,"msg":"未登入"}), 401
+
+    conn = get_db()
+    try:
+        room = conn.execute("SELECT id, name FROM chat_rooms WHERE id=?", (room_id,)).fetchone()
+        if not room:
+            return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
+
+        member = conn.execute(
+            "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+            (room_id, actor["id"])
+        ).fetchone()
+        if not member:
+            return json_resp({"ok":False,"msg":"你尚未加入此聊天室"}), 403
+
+        if request.method == "GET":
+            limit = parse_positive_int(request.args.get("limit", 50), default=50, min_value=1, max_value=200)
+            if limit is None:
+                return json_resp({"ok":False,"msg":"limit 參數錯誤"}), 400
+            rows = conn.execute(
+                "SELECT m.id, m.sender_id, u.username, m.content, m.created_at "
+                "FROM chat_messages m "
+                "LEFT JOIN users u ON u.id = m.sender_id "
+                "WHERE m.room_id = ? AND m.is_blocked = 0 "
+                "ORDER BY m.id DESC LIMIT ?",
+                (room_id, limit)
+            ).fetchall()
+            messages = [
+                {
+                    "id": r["id"],
+                    "sender_id": r["sender_id"],
+                    "sender": r["username"] or "系統",
+                    "content": r["content"],
+                    "created_at": r["created_at"]
+                } for r in reversed(rows)
+            ]
+            return json_resp({
+                "ok": True,
+                "room": {"id": room["id"], "name": room["name"]},
+                "messages": messages
+            })
+
+        csrf_tok = get_request_csrf_token()
+        if not verify_csrf_token(csrf_tok, actor["username"]):
+            return json_resp({"ok":False,"msg":"CSRF token 無效或已過期"}), 403
+        delete_csrf_token(csrf_tok)
+
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        content = (data.get("content") or "").strip()
+        if not content:
+            return json_resp({"ok":False,"msg":"訊息不可為空"}), 400
+        if len(content) > CHAT_MESSAGE_MAX_LEN:
+            return json_resp({"ok":False,"msg":f"訊息過長，最多 {CHAT_MESSAGE_MAX_LEN} 字"}), 400
+
+        is_bad, bad_reason = detect_chat_violation(content)
+        if is_bad:
+            warning_count = int(dict(actor).get("chat_violation_warned") or 0)
+            if warning_count == 0:
+                conn.execute(
+                    "UPDATE users SET chat_violation_warned = 1, updated_at=? WHERE id=?",
+                    (datetime.now().isoformat(), actor["id"])
+                )
+                conn.commit()
+                audit("CHAT_WARNING", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},reason={bad_reason}")
+                return json_resp({
+                    "ok":False,
+                    "warned":True,
+                    "reason":bad_reason,
+                    "msg":"訊息含違規內容，已警告一次，請修改後再送出"
+                }), 403
+
+            role = "super_admin" if actor["username"] == "root" else actor["role"]
+            action, msg, total = add_violation(
+                actor["id"], actor["username"], role, points=1,
+                reason=f"聊天違規：{bad_reason}", triggered_by="system", actor_username=actor["username"]
+            )
+            audit("CHAT_VIOLATION", get_client_ip(), user=actor["username"],
+                  detail=f"room_id={room_id},reason={bad_reason},action={action},total={total}")
+            return json_resp({
+                "ok":False,
+                "warned":True,
+                "reason":bad_reason,
+                "violation_count": total,
+                "msg":msg
+            }), 403
+
+        conn.execute(
+            "INSERT INTO chat_messages (room_id, sender_id, content, created_at) VALUES (?, ?, ?, ?)",
+            (room_id, actor["id"], content, datetime.now().isoformat())
+        )
+        conn.commit()
+        return json_resp({"ok":True,"msg":"訊息已送出"})
+    finally:
+        conn.close()
 
 @app.route("/api/audit", methods=["GET"])
 def api_audit():

@@ -14,6 +14,10 @@ let adminAppeals = [];
 let adminAppealPage = 1;
 let adminAppealStatus = "pending";
 const editingUserOriginal = {};
+let chatRooms = [];
+let selectedChatRoomId = null;
+let chatPollTimer = null;
+const CHAT_POLL_MS = 2500;
 
 function $(id) { return document.getElementById(id); }
 
@@ -71,6 +75,80 @@ function setUserEditMsg(text, ok) {
   if (!el) return;
   el.textContent = text;
   el.className = ok === true ? "msg show ok" : ok === false ? "msg show err" : "msg";
+}
+
+function setChatMsg(elId, text, ok) {
+  const el = $(elId);
+  if (!el) return;
+  el.textContent = text;
+  el.className = "msg show " + (ok ? "ok" : "err");
+}
+
+function stopChatPoll() {
+  if (chatPollTimer) {
+    clearInterval(chatPollTimer);
+    chatPollTimer = null;
+  }
+}
+
+function startChatPoll() {
+  stopChatPoll();
+  if (!selectedChatRoomId) return;
+  chatPollTimer = setInterval(() => {
+    loadChatMessages(selectedChatRoomId, true);
+  }, CHAT_POLL_MS);
+}
+
+function formatChatTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function renderChatRooms() {
+  const wrap = $("chat-room-list");
+  if (!wrap) return;
+  if (!chatRooms.length) {
+    wrap.innerHTML = "<p style=\"color:var(--muted);\">尚未加入任何聊天室</p>";
+    return;
+  }
+  const prevId = selectedChatRoomId;
+  wrap.innerHTML = "";
+  chatRooms.forEach((r) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chat-room-item" + (Number(prevId) === Number(r.id) ? " active" : "");
+    btn.textContent = `#${r.id} ${r.name}`;
+    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}`);
+    btn.addEventListener("click", () => openChatRoom(r.id, true));
+    wrap.appendChild(btn);
+  });
+}
+
+function renderChatMessages(messages) {
+  const list = $("chat-room-messages");
+  if (!list) return;
+  if (!messages.length) {
+    list.innerHTML = "<p style=\"color:var(--muted);\">目前還沒有訊息</p>";
+    return;
+  }
+  list.innerHTML = messages.map((m) => {
+    const isSelf = String(m.sender || "") === String(currentUser || "");
+    const cls = ["chat-msg"];
+    if (isSelf) cls.push("self");
+    return `
+      <div class="${cls.join(" ")}">
+        <span class="meta">${sanitize(formatChatTime(m.created_at))} · ${sanitize(m.sender || "系統")}</span>
+        ${sanitize(m.content || "")}
+      </div>
+    `;
+  }).join("");
+  list.scrollTop = list.scrollHeight;
 }
 
 function hideUserEditDialog() {
@@ -255,6 +333,7 @@ function setAuthState(json) {
       loadAdminAppeals();
     }
   }
+  loadChatRooms();
   if (currentRole !== "super_admin") {
     loadUserAppeals();
   }
@@ -269,6 +348,7 @@ function resetAuthState() {
   currentRole = "user";
   canManageUsers = false;
   users = [];
+  stopChatPoll();
   hideUserEditDialog();
   $("success-screen").classList.remove("show");
   const welcomeMsg = $("welcome-msg");
@@ -284,6 +364,16 @@ function resetAuthState() {
   if ($("user-appeal-wrap")) {
     $("user-appeal-wrap").style.display = "none";
   }
+  selectedChatRoomId = null;
+  chatRooms = [];
+  const chatWarn = $("chat-room-warn");
+  if (chatWarn) chatWarn.className = "msg";
+  const chatRoomList = $("chat-room-list");
+  if (chatRoomList) chatRoomList.innerHTML = "<p style=\"color:var(--muted);\">尚未登入</p>";
+  const chatRoomTitle = $("chat-room-title");
+  if (chatRoomTitle) chatRoomTitle.textContent = "請先建立或加入聊天室";
+  const chatRoomMessages = $("chat-room-messages");
+  if (chatRoomMessages) chatRoomMessages.innerHTML = "<p style=\"color:var(--muted);\">尚未登入</p>";
   userAppeals = [];
   adminAppeals = [];
   adminAppealPage = 1;
@@ -414,6 +504,183 @@ async function loadUsers() {
     canManageUsers = !!json.can_manage;
     renderUsers();
   } catch (_) {}
+}
+
+async function loadChatRooms() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await fetch(API + "/chat/rooms", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json();
+    if (!json.ok) {
+      return;
+    }
+    chatRooms = Array.isArray(json.rooms) ? json.rooms : [];
+    renderChatRooms();
+    if (selectedChatRoomId) {
+      const exists = chatRooms.some((r) => r.id === selectedChatRoomId);
+      if (!exists) {
+        selectedChatRoomId = null;
+      }
+    }
+    if (!selectedChatRoomId && chatRooms.length) {
+      await openChatRoom(chatRooms[0].id, true);
+    }
+    if (!selectedChatRoomId) {
+      const roomTitle = $("chat-room-title");
+      if (roomTitle) roomTitle.textContent = "請先建立或加入聊天室";
+      const memberLabel = $("chat-room-member");
+      if (memberLabel) memberLabel.textContent = "";
+      const msgs = $("chat-room-messages");
+      if (msgs) msgs.innerHTML = "<p style=\"color:var(--muted);\">尚未選擇聊天室</p>";
+    }
+  } catch (_) {}
+}
+
+async function openChatRoom(roomId, autoPoll = true) {
+  const id = Number(roomId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const target = chatRooms.find((r) => Number(r.id) === id);
+  if (!target) return;
+  selectedChatRoomId = id;
+  renderChatRooms();
+  const roomTitle = $("chat-room-title");
+  if (roomTitle) roomTitle.textContent = `${target.name}（#${target.id}）`;
+  const member = $("chat-room-member");
+  if (member) member.textContent = `持有者：${target.owner_username || "未知"}`;
+  await loadChatMessages(id, false);
+  if (autoPoll) startChatPoll();
+  const msgInput = $("chat-message-input");
+  if (msgInput) msgInput.focus();
+}
+
+async function loadChatMessages(roomId, silent = false) {
+  if (!roomId) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await fetch(API + `/chat/rooms/${roomId}/messages`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json();
+    if (!json.ok) {
+      if (!silent) {
+        setChatMsg("chat-room-warn", json.msg || "讀取訊息失敗", false);
+      }
+      return;
+    }
+    if (json.room && json.room.id === roomId) {
+      const title = $("chat-room-title");
+      if (title) title.textContent = `${json.room.name}（#${json.room.id}）`;
+    }
+    renderChatMessages(Array.isArray(json.messages) ? json.messages : []);
+    const warn = $("chat-room-warn");
+    if (warn) warn.className = "msg";
+  } catch (e) {
+    if (!silent) {
+      setChatMsg("chat-room-warn", "讀取訊息失敗", false);
+    }
+  }
+}
+
+async function createChatRoom() {
+  const name = ($("chat-room-name")?.value || "").trim();
+  if (!name) {
+    setChatMsg("chat-room-warn", "請輸入聊天室名稱", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/chat/rooms", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ name })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    $("chat-room-name").value = "";
+    await loadChatRooms();
+    if (json.room && json.room.id) {
+      await openChatRoom(json.room.id, true);
+      setChatMsg("chat-room-warn", "聊天室建立完成", true);
+    }
+  } else {
+    setChatMsg("chat-room-warn", json.msg || "建立聊天室失敗", false);
+  }
+}
+
+async function joinChatRoom() {
+  const roomId = Number(($("chat-join-room-id")?.value || "").trim());
+  if (!Number.isFinite(roomId) || roomId <= 0) {
+    setChatMsg("chat-room-warn", "請輸入有效的聊天室 ID", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/chat/rooms/" + roomId + "/join", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    if ($("chat-join-room-id")) $("chat-join-room-id").value = "";
+    const roomExists = chatRooms.find((r) => r.id === roomId);
+    await loadChatRooms();
+    if (roomExists) {
+      await openChatRoom(roomId, true);
+    } else if (json.room && json.room.id) {
+      await openChatRoom(json.room.id, true);
+    }
+    setChatMsg("chat-room-warn", "已加入聊天室", true);
+  } else {
+    setChatMsg("chat-room-warn", json.msg || "加入聊天室失敗", false);
+  }
+}
+
+async function sendChatMessage() {
+  if (!selectedChatRoomId) {
+    setChatMsg("chat-room-warn", "請先選擇聊天室", false);
+    return;
+  }
+  const input = $("chat-message-input");
+  const content = (input?.value || "").trim();
+  if (!content) {
+    setChatMsg("chat-room-warn", "訊息不可為空", false);
+    return;
+  }
+  if (content.length > 500) {
+    setChatMsg("chat-room-warn", "訊息過長，請少於 500 字", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/rooms/${selectedChatRoomId}/messages`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrf || ""
+    },
+    body: JSON.stringify({ content, csrf_token: csrf || "" })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    if (input) input.value = "";
+    setChatMsg("chat-room-warn", "訊息已送出", true);
+    await loadChatMessages(selectedChatRoomId, true);
+    startChatPoll();
+    return;
+  }
+
+  const reason = json.reason ? ` [${json.reason}]` : "";
+  const suffix = json.violation_count ? `（違規計次：${json.violation_count}）` : "";
+  setChatMsg("chat-room-warn", `${json.msg || "發送失敗"}${reason}${suffix}`, false);
 }
 
 function appealCountdownText(totalSeconds) {
@@ -1212,6 +1479,12 @@ function bindUiEvents() {
   const restartBtn   = $("restart-server-btn");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
+  const chatCreateBtn = $("chat-create-room-btn");
+  const chatJoinBtn = $("chat-join-room-btn");
+  const chatRefreshRoomBtn = $("chat-room-refresh-btn");
+  const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
+  const chatSendBtn = $("chat-send-btn");
+  const chatInput = $("chat-message-input");
   const userEditOverlay = $("user-edit-overlay");
 
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
@@ -1226,6 +1499,13 @@ function bindUiEvents() {
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
   if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
+  if (chatCreateBtn) chatCreateBtn.addEventListener("click", createChatRoom);
+  if (chatJoinBtn) chatJoinBtn.addEventListener("click", joinChatRoom);
+  if (chatRefreshRoomBtn) chatRefreshRoomBtn.addEventListener("click", loadChatRooms);
+  if (chatRefreshMsgBtn) chatRefreshMsgBtn.addEventListener("click", () => {
+    if (selectedChatRoomId) loadChatMessages(selectedChatRoomId, false);
+  });
+  if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (userEditOverlay) userEditOverlay.addEventListener("click", (e) => {
@@ -1234,6 +1514,12 @@ function bindUiEvents() {
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       hideUserEditDialog();
+    }
+  });
+  if (chatInput) chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      sendChatMessage();
     }
   });
 
