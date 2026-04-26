@@ -8,6 +8,12 @@ let currentUser = null;
 let currentRole = "user";
 let canManageUsers = false;
 let users = [];
+let editingUserId = null;
+let userAppeals = [];
+let adminAppeals = [];
+let adminAppealPage = 1;
+let adminAppealStatus = "pending";
+const editingUserOriginal = {};
 
 function $(id) { return document.getElementById(id); }
 
@@ -58,6 +64,41 @@ function flash(el, text, ok) {
 function clearMsg() {
   $("li-msg").className = "msg";
   $("reg-msg").className = "msg";
+}
+
+function setUserEditMsg(text, ok) {
+  const el = $("user-edit-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = ok === true ? "msg show ok" : ok === false ? "msg show err" : "msg";
+}
+
+function hideUserEditDialog() {
+  const overlay = $("user-edit-overlay");
+  if (overlay) {
+    overlay.classList.remove("show");
+  }
+  editingUserId = null;
+}
+
+function isBirthdayToday(birthdate) {
+  if (typeof birthdate !== "string") return false;
+  const normalized = birthdate.trim();
+  if (!normalized) return false;
+
+  const m = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const today = new Date();
+  return today.getMonth() + 1 === month && today.getDate() === day;
+}
+
+function setUserEditField(id, value) {
+  const el = $(id);
+  if (!el) return;
+  el.value = value || "";
 }
 
 function setLoading(btnId, spinnerId, on) {
@@ -121,6 +162,8 @@ setupPwToggle("reg-pw", "reg-pw-toggle");
 setupPwToggle("reg-pw-confirm", "reg-pw-confirm-toggle");
 setupPwToggle("admin-add-pw", "admin-add-pw-toggle");
 setupPwToggle("admin-add-pw-confirm", "admin-add-pw-confirm-toggle");
+setupPwToggle("edit-user-pw", "edit-user-pw-toggle");
+setupPwToggle("edit-user-pw-confirm", "edit-user-pw-confirm-toggle");
 
 $("reg-pw").addEventListener("input", function () {
   const v = this.value;
@@ -174,6 +217,19 @@ function setAuthState(json) {
   $("me-user").textContent = sanitize(currentUser || "-");
   $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
   $("me-nickname").textContent = sanitize(json.nickname || "-");
+  const welcomeMsg = $("welcome-msg");
+  if (welcomeMsg) {
+    welcomeMsg.classList.remove("birthday-greeting");
+    if (isBirthdayToday(json.birthdate)) {
+      const name = json.nickname || currentUser || "";
+      const label = name ? `，${name}` : "";
+      welcomeMsg.textContent = `🎉 生日快樂${label}！今天也是你的生日！`;
+      void welcomeMsg.offsetWidth;
+      welcomeMsg.classList.add("birthday-greeting");
+    } else {
+      welcomeMsg.textContent = "歡迎回來！";
+    }
+  }
   const adminWrap = $("admin-wrap");
   if (adminWrap) {
     if (currentRole === "manager" || currentRole === "super_admin") {
@@ -187,12 +243,24 @@ function setAuthState(json) {
 
   // Super admin: show settings tab + system tools
   const settingsTab = $("tab-settings");
+  const appealsTab = $("tab-appeals");
   if (settingsTab) settingsTab.style.display = currentRole === "super_admin" ? "" : "none";
+  if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentRole === "super_admin" ? "" : "none";
 
   if (currentRole === "manager" || currentRole === "super_admin") {
     loadUsers();
+    if (currentRole === "super_admin") {
+      loadAdminAppeals();
+    }
+  }
+  if (currentRole !== "super_admin") {
+    loadUserAppeals();
+  }
+  const appealWrap = $("user-appeal-wrap");
+  if (appealWrap) {
+    appealWrap.style.display = currentRole === "super_admin" ? "none" : "";
   }
 }
 
@@ -201,12 +269,25 @@ function resetAuthState() {
   currentRole = "user";
   canManageUsers = false;
   users = [];
+  hideUserEditDialog();
   $("success-screen").classList.remove("show");
+  const welcomeMsg = $("welcome-msg");
+  if (welcomeMsg) {
+    welcomeMsg.classList.remove("birthday-greeting");
+    welcomeMsg.textContent = "歡迎回來！";
+  }
   $("admin-wrap").className = "admin-wrap";
   $("me-user").textContent = "-";
   $("me-role").textContent = "-";
   $("me-nickname").textContent = "-";
   $("auth-card").style.display = "";
+  if ($("user-appeal-wrap")) {
+    $("user-appeal-wrap").style.display = "none";
+  }
+  userAppeals = [];
+  adminAppeals = [];
+  adminAppealPage = 1;
+  adminAppealStatus = "pending";
   const tb = $("user-table")?.querySelector("tbody");
   if (tb) tb.innerHTML = "";
 }
@@ -333,6 +414,172 @@ async function loadUsers() {
     canManageUsers = !!json.can_manage;
     renderUsers();
   } catch (_) {}
+}
+
+function appealCountdownText(totalSeconds) {
+  const h = Math.max(0, Math.floor(totalSeconds / 3600));
+  const m = Math.max(0, Math.floor((totalSeconds % 3600) / 60));
+  const s = Math.max(0, totalSeconds % 60);
+  return `${h} 小時 ${m} 分 ${s} 秒`;
+}
+
+async function loadUserAppeals() {
+  const wrap = $("user-appeal-wrap");
+  if (!wrap || !currentUser) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/appeals", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+
+  userAppeals = Array.isArray(json.appeals) ? json.appeals : [];
+  const summaryEl = $("appeal-summary");
+  const latest = json.latest_violation || null;
+  if (summaryEl) {
+    if (!latest) {
+      summaryEl.textContent = "目前無可申覆違規記錄";
+    } else if (!json.can_appeal) {
+      const remaining = parseInt(json.remaining_seconds || 0, 10);
+      if (remaining <= 0) {
+        summaryEl.textContent = "申覆時限已超過（24 小時）";
+      } else {
+        summaryEl.textContent = `有可申覆違規，剩餘時間：${appealCountdownText(remaining)}`;
+      }
+    } else {
+      summaryEl.textContent = "可在剩餘時間內提交申覆；點擊下方提交申覆。";
+    }
+  }
+
+  const listEl = $("appeal-entries");
+  if (!listEl) return;
+  if (!userAppeals.length) {
+    listEl.innerHTML = "<p style='color:var(--muted);'>尚無申覆記錄</p>";
+    return;
+  }
+  listEl.innerHTML = userAppeals.map(a => {
+    const statusText = {
+      pending: "待審",
+      approved: "已核准",
+      rejected: "駁回"
+    };
+    const color = a.status === "approved" ? "#4caf50" : a.status === "rejected" ? "#ff4f6d" : "#ffb74d";
+    return `
+      <div style="border-bottom:1px solid #222;padding:.35rem .25rem;word-break:break-all;">
+        <div><span style="color:${color};">[${statusText[a.status] || a.status}]</span> 違規 #${a.latest_violation_id || "-"}</div>
+        <div style="color:#888;font-size:.7rem;">${sanitize(a.created_at || "")} · 懲罰 ${a.penalty_points || 0} 點</div>
+        <div>原因：${sanitize(a.reason || "")}</div>
+        ${a.review_note ? `<div style="color:#bbb;">備註：${sanitize(a.review_note || "")}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+  const submitBtn = $("appeal-submit-btn");
+  if (submitBtn) submitBtn.disabled = !json.can_appeal;
+  const submitReason = $("appeal-reason");
+  if (submitReason) submitReason.disabled = !json.can_appeal;
+}
+
+async function submitAppeal() {
+  const reason = ($("appeal-reason")?.value || "").trim();
+  if (!reason) {
+    flash($("appeal-msg"), "請填寫申覆原因", false);
+    return;
+  }
+  if (reason.length > 200) {
+    flash($("appeal-msg"), "申覆原因請控制在 200 字以內", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/appeals", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    if ($("appeal-reason")) $("appeal-reason").value = "";
+    flash($("appeal-msg"), json.msg || "申覆已提交", true);
+    await loadUserAppeals();
+  } else {
+    flash($("appeal-msg"), json.msg || "提交失敗", false);
+  }
+}
+
+async function loadAdminAppeals(page = 0, status = null) {
+  if (!currentUser || currentRole !== "super_admin") return;
+  const targetStatus = status || adminAppealStatus;
+  adminAppealStatus = targetStatus;
+  const targetPage = Math.max(1, parseInt(page || 1, 10));
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/appeals?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=20", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+
+  adminAppealPage = targetPage;
+  adminAppeals = Array.isArray(json.items) ? json.items : [];
+  if ($("admin-appeals-total")) $("admin-appeals-total").textContent = json.total || 0;
+
+  const list = $("admin-appeal-list");
+  if (!list) return;
+  if (!adminAppeals.length) {
+    list.innerHTML = "<p style='color:var(--muted);'>目前沒有符合條件的申覆</p>";
+  } else {
+    list.innerHTML = adminAppeals.map(a => {
+      const statusColor = a.status === "pending" ? "#ffb74d" : a.status === "approved" ? "#4caf50" : "#ff4f6d";
+      const action = a.status === "pending"
+        ? `<div style=\"margin-top:.4rem;display:flex;gap:.4rem;\">
+            <button class=\"btn\" data-appeal-action=\"approve\" data-appeal-id=\"${a.id}\" style=\"background:#1f9d57;color:#fff;border:1px solid #1f9d57;\">核准撤銷</button>
+            <button class=\"btn\" data-appeal-action=\"reject\" data-appeal-id=\"${a.id}\" style=\"background:#ff5252;color:#fff;border:1px solid #ff5252;\">維持處分</button>
+          </div>`
+        : "";
+      return `
+        <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
+          <div><strong>${sanitize(a.username || "")}</strong> · 違規 #${a.latest_violation_id || "-"}</div>
+          <div style=\"color:${statusColor};font-size:.75rem;\">${a.status}</div>
+          <div style=\"color:#aaa;font-size:.7rem;\">時間：${sanitize(a.created_at || "")} · 懲罰：${a.penalty_points || 0} 點</div>
+          <div>原因：${sanitize(a.reason || "")}</div>
+          ${a.review_note ? `<div style=\"color:#bbb;\">備註：${sanitize(a.review_note || "")}</div>` : ""}
+          <div>${action}</div>
+        </div>
+      `;
+    }).join("");
+    list.querySelectorAll("button[data-appeal-id]").forEach((btn) => {
+      const appealId = btn.getAttribute("data-appeal-id");
+      const action = btn.getAttribute("data-appeal-action");
+      btn.addEventListener("click", () => reviewAppeal(appealId, action));
+    });
+  }
+
+  if ($("admin-appeals-prev")) $("admin-appeals-prev").disabled = targetPage <= 1;
+  if ($("admin-appeals-next")) $("admin-appeals-next").disabled = (targetPage * 20) >= (json.total || 0);
+}
+
+async function reviewAppeal(appealId, action) {
+  if (!currentUser || currentRole !== "super_admin") return;
+  const note = prompt("審核備註（非必填）", "");
+  if (note === null) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/appeals/" + parseInt(appealId, 10) + "/review", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action, note: (note || "").trim() })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json && json.ok) {
+    await Promise.all([loadAdminAppeals(adminAppealPage, adminAppealStatus), loadUsers()]);
+  } else {
+    alert(json.msg || "審核失敗");
+  }
 }
 
 async function doLogin() {
@@ -493,74 +740,103 @@ async function editUser(userId) {
   if (!target) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+
   let source = target;
-  const detailRes = await fetch(API + `/admin/users/${userId}`, {
-    method: "GET",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  }).then((r) => r.json().catch(() => ({})));
-  if (detailRes && detailRes.ok && detailRes.user) {
-    source = detailRes.user;
+  if (csrf) {
+    const detailRes = await fetch(API + `/admin/users/${userId}`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    }).then((r) => r.json().catch(() => ({})));
+    if (detailRes && detailRes.ok && detailRes.user) {
+      source = detailRes.user;
+    }
   }
+
   const current = {
+    username: source.username || "",
     nickname: source.nickname || "",
     real_name: source.real_name || "",
     id_number: source.id_number || "",
     birthdate: source.birthdate || "",
-    phone: source.phone || ""
+    phone: source.phone || "",
+    role: source.role || "user",
+    status: source.status || "active"
   };
 
-  const nickname = window.prompt("修改暱稱", current.nickname);
-  if (nickname === null) return;
-  const realName = window.prompt("修改真實姓名", current.real_name);
-  if (realName === null) return;
-  const idNumber = window.prompt("修改身分證", current.id_number);
-  if (idNumber === null) return;
-  const birthDate = window.prompt("修改生日（YYYY-MM-DD）", current.birthdate);
-  if (birthDate === null) return;
-  const phone = window.prompt("修改電話", current.phone);
-  if (phone === null) return;
+  editingUserId = userId;
+  editingUserOriginal.nickname = current.nickname;
+  editingUserOriginal.real_name = current.real_name;
+  editingUserOriginal.id_number = current.id_number;
+  editingUserOriginal.birthdate = current.birthdate;
+  editingUserOriginal.phone = current.phone;
+  editingUserOriginal.role = current.role;
+  editingUserOriginal.status = current.status;
 
-  const normalized = {
-    nickname: (nickname || "").trim(),
-    real_name: (realName || "").trim(),
-    id_number: (idNumber || "").trim(),
-    birthdate: (birthDate || "").trim(),
-    phone: (phone || "").trim()
-  };
+  const usernameEl = $("user-edit-username");
+  if (usernameEl) usernameEl.textContent = current.username || String(userId);
+  setUserEditField("edit-user-nickname", current.nickname);
+  setUserEditField("edit-user-realname", current.real_name);
+  setUserEditField("edit-user-idno", current.id_number);
+  setUserEditField("edit-user-birthdate", current.birthdate);
+  setUserEditField("edit-user-phone", current.phone);
+  const editRole = $("edit-user-role");
+  if (editRole) editRole.value = current.role;
+  const editStatus = $("edit-user-status");
+  if (editStatus) editStatus.value = current.status;
+  setUserEditField("edit-user-pw", "");
+  setUserEditField("edit-user-pw-confirm", "");
+  setUserEditMsg("");
 
-  const password = window.prompt("修改密碼（留空則不改）");
-  if (password === null) return;
-  let passwordConfirm = "";
-  if (password) {
-    passwordConfirm = window.prompt("再次輸入新密碼");
-    if (passwordConfirm === null) return;
+  const overlay = $("user-edit-overlay");
+  if (overlay) overlay.classList.add("show");
+  const firstField = $("edit-user-nickname");
+  if (firstField) firstField.focus();
+}
+
+async function submitEditUser() {
+  if (!editingUserId) return;
+
+  const payload = {};
+  const nickname = $("edit-user-nickname")?.value.trim() || "";
+  const realName = $("edit-user-realname")?.value.trim() || "";
+  const idNo = $("edit-user-idno")?.value.trim() || "";
+  const birthdate = $("edit-user-birthdate")?.value || "";
+  const phone = $("edit-user-phone")?.value.trim() || "";
+  const role = $("edit-user-role")?.value || "";
+  const status = $("edit-user-status")?.value || "";
+  const password = $("edit-user-pw")?.value || "";
+  const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
+
+  if (nickname !== editingUserOriginal.nickname) payload.nickname = nickname;
+  if (realName !== editingUserOriginal.real_name) payload.real_name = realName;
+  if (idNo !== editingUserOriginal.id_number) payload.id_number = idNo;
+  if (birthdate !== editingUserOriginal.birthdate) payload.birthdate = birthdate;
+  if (phone !== editingUserOriginal.phone) payload.phone = phone;
+  if (role !== editingUserOriginal.role) payload.role = role;
+  if (status !== editingUserOriginal.status) payload.status = status;
+
+  if (password || passwordConfirm) {
     if (password !== passwordConfirm) {
-      flash($("li-msg"), "兩次密碼輸入不一致", false);
+      setUserEditMsg("兩次密碼輸入不一致", false);
       return;
     }
-  }
-
-  await fetchCsrfToken({ force: true });
-  const payload = {
-    nickname: (normalized.nickname === current.nickname ? null : normalized.nickname),
-    real_name: (normalized.real_name === current.real_name ? null : normalized.real_name),
-    id_number: (normalized.id_number === current.id_number ? null : normalized.id_number),
-    birthdate: (normalized.birthdate === current.birthdate ? null : normalized.birthdate),
-    phone: (normalized.phone === current.phone ? null : normalized.phone)
-  };
-  Object.keys(payload).forEach((k) => {
-    if (payload[k] === null) delete payload[k];
-  });
-  if (!Object.keys(payload).length && !password) {
-    flash($("li-msg"), "未變更任何欄位", false);
-    return;
-  }
-  if (password) {
+    if (!password) {
+      setUserEditMsg("若要修改密碼，兩次都要輸入", false);
+      return;
+    }
     payload.password = password;
     payload.password_confirm = passwordConfirm;
   }
-  const res = await fetch(API + `/admin/users/${userId}`, {
+
+  if (!Object.keys(payload).length) {
+    setUserEditMsg("未變更任何欄位", false);
+    return;
+  }
+
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${editingUserId}`, {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -568,10 +844,11 @@ async function editUser(userId) {
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
+    hideUserEditDialog();
     loadUsers();
-  } else {
-    flash($("li-msg"), json.msg || "修改失敗", false);
+    return;
   }
+  setUserEditMsg(json.msg || "修改失敗", false);
 }
 
 async function removeUser(userId) {
@@ -673,16 +950,17 @@ async function demoteUser(userId, username, currentRole) {
 let currentTab = "users";
 function switchTab(tab) {
   currentTab = tab;
-  ["users","audit","violations","settings"].forEach(t => {
+  ["users","audit","violations","appeals","settings"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-audit","tab-violations","tab-settings"].forEach(id => {
+  ["tab-users","tab-audit","tab-violations","tab-appeals","tab-settings"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
   if (tab === "audit") loadAudit(0);
   if (tab === "violations") loadViolations(0);
+  if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
   if (tab === "settings") loadSettings();
 }
 
@@ -919,6 +1197,7 @@ function bindUiEvents() {
   const tabUsers    = $("tab-users");
   const tabAudit    = $("tab-audit");
   const tabViol     = $("tab-violations");
+  const tabAppeals  = $("tab-appeals");
   const tabSettings = $("tab-settings");
   const liBtn       = $("li-btn");
   const regBtn      = $("reg-btn");
@@ -927,25 +1206,51 @@ function bindUiEvents() {
   const adminAddBtn  = $("admin-add-btn");
   const auditRefresh = $("audit-refresh");
   const violRefresh  = $("violations-refresh");
+  const appealSubmit = $("appeal-submit-btn");
+  const appealRefresh = $("appeal-refresh-btn");
   const settingsSave = $("settings-save-btn");
   const restartBtn   = $("restart-server-btn");
+  const editSaveBtn = $("user-edit-save");
+  const editCancelBtn = $("user-edit-cancel");
+  const userEditOverlay = $("user-edit-overlay");
 
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchTab("users"));
   if (tabAudit)    tabAudit.addEventListener("click",    () => switchTab("audit"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchTab("violations"));
+  if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchTab("appeals"));
   if (tabSettings) tabSettings.addEventListener("click", () => switchTab("settings"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
   if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
+  if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
+  if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
+  if (userEditOverlay) userEditOverlay.addEventListener("click", (e) => {
+    if (e.target === userEditOverlay) hideUserEditDialog();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      hideUserEditDialog();
+    }
+  });
 
   // Audit pagination
   if (auditRefresh) auditRefresh.addEventListener("click", () => loadAudit(auditPage));
   if ($("audit-prev")) $("audit-prev").addEventListener("click", () => loadAudit(Math.max(0, auditPage - 1)));
   if ($("audit-next")) $("audit-next").addEventListener("click", () => loadAudit(auditPage + 1));
+
+  if (appealSubmit) appealSubmit.addEventListener("click", submitAppeal);
+  if (appealRefresh) appealRefresh.addEventListener("click", loadUserAppeals);
+  if ($("admin-appeal-status")) $("admin-appeal-status").addEventListener("change", (e) => {
+    adminAppealStatus = e?.target?.value || "pending";
+    loadAdminAppeals(1, adminAppealStatus);
+  });
+  if ($("admin-appeals-prev")) $("admin-appeals-prev").addEventListener("click", () => loadAdminAppeals(Math.max(1, adminAppealPage - 1), adminAppealStatus));
+  if ($("admin-appeals-next")) $("admin-appeals-next").addEventListener("click", () => loadAdminAppeals(adminAppealPage + 1, adminAppealStatus));
+  if ($("admin-appeals-refresh")) $("admin-appeals-refresh").addEventListener("click", () => loadAdminAppeals(adminAppealPage, adminAppealStatus));
 
   // Violations
   if (violRefresh) violRefresh.addEventListener("click", () => loadViolations(violationsPage, violationTargetUser));

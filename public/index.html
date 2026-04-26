@@ -100,12 +100,27 @@
 <div id="success-screen">
   <div class="success-icon">🎉</div>
   <h2>恭喜登入成功</h2>
-  <p style="color:var(--muted); margin-top:.5rem">歡迎回來！</p>
+  <p id="welcome-msg" style="color:var(--muted); margin-top:.5rem">歡迎回來！</p>
   <div class="info-grid">
     <div>使用者：<span id="me-user">-</span></div>
     <div>角色：<span id="me-role">-</span></div>
     <div>暱稱：<span id="me-nickname">-</span></div>
   </div>
+  <div id="user-appeal-wrap" class="admin-tools" style="margin-top: .95rem; text-align: left;">
+    <div class="mini-title">⚖️ 違規申覆</div>
+    <div id="appeal-summary" style="font-size:.82rem;color:var(--muted);margin-bottom:.55rem;"></div>
+    <div id="appeal-entries" style="max-height:140px;overflow:auto;margin-bottom:.65rem;"></div>
+    <div class="field">
+      <label>申覆原因（200 字內）</label>
+      <textarea id="appeal-reason" rows="3" placeholder="請輸入申覆原因"></textarea>
+    </div>
+    <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:0;">
+      <button class="btn btn-primary" type="button" id="appeal-submit-btn">提交申覆</button>
+      <button class="btn" type="button" id="appeal-refresh-btn">刷新申覆</button>
+    </div>
+    <div id="appeal-msg" class="msg"></div>
+  </div>
+
   <button class="btn" id="logout-btn">登出</button>
 
   <div class="admin-wrap" id="admin-wrap">
@@ -114,6 +129,7 @@
       <button class="tab active" id="tab-users">帳號管理</button>
       <button class="tab" id="tab-audit">審計日誌</button>
       <button class="tab" id="tab-violations">違規計次</button>
+      <button class="tab" id="tab-appeals">申覆審核</button>
       <button class="tab" id="tab-settings" style="display:none;">系統設定</button>
     </div>
 
@@ -135,7 +151,7 @@
         </table>
       </div>
 
-      <div id="admin-manager-view">
+  <div id="admin-manager-view">
         <div class="mini-title" style="margin-top:.8rem;">➕ 新增帳號（最高管理者）</div>
         <form id="admin-add-form">
           <div class="field"><label>帳號</label><input type="text" id="admin-add-user" placeholder="a-z 0-9 _ -" /></div>
@@ -191,6 +207,24 @@
       <div id="violation-entries" style="max-height:320px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
     </div>
 
+    <!-- ── 申覆審核 ── -->
+    <div class="form-section" id="sec-appeals">
+      <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;grid-template-columns:auto auto auto; margin-bottom:.65rem;">
+        <button class="btn btn-primary" id="admin-appeals-refresh">🔄 重新整理</button>
+        <select id="admin-appeal-status" style="padding:.55rem;border-radius:8px; background:rgba(0,0,0,.3); border:1.5px solid rgba(255,255,255,.1); color:#e0e0f0; font-size:.85rem;">
+          <option value="pending">待處理</option>
+          <option value="approved">已核准</option>
+          <option value="rejected">已駁回</option>
+        </select>
+        <span style="margin-left:auto;font-size:.72rem;color:var(--muted);">共 <span id="admin-appeals-total">0</span> 筆</span>
+      </div>
+      <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <button class="btn" id="admin-appeals-prev" style="margin-left:0;">← 上一頁</button>
+        <button class="btn" id="admin-appeals-next">下一頁 →</button>
+      </div>
+      <div id="admin-appeal-list" style="max-height:330px;overflow:auto;font-size:.72rem;"></div>
+    </div>
+
     <!-- ── 系統設定（super_admin only） ── -->
     <div class="form-section" id="sec-settings">
       <div class="mini-title">⚙️ 系統參數</div>
@@ -225,6 +259,70 @@
         </button>
         <span style="font-size:.72rem;color:var(--muted);margin-left:.4rem;">（超級管理者專屬）</span>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="user-edit-overlay" class="user-edit-overlay">
+  <div class="user-edit-modal">
+    <div class="mini-title">修改帳號資料</div>
+    <div class="field">
+      <label>帳號</label>
+      <div id="user-edit-username" class="readonly-field"></div>
+    </div>
+    <div class="field">
+      <label>暱稱</label>
+      <input type="text" id="edit-user-nickname" placeholder="暱稱" />
+    </div>
+    <div class="field">
+      <label>真實姓名</label>
+      <input type="text" id="edit-user-realname" placeholder="真實姓名" />
+    </div>
+    <div class="field">
+      <label>身分證</label>
+      <input type="text" id="edit-user-idno" placeholder="身分證" />
+    </div>
+    <div class="field">
+      <label>生日</label>
+      <input type="date" id="edit-user-birthdate" />
+    </div>
+    <div class="field">
+      <label>電話</label>
+      <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
+    </div>
+    <div class="field">
+      <label>角色</label>
+      <select id="edit-user-role">
+        <option value="user">一般用戶</option>
+        <option value="manager">管理者</option>
+        <option value="super_admin">超級管理者</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>帳號狀態</label>
+      <select id="edit-user-status">
+        <option value="active">啟用</option>
+        <option value="inactive">停用</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>修改密碼（留空不改）</label>
+      <div class="pw-wrap">
+        <input type="password" id="edit-user-pw" placeholder="新密碼" />
+        <button class="pw-toggle" id="edit-user-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>再次輸入新密碼</label>
+      <div class="pw-wrap">
+        <input type="password" id="edit-user-pw-confirm" placeholder="再次輸入新密碼" />
+        <button class="pw-toggle" id="edit-user-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
+      </div>
+    </div>
+    <div id="user-edit-msg" class="msg"></div>
+    <div class="edit-user-actions">
+      <button type="button" id="user-edit-save" class="btn btn-primary">儲存</button>
+      <button type="button" id="user-edit-cancel" class="btn">取消</button>
     </div>
   </div>
 </div>

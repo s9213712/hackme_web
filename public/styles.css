@@ -113,7 +113,8 @@
       margin-bottom: .35rem;
     }
 
-    input {
+    input,
+    select {
       width: 100%;
       padding: .65rem .9rem;
       background: rgba(0,0,0,.3);
@@ -126,6 +127,24 @@
     }
 
     input:focus { border-color: var(--accent); }
+    select:focus { border-color: var(--accent); }
+
+    textarea {
+      width: 100%;
+      padding: .65rem .9rem;
+      background: rgba(0,0,0,.3);
+      border: 1.5px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: .95rem;
+      outline: none;
+      transition: border-color .2s;
+      resize: vertical;
+      min-height: 72px;
+      font-family: inherit;
+    }
+
+    textarea:focus { border-color: var(--accent); }
 
     /* ── Password field with toggle ──────────────────────── */
     .pw-wrap {
@@ -240,6 +259,19 @@
       margin-bottom: .45rem;
     }
 
+    .readonly-field {
+      width: 100%;
+      min-height: 2.15rem;
+      padding: .65rem .9rem;
+      border-radius: 8px;
+      background: rgba(0,0,0,.35);
+      border: 1.5px solid rgba(255,255,255,.1);
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+
     .user-table {
       width: 100%;
       border-collapse: collapse;
@@ -279,6 +311,45 @@
       font-weight: 600;
     }
 
+    .user-edit-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1.2rem;
+      background: rgba(0,0,0,.58);
+      z-index: 20;
+    }
+
+    .user-edit-overlay.show {
+      display: flex;
+    }
+
+    .user-edit-modal {
+      width: min(500px, 94vw);
+      background: var(--surface);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.05rem 1.05rem 1rem;
+      position: relative;
+    }
+
+    .edit-user-actions {
+      margin-top: .55rem;
+      display: flex;
+      gap: .55rem;
+      align-items: center;
+    }
+
+    .edit-user-actions .btn {
+      width: auto;
+      flex: 1;
+      padding: .65rem;
+      min-height: 2.2rem;
+    }
+
     .btn-danger {
       background: var(--danger);
       color: #fff;
@@ -304,12 +375,30 @@
       -webkit-text-fill-color: transparent;
     }
 
+    .birthday-greeting {
+      color: #ffd54f !important;
+      font-weight: 700;
+      animation: birthday-pop .75s ease-out, birthday-glow 2.2s ease-in-out infinite;
+      text-shadow: 0 0 8px rgba(255, 213, 79, .35), 0 0 15px rgba(255, 79, 109, .25);
+    }
+
     #logout-btn {
       margin-top: 1.5rem;
       background: rgba(255,255,255,.08);
       color: var(--muted);
       border: 1px solid rgba(255,255,255,.1);
       font-size: .85rem;
+    }
+
+    @keyframes birthday-pop {
+      0% { transform: scale(.92); opacity: 0; }
+      45% { transform: scale(1.08); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    @keyframes birthday-glow {
+      0%, 100% { text-shadow: 0 0 8px rgba(255, 213, 79, .35), 0 0 15px rgba(255, 79, 109, .25); }
+      50% { text-shadow: 0 0 14px rgba(255, 213, 79, .65), 0 0 24px rgba(110, 200, 255, .45); }
     }
 
     #logout-btn:hover { background: rgba(255,255,255,.14); color: var(--text); }
