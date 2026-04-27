@@ -155,6 +155,9 @@
 - [x] 用戶容量 API：目前用量、剩餘容量、會員等級配額、單檔限制、每日上傳限制
 - [x] 雲端硬碟 UI：用量條、剩餘容量、風險/掃描/隱私模式統計
 - [x] Phase 1 對應測試：完整 pytest `86 passed`
+- [x] 本地 ClamAV 掃描抽象層：magic-byte / zip safety / clamav result 寫入 `file_scan_results`
+- [x] root 可配置掃描器：啟用、backend、命令路徑、逾時、fail-closed、quarantine、MIME 檢查
+- [x] 本地掃描對應測試：upload security `15 passed`
 - [ ] attachments schema
 - [ ] 上傳 API：MIME 白名單 + magic bytes
 - [ ] 圖片 re-encode 去 EXIF

@@ -1,6 +1,9 @@
 import hashlib
 import json
 import os
+import shlex
+import shutil
+import subprocess
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -101,6 +104,13 @@ DEFAULT_CLOUD_DRIVE_SECURITY_POLICY = {
     "allow_inline_preview_for_high_risk": False,
     "e2ee_server_scan_claim_allowed": False,
     "revoke_shares_on_suspension": True,
+    "scanner_enabled": True,
+    "scanner_backend": "clamav",
+    "scanner_command": "",
+    "scanner_timeout_seconds": 60,
+    "fail_closed_on_scanner_error": True,
+    "quarantine_on_infected": True,
+    "validate_magic_mime": True,
     "max_archive_files": 200,
     "max_archive_uncompressed_bytes": 50 * 1024 * 1024,
     "max_daily_downloads": 500,
@@ -117,13 +127,44 @@ CLOUD_DRIVE_POLICY_BOOL_FIELDS = {
     "allow_inline_preview_for_high_risk",
     "e2ee_server_scan_claim_allowed",
     "revoke_shares_on_suspension",
+    "scanner_enabled",
+    "fail_closed_on_scanner_error",
+    "quarantine_on_infected",
+    "validate_magic_mime",
 }
 CLOUD_DRIVE_POLICY_INT_FIELDS = {
+    "scanner_timeout_seconds",
     "max_archive_files",
     "max_archive_uncompressed_bytes",
     "max_daily_downloads",
 }
-CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"notes"}
+CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "notes"}
+
+ALLOWED_SCANNER_BACKENDS = {"disabled", "clamav"}
+
+MIME_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"%PDF-", "application/pdf"),
+    (b"PK\x03\x04", "application/zip"),
+    (b"PK\x05\x06", "application/zip"),
+    (b"PK\x07\x08", "application/zip"),
+    (b"MZ", "application/x-dosexec"),
+    (b"\x7fELF", "application/x-elf"),
+)
+
+EXTENSION_MIME_PREFIXES = {
+    ".png": ("image/png",),
+    ".jpg": ("image/jpeg",),
+    ".jpeg": ("image/jpeg",),
+    ".gif": ("image/gif",),
+    ".pdf": ("application/pdf",),
+    ".zip": ("application/zip",),
+}
+
+HIGH_RISK_MAGIC_MIMES = {"application/x-dosexec", "application/x-elf"}
 
 
 @dataclass(frozen=True)
@@ -248,6 +289,13 @@ def ensure_upload_security_schema(conn):
             allow_inline_preview_for_high_risk INTEGER NOT NULL,
             e2ee_server_scan_claim_allowed INTEGER NOT NULL,
             revoke_shares_on_suspension INTEGER NOT NULL,
+            scanner_enabled INTEGER NOT NULL,
+            scanner_backend TEXT NOT NULL,
+            scanner_command TEXT,
+            scanner_timeout_seconds INTEGER NOT NULL,
+            fail_closed_on_scanner_error INTEGER NOT NULL,
+            quarantine_on_infected INTEGER NOT NULL,
+            validate_magic_mime INTEGER NOT NULL,
             max_archive_files INTEGER NOT NULL,
             max_archive_uncompressed_bytes INTEGER NOT NULL,
             max_daily_downloads INTEGER NOT NULL,
@@ -257,6 +305,7 @@ def ensure_upload_security_schema(conn):
         )
         """
     )
+    _ensure_cloud_drive_policy_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_file_keys(file_id, recipient_user_id)")
@@ -264,6 +313,26 @@ def ensure_upload_security_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_access_logs_file ON file_access_logs(file_id, created_at)")
     seed_default_file_type_policies(conn)
     seed_default_cloud_drive_security_policy(conn)
+
+
+def _table_columns(conn, table):
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_cloud_drive_policy_columns(conn):
+    columns = _table_columns(conn, "cloud_drive_security_policies")
+    definitions = {
+        "scanner_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "scanner_backend": "TEXT NOT NULL DEFAULT 'clamav'",
+        "scanner_command": "TEXT",
+        "scanner_timeout_seconds": "INTEGER NOT NULL DEFAULT 60",
+        "fail_closed_on_scanner_error": "INTEGER NOT NULL DEFAULT 1",
+        "quarantine_on_infected": "INTEGER NOT NULL DEFAULT 1",
+        "validate_magic_mime": "INTEGER NOT NULL DEFAULT 1",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE cloud_drive_security_policies ADD COLUMN {column} {definition}")
 
 
 def seed_default_file_type_policies(conn):
@@ -306,9 +375,12 @@ def seed_default_cloud_drive_security_policy(conn):
             scope, require_scan_before_download, block_unclean_downloads,
             warn_high_risk_downloads, allow_inline_preview_for_high_risk,
             e2ee_server_scan_claim_allowed, revoke_shares_on_suspension,
+            scanner_enabled, scanner_backend, scanner_command,
+            scanner_timeout_seconds, fail_closed_on_scanner_error,
+            quarantine_on_infected, validate_magic_mime,
             max_archive_files, max_archive_uncompressed_bytes, max_daily_downloads,
             notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             policy["scope"],
@@ -318,6 +390,13 @@ def seed_default_cloud_drive_security_policy(conn):
             1 if policy["allow_inline_preview_for_high_risk"] else 0,
             1 if policy["e2ee_server_scan_claim_allowed"] else 0,
             1 if policy["revoke_shares_on_suspension"] else 0,
+            1 if policy["scanner_enabled"] else 0,
+            policy["scanner_backend"],
+            policy["scanner_command"],
+            int(policy["scanner_timeout_seconds"]),
+            1 if policy["fail_closed_on_scanner_error"] else 0,
+            1 if policy["quarantine_on_infected"] else 0,
+            1 if policy["validate_magic_mime"] else 0,
             int(policy["max_archive_files"]),
             int(policy["max_archive_uncompressed_bytes"]),
             int(policy["max_daily_downloads"]),
@@ -411,10 +490,16 @@ def serialize_cloud_drive_security_policy(row):
         "allow_inline_preview_for_high_risk",
         "e2ee_server_scan_claim_allowed",
         "revoke_shares_on_suspension",
+        "scanner_enabled",
+        "fail_closed_on_scanner_error",
+        "quarantine_on_infected",
+        "validate_magic_mime",
     ):
         data[key] = bool(data.get(key))
-    for key in ("max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
+    for key in ("scanner_timeout_seconds", "max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
         data[key] = int(data.get(key) or 0)
+    data["scanner_backend"] = str(data.get("scanner_backend") or "disabled")
+    data["scanner_command"] = str(data.get("scanner_command") or "")
     return data
 
 
@@ -445,8 +530,19 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
                 return None, f"{key} 格式錯誤"
             if value < 0:
                 return None, f"{key} 不可小於 0"
+            if key == "scanner_timeout_seconds" and value < 1:
+                return None, "scanner_timeout_seconds 必須至少 1 秒"
             updates.append(f"{key}=?")
             params.append(value)
+    if "scanner_backend" in data:
+        value = str(data.get("scanner_backend") or "").strip().lower()
+        if value not in ALLOWED_SCANNER_BACKENDS:
+            return None, "scanner_backend 僅支援 disabled 或 clamav"
+        updates.append("scanner_backend=?")
+        params.append(value)
+    if "scanner_command" in data:
+        updates.append("scanner_command=?")
+        params.append(str(data.get("scanner_command") or "").strip()[:500])
     if "notes" in data:
         updates.append("notes=?")
         params.append(str(data.get("notes") or "")[:1000])
@@ -622,6 +718,216 @@ def check_zip_archive_safety(path, *, max_files=200, max_uncompressed_bytes=50 *
         return {**result, "ok": False, "reason": "bad_zip"}
 
 
+def detect_magic_mime(path):
+    with open(path, "rb") as f:
+        header = f.read(16)
+    for signature, mime in MIME_SIGNATURES:
+        if header.startswith(signature):
+            return mime
+    if not header:
+        return "application/x-empty"
+    if b"\x00" not in header:
+        return "text/plain"
+    return "application/octet-stream"
+
+
+def check_magic_mime_safety(path, filename=None, declared_mime=None):
+    actual = detect_magic_mime(path)
+    ext = file_extension(filename or path)
+    expected = EXTENSION_MIME_PREFIXES.get(ext)
+    result = {
+        "ok": True,
+        "reason": "ok",
+        "extension": ext,
+        "declared_mime": declared_mime or "",
+        "detected_mime": actual,
+    }
+    if actual in HIGH_RISK_MAGIC_MIMES and ext not in EXECUTABLE_EXTENSIONS:
+        return {**result, "ok": False, "reason": "executable_magic_mismatch"}
+    if expected and actual not in expected and actual != "application/x-empty":
+        return {**result, "ok": False, "reason": "extension_mime_mismatch"}
+    return result
+
+
+def _record_scan_result(conn, *, file_id, scanner_name, result, scanner_version=None, started_at=None, malware_name=None, details=None):
+    now = datetime.now().isoformat()
+    conn.execute(
+        """
+        INSERT INTO file_scan_results (
+            id, file_id, scanner_name, scanner_version, scan_started_at,
+            scan_completed_at, result, malware_name, details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            file_id,
+            scanner_name,
+            scanner_version,
+            started_at or now,
+            now,
+            result,
+            malware_name,
+            json.dumps(details or {}, ensure_ascii=False),
+            now,
+        ),
+    )
+
+
+def _update_file_scan_state(conn, file_id, *, scan_status, risk_level=None):
+    fields = ["scan_status=?", "updated_at=?"]
+    params = [normalize_scan_status(scan_status), datetime.now().isoformat()]
+    if risk_level:
+        fields.append("risk_level=?")
+        params.append(risk_level)
+    params.append(file_id)
+    conn.execute(f"UPDATE uploaded_files SET {', '.join(fields)} WHERE id=?", tuple(params))
+
+
+def _resolve_clamav_command(policy):
+    configured = str(policy.get("scanner_command") or "").strip()
+    if configured:
+        return configured
+    return shutil.which("clamdscan") or shutil.which("clamscan")
+
+
+def _parse_clamav_output(output):
+    for line in output.splitlines():
+        if " FOUND" in line:
+            part = line.rsplit(":", 1)[-1].strip()
+            return part.replace(" FOUND", "").strip() or "malware"
+    return None
+
+
+def run_clamav_scan(path, *, policy):
+    command = _resolve_clamav_command(policy)
+    if not command:
+        return {
+            "result": "failed",
+            "malware_name": None,
+            "details": {"reason": "clamav_command_not_found"},
+        }
+    started_at = datetime.now().isoformat()
+    timeout = int(policy.get("scanner_timeout_seconds") or 60)
+    command_parts = shlex.split(command)
+    if not command_parts:
+        return {
+            "result": "failed",
+            "malware_name": None,
+            "scan_started_at": started_at,
+            "details": {"reason": "empty_clamav_command"},
+        }
+    try:
+        completed = subprocess.run(
+            [*command_parts, "--no-summary", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "result": "failed",
+            "malware_name": None,
+            "scan_started_at": started_at,
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+        }
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+    details = {
+        "returncode": completed.returncode,
+        "command": os.path.basename(command_parts[0]),
+        "output_tail": output[-1000:],
+    }
+    if completed.returncode == 0:
+        return {"result": "clean", "malware_name": None, "scan_started_at": started_at, "details": details}
+    if completed.returncode == 1:
+        return {"result": "infected", "malware_name": _parse_clamav_output(output), "scan_started_at": started_at, "details": details}
+    return {"result": "failed", "malware_name": None, "scan_started_at": started_at, "details": details}
+
+
+def scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime=None):
+    ensure_upload_security_schema(conn)
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    if not row:
+        raise ValueError("uploaded file not found")
+    policy = get_cloud_drive_security_policy(conn)
+    privacy_mode = row["privacy_mode"]
+    if privacy_mode.startswith("e2ee"):
+        _record_scan_result(
+            conn,
+            file_id=file_id,
+            scanner_name="server-policy",
+            result=row["scan_status"],
+            details={"reason": "e2ee_content_not_server_scannable"},
+        )
+        return {"scan_status": row["scan_status"], "risk_level": row["risk_level"], "results": []}
+
+    path = Path(file_path)
+    results = []
+    if not path.exists() or not path.is_file():
+        _record_scan_result(conn, file_id=file_id, scanner_name="file-presence", result="failed", details={"reason": "missing_file"})
+        _update_file_scan_state(conn, file_id, scan_status="failed", risk_level="high" if policy["fail_closed_on_scanner_error"] else None)
+        return {"scan_status": "failed", "risk_level": "high" if policy["fail_closed_on_scanner_error"] else row["risk_level"], "results": results}
+
+    if policy["validate_magic_mime"]:
+        magic_result = check_magic_mime_safety(path, filename=filename or row["original_filename_plain_for_public"], declared_mime=declared_mime or row["mime_type_plain_for_public"])
+        result_name = "clean" if magic_result["ok"] else "infected"
+        _record_scan_result(conn, file_id=file_id, scanner_name="magic-mime", result=result_name, details=magic_result)
+        results.append({"scanner": "magic-mime", **magic_result})
+        if not magic_result["ok"]:
+            status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+            _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+            return {"scan_status": status, "risk_level": "high", "results": results}
+
+    if file_extension(filename or row["original_filename_plain_for_public"] or path) in ARCHIVE_EXTENSIONS:
+        archive_result = check_zip_archive_safety(
+            path,
+            max_files=policy["max_archive_files"],
+            max_uncompressed_bytes=policy["max_archive_uncompressed_bytes"],
+        )
+        result_name = "clean" if archive_result["ok"] else "infected"
+        _record_scan_result(conn, file_id=file_id, scanner_name="archive-safety", result=result_name, details=archive_result)
+        results.append({"scanner": "archive-safety", **archive_result})
+        if not archive_result["ok"]:
+            status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+            _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+            return {"scan_status": status, "risk_level": "high", "results": results}
+
+    if not policy["scanner_enabled"] or policy["scanner_backend"] == "disabled":
+        _record_scan_result(conn, file_id=file_id, scanner_name="server-policy", result="not_required", details={"reason": "scanner_disabled"})
+        _update_file_scan_state(conn, file_id, scan_status="not_required")
+        return {"scan_status": "not_required", "risk_level": row["risk_level"], "results": results}
+
+    if policy["scanner_backend"] != "clamav":
+        _record_scan_result(conn, file_id=file_id, scanner_name="server-policy", result="failed", details={"reason": "unsupported_scanner_backend", "backend": policy["scanner_backend"]})
+        _update_file_scan_state(conn, file_id, scan_status="failed", risk_level="high" if policy["fail_closed_on_scanner_error"] else None)
+        return {"scan_status": "failed", "risk_level": "high" if policy["fail_closed_on_scanner_error"] else row["risk_level"], "results": results}
+
+    _update_file_scan_state(conn, file_id, scan_status="scanning")
+    clamav = run_clamav_scan(path, policy=policy)
+    _record_scan_result(
+        conn,
+        file_id=file_id,
+        scanner_name="clamav",
+        scanner_version=None,
+        started_at=clamav.get("scan_started_at"),
+        result=clamav["result"],
+        malware_name=clamav.get("malware_name"),
+        details=clamav.get("details") or {},
+    )
+    results.append({"scanner": "clamav", **clamav})
+    if clamav["result"] == "clean":
+        _update_file_scan_state(conn, file_id, scan_status="clean")
+        return {"scan_status": "clean", "risk_level": row["risk_level"], "results": results}
+    if clamav["result"] == "infected":
+        status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+        _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+        return {"scan_status": status, "risk_level": "high", "results": results}
+
+    status = "quarantined" if policy["fail_closed_on_scanner_error"] else "failed"
+    _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high" if policy["fail_closed_on_scanner_error"] else None)
+    return {"scan_status": status, "risk_level": "high" if policy["fail_closed_on_scanner_error"] else row["risk_level"], "results": results}
+
+
 def create_uploaded_file_record(
     conn,
     *,
@@ -641,6 +947,7 @@ def create_uploaded_file_record(
     nonce=None,
     client_scan_report=None,
     user=None,
+    scan_now=False,
 ):
     decision = evaluate_upload_policy(
         conn,
@@ -695,7 +1002,19 @@ def create_uploaded_file_record(
             """,
             (uuid.uuid4().hex, file_id, int(owner_user_id), encrypted_file_key, wrapped_by, 1, now),
         )
-    return {"file_id": file_id, **decision.as_dict()}
+    result = {"file_id": file_id, **decision.as_dict()}
+    if scan_now and decision.allowed and decision.scan_status == "pending":
+        scan_result = scan_uploaded_file(
+            conn,
+            file_id=file_id,
+            file_path=storage_path,
+            filename=original_filename,
+            declared_mime=mime_type,
+        )
+        result["scan_status"] = scan_result["scan_status"]
+        result["risk_level"] = scan_result["risk_level"]
+        result["scan_result"] = scan_result
+    return result
 
 
 def log_file_access(conn, *, file_id, actor_user_id, action, result, ip=None, user_agent=None, reason=None):

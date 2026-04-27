@@ -4,6 +4,7 @@ import zipfile
 import pytest
 
 from services.upload_security import (
+    check_magic_mime_safety,
     check_zip_archive_safety,
     create_uploaded_file_record,
     ensure_upload_security_schema,
@@ -44,6 +45,9 @@ def test_cloud_drive_security_policy_defaults_are_safe():
         assert policy["block_unclean_downloads"] is True
         assert policy["warn_high_risk_downloads"] is True
         assert policy["e2ee_server_scan_claim_allowed"] is False
+        assert policy["scanner_enabled"] is True
+        assert policy["scanner_backend"] == "clamav"
+        assert policy["fail_closed_on_scanner_error"] is True
         assert policy["max_archive_files"] == 200
     finally:
         conn.close()
@@ -57,12 +61,18 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
             {
                 "block_unclean_downloads": False,
                 "max_archive_files": 12,
+                "scanner_backend": "disabled",
+                "scanner_timeout_seconds": 10,
+                "scanner_enabled": False,
                 "max_daily_downloads": 40,
                 "notes": "root tuned policy",
             },
         )
         assert err is None
         assert policy["block_unclean_downloads"] is False
+        assert policy["scanner_backend"] == "disabled"
+        assert policy["scanner_timeout_seconds"] == 10
+        assert policy["scanner_enabled"] is False
         assert policy["max_archive_files"] == 12
         assert policy["max_daily_downloads"] == 40
         assert policy["notes"] == "root tuned policy"
@@ -70,6 +80,10 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         policy, err = update_cloud_drive_security_policy(conn, {"max_daily_downloads": -1})
         assert policy is None
         assert err == "max_daily_downloads 不可小於 0"
+
+        policy, err = update_cloud_drive_security_policy(conn, {"scanner_backend": "cloud_api"})
+        assert policy is None
+        assert "scanner_backend" in err
     finally:
         conn.close()
 
@@ -207,6 +221,102 @@ def test_zip_archive_path_traversal_is_rejected(tmp_path):
     result = check_zip_archive_safety(archive)
     assert result["ok"] is False
     assert result["reason"] == "path_traversal"
+
+
+def test_magic_mime_rejects_executable_disguised_as_image(tmp_path):
+    disguised = tmp_path / "avatar.png"
+    disguised.write_bytes(b"MZ" + b"\x00" * 32)
+
+    result = check_magic_mime_safety(disguised, filename="avatar.png", declared_mime="image/png")
+    assert result["ok"] is False
+    assert result["reason"] == "executable_magic_mismatch"
+
+
+def test_scan_uploaded_file_records_clean_clamav_result(tmp_path, monkeypatch):
+    conn = _conn()
+    sample = tmp_path / "note.txt"
+    sample.write_text("hello", encoding="utf-8")
+
+    def fake_clamav(path, *, policy):
+        return {"result": "clean", "malware_name": None, "details": {"fake": True}}
+
+    monkeypatch.setattr("services.upload_security.run_clamav_scan", fake_clamav)
+    try:
+        result = create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path=str(sample),
+            privacy_mode="public_attachment",
+            size_bytes=sample.stat().st_size,
+            original_filename="note.txt",
+            mime_type="text/plain",
+            user={"effective_level": "trusted"},
+            scan_now=True,
+        )
+        row = conn.execute("SELECT scan_status, risk_level FROM uploaded_files WHERE id=?", (result["file_id"],)).fetchone()
+        scanners = [r["scanner_name"] for r in conn.execute("SELECT scanner_name FROM file_scan_results WHERE file_id=? ORDER BY created_at", (result["file_id"],)).fetchall()]
+        assert result["scan_status"] == "clean"
+        assert row["scan_status"] == "clean"
+        assert row["risk_level"] == "low"
+        assert "magic-mime" in scanners
+        assert "clamav" in scanners
+    finally:
+        conn.close()
+
+
+def test_scan_uploaded_file_quarantines_infected_clamav_result(tmp_path, monkeypatch):
+    conn = _conn()
+    sample = tmp_path / "payload.txt"
+    sample.write_text("EICAR marker", encoding="utf-8")
+
+    def fake_clamav(path, *, policy):
+        return {"result": "infected", "malware_name": "Eicar-Test-Signature", "details": {"fake": True}}
+
+    monkeypatch.setattr("services.upload_security.run_clamav_scan", fake_clamav)
+    try:
+        result = create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path=str(sample),
+            privacy_mode="public_attachment",
+            size_bytes=sample.stat().st_size,
+            original_filename="payload.txt",
+            user={"effective_level": "trusted"},
+            scan_now=True,
+        )
+        scan_row = conn.execute("SELECT result, malware_name FROM file_scan_results WHERE file_id=? AND scanner_name='clamav'", (result["file_id"],)).fetchone()
+        row = conn.execute("SELECT scan_status, risk_level FROM uploaded_files WHERE id=?", (result["file_id"],)).fetchone()
+        assert result["scan_status"] == "quarantined"
+        assert row["scan_status"] == "quarantined"
+        assert row["risk_level"] == "high"
+        assert scan_row["result"] == "infected"
+        assert scan_row["malware_name"] == "Eicar-Test-Signature"
+    finally:
+        conn.close()
+
+
+def test_scan_uploaded_file_fail_closed_when_clamav_missing(tmp_path, monkeypatch):
+    conn = _conn()
+    sample = tmp_path / "note.txt"
+    sample.write_text("hello", encoding="utf-8")
+    monkeypatch.setattr("services.upload_security._resolve_clamav_command", lambda policy: None)
+    try:
+        result = create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path=str(sample),
+            privacy_mode="public_attachment",
+            size_bytes=sample.stat().st_size,
+            original_filename="note.txt",
+            user={"effective_level": "trusted"},
+            scan_now=True,
+        )
+        row = conn.execute("SELECT scan_status, risk_level FROM uploaded_files WHERE id=?", (result["file_id"],)).fetchone()
+        assert result["scan_status"] == "quarantined"
+        assert row["scan_status"] == "quarantined"
+        assert row["risk_level"] == "high"
+    finally:
+        conn.close()
 
 
 def test_safe_public_filename_strips_paths_and_control_chars():

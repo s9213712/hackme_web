@@ -510,12 +510,21 @@ const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "warn_high_risk_downloads",
   "allow_inline_preview_for_high_risk",
   "e2ee_server_scan_claim_allowed",
-  "revoke_shares_on_suspension"
+  "revoke_shares_on_suspension",
+  "scanner_enabled",
+  "fail_closed_on_scanner_error",
+  "quarantine_on_infected",
+  "validate_magic_mime"
 ];
 const CLOUD_DRIVE_POLICY_INT_FIELDS = [
+  "scanner_timeout_seconds",
   "max_archive_files",
   "max_archive_uncompressed_bytes",
   "max_daily_downloads"
+];
+const CLOUD_DRIVE_POLICY_TEXT_FIELDS = [
+  "scanner_backend",
+  "scanner_command"
 ];
 
 function cloudDrivePolicyInputId(key) {
@@ -550,6 +559,10 @@ async function loadCloudDriveAdminPolicy() {
     const el = $(cloudDrivePolicyInputId(key));
     if (el) el.value = p[key] ?? 0;
   });
+  CLOUD_DRIVE_POLICY_TEXT_FIELDS.forEach((key) => {
+    const el = $(cloudDrivePolicyInputId(key));
+    if (el) el.value = p[key] || "";
+  });
   if ($("s-cd-notes")) $("s-cd-notes").value = p.notes || "";
   if (msg) msg.textContent = "";
 }
@@ -565,6 +578,10 @@ async function saveCloudDriveAdminPolicy() {
   CLOUD_DRIVE_POLICY_INT_FIELDS.forEach((key) => {
     const el = $(cloudDrivePolicyInputId(key));
     if (el) payload[key] = parseInt(el.value || "0");
+  });
+  CLOUD_DRIVE_POLICY_TEXT_FIELDS.forEach((key) => {
+    const el = $(cloudDrivePolicyInputId(key));
+    if (el) payload[key] = el.value || "";
   });
   payload.notes = $("s-cd-notes")?.value || "";
   const res = await fetch(API + "/admin/cloud-drive/security-policy", {

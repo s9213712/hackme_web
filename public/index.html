@@ -766,6 +766,25 @@
             <div class="field"><label><input type="checkbox" id="s-cd-allow-inline-preview-for-high-risk" /> 允許高風險檔案 inline preview</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-e2ee-server-scan-claim-allowed" /> 允許 E2EE 宣稱已完成伺服器掃描</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-revoke-shares-on-suspension" /> 停權時撤銷分享</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-scanner-enabled" /> 啟用本地掃毒</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-fail-closed-on-scanner-error" /> 掃描失敗時封鎖</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-quarantine-on-infected" /> 偵測異常時隔離</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-validate-magic-mime" /> 檢查副檔名/MIME 偽裝</label></div>
+            </div>
+            <div class="field">
+              <label>本地掃描器</label>
+              <select id="s-cd-scanner-backend">
+                <option value="clamav">ClamAV（clamdscan / clamscan）</option>
+                <option value="disabled">停用</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>掃描器命令路徑（空白代表自動尋找 clamdscan / clamscan）</label>
+              <input type="text" id="s-cd-scanner-command" placeholder="/usr/bin/clamdscan" />
+            </div>
+            <div class="field">
+              <label>掃描逾時秒數</label>
+              <input type="number" id="s-cd-scanner-timeout-seconds" min="1" />
             </div>
             <div class="field">
               <label>壓縮檔最多檔案數</label>

@@ -412,6 +412,19 @@ Default risk policy blocks executable-like files from public/private uploads,
 marks E2EE files as `unknown_encrypted` or high risk, and requires archives and
 macro documents to be scanned before release.
 
+Local malware scanning is designed for free self-hosted tools. Root can enable
+the `clamav` backend, optionally pin a scanner command path, set scan timeout,
+choose fail-closed behavior, quarantine infected files, and keep extension/MIME
+magic-byte validation enabled. If no command is configured, the service looks
+for `clamdscan` first and then `clamscan`. Install ClamAV on the host and keep
+signatures updated with `freshclam` before enabling strict production use.
+
+For server-readable `public_attachment` and `private_scannable` files, the
+central scan flow performs magic-byte validation, zip archive safety checks, and
+ClamAV scanning before a pending file can become `clean`. Infected files become
+`quarantined` by default. E2EE files are never advertised as fully server-scanned
+because the server cannot decrypt their content.
+
 Cloud drive safety now exposes:
 
 - `GET /api/files/quota`: current user storage usage, remaining bytes, file count, per-level upload limits, and grouping by privacy/risk/scan status.
