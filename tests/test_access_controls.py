@@ -6,6 +6,9 @@ from services.access_controls import (
     client_ip_allowed,
     hash_maintenance_bypass_token,
     is_browser_user_agent,
+    maintenance_bypass_expires_at,
+    maintenance_bypass_required_payload,
+    maintenance_bypass_token_is_expired,
     parse_ip_whitelist,
     verify_maintenance_bypass_token,
 )
@@ -27,6 +30,7 @@ def _admin_app(settings_state=None, actor=None):
         "root_ip_whitelist": "",
         "browser_only_mode_enabled": False,
         "maintenance_bypass_token_hash": "",
+        "maintenance_bypass_token_expires_at": "",
     }
 
     def save_settings(data):
@@ -86,6 +90,21 @@ def test_maintenance_bypass_token_hash_roundtrip():
     assert verify_maintenance_bypass_token("secret-token", "") is False
 
 
+def test_maintenance_bypass_token_expiry_is_enforced():
+    stored = hash_maintenance_bypass_token("secret-token")
+    future = maintenance_bypass_expires_at(30)
+    assert verify_maintenance_bypass_token("secret-token", stored, future) is True
+    assert verify_maintenance_bypass_token("secret-token", stored, "2000-01-01T00:00:00+00:00") is False
+    assert maintenance_bypass_token_is_expired("2000-01-01T00:00:00+00:00") is True
+
+
+def test_maintenance_bypass_required_payload_names_token_header_not_hash():
+    payload = maintenance_bypass_required_payload("need bypass")
+    assert payload["requires"] == "maintenance_bypass_token"
+    assert payload["header"] == "X-Maintenance-Bypass-Token"
+    assert "hash" not in str(payload).lower()
+
+
 def test_admin_access_controls_endpoint_updates_safe_payload():
     app, state = _admin_app()
     client = app.test_client()
@@ -107,12 +126,15 @@ def test_admin_access_controls_endpoint_updates_safe_payload():
 def test_admin_rotates_maintenance_bypass_token_once():
     app, state = _admin_app()
     client = app.test_client()
-    res = client.post("/api/admin/access-controls/maintenance-bypass-token", json={"confirm": "ROTATE"})
+    res = client.post("/api/admin/access-controls/maintenance-bypass-token", json={"confirm": "ROTATE", "ttl_minutes": 15})
     data = res.get_json()
     assert res.status_code == 200
     assert data["token"]
+    assert data["ttl_minutes"] == 15
+    assert data["expires_at"]
     assert data["access_controls"]["maintenance_bypass_token_configured"] is True
-    assert verify_maintenance_bypass_token(data["token"], state["maintenance_bypass_token_hash"]) is True
+    assert data["access_controls"]["maintenance_bypass_token_expires_at"] == state["maintenance_bypass_token_expires_at"]
+    assert verify_maintenance_bypass_token(data["token"], state["maintenance_bypass_token_hash"], state["maintenance_bypass_token_expires_at"]) is True
     assert "maintenance_bypass_token_hash" not in data["access_controls"]
 
 

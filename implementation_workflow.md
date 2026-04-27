@@ -147,9 +147,10 @@
 - [x] 風險分級基礎：`low` / `medium` / `high` / `blocked` / `unknown_encrypted`
 - [x] root 功能開關：`feature_privacy_uploads_enabled`
 - [x] 雲端硬碟安全政策：scan-before-download / block unclean / high-risk warning / E2EE 不宣稱伺服器掃毒
+- [x] storage root / relative path 防穿越 helper 與測試
 - [x] 用戶容量 API：目前用量、剩餘容量、會員等級配額、單檔限制、每日上傳限制
 - [x] 雲端硬碟 UI：用量條、剩餘容量、風險/掃描/隱私模式統計
-- [x] Phase 1 對應測試：完整 pytest `68 passed`
+- [x] Phase 1 對應測試：完整 pytest `86 passed`
 - [ ] attachments schema
 - [ ] 上傳 API：MIME 白名單 + magic bytes
 - [ ] 圖片 re-encode 去 EXIF

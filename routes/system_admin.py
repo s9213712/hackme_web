@@ -11,6 +11,7 @@ from services.access_controls import (
     access_control_settings_payload,
     generate_maintenance_bypass_token,
     hash_maintenance_bypass_token,
+    maintenance_bypass_expires_at,
 )
 from services.bootstrap import CURRENT_SCHEMA_VERSION, get_schema_version
 from services.member_levels import (
@@ -411,6 +412,7 @@ def register_system_admin_routes(app, deps):
                 updates[key] = data[key]
         if "clear_maintenance_bypass_token" in data and data.get("clear_maintenance_bypass_token"):
             updates["maintenance_bypass_token_hash"] = ""
+            updates["maintenance_bypass_token_expires_at"] = ""
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
         saved = save_settings(updates)
@@ -432,14 +434,25 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
         if data.get("confirm") != "ROTATE":
             return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE"}), 400
+        ttl_minutes = data.get("ttl_minutes", 30)
+        try:
+            ttl_minutes = max(1, min(int(ttl_minutes), 24 * 60))
+        except Exception:
+            ttl_minutes = 30
         token = generate_maintenance_bypass_token()
-        save_settings({"maintenance_bypass_token_hash": hash_maintenance_bypass_token(token)})
+        expires_at = maintenance_bypass_expires_at(ttl_minutes)
+        save_settings({
+            "maintenance_bypass_token_hash": hash_maintenance_bypass_token(token),
+            "maintenance_bypass_token_expires_at": expires_at,
+        })
         audit("MAINTENANCE_BYPASS_TOKEN_ROTATED", get_client_ip(), user=actor["username"], success=True,
-              detail="token_hash_rotated")
+              detail=f"token_hash_rotated,ttl_minutes={ttl_minutes},expires_at={expires_at}")
         return json_resp({
             "ok": True,
             "msg": "maintenance bypass token 已更新，token 只會顯示這一次",
             "token": token,
+            "expires_at": expires_at,
+            "ttl_minutes": ttl_minutes,
             "access_controls": access_control_settings_payload(get_system_settings()),
         })
 

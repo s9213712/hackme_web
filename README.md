@@ -86,7 +86,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-007`
+- Current release ID: `2026.04.27-008`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -175,12 +175,14 @@ Server access controls:
 
 - `GET /api/admin/access-controls`: root-only read of root IP whitelist, browser-only mode, and maintenance bypass token state.
 - `PUT /api/admin/access-controls`: root-only update for `root_ip_whitelist_enabled`, `root_ip_whitelist`, `browser_only_mode_enabled`, and bypass token clearing.
-- `POST /api/admin/access-controls/maintenance-bypass-token`: root-only token rotation; the raw token is returned once and only its hash is stored.
+- `POST /api/admin/access-controls/maintenance-bypass-token`: root-only token rotation; the raw token is returned once, only its hash is stored, and it expires by default after 30 minutes.
 
 Root IP whitelist blocks root login and root API usage from non-whitelisted IPs
 when enabled. Browser-only mode blocks non-browser API clients unless they hold
 a valid maintenance bypass token. Maintenance bypass tokens can temporarily
 allow API access during maintenance mode without disabling maintenance globally.
+Failures include the required header name `X-Maintenance-Bypass-Token`; users
+must provide the raw token, never `maintenance_bypass_token_hash`.
 
 ### Health Center
 
@@ -261,6 +263,7 @@ Other important defaults:
 | `root_ip_whitelist` | empty |
 | `browser_only_mode_enabled` | `false` |
 | `maintenance_bypass_token_hash` | empty |
+| `maintenance_bypass_token_expires_at` | empty |
 | `allow_register` | `true` |
 | `require_email_verification` | `false` |
 | `max_login_failures` | `3` |

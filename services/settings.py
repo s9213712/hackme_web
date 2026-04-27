@@ -15,6 +15,7 @@ DEFAULT_SETTINGS = {
     "root_ip_whitelist": "",
     "browser_only_mode_enabled": False,
     "maintenance_bypass_token_hash": "",
+    "maintenance_bypass_token_expires_at": "",
     "allow_register": True,
     "require_email_verification": False,
     "max_login_failures": 3,

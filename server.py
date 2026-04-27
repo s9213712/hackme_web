@@ -29,6 +29,7 @@ from services.audit import (
 from services.access_controls import (
     client_ip_allowed,
     is_browser_user_agent,
+    maintenance_bypass_required_payload,
     verify_maintenance_bypass_token,
 )
 from services.auth import (
@@ -118,6 +119,7 @@ from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
+from services.storage_paths import validate_storage_root
 from services.upload_security import ensure_upload_security_schema
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -149,7 +151,7 @@ os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
 os.makedirs(ANCHOR_DIR, exist_ok=True)
-os.makedirs(STORAGE_DIR, exist_ok=True)
+STORAGE_DIR = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=True))
 
 
 def _load_or_create_text_secret(env_name, path, *, generator):
@@ -389,6 +391,7 @@ def has_valid_maintenance_bypass(settings=None):
     return verify_maintenance_bypass_token(
         get_request_maintenance_bypass_token(),
         settings.get("maintenance_bypass_token_hash", ""),
+        settings.get("maintenance_bypass_token_expires_at", ""),
     )
 
 
@@ -884,7 +887,9 @@ def enforce_browser_only_mode():
         target_user=(actor["username"] if actor else "-"),
         detail=f"browser_only_mode:path={request.path}",
     )
-    return json_resp({"ok":False,"msg":"browser-only mode 已啟用，請使用瀏覽器存取"}), 403
+    return json_resp(maintenance_bypass_required_payload(
+        "browser-only mode 已啟用，請使用瀏覽器存取；維護腳本可由 root 提供維護旁路 token。"
+    )), 403
 
 
 @app.before_request
@@ -909,12 +914,16 @@ def restrict_cors():
         username = normalize_text(data.get("username")) if isinstance(data, dict) else ""
         if username == "root":
             return None
-        return json_resp({"ok":False,"msg":"系統進入緊急維護模式，僅允許最高管理者登入"}, 503)
+        return json_resp(maintenance_bypass_required_payload(
+            "系統進入緊急維護模式，僅允許最高管理者登入；維護腳本可由 root 提供維護旁路 token。"
+        )), 503
 
     actor = get_current_user_ctx()
     if actor and actor["username"] == "root":
         return None
-    return json_resp({"ok":False,"msg":"系統進入緊急維護模式，請等待最高管理者處理"}, 503)
+    return json_resp(maintenance_bypass_required_payload(
+        "系統進入緊急維護模式，請等待最高管理者處理，或由 root 提供維護旁路 token。"
+    )), 503
 
 
 @app.before_request
