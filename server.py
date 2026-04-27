@@ -439,7 +439,7 @@ FEATURE_ROUTE_GATES = (
     ("feature_accounts_enabled", ("/api/admin/users",)),
     ("feature_system_health_enabled", ("/api/admin/health",)),
     ("feature_privacy_uploads_enabled", ("/api/files/", "/api/files", "/api/cloud-drive/", "/api/cloud-drive", "/api/root/announcement-attachment-requests", "/api/crypto/")),
-    ("feature_storage_albums_enabled", ("/api/storage/", "/api/storage")),
+    ("feature_storage_albums_enabled", ("/api/storage/", "/api/storage", "/api/admin/storage/", "/api/admin/storage")),
 )
 
 

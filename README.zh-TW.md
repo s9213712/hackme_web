@@ -528,7 +528,11 @@ quota 記帳、回收筒狀態與相簿歸屬，和 Cloud Drive 實體檔案表
 音樂、影片、PDF、文字文件與壓縮檔目錄清單，入口為
 `/api/cloud-drive/files/{id}/preview`；影音/PDF 內容由 `/preview/content` 透過
 CSRF fetch blob。E2EE、未通過掃描或高風險檔案預設不允許 inline preview，
-除非 root 在安全政策明確開啟。
+除非 root 在安全政策明確開啟。Storage Admin API 提供
+`/api/admin/storage/summary`、`/api/admin/storage/users`、
+`/api/admin/storage/files`、`POST /api/admin/storage/sync-quota` 給 manager/root；
+root-only `POST /api/admin/storage/trash/purge` 需確認字串
+`PURGE STORAGE TRASH`，且只移除 storage 邏輯 entry，不刪 Cloud Drive 原始檔。
 
 ### 功能開關與預設值
 

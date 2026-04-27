@@ -417,6 +417,54 @@ def test_cloud_drive_audio_preview_content(tmp_path):
     assert content.mimetype.startswith("audio/")
 
 
+def test_storage_admin_summary_sync_and_root_purge(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"admin visible"), "admin.txt"),
+            "virtual_path": "admin.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+    assert client.delete(f"/api/storage/files/{storage_file_id}").status_code == 200
+
+    actor_box["actor"] = _actor(4, "admin", "manager")
+    summary = client.get("/api/admin/storage/summary")
+    assert summary.status_code == 200
+    assert summary.get_json()["summary"]["trashed_files"] == 1
+
+    users = client.get("/api/admin/storage/users")
+    assert users.status_code == 200
+    assert any(row["username"] == "alice" for row in users.get_json()["users"])
+
+    files = client.get("/api/admin/storage/files?include_trashed=1")
+    assert files.status_code == 200
+    assert files.get_json()["files"][0]["owner_username"] == "alice"
+
+    synced = client.post("/api/admin/storage/sync-quota")
+    assert synced.status_code == 200
+    assert len(synced.get_json()["synced"]) >= 1
+
+    denied = client.post("/api/admin/storage/trash/purge", json={"confirm": "PURGE STORAGE TRASH"})
+    assert denied.status_code == 403
+
+    actor_box["actor"] = _actor(5, "root", "super_admin")
+    bad_confirm = client.post("/api/admin/storage/trash/purge", json={"confirm": "wrong"})
+    assert bad_confirm.status_code == 400
+    purged = client.post("/api/admin/storage/trash/purge", json={"confirm": "PURGE STORAGE TRASH"})
+    assert purged.status_code == 200
+    assert purged.get_json()["purged"] == 1
+
+
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

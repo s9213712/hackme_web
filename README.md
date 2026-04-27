@@ -568,6 +568,11 @@ documents, and archive directory listings through `/api/cloud-drive/files/{id}/p
 media/PDF content is fetched through `/preview/content` with CSRF headers.
 E2EE, unclean, or high-risk files are blocked from inline preview unless the root
 security policy explicitly permits the risk.
+Storage admin APIs expose `/api/admin/storage/summary`,
+`/api/admin/storage/users`, `/api/admin/storage/files`, and
+`POST /api/admin/storage/sync-quota` for manager/root operators. Root-only
+`POST /api/admin/storage/trash/purge` requires `PURGE STORAGE TRASH` and removes
+only logical storage entries, not shared Cloud Drive originals.
 
 ### Feature Flags and Defaults
 

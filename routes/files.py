@@ -4,6 +4,7 @@ from services.upload_security import (
     get_user_cloud_drive_usage,
     log_file_access,
 )
+from datetime import datetime
 from services.cloud_drive import (
     attach_existing_file,
     can_download_file,
@@ -71,6 +72,14 @@ def register_file_routes(app, deps):
         role = "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
         return role_rank(role) >= role_rank("manager")
 
+    def _manager_or_403():
+        actor, err = _actor_or_401()
+        if err:
+            return None, err
+        if not _is_manager(actor):
+            return None, json_resp({"ok": False, "msg": "需要管理員權限"}), 403
+        return actor, None
+
     def _requires_download_warning(policy, row):
         if not policy.get("warn_high_risk_downloads"):
             return False
@@ -98,6 +107,167 @@ def register_file_routes(app, deps):
             except Exception:
                 pass
         return out
+
+    @app.route("/api/admin/storage/summary", methods=["GET"])
+    @require_csrf_safe
+    def admin_storage_summary():
+        actor, err = _manager_or_403()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            file_stats = conn.execute(
+                """
+                SELECT COUNT(sf.id) AS storage_files,
+                       COALESCE(SUM(f.size_bytes), 0) AS storage_bytes,
+                       SUM(CASE WHEN sf.is_trashed=1 THEN 1 ELSE 0 END) AS trashed_files
+                FROM storage_files sf
+                JOIN uploaded_files f ON f.id=sf.file_id
+                WHERE sf.deleted_at IS NULL AND f.deleted_at IS NULL
+                """
+            ).fetchone()
+            album_count = conn.execute("SELECT COUNT(*) AS c FROM albums WHERE deleted_at IS NULL").fetchone()
+            share_count = conn.execute("SELECT COUNT(*) AS c FROM storage_share_links WHERE revoked_at IS NULL").fetchone()
+            users = conn.execute(
+                """
+                SELECT COUNT(*) AS users_with_storage,
+                       COALESCE(SUM(used_bytes), 0) AS used_bytes,
+                       COALESCE(SUM(file_count), 0) AS file_count
+                FROM user_storage
+                """
+            ).fetchone()
+            return json_resp({
+                "ok": True,
+                "summary": {
+                    "storage_files": int(file_stats["storage_files"] or 0),
+                    "storage_bytes": int(file_stats["storage_bytes"] or 0),
+                    "trashed_files": int(file_stats["trashed_files"] or 0),
+                    "albums": int(album_count["c"] or 0),
+                    "active_share_links": int(share_count["c"] or 0),
+                    "users_with_storage": int(users["users_with_storage"] or 0),
+                    "tracked_used_bytes": int(users["used_bytes"] or 0),
+                    "tracked_file_count": int(users["file_count"] or 0),
+                },
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/storage/users", methods=["GET"])
+    @require_csrf_safe
+    def admin_storage_users():
+        actor, err = _manager_or_403()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT u.id AS user_id, u.username, COALESCE(us.quota_bytes, 0) AS quota_bytes,
+                       COALESCE(us.used_bytes, 0) AS used_bytes,
+                       COALESCE(us.reserved_bytes, 0) AS reserved_bytes,
+                       COALESCE(us.file_count, 0) AS file_count,
+                       COALESCE(SUM(CASE WHEN sf.is_trashed=1 AND sf.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS trashed_files
+                FROM users u
+                LEFT JOIN user_storage us ON us.user_id=u.id
+                LEFT JOIN storage_files sf ON sf.owner_user_id=u.id
+                GROUP BY u.id, u.username, us.quota_bytes, us.used_bytes, us.reserved_bytes, us.file_count
+                ORDER BY used_bytes DESC, file_count DESC, u.id ASC
+                LIMIT 200
+                """
+            ).fetchall()
+            return json_resp({"ok": True, "users": [dict(row) for row in rows]})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/storage/files", methods=["GET"])
+    @require_csrf_safe
+    def admin_storage_files():
+        actor, err = _manager_or_403()
+        if err:
+            return err
+        user_id = request.args.get("user_id")
+        include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            where = "sf.deleted_at IS NULL AND f.deleted_at IS NULL"
+            params = []
+            if user_id:
+                where += " AND sf.owner_user_id=?"
+                params.append(int(user_id))
+            if not include_trashed:
+                where += " AND sf.is_trashed=0"
+            rows = conn.execute(
+                f"""
+                SELECT sf.*, f.size_bytes, f.scan_status, f.risk_level, f.privacy_mode,
+                       u.username AS owner_username
+                FROM storage_files sf
+                JOIN uploaded_files f ON f.id=sf.file_id
+                JOIN users u ON u.id=sf.owner_user_id
+                WHERE {where}
+                ORDER BY sf.updated_at DESC
+                LIMIT 200
+                """,
+                tuple(params),
+            ).fetchall()
+            return json_resp({"ok": True, "files": [dict(row) for row in rows]})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/storage/sync-quota", methods=["POST"])
+    @require_csrf
+    def admin_storage_sync_quota():
+        actor, err = _manager_or_403()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            rows = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
+            synced = []
+            for row in rows:
+                synced.append(sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_sync_quota"))
+            conn.commit()
+            audit("STORAGE_ADMIN_SYNC_QUOTA", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"users={len(synced)}")
+            return json_resp({"ok": True, "synced": synced})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/storage/trash/purge", methods=["POST"])
+    @require_csrf
+    def admin_storage_purge_trash():
+        actor, err = _manager_or_403()
+        if err:
+            return err
+        if not _is_root(actor):
+            return json_resp({"ok": False, "msg": "只有 root 可清理 storage 回收筒"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if data.get("confirm") != "PURGE STORAGE TRASH":
+            return json_resp({"ok": False, "msg": "confirm 必須等於 PURGE STORAGE TRASH"}), 400
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            user_id = data.get("user_id")
+            where = "is_trashed=1 AND deleted_at IS NULL"
+            params = []
+            if user_id:
+                where += " AND owner_user_id=?"
+                params.append(int(user_id))
+            now = datetime.now().isoformat()
+            cur = conn.execute(f"UPDATE storage_files SET deleted_at=?, updated_at=? WHERE {where}", (now, now, *params))
+            users = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
+            for row in users:
+                sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_purge_trash")
+            conn.commit()
+            audit("STORAGE_ADMIN_PURGE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={cur.rowcount}, user_id={user_id or '*'}")
+            return json_resp({"ok": True, "purged": cur.rowcount})
+        finally:
+            conn.close()
 
     @app.route("/api/files/quota", methods=["GET"])
     @require_csrf_safe
