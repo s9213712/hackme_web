@@ -95,11 +95,11 @@ async function forceDefaultPasswordChange() {
   if (!currentUserId) return;
   forcedPasswordChangeMode = true;
   await editUser(currentUserId);
-  setUserEditMsg("此預設帳號初次登入必須先變更密碼。變更完成後請用新密碼重新登入。", false);
+  setUserEditMsg("此預設帳號初次登入必須先變更密碼。請輸入目前密碼與新密碼，變更完成後請用新密碼重新登入。", false);
   const cancelBtn = $("user-edit-cancel");
   if (cancelBtn) cancelBtn.style.display = "none";
-  const passwordInput = $("edit-user-pw");
-  if (passwordInput) passwordInput.focus();
+  const currentPasswordInput = $("edit-user-current-pw");
+  if (currentPasswordInput) currentPasswordInput.focus();
 }
 
 async function doRegister() {
@@ -247,7 +247,11 @@ async function editUser(userId) {
     avatar_file_id: source.avatar_file_id || "",
     avatar_crop: source.avatar_crop || {},
     role: source.role || "user",
-    status: source.status || "active"
+    status: source.status || "active",
+    base_level: source.base_level || source.member_level || "normal",
+    effective_level: source.effective_level || source.base_level || source.member_level || "normal",
+    sanction_status: source.sanction_status || "none",
+    sanction_until: source.sanction_until || ""
   };
 
   editingUserId = userId;
@@ -258,9 +262,18 @@ async function editUser(userId) {
   editingUserOriginal.phone = current.phone;
   editingUserOriginal.role = current.role;
   editingUserOriginal.status = current.status;
+  editingUserOriginal.base_level = current.base_level;
+  editingUserOriginal.sanction_status = current.sanction_status;
+  editingUserOriginal.sanction_until = current.sanction_until;
 
   const usernameEl = $("user-edit-username");
   if (usernameEl) usernameEl.textContent = current.username || String(userId);
+  const memberLevelEl = $("user-edit-member-level");
+  if (memberLevelEl) {
+    memberLevelEl.textContent = current.base_level === current.effective_level
+      ? current.effective_level
+      : `${current.effective_level}（原始等級：${current.base_level}）`;
+  }
   setUserEditField("edit-user-nickname", current.nickname);
   setUserEditField("edit-user-realname", current.real_name);
   setUserEditField("edit-user-idno", current.id_number);
@@ -283,6 +296,12 @@ async function editUser(userId) {
   if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (currentPwField) currentPwField.style.display = editingUserIsSelf ? "" : "none";
+  const memberFields = $("edit-user-member-level-fields");
+  if (memberFields) memberFields.style.display = editingUserIsSelf || currentUser !== "root" ? "none" : "";
+  setUserEditField("edit-user-base-level", current.base_level);
+  setUserEditField("edit-user-sanction-status", current.sanction_status);
+  setUserEditField("edit-user-sanction-until", current.sanction_until ? current.sanction_until.slice(0, 16) : "");
+  setUserEditField("edit-user-level-reason", "");
   const cancelBtn = $("user-edit-cancel");
   if (cancelBtn) cancelBtn.style.display = forcedPasswordChangeMode ? "none" : "";
   setUserEditField("edit-user-current-pw", "");
@@ -343,6 +362,10 @@ async function submitEditUser() {
   const phone = $("edit-user-phone")?.value.trim() || "";
   const role = $("edit-user-role")?.value || "";
   const status = $("edit-user-status")?.value || "";
+  const baseLevel = $("edit-user-base-level")?.value || "";
+  const sanctionStatus = $("edit-user-sanction-status")?.value || "none";
+  const sanctionUntil = $("edit-user-sanction-until")?.value || "";
+  const levelReason = $("edit-user-level-reason")?.value.trim() || "";
   const currentPassword = $("edit-user-current-pw")?.value || "";
   const password = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
@@ -354,6 +377,15 @@ async function submitEditUser() {
   if (phone !== editingUserOriginal.phone) payload.phone = phone;
   if (!editingUserIsSelf && canManageUsers && role !== editingUserOriginal.role) payload.role = role;
   if (!editingUserIsSelf && canManageUsers && status !== editingUserOriginal.status) payload.status = status;
+  if (!editingUserIsSelf && currentUser === "root") {
+    if (baseLevel && baseLevel !== editingUserOriginal.base_level) payload.base_level = baseLevel;
+    if (sanctionStatus !== editingUserOriginal.sanction_status) payload.sanction_status = sanctionStatus;
+    const normalizedOriginalUntil = (editingUserOriginal.sanction_until || "").slice(0, 16);
+    if (sanctionUntil !== normalizedOriginalUntil) payload.sanction_until = sanctionUntil ? new Date(sanctionUntil).toISOString() : "";
+    if (payload.base_level || payload.sanction_status || Object.prototype.hasOwnProperty.call(payload, "sanction_until")) {
+      payload.level_update_reason = levelReason || "root manual member level update";
+    }
+  }
 
   if (password || passwordConfirm) {
     if (password !== passwordConfirm) {
@@ -547,6 +579,33 @@ async function promoteUser(userId, username) {
   } else {
     alert(json.msg || "升級失敗");
   }
+}
+
+async function updateUserMemberLevel(userId, username) {
+  const select = $(`member-level-select-${userId}`);
+  const level = select?.value || "";
+  if (!["newbie", "normal", "trusted", "vip"].includes(level)) {
+    alert("請選擇有效的一般會員等級");
+    return;
+  }
+  if (!confirm(`確定要將「${username}」的會員等級調整為 ${level}？`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${userId}`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({
+      base_level: level,
+      level_update_reason: `admin member level change to ${level}`
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    await loadUsers();
+    return;
+  }
+  alert(json.msg || "會員等級更新失敗");
 }
 
 async function demoteUser(userId, username, currentRole) {

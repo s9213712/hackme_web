@@ -39,15 +39,30 @@ function renderUsers() {
         actionButtons.push(blockBtn);
       }
     }
-    // Promote button (manager/super_admin can promote user→manager)
     if ((currentRole === "manager" || currentRole === "super_admin") && u.role === "user" && !isSelf) {
-      const promBtn = document.createElement("button");
-      promBtn.className = "btn";
-      promBtn.type = "button";
-      promBtn.textContent = "⬆ 升級";
-      promBtn.style.color = "#82b1ff";
-      promBtn.addEventListener("click", () => promoteUser(u.id, u.username));
-      actionButtons.push(promBtn);
+      const levelWrap = document.createElement("span");
+      levelWrap.style.display = "inline-flex";
+      levelWrap.style.gap = ".25rem";
+      levelWrap.style.alignItems = "center";
+      const levelSelect = document.createElement("select");
+      levelSelect.id = `member-level-select-${u.id}`;
+      levelSelect.style.maxWidth = "105px";
+      ["newbie", "normal", "trusted", "vip"].forEach((level) => {
+        const opt = document.createElement("option");
+        opt.value = level;
+        opt.textContent = level;
+        if ((u.base_level || u.effective_level || u.member_level || "normal") === level) opt.selected = true;
+        levelSelect.appendChild(opt);
+      });
+      const levelBtn = document.createElement("button");
+      levelBtn.className = "btn";
+      levelBtn.type = "button";
+      levelBtn.textContent = "套用等級";
+      levelBtn.style.color = "#82b1ff";
+      levelBtn.addEventListener("click", () => updateUserMemberLevel(u.id, u.username));
+      levelWrap.appendChild(levelSelect);
+      levelWrap.appendChild(levelBtn);
+      actionButtons.push(levelWrap);
     }
     // Demote button (super_admin only: manager→user, user→delete)
     if (currentRole === "super_admin" && u.role === "manager" && !isSelf) {
@@ -161,6 +176,7 @@ function renderUsers() {
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");
     appendTextCell(u.role_label || u.role || "");
+    appendTextCell(`${u.effective_level || u.member_level || "-"}${u.base_level && u.base_level !== u.effective_level ? ` (${u.base_level})` : ""}`);
     const statusCell = document.createElement("td");
     const statusSpan = document.createElement("span");
     statusSpan.textContent = "正常";

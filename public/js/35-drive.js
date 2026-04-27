@@ -87,7 +87,9 @@ function renderDriveFiles(files) {
         </div>
         <div class="drive-file-actions">
           <button class="btn" type="button" onclick="previewDriveFile('${sanitize(file.id)}')">預覽</button>
+          <button class="btn" type="button" onclick="editDriveTextFile('${sanitize(file.id)}')">編輯文字</button>
           <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(file.id)}', ${warn ? "true" : "false"})">下載</button>
+          <button class="btn btn-danger" type="button" onclick="deleteDriveFile('${sanitize(file.id)}')">刪除</button>
         </div>
       </div>
     `;
@@ -107,6 +109,32 @@ async function loadDriveFiles(csrf) {
     return;
   }
   renderDriveFiles(json.files || []);
+}
+
+async function uploadDriveFile() {
+  const input = $("drive-upload-file");
+  if (!input || !input.files || !input.files[0]) {
+    alert("請先選擇檔案");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  form.append("privacy_mode", $("drive-upload-privacy-mode")?.value || "private_scannable");
+  const res = await fetch(API + "/cloud-drive/upload", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    alert(json.msg || "雲端硬碟上傳失敗");
+    return;
+  }
+  input.value = "";
+  await loadDriveDashboard();
 }
 
 async function downloadDriveFile(fileId, likelyHighRisk) {
@@ -143,6 +171,16 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function deleteDriveFile(fileId) {
+  if (!window.confirm("刪除此雲端硬碟檔案？既有附件引用會失效。")) return;
+  try {
+    await storageAction(`/cloud-drive/files/${encodeURIComponent(fileId)}`, "DELETE");
+    await loadDriveDashboard();
+  } catch (err) {
+    alert(err.message || "刪除失敗");
+  }
 }
 
 let currentDrivePreviewUrl = "";
@@ -197,7 +235,7 @@ async function previewDriveFile(fileId) {
     renderDrivePreviewMetadata(preview);
     if (!panel) return;
     if (preview.render_mode === "text") {
-      panel.innerHTML += `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+      panel.innerHTML += `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}<button class="btn" type="button" onclick="editDriveTextFile('${sanitize(fileId)}')">線上修改此文字檔</button>`;
       return;
     }
     if (preview.render_mode === "archive") {
@@ -218,6 +256,244 @@ async function previewDriveFile(fileId) {
     clearDrivePreviewUrl();
     if (panel) panel.innerHTML = `<div class="drive-empty">${sanitize(err.message || "預覽失敗")}</div>`;
   }
+}
+
+async function editDriveTextFile(fileId) {
+  const panel = $("drive-preview-panel");
+  const card = $("drive-preview-card");
+  if (card) card.style.display = "block";
+  if (panel) panel.innerHTML = `<div class="drive-empty">讀取文字內容中...</div>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "讀取失敗");
+    const preview = json.preview || {};
+    if (preview.render_mode !== "text") throw new Error("目前只支援文字類檔案線上修改");
+    if (panel) {
+      panel.innerHTML = `
+        <div><strong>${sanitize(preview.filename || "text")}</strong></div>
+        <textarea id="drive-text-editor" rows="14">${sanitize(preview.text || "")}</textarea>
+        <div class="drive-file-actions" style="justify-content:flex-start;">
+          <button class="btn btn-primary" type="button" onclick="saveDriveTextFile('${sanitize(fileId)}')">儲存修改</button>
+          <button class="btn" type="button" onclick="previewDriveFile('${sanitize(fileId)}')">取消</button>
+        </div>
+      `;
+    }
+  } catch (err) {
+    if (panel) panel.innerHTML = `<div class="drive-empty">${sanitize(err.message || "讀取失敗")}</div>`;
+  }
+}
+
+async function saveDriveTextFile(fileId) {
+  const editor = $("drive-text-editor");
+  if (!editor) return;
+  try {
+    await storageAction(`/cloud-drive/files/${encodeURIComponent(fileId)}/text`, "PUT", { content: editor.value });
+    await loadDriveDashboard();
+    await previewDriveFile(fileId);
+  } catch (err) {
+    alert(err.message || "儲存失敗");
+  }
+}
+
+function renderContextAttachmentRefs(targetId, refs) {
+  const list = $(targetId);
+  if (!list) return;
+  if (!Array.isArray(refs) || !refs.length) {
+    list.innerHTML = `<div class="drive-empty">尚無附件</div>`;
+    return;
+  }
+  list.innerHTML = refs.map((ref) => {
+    const name = ref.original_filename_plain_for_public || ref.file_id || "download.bin";
+    const warn = driveFileNeedsWarning(ref);
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(name)}</strong>
+          <div class="drive-card-sub">${formatDriveBytes(ref.size_bytes || 0)} · ${sanitize(ref.context_type || "-")}#${sanitize(ref.context_id || "-")} · risk=${sanitize(ref.risk_level || "-")} · scan=${sanitize(ref.scan_status || "-")}</div>
+        </div>
+        <div class="drive-file-actions">
+          <button class="btn" type="button" onclick="previewDriveFile('${sanitize(ref.file_id)}')">預覽</button>
+          <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(ref.file_id)}', ${warn ? "true" : "false"})">下載</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadContextAttachments(contextType, contextId, targetId) {
+  if (!contextType || !contextId || !targetId) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/cloud-drive/refs?context_type=${encodeURIComponent(contextType)}&context_id=${encodeURIComponent(contextId)}`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    const list = $(targetId);
+    if (list) list.innerHTML = `<div class="drive-empty">${sanitize(json.msg || "附件讀取失敗")}</div>`;
+    return;
+  }
+  renderContextAttachmentRefs(targetId, json.refs || []);
+}
+
+async function uploadContextAttachment({ fileInputId, contextType, contextId, grantUserIds = [], grantRole = null, refresh }) {
+  const input = $(fileInputId);
+  if (!input?.files?.[0]) {
+    alert("請先選擇附件檔案");
+    return;
+  }
+  if (!contextId) {
+    alert("請先選擇對話、聊天室或公告");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  form.append("privacy_mode", "private_scannable");
+  form.append("context_type", contextType);
+  form.append("context_id", String(contextId));
+  grantUserIds.forEach((id) => form.append("grant_user_ids", String(id)));
+  if (grantRole) form.append("grant_role", grantRole);
+  const res = await fetch(API + "/cloud-drive/upload", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    alert(json.msg || "附件上傳失敗");
+    return;
+  }
+  input.value = "";
+  if (typeof refresh === "function") await refresh();
+}
+
+async function attachExistingContextAttachment({ fileId, contextType, contextId, grantUserIds = [], grantRole = null, refresh }) {
+  if (!fileId) {
+    alert("請輸入既有雲端 file_id");
+    return;
+  }
+  if (!contextId) {
+    alert("請先選擇對話、聊天室或公告");
+    return;
+  }
+  await storageAction("/cloud-drive/attach-existing", "POST", {
+    file_id: fileId,
+    context_type: contextType,
+    context_id: String(contextId),
+    grant_user_ids: grantUserIds,
+    grant_role: grantRole,
+    can_preview: true
+  });
+  if (typeof refresh === "function") await refresh();
+}
+
+async function uploadChatAttachment() {
+  await uploadContextAttachment({
+    fileInputId: "chat-attachment-file",
+    contextType: "group_chat",
+    contextId: selectedChatRoomId,
+    grantRole: "user",
+    refresh: () => loadContextAttachments("group_chat", selectedChatRoomId, "chat-attachment-list")
+  });
+}
+
+async function attachExistingChatFile() {
+  await attachExistingContextAttachment({
+    fileId: $("chat-attachment-existing-file-id")?.value.trim() || "",
+    contextType: "group_chat",
+    contextId: selectedChatRoomId,
+    grantRole: "user",
+    refresh: () => loadContextAttachments("group_chat", selectedChatRoomId, "chat-attachment-list")
+  });
+}
+
+function currentDmGrantUserIds() {
+  const thread = typeof currentDmThread === "function" ? currentDmThread() : null;
+  return thread?.other_user_id ? [thread.other_user_id] : [];
+}
+
+async function uploadDmAttachment() {
+  await uploadContextAttachment({
+    fileInputId: "dm-attachment-file",
+    contextType: "dm",
+    contextId: selectedDmThreadId,
+    grantUserIds: currentDmGrantUserIds(),
+    refresh: () => loadContextAttachments("dm", selectedDmThreadId, "dm-attachment-list")
+  });
+}
+
+async function attachExistingDmFile() {
+  await attachExistingContextAttachment({
+    fileId: $("dm-attachment-existing-file-id")?.value.trim() || "",
+    contextType: "dm",
+    contextId: selectedDmThreadId,
+    grantUserIds: currentDmGrantUserIds(),
+    refresh: () => loadContextAttachments("dm", selectedDmThreadId, "dm-attachment-list")
+  });
+}
+
+async function createAnnouncementAttachmentRequest(fileId, announcementId, reason) {
+  await storageAction("/cloud-drive/announcement-attachment-requests", "POST", {
+    file_id: fileId,
+    announcement_id: announcementId,
+    reason: reason || "announcement attachment"
+  });
+  alert("公告附件請求已送出，等待 root 核准");
+}
+
+async function uploadAnnouncementAttachmentRequest() {
+  const announcementId = Number($("announcement-attachment-announcement-id")?.value || 0);
+  const input = $("announcement-attachment-file");
+  if (!announcementId) {
+    alert("請輸入公告 ID");
+    return;
+  }
+  if (!input?.files?.[0]) {
+    alert("請先選擇公告附件");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  form.append("privacy_mode", "private_scannable");
+  const res = await fetch(API + "/cloud-drive/upload", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    alert(json.msg || "公告附件上傳失敗");
+    return;
+  }
+  input.value = "";
+  await createAnnouncementAttachmentRequest(json.file?.file_id, announcementId, $("announcement-attachment-reason")?.value || "");
+}
+
+async function attachExistingAnnouncementFile() {
+  const announcementId = Number($("announcement-attachment-announcement-id")?.value || 0);
+  const fileId = $("announcement-attachment-existing-file-id")?.value.trim() || "";
+  if (!announcementId) {
+    alert("請輸入公告 ID");
+    return;
+  }
+  if (!fileId) {
+    alert("請輸入既有雲端 file_id");
+    return;
+  }
+  await createAnnouncementAttachmentRequest(fileId, announcementId, $("announcement-attachment-reason")?.value || "");
 }
 
 function renderStorageFiles(files) {

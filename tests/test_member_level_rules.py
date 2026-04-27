@@ -134,7 +134,7 @@ def test_normal_user_can_interact(tmp_path):
         assert can_post(user, conn) is True
         assert can_comment(user, conn) is True
         assert can_dm(user, conn=conn) is True
-        assert can_upload(user, conn) is False
+        assert can_upload(user, conn) is True
     finally:
         conn.close()
 

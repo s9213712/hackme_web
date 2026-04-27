@@ -178,13 +178,14 @@ function applySiteConfig(config) {
 function renderServerVersion(meta) {
   if (!meta || typeof meta !== "object") return;
   serverMeta = { ...serverMeta, ...meta };
-  const el = $("server-version-badge");
-  if (!el) return;
   const releaseId = typeof serverMeta.release_id === "string" && serverMeta.release_id
     ? serverMeta.release_id
     : (typeof serverMeta.version === "string" && serverMeta.version ? serverMeta.version : "unknown");
   const startedAt = typeof serverMeta.started_at === "string" && serverMeta.started_at ? formatChatTime(serverMeta.started_at) : "";
-  el.textContent = startedAt ? `發佈號: ${releaseId} · 啟動 ${startedAt}` : `發佈號: ${releaseId}`;
+  const text = startedAt ? `發佈號: ${releaseId} · 啟動 ${startedAt}` : `發佈號: ${releaseId}`;
+  document.querySelectorAll("[data-server-version-badge]").forEach((el) => {
+    el.textContent = text;
+  });
 }
 
 async function loadSiteConfig() {
@@ -566,6 +567,8 @@ function setAuthState(json, showLoginHero = false) {
   }
   $("me-user").textContent = sanitize(currentUser || "-");
   $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
+  const levelEl = $("me-level");
+  if (levelEl) levelEl.textContent = sanitize(json.effective_level || json.member_level || "-");
   $("me-nickname").textContent = sanitize(json.nickname || "-");
   const selfEditBtn = $("self-edit-btn");
   if (selfEditBtn) selfEditBtn.style.display = currentUser ? "" : "none";

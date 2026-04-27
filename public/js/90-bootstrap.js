@@ -28,6 +28,9 @@ function bindUiEvents() {
   const regBtn      = $("reg-btn");
   const captchaRefresh = $("captcha-refresh");
   const logoutBtn   = $("logout-btn");
+  const bugReportOpenBtn = $("bug-report-open-btn");
+  const bugReportSubmitBtn = $("bug-report-submit-btn");
+  const bugReportCancelBtn = $("bug-report-cancel-btn");
   const notificationToggle = $("notification-toggle");
   const notificationReadAll = $("notification-read-all");
   const selfEditBtn = $("self-edit-btn");
@@ -50,6 +53,7 @@ function bindUiEvents() {
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
+  const serverModeApply = $("server-mode-apply-btn");
   const healthRefresh = $("health-refresh-btn");
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
@@ -64,13 +68,19 @@ function bindUiEvents() {
   const chatRefreshRoomBtn = $("chat-room-refresh-btn");
   const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
   const chatSendBtn = $("chat-send-btn");
+  const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
+  const chatAttachmentExistingBtn = $("chat-attachment-existing-btn");
   const chatInput = $("chat-message-input");
   const dmCreateBtn = $("dm-create-thread-btn");
   const dmRefreshBtn = $("dm-refresh-btn");
   const dmSendBtn = $("dm-send-btn");
+  const dmAttachmentUploadBtn = $("dm-attachment-upload-btn");
+  const dmAttachmentExistingBtn = $("dm-attachment-existing-btn");
   const dmInput = $("dm-message-input");
   const dmBlockBtn = $("dm-block-user-btn");
   const communityAnnouncementBtn = $("community-announcement-submit");
+  const announcementAttachmentUploadBtn = $("announcement-attachment-upload-btn");
+  const announcementAttachmentExistingBtn = $("announcement-attachment-existing-btn");
   const communityCategoryCreateBtn = $("community-category-create-btn");
   const communityBoardRequestBtn = $("community-board-request-btn");
   const communityThreadSubmitBtn = $("community-thread-submit");
@@ -82,10 +92,12 @@ function bindUiEvents() {
   const communityBoardSearch = $("community-board-search");
   const communityThreadSearch = $("community-thread-search");
   const driveRefreshBtn = $("drive-refresh-btn");
+  const driveUploadBtn = $("drive-upload-btn");
   const storageUploadBtn = $("storage-upload-btn");
   const albumCreateBtn = $("album-create-btn");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
+  const bugReportOverlay = $("bug-report-overlay");
 
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
@@ -116,6 +128,9 @@ function bindUiEvents() {
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (captchaRefresh) captchaRefresh.addEventListener("click", loadCaptchaChallenge);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
+  if (bugReportOpenBtn) bugReportOpenBtn.addEventListener("click", showBugReportDialog);
+  if (bugReportSubmitBtn) bugReportSubmitBtn.addEventListener("click", submitBugReport);
+  if (bugReportCancelBtn) bugReportCancelBtn.addEventListener("click", hideBugReportDialog);
   if (notificationToggle) notificationToggle.addEventListener("click", toggleNotificationPanel);
   if (notificationReadAll) notificationReadAll.addEventListener("click", markAllNotificationsRead);
   if (selfEditBtn) selfEditBtn.addEventListener("click", () => {
@@ -134,11 +149,17 @@ function bindUiEvents() {
     if (selectedChatRoomId) loadChatMessages(selectedChatRoomId, false);
   });
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
+  if (chatAttachmentUploadBtn) chatAttachmentUploadBtn.addEventListener("click", uploadChatAttachment);
+  if (chatAttachmentExistingBtn) chatAttachmentExistingBtn.addEventListener("click", attachExistingChatFile);
   if (dmCreateBtn) dmCreateBtn.addEventListener("click", createDmThread);
   if (dmRefreshBtn) dmRefreshBtn.addEventListener("click", loadDmThreads);
   if (dmSendBtn) dmSendBtn.addEventListener("click", sendDmMessage);
+  if (dmAttachmentUploadBtn) dmAttachmentUploadBtn.addEventListener("click", uploadDmAttachment);
+  if (dmAttachmentExistingBtn) dmAttachmentExistingBtn.addEventListener("click", attachExistingDmFile);
   if (dmBlockBtn) dmBlockBtn.addEventListener("click", blockSelectedDmUser);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
+  if (announcementAttachmentUploadBtn) announcementAttachmentUploadBtn.addEventListener("click", uploadAnnouncementAttachmentRequest);
+  if (announcementAttachmentExistingBtn) announcementAttachmentExistingBtn.addEventListener("click", attachExistingAnnouncementFile);
   if (communityCategoryCreateBtn) communityCategoryCreateBtn.addEventListener("click", createCommunityCategory);
   if (communityBoardRequestBtn) communityBoardRequestBtn.addEventListener("click", requestCommunityBoard);
   if (communityThreadSubmitBtn) communityThreadSubmitBtn.addEventListener("click", createCommunityThread);
@@ -165,6 +186,7 @@ function bindUiEvents() {
     if (selectedCommunityBoardId) openCommunityBoard(selectedCommunityBoardId);
   });
   if (driveRefreshBtn) driveRefreshBtn.addEventListener("click", loadDriveDashboard);
+  if (driveUploadBtn) driveUploadBtn.addEventListener("click", uploadDriveFile);
   if (storageUploadBtn) storageUploadBtn.addEventListener("click", uploadStorageFile);
   if (albumCreateBtn) albumCreateBtn.addEventListener("click", createAlbum);
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
@@ -176,10 +198,14 @@ function bindUiEvents() {
   if (adminAddOverlay) adminAddOverlay.addEventListener("click", (e) => {
     if (e.target === adminAddOverlay) hideAdminAddDialog();
   });
+  if (bugReportOverlay) bugReportOverlay.addEventListener("click", (e) => {
+    if (e.target === bugReportOverlay) hideBugReportDialog();
+  });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       hideUserEditDialog();
       hideAdminAddDialog();
+      hideBugReportDialog();
       closeNotificationPanel();
     }
   });
@@ -233,6 +259,7 @@ function bindUiEvents() {
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
+  if (serverModeApply) serverModeApply.addEventListener("click", applyServerMode);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);

@@ -298,6 +298,8 @@ def register_community_routes(app, deps):
         return "super_admin" if actor["username"] == "root" else actor["role"]
 
     def can_manage_community(actor):
+        if actor and actor.get("username") == "root":
+            return True
         return role_rank(actor_role(actor)) >= role_rank("manager")
 
     def board_moderator_row(conn, board_id, actor):
@@ -311,6 +313,8 @@ def register_community_routes(app, deps):
     def can_moderate_board(conn, board_id, actor, permission=None):
         if not actor:
             return False
+        if actor.get("username") == "root":
+            return True
         if can_manage_community(actor):
             return True
         row = board_moderator_row(conn, board_id, actor)
@@ -323,6 +327,8 @@ def register_community_routes(app, deps):
     def can_delete_community_content(actor, author_user_id=None, owner_user_id=None):
         if not actor:
             return False
+        if actor.get("username") == "root":
+            return True
         if can_manage_community(actor):
             return True
         return actor["id"] in (author_user_id, owner_user_id)

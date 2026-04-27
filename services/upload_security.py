@@ -663,7 +663,7 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None):
     quota_mb = int(rule.get("attachment_quota_mb") or 0)
     max_file_size_mb = int(rule.get("max_attachment_size_mb") or 0)
     upload_rate_limit_per_day = int(rule.get("upload_rate_limit_per_day") or 0)
-    can_upload = bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"}
+    can_upload = (role == "super_admin" or bool(rule.get("can_upload_attachment"))) and sanction_status not in {"restricted", "suspended"}
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
     total_bytes = None if role == "super_admin" else quota_mb * 1024 * 1024

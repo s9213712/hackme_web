@@ -393,6 +393,54 @@ def test_cloud_drive_text_and_archive_preview(tmp_path):
     assert archive_body["entries"][0]["name"] == "docs/readme.txt"
 
 
+def test_cloud_drive_text_file_can_be_edited_online(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"old text"), "note.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    edited = client.put(f"/api/cloud-drive/files/{file_id}/text", json={"content": "new text"})
+    assert edited.status_code == 200
+    assert edited.get_json()["size_bytes"] == len("new text")
+    preview = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert preview.status_code == 200
+    assert preview.get_json()["preview"]["text"] == "new text"
+
+    actor_box["actor"] = _actor(2, "bob")
+    denied = client.put(f"/api/cloud-drive/files/{file_id}/text", json={"content": "take over"})
+    assert denied.status_code == 403
+
+
+def test_cloud_drive_delete_file_from_ui_api_invalidates_download(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"delete me"), "delete.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+    deleted = client.delete(f"/api/cloud-drive/files/{file_id}")
+    assert deleted.status_code == 200
+    assert client.get(f"/api/cloud-drive/files/{file_id}/download").status_code == 404
+
+
 def test_cloud_drive_audio_preview_content(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -504,7 +552,7 @@ def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_referenc
     assert deleted.status_code == 200
     actor_box["actor"] = _actor(2, "bob")
     download = client.get(f"/api/cloud-drive/files/{file_id}/download")
-    assert download.status_code == 403
+    assert download.status_code == 404
 
 
 def test_announcement_attachment_requires_root_approval_before_visible(tmp_path):

@@ -93,6 +93,13 @@
       margin-bottom: 1.8rem;
     }
 
+    .auth-version {
+      margin-top: 1rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: .74rem;
+    }
+
     /* ── Tabs ─────────────────────────────────────────────── */
     .tabs {
       display: flex;

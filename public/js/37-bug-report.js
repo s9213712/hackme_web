@@ -1,0 +1,61 @@
+'use strict';
+
+function showBugReportDialog() {
+  const overlay = $("bug-report-overlay");
+  if (!overlay) return;
+  const page = window.location.pathname + window.location.hash;
+  const title = $("bug-report-title");
+  if (title && !title.value) title.value = "";
+  const msg = $("bug-report-msg");
+  if (msg) msg.className = "msg";
+  overlay.classList.add("show");
+  if (title) title.focus();
+  overlay.dataset.page = page;
+}
+
+function hideBugReportDialog() {
+  const overlay = $("bug-report-overlay");
+  if (overlay) overlay.classList.remove("show");
+}
+
+function setBugReportMsg(text, ok) {
+  const el = $("bug-report-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
+}
+
+async function submitBugReport() {
+  const payload = {
+    severity: $("bug-report-severity")?.value || "medium",
+    title: $("bug-report-title")?.value.trim() || "",
+    description: $("bug-report-description")?.value.trim() || "",
+    steps: $("bug-report-steps")?.value.trim() || "",
+    expected: $("bug-report-expected")?.value.trim() || "",
+    actual: $("bug-report-actual")?.value.trim() || "",
+    page: $("bug-report-overlay")?.dataset.page || (window.location.pathname + window.location.hash)
+  };
+  if (!payload.title || !payload.description) {
+    setBugReportMsg("請填寫標題與問題描述", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/bug-reports", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    setBugReportMsg(json.msg || "Bug 回報失敗", false);
+    return;
+  }
+  ["bug-report-title", "bug-report-description", "bug-report-steps", "bug-report-expected", "bug-report-actual"].forEach((id) => {
+    const el = $(id);
+    if (el) el.value = "";
+  });
+  setBugReportMsg(`已建立回報：${json.report_id}`, true);
+  setTimeout(hideBugReportDialog, 900);
+}

@@ -1,8 +1,11 @@
+import hashlib
+
 from services.upload_security import (
     get_cloud_drive_safety_summary,
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
     log_file_access,
+    scan_uploaded_file,
 )
 from datetime import datetime
 from services.cloud_drive import (
@@ -881,6 +884,8 @@ def register_file_routes(app, deps):
             allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
             if not row:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if row["deleted_at"]:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
                 return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
             policy = get_cloud_drive_security_policy(conn)
@@ -909,6 +914,8 @@ def register_file_routes(app, deps):
             allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
             if not row:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if row["deleted_at"]:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
                 return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
             policy = get_cloud_drive_security_policy(conn)
@@ -933,6 +940,66 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/cloud-drive/files/<file_id>/text", methods=["PUT"])
+    @require_csrf
+    def cloud_drive_update_text(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        content = data.get("content") if isinstance(data, dict) else None
+        if not isinstance(content, str):
+            return json_resp({"ok": False, "msg": "content 必須是文字"}), 400
+        raw = content.encode("utf-8")
+        if len(raw) > 512 * 1024:
+            return json_resp({"ok": False, "msg": "線上編輯目前限制 512KB 以內文字檔"}), 400
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+            if not row or row["deleted_at"]:
+                return json_resp({"ok": False, "msg": "找不到檔案或檔案已刪除"}), 404
+            if int(row["owner_user_id"]) != int(actor["id"]):
+                return json_resp({"ok": False, "msg": "只能修改自己的雲端硬碟檔案"}), 403
+            if str(row["privacy_mode"] or "").startswith("e2ee"):
+                return json_resp({"ok": False, "msg": "E2EE 檔案不可由伺服器線上修改"}), 400
+            category, _ = preview_category(row)
+            if category != "text":
+                return json_resp({"ok": False, "msg": "目前只支援文字類檔案線上修改"}), 415
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            with open(path, "wb") as handle:
+                handle.write(raw)
+            now = datetime.now().isoformat()
+            conn.execute(
+                """
+                UPDATE uploaded_files
+                SET size_bytes=?, plaintext_sha256=?, updated_at=?
+                WHERE id=?
+                """,
+                (len(raw), hashlib.sha256(raw).hexdigest(), now, file_id),
+            )
+            scan_result = scan_uploaded_file(
+                conn,
+                file_id=file_id,
+                file_path=path,
+                filename=row["original_filename_plain_for_public"],
+                declared_mime=row["mime_type_plain_for_public"],
+            )
+            log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="text_edit", result="allowed", reason=scan_result.get("scan_status"), ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return json_resp({"ok": True, "file_id": file_id, "scan_result": scan_result, "size_bytes": len(raw)})
+        finally:
+            conn.close()
+
     @app.route("/api/files/<file_id>/download", methods=["GET"])
     @app.route("/api/cloud-drive/files/<file_id>/download", methods=["GET"])
     @require_csrf_safe
@@ -945,6 +1012,8 @@ def register_file_routes(app, deps):
             ensure_cloud_drive_attachment_schema(conn)
             allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id)
             if not row:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if row["deleted_at"]:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
                 conn.commit()

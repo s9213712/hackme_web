@@ -47,6 +47,9 @@ async function openChatRoom(roomId, autoPoll = true) {
   const member = $("chat-room-member");
   if (member) member.textContent = `持有者：${target.owner_username || "未知"}`;
   await loadChatMessages(id, false);
+  if (typeof loadContextAttachments === "function") {
+    await loadContextAttachments("group_chat", id, "chat-attachment-list");
+  }
   if (autoPoll) startChatPoll();
   const msgInput = $("chat-message-input");
   if (msgInput) msgInput.focus();

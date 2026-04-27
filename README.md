@@ -7,6 +7,8 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
+**Current Release ID: `2026.04.27-015`**
+
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
 hardening in a compact single-node deployment.
@@ -34,7 +36,7 @@ Then open:
 https://127.0.0.1:5000/
 ```
 
-Bootstrap accounts are no longer hard-coded. On a fresh database, `root` is created from `HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if `HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set.
+Bootstrap accounts are no longer hard-coded. On a fresh database, `root` is created from `HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if `HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set. These three bootstrap accounts remain supported as the default account set, but first login forces a password change when the password still matches the configured bootstrap environment value.
 
 ## Developer Security Dependencies
 
@@ -139,6 +141,22 @@ curl http://127.0.0.1:5000/api/version
 
 It should match `services/release_info.py` and the README release ID.
 
+### Bug Reports
+
+Logged-in users can click `回報 Bug` after login. Reports are written as JSON
+runtime files under `reports/bugs/` and are intentionally ignored by git. Set
+`HTML_LEARNING_REPORTS_DIR` to move the runtime report directory.
+Root can query recent report metadata with:
+
+```bash
+curl -b cookies.txt http://127.0.0.1:5000/api/admin/bug-reports
+```
+
+When asking the agent to continue maintenance, point it at `reports/bugs/` so
+the saved reports can be triaged, fixed, tested, and then archived or removed.
+The repository tracks only `reports/.gitkeep` and `reports/bugs/.gitkeep`; bug
+payloads remain local runtime data.
+
 ### Admin UI says listen IP/port needs restart
 
 That is expected. Root can save `server_listen_host` and `server_listen_port`
@@ -164,6 +182,13 @@ For faster focused verification during development, run:
 ```bash
 PYTHONPATH=. python3 -m pytest -q tests
 ```
+
+Security-focused checks include:
+
+- `PYTHONPATH=. pytest -q tests/test_plaintext_secrets_scan.py`
+- `PYTHONPATH=. pytest -q tests/test_upload_security.py`
+- `PYTHONPATH=. pytest -q tests/test_integrity_guard.py`
+- `PYTHONPATH=. pytest -q tests/test_bug_reports.py`
 
 ## Why This Project Exists
 
@@ -215,7 +240,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-014`
+- Current release ID: `2026.04.27-015`
 - Current schema version: `19`
 
 ### Governance and Member Levels
@@ -238,7 +263,7 @@ member under restriction keeps `base_level=vip`, but receives
 | Level | Default Interaction Model |
 |---|---|
 | `newbie` | comments allowed, posts moderated/limited, no DM, no uploads |
-| `normal` | normal post/comment/DM, no uploads by default |
+| `normal` | normal post/comment/DM, small upload quota by default |
 | `trusted` | higher limits, uploads enabled, higher report weight |
 | `vip` | highest quotas, uploads enabled, promotion requires admin/root approval |
 | `restricted` | read-only interaction model, no post/comment/DM/upload |
@@ -253,6 +278,9 @@ password.
 Rules are loaded from the DB table `member_level_rules`, not hard-coded at route
 level. Root can update rule rows through `/api/admin/member-level-rules` or the
 admin Settings -> Member Levels UI.
+Normal users can see their effective membership level in the post-login account
+summary and in the self account edit dialog. If a sanction overrides the base
+level, the dialog shows both effective and original levels.
 
 Configurable rule fields include:
 
@@ -445,7 +473,7 @@ before a pending file can become `clean`.
 Infected files become `quarantined` by default. E2EE files are never advertised
 as fully server-scanned because the server cannot decrypt their content.
 
-Cloud drive safety now exposes:
+Cloud drive safety and attachment integration now expose:
 
 - `GET /api/files/quota`: current user storage usage, remaining bytes, file count, per-level upload limits, and grouping by privacy/risk/scan status.
 - `GET /api/files/security-policy`: active cloud drive safety policy plus user-visible restrictions.
@@ -459,6 +487,8 @@ Cloud drive safety now exposes:
 - `GET /api/cloud-drive/files`: list the current user's cloud drive files.
 - `POST /api/cloud-drive/upload`: upload into the owner's cloud drive and optionally attach the uploaded file to a context.
 - `POST /api/cloud-drive/attach-existing`: attach an existing cloud drive file to `dm`, `group_chat`, `forum_post`, or `forum_comment` without copying the physical file.
+- `PUT /api/cloud-drive/files/{file_id}/text`: owner-only online text editing for safe text previews.
+- `DELETE /api/cloud-drive/files/{file_id}`: owner/root soft delete; deleted originals invalidate all references and downloads return 404.
 - `GET /api/cloud-drive/files/{file_id}/download`: download after server-side permission, scan status, and deletion checks.
 - `POST /api/cloud-drive/announcement-attachment-requests`: manager/admin announcement attachment request.
 - `POST /api/root/announcement-attachment-requests/{id}/review`: root-only approve/reject; approved announcement files become root-owned management files.
@@ -467,10 +497,10 @@ The logged-in UI includes a cloud drive tab that shows used capacity, remaining
 capacity, single-file limit, daily upload limit, risk distribution, scan status,
 privacy mode distribution, and the currently enforced safety measures.
 
-Messages, posts, comments, and announcements should store only `cloud_file_refs`
-records. The physical file is stored once under the owner's cloud drive, and
-`file_access_grants` controls who can download or preview it. Deleting the
-source cloud file invalidates all references.
+Messages, group chats, direct messages, forum posts/comments, and announcements
+store only `cloud_file_refs` records. The physical file is stored once under the
+owner's cloud drive, and `file_access_grants` controls who can download or
+preview it. Deleting the source cloud file invalidates all references.
 
 Root can configure cloud drive storage from Settings -> Cloud Drive with
 `cloud_drive_storage_root`. The value must be an absolute, safe path outside
@@ -608,13 +638,13 @@ storage, and per-level member quotas from the same web surface.
 | `feature_forum_core_enabled` | `true` |
 | `feature_ui_rebuild_enabled` | `false` |
 | `feature_reports_notifications_enabled` | `true` |
-| `feature_dm_enabled` | `false` |
-| `feature_attachments_enabled` | `false` |
-| `feature_storage_albums_enabled` | `false` |
+| `feature_dm_enabled` | `true` |
+| `feature_attachments_enabled` | `true` |
+| `feature_storage_albums_enabled` | `true` |
 | `feature_personalization_enabled` | `false` |
 | `feature_social_search_enabled` | `false` |
 | `feature_advanced_security_enabled` | `false` |
-| `feature_privacy_uploads_enabled` | `false` |
+| `feature_privacy_uploads_enabled` | `true` |
 
 Other important defaults:
 
@@ -655,6 +685,10 @@ keeping all behavior in one giant file.
 - `routes/public.py`
 - `routes/chat.py`
 - `routes/users.py`
+- `routes/community.py`
+- `routes/dm.py`
+- `routes/files.py`
+- `routes/bug_reports.py`
 - `routes/appeals.py`
 - `routes/reports_notifications.py`
 - `routes/moderation.py`
@@ -663,20 +697,32 @@ keeping all behavior in one giant file.
 
 ### Backend Service Modules
 
+- `services/access_controls.py`
 - `services/auth.py`
 - `services/audit.py`
-- `services/settings.py`
-- `services/violations.py`
-- `services/security_events.py`
 - `services/bootstrap.py`
+- `services/captcha.py`
 - `services/chat_support.py`
+- `services/cloud_drive.py`
+- `services/file_previews.py`
 - `services/governance_records.py`
+- `services/identity.py`
+- `services/integrity_guard.py`
 - `services/member_levels.py`
 - `services/moderation_proposals.py`
 - `services/notifications.py`
+- `services/password_strength.py`
 - `services/permissions.py`
 - `services/release_info.py`
+- `services/security_events.py`
+- `services/server_bind.py`
+- `services/settings.py`
 - `services/snapshots.py`
+- `services/storage_albums.py`
+- `services/storage_maintenance.py`
+- `services/storage_paths.py`
+- `services/upload_security.py`
+- `services/violations.py`
 
 ### Frontend Structure
 
@@ -686,7 +732,13 @@ The frontend no longer relies on a single large application file.
 - `public/js/00-core.js` contains shared state and utility helpers
 - `public/js/10-users.js` contains account-table rendering
 - `public/js/20-chat.js` contains chat UI logic
+- `public/js/25-community.js` contains forum/community UI logic
 - `public/js/30-appeals.js` contains appeal and report UI logic
+- `public/js/32-notifications.js` contains notification center UI logic
+- `public/js/33-dm.js` contains direct message UI logic
+- `public/js/34-markdown-editor.js` contains the lightweight Markdown editor
+- `public/js/35-drive.js` contains cloud drive, attachment, preview, and storage UI logic
+- `public/js/37-bug-report.js` contains user bug report UI logic
 - `public/js/40-auth-users.js` contains login, registration, and profile actions
 - `public/js/50-admin.js` contains admin, audit, settings, and health views
 - `public/js/90-bootstrap.js` wires DOM events and application startup
@@ -714,6 +766,7 @@ The frontend no longer relies on a single large application file.
 - `logs/` holds runtime logs
 - `anchors/` holds audit-chain head snapshots
 - `chats/` holds encrypted chat transcript sidecars
+- `reports/bugs/` holds local runtime bug reports and is ignored by git
 - `.fkey`, `.csrfkey`, `.integrity_key`, and `.chain_seed` are generated on first boot and must be persisted across restarts
 
 For test automation, all of these directories can be overridden with:
@@ -722,6 +775,7 @@ For test automation, all of these directories can be overridden with:
 - `HTML_LEARNING_LOG_DIR`
 - `HTML_LEARNING_CHAT_DIR`
 - `HTML_LEARNING_ANCHOR_DIR`
+- `HTML_LEARNING_REPORTS_DIR`
 - `HTML_LEARNING_HOST`
 - `HTML_LEARNING_PORT`
 
@@ -739,6 +793,8 @@ Current hardening includes:
 - role-aware server-side authorization enforcement
 - optional IP blocking driven by `system_settings`
 - emergency maintenance mode for integrity failures
+- CI and pre-commit plaintext secret scanning through `gitleaks` plus `scripts/security/scan_plaintext_secrets.py`
+- optional local malware scanning through ClamAV/YARA/Pillow/archive checks as soft dependencies
 
 ## Testing Strategy
 
@@ -801,11 +857,16 @@ same isolated smoke harness.
 | `public/js/` | split frontend logic |
 | `public/styles.css` | frontend styling |
 | `database/bootstrap.schema.sql` | bootstrap schema |
+| `reports/` | local runtime bug reports; only `.gitkeep` files are tracked |
+| `security/secrets_allowlist.yml` | expiring allowlist for plaintext secret scan findings |
+| `docs/security/secrets_scanning.md` | developer guide for gitleaks/custom secret scanning |
 | `scripts/run_prod.sh` | production startup helper |
 | `scripts/pre_push_scan.sh` | static scan + local quality gate wrapper |
 | `scripts/pre_push_checks.py` | isolated functional and security pre-push runner |
+| `scripts/security/scan_plaintext_secrets.py` | custom plaintext secret/log scanner |
 | `tests/smoke_suite.py` | end-to-end smoke and security checks |
 | `.github/workflows/ci.yml` | GitHub Actions pipeline |
+| `.github/workflows/security-secrets-scan.yml` | GitHub Actions plaintext secret scan pipeline |
 
 ## Configuration Model
 

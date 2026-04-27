@@ -96,6 +96,39 @@ def _mark_default_account_password(conn, user_id, now):
     )
 
 
+def _mark_default_account_if_unconfirmed(conn, user_id, now):
+    row = conn.execute(
+        "SELECT must_change_password, is_default_password, password_changed_at FROM users WHERE id=?",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return
+    if not row["password_changed_at"] and not row["must_change_password"] and not row["is_default_password"]:
+        _mark_default_account_password(conn, user_id, now)
+
+
+def _apply_default_account_level(conn, user_id, base_level, now):
+    conn.execute(
+        """
+        UPDATE users
+        SET base_level=CASE WHEN base_level IS NULL OR base_level='' OR base_level='normal' THEN ? ELSE base_level END,
+            effective_level=CASE
+                WHEN sanction_status IN ('restricted', 'suspended') THEN sanction_status
+                WHEN effective_level IS NULL OR effective_level='' OR effective_level='normal' THEN ?
+                ELSE effective_level
+            END,
+            member_level=CASE
+                WHEN sanction_status IN ('restricted', 'suspended') THEN sanction_status
+                WHEN member_level IS NULL OR member_level='' OR member_level='normal' THEN ?
+                ELSE member_level
+            END,
+            updated_at=?
+        WHERE id=?
+        """,
+        (base_level, base_level, base_level, now, user_id),
+    )
+
+
 def _bootstrap_password(env_name, username, *, required):
     password = os.environ.get(env_name, "").strip()
     if password:
@@ -611,6 +644,9 @@ def init_db(
     if not has_root_pw:
         _insert_password_record(conn, root_id, root_password, hash_password, now)
         _mark_default_account_password(conn, root_id, now)
+    elif os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip():
+        _mark_default_account_if_unconfirmed(conn, root_id, now)
+    _apply_default_account_level(conn, root_id, "vip", now)
 
     admin_password = _bootstrap_password("HTML_LEARNING_MANAGER_PASSWORD", "admin", required=False)
     if admin_password:
@@ -628,6 +664,9 @@ def init_db(
         if not has_admin_pw:
             _insert_password_record(conn, admin_id, admin_password, hash_password, now)
             _mark_default_account_password(conn, admin_id, now)
+        else:
+            _mark_default_account_if_unconfirmed(conn, admin_id, now)
+        _apply_default_account_level(conn, admin_id, "trusted", now)
 
     test_password = _bootstrap_password("HTML_LEARNING_TEST_PASSWORD", "test", required=False)
     if test_password:
@@ -645,6 +684,9 @@ def init_db(
         if not has_test_pw:
             _insert_password_record(conn, test_id, test_password, hash_password, now)
             _mark_default_account_password(conn, test_id, now)
+        else:
+            _mark_default_account_if_unconfirmed(conn, test_id, now)
+        _apply_default_account_level(conn, test_id, "trusted", now)
 
     ensure_official_chat_room(conn)
     _STATE["refresh_system_settings"]()

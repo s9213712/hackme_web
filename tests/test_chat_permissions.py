@@ -192,6 +192,31 @@ def test_root_can_delete_manager_message(tmp_path):
     assert _message_block_state(db_path, 3) == 1
 
 
+def test_root_can_delete_message_even_when_not_room_member(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO chat_rooms (id, name, owner_user_id, is_private, is_active, created_at) VALUES (2, 'private', 3, 1, 1, '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO chat_room_members (room_id, user_id, joined_at) VALUES (2, 3, '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at) VALUES (4, 2, 3, 'hidden', 0, NULL, '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.delete("/api/chat/messages/4")
+
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    assert _message_block_state(db_path, 4) == 1
+
+
 def test_restricted_member_cannot_send_chat_message(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)

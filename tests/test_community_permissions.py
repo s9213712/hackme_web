@@ -304,6 +304,25 @@ def test_manager_can_delete_announcement_thread_and_post(tmp_path):
     assert _thread_row(db_path, ids["thread"])["is_deleted"] == 1
 
 
+def test_root_can_delete_announcement_thread_and_post(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    announcement = client.delete(f"/api/community/announcements/{ids['announcement']}")
+    assert announcement.status_code == 200
+    assert announcement.get_json()["ok"] is True
+
+    post = client.delete(f"/api/community/posts/{ids['post']}")
+    assert post.status_code == 200
+    assert post.get_json()["ok"] is True
+
+    thread = client.delete(f"/api/community/threads/{ids['thread']}")
+    assert thread.status_code == 200
+    assert thread.get_json()["ok"] is True
+
+
 def test_soft_deleted_thread_and_post_are_hidden_from_users(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)

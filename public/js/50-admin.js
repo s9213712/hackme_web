@@ -11,7 +11,10 @@ function switchServerTab(tab) {
   });
   if (tab === "health") loadServerHealth();
   if (tab === "integrity") loadIntegrityGuard();
-  if (tab === "settings") loadSettings();
+  if (tab === "settings") {
+    loadSettings();
+    loadServerMode();
+  }
   if (tab === "env") loadServerEnv();
 }
 
@@ -513,6 +516,7 @@ const MEMBER_LEVEL_INT_FIELDS = [
   ["downgrade_violation_threshold", "降級/處分建議門檻"],
   ["session_idle_timeout_minutes", "閒置登出分鐘"]
 ];
+let editableMemberLevelRules = [];
 const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "require_scan_before_download",
   "block_unclean_downloads",
@@ -630,29 +634,51 @@ async function loadEditableMemberLevelRules() {
     container.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "會員等級規則讀取失敗")}</div>`;
     return;
   }
-  const rules = Array.isArray(json.rules) ? json.rules : [];
-  container.innerHTML = rules.map((rule) => {
-    const level = rule.level || "";
-    const bools = MEMBER_LEVEL_BOOL_FIELDS.map(([key, label]) => `
+  editableMemberLevelRules = Array.isArray(json.rules) ? json.rules : [];
+  const selected = $("settings-member-level-select")?.value || editableMemberLevelRules[0]?.level || "normal";
+  container.innerHTML = `
+    <div class="settings-option-grid" style="margin-bottom:.75rem;">
+      <div class="field">
+        <label>選擇要調整的會員等級</label>
+        <select id="settings-member-level-select">
+          ${editableMemberLevelRules.map((rule) => `<option value="${sanitize(rule.level || "")}" ${rule.level === selected ? "selected" : ""}>${sanitize(rule.level || "")}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="btn btn-primary" type="button" id="member-level-rule-save-btn">儲存此等級規則</button>
+      </div>
+    </div>
+    <div id="settings-member-level-editor"></div>
+  `;
+  const select = $("settings-member-level-select");
+  if (select) select.addEventListener("change", () => renderSelectedMemberLevelRule(select.value));
+  const saveBtn = $("member-level-rule-save-btn");
+  if (saveBtn) saveBtn.addEventListener("click", () => saveMemberLevelRule($("settings-member-level-select")?.value || ""));
+  renderSelectedMemberLevelRule(selected);
+}
+
+function renderSelectedMemberLevelRule(level) {
+  const editor = $("settings-member-level-editor");
+  if (!editor) return;
+  const rule = editableMemberLevelRules.find((item) => item.level === level) || editableMemberLevelRules[0];
+  if (!rule) {
+    editor.innerHTML = `<div style="color:#ff4f6d;">尚無會員等級規則</div>`;
+    return;
+  }
+  const bools = MEMBER_LEVEL_BOOL_FIELDS.map(([key, label]) => `
       <label style="font-size:.74rem;color:var(--text);"><input type="checkbox" data-level="${sanitize(level)}" data-rule-bool="${key}" ${rule[key] ? "checked" : ""} /> ${label}</label>
     `).join("");
-    const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
+  const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
       <label style="font-size:.7rem;color:var(--muted);">${label}
         <input type="number" min="0" data-level="${sanitize(level)}" data-rule-int="${key}" value="${Number(rule[key] || 0)}" style="margin-top:.18rem;" />
       </label>
     `).join("");
-    return `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:.7rem;background:rgba(0,0,0,.24);">
-      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.55rem;">
-        <strong style="font-size:.95rem;">${sanitize(level)}</strong>
-        <button class="btn btn-primary" type="button" data-save-member-level="${sanitize(level)}" style="margin-left:auto;padding:.35rem .55rem;font-size:.72rem;">儲存</button>
-      </div>
+  editor.innerHTML = `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:.7rem;background:rgba(0,0,0,.24);">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.55rem;"><strong style="font-size:.95rem;">${sanitize(rule.level || level)}</strong></div>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.35rem;margin-bottom:.55rem;">${bools}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:.45rem;">${ints}</div>
     </div>`;
-  }).join("");
-  container.querySelectorAll("[data-save-member-level]").forEach((btn) => {
-    btn.addEventListener("click", () => saveMemberLevelRule(btn.getAttribute("data-save-member-level")));
-  });
 }
 
 async function saveMemberLevelRule(level) {
@@ -682,6 +708,62 @@ async function saveMemberLevelRule(level) {
     msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) loadMemberLevelRulesSummary();
+}
+
+async function loadServerMode() {
+  if (!currentUser || currentUser !== "root") return;
+  const status = $("server-mode-status");
+  if (!$("server-mode-select")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/server-mode", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    if (status) {
+      status.textContent = json.msg || "伺服器模式讀取失敗";
+      status.style.color = "#ff4f6d";
+    }
+    return;
+  }
+  const mode = json.mode || {};
+  if ($("server-mode-select")) $("server-mode-select").value = mode.current_mode || "preprod";
+  if (status) {
+    const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
+    const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
+    status.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
+    status.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
+  }
+}
+
+async function applyServerMode() {
+  const target = $("server-mode-select")?.value || "preprod";
+  const confirmText = $("server-mode-confirm")?.value || "";
+  const notes = $("server-mode-notes")?.value || "";
+  if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
+    alert("進入 superweak 必須在確認欄輸入 ENABLE_SUPERWEAK");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/server-mode", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ mode: target, confirm: confirmText, notes })
+  });
+  const json = await res.json().catch(() => ({}));
+  const status = $("server-mode-status");
+  if (status) {
+    status.textContent = json.ok ? "伺服器模式已更新" : (json.msg || "伺服器模式更新失敗");
+    status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) {
+    if ($("server-mode-confirm")) $("server-mode-confirm").value = "";
+    await loadServerMode();
+  }
 }
 
 async function loadSettings() {

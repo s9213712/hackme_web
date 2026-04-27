@@ -111,6 +111,10 @@
     <div class="msg" id="reg-msg"></div>
   </div>
 
+  <div class="auth-version">
+    <span data-server-version-badge>發佈號: loading...</span>
+  </div>
+
 </div><!-- /auth-card -->
 
 
@@ -124,6 +128,7 @@
   <div class="info-grid">
     <div>使用者：<span id="me-user">-</span></div>
     <div>角色：<span id="me-role">-</span></div>
+    <div>會員等級：<span id="me-level">-</span></div>
     <div>暱稱：<span id="me-nickname">-</span></div>
   </div>
   <div class="success-toolbar">
@@ -142,6 +147,7 @@
         </div>
       </div>
     </div>
+    <button class="btn" id="bug-report-open-btn" type="button">回報 Bug</button>
     <button class="btn" id="logout-btn">登出</button>
   </div>
 
@@ -193,6 +199,16 @@
           <div class="chat-composer-actions">
             <button class="btn" id="chat-refresh-msg-btn" type="button">重新整理訊息</button>
           </div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">聊天室附件</div>
+            <div class="settings-option-grid">
+              <div class="field"><label>上傳新附件</label><input type="file" id="chat-attachment-file" /></div>
+              <div class="field"><label>既有雲端 file_id</label><input type="text" id="chat-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="chat-attachment-upload-btn" type="button">上傳附件</button></div>
+              <div class="field"><label>&nbsp;</label><button class="btn" id="chat-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
+            </div>
+            <div id="chat-attachment-list" class="drive-file-list"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -219,6 +235,18 @@
                 <label><input type="checkbox" id="community-announcement-pinned" /> 置頂公告</label>
               </div>
               <button class="btn btn-primary" id="community-announcement-submit" type="button">發布公告</button>
+              <div class="drive-card" style="margin-top:.75rem;">
+                <div class="drive-card-title">公告附件請求（需 root 核准）</div>
+                <div class="settings-option-grid">
+                  <div class="field"><label>公告 ID</label><input type="number" id="announcement-attachment-announcement-id" min="1" placeholder="公告 #ID" /></div>
+                  <div class="field"><label>上傳新附件</label><input type="file" id="announcement-attachment-file" /></div>
+                  <div class="field"><label>既有雲端 file_id</label><input type="text" id="announcement-attachment-existing-file-id" placeholder="file_id" /></div>
+                  <div class="field"><label>理由</label><input type="text" id="announcement-attachment-reason" placeholder="附件用途" /></div>
+                  <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="announcement-attachment-upload-btn" type="button">上傳並送審</button></div>
+                  <div class="field"><label>&nbsp;</label><button class="btn" id="announcement-attachment-existing-btn" type="button">既有檔送審</button></div>
+                </div>
+                <div class="drive-card-sub">公告附件視為管理文件，送審後需 root 核准才會對公告生效。</div>
+              </div>
             </div>
           </div>
 
@@ -394,6 +422,29 @@
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
       <div class="drive-card" style="margin-top:1rem;">
+        <div class="drive-card-title">上傳到雲端硬碟</div>
+        <div class="settings-option-grid">
+          <div class="field">
+            <label>選擇檔案</label>
+            <input type="file" id="drive-upload-file" />
+          </div>
+          <div class="field">
+            <label>隱私模式</label>
+            <select id="drive-upload-privacy-mode">
+              <option value="private_scannable">private_scannable</option>
+              <option value="public_attachment">public_attachment</option>
+              <option value="e2ee_vault">e2ee_vault</option>
+              <option value="e2ee_vault_with_client_scan">e2ee_vault_with_client_scan</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button class="btn btn-primary" id="drive-upload-btn" type="button">上傳雲端硬碟</button>
+          </div>
+        </div>
+        <div class="drive-card-sub">上傳會套用會員等級 quota、掃描政策與風險分級。</div>
+      </div>
+      <div class="drive-card" style="margin-top:1rem;">
         <div class="drive-card-title">我的檔案</div>
         <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。影片、音樂、PDF、文字與 ZIP/TAR 可在通過安全政策後預覽。</div>
         <div id="drive-file-list" class="drive-file-list"></div>
@@ -472,6 +523,16 @@
             <textarea id="dm-message-input" rows="2" maxlength="1000" placeholder="輸入站內信，最多 1000 字"></textarea>
             <button class="btn btn-primary" id="dm-send-btn" type="button">送出</button>
           </div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">站內信附件</div>
+            <div class="settings-option-grid">
+              <div class="field"><label>上傳新附件</label><input type="file" id="dm-attachment-file" /></div>
+              <div class="field"><label>既有雲端 file_id</label><input type="text" id="dm-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="dm-attachment-upload-btn" type="button">上傳附件</button></div>
+              <div class="field"><label>&nbsp;</label><button class="btn" id="dm-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
+            </div>
+            <div id="dm-attachment-list" class="drive-file-list"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -506,7 +567,7 @@
             <thead>
               <tr>
                 <th>選取</th><th>ID</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
-                <th>角色</th><th>狀態</th><th>違規</th><th>行為</th>
+                <th>角色</th><th>會員等級</th><th>狀態</th><th>違規</th><th>行為</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -670,6 +731,32 @@
       </div>
 
       <div class="form-section" id="sec-server-settings">
+        <div class="drive-card" style="margin-top:.6rem;margin-bottom:.8rem;">
+          <div class="drive-card-title">Root 伺服器模式</div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>目前 / 目標模式</label>
+              <select id="server-mode-select">
+                <option value="preprod">preprod（準上線）</option>
+                <option value="test">test（測試）</option>
+                <option value="superweak">superweak（弱化測試）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>確認字串（進入 superweak 需 ENABLE_SUPERWEAK）</label>
+              <input type="text" id="server-mode-confirm" placeholder="需要時輸入確認字串" />
+            </div>
+            <div class="field">
+              <label>備註</label>
+              <input type="text" id="server-mode-notes" placeholder="模式切換原因" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" type="button" id="server-mode-apply-btn">套用模式</button>
+            </div>
+          </div>
+          <div id="server-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+        </div>
         <form id="settings-form" style="margin-top:.6rem;">
           <div class="tabs" style="margin-bottom:.85rem;">
             <button class="tab active" type="button" id="tab-settings-security">安全</button>
@@ -967,7 +1054,7 @@
           <div class="form-section" id="sec-settings-member-levels">
             <div class="mini-title" style="margin-bottom:.45rem;">會員等級權限、限額與升降級門檻</div>
             <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">這些設定會直接寫入 member_level_rules，權限檢查由 permission service 集中讀取。</div>
-            <div id="settings-member-level-rules" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem;"></div>
+            <div id="settings-member-level-rules"></div>
             <div id="member-level-settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
           </div>
           <div class="admin-toolbar" style="margin-top:.6rem;">
@@ -999,6 +1086,10 @@
     <div class="field">
       <label>帳號</label>
       <div id="user-edit-username" class="readonly-field"></div>
+    </div>
+    <div class="field">
+      <label>目前會員等級</label>
+      <div id="user-edit-member-level" class="readonly-field"></div>
     </div>
     <div class="field">
       <label>暱稱</label>
@@ -1048,6 +1139,35 @@
         <option value="pending">待審核</option>
         <option value="rejected">已駁回</option>
       </select>
+    </div>
+    <div class="settings-option-grid" id="edit-user-member-level-fields">
+      <div class="field">
+        <label>base_level（原始會員等級）</label>
+        <select id="edit-user-base-level">
+          <option value="newbie">newbie</option>
+          <option value="normal">normal</option>
+          <option value="trusted">trusted</option>
+          <option value="vip">vip</option>
+          <option value="restricted">restricted</option>
+          <option value="suspended">suspended</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>sanction_status（處分覆蓋）</label>
+        <select id="edit-user-sanction-status">
+          <option value="none">none</option>
+          <option value="restricted">restricted</option>
+          <option value="suspended">suspended</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>處分到期時間（可空白）</label>
+        <input type="datetime-local" id="edit-user-sanction-until" />
+      </div>
+      <div class="field">
+        <label>等級變更原因</label>
+        <input type="text" id="edit-user-level-reason" placeholder="root 手動調整" />
+      </div>
     </div>
     <div class="field">
       <label>修改密碼（留空不改）</label>
@@ -1111,6 +1231,48 @@
   </div>
 </div>
 
+<div id="bug-report-overlay" class="user-edit-overlay">
+  <div class="user-edit-modal">
+    <div class="mini-title">回報 Bug</div>
+    <div class="field">
+      <label>嚴重度</label>
+      <select id="bug-report-severity">
+        <option value="medium">medium</option>
+        <option value="low">low</option>
+        <option value="high">high</option>
+        <option value="critical">critical</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>標題</label>
+      <input type="text" id="bug-report-title" maxlength="120" placeholder="例如：root 無法刪除留言" />
+    </div>
+    <div class="field">
+      <label>問題描述</label>
+      <textarea id="bug-report-description" rows="4" maxlength="4000" placeholder="請描述看到的錯誤、畫面或 API 行為"></textarea>
+    </div>
+    <div class="field">
+      <label>重現步驟</label>
+      <textarea id="bug-report-steps" rows="4" maxlength="4000" placeholder="1. 登入 root&#10;2. 進入...&#10;3. 點擊..."></textarea>
+    </div>
+    <div class="settings-option-grid">
+      <div class="field">
+        <label>預期結果</label>
+        <textarea id="bug-report-expected" rows="3" maxlength="2000"></textarea>
+      </div>
+      <div class="field">
+        <label>實際結果</label>
+        <textarea id="bug-report-actual" rows="3" maxlength="2000"></textarea>
+      </div>
+    </div>
+    <div id="bug-report-msg" class="msg"></div>
+    <div class="edit-user-actions">
+      <button type="button" id="bug-report-submit-btn" class="btn btn-primary">送出回報</button>
+      <button type="button" id="bug-report-cancel-btn" class="btn">取消</button>
+    </div>
+  </div>
+</div>
+
 <div id="review-note-overlay" class="user-edit-overlay">
   <div class="user-edit-modal">
     <div class="mini-title" id="review-note-title">審核備註</div>
@@ -1129,7 +1291,7 @@
 
 <div class="footer">
   hackme_web · 密碼使用 Argon2id 雜湊儲存
-  <span id="server-version-badge" style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
+  <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
 <script src="/js/00-core.js" defer></script>
@@ -1141,6 +1303,7 @@
 <script src="/js/33-dm.js" defer></script>
 <script src="/js/34-markdown-editor.js" defer></script>
 <script src="/js/35-drive.js" defer></script>
+<script src="/js/37-bug-report.js" defer></script>
 <script src="/js/40-auth-users.js" defer></script>
 <script src="/js/50-admin.js" defer></script>
 <script src="/js/90-bootstrap.js" defer></script>

@@ -147,6 +147,7 @@ LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(BASE_DIR, "logs"))
 CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(BASE_DIR, "chats"))
 ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(BASE_DIR, "anchors"))
 STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(BASE_DIR, "storage"))
+REPORTS_DIR = _env_path("HTML_LEARNING_REPORTS_DIR", os.path.join(BASE_DIR, "reports"))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
 SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
@@ -158,6 +159,7 @@ os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
 os.makedirs(ANCHOR_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
 
 
 def _load_db_setting_value(db_path, key):
@@ -1020,7 +1022,7 @@ def enforce_required_password_change():
     if not actor or not dict(actor).get("must_change_password"):
         return None
     match = re.fullmatch(r"/api/admin/users/(\d+)", request.path or "")
-    if request.method == "PUT" and match and int(match.group(1)) == int(actor["id"]):
+    if request.method in {"GET", "PUT"} and match and int(match.group(1)) == int(actor["id"]):
         return None
     return json_resp({
         "ok": False,
@@ -1159,6 +1161,7 @@ register_operation_routes(app, {
     "CURRENT_SERVER_BIND_STATE": SERVER_BIND_STATE,
     "DB_PATH": DB_PATH,
     "LOG_DIR": LOG_DIR,
+    "REPORTS_DIR": REPORTS_DIR,
     "SERVER_LOG_PATH": SERVER_LOG_PATH,
     "STORAGE_DIR": STORAGE_DIR,
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,

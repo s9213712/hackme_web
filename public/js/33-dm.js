@@ -128,6 +128,9 @@ async function loadDmMessages(threadId) {
   }
   renderDmMessages(Array.isArray(json.messages) ? json.messages : []);
   await markDmThreadRead(threadId);
+  if (typeof loadContextAttachments === "function") {
+    await loadContextAttachments("dm", threadId, "dm-attachment-list");
+  }
 }
 
 async function sendDmMessage() {

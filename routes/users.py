@@ -469,8 +469,8 @@ def register_user_routes(app, deps):
         is_self = actor["id"] == user_id
         if request.method == "DELETE" and role_rank(actor_role) < role_rank("super_admin"):
             return json_resp({"ok":False,"msg":"只有最高權限可刪除帳號"}), 403
-        if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("super_admin"):
-            return json_resp({"ok":False,"msg":"只有最高權限可修改他人帳號"}), 403
+        if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"只有管理者以上可修改他人帳號"}), 403
 
         conn = get_db()
         try:
@@ -503,6 +503,10 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
             if not isinstance(data, dict):
                 return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            if request.method == "PUT" and not is_self and role_rank(actor_role) < role_rank("super_admin"):
+                allowed_manager_keys = {"member_level", "base_level", "level_update_reason", "reason"}
+                if set(data.keys()) - allowed_manager_keys:
+                    return json_resp({"ok":False,"msg":"管理員只能調整一般用戶會員等級；角色、狀態與個資需 root"}), 403
 
             revoke_sessions_needed = False
             level_changed = False
@@ -547,9 +551,16 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":"身份治理功能目前已關閉"}), 503
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更會員等級"}), 403
-                if role_rank(actor_role) < role_rank("super_admin"):
-                    return json_resp({"ok":False,"msg":"只有最高權限可變更會員等級"}), 403
+                requested_sanction_change = "sanction_status" in data or "sanction_until" in data
                 val = normalize_text(data.get("base_level") or data.get("member_level") or target["base_level"] or target["member_level"])
+                manager_level_change = (
+                    role_rank(actor_role) >= role_rank("manager")
+                    and target["role"] == "user"
+                    and not requested_sanction_change
+                    and val in {"newbie", "normal", "trusted", "vip"}
+                )
+                if role_rank(actor_role) < role_rank("super_admin") and not manager_level_change:
+                    return json_resp({"ok":False,"msg":"管理員只能調整一般用戶的 newbie/normal/trusted/vip 會員等級；處分與角色需 root"}), 403
                 level_user, err = apply_member_level_change(
                     conn,
                     user_id,
