@@ -86,7 +86,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-005`
+- Current release ID: `2026.04.27-006`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -170,6 +170,15 @@ Server modes:
 Entering `superweak` requires root confirmation and automatically creates a
 `before_superweak` snapshot. Exiting can restore that snapshot by default or let
 root explicitly keep the dirty state with a high-risk audit event.
+
+### Health Center
+
+Root health diagnostics now expose separate machine-readable probes:
+
+- `GET /api/admin/health/readiness`: database/schema, runtime directories, audit chain, maintenance mode, and snapshot service readiness.
+- `GET /api/admin/health/anomaly`: pending moderation queues, quarantined uploads, maintenance mode, and audit chain anomaly signals.
+- `GET /api/admin/health/audit-chain`: audit chain verification result.
+- `GET /api/admin/health/db-integrity`: SQLite `quick_check`, foreign key check, and schema version check.
 
 ### Privacy Upload Security
 

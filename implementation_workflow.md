@@ -92,11 +92,11 @@
 
 ## Phase 6：健康監控與安全中心
 
-- [ ] readiness light API
-- [ ] anomaly light API
-- [ ] hash chain 完整性檢查 API
-- [ ] DB integrity check dashboard API
-- [ ] 對應測試
+- [x] readiness light API
+- [x] anomaly light API
+- [x] hash chain 完整性檢查 API
+- [x] DB integrity check dashboard API
+- [x] 對應測試：完整 pytest `72 passed`
 
 ## Phase 7：論壇核心功能
 

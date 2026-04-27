@@ -84,7 +84,7 @@ https://127.0.0.1:5000/
 登入頁底部會顯示發佈號，`GET /api/version` 也會回傳同一個版本資訊。
 每次正式發布請更新 `services/release_info.py`。
 
-- 目前發佈號：`2026.04.27-005`
+- 目前發佈號：`2026.04.27-006`
 - 目前 schema version：`18`
 
 ### 會員制度
@@ -168,6 +168,15 @@ snapshot 內容包含：
 進入 `superweak` 只能由 root 二次確認，且會自動建立 `before_superweak`
 snapshot。離開時預設應還原該 snapshot；root 也可以明確選擇保留 dirty
 state，但會寫入高風險 audit log。
+
+### 健康監控中心
+
+root 健康診斷已拆成獨立 API：
+
+- `GET /api/admin/health/readiness`：檢查 DB/schema、runtime 目錄、audit chain、maintenance mode、snapshot service readiness。
+- `GET /api/admin/health/anomaly`：檢查待處理治理佇列、隔離上傳檔、maintenance mode、audit chain 異常訊號。
+- `GET /api/admin/health/audit-chain`：audit chain 完整性驗證結果。
+- `GET /api/admin/health/db-integrity`：SQLite `quick_check`、foreign key check、schema version check。
 
 ### 隱私分級上傳安全
 
