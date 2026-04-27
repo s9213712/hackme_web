@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -16,6 +16,7 @@ SCHEMA_MIGRATIONS = (
     (10, "phase 2 session device management columns"),
     (11, "phase 2 login location tracking schema"),
     (12, "phase 3 member level rules schema"),
+    (13, "phase 3 moderation proposal voting schema"),
 )
 
 _STATE = {
@@ -385,6 +386,8 @@ def apply_schema_migrations(
         elif version == 11:
             ensure_security_support_schema(conn)
         elif version == 12:
+            ensure_security_support_schema(conn)
+        elif version == 13:
             ensure_security_support_schema(conn)
 
         conn.execute(

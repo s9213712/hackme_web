@@ -52,14 +52,16 @@
 
 - [x] `member_level_rules` schema + API
 - [x] `member_level_rules` 接入聊天、主題、留言權限檢查（受 `feature_member_governance_enabled` 控制）
-- [ ] `moderation_proposals` schema + API
-- [ ] `moderation_votes` schema + API
-- [ ] admin 高風險操作改 proposal + vote
-- [ ] root override
+- [x] `moderation_proposals` schema + API
+- [x] `moderation_votes` schema + API
+- [x] admin 高風險操作 proposal + vote 後可執行
+- [x] root override
+- [x] 基本處分執行：warn / mute / restrict / suspend / delete / downgrade_level / force_password_reset
 - [ ] 版主動作日誌 `moderation_actions`
 - [ ] Mod Note `user_mod_notes`
 - [ ] 威望明細 `reputation_events`
 - [x] 會員等級規則對應測試：`37 passed`
+- [x] moderation proposal / vote 對應測試：`39 passed`
 - [ ] Phase 3 其餘治理功能對應測試
 
 ## Phase 4：伺服器模式

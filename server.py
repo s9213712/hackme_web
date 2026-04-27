@@ -108,6 +108,7 @@ from services.identity import (
     role_rank,
 )
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
+from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -616,6 +617,7 @@ def ensure_security_support_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at)")
     ensure_member_level_rules_schema(conn)
+    ensure_moderation_proposals_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "
@@ -975,6 +977,7 @@ register_operation_routes(app, {
     "repair_violation_chains": repair_violation_chains,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
+    "revoke_user_sessions": revoke_user_sessions,
     "role_rank": role_rank,
     "save_feature_settings": save_feature_settings,
     "save_settings": save_settings,

@@ -5,6 +5,16 @@ import time
 from datetime import datetime
 from flask import request
 
+from services.moderation_proposals import (
+    ACTION_TYPES,
+    VOTES,
+    cast_action_value,
+    create_moderation_proposal,
+    ensure_moderation_proposals_schema,
+    proposal_row_to_dict,
+    refresh_proposal_vote_counts,
+)
+
 _VIOLATION_INTEGRITY_CACHE = {
     "head_id": None,
     "checked_at": 0.0,
@@ -21,12 +31,14 @@ def register_moderation_routes(app, deps):
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
+    is_feature_enabled = deps.get("is_feature_enabled", lambda key: True)
     is_audit_chain_enabled = deps["is_audit_chain_enabled"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
     parse_positive_int = deps["parse_positive_int"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
+    revoke_user_sessions = deps.get("revoke_user_sessions", lambda user_id: 0)
     role_rank = deps["role_rank"]
     secure_add_violation = deps["secure_add_violation"]
     verify_audit_integrity = deps["verify_audit_integrity"]
@@ -61,6 +73,262 @@ def register_moderation_routes(app, deps):
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at)")
         return True
+
+    def actor_role(actor):
+        return "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
+
+    def require_moderation_governance_actor(actor):
+        if not actor:
+            return False, "未登入", 401
+        if not is_feature_enabled("feature_member_governance_enabled"):
+            return False, "會員治理功能目前已關閉", 503
+        if role_rank(actor_role(actor)) < role_rank("manager"):
+            return False, "權限不足", 403
+        return True, "", 200
+
+    def proposal_payload(conn, row):
+        proposal = proposal_row_to_dict(row)
+        if not proposal:
+            return None
+        target = conn.execute("SELECT id, username, role, status, member_level FROM users WHERE id=?", (proposal["target_user_id"],)).fetchone()
+        proposer = conn.execute("SELECT id, username, role FROM users WHERE id=?", (proposal["proposed_by_user_id"],)).fetchone()
+        proposal["target"] = dict(target) if target else None
+        proposal["proposed_by"] = dict(proposer) if proposer else None
+        votes = conn.execute(
+            "SELECT v.id, v.vote, v.comment, v.created_at, u.username AS voter_username "
+            "FROM moderation_votes v JOIN users u ON u.id=v.voter_user_id "
+            "WHERE v.proposal_id=? ORDER BY v.id ASC",
+            (proposal["id"],),
+        ).fetchall()
+        proposal["votes"] = [dict(vote) for vote in votes]
+        return proposal
+
+    def execute_proposal_action(conn, proposal, actor):
+        target = conn.execute(
+            "SELECT id, username, role, status, member_level FROM users WHERE id=?",
+            (proposal["target_user_id"],),
+        ).fetchone()
+        if not target:
+            return None, "找不到目標帳號", None
+        if target["username"] == "root":
+            return None, "不可對 root 執行治理提案", None
+
+        action_type = proposal["action_type"]
+        action_value = proposal["action_value"]
+        now = datetime.now().isoformat()
+        revoke_target_sessions = False
+        if action_type == "warn":
+            secure_add_violation(
+                target["id"],
+                target["username"],
+                target["role"],
+                1,
+                proposal["reason"],
+                actor_role(actor),
+                actor["username"],
+            )
+        elif action_type == "mute":
+            conn.execute("UPDATE users SET status='muted', updated_at=? WHERE id=?", (now, target["id"]))
+            revoke_target_sessions = True
+        elif action_type == "restrict":
+            conn.execute("UPDATE users SET status='limited', member_level='restricted', updated_at=? WHERE id=?", (now, target["id"]))
+            revoke_target_sessions = True
+        elif action_type == "suspend":
+            conn.execute("UPDATE users SET status='suspended', member_level='suspended', updated_at=? WHERE id=?", (now, target["id"]))
+            revoke_target_sessions = True
+        elif action_type == "delete":
+            conn.execute("UPDATE users SET status='deleted', deleted_at=?, updated_at=? WHERE id=?", (now, now, target["id"]))
+            revoke_target_sessions = True
+        elif action_type == "downgrade_level":
+            conn.execute("UPDATE users SET member_level=?, updated_at=? WHERE id=?", (action_value or "restricted", now, target["id"]))
+        elif action_type == "force_password_reset":
+            conn.execute("UPDATE users SET must_change_password=1, updated_at=? WHERE id=?", (now, target["id"]))
+            revoke_target_sessions = True
+        else:
+            return None, "不支援的提案動作", None
+        return target, None, revoke_target_sessions
+
+    @app.route("/api/admin/moderation/proposals", methods=["GET", "POST"])
+    @require_csrf_safe
+    def moderation_proposals():
+        actor = get_current_user_ctx()
+        ok, msg, status_code = require_moderation_governance_actor(actor)
+        if not ok:
+            return json_resp({"ok":False,"msg":msg}), status_code
+
+        conn = get_db()
+        try:
+            ensure_moderation_proposals_schema(conn)
+            if request.method == "GET":
+                status_filter = normalize_text(request.args.get("status")) or ""
+                params = []
+                where = "1=1"
+                if status_filter:
+                    where += " AND status=?"
+                    params.append(status_filter)
+                rows = conn.execute(
+                    f"SELECT * FROM moderation_proposals WHERE {where} ORDER BY id DESC LIMIT 100",
+                    tuple(params),
+                ).fetchall()
+                return json_resp({"ok":True,"proposals":[proposal_payload(conn, row) for row in rows]})
+
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            if not isinstance(data, dict):
+                return json_resp({"ok":False,"msg":"Invalid request"}), 400
+            target_user_id = data.get("target_user_id")
+            action_type = normalize_text(data.get("action_type"))
+            action_value = cast_action_value(data.get("action_value"))
+            target = conn.execute("SELECT id, username FROM users WHERE id=?", (target_user_id,)).fetchone()
+            if not target:
+                return json_resp({"ok":False,"msg":"找不到目標帳號"}), 404
+            if target["username"] == "root":
+                return json_resp({"ok":False,"msg":"不可對 root 建立治理提案"}), 403
+            proposal, err = create_moderation_proposal(
+                conn,
+                target_user_id=target["id"],
+                action_type=action_type,
+                action_value=action_value,
+                proposed_by_user_id=actor["id"],
+                reason=normalize_text(data.get("reason")),
+                required_votes=data.get("required_votes", 2),
+                ttl_hours=data.get("ttl_hours", 72),
+            )
+            if err:
+                return json_resp({"ok":False,"msg":err}), 400
+            conn.commit()
+            audit("MODERATION_PROPOSAL_CREATED", get_client_ip(), user=actor["username"], success=True,
+                  detail=f"proposal_id={proposal['id']},target={target['username']},action={action_type}")
+            return json_resp({"ok":True,"msg":"治理提案已建立","proposal":proposal_payload(conn, conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal["id"],)).fetchone())})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/moderation/proposals/<int:proposal_id>", methods=["GET"])
+    @require_csrf_safe
+    def moderation_proposal_detail(proposal_id):
+        actor = get_current_user_ctx()
+        ok, msg, status_code = require_moderation_governance_actor(actor)
+        if not ok:
+            return json_resp({"ok":False,"msg":msg}), status_code
+        conn = get_db()
+        try:
+            ensure_moderation_proposals_schema(conn)
+            row = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()
+            if not row:
+                return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
+            return json_resp({"ok":True,"proposal":proposal_payload(conn, row)})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/moderation/proposals/<int:proposal_id>/vote", methods=["POST"])
+    @require_csrf
+    def moderation_proposal_vote(proposal_id):
+        actor = get_current_user_ctx()
+        ok, msg, status_code = require_moderation_governance_actor(actor)
+        if not ok:
+            return json_resp({"ok":False,"msg":msg}), status_code
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        vote = normalize_text(data.get("vote")) if isinstance(data, dict) else ""
+        if vote not in VOTES:
+            return json_resp({"ok":False,"msg":"投票值錯誤"}), 400
+
+        conn = get_db()
+        try:
+            ensure_moderation_proposals_schema(conn)
+            proposal = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()
+            if not proposal:
+                return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
+            proposal = refresh_proposal_vote_counts(conn, proposal_id)
+            if proposal["status"] != "pending":
+                conn.commit()
+                return json_resp({"ok":False,"msg":"此提案目前不可投票","status":proposal["status"]}), 409
+            try:
+                conn.execute(
+                    "INSERT INTO moderation_votes (proposal_id, voter_user_id, vote, comment, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (proposal_id, actor["id"], vote, normalize_text(data.get("comment"))[:500], datetime.now().isoformat()),
+                )
+            except Exception:
+                return json_resp({"ok":False,"msg":"同一管理員不可重複投票"}), 409
+            proposal = refresh_proposal_vote_counts(conn, proposal_id)
+            conn.commit()
+            audit("MODERATION_PROPOSAL_VOTED", get_client_ip(), user=actor["username"], success=True,
+                  detail=f"proposal_id={proposal_id},vote={vote},status={proposal['status']}")
+            return json_resp({"ok":True,"msg":"已完成投票","proposal":proposal_payload(conn, conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone())})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/moderation/proposals/<int:proposal_id>/execute", methods=["POST"])
+    @require_csrf
+    def moderation_proposal_execute(proposal_id):
+        actor = get_current_user_ctx()
+        ok, msg, status_code = require_moderation_governance_actor(actor)
+        if not ok:
+            return json_resp({"ok":False,"msg":msg}), status_code
+        conn = get_db()
+        revoke_target_sessions = False
+        target = None
+        try:
+            ensure_moderation_proposals_schema(conn)
+            proposal = refresh_proposal_vote_counts(conn, proposal_id)
+            if not proposal:
+                return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
+            if proposal["status"] != "approved":
+                conn.commit()
+                return json_resp({"ok":False,"msg":"提案通過後才可執行","status":proposal["status"]}), 409
+            target, err, revoke_target_sessions = execute_proposal_action(conn, proposal, actor)
+            if err:
+                return json_resp({"ok":False,"msg":err}), 400
+            now = datetime.now().isoformat()
+            conn.execute("UPDATE moderation_proposals SET status='executed', executed_at=?, updated_at=? WHERE id=?", (now, now, proposal_id))
+            conn.commit()
+            if revoke_target_sessions:
+                revoke_user_sessions(target["id"])
+            audit("MODERATION_PROPOSAL_EXECUTED", get_client_ip(), user=actor["username"], success=True,
+                  detail=f"proposal_id={proposal_id},target={target['username']},action={proposal['action_type']}")
+            return json_resp({"ok":True,"msg":"治理提案已執行","proposal_id":proposal_id})
+        finally:
+            conn.close()
+
+    @app.route("/api/root/moderation/proposals/<int:proposal_id>/override", methods=["POST"])
+    @require_csrf
+    def root_moderation_proposal_override(proposal_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可 override 治理提案"}), 403
+        if not is_feature_enabled("feature_member_governance_enabled"):
+            return json_resp({"ok":False,"msg":"會員治理功能目前已關閉"}), 503
+
+        conn = get_db()
+        revoke_target_sessions = False
+        target = None
+        try:
+            ensure_moderation_proposals_schema(conn)
+            proposal = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()
+            if not proposal:
+                return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
+            proposal = proposal_row_to_dict(proposal)
+            if proposal["status"] == "executed":
+                return json_resp({"ok":False,"msg":"提案已執行"}), 409
+            target, err, revoke_target_sessions = execute_proposal_action(conn, proposal, actor)
+            if err:
+                return json_resp({"ok":False,"msg":err}), 400
+            now = datetime.now().isoformat()
+            conn.execute("UPDATE moderation_proposals SET status='executed', executed_at=?, updated_at=? WHERE id=?", (now, now, proposal_id))
+            conn.commit()
+            if revoke_target_sessions:
+                revoke_user_sessions(target["id"])
+            audit("MODERATION_PROPOSAL_ROOT_OVERRIDE", get_client_ip(), user=actor["username"], success=True,
+                  detail=f"proposal_id={proposal_id},target={target['username']},action={proposal['action_type']}")
+            return json_resp({"ok":True,"msg":"root override 已執行","proposal_id":proposal_id})
+        finally:
+            conn.close()
 
     # ── 查詢所有違規記錄（可驗證 integrity）──────────────────────────────────────
     @app.route("/api/admin/violations", methods=["GET"])

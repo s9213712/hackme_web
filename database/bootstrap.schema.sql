@@ -91,6 +91,33 @@ CREATE TABLE IF NOT EXISTS member_level_rules (
     updated_at             TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS moderation_proposals (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    action_type         TEXT NOT NULL,
+    action_value        TEXT,
+    proposed_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason              TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    required_votes      INTEGER NOT NULL DEFAULT 2,
+    approve_count       INTEGER NOT NULL DEFAULT 0,
+    reject_count        INTEGER NOT NULL DEFAULT 0,
+    expires_at          TEXT NOT NULL,
+    executed_at         TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS moderation_votes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_id    INTEGER NOT NULL REFERENCES moderation_proposals(id) ON DELETE CASCADE,
+    voter_user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vote           TEXT NOT NULL,
+    comment        TEXT,
+    created_at     TEXT NOT NULL,
+    UNIQUE(proposal_id, voter_user_id)
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -239,6 +266,10 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_time   ON login_attempts(attempted
 CREATE INDEX IF NOT EXISTS idx_login_attempts_user   ON login_attempts(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_member_level_rules_level ON member_level_rules(level);
+
+CREATE INDEX IF NOT EXISTS idx_moderation_proposals_status ON moderation_proposals(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_moderation_proposals_target ON moderation_proposals(target_user_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_votes_proposal ON moderation_votes(proposal_id);
 
 CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
 

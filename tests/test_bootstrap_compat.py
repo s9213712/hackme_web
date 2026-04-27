@@ -121,6 +121,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     login_location_cols = {row["name"] for row in conn.execute("PRAGMA table_info(login_locations)").fetchall()}
     member_rule_cols = {row["name"] for row in conn.execute("PRAGMA table_info(member_level_rules)").fetchall()}
+    proposal_cols = {row["name"] for row in conn.execute("PRAGMA table_info(moderation_proposals)").fetchall()}
+    vote_cols = {row["name"] for row in conn.execute("PRAGMA table_info(moderation_votes)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
     conn.close()
@@ -130,7 +132,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"member_level", "trust_score", "points", "reputation", "locked_until", "password_strength_score", "deleted_at"} <= user_cols
     assert {"ip_hash", "login_at", "is_suspicious"} <= login_location_cols
     assert {"level", "can_post", "can_comment", "daily_post_limit"} <= member_rule_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert {"target_user_id", "action_type", "status", "required_votes", "approve_count"} <= proposal_cols
+    assert {"proposal_id", "voter_user_id", "vote"} <= vote_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     assert root_user["username"] == "root"
 
 
