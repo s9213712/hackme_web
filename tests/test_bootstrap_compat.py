@@ -143,6 +143,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     dm_thread_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dm_threads)").fetchall()}
     dm_message_cols = {row["name"] for row in conn.execute("PRAGMA table_info(direct_messages)").fetchall()}
     blocked_cols = {row["name"] for row in conn.execute("PRAGMA table_info(blocked_users)").fetchall()}
+    captcha_cols = {row["name"] for row in conn.execute("PRAGMA table_info(captcha_challenges)").fetchall()}
     integrity_finding_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_findings)").fetchall()}
     integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
     integrity_manifest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_manifest_versions)").fetchall()}
@@ -191,6 +192,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"participant_a_id", "participant_b_id", "created_by_user_id", "updated_at"} <= dm_thread_cols
     assert {"thread_id", "sender_user_id", "recipient_user_id", "is_read", "sender_deleted_at", "recipient_deleted_at"} <= dm_message_cols
     assert {"blocker_user_id", "blocked_user_id", "reason"} <= blocked_cols
+    assert {"id", "mode", "answer_hash", "expires_at", "used_at"} <= captcha_cols
     assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
     assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
     assert {"manifest_hash", "manifest_signature", "approved_by"} <= integrity_manifest_cols

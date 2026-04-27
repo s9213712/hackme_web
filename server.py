@@ -920,7 +920,7 @@ def enforce_browser_only_mode():
         return None
     if has_valid_maintenance_bypass(settings):
         return None
-    if request.path in ("/api/version", "/api/site-config"):
+    if request.path in ("/api/version", "/api/site-config", "/api/captcha/challenge"):
         return None
     if is_browser_user_agent(request.headers.get("User-Agent", "")):
         return None
@@ -951,7 +951,7 @@ def restrict_cors():
         return None
     if not request.path.startswith("/api"):
         return None
-    if request.path in ("/api/csrf-token", "/api/logout", "/api/me"):
+    if request.path in ("/api/csrf-token", "/api/logout", "/api/me", "/api/captcha/challenge"):
         return None
     if request.path == "/api/login":
         data = request.get_json(silent=True) if request.is_json else {}
@@ -988,7 +988,7 @@ def enforce_feature_flags():
         return None
     # The settings endpoints must stay reachable, otherwise root can lock the
     # site into a disabled state with no way back through the UI/API.
-    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/me", "/api/login", "/api/logout"):
+    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/captcha/challenge", "/api/me", "/api/login", "/api/logout"):
         return None
     feature_key = feature_gate_for_path(request.path)
     if not feature_key or is_feature_enabled(feature_key):
@@ -1011,7 +1011,7 @@ def enforce_feature_flags():
 def enforce_required_password_change():
     if request.method == "OPTIONS" or not request.path.startswith("/api"):
         return None
-    allowed = {"/api/csrf-token", "/api/logout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength"}
+    allowed = {"/api/csrf-token", "/api/logout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength", "/api/captcha/challenge"}
     if request.path in allowed:
         return None
     actor = get_current_user_ctx()

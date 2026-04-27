@@ -532,6 +532,15 @@ replies include a lightweight Markdown toolbar and sanitized preview. The editor
 supports common formatting helpers such as bold, italic, inline code, quote, and
 link insertion without adding a third-party dependency.
 
+### Registration CAPTCHA
+
+Root can choose the registration CAPTCHA mode in the admin settings UI:
+`none`, `math`, `image`, or `turnstile`. `math` and `image` are fully local and
+store one-time challenge hashes in `captcha_challenges`; answers expire according
+to `captcha_ttl_seconds`. `turnstile` keeps the site-key setting visible, but
+registration fails with an actionable message until `TURNSTILE_SECRET_KEY` and
+server-side verification are configured.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and
@@ -580,6 +589,9 @@ Other important defaults:
 | `maintenance_bypass_token_expires_at` | empty |
 | `server_listen_host` | empty; use `HTML_LEARNING_HOST` |
 | `server_listen_port` | `0`; use `HTML_LEARNING_PORT` |
+| `captcha_mode` | `none` |
+| `captcha_ttl_seconds` | `300` |
+| `captcha_turnstile_site_key` | empty |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |
 | `snapshot_daily_last_date` | empty |

@@ -707,6 +707,9 @@ async function loadSettings() {
   if ($("s-integrity-guard-strict-mode")) $("s-integrity-guard-strict-mode").checked = !!s.integrity_guard_strict_mode;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
+  if ($("s-captcha-mode")) $("s-captcha-mode").value = s.captcha_mode || "none";
+  if ($("s-captcha-ttl-seconds")) $("s-captcha-ttl-seconds").value = s.captcha_ttl_seconds || 300;
+  if ($("s-captcha-turnstile-site-key")) $("s-captcha-turnstile-site-key").value = s.captcha_turnstile_site_key || "";
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
@@ -1009,6 +1012,9 @@ async function saveSettings() {
     integrity_guard_strict_mode: !!$("s-integrity-guard-strict-mode")?.checked,
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
+    captcha_mode: $("s-captcha-mode")?.value || "none",
+    captcha_ttl_seconds: parseInt($("s-captcha-ttl-seconds")?.value || "300"),
+    captcha_turnstile_site_key: ($("s-captcha-turnstile-site-key")?.value || "").trim(),
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),

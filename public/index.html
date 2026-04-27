@@ -95,6 +95,17 @@
       <label>電話</label>
       <input type="tel" id="reg-phone" placeholder="09xx-xxx-xxx" autocomplete="tel" />
     </div>
+    <div class="field captcha-box" id="captcha-field" style="display:none;">
+      <label id="captcha-label">驗證碼</label>
+      <div class="captcha-panel">
+        <div id="captcha-question" class="captcha-question"></div>
+        <img id="captcha-image" class="captcha-image" alt="CAPTCHA" style="display:none;" />
+        <input type="hidden" id="captcha-id" />
+        <input type="text" id="captcha-answer" placeholder="請輸入答案" autocomplete="off" inputmode="numeric" />
+        <button class="btn btn-sm" id="captcha-refresh" type="button">重新取得</button>
+        <p class="hint" id="captcha-hint"></p>
+      </div>
+    </div>
     <button class="btn btn-primary" id="reg-btn">註冊</button>
     <div class="spinner" id="reg-spinner"></div>
     <div class="msg" id="reg-msg"></div>
@@ -655,6 +666,25 @@
             <div class="field">
               <label><input type="checkbox" id="s-integrity-guard-strict-mode" /> Integrity Guard strict mode（高風險異常時阻擋啟動）</label>
             </div>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>註冊 CAPTCHA 模式</label>
+                <select id="s-captcha-mode">
+                  <option value="none">none</option>
+                  <option value="math">math</option>
+                  <option value="image">image</option>
+                  <option value="turnstile">turnstile</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>CAPTCHA 到期秒數</label>
+                <input type="number" id="s-captcha-ttl-seconds" min="60" max="3600" />
+              </div>
+              <div class="field">
+                <label>Turnstile site key</label>
+                <input type="text" id="s-captcha-turnstile-site-key" placeholder="未使用可留空" />
+              </div>
             </div>
             <div class="field">
               <label>登入失敗鎖定次數</label>

@@ -40,6 +40,57 @@ async function doLogin() {
   }
 }
 
+function renderCaptchaChallenge(captcha) {
+  const field = $("captcha-field");
+  const question = $("captcha-question");
+  const image = $("captcha-image");
+  const answer = $("captcha-answer");
+  const idInput = $("captcha-id");
+  const hint = $("captcha-hint");
+  if (!field) return;
+  const mode = captcha?.mode || "none";
+  if (!captcha?.required || mode === "none") {
+    field.style.display = "none";
+    if (idInput) idInput.value = "";
+    if (answer) answer.value = "";
+    return;
+  }
+  field.style.display = "block";
+  if (idInput) idInput.value = captcha.captcha_id || "";
+  if (answer) answer.value = "";
+  if (question) {
+    if (mode === "turnstile") question.textContent = "Turnstile 驗證已啟用，請使用部署的 Turnstile widget 完成驗證。";
+    else question.textContent = captcha.question || "請完成驗證";
+  }
+  if (image) {
+    if (captcha.image_data_uri) {
+      image.src = captcha.image_data_uri;
+      image.style.display = "block";
+    } else {
+      image.removeAttribute("src");
+      image.style.display = "none";
+    }
+  }
+  if (hint) {
+    if (mode === "turnstile") {
+      hint.textContent = captcha.site_key ? "服務端仍需 TURNSTILE_SECRET_KEY；未設定時註冊會提示 root 調整。" : "尚未設定 Turnstile site key。";
+    } else {
+      hint.textContent = captcha.expires_at ? "驗證碼會過期，送出前若失敗請重新取得。" : "";
+    }
+  }
+}
+
+async function loadCaptchaChallenge() {
+  try {
+    const res = await fetch(API + "/captcha/challenge", { credentials: "same-origin" });
+    const json = await res.json().catch(() => ({}));
+    if (json.ok) renderCaptchaChallenge(json.captcha || { required: false, mode: "none" });
+  } catch (_) {
+    const hint = $("captcha-hint");
+    if (hint) hint.textContent = "目前無法取得驗證碼，請稍後重試。";
+  }
+}
+
 async function forceDefaultPasswordChange() {
   if (!currentUserId) return;
   forcedPasswordChangeMode = true;
@@ -101,6 +152,9 @@ async function doRegister() {
         id_number: idNo,
         birthdate: birth,
         phone,
+        captcha_id: $("captcha-id")?.value || "",
+        captcha_answer: $("captcha-answer")?.value || "",
+        captcha_turnstile_token: $("captcha-turnstile-token")?.value || "",
         csrf_token: csrf
       })
     });
@@ -118,9 +172,11 @@ async function doRegister() {
     } else {
       _csrfToken = null;
       flash($("reg-msg"), json.msg || "註冊失敗", false);
+      loadCaptchaChallenge();
     }
   } catch (e) {
     flash($("reg-msg"), "網路錯誤，請稍後再試", false);
+    loadCaptchaChallenge();
   } finally {
     setLoading("reg-btn", "reg-spinner", false);
   }

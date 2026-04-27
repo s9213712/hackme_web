@@ -26,6 +26,7 @@ function bindUiEvents() {
   const tabReports  = $("tab-reports");
   const liBtn       = $("li-btn");
   const regBtn      = $("reg-btn");
+  const captchaRefresh = $("captcha-refresh");
   const logoutBtn   = $("logout-btn");
   const notificationToggle = $("notification-toggle");
   const notificationReadAll = $("notification-read-all");
@@ -111,6 +112,7 @@ function bindUiEvents() {
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
+  if (captchaRefresh) captchaRefresh.addEventListener("click", loadCaptchaChallenge);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
   if (notificationToggle) notificationToggle.addEventListener("click", toggleNotificationPanel);
   if (notificationReadAll) notificationReadAll.addEventListener("click", markAllNotificationsRead);
@@ -253,6 +255,7 @@ $("reg-pw").addEventListener("keydown", (e) => {
   startServerConnectionMonitor();
   _csrfToken = readCookie("csrf_token");
   bindUiEvents();
+  if (typeof loadCaptchaChallenge === "function") loadCaptchaChallenge();
   // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死
   async function safeFetch(url, opts = {}) {
     const ctrl = new AbortController();

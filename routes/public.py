@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import argon2
 from flask import make_response, request, send_from_directory
 
+from services.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
+
 
 def register_public_routes(app, deps):
     CSRF_TOKEN_TTL = deps["CSRF_TOKEN_TTL"]
@@ -164,6 +166,33 @@ def register_public_routes(app, deps):
         result = score_password_strength(password)
         return json_resp({"ok": True, **result})
 
+    @app.route("/api/captcha/challenge", methods=["GET"])
+    def captcha_challenge():
+        ip = get_client_ip()
+        settings = get_system_settings()
+        mode = normalize_captcha_mode(settings.get("captcha_mode"))
+        if mode == "turnstile":
+            return json_resp({
+                "ok": True,
+                "captcha": {
+                    "required": True,
+                    "mode": "turnstile",
+                    "site_key": settings.get("captcha_turnstile_site_key", ""),
+                },
+            })
+        conn = get_db()
+        try:
+            challenge = create_captcha_challenge(
+                conn,
+                mode=mode,
+                ttl_seconds=settings.get("captcha_ttl_seconds", 300),
+                ip=ip,
+            )
+            conn.commit()
+            return json_resp({"ok": True, "captcha": challenge})
+        finally:
+            conn.close()
+
     @app.route("/api/register", methods=["POST"])
     def register():
         ip, ua = get_client_ip(), get_ua()
@@ -191,6 +220,17 @@ def register_public_routes(app, deps):
         if not verify_csrf_double_submit(data.get("csrf_token", "")):
             audit("REGISTER_CSRF", ip, ua=ua)
             return json_resp({"ok":False,"msg":"Invalid request"}), 403
+
+        conn = get_db()
+        try:
+            captcha_ok, captcha_msg = verify_captcha_response(conn, settings, data, ip=ip)
+            if captcha_ok:
+                conn.commit()
+            else:
+                audit("REGISTER_CAPTCHA_FAIL", ip, ua=ua, success=False, detail=captcha_msg)
+                return json_resp({"ok":False,"msg":captcha_msg}), 400
+        finally:
+            conn.close()
 
         username = normalize_text(data.get("username"))
         password = data.get("password","") if isinstance(data.get("password"), str) else ""

@@ -499,6 +499,14 @@ Phase 10 後端提供 1 對 1 站內信 API：
 安全預覽，支援粗體、斜體、行內程式碼、引用與連結插入，不需額外第三方
 前端套件。
 
+### 註冊 CAPTCHA
+
+root 可在管理設定頁選擇註冊 CAPTCHA 模式：`none`、`math`、`image` 或
+`turnstile`。`math` 與 `image` 完全本地運作，challenge 只保存一次性 hash
+於 `captcha_challenges`，並依 `captcha_ttl_seconds` 到期。`turnstile` 先保留
+site key 設定；若未配置 `TURNSTILE_SECRET_KEY` 與服務端驗證，註冊會明確提示
+root 調整，不會靜默放行。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI
@@ -546,6 +554,9 @@ Phase 10 後端提供 1 對 1 站內信 API：
 | `maintenance_bypass_token_expires_at` | 空字串 |
 | `server_listen_host` | 空字串，沿用 `HTML_LEARNING_HOST` |
 | `server_listen_port` | `0`，沿用 `HTML_LEARNING_PORT` |
+| `captcha_mode` | `none` |
+| `captcha_ttl_seconds` | `300` |
+| `captcha_turnstile_site_key` | 空字串 |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |
 | `snapshot_daily_last_date` | 空字串 |

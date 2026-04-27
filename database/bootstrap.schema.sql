@@ -79,6 +79,16 @@ CREATE TABLE IF NOT EXISTS csrf_tokens (
     expires_at   TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS captcha_challenges (
+    id           TEXT PRIMARY KEY,
+    mode         TEXT NOT NULL,
+    answer_hash  TEXT NOT NULL,
+    ip_hash      TEXT,
+    expires_at   TEXT NOT NULL,
+    used_at      TEXT,
+    created_at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ip_blocks (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     ip_address     TEXT    NOT NULL UNIQUE,

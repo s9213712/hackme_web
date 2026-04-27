@@ -26,6 +26,7 @@ from services.server_bind import (
     validate_listen_host,
     validate_listen_port,
 )
+from services.captcha import normalize_captcha_mode
 from services.storage_paths import validate_storage_root
 from services.upload_security import (
     ensure_upload_security_schema,
@@ -517,6 +518,19 @@ def register_system_admin_routes(app, deps):
                     return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 不安全或格式錯誤：{exc}"}), 400
             else:
                 data["cloud_drive_storage_root"] = ""
+        if "captcha_mode" in data:
+            raw_mode = str(data.get("captcha_mode") or "").strip().lower()
+            if raw_mode and normalize_captcha_mode(raw_mode) != raw_mode:
+                return json_resp({"ok":False,"msg":"captcha_mode 必須是 none、math、image 或 turnstile"}), 400
+            data["captcha_mode"] = normalize_captcha_mode(raw_mode)
+        if "captcha_ttl_seconds" in data:
+            try:
+                ttl_seconds = int(data.get("captcha_ttl_seconds"))
+            except Exception:
+                return json_resp({"ok":False,"msg":"captcha_ttl_seconds 必須是 60-3600 秒"}), 400
+            if ttl_seconds < 60 or ttl_seconds > 3600:
+                return json_resp({"ok":False,"msg":"captcha_ttl_seconds 必須是 60-3600 秒"}), 400
+            data["captcha_ttl_seconds"] = ttl_seconds
 
         settings = save_settings(data)
         if not settings:

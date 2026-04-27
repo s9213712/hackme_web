@@ -173,8 +173,8 @@
 - [x] 圖片 re-encode 去 EXIF
 - [x] 頭像上傳與裁切
 - [x] Markdown 富文字編輯器
-- [ ] CAPTCHA：none / math / image / turnstile
-- [ ] 對應測試
+- [x] CAPTCHA：none / math / image / turnstile
+- [x] 對應測試
 
 ## Phase 12：Storage / 相簿
 
