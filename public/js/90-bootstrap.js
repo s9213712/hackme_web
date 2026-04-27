@@ -82,6 +82,8 @@ function bindUiEvents() {
   const communityBoardSearch = $("community-board-search");
   const communityThreadSearch = $("community-thread-search");
   const driveRefreshBtn = $("drive-refresh-btn");
+  const storageUploadBtn = $("storage-upload-btn");
+  const albumCreateBtn = $("album-create-btn");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
 
@@ -163,6 +165,8 @@ function bindUiEvents() {
     if (selectedCommunityBoardId) openCommunityBoard(selectedCommunityBoardId);
   });
   if (driveRefreshBtn) driveRefreshBtn.addEventListener("click", loadDriveDashboard);
+  if (storageUploadBtn) storageUploadBtn.addEventListener("click", uploadStorageFile);
+  if (albumCreateBtn) albumCreateBtn.addEventListener("click", createAlbum);
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);

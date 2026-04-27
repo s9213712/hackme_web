@@ -186,8 +186,8 @@
 - [x] 分享連結 API
 - [x] 雲端硬碟預覽：影片 / 音樂 / PDF / 文字 / 壓縮檔清單
 - [x] Storage Admin API
-- [ ] FileManager UI
-- [ ] AlbumManager UI
+- [x] FileManager UI
+- [x] AlbumManager UI
 - [ ] 清理與配額同步 cron
 - [ ] 對應測試
 

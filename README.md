@@ -573,6 +573,9 @@ Storage admin APIs expose `/api/admin/storage/summary`,
 `POST /api/admin/storage/sync-quota` for manager/root operators. Root-only
 `POST /api/admin/storage/trash/purge` requires `PURGE STORAGE TRASH` and removes
 only logical storage entries, not shared Cloud Drive originals.
+The logged-in Cloud Drive page now includes a basic FileManager for Storage
+uploads, logical download, trash/restore/purge actions, plus an AlbumManager for
+creating albums and adding Storage files by album id.
 
 ### Feature Flags and Defaults
 

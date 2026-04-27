@@ -533,6 +533,9 @@ CSRF fetch blob。E2EE、未通過掃描或高風險檔案預設不允許 inline
 `/api/admin/storage/files`、`POST /api/admin/storage/sync-quota` 給 manager/root；
 root-only `POST /api/admin/storage/trash/purge` 需確認字串
 `PURGE STORAGE TRASH`，且只移除 storage 邏輯 entry，不刪 Cloud Drive 原始檔。
+登入後的雲端硬碟頁也新增基本 FileManager，可上傳 Storage 檔案、下載、
+移入回收筒、還原與永久移除；AlbumManager 可建立相簿並用相簿 id 加入
+Storage 檔案。
 
 ### 功能開關與預設值
 

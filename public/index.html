@@ -402,6 +402,48 @@
         <div class="drive-card-title">檔案預覽</div>
         <div id="drive-preview-panel" class="drive-preview-panel"></div>
       </div>
+      <div class="drive-dashboard-grid" style="margin-top:1rem;">
+        <div class="drive-card">
+          <div class="drive-card-title">FileManager</div>
+          <div class="field">
+            <label>上傳到 Storage</label>
+            <input type="file" id="storage-upload-file" />
+          </div>
+          <div class="field">
+            <label>虛擬路徑</label>
+            <input type="text" id="storage-upload-path" placeholder="docs/readme.txt" />
+          </div>
+          <button class="btn btn-primary" id="storage-upload-btn" type="button">上傳 Storage 檔案</button>
+          <div class="drive-card-sub" style="margin-top:.6rem;">Storage 使用雲端硬碟實體檔案，不複製資料。</div>
+          <div id="storage-file-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-title">回收筒</div>
+          <div id="storage-trash-list" class="drive-file-list"></div>
+        </div>
+      </div>
+      <div class="drive-card" style="margin-top:1rem;">
+        <div class="drive-card-title">AlbumManager</div>
+        <div class="settings-option-grid">
+          <div class="field">
+            <label>相簿名稱</label>
+            <input type="text" id="album-create-title" placeholder="我的相簿" />
+          </div>
+          <div class="field">
+            <label>可見性</label>
+            <select id="album-create-visibility">
+              <option value="private">private</option>
+              <option value="unlisted">unlisted</option>
+              <option value="public">public</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button class="btn btn-primary" id="album-create-btn" type="button">建立相簿</button>
+          </div>
+        </div>
+        <div id="album-list" class="drive-file-list"></div>
+      </div>
       <div id="drive-msg" class="msg"></div>
     </div>
   </div>
