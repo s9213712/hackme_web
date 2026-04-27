@@ -86,7 +86,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-009`
+- Current release ID: `2026.04.27-010`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -194,6 +194,11 @@ allow API access during maintenance mode without disabling maintenance globally.
 Failures include the required header name `X-Maintenance-Bypass-Token`; users
 must provide the raw token, never `maintenance_bypass_token_hash`.
 
+Root can also set the next boot listen address through `server_listen_host` and
+`server_listen_port` in the server settings UI/API. Empty host or port `0`
+falls back to `HTML_LEARNING_HOST` / `HTML_LEARNING_PORT`. Changing these values
+requires a server restart because the running socket cannot be rebound safely.
+
 ### Health Center
 
 Root health diagnostics now expose separate machine-readable probes:
@@ -274,6 +279,8 @@ Other important defaults:
 | `browser_only_mode_enabled` | `false` |
 | `maintenance_bypass_token_hash` | empty |
 | `maintenance_bypass_token_expires_at` | empty |
+| `server_listen_host` | empty; use `HTML_LEARNING_HOST` |
+| `server_listen_port` | `0`; use `HTML_LEARNING_PORT` |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |
 | `snapshot_daily_last_date` | empty |

@@ -570,6 +570,16 @@
               <label>Session 有效期（小時）</label>
               <input type="number" id="s-session-ttl" min="1" max="72" />
             </div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">伺服器 Listen 設定（需重啟生效）</div>
+            <div class="field">
+              <label>Listen IP / Host（空白代表沿用環境變數）</label>
+              <input type="text" id="s-server-listen-host" placeholder="0.0.0.0 / 127.0.0.1 / localhost / ::" />
+            </div>
+            <div class="field">
+              <label>Listen Port（0 或空白代表沿用環境變數）</label>
+              <input type="number" id="s-server-listen-port" min="0" max="65535" />
+            </div>
+            <div id="server-bind-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">模組開放層級</div>
             <div class="field">
               <label>聊天頁最低可用角色</label>

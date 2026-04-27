@@ -12,6 +12,7 @@ from services.access_controls import (
     parse_ip_whitelist,
     verify_maintenance_bypass_token,
 )
+from services.server_bind import effective_server_bind, validate_listen_host, validate_listen_port
 
 
 def _json_resp(payload, status=200):
@@ -31,6 +32,8 @@ def _admin_app(settings_state=None, actor=None):
         "browser_only_mode_enabled": False,
         "maintenance_bypass_token_hash": "",
         "maintenance_bypass_token_expires_at": "",
+        "server_listen_host": "",
+        "server_listen_port": 0,
     }
 
     def save_settings(data):
@@ -41,6 +44,7 @@ def _admin_app(settings_state=None, actor=None):
         "ANCHOR_DIR": ".",
         "BASE_DIR": ".",
         "CHAT_DIR": ".",
+        "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000},
         "DB_PATH": "missing.db",
         "LOG_DIR": ".",
         "SERVER_LOG_PATH": "server.log",
@@ -148,3 +152,55 @@ def test_access_control_settings_payload_never_exposes_token_hash():
     payload = access_control_settings_payload({"maintenance_bypass_token_hash": "hash"})
     assert payload["maintenance_bypass_token_configured"] is True
     assert "maintenance_bypass_token_hash" not in payload
+
+
+def test_server_bind_validation_accepts_ips_and_rejects_unsafe_values():
+    assert validate_listen_host("127.0.0.1") == "127.0.0.1"
+    assert validate_listen_host("::1") == "::1"
+    assert validate_listen_host("localhost") == "localhost"
+    assert validate_listen_host("0.0.0.0/0") is None
+    assert validate_listen_host("127.0.0.1,0.0.0.0") is None
+    assert validate_listen_port("8080") == 8080
+    assert validate_listen_port("0") == 0
+    assert validate_listen_port("70000") is None
+
+
+def test_root_can_configure_server_bind_settings_with_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={
+        "server_listen_host": "127.0.0.1",
+        "server_listen_port": 8081,
+    })
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert state["server_listen_host"] == "127.0.0.1"
+    assert state["server_listen_port"] == 8081
+    assert data["server_bind"]["host"] == "127.0.0.1"
+    assert data["server_bind"]["port"] == 8081
+    assert data["server_bind"]["restart_required"] is True
+
+
+def test_invalid_server_bind_settings_are_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    bad_host = client.put("/api/admin/settings", json={"server_listen_host": "0.0.0.0/0"})
+    bad_port = client.put("/api/admin/settings", json={"server_listen_port": 70000})
+
+    assert bad_host.status_code == 400
+    assert bad_port.status_code == 400
+    assert state["server_listen_host"] == ""
+    assert state["server_listen_port"] == 0
+
+
+def test_effective_server_bind_falls_back_to_environment():
+    bind = effective_server_bind(
+        {"server_listen_host": "", "server_listen_port": 0},
+        env={"HTML_LEARNING_HOST": "127.0.0.1", "HTML_LEARNING_PORT": "9000"},
+    )
+    assert bind["host"] == "127.0.0.1"
+    assert bind["port"] == 9000
+    assert bind["host_source"] == "env"

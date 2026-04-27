@@ -20,6 +20,11 @@ from services.member_levels import (
     serialize_member_level_rule,
     update_member_level_rule,
 )
+from services.server_bind import (
+    server_bind_settings_payload,
+    validate_listen_host,
+    validate_listen_port,
+)
 
 
 def register_system_admin_routes(app, deps):
@@ -30,6 +35,7 @@ def register_system_admin_routes(app, deps):
     LOG_DIR = deps["LOG_DIR"]
     SERVER_LOG_PATH = deps["SERVER_LOG_PATH"]
     STORAGE_DIR = deps.get("STORAGE_DIR")
+    CURRENT_SERVER_BIND_STATE = deps.get("CURRENT_SERVER_BIND_STATE") or {}
     activate_emergency_lockdown = deps["activate_emergency_lockdown"]
     audit = deps["audit"]
     get_client_ip = deps["get_client_ip"]
@@ -348,7 +354,16 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"只有最高管理者可修改系統參數"}), 403
 
         if request.method == "GET":
-            return json_resp({"ok":True,"settings":get_system_settings()})
+            settings = get_system_settings()
+            return json_resp({
+                "ok": True,
+                "settings": settings,
+                "server_bind": server_bind_settings_payload(
+                    settings,
+                    current_host=CURRENT_SERVER_BIND_STATE.get("host"),
+                    current_port=CURRENT_SERVER_BIND_STATE.get("port"),
+                ),
+            })
 
         # PUT
         try:
@@ -357,6 +372,16 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        if "server_listen_host" in data:
+            host = validate_listen_host(data.get("server_listen_host"), allow_empty=True)
+            if host is None:
+                return json_resp({"ok":False,"msg":"server_listen_host 必須是 IP、localhost，或留空沿用環境變數"}), 400
+            data["server_listen_host"] = host
+        if "server_listen_port" in data:
+            port = validate_listen_port(data.get("server_listen_port"), allow_empty=True)
+            if port is None:
+                return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
+            data["server_listen_port"] = port
 
         settings = save_settings(data)
         if not settings:
@@ -364,7 +389,16 @@ def register_system_admin_routes(app, deps):
 
         audit("SETTINGS_CHANGED", get_client_ip(), user=actor["username"],
               detail=str(settings))
-        return json_resp({"ok":True,"msg":"系統參數已更新","settings":settings})
+        return json_resp({
+            "ok": True,
+            "msg": "系統參數已更新",
+            "settings": settings,
+            "server_bind": server_bind_settings_payload(
+                get_system_settings(),
+                current_host=CURRENT_SERVER_BIND_STATE.get("host"),
+                current_port=CURRENT_SERVER_BIND_STATE.get("port"),
+            ),
+        })
 
     @app.route("/api/admin/features", methods=["GET", "PUT"])
     @require_csrf_safe
@@ -728,8 +762,8 @@ def register_system_admin_routes(app, deps):
         import threading, subprocess
         def restart_delayed():
             time.sleep(1.5)
-            # Kill old server on port 5000
-            subprocess.run(["fuser", "-k", "5000/tcp"],
+            current_port = str(CURRENT_SERVER_BIND_STATE.get("port") or 5000)
+            subprocess.run(["fuser", "-k", f"{current_port}/tcp"],
                            cwd=BASE_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(0.5)
             # Start new server

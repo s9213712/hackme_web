@@ -304,6 +304,7 @@ async function loadSettings() {
   const json = await res.json().catch(() => ({}));
   if (!json.ok) return;
   const s = json.settings || {};
+  const bind = json.server_bind || {};
   if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
   if ($("s-audit-chain-enabled")) $("s-audit-chain-enabled").checked = !!s.audit_chain_enabled;
   if ($("s-ip-blocking-enabled")) $("s-ip-blocking-enabled").checked = !!s.ip_blocking_enabled;
@@ -312,6 +313,14 @@ async function loadSettings() {
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
+  if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
+  if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  const bindStatus = $("server-bind-status");
+  if (bindStatus) {
+    const restartText = bind.restart_required ? "需重啟才會套用新 listen 設定" : "目前執行中的 listen 設定已一致";
+    bindStatus.textContent = `目前 ${bind.current_host || bind.host || "0.0.0.0"}:${bind.current_port || bind.port || 5000}，下次啟動 ${bind.host || "0.0.0.0"}:${bind.port || 5000}。${restartText}`;
+    bindStatus.style.color = bind.restart_required ? "#ffb74d" : "var(--muted)";
+  }
   if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
   if ($("s-module-community-min-role")) $("s-module-community-min-role").value = s.module_community_min_role || "user";
   if ($("s-module-appeals-min-role")) $("s-module-appeals-min-role").value = s.module_appeals_min_role || "user";
@@ -452,6 +461,8 @@ async function saveSettings() {
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
+    server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
+    server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     module_chat_min_role: $("s-module-chat-min-role")?.value || "user",
     module_community_min_role: $("s-module-community-min-role")?.value || "user",
     module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
@@ -478,7 +489,9 @@ async function saveSettings() {
   const json = await res.json().catch(() => ({}));
   const el = $("settings-msg");
   if (el) {
-    el.textContent = json.ok ? "✅ 設定已儲存" : (json.msg || "儲存失敗");
+    const bind = json.server_bind || {};
+    const restartHint = bind.restart_required ? "，listen IP/port 需重啟服務器後生效" : "";
+    el.textContent = json.ok ? `✅ 設定已儲存${restartHint}` : (json.msg || "儲存失敗");
     el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {

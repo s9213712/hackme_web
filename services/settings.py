@@ -16,6 +16,8 @@ DEFAULT_SETTINGS = {
     "browser_only_mode_enabled": False,
     "maintenance_bypass_token_hash": "",
     "maintenance_bypass_token_expires_at": "",
+    "server_listen_host": "",
+    "server_listen_port": 0,
     "allow_register": True,
     "require_email_verification": False,
     "max_login_failures": 3,

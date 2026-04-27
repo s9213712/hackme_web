@@ -118,12 +118,17 @@ from services.member_levels import ensure_member_level_rules_schema, get_member_
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
 from services.release_info import APP_NAME, APP_RELEASE_ID
+from services.server_bind import effective_server_bind
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 from services.storage_paths import validate_storage_root
 from services.upload_security import ensure_upload_security_schema
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+STARTUP_BIND = effective_server_bind()
+STARTUP_HOST = STARTUP_BIND["host"]
+STARTUP_PORT = STARTUP_BIND["port"]
+SERVER_BIND_STATE = {"host": STARTUP_HOST, "port": STARTUP_PORT}
 SERVER_STARTED_AT = datetime.now().isoformat()
 SERVER_RELEASE_ID = APP_RELEASE_ID
 SERVER_VERSION = APP_RELEASE_ID
@@ -1076,6 +1081,7 @@ register_operation_routes(app, {
     "AUDIT_LOG_PATH": AUDIT_LOG_PATH,
     "BASE_DIR": BASE_DIR,
     "CHAT_DIR": CHAT_DIR,
+    "CURRENT_SERVER_BIND_STATE": SERVER_BIND_STATE,
     "DB_PATH": DB_PATH,
     "LOG_DIR": LOG_DIR,
     "SERVER_LOG_PATH": SERVER_LOG_PATH,
@@ -1162,13 +1168,15 @@ if __name__ == "__main__":
 
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
     scheme = "https" if has_ssl else "http"
-    print(f"\n🌐  hackme_web server running at {scheme}://localhost:5000")
+    bind = effective_server_bind(get_system_settings())
+    host = bind["host"]
+    port = bind["port"]
+    SERVER_BIND_STATE.update({"host": host, "port": port})
+    print(f"\n🌐  hackme_web server running at {scheme}://{host}:{port}")
     print(f"    SSL: {'enabled' if has_ssl else 'disabled (add cert.pem + key.pem to enable)'}")
     print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")
 
-    port = int(os.environ.get("HTML_LEARNING_PORT", "5000"))
-    host = os.environ.get("HTML_LEARNING_HOST", "0.0.0.0").strip() or "0.0.0.0"
     kwargs = {"host": host, "port": port, "debug": False}
     if has_ssl:
         kwargs["ssl_context"] = (CERT_FILE, KEY_FILE)

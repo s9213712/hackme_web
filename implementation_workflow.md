@@ -71,6 +71,7 @@
 - [x] root IP whitelist API
 - [x] `browser_only_mode` middleware
 - [x] maintenance bypass token
+- [x] root 可設定下一次啟動的 listen IP / port，並在 UI 顯示是否需重啟生效
 - [x] test mode
 - [x] pre-production 條件檢查
 - [x] superweak sandbox 前置條件確認
