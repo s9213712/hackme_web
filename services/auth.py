@@ -12,6 +12,7 @@ from flask import jsonify, make_response, request
 
 SESSION_TTL = 3600 * 4
 CSRF_TOKEN_TTL = SESSION_TTL
+SESSION_IDLE_TIMEOUT = 3 * 60
 MIN_DELAY = 0.25
 MAX_DELAY = 0.90
 
@@ -21,19 +22,29 @@ _STATE = {
     "fernet": None,
     "session_ttl": SESSION_TTL,
     "csrf_token_ttl": CSRF_TOKEN_TTL,
+    "session_idle_timeout": SESSION_IDLE_TIMEOUT,
 }
 
 _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
                                 parallelism=4, hash_len=32, salt_len=16)
 
 
-def configure_auth_service(*, get_db, get_user_by_username, fernet, session_ttl=SESSION_TTL, csrf_token_ttl=CSRF_TOKEN_TTL):
+def configure_auth_service(
+    *,
+    get_db,
+    get_user_by_username,
+    fernet,
+    session_ttl=SESSION_TTL,
+    csrf_token_ttl=CSRF_TOKEN_TTL,
+    session_idle_timeout=SESSION_IDLE_TIMEOUT,
+):
     _STATE.update({
         "get_db": get_db,
         "get_user_by_username": get_user_by_username,
         "fernet": fernet,
         "session_ttl": session_ttl,
         "csrf_token_ttl": csrf_token_ttl,
+        "session_idle_timeout": session_idle_timeout,
     })
 
 
@@ -233,10 +244,11 @@ def get_request_csrf_token():
 
 def db_save_session(user_id, token, ip, ua):
     conn = _STATE["get_db"]()
+    now = datetime.now().isoformat()
     expires = (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat()
     conn.execute(
-        "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at) VALUES (?, ?, ?, ?, ?)",
-        (user_id, _hash_token(token), ip, ua, expires)
+        "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, _hash_token(token), ip, ua, expires, now)
     )
     conn.commit()
     conn.close()
@@ -281,14 +293,35 @@ def db_clean_expired_sessions():
 def db_get_user_from_token(token):
     conn = _STATE["get_db"]()
     try:
+        now = datetime.now()
+        now_iso = now.isoformat()
         row = conn.execute(
-            "SELECT u.username FROM sessions s "
+            "SELECT s.id, s.last_seen, u.username FROM sessions s "
             "JOIN users u ON u.id=s.user_id "
             "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0 "
             "AND u.status='active'",
-            (_hash_token(token), datetime.now().isoformat())
+            (_hash_token(token), now_iso)
         ).fetchone()
-        return row["username"] if row else None
+        if not row:
+            return None
+
+        last_seen = row["last_seen"]
+        if last_seen:
+            try:
+                idle_seconds = (now - datetime.fromisoformat(last_seen)).total_seconds()
+            except Exception:
+                idle_seconds = 0
+            if idle_seconds > int(_STATE["session_idle_timeout"]):
+                conn.execute(
+                    "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
+                    (now_iso, row["id"])
+                )
+                conn.commit()
+                return None
+
+        conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))
+        conn.commit()
+        return row["username"]
     finally:
         conn.close()
 

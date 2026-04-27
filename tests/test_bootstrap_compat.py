@@ -19,8 +19,12 @@ def _ensure_session_columns(conn):
         conn.execute("ALTER TABLE sessions ADD COLUMN is_revoked INTEGER NOT NULL DEFAULT 0")
     if "revoked_at" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN revoked_at TEXT")
+    if "last_seen" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN last_seen TEXT")
     conn.execute("UPDATE sessions SET is_revoked=0 WHERE is_revoked IS NULL")
+    conn.execute("UPDATE sessions SET last_seen=created_at WHERE last_seen IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked)")
 
 
@@ -114,7 +118,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
     conn.close()
 
-    assert {"is_revoked", "revoked_at"} <= session_cols
+    assert {"is_revoked", "revoked_at", "last_seen"} <= session_cols
     assert "is_private" in chat_room_cols
     assert migration_versions == [1, 2, 3, 4, 5, 6]
     assert root_user["username"] == "root"

@@ -29,6 +29,7 @@ from services.audit import (
 from services.auth import (
     CSRF_TOKEN_TTL,
     SESSION_TTL,
+    SESSION_IDLE_TIMEOUT,
     configure_auth_service,
     db_delete_session,
     db_get_user_from_token,
@@ -359,6 +360,7 @@ MAX_EXTRA_SUPER_ADMINS = _env_int("HTML_LEARNING_MAX_EXTRA_SUPER_ADMINS", 2, min
 PASSWORD_HISTORY_LIMIT = _env_int("HTML_LEARNING_PASSWORD_HISTORY_LIMIT", 5, minimum=1)
 VIOLATION_APPEAL_WINDOW_HOURS = 24
 CHAT_MESSAGE_MAX_LEN = 500
+SESSION_IDLE_TIMEOUT_SECONDS = _env_int("HTML_LEARNING_SESSION_IDLE_SECONDS", SESSION_IDLE_TIMEOUT, minimum=30)
 OFFICIAL_CHAT_ROOM_NAME = "官方聊天室"
 
 PW_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]).{8,128}$")
@@ -549,12 +551,15 @@ def ensure_session_columns(conn):
     additions = [
         ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
         ("revoked_at", "TEXT"),
+        ("last_seen", "TEXT"),
     ]
     for name, ddl in additions:
         if name not in cols:
             conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {ddl}")
     conn.execute("UPDATE sessions SET is_revoked=0 WHERE is_revoked IS NULL")
+    conn.execute("UPDATE sessions SET last_seen=created_at WHERE last_seen IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked)")
 
 
@@ -634,6 +639,7 @@ configure_auth_service(
     fernet=fernet,
     session_ttl=SESSION_TTL,
     csrf_token_ttl=CSRF_TOKEN_TTL,
+    session_idle_timeout=SESSION_IDLE_TIMEOUT_SECONDS,
 )
 configure_audit_service(
     get_db=get_db,

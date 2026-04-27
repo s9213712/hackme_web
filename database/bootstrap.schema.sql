@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at   TEXT    NOT NULL,
     is_revoked   INTEGER NOT NULL DEFAULT 0,
     revoked_at   TEXT,
+    last_seen    TEXT,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -216,6 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_secure_audit_user   ON secure_audit(user);
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked);
 
