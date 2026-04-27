@@ -121,6 +121,7 @@ from services.password_strength import enforce_password_strength, score_password
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.server_bind import effective_server_bind
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
+from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
 from services.upload_security import ensure_upload_security_schema
 
@@ -1224,6 +1225,43 @@ def start_daily_snapshot_worker():
     return worker
 
 
+def start_storage_maintenance_worker():
+    try:
+        interval = int(os.environ.get("HTML_LEARNING_STORAGE_MAINTENANCE_CHECK_INTERVAL_SECONDS", "3600"))
+    except ValueError:
+        interval = 3600
+    interval = max(60, interval)
+
+    def loop():
+        while True:
+            conn = None
+            try:
+                conn = get_db()
+                result = run_storage_maintenance_if_due(
+                    conn,
+                    settings=get_system_settings(),
+                    save_settings=save_settings,
+                    actor_user_id=0,
+                )
+                if result.get("ran"):
+                    conn.commit()
+                    audit("STORAGE_MAINTENANCE_AUTO_RUN", "0.0.0.0", user="system", success=True, detail=str(result.get("result") or {}))
+                else:
+                    conn.rollback()
+            except Exception as exc:
+                if conn:
+                    conn.rollback()
+                audit("STORAGE_MAINTENANCE_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            finally:
+                if conn:
+                    conn.close()
+            time.sleep(interval)
+
+    worker = threading.Thread(target=loop, name="storage-maintenance-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db(
@@ -1242,6 +1280,7 @@ if __name__ == "__main__":
             if high_risk:
                 raise SystemExit("Integrity Guard strict mode blocked startup due to high risk findings")
     start_daily_snapshot_worker()
+    start_storage_maintenance_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")

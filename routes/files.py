@@ -43,6 +43,7 @@ from services.storage_albums import (
     trash_storage_file,
     update_album,
 )
+from services.storage_maintenance import run_storage_maintenance, storage_maintenance_status
 from flask import request, send_file
 
 
@@ -266,6 +267,29 @@ def register_file_routes(app, deps):
             conn.commit()
             audit("STORAGE_ADMIN_PURGE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={cur.rowcount}, user_id={user_id or '*'}")
             return json_resp({"ok": True, "purged": cur.rowcount})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/storage/maintenance", methods=["GET", "POST"])
+    @require_csrf_safe
+    def admin_storage_maintenance():
+        actor, err = _manager_or_403()
+        if err:
+            return err
+        get_system_settings = deps.get("get_system_settings")
+        settings = get_system_settings() if get_system_settings else {}
+        if request.method == "GET":
+            return json_resp({"ok": True, "maintenance": storage_maintenance_status(settings)})
+        conn = get_db()
+        try:
+            result = run_storage_maintenance(
+                conn,
+                actor_user_id=actor["id"],
+                retention_days=settings.get("storage_trash_retention_days", 30),
+            )
+            conn.commit()
+            audit("STORAGE_MAINTENANCE_RUN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=str(result))
+            return json_resp({"ok": True, "maintenance": result})
         finally:
             conn.close()
 

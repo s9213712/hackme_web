@@ -34,6 +34,7 @@ def _build_app(db_path, storage_root, actor_box):
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": get_db,
+        "get_system_settings": lambda: {"storage_trash_retention_days": 30},
         "get_member_level_rule": lambda conn, level: {
             "can_upload_attachment": True,
             "attachment_quota_mb": 1,
@@ -463,6 +464,13 @@ def test_storage_admin_summary_sync_and_root_purge(tmp_path):
     purged = client.post("/api/admin/storage/trash/purge", json={"confirm": "PURGE STORAGE TRASH"})
     assert purged.status_code == 200
     assert purged.get_json()["purged"] == 1
+
+    maintenance = client.get("/api/admin/storage/maintenance")
+    assert maintenance.status_code == 200
+    assert "maintenance" in maintenance.get_json()
+    run = client.post("/api/admin/storage/maintenance")
+    assert run.status_code == 200
+    assert "synced_users" in run.get_json()["maintenance"]
 
 
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):

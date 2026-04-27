@@ -883,6 +883,18 @@
               <input type="text" id="s-cloud-drive-storage-root" placeholder="/home/s92137/html_learning_storage" />
             </div>
             <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Storage Maintenance</div>
+            <div class="settings-option-grid">
+              <div class="field"><label><input type="checkbox" id="s-storage-maintenance-auto-enabled" /> 每日自動同步 quota / 清理回收筒</label></div>
+              <div class="field">
+                <label>每日執行時間</label>
+                <input type="time" id="s-storage-maintenance-daily-time" />
+              </div>
+              <div class="field">
+                <label>回收筒保留天數</label>
+                <input type="number" id="s-storage-trash-retention-days" min="0" max="3650" />
+              </div>
+            </div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">安全政策</div>
             <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-cd-require-scan-before-download" /> 下載前要求掃描</label></div>

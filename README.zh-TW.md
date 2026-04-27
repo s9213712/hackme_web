@@ -535,7 +535,10 @@ root-only `POST /api/admin/storage/trash/purge` 需確認字串
 `PURGE STORAGE TRASH`，且只移除 storage 邏輯 entry，不刪 Cloud Drive 原始檔。
 登入後的雲端硬碟頁也新增基本 FileManager，可上傳 Storage 檔案、下載、
 移入回收筒、還原與永久移除；AlbumManager 可建立相簿並用相簿 id 加入
-Storage 檔案。
+Storage 檔案。Storage maintenance 可用 `storage_maintenance_auto_enabled`、
+`storage_maintenance_daily_time`、`storage_trash_retention_days` 每日自動執行，
+同步用戶 quota 並清理過期回收筒 storage entry；manager 可用
+`POST /api/admin/storage/maintenance` 手動觸發。
 
 ### 功能開關與預設值
 
@@ -587,6 +590,9 @@ Storage 檔案。
 | `captcha_mode` | `none` |
 | `captcha_ttl_seconds` | `300` |
 | `captcha_turnstile_site_key` | 空字串 |
+| `storage_maintenance_auto_enabled` | `false` |
+| `storage_maintenance_daily_time` | `04:00` |
+| `storage_trash_retention_days` | `30` |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |
 | `snapshot_daily_last_date` | 空字串 |

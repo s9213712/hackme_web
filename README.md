@@ -576,6 +576,11 @@ only logical storage entries, not shared Cloud Drive originals.
 The logged-in Cloud Drive page now includes a basic FileManager for Storage
 uploads, logical download, trash/restore/purge actions, plus an AlbumManager for
 creating albums and adding Storage files by album id.
+Storage maintenance can run automatically each day using
+`storage_maintenance_auto_enabled`, `storage_maintenance_daily_time`, and
+`storage_trash_retention_days`; it syncs user quota counters and purges old
+trashed storage entries. Managers can run it manually through
+`POST /api/admin/storage/maintenance`.
 
 ### Feature Flags and Defaults
 
@@ -628,6 +633,9 @@ Other important defaults:
 | `captcha_mode` | `none` |
 | `captcha_ttl_seconds` | `300` |
 | `captcha_turnstile_site_key` | empty |
+| `storage_maintenance_auto_enabled` | `false` |
+| `storage_maintenance_daily_time` | `04:00` |
+| `storage_trash_retention_days` | `30` |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |
 | `snapshot_daily_last_date` | empty |

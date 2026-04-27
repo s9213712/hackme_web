@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -531,6 +532,17 @@ def register_system_admin_routes(app, deps):
             if ttl_seconds < 60 or ttl_seconds > 3600:
                 return json_resp({"ok":False,"msg":"captcha_ttl_seconds 必須是 60-3600 秒"}), 400
             data["captcha_ttl_seconds"] = ttl_seconds
+        if "storage_trash_retention_days" in data:
+            try:
+                retention_days = int(data.get("storage_trash_retention_days"))
+            except Exception:
+                return json_resp({"ok":False,"msg":"storage_trash_retention_days 必須是 0-3650"}), 400
+            if retention_days < 0 or retention_days > 3650:
+                return json_resp({"ok":False,"msg":"storage_trash_retention_days 必須是 0-3650"}), 400
+            data["storage_trash_retention_days"] = retention_days
+        if "storage_maintenance_daily_time" in data:
+            if not re.fullmatch(r"\d{2}:\d{2}", str(data.get("storage_maintenance_daily_time") or "")):
+                return json_resp({"ok":False,"msg":"storage_maintenance_daily_time 必須是 HH:MM"}), 400
 
         settings = save_settings(data)
         if not settings:

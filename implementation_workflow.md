@@ -188,8 +188,8 @@
 - [x] Storage Admin API
 - [x] FileManager UI
 - [x] AlbumManager UI
-- [ ] 清理與配額同步 cron
-- [ ] 對應測試
+- [x] 清理與配額同步 cron
+- [x] 對應測試
 
 ## Phase 13：個人化 / 互動 / 社交 / 搜尋
 

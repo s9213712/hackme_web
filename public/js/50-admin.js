@@ -716,6 +716,9 @@ async function loadSettings() {
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
+  if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
+  if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
+  if ($("s-storage-trash-retention-days")) $("s-storage-trash-retention-days").value = s.storage_trash_retention_days || 30;
   if ($("s-snapshot-daily-auto-enabled")) $("s-snapshot-daily-auto-enabled").checked = !!s.snapshot_daily_auto_enabled;
   if ($("s-snapshot-daily-time")) $("s-snapshot-daily-time").value = s.snapshot_daily_time || "03:00";
   const bindStatus = $("server-bind-status");
@@ -1021,6 +1024,9 @@ async function saveSettings() {
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
+    storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
+    storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",
+    storage_trash_retention_days: parseInt($("s-storage-trash-retention-days")?.value || "30"),
     snapshot_daily_auto_enabled: !!$("s-snapshot-daily-auto-enabled")?.checked,
     snapshot_daily_time: $("s-snapshot-daily-time")?.value || "03:00",
     module_chat_min_role: $("s-module-chat-min-role")?.value || "user",
