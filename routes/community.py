@@ -1,10 +1,12 @@
+import math
 from datetime import datetime
 
 from flask import request
 
 
 def register_community_routes(app, deps):
-    COMMUNITY_POST_AUTO_HIDE_DISLIKES = 3
+    COMMUNITY_POST_AUTO_HIDE_MIN_DISLIKES = 3
+    COMMUNITY_POST_AUTO_HIDE_ACTIVE_USER_RATIO = 0.10
     audit = deps["audit"]
     check_user_rate_limit = deps["check_user_rate_limit"]
     get_client_ip = deps["get_client_ip"]
@@ -148,7 +150,7 @@ def register_community_routes(app, deps):
             return True
         return actor["id"] in (author_user_id, owner_user_id)
 
-    def ensure_auto_hidden_post_report(conn, post_id, actor_id, dislike_count):
+    def ensure_auto_hidden_post_report(conn, post_id, actor_id, dislike_count, auto_hide_threshold):
         post = conn.execute(
             "SELECT p.id, p.thread_id, p.author_user_id, p.author_username, p.content "
             "FROM forum_posts p WHERE p.id=?",
@@ -156,13 +158,24 @@ def register_community_routes(app, deps):
         ).fetchone()
         if not post:
             return
-        reason = f"倒讚過多自動隱藏（{dislike_count}）"
+        reason = f"倒讚過多自動隱藏（{dislike_count}/{auto_hide_threshold}）"
         conn.execute(
             "INSERT OR IGNORE INTO forum_post_reports "
             "(post_id, thread_id, reporter_user_id, reported_user_id, reason, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (post_id, post["thread_id"], actor_id, post["author_user_id"], reason, datetime.now().isoformat())
         )
+
+    def community_post_auto_hide_threshold(conn):
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "status" in user_cols:
+            active_users = conn.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE status='active'"
+            ).fetchone()["c"]
+        else:
+            active_users = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        ratio_threshold = math.ceil((active_users or 0) * COMMUNITY_POST_AUTO_HIDE_ACTIVE_USER_RATIO)
+        return max(COMMUNITY_POST_AUTO_HIDE_MIN_DISLIKES, ratio_threshold)
 
     def board_payload(row):
         return {
@@ -766,14 +779,15 @@ def register_community_routes(app, deps):
             like_count = counts["like_count"] or 0
             dislike_count = counts["dislike_count"] or 0
             auto_hidden = False
-            if dislike_count >= COMMUNITY_POST_AUTO_HIDE_DISLIKES and not post["is_hidden"]:
+            auto_hide_threshold = community_post_auto_hide_threshold(conn)
+            if dislike_count >= auto_hide_threshold and not post["is_hidden"]:
                 auto_hidden = True
-                reason = f"倒讚過多自動隱藏（{dislike_count}）"
+                reason = f"倒讚過多自動隱藏（{dislike_count}/{auto_hide_threshold}）"
                 conn.execute(
                     "UPDATE forum_posts SET is_hidden=1, hidden_reason=?, updated_at=? WHERE id=?",
                     (reason, now, post_id)
                 )
-                ensure_auto_hidden_post_report(conn, post_id, actor["id"], dislike_count)
+                ensure_auto_hidden_post_report(conn, post_id, actor["id"], dislike_count, auto_hide_threshold)
             conn.commit()
             if auto_hidden:
                 audit("COMMUNITY_POST_AUTO_HIDDEN", get_client_ip(), user="system", success=True, ua=get_ua(),

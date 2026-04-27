@@ -227,3 +227,38 @@ def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
     assert report["post_id"] == ids["post"]
     assert report["status"] == "pending"
     assert "倒讚過多" in report["reason"]
+
+
+def test_dislike_auto_hide_threshold_scales_with_active_users(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        "INSERT INTO users (id, username, role) VALUES (?, ?, 'user')",
+        [(user_id, f"user{user_id}") for user_id in range(5, 41)]
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    for actor in (
+        {"id": 2, "username": "admin", "role": "manager"},
+        {"id": 3, "username": "alice", "role": "user"},
+        {"id": 4, "username": "bob", "role": "user"},
+    ):
+        actor_box["actor"] = actor
+        res = client.post(f"/api/community/posts/{ids['post']}/reaction", json={"value": -1})
+        assert res.status_code == 200
+
+    assert _post_row(db_path, ids["post"])["is_hidden"] == 0
+
+    actor_box["actor"] = {"id": 5, "username": "user5", "role": "user"}
+    res = client.post(f"/api/community/posts/{ids['post']}/reaction", json={"value": -1})
+
+    assert res.status_code == 200
+    assert res.get_json()["auto_hidden"] is True
+    post = _post_row(db_path, ids["post"])
+    assert post["is_hidden"] == 1
+    assert "4/4" in post["hidden_reason"]
