@@ -111,11 +111,13 @@ from services.governance_records import ensure_governance_records_schema
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
+from services.release_info import APP_NAME, APP_RELEASE_ID
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 SERVER_STARTED_AT = datetime.now().isoformat()
-SERVER_VERSION = os.environ.get("HTML_LEARNING_SERVER_VERSION", f"boot-{SERVER_STARTED_AT}")
+SERVER_RELEASE_ID = APP_RELEASE_ID
+SERVER_VERSION = APP_RELEASE_ID
 
 def _env_path(name, default_path):
     value = os.environ.get(name, "").strip()
@@ -832,6 +834,8 @@ register_public_routes(app, {
     "CSRF_TOKEN_TTL": CSRF_TOKEN_TTL,
     "PUBLIC_DIR": PUBLIC_DIR,
     "ROLE_LABEL": ROLE_LABEL,
+    "SERVER_APP_NAME": APP_NAME,
+    "SERVER_RELEASE_ID": SERVER_RELEASE_ID,
     "SERVER_STARTED_AT": SERVER_STARTED_AT,
     "SERVER_VERSION": SERVER_VERSION,
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,

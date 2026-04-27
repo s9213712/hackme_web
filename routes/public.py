@@ -12,6 +12,8 @@ def register_public_routes(app, deps):
     CSRF_TOKEN_TTL = deps["CSRF_TOKEN_TTL"]
     PUBLIC_DIR = deps["PUBLIC_DIR"]
     ROLE_LABEL = deps["ROLE_LABEL"]
+    SERVER_APP_NAME = deps.get("SERVER_APP_NAME", "hackme_web")
+    SERVER_RELEASE_ID = deps.get("SERVER_RELEASE_ID", deps.get("SERVER_VERSION", "unknown"))
     SERVER_STARTED_AT = deps["SERVER_STARTED_AT"]
     SERVER_VERSION = deps["SERVER_VERSION"]
     SESSION_COOKIE_SAMESITE = deps["SESSION_COOKIE_SAMESITE"]
@@ -128,9 +130,21 @@ def register_public_routes(app, deps):
                 **features,
             },
             "server_meta": {
+                "app": SERVER_APP_NAME,
+                "release_id": SERVER_RELEASE_ID,
                 "version": SERVER_VERSION,
                 "started_at": SERVER_STARTED_AT,
             },
+        })
+
+    @app.route("/api/version", methods=["GET"])
+    def get_version():
+        return json_resp({
+            "ok": True,
+            "app": SERVER_APP_NAME,
+            "release_id": SERVER_RELEASE_ID,
+            "version": SERVER_VERSION,
+            "started_at": SERVER_STARTED_AT,
         })
 
     @app.route("/api/password-strength", methods=["POST"])

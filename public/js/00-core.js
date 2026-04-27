@@ -124,9 +124,11 @@ function renderServerVersion(meta) {
   serverMeta = { ...serverMeta, ...meta };
   const el = $("server-version-badge");
   if (!el) return;
-  const version = typeof serverMeta.version === "string" && serverMeta.version ? serverMeta.version : "unknown";
+  const releaseId = typeof serverMeta.release_id === "string" && serverMeta.release_id
+    ? serverMeta.release_id
+    : (typeof serverMeta.version === "string" && serverMeta.version ? serverMeta.version : "unknown");
   const startedAt = typeof serverMeta.started_at === "string" && serverMeta.started_at ? formatChatTime(serverMeta.started_at) : "";
-  el.textContent = startedAt ? `server: ${version} · started ${startedAt}` : `server: ${version}`;
+  el.textContent = startedAt ? `發佈號: ${releaseId} · 啟動 ${startedAt}` : `發佈號: ${releaseId}`;
 }
 
 async function loadSiteConfig() {

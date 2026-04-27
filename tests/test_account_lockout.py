@@ -21,6 +21,8 @@ def _build_app(db_path, settings, ip_box=None, event_log=None):
         "CSRF_TOKEN_TTL": 3600,
         "PUBLIC_DIR": ".",
         "ROLE_LABEL": {},
+        "SERVER_APP_NAME": "hackme_web",
+        "SERVER_RELEASE_ID": "test-release",
         "SERVER_STARTED_AT": "2026-01-01T00:00:00",
         "SERVER_VERSION": "test",
         "SESSION_COOKIE_SAMESITE": "Lax",
@@ -63,6 +65,19 @@ def _build_app(db_path, settings, ip_box=None, event_log=None):
         "verify_password": lambda stored, provided: stored == provided,
     })
     return app
+
+
+def test_public_version_endpoints_expose_release_id(tmp_path):
+    client = _build_app(tmp_path / "release.db", {}).test_client()
+
+    site_config = client.get("/api/site-config")
+    version = client.get("/api/version")
+
+    assert site_config.status_code == 200
+    assert site_config.get_json()["server_meta"]["release_id"] == "test-release"
+    assert site_config.get_json()["server_meta"]["version"] == "test"
+    assert version.status_code == 200
+    assert version.get_json()["release_id"] == "test-release"
 
 
 def _seed_db(db_path):
