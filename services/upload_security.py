@@ -110,6 +110,21 @@ DEFAULT_CLOUD_DRIVE_SECURITY_POLICY = {
     ),
 }
 
+CLOUD_DRIVE_POLICY_BOOL_FIELDS = {
+    "require_scan_before_download",
+    "block_unclean_downloads",
+    "warn_high_risk_downloads",
+    "allow_inline_preview_for_high_risk",
+    "e2ee_server_scan_claim_allowed",
+    "revoke_shares_on_suspension",
+}
+CLOUD_DRIVE_POLICY_INT_FIELDS = {
+    "max_archive_files",
+    "max_archive_uncompressed_bytes",
+    "max_daily_downloads",
+}
+CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"notes"}
+
 
 @dataclass(frozen=True)
 class UploadPolicyDecision:
@@ -410,6 +425,39 @@ def get_cloud_drive_security_policy(conn, scope="default"):
         (scope or "default",),
     ).fetchone()
     return serialize_cloud_drive_security_policy(row)
+
+
+def update_cloud_drive_security_policy(conn, data, scope="default"):
+    ensure_upload_security_schema(conn)
+    if not isinstance(data, dict):
+        return None, "Invalid request"
+    updates = []
+    params = []
+    for key in CLOUD_DRIVE_POLICY_BOOL_FIELDS:
+        if key in data:
+            updates.append(f"{key}=?")
+            params.append(1 if bool(data[key]) else 0)
+    for key in CLOUD_DRIVE_POLICY_INT_FIELDS:
+        if key in data:
+            try:
+                value = int(data[key])
+            except Exception:
+                return None, f"{key} 格式錯誤"
+            if value < 0:
+                return None, f"{key} 不可小於 0"
+            updates.append(f"{key}=?")
+            params.append(value)
+    if "notes" in data:
+        updates.append("notes=?")
+        params.append(str(data.get("notes") or "")[:1000])
+    if not updates:
+        return None, "未提供可更新欄位"
+    updates.append("updated_at=?")
+    params.append(datetime.now().isoformat())
+    params.append(scope or "default")
+    conn.execute(f"UPDATE cloud_drive_security_policies SET {', '.join(updates)} WHERE scope=?", tuple(params))
+    row = conn.execute("SELECT * FROM cloud_drive_security_policies WHERE scope=?", (scope or "default",)).fetchone()
+    return serialize_cloud_drive_security_policy(row), None
 
 
 def _sum_uploaded_file_bytes(conn, owner_user_id):

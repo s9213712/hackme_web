@@ -156,6 +156,25 @@ os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
 os.makedirs(ANCHOR_DIR, exist_ok=True)
+
+
+def _load_db_setting_value(db_path, key):
+    if not os.path.exists(db_path):
+        return ""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("SELECT value FROM system_settings WHERE key=?", (key,)).fetchone()
+            return str(row[0] or "").strip() if row else ""
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+
+
+_configured_storage_root = _load_db_setting_value(DB_PATH, "cloud_drive_storage_root")
+if _configured_storage_root:
+    STORAGE_DIR = _configured_storage_root
 STORAGE_DIR = str(validate_storage_root(STORAGE_DIR, base_dir=BASE_DIR, create=True))
 
 

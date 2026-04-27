@@ -164,6 +164,112 @@ def test_admin_features_endpoint_is_root_only():
     assert res.status_code == 403
 
 
+def test_admin_settings_validates_cloud_drive_storage_root(tmp_path):
+    app = Flask(__name__)
+    app.testing = True
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    state = {"server_listen_host": "", "server_listen_port": 0, "cloud_drive_storage_root": ""}
+    storage_dir = tmp_path / "current-storage"
+    storage_dir.mkdir()
+
+    def save_settings(data):
+        state.update(data)
+        return dict(data)
+
+    register_system_admin_routes(app, {
+        "ANCHOR_DIR": str(tmp_path),
+        "BASE_DIR": str(tmp_path),
+        "CHAT_DIR": str(tmp_path),
+        "DB_PATH": str(tmp_path / "missing.db"),
+        "LOG_DIR": str(tmp_path),
+        "SERVER_LOG_PATH": str(tmp_path / "server.log"),
+        "STORAGE_DIR": str(storage_dir),
+        "CURRENT_SERVER_BIND_STATE": {"host": "127.0.0.1", "port": 5000},
+        "activate_emergency_lockdown": lambda reason: None,
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": lambda: actor_box["actor"],
+        "get_db": lambda: None,
+        "get_feature_settings": lambda: {},
+        "get_system_settings": lambda: dict(state),
+        "is_audit_chain_enabled": lambda: False,
+        "json_resp": _json_resp,
+        "repair_audit_chain": lambda **kwargs: {"entries_resealed": 0},
+        "repair_violation_chains": lambda: {"entries_resealed": 0},
+        "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+        "save_feature_settings": lambda data: {},
+        "save_settings": save_settings,
+        "verify_audit_integrity": lambda: (True, None, "ok"),
+    })
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"cloud_drive_storage_root": "/"})
+    assert res.status_code == 400
+    assert "cloud_drive_storage_root" in res.get_json()["msg"]
+
+    next_root = tmp_path / "next-storage"
+    res = client.put("/api/admin/settings", json={"cloud_drive_storage_root": str(next_root)})
+    data = res.get_json()
+    assert res.status_code == 200
+    assert data["settings"]["cloud_drive_storage_root"] == str(next_root)
+    assert data["cloud_drive_storage"]["restart_required"] is True
+
+
+def test_admin_cloud_drive_security_policy_endpoint_is_root_only(tmp_path):
+    db_path = tmp_path / "cloud-policy.db"
+    app = Flask(__name__)
+    app.testing = True
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    register_system_admin_routes(app, {
+        "ANCHOR_DIR": str(tmp_path),
+        "BASE_DIR": str(tmp_path),
+        "CHAT_DIR": str(tmp_path),
+        "DB_PATH": str(db_path),
+        "LOG_DIR": str(tmp_path),
+        "SERVER_LOG_PATH": str(tmp_path / "server.log"),
+        "STORAGE_DIR": str(tmp_path / "storage"),
+        "activate_emergency_lockdown": lambda reason: None,
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": lambda: actor_box["actor"],
+        "get_db": get_db,
+        "get_feature_settings": lambda: {},
+        "get_system_settings": lambda: {},
+        "is_audit_chain_enabled": lambda: False,
+        "json_resp": _json_resp,
+        "repair_audit_chain": lambda **kwargs: {"entries_resealed": 0},
+        "repair_violation_chains": lambda: {"entries_resealed": 0},
+        "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+        "save_feature_settings": lambda data: {},
+        "save_settings": lambda data: data,
+        "verify_audit_integrity": lambda: (True, None, "ok"),
+    })
+    client = app.test_client()
+
+    res = client.get("/api/admin/cloud-drive/security-policy")
+    assert res.status_code == 200
+    assert res.get_json()["policy"]["block_unclean_downloads"] is True
+
+    res = client.put("/api/admin/cloud-drive/security-policy", json={"block_unclean_downloads": False, "max_daily_downloads": 8})
+    assert res.status_code == 200
+    assert res.get_json()["policy"]["block_unclean_downloads"] is False
+    assert res.get_json()["policy"]["max_daily_downloads"] == 8
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    res = client.get("/api/admin/cloud-drive/security-policy")
+    assert res.status_code == 403
+
+
 def test_admin_member_level_rules_endpoint_is_root_only(tmp_path):
     db_path = tmp_path / "rules.db"
     app = Flask(__name__)

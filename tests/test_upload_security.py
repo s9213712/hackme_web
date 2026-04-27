@@ -12,6 +12,7 @@ from services.upload_security import (
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
     safe_public_filename,
+    update_cloud_drive_security_policy,
 )
 
 
@@ -44,6 +45,31 @@ def test_cloud_drive_security_policy_defaults_are_safe():
         assert policy["warn_high_risk_downloads"] is True
         assert policy["e2ee_server_scan_claim_allowed"] is False
         assert policy["max_archive_files"] == 200
+    finally:
+        conn.close()
+
+
+def test_update_cloud_drive_security_policy_validates_and_serializes():
+    conn = _conn()
+    try:
+        policy, err = update_cloud_drive_security_policy(
+            conn,
+            {
+                "block_unclean_downloads": False,
+                "max_archive_files": 12,
+                "max_daily_downloads": 40,
+                "notes": "root tuned policy",
+            },
+        )
+        assert err is None
+        assert policy["block_unclean_downloads"] is False
+        assert policy["max_archive_files"] == 12
+        assert policy["max_daily_downloads"] == 40
+        assert policy["notes"] == "root tuned policy"
+
+        policy, err = update_cloud_drive_security_policy(conn, {"max_daily_downloads": -1})
+        assert policy is None
+        assert err == "max_daily_downloads 不可小於 0"
     finally:
         conn.close()
 

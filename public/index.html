@@ -514,6 +514,8 @@
             <button class="tab" type="button" id="tab-settings-features">功能</button>
             <button class="tab" type="button" id="tab-settings-appearance">外觀</button>
             <button class="tab" type="button" id="tab-settings-system">系統</button>
+            <button class="tab" type="button" id="tab-settings-drive">雲端硬碟</button>
+            <button class="tab" type="button" id="tab-settings-member-levels">會員等級</button>
           </div>
           <div class="form-section active" id="sec-settings-security">
             <div class="field">
@@ -524,6 +526,22 @@
             </div>
             <div class="field">
               <label><input type="checkbox" id="s-ip-blocking-enabled" /> 啟用錯誤登入自動鎖 IP</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-login-violation-enabled" /> 錯誤登入寫入違規紀錄</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-rate-limit-violation-enabled" /> 速率限制異常寫入違規紀錄</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-root-ip-whitelist-enabled" /> root IP 白名單限制</label>
+            </div>
+            <div class="field">
+              <label>root IP 白名單（逗號或換行分隔）</label>
+              <textarea id="s-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-browser-only-mode-enabled" /> Browser-only 模式（阻擋非瀏覽器請求）</label>
             </div>
             <div class="field">
               <label>登入失敗鎖定次數</label>
@@ -624,6 +642,14 @@
               <input type="number" id="s-server-listen-port" min="0" max="65535" />
             </div>
             <div id="server-bind-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">自動 Snapshot</div>
+            <div class="field">
+              <label><input type="checkbox" id="s-snapshot-daily-auto-enabled" /> 每日自動建立 snapshot</label>
+            </div>
+            <div class="field">
+              <label>每日 snapshot 時間（HH:MM）</label>
+              <input type="time" id="s-snapshot-daily-time" />
+            </div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">模組開放層級</div>
             <div class="field">
               <label>聊天頁最低可用角色</label>
@@ -656,6 +682,47 @@
                 <option value="super_admin">最高管理者</option>
               </select>
             </div>
+          </div>
+          <div class="form-section" id="sec-settings-drive">
+            <div class="mini-title" style="margin-bottom:.8rem;">雲端硬碟儲存位置（需重啟生效）</div>
+            <div class="field">
+              <label>儲存根目錄（空白代表沿用 HTML_LEARNING_STORAGE_DIR / 目前啟動設定）</label>
+              <input type="text" id="s-cloud-drive-storage-root" placeholder="/home/s92137/html_learning_storage" />
+            </div>
+            <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">安全政策</div>
+            <div class="field"><label><input type="checkbox" id="s-cd-require-scan-before-download" /> 下載前要求掃描</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-block-unclean-downloads" /> 阻擋未掃描乾淨的下載</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-warn-high-risk-downloads" /> 高風險下載前警告</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-allow-inline-preview-for-high-risk" /> 允許高風險檔案 inline preview</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-e2ee-server-scan-claim-allowed" /> 允許 E2EE 宣稱已完成伺服器掃描</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-revoke-shares-on-suspension" /> 停權時撤銷分享</label></div>
+            <div class="field">
+              <label>壓縮檔最多檔案數</label>
+              <input type="number" id="s-cd-max-archive-files" min="0" />
+            </div>
+            <div class="field">
+              <label>壓縮檔最大解壓總量（bytes）</label>
+              <input type="number" id="s-cd-max-archive-uncompressed-bytes" min="0" />
+            </div>
+            <div class="field">
+              <label>每日下載上限</label>
+              <input type="number" id="s-cd-max-daily-downloads" min="0" />
+            </div>
+            <div class="field">
+              <label>政策備註</label>
+              <textarea id="s-cd-notes" rows="3"></textarea>
+            </div>
+            <div class="admin-toolbar" style="margin-top:.55rem;">
+              <button class="btn btn-primary" type="button" id="cloud-drive-policy-save-btn">儲存雲端硬碟安全政策</button>
+            </div>
+            <div id="cloud-drive-policy-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+          </div>
+          <div class="form-section" id="sec-settings-member-levels">
+            <div class="mini-title" style="margin-bottom:.45rem;">會員等級權限、限額與升降級門檻</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">這些設定會直接寫入 member_level_rules，權限檢查由 permission service 集中讀取。</div>
+            <div id="settings-member-level-rules" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem;"></div>
+            <div id="member-level-settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
           </div>
           <div class="admin-toolbar" style="margin-top:.6rem;">
             <button class="btn btn-primary" type="button" id="settings-save-btn">儲存設定</button>

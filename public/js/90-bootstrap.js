@@ -14,6 +14,8 @@ function bindUiEvents() {
   const tabSettingsFeatures = $("tab-settings-features");
   const tabSettingsAppearance = $("tab-settings-appearance");
   const tabSettingsSystem = $("tab-settings-system");
+  const tabSettingsDrive = $("tab-settings-drive");
+  const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
   const tabAudit    = $("tab-audit");
   const tabViol     = $("tab-violations");
@@ -42,6 +44,7 @@ function bindUiEvents() {
   const adminReportsBulkApproveBtn = $("admin-reports-bulk-approve");
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
+  const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const healthRefresh = $("health-refresh-btn");
   const integrityRepair = $("integrity-repair-btn");
   const restartBtn   = $("restart-server-btn");
@@ -82,6 +85,8 @@ function bindUiEvents() {
   if (tabSettingsFeatures) tabSettingsFeatures.addEventListener("click", () => switchSettingsSection("features"));
   if (tabSettingsAppearance) tabSettingsAppearance.addEventListener("click", () => switchSettingsSection("appearance"));
   if (tabSettingsSystem) tabSettingsSystem.addEventListener("click", () => switchSettingsSection("system"));
+  if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
+  if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
   if (tabAudit)    tabAudit.addEventListener("click",    () => switchAdminTab("audit"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
@@ -190,6 +195,7 @@ function bindUiEvents() {
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);

@@ -16,15 +16,17 @@ function switchServerTab(tab) {
 
 function switchSettingsSection(tab) {
   currentSettingsSection = tab;
-  ["security", "features", "appearance", "system"].forEach((name) => {
+  ["security", "features", "appearance", "system", "drive", "member-levels"].forEach((name) => {
     const sec = $("sec-settings-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system"].forEach((id) => {
+  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system", "tab-settings-drive", "tab-settings-member-levels"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-settings-" + tab);
   });
+  if (tab === "drive") loadCloudDriveAdminPolicy();
+  if (tab === "member-levels") loadEditableMemberLevelRules();
 }
 
 function switchModuleTab(tab) {
@@ -313,20 +315,20 @@ async function loadMemberLevelRulesSummary() {
     container.innerHTML = `<div style="color:#ffb74d;">${sanitize(json.msg || "會員規則僅 root 可讀取或功能尚未啟用")}</div>`;
     return;
   }
-  const rules = json.rules || {};
-  container.innerHTML = Object.keys(rules).sort().map((level) => {
-    const r = rules[level] || {};
+  const rules = Array.isArray(json.rules) ? json.rules : [];
+  container.innerHTML = rules.map((r) => {
+    const level = r.level || "";
     const flags = [
       r.can_post ? "發文" : "禁發文",
       r.can_comment ? "留言" : "禁留言",
-      r.can_dm ? "私訊" : "禁私訊",
-      r.can_upload ? "上傳" : "禁上傳",
-      r.requires_post_review ? "發文需審" : "免審"
+      r.can_send_dm ? "私訊" : "禁私訊",
+      r.can_upload_attachment ? "上傳" : "禁上傳",
+      r.requires_moderation ? "需審核" : "免審"
     ].join(" · ");
     return `<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.6rem;background:rgba(0,0,0,.2);">
       <div style="font-weight:700;color:#e0e0f0;">${sanitize(level)}</div>
       <div style="color:var(--muted);margin-top:.2rem;">${sanitize(flags)}</div>
-      <div style="color:#82b1ff;margin-top:.25rem;">post ${r.daily_post_limit ?? "-"} · comment ${r.daily_comment_limit ?? "-"} · report weight ${r.report_weight ?? "-"}</div>
+      <div style="color:#82b1ff;margin-top:.25rem;">post ${r.daily_post_limit ?? "-"} · upload ${r.attachment_quota_mb ?? 0} MB · report weight ${r.report_weight ?? "-"}</div>
     </div>`;
   }).join("");
 }
@@ -472,6 +474,180 @@ function openGovernanceProposalForUser(userId, username) {
 }
 
 // ── Settings & restart ───────────────────────────────────────
+const MEMBER_LEVEL_BOOL_FIELDS = [
+  ["can_post", "可發文"],
+  ["can_comment", "可留言"],
+  ["can_send_dm", "可私訊"],
+  ["can_upload_attachment", "可上傳附件"],
+  ["can_report", "可檢舉"],
+  ["requires_moderation", "發文需審核"],
+  ["require_admin_approval", "升等需 admin 核准"],
+  ["require_root_approval", "升等需 root 核准"]
+];
+const MEMBER_LEVEL_INT_FIELDS = [
+  ["daily_post_limit", "每日發文上限"],
+  ["daily_dm_limit", "每日私訊上限"],
+  ["post_rate_limit_per_hour", "每小時發文限制"],
+  ["comment_rate_limit_per_hour", "每小時留言限制"],
+  ["dm_rate_limit_per_day", "每日私訊 rate limit"],
+  ["upload_rate_limit_per_day", "每日上傳限制"],
+  ["max_attachment_size_mb", "單檔上限 MB"],
+  ["attachment_quota_mb", "總容量 MB"],
+  ["report_weight", "檢舉權重"],
+  ["min_account_age_days", "升等帳齡天數"],
+  ["min_approved_content_count", "升等核准內容數"],
+  ["min_points", "升等點數"],
+  ["min_trust_score", "升等 trust_score"],
+  ["min_reputation", "升等 reputation"],
+  ["max_violation_score", "升等最大違規分"],
+  ["downgrade_violation_threshold", "降級/處分建議門檻"]
+];
+const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
+  "require_scan_before_download",
+  "block_unclean_downloads",
+  "warn_high_risk_downloads",
+  "allow_inline_preview_for_high_risk",
+  "e2ee_server_scan_claim_allowed",
+  "revoke_shares_on_suspension"
+];
+const CLOUD_DRIVE_POLICY_INT_FIELDS = [
+  "max_archive_files",
+  "max_archive_uncompressed_bytes",
+  "max_daily_downloads"
+];
+
+function cloudDrivePolicyInputId(key) {
+  return "s-cd-" + key.replaceAll("_", "-");
+}
+
+async function loadCloudDriveAdminPolicy() {
+  if (!currentUser || currentUser !== "root") return;
+  const rootEl = $("s-cd-require-scan-before-download");
+  if (!rootEl) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/cloud-drive/security-policy", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("cloud-drive-policy-msg");
+  if (!json.ok) {
+    if (msg) {
+      msg.textContent = json.msg || "雲端硬碟安全政策讀取失敗";
+      msg.style.color = "#ff4f6d";
+    }
+    return;
+  }
+  const p = json.policy || {};
+  CLOUD_DRIVE_POLICY_BOOL_FIELDS.forEach((key) => {
+    const el = $(cloudDrivePolicyInputId(key));
+    if (el) el.checked = !!p[key];
+  });
+  CLOUD_DRIVE_POLICY_INT_FIELDS.forEach((key) => {
+    const el = $(cloudDrivePolicyInputId(key));
+    if (el) el.value = p[key] ?? 0;
+  });
+  if ($("s-cd-notes")) $("s-cd-notes").value = p.notes || "";
+  if (msg) msg.textContent = "";
+}
+
+async function saveCloudDriveAdminPolicy() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {};
+  CLOUD_DRIVE_POLICY_BOOL_FIELDS.forEach((key) => {
+    const el = $(cloudDrivePolicyInputId(key));
+    if (el) payload[key] = !!el.checked;
+  });
+  CLOUD_DRIVE_POLICY_INT_FIELDS.forEach((key) => {
+    const el = $(cloudDrivePolicyInputId(key));
+    if (el) payload[key] = parseInt(el.value || "0");
+  });
+  payload.notes = $("s-cd-notes")?.value || "";
+  const res = await fetch(API + "/admin/cloud-drive/security-policy", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("cloud-drive-policy-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "雲端硬碟安全政策已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+}
+
+async function loadEditableMemberLevelRules() {
+  if (!currentUser || currentUser !== "root") return;
+  const container = $("settings-member-level-rules");
+  if (!container) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/member-level-rules", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    container.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "會員等級規則讀取失敗")}</div>`;
+    return;
+  }
+  const rules = Array.isArray(json.rules) ? json.rules : [];
+  container.innerHTML = rules.map((rule) => {
+    const level = rule.level || "";
+    const bools = MEMBER_LEVEL_BOOL_FIELDS.map(([key, label]) => `
+      <label style="font-size:.74rem;color:var(--text);"><input type="checkbox" data-level="${sanitize(level)}" data-rule-bool="${key}" ${rule[key] ? "checked" : ""} /> ${label}</label>
+    `).join("");
+    const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
+      <label style="font-size:.7rem;color:var(--muted);">${label}
+        <input type="number" min="0" data-level="${sanitize(level)}" data-rule-int="${key}" value="${Number(rule[key] || 0)}" style="margin-top:.18rem;" />
+      </label>
+    `).join("");
+    return `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:.7rem;background:rgba(0,0,0,.24);">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.55rem;">
+        <strong style="font-size:.95rem;">${sanitize(level)}</strong>
+        <button class="btn btn-primary" type="button" data-save-member-level="${sanitize(level)}" style="margin-left:auto;padding:.35rem .55rem;font-size:.72rem;">儲存</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.35rem;margin-bottom:.55rem;">${bools}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:.45rem;">${ints}</div>
+    </div>`;
+  }).join("");
+  container.querySelectorAll("[data-save-member-level]").forEach((btn) => {
+    btn.addEventListener("click", () => saveMemberLevelRule(btn.getAttribute("data-save-member-level")));
+  });
+}
+
+async function saveMemberLevelRule(level) {
+  if (!level) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const container = $("settings-member-level-rules");
+  const payload = {};
+  MEMBER_LEVEL_BOOL_FIELDS.forEach(([key]) => {
+    const el = container?.querySelector(`[data-level="${CSS.escape(level)}"][data-rule-bool="${key}"]`);
+    if (el) payload[key] = !!el.checked;
+  });
+  MEMBER_LEVEL_INT_FIELDS.forEach(([key]) => {
+    const el = container?.querySelector(`[data-level="${CSS.escape(level)}"][data-rule-int="${key}"]`);
+    if (el) payload[key] = parseInt(el.value || "0");
+  });
+  const res = await fetch(API + "/admin/member-level-rules/" + encodeURIComponent(level), {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("member-level-settings-msg");
+  if (msg) {
+    msg.textContent = json.ok ? `${level} 規則已儲存` : (json.msg || "會員等級規則儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) loadMemberLevelRulesSummary();
+}
+
 async function loadSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -486,6 +662,11 @@ async function loadSettings() {
   if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
   if ($("s-audit-chain-enabled")) $("s-audit-chain-enabled").checked = !!s.audit_chain_enabled;
   if ($("s-ip-blocking-enabled")) $("s-ip-blocking-enabled").checked = !!s.ip_blocking_enabled;
+  if ($("s-login-violation-enabled")) $("s-login-violation-enabled").checked = !!s.login_violation_enabled;
+  if ($("s-rate-limit-violation-enabled")) $("s-rate-limit-violation-enabled").checked = !!s.rate_limit_violation_enabled;
+  if ($("s-root-ip-whitelist-enabled")) $("s-root-ip-whitelist-enabled").checked = !!s.root_ip_whitelist_enabled;
+  if ($("s-root-ip-whitelist")) $("s-root-ip-whitelist").value = s.root_ip_whitelist || "";
+  if ($("s-browser-only-mode-enabled")) $("s-browser-only-mode-enabled").checked = !!s.browser_only_mode_enabled;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
@@ -493,11 +674,21 @@ async function loadSettings() {
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
+  if ($("s-snapshot-daily-auto-enabled")) $("s-snapshot-daily-auto-enabled").checked = !!s.snapshot_daily_auto_enabled;
+  if ($("s-snapshot-daily-time")) $("s-snapshot-daily-time").value = s.snapshot_daily_time || "03:00";
   const bindStatus = $("server-bind-status");
   if (bindStatus) {
     const restartText = bind.restart_required ? "需重啟才會套用新 listen 設定" : "目前執行中的 listen 設定已一致";
     bindStatus.textContent = `目前 ${bind.current_host || bind.host || "0.0.0.0"}:${bind.current_port || bind.port || 5000}，下次啟動 ${bind.host || "0.0.0.0"}:${bind.port || 5000}。${restartText}`;
     bindStatus.style.color = bind.restart_required ? "#ffb74d" : "var(--muted)";
+  }
+  const driveStorage = json.cloud_drive_storage || {};
+  const driveStorageStatus = $("cloud-drive-storage-status");
+  if (driveStorageStatus) {
+    const restartText = driveStorage.restart_required ? "需重啟服務器才會切到新儲存根目錄" : "目前執行中的儲存根目錄已一致";
+    driveStorageStatus.textContent = `目前 ${driveStorage.current_root || "-"}，下次啟動 ${driveStorage.effective_next_root || "-"}。${restartText}`;
+    driveStorageStatus.style.color = driveStorage.restart_required ? "#ffb74d" : "var(--muted)";
   }
   if ($("s-module-chat-min-role")) $("s-module-chat-min-role").value = s.module_chat_min_role || "user";
   if ($("s-module-community-min-role")) $("s-module-community-min-role").value = s.module_community_min_role || "user";
@@ -634,6 +825,11 @@ async function saveSettings() {
     maintenance_mode: !!$("s-maintenance-mode")?.checked,
     audit_chain_enabled: !!$("s-audit-chain-enabled")?.checked,
     ip_blocking_enabled: !!$("s-ip-blocking-enabled")?.checked,
+    login_violation_enabled: !!$("s-login-violation-enabled")?.checked,
+    rate_limit_violation_enabled: !!$("s-rate-limit-violation-enabled")?.checked,
+    root_ip_whitelist_enabled: !!$("s-root-ip-whitelist-enabled")?.checked,
+    root_ip_whitelist: $("s-root-ip-whitelist")?.value || "",
+    browser_only_mode_enabled: !!$("s-browser-only-mode-enabled")?.checked,
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
@@ -641,6 +837,9 @@ async function saveSettings() {
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
+    snapshot_daily_auto_enabled: !!$("s-snapshot-daily-auto-enabled")?.checked,
+    snapshot_daily_time: $("s-snapshot-daily-time")?.value || "03:00",
     module_chat_min_role: $("s-module-chat-min-role")?.value || "user",
     module_community_min_role: $("s-module-community-min-role")?.value || "user",
     module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
@@ -668,7 +867,11 @@ async function saveSettings() {
   const el = $("settings-msg");
   if (el) {
     const bind = json.server_bind || {};
-    const restartHint = bind.restart_required ? "，listen IP/port 需重啟服務器後生效" : "";
+    const driveStorage = json.cloud_drive_storage || {};
+    const restartParts = [];
+    if (bind.restart_required) restartParts.push("listen IP/port");
+    if (driveStorage.restart_required) restartParts.push("雲端硬碟儲存位置");
+    const restartHint = restartParts.length ? `，${restartParts.join("、")} 需重啟服務器後生效` : "";
     el.textContent = json.ok ? `✅ 設定已儲存${restartHint}` : (json.msg || "儲存失敗");
     el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }

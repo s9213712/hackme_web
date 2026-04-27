@@ -25,6 +25,12 @@ from services.server_bind import (
     validate_listen_host,
     validate_listen_port,
 )
+from services.storage_paths import validate_storage_root
+from services.upload_security import (
+    ensure_upload_security_schema,
+    get_cloud_drive_security_policy,
+    update_cloud_drive_security_policy,
+)
 
 
 def register_system_admin_routes(app, deps):
@@ -73,6 +79,23 @@ def register_system_admin_routes(app, deps):
         if role_rank(actor_role) < role_rank("super_admin"):
             return None, (json_resp({"ok":False,"msg":"只有最高管理者可查看健康中心"}), 403)
         return actor, None
+
+    def cloud_drive_storage_payload(settings):
+        configured = str(settings.get("cloud_drive_storage_root") or "").strip()
+        current = os.path.abspath(STORAGE_DIR) if STORAGE_DIR else ""
+        effective = configured or current
+        restart_required = False
+        if configured and current:
+            try:
+                restart_required = os.path.realpath(configured) != os.path.realpath(current)
+            except Exception:
+                restart_required = configured != current
+        return {
+            "configured_root": configured,
+            "current_root": current,
+            "effective_next_root": effective,
+            "restart_required": restart_required,
+        }
 
     def safe_count(conn, table, where="", params=()):
         try:
@@ -363,6 +386,7 @@ def register_system_admin_routes(app, deps):
                     current_host=CURRENT_SERVER_BIND_STATE.get("host"),
                     current_port=CURRENT_SERVER_BIND_STATE.get("port"),
                 ),
+                "cloud_drive_storage": cloud_drive_storage_payload(settings),
             })
 
         # PUT
@@ -382,6 +406,15 @@ def register_system_admin_routes(app, deps):
             if port is None:
                 return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
             data["server_listen_port"] = port
+        if "cloud_drive_storage_root" in data:
+            raw_root = str(data.get("cloud_drive_storage_root") or "").strip()
+            if raw_root:
+                try:
+                    data["cloud_drive_storage_root"] = str(validate_storage_root(raw_root, base_dir=BASE_DIR, create=False))
+                except ValueError as exc:
+                    return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 不安全或格式錯誤：{exc}"}), 400
+            else:
+                data["cloud_drive_storage_root"] = ""
 
         settings = save_settings(data)
         if not settings:
@@ -398,7 +431,33 @@ def register_system_admin_routes(app, deps):
                 current_host=CURRENT_SERVER_BIND_STATE.get("host"),
                 current_port=CURRENT_SERVER_BIND_STATE.get("port"),
             ),
+            "cloud_drive_storage": cloud_drive_storage_payload(get_system_settings()),
         })
+
+    @app.route("/api/admin/cloud-drive/security-policy", methods=["GET", "PUT"])
+    @require_csrf_safe
+    def admin_cloud_drive_security_policy():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        conn = get_db()
+        try:
+            ensure_upload_security_schema(conn)
+            if request.method == "GET":
+                return json_resp({"ok":True,"policy":get_cloud_drive_security_policy(conn)})
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            policy, err = update_cloud_drive_security_policy(conn, data)
+            if err:
+                return json_resp({"ok":False,"msg":err}), 400
+            conn.commit()
+            audit("CLOUD_DRIVE_POLICY_UPDATED", get_client_ip(), user=actor["username"], success=True,
+                  detail=str(policy))
+            return json_resp({"ok":True,"msg":"雲端硬碟安全政策已更新","policy":policy})
+        finally:
+            conn.close()
 
     @app.route("/api/admin/features", methods=["GET", "PUT"])
     @require_csrf_safe

@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     "maintenance_bypass_token_expires_at": "",
     "server_listen_host": "",
     "server_listen_port": 0,
+    "cloud_drive_storage_root": "",
     "allow_register": True,
     "require_email_verification": False,
     "max_login_failures": 3,

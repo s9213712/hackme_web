@@ -184,7 +184,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-012`
+- Current release ID: `2026.04.27-013`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -220,7 +220,8 @@ change that default password, then the user must sign in again with the new
 password.
 
 Rules are loaded from the DB table `member_level_rules`, not hard-coded at route
-level. Root can update rule rows through `/api/admin/member-level-rules`.
+level. Root can update rule rows through `/api/admin/member-level-rules` or the
+admin Settings -> Member Levels UI.
 
 Configurable rule fields include:
 
@@ -335,15 +336,24 @@ Cloud drive safety now exposes:
 - `GET /api/files/quota`: current user storage usage, remaining bytes, file count, per-level upload limits, and grouping by privacy/risk/scan status.
 - `GET /api/files/security-policy`: active cloud drive safety policy plus user-visible restrictions.
 - `GET /api/files/privacy-modes`: the four privacy modes and their user-facing warnings.
+- `GET/PUT /api/admin/cloud-drive/security-policy`: root-managed scan, archive, preview, E2EE claim, share revocation, and download quota policy.
 
 The logged-in UI includes a cloud drive tab that shows used capacity, remaining
 capacity, single-file limit, daily upload limit, risk distribution, scan status,
 privacy mode distribution, and the currently enforced safety measures.
 
+Root can configure cloud drive storage from Settings -> Cloud Drive with
+`cloud_drive_storage_root`. The value must be an absolute, safe path outside
+the web `public/` directory and project root. Changing it is a restart-required
+runtime setting; the UI shows current and next-start roots so operators can
+confirm whether the server is still running an old storage location.
+
 ### Feature Flags and Defaults
 
-Feature flags live in DB-backed `system_settings` and are editable by root under
-the admin settings UI.
+Feature flags and operational settings live in DB-backed `system_settings` and
+are editable by root under the admin settings UI. Root can also tune server
+listen host/port, access controls, daily snapshot scheduling, cloud drive
+storage, and per-level member quotas from the same web surface.
 
 | Setting | Default |
 |---|---:|
