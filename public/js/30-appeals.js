@@ -271,19 +271,21 @@ async function loadAdminReports(page = 0, status = null) {
   } else {
     list.innerHTML = adminReports.map(r => {
       const selectable = r.status === "pending";
-      if (selectable) allowedReportIds.add(String(r.id));
-      const checked = selectable && selectedReportIds.has(String(r.id)) ? "checked" : "";
+      const reportKey = `${r.kind || "chat"}:${r.id}`;
+      const sourceLabel = r.kind === "community_post" ? "社群留言" : "聊天室訊息";
+      if (selectable) allowedReportIds.add(reportKey);
+      const checked = selectable && selectedReportIds.has(reportKey) ? "checked" : "";
       const action = r.status === "pending"
         ? `<div style="margin-top:.4rem;display:flex;gap:.4rem;">
-            <button class="btn" data-report-action="approve" data-report-id="${r.id}" style="background:#1f9d57;color:#fff;border:1px solid #1f9d57;">核准計點</button>
-            <button class="btn" data-report-action="reject" data-report-id="${r.id}" style="background:#ff5252;color:#fff;border:1px solid #ff5252;">駁回</button>
+            <button class="btn" data-report-action="approve" data-report-id="${r.id}" data-report-kind="${r.kind || "chat"}" style="background:#1f9d57;color:#fff;border:1px solid #1f9d57;">核准計點</button>
+            <button class="btn" data-report-action="reject" data-report-id="${r.id}" data-report-kind="${r.kind || "chat"}" style="background:#ff5252;color:#fff;border:1px solid #ff5252;">駁回</button>
           </div>`
         : "";
       return `
         <div style="border-bottom:1px solid #222;padding:.45rem .25rem;word-break:break-all;">
           <div style="display:flex;align-items:center;gap:.5rem;">
-            ${selectable ? `<input type="checkbox" data-report-check="${r.id}" ${checked} />` : `<span style="color:var(--muted);">—</span>`}
-            <strong>檢舉 #${r.id}</strong> · 訊息 #${r.message_id} · room #${r.room_id}
+            ${selectable ? `<input type="checkbox" data-report-check="${reportKey}" ${checked} />` : `<span style="color:var(--muted);">—</span>`}
+            <strong>${sourceLabel}檢舉 #${r.id}</strong> · 內容 #${r.message_id} · ${r.kind === "community_post" ? "thread" : "room"} #${r.room_id}
           </div>
           <div style="color:#aaa;font-size:.7rem;">${sanitize(r.created_at || "")} · 檢舉者：${sanitize(r.reporter_username || "")} · 被檢舉：${sanitize(r.reported_username || "")}</div>
           <div style="color:#ff8a80;">訊息：${sanitize(r.content || "")}</div>
@@ -296,14 +298,15 @@ async function loadAdminReports(page = 0, status = null) {
     list.querySelectorAll("button[data-report-id]").forEach((btn) => {
       btn.addEventListener("click", () => reviewMessageReport(
         parseInt(btn.getAttribute("data-report-id"), 10),
-        btn.getAttribute("data-report-action")
+        btn.getAttribute("data-report-action"),
+        btn.getAttribute("data-report-kind") || "chat"
       ));
     });
     list.querySelectorAll("input[data-report-check]").forEach((box) => {
       box.addEventListener("change", () => {
         const id = box.getAttribute("data-report-check");
-        if (box.checked) selectedReportIds.add(String(id));
-        else selectedReportIds.delete(String(id));
+        if (box.checked) selectedReportIds.add(id);
+        else selectedReportIds.delete(id);
         updateReportSelectionUi();
       });
     });
@@ -324,13 +327,16 @@ function updateReportSelectionUi() {
   if (rejectBtn) rejectBtn.disabled = count === 0;
 }
 
-async function reviewMessageReport(reportId, action) {
+async function reviewMessageReport(reportId, action, kind = "chat") {
   if (!currentUser || currentRole !== "super_admin") return;
   const note = prompt("審核備註（非必填）", "");
   if (note === null) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/message-reports/" + reportId + "/review", {
+  const path = kind === "community_post"
+    ? "/admin/community-post-reports/" + reportId + "/review"
+    : "/admin/message-reports/" + reportId + "/review";
+  const res = await fetch(API + path, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -358,7 +364,11 @@ async function bulkReviewMessageReports(action) {
   let failed = 0;
   for (const reportId of ids) {
     try {
-      const res = await fetch(API + "/admin/message-reports/" + parseInt(reportId, 10) + "/review", {
+      const [kind, rawId] = String(reportId).split(":");
+      const path = kind === "community_post"
+        ? "/admin/community-post-reports/" + parseInt(rawId, 10) + "/review"
+        : "/admin/message-reports/" + parseInt(rawId, 10) + "/review";
+      const res = await fetch(API + path, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

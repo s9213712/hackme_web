@@ -32,6 +32,36 @@ def register_moderation_routes(app, deps):
     verify_audit_integrity = deps["verify_audit_integrity"]
     verify_violation_integrity = deps["verify_violation_integrity"]
 
+    def ensure_community_report_schema(conn):
+        post_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='forum_posts' LIMIT 1"
+        ).fetchone()
+        thread_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='forum_threads' LIMIT 1"
+        ).fetchone()
+        if not post_table or not thread_table:
+            return False
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS forum_post_reports (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id          INTEGER NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
+                thread_id        INTEGER NOT NULL REFERENCES forum_threads(id) ON DELETE CASCADE,
+                reporter_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                reported_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                reason           TEXT NOT NULL,
+                status           TEXT NOT NULL DEFAULT 'pending',
+                reviewed_by      TEXT,
+                reviewed_at      TEXT,
+                review_note      TEXT,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(post_id, reason)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at)")
+        return True
+
     # ── 查詢所有違規記錄（可驗證 integrity）──────────────────────────────────────
     @app.route("/api/admin/violations", methods=["GET"])
     @require_csrf_safe
@@ -292,10 +322,12 @@ def register_moderation_routes(app, deps):
 
         conn = get_db()
         try:
-            total = conn.execute(
+            has_community_reports = ensure_community_report_schema(conn)
+            chat_total = conn.execute(
                 "SELECT COUNT(*) AS c FROM chat_message_reports WHERE status=?", (status,)
             ).fetchone()["c"]
-            rows = conn.execute(
+            community_total = 0
+            chat_rows = conn.execute(
                 "SELECT r.id, r.message_id, r.room_id, r.reason, r.status, r.reviewed_by, r.reviewed_at, r.review_note, r.created_at, "
                 "reporter.username AS reporter_username, reported.username AS reported_username, m.content "
                 "FROM chat_message_reports r "
@@ -305,25 +337,59 @@ def register_moderation_routes(app, deps):
                 "WHERE r.status=? ORDER BY r.id DESC LIMIT ? OFFSET ?",
                 (status, limit, offset)
             ).fetchall()
+            community_rows = []
+            if has_community_reports:
+                community_total = conn.execute(
+                    "SELECT COUNT(*) AS c FROM forum_post_reports WHERE status=?", (status,)
+                ).fetchone()["c"]
+                community_rows = conn.execute(
+                    "SELECT r.id, r.post_id, r.thread_id, r.reason, r.status, r.reviewed_by, r.reviewed_at, r.review_note, r.created_at, "
+                    "reporter.username AS reporter_username, reported.username AS reported_username, p.content "
+                    "FROM forum_post_reports r "
+                    "LEFT JOIN users reporter ON reporter.id=r.reporter_user_id "
+                    "LEFT JOIN users reported ON reported.id=r.reported_user_id "
+                    "LEFT JOIN forum_posts p ON p.id=r.post_id "
+                    "WHERE r.status=? ORDER BY r.id DESC LIMIT ? OFFSET ?",
+                    (status, limit, offset)
+                ).fetchall()
+            items = [{
+                "kind": "chat",
+                "id": r["id"],
+                "message_id": r["message_id"],
+                "room_id": r["room_id"],
+                "reason": r["reason"],
+                "status": r["status"],
+                "reporter_username": r["reporter_username"] or "",
+                "reported_username": r["reported_username"] or "",
+                "content": r["content"] or "",
+                "reviewed_by": r["reviewed_by"],
+                "reviewed_at": r["reviewed_at"],
+                "review_note": r["review_note"],
+                "created_at": r["created_at"],
+            } for r in chat_rows]
+            items.extend({
+                "kind": "community_post",
+                "id": r["id"],
+                "message_id": r["post_id"],
+                "room_id": r["thread_id"],
+                "reason": r["reason"],
+                "status": r["status"],
+                "reporter_username": r["reporter_username"] or "system",
+                "reported_username": r["reported_username"] or "",
+                "content": r["content"] or "",
+                "reviewed_by": r["reviewed_by"],
+                "reviewed_at": r["reviewed_at"],
+                "review_note": r["review_note"],
+                "created_at": r["created_at"],
+            } for r in community_rows)
+            items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+            items = items[:limit]
             return json_resp({
                 "ok": True,
-                "total": total,
+                "total": chat_total + community_total,
                 "page": page,
                 "limit": limit,
-                "items": [{
-                    "id": r["id"],
-                    "message_id": r["message_id"],
-                    "room_id": r["room_id"],
-                    "reason": r["reason"],
-                    "status": r["status"],
-                    "reporter_username": r["reporter_username"] or "",
-                    "reported_username": r["reported_username"] or "",
-                    "content": r["content"] or "",
-                    "reviewed_by": r["reviewed_by"],
-                    "reviewed_at": r["reviewed_at"],
-                    "review_note": r["review_note"],
-                    "created_at": r["created_at"],
-                } for r in rows]
+                "items": items
             })
         finally:
             conn.close()
@@ -374,6 +440,64 @@ def register_moderation_routes(app, deps):
             )
             conn.commit()
             audit("CHAT_MESSAGE_REPORT_REVIEWED", get_client_ip(), user=actor["username"],
+                  detail=f"report_id={report_id},action={action},reported={report['reported_username']}")
+            return json_resp({"ok":True,"msg":msg})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/community-post-reports/<int:report_id>/review", methods=["POST"])
+    @require_csrf
+    def admin_community_post_report_review(report_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("super_admin"):
+            return json_resp({"ok":False,"msg":"只有最高管理者可審核檢舉"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        action = normalize_text(data.get("action"))
+        note = normalize_text(data.get("note"))
+        if action not in ("approve", "reject"):
+            return json_resp({"ok":False,"msg":"審核動作錯誤"}), 400
+
+        conn = get_db()
+        try:
+            if not ensure_community_report_schema(conn):
+                return json_resp({"ok":False,"msg":"找不到社群留言檢舉"}), 404
+            report = conn.execute(
+                "SELECT r.*, u.username AS reported_username, u.role AS reported_role "
+                "FROM forum_post_reports r LEFT JOIN users u ON u.id=r.reported_user_id WHERE r.id=?",
+                (report_id,)
+            ).fetchone()
+            if not report:
+                return json_resp({"ok":False,"msg":"找不到檢舉"}), 404
+            if report["status"] != "pending":
+                return json_resp({"ok":False,"msg":"此檢舉已審核"}), 409
+            final_status = "approved" if action == "approve" else "rejected"
+            reviewed_at = datetime.now().isoformat()
+            msg = "已駁回檢舉，留言已恢復顯示"
+            if action == "approve":
+                role = "super_admin" if report["reported_username"] == "root" else (report["reported_role"] or "user")
+                _, msg, _ = add_violation(
+                    report["reported_user_id"], report["reported_username"], role, points=1,
+                    reason=f"社群留言檢舉成立：{report['reason']}", triggered_by="community_post_report", actor_username=actor["username"]
+                )
+            else:
+                conn.execute(
+                    "UPDATE forum_posts SET is_hidden=0, hidden_reason=NULL, updated_at=? WHERE id=?",
+                    (reviewed_at, report["post_id"])
+                )
+            conn.execute(
+                "UPDATE forum_post_reports SET status=?, reviewed_by=?, reviewed_at=?, review_note=? WHERE id=?",
+                (final_status, actor["username"], reviewed_at, note, report_id)
+            )
+            conn.commit()
+            audit("COMMUNITY_POST_REPORT_REVIEWED", get_client_ip(), user=actor["username"],
                   detail=f"report_id={report_id},action={action},reported={report['reported_username']}")
             return json_resp({"ok":True,"msg":msg})
         finally:

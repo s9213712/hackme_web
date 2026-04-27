@@ -29,6 +29,11 @@ function canDeleteCommunityItem(authorUserId, ownerUserId) {
   return Number(currentUserId) === Number(authorUserId) || Number(currentUserId) === Number(ownerUserId);
 }
 
+function communityReactionButton(post, value, label) {
+  const active = Number(post.user_reaction || 0) === Number(value);
+  return `<button class="btn community-mini-btn${active ? " active" : ""}" type="button" data-community-reaction="${post.id}" data-reaction-value="${value}">${label} ${value === 1 ? (post.like_count || 0) : (post.dislike_count || 0)}</button>`;
+}
+
 function renderCommunityAnnouncements() {
   const list = $("community-announcement-list");
   const editor = $("community-announcement-editor");
@@ -218,12 +223,19 @@ function renderCommunityThreadDetail(thread, posts) {
   }
   const replies = Array.isArray(posts) && posts.length
     ? posts.map((post) => `
-        <div class="community-card">
+        <div class="community-card${post.is_hidden ? " community-hidden-post" : ""}">
           <div class="community-card-head">
-            <div class="community-meta">${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}</div>
-            ${canDeleteCommunityItem(post.author_user_id, thread.author_user_id) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
+            <div class="community-meta">${post.is_pinned ? "置頂 · " : ""}${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}${post.is_hidden ? ` · 已隱藏：${sanitize(post.hidden_reason || "")}` : ""}</div>
+            <div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">
+              ${canManageCommunity() ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂"}</button>` : ""}
+              ${canDeleteCommunityItem(post.author_user_id, thread.author_user_id) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
+            </div>
           </div>
           <div class="community-body">${sanitize(post.content || "")}</div>
+          <div class="community-actions" style="margin-top:.45rem;">
+            ${communityReactionButton(post, 1, "讚")}
+            ${communityReactionButton(post, -1, "倒讚")}
+          </div>
         </div>
       `).join("")
     : "<p style='color:var(--muted);'>尚無留言</p>";
@@ -238,6 +250,18 @@ function renderCommunityThreadDetail(thread, posts) {
   `;
   detail.querySelectorAll("button[data-delete-community-post]").forEach((btn) => {
     btn.addEventListener("click", () => deleteCommunityPost(parseInt(btn.getAttribute("data-delete-community-post"), 10)));
+  });
+  detail.querySelectorAll("button[data-pin-community-post]").forEach((btn) => {
+    btn.addEventListener("click", () => toggleCommunityPostPin(
+      parseInt(btn.getAttribute("data-pin-community-post"), 10),
+      btn.getAttribute("data-pinned") !== "1"
+    ));
+  });
+  detail.querySelectorAll("button[data-community-reaction]").forEach((btn) => {
+    btn.addEventListener("click", () => reactToCommunityPost(
+      parseInt(btn.getAttribute("data-community-reaction"), 10),
+      parseInt(btn.getAttribute("data-reaction-value"), 10)
+    ));
   });
 }
 
@@ -515,6 +539,42 @@ async function deleteCommunityPost(postId) {
     await openCommunityThread(selectedCommunityThreadId);
     if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId);
   }
+}
+
+async function toggleCommunityPostPin(postId, pinned) {
+  if (!postId) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/posts/" + postId + "/pin", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ pinned })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "留言置頂更新失敗", !!json.ok);
+  if (json.ok && selectedCommunityThreadId) {
+    await openCommunityThread(selectedCommunityThreadId);
+  }
+}
+
+async function reactToCommunityPost(postId, value) {
+  if (!postId) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/posts/" + postId + "/reaction", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ value })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    if (json.auto_hidden) {
+      flash($("community-msg"), "留言倒讚過多，已自動隱藏並送 root 審核", false);
+    }
+    if (selectedCommunityThreadId) await openCommunityThread(selectedCommunityThreadId);
+    return;
+  }
+  flash($("community-msg"), json.msg || "反應更新失敗", false);
 }
 
 async function toggleCommunityThreadLock() {

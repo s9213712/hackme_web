@@ -129,6 +129,17 @@ def _count(db_path, table_name):
     return count
 
 
+def _post_row(db_path, post_id):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, is_pinned, is_hidden, hidden_reason FROM forum_posts WHERE id=?",
+        (post_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
 def _announcement_active(db_path, announcement_id):
     conn = sqlite3.connect(db_path)
     active = conn.execute("SELECT is_active FROM announcements WHERE id=?", (announcement_id,)).fetchone()[0]
@@ -171,3 +182,48 @@ def test_user_cannot_delete_other_user_thread_or_post(tmp_path):
     thread = client.delete(f"/api/community/threads/{ids['thread']}")
     assert thread.status_code == 403
     assert thread.get_json()["ok"] is False
+
+
+def test_manager_can_pin_post(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.post(f"/api/community/posts/{ids['post']}/pin", json={"pinned": True})
+
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    assert _post_row(db_path, ids["post"])["is_pinned"] == 1
+
+
+def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    for actor in (
+        {"id": 2, "username": "admin", "role": "manager"},
+        {"id": 3, "username": "alice", "role": "user"},
+        {"id": 4, "username": "bob", "role": "user"},
+    ):
+        actor_box["actor"] = actor
+        res = client.post(f"/api/community/posts/{ids['post']}/reaction", json={"value": -1})
+        assert res.status_code == 200
+        assert res.get_json()["ok"] is True
+
+    post = _post_row(db_path, ids["post"])
+    assert post["is_hidden"] == 1
+    assert "倒讚過多" in post["hidden_reason"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    report = conn.execute(
+        "SELECT post_id, status, reason FROM forum_post_reports WHERE post_id=?",
+        (ids["post"],)
+    ).fetchone()
+    conn.close()
+    assert report["post_id"] == ids["post"]
+    assert report["status"] == "pending"
+    assert "倒讚過多" in report["reason"]

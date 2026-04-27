@@ -351,6 +351,17 @@
       font-size: .75rem;
     }
 
+    .community-mini-btn.active {
+      border-color: var(--accent2);
+      color: var(--accent2);
+      background: rgba(0,212,170,.12);
+    }
+
+    .community-hidden-post {
+      border-color: rgba(255,79,109,.34);
+      background: rgba(255,79,109,.08);
+    }
+
     .community-badge {
       display: inline-flex;
       align-items: center;

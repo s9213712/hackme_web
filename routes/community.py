@@ -4,6 +4,7 @@ from flask import request
 
 
 def register_community_routes(app, deps):
+    COMMUNITY_POST_AUTO_HIDE_DISLIKES = 3
     audit = deps["audit"]
     check_user_rate_limit = deps["check_user_rate_limit"]
     get_client_ip = deps["get_client_ip"]
@@ -68,14 +69,45 @@ def register_community_routes(app, deps):
             content          TEXT NOT NULL,
             author_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             author_username  TEXT NOT NULL,
+            is_pinned        INTEGER NOT NULL DEFAULT 0,
+            is_hidden        INTEGER NOT NULL DEFAULT 0,
+            hidden_reason    TEXT,
             created_at       TEXT NOT NULL,
             updated_at       TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS forum_post_reactions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id        INTEGER NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
+            user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            value          INTEGER NOT NULL,
+            created_at     TEXT NOT NULL,
+            updated_at     TEXT NOT NULL,
+            UNIQUE(post_id, user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS forum_post_reports (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id          INTEGER NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
+            thread_id        INTEGER NOT NULL REFERENCES forum_threads(id) ON DELETE CASCADE,
+            reporter_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reported_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            reason           TEXT NOT NULL,
+            status           TEXT NOT NULL DEFAULT 'pending',
+            reviewed_by      TEXT,
+            reviewed_at      TEXT,
+            review_note      TEXT,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(post_id, reason)
         );
 
         CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_boards_status ON forum_boards(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_threads_board ON forum_threads(board_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_thread ON forum_posts(thread_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_posts_visible ON forum_posts(thread_id, is_hidden, is_pinned, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_post_reactions_post ON forum_post_reactions(post_id);
+        CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at);
         """)
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcements)").fetchall()}
         if "is_pinned" not in cols:
@@ -94,6 +126,14 @@ def register_community_routes(app, deps):
             conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_at TEXT")
         if "is_locked" not in cols:
             conn.execute("ALTER TABLE forum_threads ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0")
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_posts)").fetchall()}
+        for name, ddl in (
+            ("is_pinned", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_hidden", "INTEGER NOT NULL DEFAULT 0"),
+            ("hidden_reason", "TEXT"),
+        ):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE forum_posts ADD COLUMN {name} {ddl}")
 
     def actor_role(actor):
         return "super_admin" if actor["username"] == "root" else actor["role"]
@@ -107,6 +147,22 @@ def register_community_routes(app, deps):
         if can_manage_community(actor):
             return True
         return actor["id"] in (author_user_id, owner_user_id)
+
+    def ensure_auto_hidden_post_report(conn, post_id, actor_id, dislike_count):
+        post = conn.execute(
+            "SELECT p.id, p.thread_id, p.author_user_id, p.author_username, p.content "
+            "FROM forum_posts p WHERE p.id=?",
+            (post_id,)
+        ).fetchone()
+        if not post:
+            return
+        reason = f"倒讚過多自動隱藏（{dislike_count}）"
+        conn.execute(
+            "INSERT OR IGNORE INTO forum_post_reports "
+            "(post_id, thread_id, reporter_user_id, reported_user_id, reason, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (post_id, post["thread_id"], actor_id, post["author_user_id"], reason, datetime.now().isoformat())
+        )
 
     def board_payload(row):
         return {
@@ -552,9 +608,22 @@ def register_community_routes(app, deps):
                 )
                 return json_resp({"ok": True, "msg": "主題已刪除"})
 
+            post_where = "p.thread_id=?"
+            post_params = [thread_id]
+            if not manageable:
+                post_where += " AND p.is_hidden=0"
             posts = conn.execute(
-                "SELECT id, content, author_user_id, author_username, created_at, updated_at FROM forum_posts WHERE thread_id=? ORDER BY created_at ASC",
-                (thread_id,)
+                "SELECT p.id, p.content, p.author_user_id, p.author_username, p.is_pinned, p.is_hidden, p.hidden_reason, "
+                "p.created_at, p.updated_at, "
+                "COALESCE(SUM(CASE WHEN r.value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
+                "COALESCE(SUM(CASE WHEN r.value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count, "
+                "COALESCE(MAX(CASE WHEN r.user_id=? THEN r.value ELSE 0 END), 0) AS user_reaction "
+                "FROM forum_posts p "
+                "LEFT JOIN forum_post_reactions r ON r.post_id=p.id "
+                f"WHERE {post_where} "
+                "GROUP BY p.id "
+                "ORDER BY p.is_pinned DESC, p.created_at ASC",
+                tuple([actor["id"]] + post_params)
             ).fetchall()
             return json_resp({
                 "ok": True,
@@ -580,6 +649,12 @@ def register_community_routes(app, deps):
                     "content": row["content"],
                     "author_user_id": row["author_user_id"],
                     "author_username": row["author_username"],
+                    "is_pinned": bool(row["is_pinned"]),
+                    "is_hidden": bool(row["is_hidden"]),
+                    "hidden_reason": row["hidden_reason"],
+                    "like_count": row["like_count"],
+                    "dislike_count": row["dislike_count"],
+                    "user_reaction": row["user_reaction"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 } for row in posts]
@@ -630,6 +705,118 @@ def register_community_routes(app, deps):
             conn.commit()
             audit("COMMUNITY_THREAD_REPLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"thread_id={thread_id}")
             return json_resp({"ok": True, "msg": "留言已送出"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/posts/<int:post_id>/reaction", methods=["POST"])
+    @require_csrf
+    def community_post_reaction(post_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        value = data.get("value") if isinstance(data, dict) else None
+        if value not in (-1, 0, 1):
+            return json_resp({"ok": False, "msg": "反應值錯誤"}), 400
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            post = conn.execute(
+                "SELECT p.id, p.thread_id, p.is_hidden, t.status AS thread_status, b.status AS board_status, b.owner_user_id "
+                "FROM forum_posts p "
+                "JOIN forum_threads t ON t.id=p.thread_id "
+                "JOIN forum_boards b ON b.id=t.board_id "
+                "WHERE p.id=?",
+                (post_id,)
+            ).fetchone()
+            if not post:
+                return json_resp({"ok": False, "msg": "找不到留言"}), 404
+            manageable = can_manage_community(actor)
+            accessible = post["board_status"] == "approved" or manageable or post["owner_user_id"] == actor["id"]
+            if not accessible or (post["thread_status"] != "approved" and not manageable):
+                return json_resp({"ok": False, "msg": "權限不足"}), 403
+            if post["is_hidden"] and not manageable:
+                return json_resp({"ok": False, "msg": "留言已隱藏"}), 403
+
+            now = datetime.now().isoformat()
+            if value == 0:
+                conn.execute(
+                    "DELETE FROM forum_post_reactions WHERE post_id=? AND user_id=?",
+                    (post_id, actor["id"])
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO forum_post_reactions (post_id, user_id, value, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(post_id, user_id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                    (post_id, actor["id"], value, now, now)
+                )
+
+            counts = conn.execute(
+                "SELECT "
+                "COALESCE(SUM(CASE WHEN value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
+                "COALESCE(SUM(CASE WHEN value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count "
+                "FROM forum_post_reactions WHERE post_id=?",
+                (post_id,)
+            ).fetchone()
+            like_count = counts["like_count"] or 0
+            dislike_count = counts["dislike_count"] or 0
+            auto_hidden = False
+            if dislike_count >= COMMUNITY_POST_AUTO_HIDE_DISLIKES and not post["is_hidden"]:
+                auto_hidden = True
+                reason = f"倒讚過多自動隱藏（{dislike_count}）"
+                conn.execute(
+                    "UPDATE forum_posts SET is_hidden=1, hidden_reason=?, updated_at=? WHERE id=?",
+                    (reason, now, post_id)
+                )
+                ensure_auto_hidden_post_report(conn, post_id, actor["id"], dislike_count)
+            conn.commit()
+            if auto_hidden:
+                audit("COMMUNITY_POST_AUTO_HIDDEN", get_client_ip(), user="system", success=True, ua=get_ua(),
+                      detail=f"post_id={post_id}, dislikes={dislike_count}")
+            return json_resp({
+                "ok": True,
+                "msg": "已更新反應",
+                "like_count": like_count,
+                "dislike_count": dislike_count,
+                "user_reaction": value,
+                "auto_hidden": auto_hidden,
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/community/posts/<int:post_id>/pin", methods=["POST"])
+    @require_csrf
+    def community_pin_post(post_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not can_manage_community(actor):
+            return json_resp({"ok": False, "msg": "只有管理員以上可置頂留言"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        pinned = 1 if isinstance(data, dict) and bool(data.get("pinned")) else 0
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            post = conn.execute("SELECT id, thread_id FROM forum_posts WHERE id=?", (post_id,)).fetchone()
+            if not post:
+                return json_resp({"ok": False, "msg": "找不到留言"}), 404
+            conn.execute(
+                "UPDATE forum_posts SET is_pinned=?, updated_at=? WHERE id=?",
+                (pinned, datetime.now().isoformat(), post_id)
+            )
+            conn.commit()
+            audit("COMMUNITY_POST_PIN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"post_id={post_id}, pinned={pinned}")
+            return json_resp({"ok": True, "msg": "留言已置頂" if pinned else "留言已取消置頂"})
         finally:
             conn.close()
 
