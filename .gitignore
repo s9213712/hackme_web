@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 database/database.db
 database/database.db.bak
+database/app.db
 .blocked_ips.json
 .fail_log.json
 .rate_limit.json
