@@ -101,15 +101,26 @@ function renderUsers() {
       editBtn.addEventListener("click", () => editUser(u.id));
       editBtn.classList.add("action-edit-user");
       actionButtons.push(editBtn);
-      if (canManageUsers && !isSelf) {
-        const delBtn = document.createElement("button");
-        delBtn.className = "btn btn-danger";
-        delBtn.type = "button";
-        delBtn.textContent = "刪除";
-        delBtn.addEventListener("click", () => removeUser(u.id));
-        delBtn.classList.add("action-remove-user");
-        actionButtons.push(delBtn);
-      }
+    }
+    // PM button: any logged-in user can PM anyone except self
+    if (!isSelf) {
+      const pmBtn = document.createElement("button");
+      pmBtn.className = "btn";
+      pmBtn.type = "button";
+      pmBtn.textContent = "💬 私訊";
+      pmBtn.style.color = "#82b1ff";
+      pmBtn.title = `傳送私人訊息給 ${u.username}`;
+      pmBtn.addEventListener("click", () => openPmWithUser(u.username));
+      actionButtons.push(pmBtn);
+    }
+    if (canManageUsers && !isSelf) {
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn btn-danger";
+      delBtn.type = "button";
+      delBtn.textContent = "刪除";
+      delBtn.addEventListener("click", () => removeUser(u.id));
+      delBtn.classList.add("action-remove-user");
+      actionButtons.push(delBtn);
     }
     const tr = document.createElement("tr");
     if (isBlocked) tr.style.opacity = "0.5";

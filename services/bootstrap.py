@@ -2,13 +2,14 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
     (3, "ensure violation_appeals columns"),
     (4, "ensure system_settings baseline rows"),
     (5, "session revocation and security support schema"),
+    (6, "add is_private column to chat_rooms for 1on1 PM support"),
 )
 
 _STATE = {
@@ -337,6 +338,11 @@ def apply_schema_migrations(
         elif version == 5:
             ensure_session_columns(conn)
             ensure_security_support_schema(conn)
+        elif version == 6:
+            try:
+                conn.execute("ALTER TABLE chat_rooms ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass  # column may already exist
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",

@@ -40,7 +40,10 @@ async function openChatRoom(roomId, autoPoll = true) {
   selectedChatRoomId = id;
   renderChatRooms();
   const roomTitle = $("chat-room-title");
-  if (roomTitle) roomTitle.textContent = `${target.name}（#${target.id}）`;
+  if (roomTitle) {
+    const lock = target.is_private ? "🔒 " : "";
+    roomTitle.textContent = `${lock}${target.name}（#${target.id}）`;
+  }
   const member = $("chat-room-member");
   if (member) member.textContent = `持有者：${target.owner_username || "未知"}`;
   await loadChatMessages(id, false);
@@ -67,7 +70,10 @@ async function loadChatMessages(roomId, silent = false) {
     }
     if (json.room && json.room.id === roomId) {
       const title = $("chat-room-title");
-      if (title) title.textContent = `${json.room.name}（#${json.room.id}）`;
+      if (title) {
+        const lock = json.room.is_private ? "🔒 " : "";
+        title.textContent = `${lock}${json.room.name}（#${json.room.id}）`;
+      }
     }
     renderChatMessages(Array.isArray(json.messages) ? json.messages : []);
     const warn = $("chat-room-warn");
@@ -83,8 +89,8 @@ async function createChatRoom() {
   const name = ($("chat-room-name")?.value || "").trim();
   const targetUser = ($("chat-room-target-user")?.value || "").trim();
 
-  if (!name) {
-    setChatMsg("chat-room-warn", "請輸入聊天室名稱", false);
+  if (!name && !targetUser) {
+    setChatMsg("chat-room-warn", "請輸入聊天室名稱或指定對象", false);
     return;
   }
   if (targetUser && targetUser === currentUser) {
@@ -98,7 +104,7 @@ async function createChatRoom() {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ name, target_user: targetUser || null })
+    body: JSON.stringify({ name: name || null, target_user: targetUser || null })
   });
   const raw = await res.text().catch(() => "");
   const json = (() => {
@@ -110,8 +116,9 @@ async function createChatRoom() {
     await loadChatRooms();
     if (json.room && json.room.id) {
       await openChatRoom(json.room.id, true);
-      const inviteInfo = json.room.target_username ? `（邀請 ${sanitize(json.room.target_username)}）` : "";
-      setChatMsg("chat-room-warn", `聊天室建立完成${inviteInfo}`, true);
+      const inviteInfo = json.room.target_username ? `（與 ${sanitize(json.room.target_username)} 的私訊）` : "";
+      const roomType = json.room.is_private ? "私人訊息聊天室" : "聊天室";
+      setChatMsg("chat-room-warn", `${roomType}建立完成${inviteInfo}`, true);
     }
   } else {
     const fallback = (raw || "").split("\n")[0].trim();
@@ -194,6 +201,19 @@ async function sendChatMessage() {
   if (json.warned || json.reason || json.violation_count) {
     alert(message);
   }
+}
+
+async function openPmWithUser(targetUsername) {
+  // Switch to chat tab first
+  const chatTab = $("tab-module-chat");
+  if (chatTab) chatTab.click();
+  // Fill in target and optionally auto-create PM room
+  const targetInput = $("chat-room-target-user");
+  const nameInput = $("chat-room-name");
+  if (targetInput) targetInput.value = targetUsername;
+  if (nameInput) nameInput.value = "";
+  // Trigger create immediately (backend auto-finds or creates 1on1 room)
+  await createChatRoom();
 }
 
 async function reportChatMessage(messageId) {

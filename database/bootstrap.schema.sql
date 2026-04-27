@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             name           TEXT    NOT NULL,
             owner_user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            is_private     INTEGER NOT NULL DEFAULT 0,
             is_active      INTEGER NOT NULL DEFAULT 1,
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );

@@ -42,12 +42,12 @@ def register_chat_routes(app, deps):
                 ensure_user_official_room_membership(conn, urow_id)
                 conn.commit()
                 rows = conn.execute(
-                    "SELECT r.id, r.name, r.owner_user_id, r.created_at, u.username AS owner_username "
+                    "SELECT r.id, r.name, r.owner_user_id, r.is_private, r.created_at, u.username AS owner_username "
                     "FROM chat_rooms r "
                     "LEFT JOIN users u ON u.id = r.owner_user_id "
                     "INNER JOIN chat_room_members m ON m.room_id = r.id "
                     "WHERE m.user_id = ? "
-                    "ORDER BY r.created_at DESC",
+                    "ORDER BY r.is_private ASC, r.created_at DESC",
                     (urow_id,)
                 ).fetchall()
                 return json_resp({
@@ -58,6 +58,7 @@ def register_chat_routes(app, deps):
                             "name": r["name"],
                             "owner_user_id": r["owner_user_id"],
                             "owner_username": r["owner_username"] or "未知",
+                            "is_private": r["is_private"],
                             "created_at": r["created_at"]
                         } for r in rows
                     ]
@@ -84,6 +85,7 @@ def register_chat_routes(app, deps):
         room_id = None
         invite_username = None
         detail = None
+        is_private_room = False
         try:
             conn.execute("BEGIN")
             target_row = None
@@ -94,9 +96,46 @@ def register_chat_routes(app, deps):
                 ).fetchone()
                 if not target_row:
                     return json_resp({"ok":False,"msg":"找不到指定對象帳號"}), 404
+
+                # Check if a private 1on1 room already exists between these two users
+                existing = conn.execute(
+                    """SELECT cr.id, cr.name FROM chat_rooms cr
+                       INNER JOIN chat_room_members m1 ON m1.room_id = cr.id AND m1.user_id = ?
+                       INNER JOIN chat_room_members m2 ON m2.room_id = cr.id AND m2.user_id = ?
+                       WHERE cr.is_private = 1
+                       LIMIT 1""",
+                    (urow_id, target_row["id"])
+                ).fetchone()
+                if existing:
+                    conn.commit()
+                    return json_resp({
+                        "ok": True,
+                        "msg": "已找到私訊聊天室",
+                        "room": {
+                            "id": existing["id"],
+                            "name": existing["name"],
+                            "owner_user_id": urow_id,
+                            "owner_username": actor["username"],
+                            "target_username": target_row["username"],
+                            "is_private": 1
+                        }
+                    })
+
+                # Auto-generate consistent room name (alphabetically sorted)
+                usernames = sorted([actor["username"], target_row["username"]])
+                name = f"PM: {usernames[0]} | {usernames[1]}"
+                is_private_room = True
+            elif not name:
+                return json_resp({"ok":False,"msg":"聊天室名稱不可為空"}), 400
+
+            if not is_private_room and len(name) > 48:
+                return json_resp({"ok":False,"msg":"聊天室名稱最多 48 字元"}), 400
+            if target_user == actor["username"]:
+                return json_resp({"ok":False,"msg":"不能指定自己為對象"}), 400
+
             cur = conn.execute(
-                "INSERT INTO chat_rooms (name, owner_user_id, created_at) VALUES (?, ?, ?)",
-                (name, urow_id, datetime.now().isoformat())
+                "INSERT INTO chat_rooms (name, owner_user_id, is_private, created_at) VALUES (?, ?, ?, ?)",
+                (name, urow_id, 1 if is_private_room else 0, datetime.now().isoformat())
             )
             room_id = cur.lastrowid
             now = datetime.now().isoformat()
@@ -110,7 +149,7 @@ def register_chat_routes(app, deps):
                     (room_id, target_row["id"], now)
                 )
             conn.commit()
-            detail = f"room_id={room_id}, name={name}"
+            detail = f"room_id={room_id}, name={name}, is_private={is_private_room}"
             if target_row:
                 detail += f", target={target_row['username']}"
         except Exception:
@@ -130,13 +169,14 @@ def register_chat_routes(app, deps):
         invite_username = target_row["username"] if target_row else None
         return json_resp({
             "ok": True,
-            "msg": "聊天室已建立",
+            "msg": "私人訊息聊天室已建立" if is_private_room else "聊天室已建立",
             "room": {
                 "id": room_id,
                 "name": name,
                 "owner_user_id": urow_id,
                 "owner_username": actor["username"],
-                "target_username": invite_username
+                "target_username": invite_username,
+                "is_private": 1 if is_private_room else 0
             }
         })
 
@@ -150,7 +190,7 @@ def register_chat_routes(app, deps):
         conn = get_db()
         try:
             room = conn.execute(
-                "SELECT r.id, r.name, r.owner_user_id, u.username AS owner_username "
+                "SELECT r.id, r.name, r.owner_user_id, r.is_private, u.username AS owner_username "
                 "FROM chat_rooms r LEFT JOIN users u ON u.id=r.owner_user_id WHERE r.id=?",
                 (room_id,)
             ).fetchone()
@@ -162,6 +202,8 @@ def register_chat_routes(app, deps):
             ).fetchone()
             if existing_member:
                 return json_resp({"ok":True,"msg":"已加入聊天室","room":{"id":room["id"],"name":room["name"]}})
+            if room["is_private"]:
+                return json_resp({"ok":False,"msg":"這是私人聊天室，無法直接加入"}), 403
             is_public_official = room["name"] == OFFICIAL_CHAT_ROOM_NAME and room["owner_username"] == "root"
             if not is_public_official:
                 audit("CHAT_JOIN_DENIED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},owner={room['owner_username'] or '-'}")

@@ -240,8 +240,9 @@ function renderChatRooms() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "chat-room-item" + (Number(prevId) === Number(r.id) ? " active" : "");
-    btn.textContent = `#${r.id} ${r.name}`;
-    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}`);
+    const lock = r.is_private ? "🔒 " : "";
+    btn.textContent = `${lock}#${r.id} ${r.name}`;
+    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}`);
     btn.addEventListener("click", () => openChatRoom(r.id, true));
     wrap.appendChild(btn);
   });
