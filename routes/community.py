@@ -36,8 +36,19 @@ def register_community_routes(app, deps):
             updated_at       TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS forum_categories (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            name             TEXT NOT NULL UNIQUE,
+            description      TEXT,
+            sort_order       INTEGER NOT NULL DEFAULT 100,
+            is_active        INTEGER NOT NULL DEFAULT 1,
+            created_at       TEXT NOT NULL,
+            updated_at       TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS forum_boards (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id      INTEGER REFERENCES forum_categories(id) ON DELETE SET NULL,
             title            TEXT NOT NULL,
             description      TEXT NOT NULL,
             rules            TEXT,
@@ -106,6 +117,8 @@ def register_community_routes(app, deps):
         );
 
         CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(is_active, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_categories_active_sort ON forum_categories(is_active, sort_order, name);
+        CREATE INDEX IF NOT EXISTS idx_forum_boards_category ON forum_boards(category_id, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_boards_status ON forum_boards(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_threads_board ON forum_threads(board_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_thread ON forum_posts(thread_id, created_at);
@@ -117,6 +130,8 @@ def register_community_routes(app, deps):
         if "is_pinned" not in cols:
             conn.execute("ALTER TABLE announcements ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_boards)").fetchall()}
+        if "category_id" not in cols:
+            conn.execute("ALTER TABLE forum_boards ADD COLUMN category_id INTEGER REFERENCES forum_categories(id) ON DELETE SET NULL")
         if "rules" not in cols:
             conn.execute("ALTER TABLE forum_boards ADD COLUMN rules TEXT")
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(forum_threads)").fetchall()}
@@ -138,6 +153,38 @@ def register_community_routes(app, deps):
         ):
             if name not in cols:
                 conn.execute(f"ALTER TABLE forum_posts ADD COLUMN {name} {ddl}")
+        default_category_id = ensure_default_forum_category(conn)
+        conn.execute(
+            "UPDATE forum_boards SET category_id=? WHERE category_id IS NULL",
+            (default_category_id,)
+        )
+
+    def ensure_default_forum_category(conn):
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT OR IGNORE INTO forum_categories "
+            "(name, description, sort_order, is_active, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?)",
+            ("一般討論", "預設討論分類", 100, now, now)
+        )
+        return conn.execute(
+            "SELECT id FROM forum_categories WHERE name=?",
+            ("一般討論",)
+        ).fetchone()["id"]
+
+    def row_value(row, key, default=None):
+        return row[key] if key in row.keys() else default
+
+    def category_payload(row):
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"] or "",
+            "sort_order": row["sort_order"],
+            "is_active": bool(row["is_active"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def actor_role(actor):
         return "super_admin" if actor["username"] == "root" else actor["role"]
@@ -180,8 +227,18 @@ def register_community_routes(app, deps):
         return max(COMMUNITY_POST_AUTO_HIDE_MIN_DISLIKES, ratio_threshold)
 
     def board_payload(row):
+        category_id = row_value(row, "category_id")
+        category_name = row_value(row, "category_name")
         return {
             "id": row["id"],
+            "category_id": category_id,
+            "category": {
+                "id": category_id,
+                "name": category_name,
+                "description": row_value(row, "category_description", "") or "",
+                "sort_order": row_value(row, "category_sort_order"),
+                "is_active": bool(row_value(row, "category_is_active", 1)),
+            } if category_id and category_name else None,
             "title": row["title"],
             "description": row["description"],
             "rules": row["rules"] or "",
@@ -194,6 +251,21 @@ def register_community_routes(app, deps):
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    def validate_category_id(conn, category_id):
+        if not category_id:
+            return ensure_default_forum_category(conn), None
+        try:
+            parsed = int(category_id)
+        except Exception:
+            return None, "分類格式錯誤"
+        row = conn.execute(
+            "SELECT id FROM forum_categories WHERE id=? AND is_active=1",
+            (parsed,)
+        ).fetchone()
+        if not row:
+            return None, "找不到可用的討論分類"
+        return row["id"], None
 
     def thread_payload(row):
         return {
@@ -290,6 +362,105 @@ def register_community_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/community/categories", methods=["GET", "POST"])
+    @require_csrf_safe
+    def community_categories():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            manageable = can_manage_community(actor)
+            if request.method == "GET":
+                where = "" if manageable else "WHERE is_active=1"
+                rows = conn.execute(
+                    f"SELECT * FROM forum_categories {where} ORDER BY sort_order ASC, name ASC"
+                ).fetchall()
+                categories = []
+                for row in rows:
+                    payload = category_payload(row)
+                    counts = conn.execute(
+                        "SELECT COUNT(*) AS c FROM forum_boards WHERE category_id=? AND "
+                        "(status='approved' OR owner_user_id=? OR ?=1)",
+                        (row["id"], actor["id"], 1 if manageable else 0)
+                    ).fetchone()
+                    payload["board_count"] = counts["c"] or 0
+                    categories.append(payload)
+                return json_resp({"ok": True, "categories": categories, "can_manage": manageable})
+
+            if not manageable:
+                return json_resp({"ok": False, "msg": "只有管理員以上可建立討論分類"}), 403
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            name = normalize_text(data.get("name"))[:80]
+            description = normalize_text(data.get("description"))[:500]
+            sort_order = parse_positive_int(data.get("sort_order", 100), default=100, min_value=0, max_value=9999)
+            is_active = 0 if data.get("is_active") is False else 1
+            if not name:
+                return json_resp({"ok": False, "msg": "分類名稱不可為空"}), 400
+            now = datetime.now().isoformat()
+            try:
+                conn.execute(
+                    "INSERT INTO forum_categories (name, description, sort_order, is_active, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (name, description, sort_order, is_active, now, now)
+                )
+            except Exception:
+                return json_resp({"ok": False, "msg": "分類名稱已存在或格式錯誤"}), 409
+            conn.commit()
+            audit("COMMUNITY_CATEGORY_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=name)
+            return json_resp({"ok": True, "msg": "討論分類已建立"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/categories/<int:category_id>", methods=["PUT"])
+    @require_csrf
+    def community_category_update(category_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not can_manage_community(actor):
+            return json_resp({"ok": False, "msg": "只有管理員以上可更新討論分類"}), 403
+
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            row = conn.execute("SELECT * FROM forum_categories WHERE id=?", (category_id,)).fetchone()
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到討論分類"}), 404
+            name = normalize_text(data.get("name"))[:80] if "name" in data else row["name"]
+            description = normalize_text(data.get("description"))[:500] if "description" in data else row["description"]
+            sort_order = parse_positive_int(
+                data.get("sort_order", row["sort_order"]),
+                default=row["sort_order"],
+                min_value=0,
+                max_value=9999,
+            )
+            is_active = 1 if data.get("is_active", bool(row["is_active"])) else 0
+            if not name:
+                return json_resp({"ok": False, "msg": "分類名稱不可為空"}), 400
+            try:
+                conn.execute(
+                    "UPDATE forum_categories SET name=?, description=?, sort_order=?, is_active=?, updated_at=? WHERE id=?",
+                    (name, description, sort_order, is_active, datetime.now().isoformat(), category_id)
+                )
+            except Exception:
+                return json_resp({"ok": False, "msg": "分類名稱已存在或格式錯誤"}), 409
+            conn.commit()
+            audit("COMMUNITY_CATEGORY_UPDATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"id={category_id}, name={name}")
+            return json_resp({"ok": True, "msg": "討論分類已更新"})
+        finally:
+            conn.close()
+
     @app.route("/api/community/boards", methods=["GET", "POST"])
     @require_csrf_safe
     def community_boards():
@@ -302,11 +473,19 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             if request.method == "GET":
                 if can_manage_community(actor):
-                    rows = conn.execute("SELECT * FROM forum_boards ORDER BY created_at DESC").fetchall()
+                    rows = conn.execute(
+                        "SELECT b.*, c.name AS category_name, c.description AS category_description, "
+                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                        "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
+                        "ORDER BY c.sort_order ASC, b.created_at DESC"
+                    ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT * FROM forum_boards WHERE status='approved' OR owner_user_id=? ORDER BY "
-                        "CASE status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, created_at DESC",
+                        "SELECT b.*, c.name AS category_name, c.description AS category_description, "
+                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                        "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
+                        "WHERE b.status='approved' OR b.owner_user_id=? ORDER BY "
+                        "c.sort_order ASC, CASE b.status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, b.created_at DESC",
                         (actor["id"],)
                     ).fetchall()
                 boards = []
@@ -332,6 +511,9 @@ def register_community_routes(app, deps):
             title = normalize_text(data.get("title"))[:80]
             description = normalize_text(data.get("description"))[:1200]
             rules = normalize_text(data.get("rules"))[:2000]
+            category_id, category_error = validate_category_id(conn, data.get("category_id"))
+            if category_error:
+                return json_resp({"ok": False, "msg": category_error}), 400
             if not title or not description:
                 return json_resp({"ok": False, "msg": "討論區名稱與說明不可為空"}), 400
             existing = conn.execute(
@@ -342,9 +524,9 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "你已有待審核的討論區申請"}), 409
             now = datetime.now().isoformat()
             conn.execute(
-                "INSERT INTO forum_boards (title, description, rules, owner_user_id, owner_username, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
-                (title, description, rules, actor["id"], actor["username"], now, now)
+                "INSERT INTO forum_boards (category_id, title, description, rules, owner_user_id, owner_username, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+                (category_id, title, description, rules, actor["id"], actor["username"], now, now)
             )
             conn.commit()
             audit("COMMUNITY_BOARD_REQUEST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=title)
@@ -365,7 +547,10 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             rows = conn.execute(
-                "SELECT * FROM forum_boards WHERE status='pending' ORDER BY created_at ASC"
+                "SELECT b.*, c.name AS category_name, c.description AS category_description, "
+                "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
+                "WHERE b.status='pending' ORDER BY b.created_at ASC"
             ).fetchall()
             return json_resp({"ok": True, "items": [board_payload(row) for row in rows]})
         finally:
@@ -420,7 +605,12 @@ def register_community_routes(app, deps):
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            board = conn.execute("SELECT * FROM forum_boards WHERE id=?", (board_id,)).fetchone()
+            board = conn.execute(
+                "SELECT b.*, c.name AS category_name, c.description AS category_description, "
+                "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id WHERE b.id=?",
+                (board_id,)
+            ).fetchone()
             if not board:
                 return json_resp({"ok": False, "msg": "找不到討論區"}), 404
             manageable = can_manage_community(actor)

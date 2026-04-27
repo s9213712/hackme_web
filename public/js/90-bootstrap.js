@@ -61,6 +61,7 @@ function bindUiEvents() {
   const chatSendBtn = $("chat-send-btn");
   const chatInput = $("chat-message-input");
   const communityAnnouncementBtn = $("community-announcement-submit");
+  const communityCategoryCreateBtn = $("community-category-create-btn");
   const communityBoardRequestBtn = $("community-board-request-btn");
   const communityThreadSubmitBtn = $("community-thread-submit");
   const communityReplySubmitBtn = $("community-reply-submit");
@@ -118,6 +119,7 @@ function bindUiEvents() {
   });
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
+  if (communityCategoryCreateBtn) communityCategoryCreateBtn.addEventListener("click", createCommunityCategory);
   if (communityBoardRequestBtn) communityBoardRequestBtn.addEventListener("click", requestCommunityBoard);
   if (communityThreadSubmitBtn) communityThreadSubmitBtn.addEventListener("click", createCommunityThread);
   if (communityReplySubmitBtn) communityReplySubmitBtn.addEventListener("click", replyCommunityThread);

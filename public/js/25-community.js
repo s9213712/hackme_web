@@ -1,4 +1,5 @@
 let communityBoards = [];
+let communityCategories = [];
 let communityAnnouncements = [];
 let communityBoardReviews = [];
 let communityThreadReviews = [];
@@ -27,6 +28,34 @@ function canManageCommunity() {
 function canDeleteCommunityItem(authorUserId, ownerUserId) {
   if (canManageCommunity()) return true;
   return Number(currentUserId) === Number(authorUserId) || Number(currentUserId) === Number(ownerUserId);
+}
+
+function renderCommunityCategories() {
+  const panel = $("community-category-manager-panel");
+  const list = $("community-category-list");
+  const select = $("community-board-category");
+  if (panel) panel.style.display = canManageCommunity() ? "block" : "none";
+  if (select) {
+    const activeCategories = communityCategories.filter((item) => item.is_active !== false);
+    select.innerHTML = activeCategories.map((item) => (
+      `<option value="${item.id}">${sanitize(item.name || "")}</option>`
+    )).join("");
+  }
+  if (!list || !canManageCommunity()) return;
+  if (!communityCategories.length) {
+    list.innerHTML = "<p style='color:var(--muted);'>目前沒有討論分類</p>";
+    return;
+  }
+  list.innerHTML = communityCategories.map((item) => `
+    <div class="community-card">
+      <div class="community-card-head">
+        <strong>${sanitize(item.name || "")}</strong>
+        <span class="community-badge ${item.is_active ? "approved" : "rejected"}">${item.is_active ? "啟用" : "停用"}</span>
+      </div>
+      <div class="community-meta">排序 ${item.sort_order ?? 100} · 版面 ${item.board_count || 0}</div>
+      <div class="community-body">${sanitize(item.description || "")}</div>
+    </div>
+  `).join("");
 }
 
 function communityReactionButton(post, value, label) {
@@ -74,7 +103,7 @@ function renderCommunityBoardReviews() {
         <strong>${sanitize(item.title || "")}</strong>
         <span class="community-badge pending">${communityStatusLabel(item.status)}</span>
       </div>
-      <div class="community-meta">申請者：${sanitize(item.owner_username || "")} · ${sanitize(formatChatTime(item.created_at || ""))}</div>
+      <div class="community-meta">分類：${sanitize(item.category?.name || "未分類")} · 申請者：${sanitize(item.owner_username || "")} · ${sanitize(formatChatTime(item.created_at || ""))}</div>
       <div class="community-body">${sanitize(item.description || "")}</div>
       <div class="community-actions">
         <button class="btn btn-primary" type="button" data-board-review="${item.id}" data-board-action="approve">核准</button>
@@ -128,7 +157,7 @@ function renderCommunityBoards() {
   const query = communityBoardQuery.trim().toLowerCase();
   const visibleBoards = communityBoards.filter((board) => {
     if (!query) return true;
-    return [board.title, board.description, board.rules, board.owner_username].some((v) => String(v || "").toLowerCase().includes(query));
+    return [board.title, board.description, board.rules, board.owner_username, board.category?.name].some((v) => String(v || "").toLowerCase().includes(query));
   });
   if (!visibleBoards.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有討論區</p>";
@@ -140,7 +169,7 @@ function renderCommunityBoards() {
         <strong>${sanitize(board.title || "")}</strong>
         <span class="community-badge ${sanitize(board.status || "")}">${communityStatusLabel(board.status)}</span>
       </div>
-      <div class="community-meta">版主：${sanitize(board.owner_username || "")}</div>
+      <div class="community-meta">分類：${sanitize(board.category?.name || "未分類")} · 版主：${sanitize(board.owner_username || "")}</div>
       <div class="community-body">${sanitize(board.description || "")}</div>
       <div class="community-meta">主題 ${board.thread_count || 0} · 留言 ${board.post_count || 0}</div>
     </button>
@@ -163,7 +192,7 @@ function renderCommunityThreads(board) {
   if (heading) heading.textContent = board ? board.title : "請先選擇討論區";
   if (meta) {
     meta.textContent = board
-      ? `${board.owner_username || "-"} · ${communityStatusLabel(board.status)}${board.review_note ? ` · ${board.review_note}` : ""}`
+      ? `${board.category?.name || "未分類"} · ${board.owner_username || "-"} · ${communityStatusLabel(board.status)}${board.review_note ? ` · ${board.review_note}` : ""}`
       : "";
   }
   if (rulesView) {
@@ -312,6 +341,42 @@ async function deleteAnnouncement(id) {
   if (json.ok) await loadAnnouncements();
 }
 
+async function loadCommunityCategories() {
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/categories", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  communityCategories = Array.isArray(json.categories) ? json.categories : [];
+  renderCommunityCategories();
+}
+
+async function createCommunityCategory() {
+  if (!canManageCommunity()) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/categories", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({
+      name: $("community-category-name")?.value || "",
+      description: $("community-category-description")?.value || "",
+      sort_order: $("community-category-sort")?.value || 100,
+      is_active: true
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-category-msg"), json.msg || "分類建立失敗", !!json.ok);
+  if (json.ok) {
+    if ($("community-category-name")) $("community-category-name").value = "";
+    if ($("community-category-description")) $("community-category-description").value = "";
+    if ($("community-category-sort")) $("community-category-sort").value = "100";
+    await loadCommunityCategories();
+  }
+}
+
 async function loadCommunityBoards() {
   await fetchCsrfToken({ force: true });
   const res = await fetch(API + "/community/boards", {
@@ -335,6 +400,7 @@ async function requestCommunityBoard() {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
     body: JSON.stringify({
+      category_id: $("community-board-category")?.value || null,
       title: $("community-board-title")?.value || "",
       description: $("community-board-description")?.value || "",
       rules: $("community-board-rules")?.value || ""
@@ -596,6 +662,7 @@ async function toggleCommunityThreadLock() {
 
 async function loadCommunityHome() {
   await Promise.all([
+    loadCommunityCategories(),
     loadAnnouncements(),
     loadCommunityBoards(),
     (currentRole === "manager" || currentRole === "super_admin") ? loadCommunityBoardReviews() : Promise.resolve(),

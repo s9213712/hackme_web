@@ -199,6 +199,10 @@
           <div class="community-panel" id="community-board-request-panel">
             <div class="mini-title">申請建立討論區</div>
             <div class="field">
+              <label>討論分類</label>
+              <select id="community-board-category"></select>
+            </div>
+            <div class="field">
               <label>討論區名稱</label>
               <input type="text" id="community-board-title" maxlength="80" placeholder="例如：遊戲交流區" />
             </div>
@@ -212,6 +216,25 @@
             </div>
             <button class="btn btn-primary" id="community-board-request-btn" type="button">送出申請</button>
             <div id="community-board-request-msg" class="msg"></div>
+          </div>
+
+          <div class="community-panel" id="community-category-manager-panel" style="display:none;">
+            <div class="mini-title">討論分類管理</div>
+            <div class="field">
+              <label>分類名稱</label>
+              <input type="text" id="community-category-name" maxlength="80" placeholder="例如：公告討論、技術交流" />
+            </div>
+            <div class="field">
+              <label>分類說明</label>
+              <textarea id="community-category-description" rows="2" maxlength="500" placeholder="分類用途說明"></textarea>
+            </div>
+            <div class="field">
+              <label>排序</label>
+              <input type="number" id="community-category-sort" min="0" max="9999" value="100" />
+            </div>
+            <button class="btn btn-primary" id="community-category-create-btn" type="button">新增分類</button>
+            <div id="community-category-msg" class="msg"></div>
+            <div id="community-category-list" class="community-scroll" style="margin-top:.75rem;"></div>
           </div>
 
           <div class="community-panel" id="community-board-review-panel" style="display:none;">

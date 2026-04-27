@@ -398,6 +398,13 @@ the web `public/` directory and project root. Changing it is a restart-required
 runtime setting; the UI shows current and next-start roots so operators can
 confirm whether the server is still running an old storage location.
 
+### Community Forum
+
+The forum core includes root/manager-managed categories, board requests, board
+review, thread review, pinned posts, locked threads, reactions, and automatic
+root reports when downvotes exceed the configured threshold. Managers can create
+forum categories from the community UI and assign new boards to a category.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and

@@ -147,6 +147,73 @@ def _announcement_active(db_path, announcement_id):
     return active
 
 
+def test_manager_can_create_category_and_assign_board(tmp_path):
+    db_path = tmp_path / "community.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES (1, 'root', 'super_admin');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    created = client.post(
+        "/api/community/categories",
+        json={"name": "技術交流", "description": "工程討論", "sort_order": 10},
+    )
+    assert created.status_code == 200
+    assert created.get_json()["ok"] is True
+
+    categories = client.get("/api/community/categories")
+    category = next(item for item in categories.get_json()["categories"] if item["name"] == "技術交流")
+
+    board = client.post(
+        "/api/community/boards",
+        json={"category_id": category["id"], "title": "Python", "description": "Python 討論", "rules": "友善"},
+    )
+    assert board.status_code == 200
+    assert board.get_json()["ok"] is True
+
+    boards = client.get("/api/community/boards").get_json()["boards"]
+    python_board = next(item for item in boards if item["title"] == "Python")
+    assert python_board["category_id"] == category["id"]
+    assert python_board["category"]["name"] == "技術交流"
+
+
+def test_non_manager_cannot_create_category(tmp_path):
+    db_path = tmp_path / "community.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES (3, 'alice', 'user');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.post("/api/community/categories", json={"name": "私人分類"})
+
+    assert res.status_code == 403
+    assert res.get_json()["ok"] is False
+
+
 def test_manager_can_delete_announcement_thread_and_post(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
