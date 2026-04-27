@@ -110,6 +110,22 @@ def register_community_routes(app, deps):
             updated_at       TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS board_moderators (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_id            INTEGER NOT NULL REFERENCES forum_boards(id) ON DELETE CASCADE,
+            user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            username            TEXT NOT NULL,
+            can_review_threads  INTEGER NOT NULL DEFAULT 1,
+            can_pin_posts       INTEGER NOT NULL DEFAULT 1,
+            can_lock_threads    INTEGER NOT NULL DEFAULT 1,
+            can_edit_posts      INTEGER NOT NULL DEFAULT 1,
+            can_delete_posts    INTEGER NOT NULL DEFAULT 1,
+            created_by          TEXT NOT NULL,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT NOT NULL,
+            UNIQUE(board_id, user_id)
+        );
+
         CREATE TABLE IF NOT EXISTS forum_post_reactions (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             post_id        INTEGER NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
@@ -144,6 +160,7 @@ def register_community_routes(app, deps):
         CREATE INDEX IF NOT EXISTS idx_forum_threads_visible ON forum_threads(board_id, is_deleted, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_thread ON forum_posts(thread_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_visible ON forum_posts(thread_id, is_deleted, is_hidden, is_pinned, created_at);
+        CREATE INDEX IF NOT EXISTS idx_board_moderators_user ON board_moderators(user_id, board_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reactions_post ON forum_post_reactions(post_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at);
         """)
@@ -198,6 +215,19 @@ def register_community_routes(app, deps):
         ):
             if name not in cols:
                 conn.execute(f"ALTER TABLE forum_posts ADD COLUMN {name} {ddl}")
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(board_moderators)").fetchall()}
+        for name, ddl in (
+            ("can_review_threads", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_pin_posts", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_lock_threads", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_edit_posts", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_delete_posts", "INTEGER NOT NULL DEFAULT 1"),
+            ("created_by", "TEXT NOT NULL DEFAULT 'system'"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
+        ):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE board_moderators ADD COLUMN {name} {ddl}")
         default_category_id = ensure_default_forum_category(conn)
         conn.execute(
             "UPDATE forum_boards SET category_id=? WHERE category_id IS NULL",
@@ -251,6 +281,26 @@ def register_community_routes(app, deps):
 
     def can_manage_community(actor):
         return role_rank(actor_role(actor)) >= role_rank("manager")
+
+    def board_moderator_row(conn, board_id, actor):
+        if not actor:
+            return None
+        return conn.execute(
+            "SELECT * FROM board_moderators WHERE board_id=? AND user_id=?",
+            (board_id, actor["id"])
+        ).fetchone()
+
+    def can_moderate_board(conn, board_id, actor, permission=None):
+        if not actor:
+            return False
+        if can_manage_community(actor):
+            return True
+        row = board_moderator_row(conn, board_id, actor)
+        if not row:
+            return False
+        if not permission:
+            return True
+        return bool(row[permission])
 
     def can_delete_community_content(actor, author_user_id=None, owner_user_id=None):
         if not actor:
@@ -320,6 +370,22 @@ def register_community_routes(app, deps):
             "review_note": row["review_note"],
             "reviewed_by": row["reviewed_by"],
             "reviewed_at": row["reviewed_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def board_moderator_payload(row):
+        return {
+            "id": row["id"],
+            "board_id": row["board_id"],
+            "user_id": row["user_id"],
+            "username": row["username"],
+            "can_review_threads": bool(row["can_review_threads"]),
+            "can_pin_posts": bool(row["can_pin_posts"]),
+            "can_lock_threads": bool(row["can_lock_threads"]),
+            "can_edit_posts": bool(row["can_edit_posts"]),
+            "can_delete_posts": bool(row["can_delete_posts"]),
+            "created_by": row["created_by"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -766,6 +832,102 @@ def register_community_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/community/boards/<int:board_id>/moderators", methods=["GET", "POST"])
+    @require_csrf_safe
+    def community_board_moderators(board_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not can_manage_community(actor):
+            return json_resp({"ok": False, "msg": "只有管理員以上可管理版主"}), 403
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            board = conn.execute("SELECT id, title FROM forum_boards WHERE id=?", (board_id,)).fetchone()
+            if not board:
+                return json_resp({"ok": False, "msg": "找不到討論區"}), 404
+            if request.method == "GET":
+                rows = conn.execute(
+                    "SELECT * FROM board_moderators WHERE board_id=? ORDER BY username ASC",
+                    (board_id,)
+                ).fetchall()
+                return json_resp({"ok": True, "moderators": [board_moderator_payload(row) for row in rows]})
+
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            user_id = parse_positive_int(data.get("user_id"), default=None, min_value=1)
+            if not user_id:
+                return json_resp({"ok": False, "msg": "user_id 格式錯誤"}), 400
+            user = conn.execute("SELECT id, username FROM users WHERE id=?", (user_id,)).fetchone()
+            if not user:
+                return json_resp({"ok": False, "msg": "找不到使用者"}), 404
+            now = datetime.now().isoformat()
+            values = {
+                "can_review_threads": 1 if data.get("can_review_threads", True) else 0,
+                "can_pin_posts": 1 if data.get("can_pin_posts", True) else 0,
+                "can_lock_threads": 1 if data.get("can_lock_threads", True) else 0,
+                "can_edit_posts": 1 if data.get("can_edit_posts", True) else 0,
+                "can_delete_posts": 1 if data.get("can_delete_posts", True) else 0,
+            }
+            conn.execute(
+                "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, "
+                "can_lock_threads, can_edit_posts, can_delete_posts, created_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(board_id, user_id) DO UPDATE SET "
+                "username=excluded.username, can_review_threads=excluded.can_review_threads, "
+                "can_pin_posts=excluded.can_pin_posts, can_lock_threads=excluded.can_lock_threads, "
+                "can_edit_posts=excluded.can_edit_posts, can_delete_posts=excluded.can_delete_posts, "
+                "updated_at=excluded.updated_at",
+                (
+                    board_id,
+                    user["id"],
+                    user["username"],
+                    values["can_review_threads"],
+                    values["can_pin_posts"],
+                    values["can_lock_threads"],
+                    values["can_edit_posts"],
+                    values["can_delete_posts"],
+                    actor["username"],
+                    now,
+                    now,
+                )
+            )
+            conn.commit()
+            audit("COMMUNITY_BOARD_MODERATOR_UPSERT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"board_id={board_id}, user_id={user_id}")
+            return json_resp({"ok": True, "msg": "版主設定已儲存"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/boards/<int:board_id>/moderators/<int:user_id>", methods=["DELETE"])
+    @require_csrf
+    def community_board_moderator_delete(board_id, user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if not can_manage_community(actor):
+            return json_resp({"ok": False, "msg": "只有管理員以上可移除版主"}), 403
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            row = conn.execute(
+                "SELECT id FROM board_moderators WHERE board_id=? AND user_id=?",
+                (board_id, user_id)
+            ).fetchone()
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到版主設定"}), 404
+            conn.execute("DELETE FROM board_moderators WHERE board_id=? AND user_id=?", (board_id, user_id))
+            conn.commit()
+            audit("COMMUNITY_BOARD_MODERATOR_DELETE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"board_id={board_id}, user_id={user_id}")
+            return json_resp({"ok": True, "msg": "版主已移除"})
+        finally:
+            conn.close()
+
     @app.route("/api/community/boards/<int:board_id>/threads", methods=["GET", "POST"])
     @require_csrf_safe
     def community_threads(board_id):
@@ -784,7 +946,7 @@ def register_community_routes(app, deps):
             ).fetchone()
             if not board:
                 return json_resp({"ok": False, "msg": "找不到討論區"}), 404
-            manageable = can_manage_community(actor)
+            manageable = can_moderate_board(conn, board_id, actor)
             accessible = board_is_accessible(board, actor, manageable)
             if not accessible:
                 return json_resp({"ok": False, "msg": "權限不足"}), 403
@@ -895,17 +1057,32 @@ def register_community_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
-        if not can_manage_community(actor):
-            return json_resp({"ok": False, "msg": "只有管理員以上可審核主題"}), 403
 
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            rows = conn.execute(
-                "SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, is_locked, "
-                "author_user_id, author_username, created_at, updated_at "
-                "FROM forum_threads WHERE status='pending' AND is_deleted=0 ORDER BY created_at ASC"
-            ).fetchall()
+            if can_manage_community(actor):
+                rows = conn.execute(
+                    "SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, is_locked, "
+                    "author_user_id, author_username, created_at, updated_at "
+                    "FROM forum_threads WHERE status='pending' AND is_deleted=0 ORDER BY created_at ASC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, t.is_locked, "
+                    "t.author_user_id, t.author_username, t.created_at, t.updated_at "
+                    "FROM forum_threads t JOIN board_moderators m ON m.board_id=t.board_id "
+                    "WHERE t.status='pending' AND t.is_deleted=0 AND m.user_id=? AND m.can_review_threads=1 "
+                    "ORDER BY t.created_at ASC",
+                    (actor["id"],)
+                ).fetchall()
+                if not rows:
+                    exists = conn.execute(
+                        "SELECT 1 FROM board_moderators WHERE user_id=? AND can_review_threads=1 LIMIT 1",
+                        (actor["id"],)
+                    ).fetchone()
+                    if not exists:
+                        return json_resp({"ok": False, "msg": "只有管理員或版主可審核主題"}), 403
             return json_resp({"ok": True, "items": [thread_payload(row) for row in rows]})
         finally:
             conn.close()
@@ -916,8 +1093,6 @@ def register_community_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
-        if not can_manage_community(actor):
-            return json_resp({"ok": False, "msg": "只有管理員以上可審核主題"}), 403
 
         try:
             data = request.get_json(force=True)
@@ -932,11 +1107,13 @@ def register_community_routes(app, deps):
         try:
             ensure_community_schema(conn)
             row = conn.execute(
-                "SELECT id, title, status, is_deleted FROM forum_threads WHERE id=?",
+                "SELECT id, board_id, title, status, is_deleted FROM forum_threads WHERE id=?",
                 (thread_id,)
             ).fetchone()
             if not row:
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            if not can_moderate_board(conn, row["board_id"], actor, "can_review_threads"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可審核主題"}), 403
             if row["is_deleted"]:
                 return json_resp({"ok": False, "msg": "主題已刪除"}), 404
             if row["status"] != "pending":
@@ -981,7 +1158,7 @@ def register_community_routes(app, deps):
             ).fetchone()
             if not thread:
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
-            manageable = can_manage_community(actor)
+            manageable = can_moderate_board(conn, thread["board_id"], actor)
             accessible = manageable or (
                 bool(thread["board_is_active"]) and (
                     (thread["board_status"] == "approved" and thread["board_visibility"] == "public") or
@@ -1195,7 +1372,7 @@ def register_community_routes(app, deps):
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), status_code
             post = conn.execute(
-                "SELECT p.id, p.thread_id, p.is_hidden, p.is_deleted, t.status AS thread_status, t.is_deleted AS thread_is_deleted, b.status AS board_status, "
+                "SELECT p.id, p.thread_id, p.is_hidden, p.is_deleted, t.board_id, t.status AS thread_status, t.is_deleted AS thread_is_deleted, b.status AS board_status, "
                 "b.owner_user_id, b.visibility AS board_visibility, b.is_active AS board_is_active "
                 "FROM forum_posts p "
                 "JOIN forum_threads t ON t.id=p.thread_id "
@@ -1207,7 +1384,7 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到留言"}), 404
             if post["is_deleted"] or post["thread_is_deleted"]:
                 return json_resp({"ok": False, "msg": "找不到留言"}), 404
-            manageable = can_manage_community(actor)
+            manageable = can_moderate_board(conn, post["board_id"], actor)
             accessible = manageable or (
                 bool(post["board_is_active"]) and (
                     (post["board_status"] == "approved" and post["board_visibility"] == "public") or
@@ -1273,8 +1450,6 @@ def register_community_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
-        if not can_manage_community(actor):
-            return json_resp({"ok": False, "msg": "只有管理員以上可置頂留言"}), 403
         try:
             data = request.get_json(force=True)
         except Exception:
@@ -1284,9 +1459,15 @@ def register_community_routes(app, deps):
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            post = conn.execute("SELECT id, thread_id, is_deleted FROM forum_posts WHERE id=?", (post_id,)).fetchone()
+            post = conn.execute(
+                "SELECT p.id, p.thread_id, p.is_deleted, t.board_id FROM forum_posts p "
+                "JOIN forum_threads t ON t.id=p.thread_id WHERE p.id=?",
+                (post_id,)
+            ).fetchone()
             if not post:
                 return json_resp({"ok": False, "msg": "找不到留言"}), 404
+            if not can_moderate_board(conn, post["board_id"], actor, "can_pin_posts"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可置頂留言"}), 403
             if post["is_deleted"]:
                 return json_resp({"ok": False, "msg": "已刪除留言不可置頂"}), 409
             conn.execute(
@@ -1312,7 +1493,7 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             post = conn.execute(
                 "SELECT p.id, p.thread_id, p.content, p.author_user_id, p.author_username, p.is_deleted, "
-                "t.author_user_id AS thread_author_user_id, t.is_locked, t.is_deleted AS thread_is_deleted, "
+                "t.board_id, t.author_user_id AS thread_author_user_id, t.is_locked, t.is_deleted AS thread_is_deleted, "
                 "b.owner_user_id, b.status AS board_status "
                 "FROM forum_posts p "
                 "JOIN forum_threads t ON t.id=p.thread_id "
@@ -1324,15 +1505,16 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到留言"}), 404
             if post["is_deleted"] or post["thread_is_deleted"]:
                 return json_resp({"ok": False, "msg": "找不到留言"}), 404
-            accessible = post["board_status"] == "approved" or can_manage_community(actor) or post["owner_user_id"] == actor["id"]
+            board_moderator = can_moderate_board(conn, post["board_id"], actor)
+            accessible = post["board_status"] == "approved" or board_moderator or post["owner_user_id"] == actor["id"]
             if not accessible:
                 return json_resp({"ok": False, "msg": "權限不足"}), 403
 
             if request.method == "PUT":
-                manageable = can_manage_community(actor)
+                manageable = can_moderate_board(conn, post["board_id"], actor, "can_edit_posts")
                 if bool(post["is_locked"]) and not manageable:
                     return json_resp({"ok": False, "msg": "此主題已鎖定，不可編輯留言"}), 403
-                if not can_edit_community_content(actor, post["author_user_id"]):
+                if not manageable and not can_edit_community_content(actor, post["author_user_id"]):
                     return json_resp({"ok": False, "msg": "你沒有編輯此留言的權限"}), 403
                 try:
                     data = request.get_json(force=True)
@@ -1357,7 +1539,7 @@ def register_community_routes(app, deps):
                 )
                 return json_resp({"ok": True, "msg": "留言已更新"})
 
-            if not can_delete_community_content(actor, post["author_user_id"], post["owner_user_id"]):
+            if not can_moderate_board(conn, post["board_id"], actor, "can_delete_posts") and not can_delete_community_content(actor, post["author_user_id"], post["owner_user_id"]):
                 return json_resp({"ok": False, "msg": "你沒有刪除此留言的權限"}), 403
 
             now = datetime.now().isoformat()
@@ -1390,8 +1572,6 @@ def register_community_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
-        if not can_manage_community(actor):
-            return json_resp({"ok": False, "msg": "只有管理員以上可鎖定主題"}), 403
         try:
             data = request.get_json(force=True)
         except Exception:
@@ -1400,9 +1580,11 @@ def register_community_routes(app, deps):
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            thread = conn.execute("SELECT id, title, is_deleted FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
+            thread = conn.execute("SELECT id, board_id, title, is_deleted FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
             if not thread:
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            if not can_moderate_board(conn, thread["board_id"], actor, "can_lock_threads"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可鎖定主題"}), 403
             if thread["is_deleted"]:
                 return json_resp({"ok": False, "msg": "已刪除主題不可鎖定"}), 409
             conn.execute(

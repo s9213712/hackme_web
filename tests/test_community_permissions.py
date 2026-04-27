@@ -435,6 +435,71 @@ def test_manager_can_pin_post(tmp_path):
     assert _post_row(db_path, ids["post"])["is_pinned"] == 1
 
 
+def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    assigned = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={"user_id": 4, "can_pin_posts": True, "can_lock_threads": True, "can_delete_posts": True},
+    )
+    assert assigned.status_code == 200
+    listed = client.get(f"/api/community/boards/{board_id}/moderators")
+    assert any(item["user_id"] == 4 for item in listed.get_json()["moderators"])
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    pin = client.post(f"/api/community/posts/{ids['post']}/pin", json={"pinned": True})
+    lock = client.post(f"/api/community/threads/{ids['thread']}/lock", json={"locked": True})
+    delete = client.delete(f"/api/community/posts/{ids['post']}")
+
+    assert pin.status_code == 200
+    assert lock.status_code == 200
+    assert delete.status_code == 200
+    assert _post_row(db_path, ids["post"])["is_deleted"] == 1
+
+
+def test_board_moderator_can_review_only_assigned_board_threads(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    assigned = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={"user_id": 4, "can_review_threads": True},
+    )
+    assert assigned.status_code == 200
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    pending = client.post(
+        f"/api/community/boards/{board_id}/threads",
+        json={"title": "待審主題", "content": "需要版主審核"},
+    )
+    assert pending.status_code == 200
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    pending_id = conn.execute(
+        "SELECT id FROM forum_threads WHERE title=?",
+        ("待審主題",)
+    ).fetchone()["id"]
+    conn.close()
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    reviews = client.get("/api/community/threads/reviews")
+    assert any(item["id"] == pending_id for item in reviews.get_json()["items"])
+    approved = client.post(f"/api/community/threads/{pending_id}/review", json={"action": "approve"})
+    assert approved.status_code == 200
+    assert _thread_row(db_path, pending_id)["title"] == "待審主題"
+
+
 def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
