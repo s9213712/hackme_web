@@ -38,6 +38,7 @@ function bindUiEvents() {
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
   const healthRefresh = $("health-refresh-btn");
+  const integrityRepair = $("integrity-repair-btn");
   const restartBtn   = $("restart-server-btn");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
@@ -175,6 +176,7 @@ function bindUiEvents() {
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
+  if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
 }
 

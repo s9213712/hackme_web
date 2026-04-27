@@ -23,6 +23,7 @@ from services.audit import (
     audit,
     canonical_json,
     configure_audit_service,
+    repair_audit_chain,
     verify_audit_integrity,
 )
 from services.auth import (
@@ -66,6 +67,7 @@ from services.violations import (
     detect_chat_violation,
     get_latest_violation,
     parse_iso_to_datetime,
+    repair_violation_chains,
     secure_add_violation,
     verify_violation_integrity,
 )
@@ -882,6 +884,8 @@ register_operation_routes(app, {
     "normalize_text": normalize_text,
     "parse_iso_to_datetime": parse_iso_to_datetime,
     "parse_positive_int": parse_positive_int,
+    "repair_audit_chain": repair_audit_chain,
+    "repair_violation_chains": repair_violation_chains,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
     "role_rank": role_rank,

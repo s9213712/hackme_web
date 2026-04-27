@@ -370,6 +370,30 @@ async function loadServerHealth() {
     聊天檔案：${s.chat_files || 0} 個 / ${formatBytes(s.chat_bytes)} ·
     ${json.audit_integrity && json.audit_integrity.details ? sanitize(json.audit_integrity.details) : ""}
   `;
+  const repairBtn = $("integrity-repair-btn");
+  if (repairBtn) {
+    repairBtn.disabled = currentUser !== "root";
+  }
+}
+
+async function repairIntegrityChains() {
+  if (currentUser !== "root") {
+    alert("只有 root 可處理鏈異常");
+    return;
+  }
+  if (!confirm("確定要重新封鏈並解除維護模式？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/integrity/repair", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "鏈異常已處理" : "處理失敗"));
+  await loadServerHealth();
+  if (currentAdminTab === "audit") await loadAudit(auditPage);
+  if (currentAdminTab === "violations") await loadViolations(violationsPage, violationTargetUser);
 }
 
 async function saveSettings() {

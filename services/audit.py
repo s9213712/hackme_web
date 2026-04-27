@@ -210,3 +210,59 @@ def verify_audit_integrity(start_id=None, end_id=None):
         return True, None, f"integrity OK ({len(rows)} entries verified); {anchor_details}"
     finally:
         conn.close()
+
+
+def repair_audit_chain(reason="manual reseal"):
+    """Recompute audit hash-chain metadata from the current stored entries."""
+    with _audit_db_lock:
+        conn = _STATE["get_db"]()
+        try:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(secure_audit)").fetchall()}
+            has_extended = {"prev_hash", "entry_hash"}.issubset(cols)
+            col_list = "id, ts, action, ip, user, success, ua, detail, chain_hash"
+            if has_extended:
+                col_list = "id, ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash"
+            rows = conn.execute(f"SELECT {col_list} FROM secure_audit ORDER BY id ASC").fetchall()
+            if not rows:
+                return {"entries_resealed": 0, "head_id": None}
+
+            prev_hash = _STATE["chain_seed"]
+            head = None
+            conn.execute("BEGIN IMMEDIATE")
+            for r in rows:
+                entry = {
+                    "ts": r["ts"],
+                    "action": r["action"],
+                    "ip": r["ip"],
+                    "user": r["user"],
+                    "success": bool(r["success"]),
+                    "ua": r["ua"],
+                    "detail": r["detail"],
+                }
+                entry_hash = _entry_hash(canonical_json(entry))
+                chain_hash = _chain_hash(prev_hash, entry_hash)
+                if has_extended:
+                    conn.execute(
+                        "UPDATE secure_audit SET prev_hash=?, entry_hash=?, chain_hash=? WHERE id=?",
+                        (prev_hash, entry_hash, chain_hash, r["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE secure_audit SET chain_hash=? WHERE id=?",
+                        (chain_hash, r["id"]),
+                    )
+                prev_hash = chain_hash
+                head = {"id": r["id"], "entry_hash": entry_hash, "chain_hash": chain_hash}
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    if head:
+        _write_audit_anchor(head["id"], head["chain_hash"], head["entry_hash"], reason=reason)
+    return {"entries_resealed": len(rows), "head_id": head["id"] if head else None}

@@ -23,6 +23,8 @@ def register_system_admin_routes(app, deps):
     get_system_settings = deps["get_system_settings"]
     is_audit_chain_enabled = deps["is_audit_chain_enabled"]
     json_resp = deps["json_resp"]
+    repair_audit_chain = deps["repair_audit_chain"]
+    repair_violation_chains = deps["repair_violation_chains"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
@@ -142,6 +144,43 @@ def register_system_admin_routes(app, deps):
         audit("SETTINGS_CHANGED", get_client_ip(), user=actor["username"],
               detail=str(settings))
         return json_resp({"ok":True,"msg":"系統參數已更新","settings":settings})
+
+    @app.route("/api/admin/integrity/repair", methods=["POST"])
+    @require_csrf
+    def admin_repair_integrity_chains():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可處理鏈異常"}), 403
+
+        audit_before = verify_audit_integrity() if is_audit_chain_enabled() else (None, None, "audit chain disabled")
+        audit_result = repair_audit_chain(reason=f"manual_repair_by={actor['username']}")
+        violation_result = repair_violation_chains()
+        save_settings({"maintenance_mode": False})
+        audit_after = verify_audit_integrity() if is_audit_chain_enabled() else (None, None, "audit chain disabled")
+
+        audit(
+            "INTEGRITY_CHAINS_RESEALED",
+            get_client_ip(),
+            user=actor["username"],
+            success=True,
+            detail=(
+                f"audit_before={audit_before[2]}; audit_resealed={audit_result['entries_resealed']}; "
+                f"violations_resealed={violation_result['entries_resealed']}; maintenance_mode=False"
+            ),
+        )
+        return json_resp({
+            "ok": True,
+            "msg": "鏈異常已重新封鏈，維護模式已關閉",
+            "audit": {
+                "before": {"ok": audit_before[0], "broken_at": audit_before[1], "details": audit_before[2]},
+                "after": {"ok": audit_after[0], "broken_at": audit_after[1], "details": audit_after[2]},
+                **audit_result,
+            },
+            "violations": violation_result,
+            "maintenance_mode": False,
+        })
 
     # ── 重啟服務器（超級管理者 only）─────────────────────────────────────────────
     @app.route("/api/admin/restart", methods=["POST"])

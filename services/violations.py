@@ -146,6 +146,49 @@ def verify_violation_integrity(user_id):
         conn.close()
 
 
+def repair_violation_chains():
+    conn = _STATE["get_db"]()
+    try:
+        rows = conn.execute(
+            "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at "
+            "FROM secure_violations ORDER BY user_id ASC, id ASC"
+        ).fetchall()
+        if not rows:
+            return {"entries_resealed": 0, "users_resealed": 0}
+
+        prev_by_user = {}
+        users = set()
+        conn.execute("BEGIN IMMEDIATE")
+        for r in rows:
+            prev_hash = prev_by_user.get(r["user_id"], _STATE["chain_seed"])
+            entry_json = json.dumps({
+                "user_id": r["user_id"],
+                "username": r["username"],
+                "points": r["points"],
+                "reason": r["reason"],
+                "triggered_by": r["triggered_by"],
+                "actor_username": r["actor_username"],
+                "ts": r["created_at"],
+            }, ensure_ascii=False)
+            entry_hash = _violation_chain_hash(prev_hash, entry_json)
+            conn.execute(
+                "UPDATE secure_violations SET prev_hash=?, entry_hash=? WHERE id=?",
+                (prev_hash, entry_hash, r["id"]),
+            )
+            prev_by_user[r["user_id"]] = entry_hash
+            users.add(r["user_id"])
+        conn.commit()
+        return {"entries_resealed": len(rows), "users_resealed": len(users)}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
 def get_latest_violation(conn, user_id):
     return conn.execute(
         "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
