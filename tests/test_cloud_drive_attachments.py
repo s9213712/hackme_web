@@ -189,6 +189,47 @@ def test_storage_upload_rejects_path_traversal(tmp_path):
     assert "path" in uploaded.get_json()["msg"]
 
 
+def test_storage_trash_restore_and_purge_updates_listing_and_quota(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"trash me"), "trash.txt"),
+            "virtual_path": "trash.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    trashed = client.delete(f"/api/storage/files/{storage_file_id}")
+    assert trashed.status_code == 200
+    assert trashed.get_json()["storage_file"]["is_trashed"] == 1
+
+    assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 404
+    listing = client.get("/api/storage/files").get_json()
+    assert listing["files"] == []
+    trash = client.get("/api/storage/trash").get_json()
+    assert trash["files"][0]["id"] == storage_file_id
+    assert trash["storage"]["used_bytes"] == len(b"trash me")
+
+    restored = client.post(f"/api/storage/files/{storage_file_id}/restore")
+    assert restored.status_code == 200
+    assert restored.get_json()["storage_file"]["is_trashed"] == 0
+    assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 200
+
+    purged = client.delete(f"/api/storage/files/{storage_file_id}/purge")
+    assert purged.status_code == 200
+    assert purged.get_json()["purged"]["storage"]["used_bytes"] == 0
+    assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 404
+
+
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

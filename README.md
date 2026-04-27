@@ -551,6 +551,11 @@ The MVP API exposes `GET/POST /api/storage/files`,
 `POST /api/storage/files/attach-existing`, and
 `GET /api/storage/files/{id}/download`; uploads reuse the existing Cloud Drive
 quota, scanning, and safe storage-path controls.
+Trash support is logical: `DELETE /api/storage/files/{id}` moves an entry to
+trash, `POST /api/storage/files/{id}/restore` restores it,
+`DELETE /api/storage/files/{id}/purge` permanently removes the storage entry,
+and `GET /api/storage/trash` lists trashed entries. Purging does not delete the
+underlying Cloud Drive file so existing message/forum references are not broken.
 
 ### Feature Flags and Defaults
 

@@ -286,3 +286,83 @@ def list_storage_files(conn, *, actor, include_trashed=False, limit=100, offset=
         (*params, int(limit), int(offset)),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_storage_trash(conn, *, actor, limit=100, offset=0):
+    ensure_storage_album_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT sf.*, f.size_bytes, f.privacy_mode, f.risk_level, f.scan_status,
+               f.original_filename_plain_for_public
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND f.deleted_at IS NULL
+              AND sf.is_trashed=1
+        ORDER BY sf.trashed_at DESC, sf.updated_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (int(actor["id"]), int(limit), int(offset)),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def trash_storage_file(conn, *, actor, storage_file_id):
+    ensure_storage_album_schema(conn)
+    row = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+    if not row or row.get("deleted_at") or row.get("file_deleted_at"):
+        return None, "找不到檔案或檔案已刪除"
+    if int(row.get("is_trashed") or 0):
+        return row, None
+    now = _now()
+    conn.execute(
+        """
+        UPDATE storage_files
+        SET is_trashed=1, trashed_at=?, updated_at=?
+        WHERE id=? AND owner_user_id=?
+        """,
+        (now, now, storage_file_id, int(actor["id"])),
+    )
+    return get_storage_file(conn, actor=actor, storage_file_id=storage_file_id), None
+
+
+def restore_storage_file(conn, *, actor, storage_file_id):
+    ensure_storage_album_schema(conn)
+    row = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+    if not row or row.get("deleted_at") or row.get("file_deleted_at"):
+        return None, "找不到檔案或檔案已刪除"
+    if not int(row.get("is_trashed") or 0):
+        return row, None
+    now = _now()
+    conn.execute(
+        """
+        UPDATE storage_files
+        SET is_trashed=0, restored_at=?, updated_at=?
+        WHERE id=? AND owner_user_id=?
+        """,
+        (now, now, storage_file_id, int(actor["id"])),
+    )
+    return get_storage_file(conn, actor=actor, storage_file_id=storage_file_id), None
+
+
+def purge_storage_file(conn, *, actor, storage_file_id):
+    ensure_storage_album_schema(conn)
+    row = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+    if not row or row.get("deleted_at") or row.get("file_deleted_at"):
+        return None, "找不到檔案或檔案已刪除"
+    now = _now()
+    conn.execute(
+        """
+        UPDATE storage_files
+        SET deleted_at=?, updated_at=?
+        WHERE id=? AND owner_user_id=?
+        """,
+        (now, now, storage_file_id, int(actor["id"])),
+    )
+    summary = sync_user_storage_summary(
+        conn,
+        actor["id"],
+        actor_user_id=actor["id"],
+        source="trash",
+        reason="storage_file_purged",
+    )
+    return {"id": storage_file_id, "storage": summary}, None

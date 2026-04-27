@@ -23,7 +23,11 @@ from services.storage_albums import (
     ensure_storage_album_schema,
     get_storage_file,
     list_storage_files,
+    list_storage_trash,
+    purge_storage_file,
+    restore_storage_file,
     sync_user_storage_summary,
+    trash_storage_file,
 )
 from flask import request, send_file
 
@@ -211,7 +215,7 @@ def register_file_routes(app, deps):
         try:
             ensure_storage_album_schema(conn)
             storage_file = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
-            if not storage_file or storage_file.get("deleted_at") or storage_file.get("file_deleted_at"):
+            if not storage_file or storage_file.get("deleted_at") or storage_file.get("file_deleted_at") or int(storage_file.get("is_trashed") or 0):
                 return json_resp({"ok": False, "msg": "找不到檔案或檔案已刪除"}), 404
             allowed, reason, row = can_download_file(conn, actor=actor, file_id=storage_file["file_id"])
             if not row:
@@ -225,6 +229,76 @@ def register_file_routes(app, deps):
             log_file_access(conn, file_id=storage_file["file_id"], actor_user_id=actor["id"], action="storage_download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return send_file(path, as_attachment=True, download_name=storage_file["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/trash", methods=["GET"])
+    @require_csrf_safe
+    def storage_trash():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            files = list_storage_trash(conn, actor=actor, limit=100, offset=0)
+            summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="trash", reason="storage_trash_list")
+            conn.commit()
+            return json_resp({"ok": True, "files": files, "storage": summary})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/files/<storage_file_id>", methods=["DELETE"])
+    @require_csrf
+    def storage_file_trash(storage_file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            storage_file, msg = trash_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 404
+            conn.commit()
+            audit("STORAGE_FILE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}")
+            return json_resp({"ok": True, "storage_file": storage_file})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/files/<storage_file_id>/restore", methods=["POST"])
+    @require_csrf
+    def storage_file_restore(storage_file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            storage_file, msg = restore_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 404
+            conn.commit()
+            audit("STORAGE_FILE_RESTORE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}")
+            return json_resp({"ok": True, "storage_file": storage_file})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/files/<storage_file_id>/purge", methods=["DELETE"])
+    @require_csrf
+    def storage_file_purge(storage_file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            result, msg = purge_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 404
+            conn.commit()
+            audit("STORAGE_FILE_PURGE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}")
+            return json_resp({"ok": True, "purged": result})
         finally:
             conn.close()
 

@@ -181,7 +181,7 @@
 - [x] user_storage / storage_files / storage_quota_log schema
 - [x] albums / album_files schema
 - [x] 上傳下載 API
-- [ ] 回收筒 API
+- [x] 回收筒 API
 - [ ] 相簿 API
 - [ ] 分享連結 API
 - [ ] Storage Admin API
