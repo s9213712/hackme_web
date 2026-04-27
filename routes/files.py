@@ -18,6 +18,13 @@ from services.cloud_drive import (
     soft_delete_cloud_file,
     store_cloud_upload,
 )
+from services.storage_albums import (
+    create_storage_file_entry,
+    ensure_storage_album_schema,
+    get_storage_file,
+    list_storage_files,
+    sync_user_storage_summary,
+)
 from flask import request, send_file
 
 
@@ -103,6 +110,123 @@ def register_file_routes(app, deps):
             return json.loads(raw)
         except Exception:
             return None
+
+    @app.route("/api/storage/files", methods=["GET", "POST"])
+    @require_csrf_safe
+    def storage_files():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            ensure_storage_album_schema(conn)
+            if request.method == "GET":
+                include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
+                files = list_storage_files(conn, actor=actor, include_trashed=include_trashed, limit=100, offset=0)
+                summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="list", reason="storage_files_list")
+                conn.commit()
+                return json_resp({"ok": True, "files": files, "storage": summary})
+            if "file" not in request.files:
+                return json_resp({"ok": False, "msg": "缺少 file"}), 400
+            rule = get_member_level_rule(conn, actor.get("effective_level") or actor.get("member_level"))
+            upload_result, msg = store_cloud_upload(
+                conn,
+                actor=actor,
+                member_rule=rule,
+                storage_root=storage_root,
+                file_storage=request.files["file"],
+                privacy_mode=(request.form.get("privacy_mode") or "private_scannable").strip(),
+                encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
+                encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
+                wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
+                ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
+                encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
+                encryption_version=(request.form.get("encryption_version") or "").strip() or None,
+                nonce=(request.form.get("nonce") or "").strip() or None,
+                client_scan_report=_form_json_value("client_scan_report"),
+                scan_now=True,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
+            storage_file, msg = create_storage_file_entry(
+                conn,
+                actor=actor,
+                file_row=file_row,
+                virtual_path=(request.form.get("virtual_path") or "").strip(),
+                display_name=(request.form.get("display_name") or "").strip() or None,
+                source="upload",
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_FILE_UPLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file['id']}")
+            return json_resp({"ok": True, "file": upload_result, "storage_file": storage_file})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/files/attach-existing", methods=["POST"])
+    @require_csrf
+    def storage_attach_existing():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL", (str(data.get("file_id") or ""),)).fetchone()
+            if not file_row:
+                return json_resp({"ok": False, "msg": "找不到檔案或檔案已刪除"}), 404
+            storage_file, msg = create_storage_file_entry(
+                conn,
+                actor=actor,
+                file_row=file_row,
+                virtual_path=data.get("virtual_path") or "",
+                display_name=data.get("display_name") or None,
+                source="attach_existing",
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_FILE_ATTACH_EXISTING", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file['id']}")
+            return json_resp({"ok": True, "storage_file": storage_file})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/files/<storage_file_id>/download", methods=["GET"])
+    @require_csrf_safe
+    def storage_file_download(storage_file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            storage_file = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+            if not storage_file or storage_file.get("deleted_at") or storage_file.get("file_deleted_at"):
+                return json_resp({"ok": False, "msg": "找不到檔案或檔案已刪除"}), 404
+            allowed, reason, row = can_download_file(conn, actor=actor, file_id=storage_file["file_id"])
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if not allowed:
+                conn.commit()
+                return json_resp({"ok": False, "msg": "沒有下載權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            log_file_access(conn, file_id=storage_file["file_id"], actor_user_id=actor["id"], action="storage_download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return send_file(path, as_attachment=True, download_name=storage_file["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+        finally:
+            conn.close()
 
     @app.route("/api/files/upload", methods=["POST"])
     @app.route("/api/cloud-drive/upload", methods=["POST"])

@@ -512,7 +512,9 @@ root 調整，不會靜默放行。
 Phase 12 先建立 DB-backed storage 基礎：`user_storage`、`storage_files`、
 `storage_quota_log`、`albums`、`album_files`。這些表把檔案管理器邏輯狀態、
 quota 記帳、回收筒狀態與相簿歸屬，和 Cloud Drive 實體檔案表
-`uploaded_files` 分開。
+`uploaded_files` 分開。MVP API 提供 `GET/POST /api/storage/files`、
+`POST /api/storage/files/attach-existing`、`GET /api/storage/files/{id}/download`；
+上傳仍沿用既有 Cloud Drive quota、掃描與安全儲存路徑控制。
 
 ### 功能開關與預設值
 

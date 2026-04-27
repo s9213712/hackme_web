@@ -547,6 +547,10 @@ Phase 12 starts with DB-backed storage foundations: `user_storage`,
 `storage_files`, `storage_quota_log`, `albums`, and `album_files`. These tables
 separate logical file-manager state, quota accounting, trash state, and album
 membership from the physical `uploaded_files` records used by Cloud Drive.
+The MVP API exposes `GET/POST /api/storage/files`,
+`POST /api/storage/files/attach-existing`, and
+`GET /api/storage/files/{id}/download`; uploads reuse the existing Cloud Drive
+quota, scanning, and safe storage-path controls.
 
 ### Feature Flags and Defaults
 

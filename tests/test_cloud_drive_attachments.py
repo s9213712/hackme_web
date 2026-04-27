@@ -6,6 +6,7 @@ from flask import Flask, jsonify, make_response
 from routes.files import register_file_routes
 from services.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.member_levels import ensure_member_level_rules_schema
+from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
 
 
@@ -81,6 +82,7 @@ def _init_db(db_path):
     ensure_member_level_rules_schema(conn)
     ensure_upload_security_schema(conn)
     ensure_cloud_drive_attachment_schema(conn)
+    ensure_storage_album_schema(conn)
     update_cloud_drive_security_policy(conn, {"scanner_enabled": False})
     conn.commit()
     conn.close()
@@ -133,6 +135,58 @@ def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path)
     actor_box["actor"] = _actor(3, "mallory")
     denied = client.get(f"/api/cloud-drive/files/{file_id}/download")
     assert denied.status_code == 403
+
+
+def test_storage_upload_creates_logical_file_and_downloads_through_original_record(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"storage data"), "note.txt"),
+            "virtual_path": "docs/note.txt",
+            "display_name": "note.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file = uploaded.get_json()["storage_file"]
+    assert storage_file["virtual_path"] == "/docs/note.txt"
+
+    listing = client.get("/api/storage/files")
+    assert listing.status_code == 200
+    body = listing.get_json()
+    assert body["files"][0]["id"] == storage_file["id"]
+    assert body["storage"]["used_bytes"] == len(b"storage data")
+
+    download = client.get(f"/api/storage/files/{storage_file['id']}/download")
+    assert download.status_code == 200
+    assert download.data == b"storage data"
+
+
+def test_storage_upload_rejects_path_traversal(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"bad path"), "bad.txt"),
+            "virtual_path": "../bad.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 400
+    assert "path" in uploaded.get_json()["msg"]
 
 
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):
