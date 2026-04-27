@@ -1,7 +1,7 @@
 import base64
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import argon2
 from flask import make_response, request, send_from_directory
@@ -221,6 +221,7 @@ def register_public_routes(app, deps):
     @require_csrf
     def login():
         ip, ua = get_client_ip(), get_ua()
+        settings = get_system_settings()
 
         # Check blocked BEFORE anything else
         if is_ip_blocked(ip):
@@ -257,7 +258,7 @@ def register_public_routes(app, deps):
         conn = get_db()
         try:
             user_row = conn.execute(
-                "SELECT id, username, status, blocked_until, role FROM users WHERE username=?", (username,)
+                "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role FROM users WHERE username=?", (username,)
             ).fetchone()
 
             # Always do timing-consuming verify to prevent timing oracles
@@ -288,7 +289,16 @@ def register_public_routes(app, deps):
             timing_delay()
 
             now = datetime.now().isoformat()
+            account_security_enabled = is_feature_enabled("feature_account_security_enabled")
             if verified:
+                if account_security_enabled and user_row["locked_until"]:
+                    try:
+                        locked_until = datetime.fromisoformat(user_row["locked_until"])
+                        if datetime.now() < locked_until:
+                            audit("LOGIN_ACCOUNT_LOCKED", ip, username, ua=ua, detail=f"locked_until={user_row['locked_until']}")
+                            return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                    except Exception:
+                        pass
                 if user_row["blocked_until"]:
                     try:
                         blocked_until = datetime.fromisoformat(user_row["blocked_until"])
@@ -306,6 +316,11 @@ def register_public_routes(app, deps):
                     "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 1, ?)",
                     (user_row["id"], ip, ua, now)
                 )
+                if account_security_enabled:
+                    conn.execute(
+                        "UPDATE users SET failed_login_count=0, locked_until=NULL, last_login_at=?, updated_at=? WHERE id=?",
+                        (now, now, user_row["id"])
+                    )
                 conn.commit()
 
                 # Create token + save session to DB
@@ -334,6 +349,19 @@ def register_public_routes(app, deps):
                     (user_id_for_log, ip, ua, now)
                 )
                 conn.commit()
+                if account_security_enabled and user_row:
+                    fail_count = int(user_row["failed_login_count"] or 0) + 1
+                    lock_limit = max(1, int(settings.get("max_login_failures", 5)))
+                    updates = ["failed_login_count=?", "updated_at=?"]
+                    params = [fail_count, now]
+                    if fail_count >= lock_limit:
+                        locked_until = (datetime.now() + timedelta(minutes=max(1, int(settings.get("block_duration_minutes", 10))))).isoformat()
+                        updates.append("locked_until=?")
+                        params.append(locked_until)
+                        audit("LOGIN_ACCOUNT_LOCKED", ip, username, ua=ua, detail=f"failed_login_count={fail_count},locked_until={locked_until}")
+                    params.append(user_row["id"])
+                    conn.execute("UPDATE users SET " + ", ".join(updates) + " WHERE id=?", params)
+                    conn.commit()
                 record_login_failure(ip, username=username, ua=ua, detail="bad_credentials")
 
                 # Generic message — never distinguish "no user" from "bad pw"

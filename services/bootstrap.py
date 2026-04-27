@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -12,6 +12,7 @@ SCHEMA_MIGRATIONS = (
     (6, "add is_private column to chat_rooms for 1on1 PM support"),
     (7, "phase 1 identity governance user columns"),
     (8, "phase 2 password strength user columns"),
+    (9, "phase 2 account lockout user columns"),
 )
 
 _STATE = {
@@ -373,6 +374,8 @@ def apply_schema_migrations(
         elif version == 7:
             ensure_user_columns(conn)
         elif version == 8:
+            ensure_user_columns(conn)
+        elif version == 9:
             ensure_user_columns(conn)
 
         conn.execute(
