@@ -65,6 +65,7 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/reports") == "feature_reports_enabled"
     assert feature_gate_for_path("/api/admin/reports") == "feature_reports_enabled"
     assert feature_gate_for_path("/api/notifications") == "feature_reports_notifications_enabled"
+    assert feature_gate_for_path("/api/dm/threads") == "feature_dm_enabled"
     assert feature_gate_for_path("/api/files/upload") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/cloud-drive/upload") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/files/quota") == "feature_privacy_uploads_enabled"

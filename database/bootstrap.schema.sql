@@ -40,6 +40,38 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
+CREATE TABLE IF NOT EXISTS dm_threads (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    participant_a_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    participant_b_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    UNIQUE(participant_a_id, participant_b_id)
+);
+
+CREATE TABLE IF NOT EXISTS direct_messages (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id            INTEGER NOT NULL REFERENCES dm_threads(id) ON DELETE CASCADE,
+    sender_user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body                 TEXT NOT NULL,
+    is_read              INTEGER NOT NULL DEFAULT 0,
+    read_at              TEXT,
+    sender_deleted_at    TEXT,
+    recipient_deleted_at TEXT,
+    created_at           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS blocked_users (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    blocker_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blocked_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason          TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE(blocker_user_id, blocked_user_id)
+);
+
 CREATE TABLE IF NOT EXISTS csrf_tokens (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     token_hash   TEXT    NOT NULL UNIQUE,
@@ -592,6 +624,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_a
 CREATE INDEX IF NOT EXISTS idx_chat_reports_message ON chat_message_reports(message_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_message_reports(status);
+
+CREATE INDEX IF NOT EXISTS idx_dm_threads_a ON dm_threads(participant_a_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_dm_threads_b ON dm_threads(participant_b_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_thread ON direct_messages(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_unread ON direct_messages(recipient_user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_blocked_users_pair ON blocked_users(blocker_user_id, blocked_user_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_room_members_room ON chat_room_members(room_id);
 

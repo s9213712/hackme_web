@@ -141,11 +141,11 @@
 
 ## Phase 10：站內信
 
-- [ ] direct_messages / dm_threads schema
-- [ ] DM API：收發 / 已讀 / 軟刪除
+- [x] direct_messages / dm_threads schema
+- [x] DM API：收發 / 已讀 / 軟刪除
 - [ ] DM UI
-- [ ] blocked_users 阻擋 DM
-- [ ] 對應測試
+- [x] blocked_users 阻擋 DM
+- [x] Phase 10 後端測試：DM thread / send / read / soft delete / block
 
 ## Phase 11：附件 / 頭像 / CAPTCHA
 

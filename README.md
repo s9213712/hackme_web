@@ -494,6 +494,23 @@ The logged-in UI shows a notification center in the success toolbar. It polls
 the notification API, shows an unread badge, and supports single/all read
 actions without relying on WebSocket delivery.
 
+### Direct Messages
+
+Phase 10 backend APIs provide private station-mail style conversations:
+
+- `GET /api/dm/threads`: list current-user DM threads with unread counts.
+- `POST /api/dm/threads`: create or reuse a 1:1 DM thread by `target_username`.
+- `GET /api/dm/threads/{id}/messages`: list messages visible to the current user.
+- `POST /api/dm/threads/{id}/messages`: send a DM after member-level and block checks.
+- `POST /api/dm/threads/{id}/read`: mark received messages in a thread as read.
+- `DELETE /api/dm/messages/{id}`: soft-delete a message from the current user's view.
+- `GET/POST /api/dm/blocks`: list or create current-user DM blocks.
+- `DELETE /api/dm/blocks/{user_id}`: unblock a user.
+
+DM delivery uses `dm_threads`, `direct_messages`, and `blocked_users`. Sending a
+DM also creates a notification for the recipient. The web DM UI is still a
+future Phase 10 item.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and

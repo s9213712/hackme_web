@@ -140,6 +140,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     announcement_request_cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcement_attachment_requests)").fetchall()}
     report_cols = {row["name"] for row in conn.execute("PRAGMA table_info(reports)").fetchall()}
     notification_cols = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+    dm_thread_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dm_threads)").fetchall()}
+    dm_message_cols = {row["name"] for row in conn.execute("PRAGMA table_info(direct_messages)").fetchall()}
+    blocked_cols = {row["name"] for row in conn.execute("PRAGMA table_info(blocked_users)").fetchall()}
     integrity_finding_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_findings)").fetchall()}
     integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
     integrity_manifest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_manifest_versions)").fetchall()}
@@ -184,10 +187,13 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"file_id", "requested_by", "announcement_id", "status", "reviewed_by"} <= announcement_request_cols
     assert {"target_type", "reporter_user_id", "reported_user_id", "status", "claimed_by_user_id"} <= report_cols
     assert {"user_id", "type", "title", "body", "is_read", "read_at"} <= notification_cols
+    assert {"participant_a_id", "participant_b_id", "created_by_user_id", "updated_at"} <= dm_thread_cols
+    assert {"thread_id", "sender_user_id", "recipient_user_id", "is_read", "sender_deleted_at", "recipient_deleted_at"} <= dm_message_cols
+    assert {"blocker_user_id", "blocked_user_id", "reason"} <= blocked_cols
     assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
     assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
     assert {"manifest_hash", "manifest_signature", "approved_by"} <= integrity_manifest_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     assert root_user["username"] == "root"
     assert root_user["must_change_password"] == 1
     assert root_user["is_default_password"] == 1

@@ -433,6 +433,7 @@ FEATURE_ROUTE_GATES = (
     ("feature_appeals_enabled", ("/api/appeals", "/api/admin/appeals")),
     ("feature_reports_enabled", ("/api/reports", "/api/admin/reports", "/api/admin/message-reports", "/api/admin/community-post-reports")),
     ("feature_reports_notifications_enabled", ("/api/notifications",)),
+    ("feature_dm_enabled", ("/api/dm",)),
     ("feature_audit_log_enabled", ("/api/admin/audit", "/api/audit")),
     ("feature_violation_center_enabled", ("/api/admin/violations", "/api/admin/users/")),
     ("feature_accounts_enabled", ("/api/admin/users",)),

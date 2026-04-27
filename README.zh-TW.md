@@ -466,6 +466,22 @@ Phase 9 檢舉與通知後端 API：
 登入後 UI 會在成功畫面工具列顯示通知中心，定期輪詢通知 API、顯示未讀
 badge，並支援單筆已讀與全部已讀；目前不依賴 WebSocket 即時推送。
 
+### 站內信
+
+Phase 10 後端提供 1 對 1 站內信 API：
+
+- `GET /api/dm/threads`：列出目前使用者的私訊串與未讀數。
+- `POST /api/dm/threads`：依 `target_username` 建立或重用 1 對 1 私訊串。
+- `GET /api/dm/threads/{id}/messages`：列出目前使用者可見訊息。
+- `POST /api/dm/threads/{id}/messages`：通過會員等級與封鎖檢查後送出私訊。
+- `POST /api/dm/threads/{id}/read`：將私訊串內收到的訊息標為已讀。
+- `DELETE /api/dm/messages/{id}`：從目前使用者視角軟刪除訊息。
+- `GET/POST /api/dm/blocks`：列出或新增目前使用者的私訊封鎖。
+- `DELETE /api/dm/blocks/{user_id}`：解除封鎖。
+
+站內信使用 `dm_threads`、`direct_messages`、`blocked_users`。送出私訊會同時
+建立收件者通知；網頁 DM UI 仍是後續 Phase 10 項目。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI
