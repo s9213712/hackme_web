@@ -498,7 +498,6 @@ The frontend no longer relies on a single large application file.
 - `public/js/40-auth-users.js` contains login, registration, and profile actions
 - `public/js/50-admin.js` contains admin, audit, settings, and health views
 - `public/js/90-bootstrap.js` wires DOM events and application startup
-- `public/app.js` is now only a compatibility stub
 
 ## Role Model
 

@@ -481,7 +481,6 @@ root 可在「管理台 -> 伺服器 -> 設定 -> 雲端硬碟」設定
 - `public/js/40-auth-users.js`：登入、註冊、個資操作
 - `public/js/50-admin.js`：管理端、審計、設定、健康度
 - `public/js/90-bootstrap.js`：DOM 綁定與啟動流程
-- `public/app.js`：僅保留相容性 stub
 
 ## 角色模型
 
