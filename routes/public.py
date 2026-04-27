@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import re
 import time
 from datetime import datetime, timedelta
@@ -39,6 +40,7 @@ def register_public_routes(app, deps):
     normalize_text = deps["normalize_text"]
     parse_birthdate = deps["parse_birthdate"]
     record_login_failure = deps["record_login_failure"]
+    record_security_event = deps["record_security_event"]
     require_csrf = deps["require_csrf"]
     score_password_strength = deps["score_password_strength"]
     store_csrf_token = deps["store_csrf_token"]
@@ -49,6 +51,26 @@ def register_public_routes(app, deps):
     validate_phone = deps["validate_phone"]
     verify_csrf_double_submit = deps["verify_csrf_double_submit"]
     verify_password = deps["verify_password"]
+
+    def record_login_location(conn, user_id, username, ip, ua):
+        ip_hash = hashlib.sha256((ip or "-").encode("utf-8")).hexdigest()
+        previous = conn.execute(
+            "SELECT 1 FROM login_locations WHERE user_id=? AND ip_hash<>? LIMIT 1",
+            (user_id, ip_hash)
+        ).fetchone()
+        is_suspicious = 1 if previous else 0
+        conn.execute(
+            "INSERT INTO login_locations (user_id, ip_hash, country, city, login_at, is_suspicious) "
+            "VALUES (?, ?, NULL, NULL, ?, ?)",
+            (user_id, ip_hash, datetime.now().isoformat(), is_suspicious)
+        )
+        if is_suspicious:
+            record_security_event(
+                "login_location_suspicious",
+                ip,
+                target_user=username,
+                detail=f"new_ip_hash={ip_hash[:12]},ua={ua[:80]}",
+            )
 
     @app.route("/")
     def index():
@@ -321,6 +343,7 @@ def register_public_routes(app, deps):
                         "UPDATE users SET failed_login_count=0, locked_until=NULL, last_login_at=?, updated_at=? WHERE id=?",
                         (now, now, user_row["id"])
                     )
+                    record_login_location(conn, user_row["id"], username, ip, ua)
                 conn.commit()
 
                 # Create token + save session to DB

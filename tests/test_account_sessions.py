@@ -10,7 +10,7 @@ def _hash_token(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _build_app(db_path, actor_box):
+def _build_app(db_path, actor_box, revoke_user_sessions=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -50,7 +50,7 @@ def _build_app(db_path, actor_box):
         "normalize_text": lambda value: value.strip() if isinstance(value, str) else "",
         "parse_birthdate": lambda value: value,
         "parse_positive_int": lambda value, default=None, **kwargs: int(value) if value is not None else default,
-        "revoke_user_sessions": lambda *args, **kwargs: None,
+        "revoke_user_sessions": revoke_user_sessions or (lambda *args, **kwargs: None),
         "require_csrf": lambda fn: fn,
         "require_csrf_safe": lambda fn: fn,
         "SESSION_COOKIE_SAMESITE": "Lax",
@@ -146,3 +146,86 @@ def test_account_sessions_logout_all_can_keep_current(tmp_path):
     rows = conn.execute("SELECT id, is_revoked FROM sessions ORDER BY id").fetchall()
     conn.close()
     assert rows == [(1, 0), (2, 1)]
+
+
+def test_password_change_revokes_existing_sessions(tmp_path):
+    db_path = tmp_path / "password-change.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            role TEXT NOT NULL,
+            status TEXT NOT NULL,
+            member_level TEXT NOT NULL DEFAULT 'normal',
+            trust_score INTEGER NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL DEFAULT 0,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            password_strength_score INTEGER NOT NULL DEFAULT 0,
+            blocked_until TEXT,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            password_changed_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            device_info TEXT,
+            ip_country TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, updated_at) VALUES (1, 'alice', 'user', 'active', '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, 'oldpass', '2026-01-01T00:00:00')"
+    )
+    conn.executemany(
+        "INSERT INTO sessions (user_id, token_hash, expires_at, is_revoked, created_at) VALUES (1, ?, '2999-01-01T00:00:00', 0, '2026-01-01T00:00:00')",
+        [(_hash_token("current"),), (_hash_token("remote"),)],
+    )
+    conn.commit()
+    conn.close()
+
+    def revoke_sessions(user_id):
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE sessions SET is_revoked=1, revoked_at='now' WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, revoke_user_sessions=revoke_sessions).test_client()
+    res = client.put(
+        "/api/admin/users/1",
+        json={"current_password": "oldpass", "password": "Newpass@123", "password_confirm": "Newpass@123"},
+    )
+
+    assert res.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    revoked = conn.execute("SELECT COUNT(*) FROM sessions WHERE is_revoked=1").fetchone()[0]
+    passwords = conn.execute("SELECT COUNT(*) FROM user_passwords WHERE user_id=1").fetchone()[0]
+    conn.close()
+    assert revoked == 2
+    assert passwords == 2

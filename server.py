@@ -595,8 +595,23 @@ def ensure_security_support_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_locations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            ip_hash       TEXT NOT NULL,
+            country       TEXT,
+            city          TEXT,
+            login_at      TEXT NOT NULL,
+            is_suspicious INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ip_blocks_ip ON ip_blocks(ip_address)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ip_blocks_until ON ip_blocks(blocked_until)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_locations_user ON login_locations(user_id, login_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_login_locations_ip ON login_locations(ip_hash)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at)")
 
@@ -840,6 +855,7 @@ register_public_routes(app, {
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
     "record_login_failure": record_login_failure,
+    "record_security_event": record_security_event,
     "require_csrf": require_csrf,
     "score_password_strength": score_password_strength,
     "role_rank": role_rank,

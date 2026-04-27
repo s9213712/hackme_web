@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     attempted_at TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS login_locations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ip_hash       TEXT NOT NULL,
+    country       TEXT,
+    city          TEXT,
+    login_at      TEXT NOT NULL,
+    is_suspicious INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,

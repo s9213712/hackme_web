@@ -26,6 +26,7 @@ SECURITY_EVENT_TYPES = {
     "csrf_fail",
     "permission_denied",
     "session_revoked",
+    "login_location_suspicious",
 }
 
 

@@ -5,7 +5,7 @@ from flask import Flask, jsonify, make_response
 from routes.public import register_public_routes
 
 
-def _build_app(db_path, settings):
+def _build_app(db_path, settings, ip_box=None, event_log=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -33,7 +33,7 @@ def _build_app(db_path, settings):
         "decrypt_field": lambda value: value,
         "encrypt_field": lambda value: value,
         "ensure_user_official_room_membership": lambda *args, **kwargs: None,
-        "get_client_ip": lambda: "127.0.0.1",
+        "get_client_ip": lambda: (ip_box or {"ip": "127.0.0.1"})["ip"],
         "get_current_user_ctx": lambda: None,
         "get_db": get_db,
         "get_feature_settings": lambda: {},
@@ -49,6 +49,7 @@ def _build_app(db_path, settings):
         "normalize_text": lambda value: value.strip() if isinstance(value, str) else "",
         "parse_birthdate": lambda value: value,
         "record_login_failure": lambda *args, **kwargs: None,
+        "record_security_event": lambda *args, **kwargs: (event_log.append((args, kwargs)) if event_log is not None else None),
         "require_csrf": lambda fn: fn,
         "score_password_strength": lambda value: {"score": 4, "missing": []},
         "role_rank": lambda role: 0,
@@ -93,6 +94,15 @@ def _seed_db(db_path):
             success INTEGER NOT NULL,
             attempted_at TEXT NOT NULL
         );
+        CREATE TABLE login_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            ip_hash TEXT NOT NULL,
+            country TEXT,
+            city TEXT,
+            login_at TEXT NOT NULL,
+            is_suspicious INTEGER NOT NULL DEFAULT 0
+        );
         """
     )
     conn.execute(
@@ -129,3 +139,33 @@ def test_account_security_locks_user_after_repeated_bad_passwords(tmp_path):
 
     assert row[0] == 2
     assert row[1]
+
+
+def test_successful_login_records_suspicious_new_location(tmp_path):
+    db_path = tmp_path / "locations.db"
+    _seed_db(db_path)
+    ip_box = {"ip": "10.0.0.1"}
+    events = []
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 2, "block_duration_minutes": 10},
+        ip_box=ip_box,
+        event_log=events,
+    ).test_client()
+
+    first = client.post("/api/login", json={"username": "alice", "password": "correct"})
+    ip_box["ip"] = "10.0.0.2"
+    second = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT is_suspicious FROM login_locations ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    assert rows == [(0,), (1,)]
+    assert events
+    assert events[-1][0][0] == "login_location_suspicious"
