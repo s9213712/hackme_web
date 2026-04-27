@@ -94,7 +94,7 @@ def _seed_community_db(db_path):
     conn.commit()
     conn.close()
 
-    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "newbie"}
     client.post(
         f"/api/community/boards/{board_id}/threads",
         json={"title": "主題", "content": "主題內容"},
@@ -144,7 +144,7 @@ def _thread_row(db_path, thread_id):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT id, title, content, is_deleted, deleted_by, edited_by FROM forum_threads WHERE id=?",
+        "SELECT id, title, content, status, post_type, is_sticky, is_locked, is_curated, view_count, is_deleted, deleted_by, edited_by FROM forum_threads WHERE id=?",
         (thread_id,)
     ).fetchone()
     conn.close()
@@ -313,7 +313,7 @@ def test_soft_deleted_thread_and_post_are_hidden_from_users(tmp_path):
     delete_post = client.delete(f"/api/community/posts/{ids['post']}")
     assert delete_post.status_code == 200
 
-    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "newbie"}
     detail = client.get(f"/api/community/threads/{ids['thread']}")
     assert detail.status_code == 200
     assert detail.get_json()["posts"] == []
@@ -322,7 +322,7 @@ def test_soft_deleted_thread_and_post_are_hidden_from_users(tmp_path):
     delete_thread = client.delete(f"/api/community/threads/{ids['thread']}")
     assert delete_thread.status_code == 200
 
-    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "newbie"}
     hidden_detail = client.get(f"/api/community/threads/{ids['thread']}")
     assert hidden_detail.status_code == 404
 
@@ -435,6 +435,67 @@ def test_manager_can_pin_post(tmp_path):
     assert _post_row(db_path, ids["post"])["is_pinned"] == 1
 
 
+def test_newbie_thread_requires_review_but_normal_thread_is_approved(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "newbie"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    newbie = client.post(
+        f"/api/community/boards/{board_id}/threads",
+        json={"title": "新手待審", "content": "需要審核", "post_type": "question"},
+    )
+    assert newbie.status_code == 200
+    assert newbie.get_json()["status"] == "pending"
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user", "member_level": "normal"}
+    normal = client.post(
+        f"/api/community/boards/{board_id}/threads",
+        json={"title": "一般直接公開", "content": "可直接公開", "post_type": "howto"},
+    )
+    assert normal.status_code == 200
+    assert normal.get_json()["status"] == "approved"
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = {
+        row["title"]: dict(row)
+        for row in conn.execute("SELECT title, status, post_type FROM forum_threads WHERE title IN (?, ?)", ("新手待審", "一般直接公開")).fetchall()
+    }
+    conn.close()
+    assert rows["新手待審"]["status"] == "pending"
+    assert rows["新手待審"]["post_type"] == "question"
+    assert rows["一般直接公開"]["status"] == "approved"
+    assert rows["一般直接公開"]["post_type"] == "howto"
+
+
+def test_manager_can_sticky_curate_and_view_count_dedupes(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    sticky = client.post(f"/api/community/threads/{ids['thread']}/sticky", json={"sticky": True})
+    curate = client.post(f"/api/community/threads/{ids['thread']}/curate", json={"curated": True})
+    assert sticky.status_code == 200
+    assert curate.status_code == 200
+    row = _thread_row(db_path, ids["thread"])
+    assert row["is_sticky"] == 1
+    assert row["is_curated"] == 1
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    first = client.get(f"/api/community/threads/{ids['thread']}")
+    second = client.get(f"/api/community/threads/{ids['thread']}")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json()["thread"]["view_counted"] is True
+    assert second.get_json()["thread"]["view_counted"] is False
+    assert second.get_json()["thread"]["view_count"] == first.get_json()["thread"]["view_count"]
+
+
 def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
@@ -478,7 +539,7 @@ def test_board_moderator_can_review_only_assigned_board_threads(tmp_path):
     )
     assert assigned.status_code == 200
 
-    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "newbie"}
     pending = client.post(
         f"/api/community/boards/{board_id}/threads",
         json={"title": "待審主題", "content": "需要版主審核"},

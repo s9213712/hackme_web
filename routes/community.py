@@ -1,6 +1,6 @@
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import request
 
@@ -11,6 +11,7 @@ def register_community_routes(app, deps):
     COMMUNITY_POST_AUTO_HIDE_MIN_DISLIKES = 3
     COMMUNITY_POST_AUTO_HIDE_ACTIVE_USER_RATIO = 0.10
     BOARD_VISIBILITIES = {"public", "unlisted", "private"}
+    THREAD_POST_TYPES = {"normal", "announcement", "question", "howto", "review", "nsfw"}
     audit = deps["audit"]
     check_user_rate_limit = deps["check_user_rate_limit"]
     get_client_ip = deps["get_client_ip"]
@@ -78,7 +79,11 @@ def register_community_routes(app, deps):
             review_note      TEXT,
             reviewed_by      TEXT,
             reviewed_at      TEXT,
+            post_type        TEXT NOT NULL DEFAULT 'normal',
+            is_sticky        INTEGER NOT NULL DEFAULT 0,
             is_locked        INTEGER NOT NULL DEFAULT 0,
+            is_curated       INTEGER NOT NULL DEFAULT 0,
+            view_count       INTEGER NOT NULL DEFAULT 0,
             edited_at        TEXT,
             edited_by        TEXT,
             is_deleted       INTEGER NOT NULL DEFAULT 0,
@@ -89,6 +94,14 @@ def register_community_routes(app, deps):
             author_username  TEXT NOT NULL,
             created_at       TEXT NOT NULL,
             updated_at       TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS forum_thread_views (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id        INTEGER NOT NULL REFERENCES forum_threads(id) ON DELETE CASCADE,
+            viewer_key       TEXT NOT NULL,
+            viewed_at        TEXT NOT NULL,
+            UNIQUE(thread_id, viewer_key)
         );
 
         CREATE TABLE IF NOT EXISTS forum_posts (
@@ -157,12 +170,13 @@ def register_community_routes(app, deps):
         CREATE INDEX IF NOT EXISTS idx_forum_boards_visible ON forum_boards(is_active, visibility, status, sort_order);
         CREATE INDEX IF NOT EXISTS idx_forum_boards_status ON forum_boards(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_threads_board ON forum_threads(board_id, created_at);
-        CREATE INDEX IF NOT EXISTS idx_forum_threads_visible ON forum_threads(board_id, is_deleted, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_threads_visible ON forum_threads(board_id, is_deleted, status, is_sticky, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_thread ON forum_posts(thread_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_posts_visible ON forum_posts(thread_id, is_deleted, is_hidden, is_pinned, created_at);
         CREATE INDEX IF NOT EXISTS idx_board_moderators_user ON board_moderators(user_id, board_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reactions_post ON forum_post_reactions(post_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_forum_thread_views_thread ON forum_thread_views(thread_id, viewed_at);
         """)
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcements)").fetchall()}
         if "is_pinned" not in cols:
@@ -191,7 +205,11 @@ def register_community_routes(app, deps):
         if "reviewed_at" not in cols:
             conn.execute("ALTER TABLE forum_threads ADD COLUMN reviewed_at TEXT")
         for name, ddl in (
+            ("post_type", "TEXT NOT NULL DEFAULT 'normal'"),
+            ("is_sticky", "INTEGER NOT NULL DEFAULT 0"),
             ("is_locked", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_curated", "INTEGER NOT NULL DEFAULT 0"),
+            ("view_count", "INTEGER NOT NULL DEFAULT 0"),
             ("edited_at", "TEXT"),
             ("edited_by", "TEXT"),
             ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
@@ -409,6 +427,41 @@ def register_community_routes(app, deps):
         visibility = normalize_text(value) or "public"
         return visibility if visibility in BOARD_VISIBILITIES else None
 
+    def normalize_thread_post_type(value):
+        post_type = normalize_text(value) or "normal"
+        return post_type if post_type in THREAD_POST_TYPES else None
+
+    def actor_effective_level(actor):
+        return (actor or {}).get("effective_level") or (actor or {}).get("base_level") or (actor or {}).get("member_level") or "normal"
+
+    def thread_requires_review(actor, manageable):
+        return (not manageable) and actor_effective_level(actor) == "newbie"
+
+    def record_thread_view(conn, thread_id, actor):
+        viewer_key = f"user:{actor['id']}"
+        now = datetime.now()
+        row = conn.execute(
+            "SELECT viewed_at FROM forum_thread_views WHERE thread_id=? AND viewer_key=?",
+            (thread_id, viewer_key),
+        ).fetchone()
+        should_count = True
+        if row and row["viewed_at"]:
+            try:
+                should_count = datetime.fromisoformat(row["viewed_at"]) <= now - timedelta(minutes=15)
+            except Exception:
+                should_count = True
+        if should_count:
+            conn.execute(
+                "UPDATE forum_threads SET view_count=COALESCE(view_count, 0)+1, updated_at=updated_at WHERE id=?",
+                (thread_id,),
+            )
+            conn.execute(
+                "INSERT INTO forum_thread_views (thread_id, viewer_key, viewed_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(thread_id, viewer_key) DO UPDATE SET viewed_at=excluded.viewed_at",
+                (thread_id, viewer_key, now.isoformat()),
+            )
+        return should_count
+
     def board_is_accessible(board, actor, manageable):
         if manageable:
             return True
@@ -428,7 +481,11 @@ def register_community_routes(app, deps):
             "review_note": row["review_note"],
             "reviewed_by": row["reviewed_by"],
             "reviewed_at": row["reviewed_at"],
+            "post_type": row_value(row, "post_type", "normal"),
+            "is_sticky": bool(row_value(row, "is_sticky", 0)),
             "is_locked": bool(row["is_locked"]),
+            "is_curated": bool(row_value(row, "is_curated", 0)),
+            "view_count": int(row_value(row, "view_count", 0) or 0),
             "edited_at": row_value(row, "edited_at"),
             "edited_by": row_value(row, "edited_by"),
             "is_deleted": bool(row_value(row, "is_deleted", 0)),
@@ -978,9 +1035,9 @@ def register_community_routes(app, deps):
                     tuple(params)
                 ).fetchone()["c"]
                 rows = conn.execute(
-                    f"SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, is_locked, "
-                    f"author_user_id, author_username, created_at, updated_at "
-                    f"FROM forum_threads WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    f"SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, post_type, "
+                    f"is_sticky, is_locked, is_curated, view_count, author_user_id, author_username, created_at, updated_at "
+                    f"FROM forum_threads WHERE {where} ORDER BY is_sticky DESC, created_at DESC LIMIT ? OFFSET ?",
                     tuple(params + [limit, page * limit])
                 ).fetchall()
                 threads = []
@@ -1022,17 +1079,22 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
             title = normalize_text(data.get("title"))[:120]
             content = normalize_text(data.get("content"))[:4000]
+            post_type = normalize_thread_post_type(data.get("post_type"))
+            if post_type is None:
+                return json_resp({"ok": False, "msg": "文章類型錯誤"}), 400
+            if post_type == "announcement" and not manageable:
+                return json_resp({"ok": False, "msg": "只有管理員或版主可建立公告型主題"}), 403
             if not title or not content:
                 return json_resp({"ok": False, "msg": "主題標題與內容不可為空"}), 400
             blocked, info = check_user_rate_limit(actor["id"], "community_thread_create", max_req=5, window_sec=300)
             if blocked:
                 return json_resp({"ok": False, "msg": f"發文太頻繁（{info['limit']} 次 / 5 分鐘）"}), 429
             now = datetime.now().isoformat()
-            status = "approved" if manageable else "pending"
+            status = "pending" if thread_requires_review(actor, manageable) else "approved"
             conn.execute(
-                "INSERT INTO forum_threads (board_id, title, content, status, author_user_id, author_username, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (board_id, title, content, status, actor["id"], actor["username"], now, now)
+                "INSERT INTO forum_threads (board_id, title, content, status, post_type, author_user_id, author_username, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (board_id, title, content, status, post_type, actor["id"], actor["username"], now, now)
             )
             conn.execute(
                 "UPDATE forum_boards SET last_activity_at=?, updated_at=? WHERE id=?",
@@ -1047,7 +1109,7 @@ def register_community_routes(app, deps):
                 ua=get_ua(),
                 detail=f"board_id={board_id}, title={title}, status={status}"
             )
-            return json_resp({"ok": True, "msg": "主題已建立" if manageable else "主題已送審，待管理員核准後公開"})
+            return json_resp({"ok": True, "msg": "主題已建立" if status == "approved" else "主題已送審，待管理員核准後公開", "status": status})
         finally:
             conn.close()
 
@@ -1063,13 +1125,15 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             if can_manage_community(actor):
                 rows = conn.execute(
-                    "SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, is_locked, "
+                    "SELECT id, board_id, title, content, status, review_note, reviewed_by, reviewed_at, post_type, "
+                    "is_sticky, is_locked, is_curated, view_count, "
                     "author_user_id, author_username, created_at, updated_at "
                     "FROM forum_threads WHERE status='pending' AND is_deleted=0 ORDER BY created_at ASC"
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, t.is_locked, "
+                    "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, "
+                    "t.post_type, t.is_sticky, t.is_locked, t.is_curated, t.view_count, "
                     "t.author_user_id, t.author_username, t.created_at, t.updated_at "
                     "FROM forum_threads t JOIN board_moderators m ON m.board_id=t.board_id "
                     "WHERE t.status='pending' AND t.is_deleted=0 AND m.user_id=? AND m.can_review_threads=1 "
@@ -1149,6 +1213,7 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             thread = conn.execute(
                 "SELECT t.id, t.board_id, t.title, t.content, t.status, t.review_note, t.reviewed_by, t.reviewed_at, "
+                "t.post_type, t.is_sticky, t.is_curated, t.view_count, "
                 "t.author_user_id, t.author_username, t.created_at, t.updated_at, t.is_locked, t.edited_at, t.edited_by, "
                 "t.is_deleted, t.deleted_at, t.deleted_by, t.delete_reason, "
                 "b.status AS board_status, b.owner_user_id, b.owner_username, b.title AS board_title, "
@@ -1247,6 +1312,9 @@ def register_community_routes(app, deps):
                 "ORDER BY p.is_pinned DESC, p.created_at ASC",
                 tuple([actor["id"]] + post_params)
             ).fetchall()
+            counted_view = record_thread_view(conn, thread_id, actor)
+            conn.commit()
+            refreshed_view = conn.execute("SELECT view_count FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
             return json_resp({
                 "ok": True,
                 "thread": {
@@ -1259,7 +1327,12 @@ def register_community_routes(app, deps):
                     "review_note": thread["review_note"],
                     "reviewed_by": thread["reviewed_by"],
                     "reviewed_at": thread["reviewed_at"],
+                    "post_type": thread["post_type"],
+                    "is_sticky": bool(thread["is_sticky"]),
                     "is_locked": bool(thread["is_locked"]),
+                    "is_curated": bool(thread["is_curated"]),
+                    "view_count": int(refreshed_view["view_count"] or 0),
+                    "view_counted": counted_view,
                     "edited_at": thread["edited_at"],
                     "edited_by": thread["edited_by"],
                     "is_deleted": bool(thread["is_deleted"]),
@@ -1595,5 +1668,69 @@ def register_community_routes(app, deps):
             audit("COMMUNITY_THREAD_LOCK", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"thread_id={thread_id}, locked={locked}")
             return json_resp({"ok": True, "msg": "主題狀態已更新"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/threads/<int:thread_id>/sticky", methods=["POST"])
+    @require_csrf
+    def community_thread_sticky(thread_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        sticky = 1 if bool(data.get("sticky")) else 0
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            thread = conn.execute("SELECT id, board_id, title, is_deleted FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
+            if not thread:
+                return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            if not can_moderate_board(conn, thread["board_id"], actor, "can_pin_posts"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可置頂主題"}), 403
+            if thread["is_deleted"]:
+                return json_resp({"ok": False, "msg": "已刪除主題不可置頂"}), 409
+            conn.execute(
+                "UPDATE forum_threads SET is_sticky=?, updated_at=? WHERE id=?",
+                (sticky, datetime.now().isoformat(), thread_id)
+            )
+            conn.commit()
+            audit("COMMUNITY_THREAD_STICKY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"thread_id={thread_id}, sticky={sticky}")
+            return json_resp({"ok": True, "msg": "主題已置頂" if sticky else "主題已取消置頂"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/threads/<int:thread_id>/curate", methods=["POST"])
+    @require_csrf
+    def community_thread_curate(thread_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        curated = 1 if bool(data.get("curated")) else 0
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            thread = conn.execute("SELECT id, board_id, title, is_deleted FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
+            if not thread:
+                return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            if not can_moderate_board(conn, thread["board_id"], actor, "can_pin_posts"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可設定精華主題"}), 403
+            if thread["is_deleted"]:
+                return json_resp({"ok": False, "msg": "已刪除主題不可設定精華"}), 409
+            conn.execute(
+                "UPDATE forum_threads SET is_curated=?, updated_at=? WHERE id=?",
+                (curated, datetime.now().isoformat(), thread_id)
+            )
+            conn.commit()
+            audit("COMMUNITY_THREAD_CURATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"thread_id={thread_id}, curated={curated}")
+            return json_resp({"ok": True, "msg": "主題已加入精華" if curated else "主題已移出精華"})
         finally:
             conn.close()
