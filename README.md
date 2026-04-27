@@ -431,10 +431,21 @@ Cloud drive safety now exposes:
 - `GET /api/files/security-policy`: active cloud drive safety policy plus user-visible restrictions.
 - `GET /api/files/privacy-modes`: the four privacy modes and their user-facing warnings.
 - `GET/PUT /api/admin/cloud-drive/security-policy`: root-managed scan, archive, preview, E2EE claim, share revocation, and download quota policy.
+- `GET /api/cloud-drive/files`: list the current user's cloud drive files.
+- `POST /api/cloud-drive/upload`: upload into the owner's cloud drive and optionally attach the uploaded file to a context.
+- `POST /api/cloud-drive/attach-existing`: attach an existing cloud drive file to `dm`, `group_chat`, `forum_post`, or `forum_comment` without copying the physical file.
+- `GET /api/cloud-drive/files/{file_id}/download`: download after server-side permission, scan status, and deletion checks.
+- `POST /api/cloud-drive/announcement-attachment-requests`: manager/admin announcement attachment request.
+- `POST /api/root/announcement-attachment-requests/{id}/review`: root-only approve/reject; approved announcement files become root-owned management files.
 
 The logged-in UI includes a cloud drive tab that shows used capacity, remaining
 capacity, single-file limit, daily upload limit, risk distribution, scan status,
 privacy mode distribution, and the currently enforced safety measures.
+
+Messages, posts, comments, and announcements should store only `cloud_file_refs`
+records. The physical file is stored once under the owner's cloud drive, and
+`file_access_grants` controls who can download or preview it. Deleting the
+source cloud file invalidates all references.
 
 Root can configure cloud drive storage from Settings -> Cloud Drive with
 `cloud_drive_storage_root`. The value must be an absolute, safe path outside

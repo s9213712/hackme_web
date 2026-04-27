@@ -323,6 +323,51 @@ CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_f
 CREATE INDEX IF NOT EXISTS idx_file_scan_results_file ON file_scan_results(file_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_file_access_logs_file ON file_access_logs(file_id, created_at);
 
+CREATE TABLE IF NOT EXISTS cloud_file_refs (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    context_type TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    attached_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    permission_snapshot_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS file_access_grants (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    granted_to_user_id INTEGER,
+    granted_to_role TEXT,
+    granted_to_group_id TEXT,
+    context_type TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    can_download INTEGER NOT NULL DEFAULT 1,
+    can_preview INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS announcement_attachment_requests (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    requested_by INTEGER NOT NULL REFERENCES users(id),
+    announcement_id INTEGER REFERENCES announcements(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_by INTEGER REFERENCES users(id),
+    reviewed_at TEXT,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cloud_file_refs_file ON cloud_file_refs(file_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_file_refs_context ON cloud_file_refs(context_type, context_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_file_refs_owner ON cloud_file_refs(owner_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_file_access_grants_file ON file_access_grants(file_id, revoked_at);
+CREATE INDEX IF NOT EXISTS idx_file_access_grants_user_context ON file_access_grants(granted_to_user_id, context_type, context_id);
+CREATE INDEX IF NOT EXISTS idx_announcement_attachment_requests_status ON announcement_attachment_requests(status, created_at);
+
 CREATE TABLE IF NOT EXISTS integrity_findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path TEXT NOT NULL,

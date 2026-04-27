@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 19
+CURRENT_SCHEMA_VERSION = 20
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -23,6 +23,7 @@ SCHEMA_MIGRATIONS = (
     (17, "privacy upload security schema"),
     (18, "cloud drive quota and safety policy schema"),
     (19, "integrity guard schema"),
+    (20, "cloud drive attachment references and grants schema"),
 )
 
 _STATE = {
