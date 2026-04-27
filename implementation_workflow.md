@@ -83,12 +83,12 @@
 - [x] snapshot schema
 - [x] 手動 snapshot API
 - [x] restore API
-- [ ] reset API
-- [ ] daily auto snapshot
+- [x] reset API：root-only runtime reset，先建立 `pre_reset` snapshot，再清空可重建 runtime 資料
+- [x] daily auto snapshot：DB 設定控制，背景 worker 每日最多建立一次 `scheduled` snapshot
 - [x] Danger Zone 後端安全檢查
 - [x] tar restore path traversal 防護
 - [x] restore 前自動 pre_restore snapshot
-- [x] 對應測試
+- [x] 對應測試：完整 pytest `89 passed`
 
 ## Phase 6：健康監控與安全中心
 

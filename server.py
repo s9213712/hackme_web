@@ -1116,6 +1116,33 @@ register_operation_routes(app, {
     "verify_violation_integrity": verify_violation_integrity,
 })
 
+
+def start_daily_snapshot_worker():
+    try:
+        interval = int(os.environ.get("HTML_LEARNING_SNAPSHOT_CHECK_INTERVAL_SECONDS", "3600"))
+    except ValueError:
+        interval = 3600
+    interval = max(60, interval)
+
+    def loop():
+        while True:
+            try:
+                result = snapshot_service.create_daily_snapshot_if_due(
+                    actor={"id": 0, "username": "system"},
+                    settings=get_system_settings(),
+                    save_settings=save_settings,
+                )
+                if result.get("created"):
+                    audit("DAILY_SNAPSHOT_CREATED", "0.0.0.0", user="system", success=True, detail=f"snapshot_id={result.get('snapshot_id')}")
+            except Exception as exc:
+                audit("DAILY_SNAPSHOT_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            time.sleep(interval)
+
+    worker = threading.Thread(target=loop, name="daily-snapshot-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db(
@@ -1127,6 +1154,7 @@ if __name__ == "__main__":
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
+    start_daily_snapshot_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")

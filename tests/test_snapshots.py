@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response
@@ -195,6 +196,70 @@ def test_superweak_keep_dirty_state_requires_root_confirmation(tmp_path):
     assert any(call[0][0] == "SUPERWEAK_EXIT_KEEP_DIRTY_STATE" for call in audit_log)
 
 
+def test_daily_snapshot_runs_once_after_configured_time(tmp_path):
+    audit_log = []
+    service, _, _ = _service(tmp_path, audit_log)
+    saved = []
+    settings = {
+        "snapshot_daily_auto_enabled": True,
+        "snapshot_daily_time": "03:00",
+        "snapshot_daily_last_date": "",
+    }
+
+    early = service.create_daily_snapshot_if_due(
+        actor={"id": 0, "username": "system"},
+        settings=settings,
+        save_settings=saved.append,
+        now=datetime(2026, 4, 27, 2, 59, 0),
+    )
+    assert early["created"] is False
+    assert early["status"]["reason"] == "before_scheduled_time"
+
+    due = service.create_daily_snapshot_if_due(
+        actor={"id": 0, "username": "system"},
+        settings=settings,
+        save_settings=saved.append,
+        now=datetime(2026, 4, 27, 3, 0, 0),
+    )
+
+    assert due["ok"] is True
+    assert due["created"] is True
+    assert saved[-1] == {"snapshot_daily_last_date": "2026-04-27"}
+    snapshot = service.get_snapshot(snapshot_id=due["snapshot_id"], actor={"id": 1, "username": "root"})
+    assert snapshot["type"] == "scheduled"
+
+
+def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_files(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    (uploads / "dirty.txt").write_text("dirty", encoding="utf-8")
+    conn = _db(db_path)
+    conn.execute("INSERT INTO posts (id, title) VALUES (2, 'dirty')")
+    conn.commit()
+    conn.close()
+
+    result = service.reset_runtime_state(
+        actor={"id": 1, "username": "root"},
+        confirm="RESET_RUNTIME_STATE",
+        reason="cleanup",
+    )
+
+    assert result["ok"] is True
+    assert result["pre_reset_snapshot_id"].startswith("snap_")
+    assert "posts" in result["cleared_tables"]
+    assert not (uploads / "dirty.txt").exists()
+    conn = _db(db_path)
+    post_count = conn.execute("SELECT COUNT(*) AS c FROM posts").fetchone()["c"]
+    root_count = conn.execute("SELECT COUNT(*) AS c FROM users WHERE username='root'").fetchone()["c"]
+    pre_reset = conn.execute("SELECT type, status FROM snapshots WHERE id=?", (result["pre_reset_snapshot_id"],)).fetchone()
+    conn.close()
+    assert post_count == 0
+    assert root_count == 1
+    assert pre_reset["type"] == "pre_reset"
+    assert pre_reset["status"] == "ready"
+    assert any(call[0][0] == "SYSTEM_RUNTIME_RESET" for call in audit_log)
+
+
 def _json_resp(payload, status=200):
     return make_response(jsonify(payload), status)
 
@@ -222,6 +287,19 @@ class _FakeSnapshotService:
 
     def delete_snapshot(self, *, snapshot_id, actor, reason):
         return {"ok": True}
+
+    def daily_snapshot_status(self, *, settings):
+        return {"enabled": True, "due": True, "reason": "due"}
+
+    def create_daily_snapshot_if_due(self, *, actor, settings, save_settings=None, force=False, notes=None):
+        if save_settings:
+            save_settings({"snapshot_daily_last_date": "2026-04-27"})
+        return {"ok": True, "created": True, "snapshot_id": "snap_20260427_153000_abcdef", "force": force}
+
+    def reset_runtime_state(self, *, actor, confirm, reason):
+        if confirm != "RESET_RUNTIME_STATE":
+            return {"ok": False, "msg": "confirm 必須等於 RESET_RUNTIME_STATE"}
+        return {"ok": True, "pre_reset_snapshot_id": "snap_20260427_153000_abcdef", "cleared_tables": ["posts"]}
 
 
 class _FakeServerModeService:
@@ -288,4 +366,22 @@ def test_snapshot_api_is_root_only_and_supports_dry_run_restore():
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.post("/api/admin/snapshots", json={"type": "manual"})
+    assert denied.status_code == 403
+
+
+def test_daily_snapshot_and_reset_api_are_root_only():
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_admin_app(actor_box, snapshot_service).test_client()
+
+    daily = client.post("/api/admin/snapshots/daily", json={"confirm": "RUN_DAILY_SNAPSHOT", "force": True})
+    assert daily.status_code == 200
+    assert daily.get_json()["created"] is True
+
+    reset = client.post("/api/admin/system-reset", json={"confirm": "RESET_RUNTIME_STATE", "reason": "test"})
+    assert reset.status_code == 200
+    assert reset.get_json()["pre_reset_snapshot_id"] == "snap_20260427_153000_abcdef"
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    denied = client.post("/api/admin/system-reset", json={"confirm": "RESET_RUNTIME_STATE"})
     assert denied.status_code == 403

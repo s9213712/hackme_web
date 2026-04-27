@@ -530,6 +530,55 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"snapshot 建立失敗","error":result.error,"snapshot_id":result.snapshot_id}), 500
         return json_resp({"ok":True,"snapshot_id":result.snapshot_id,"status":result.status})
 
+    @app.route("/api/admin/snapshots/daily", methods=["GET", "POST"])
+    @require_csrf_safe
+    def admin_daily_snapshots():
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        settings = get_system_settings()
+        if request.method == "GET":
+            return json_resp({"ok":True,"daily":snapshot_service.daily_snapshot_status(settings=settings)})
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        if data.get("confirm") != "RUN_DAILY_SNAPSHOT":
+            return json_resp({"ok":False,"msg":"confirm 必須等於 RUN_DAILY_SNAPSHOT"}), 400
+        result = snapshot_service.create_daily_snapshot_if_due(
+            actor=actor,
+            settings=settings,
+            save_settings=save_settings,
+            force=bool(data.get("force")),
+            notes=data.get("notes") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 500)
+
+    @app.route("/api/admin/system-reset", methods=["POST"])
+    @require_csrf
+    def admin_system_reset():
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = snapshot_service.reset_runtime_state(
+            actor=actor,
+            confirm=data.get("confirm"),
+            reason=data.get("reason") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
     @app.route("/api/admin/snapshots/<snapshot_id>", methods=["GET", "DELETE"])
     @require_csrf_safe
     def admin_snapshot_detail(snapshot_id):

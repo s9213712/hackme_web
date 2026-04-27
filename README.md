@@ -86,7 +86,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-008`
+- Current release ID: `2026.04.27-009`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -145,9 +145,12 @@ Root can manage operational rollback through:
 
 - `POST /api/admin/snapshots`
 - `GET /api/admin/snapshots`
+- `GET /api/admin/snapshots/daily`
+- `POST /api/admin/snapshots/daily`
 - `GET /api/admin/snapshots/<snapshot_id>`
 - `POST /api/admin/snapshots/<snapshot_id>/restore`
 - `DELETE /api/admin/snapshots/<snapshot_id>`
+- `POST /api/admin/system-reset`
 - `GET /api/admin/server-mode`
 - `POST /api/admin/server-mode`
 - `POST /api/admin/server-mode/exit-superweak`
@@ -170,6 +173,13 @@ Server modes:
 Entering `superweak` requires root confirmation and automatically creates a
 `before_superweak` snapshot. Exiting can restore that snapshot by default or let
 root explicitly keep the dirty state with a high-risk audit event.
+
+Daily auto snapshot is controlled by `snapshot_daily_auto_enabled`,
+`snapshot_daily_time`, and `snapshot_daily_last_date`. The server checks the
+schedule in a background worker and creates one `scheduled` snapshot per day.
+`POST /api/admin/system-reset` is a root-only runtime reset: it first creates a
+`pre_reset` snapshot, then clears resettable runtime tables and user file roots
+without deleting users, settings, audit logs, or snapshot records.
 
 Server access controls:
 
@@ -264,6 +274,9 @@ Other important defaults:
 | `browser_only_mode_enabled` | `false` |
 | `maintenance_bypass_token_hash` | empty |
 | `maintenance_bypass_token_expires_at` | empty |
+| `snapshot_daily_auto_enabled` | `false` |
+| `snapshot_daily_time` | `03:00` |
+| `snapshot_daily_last_date` | empty |
 | `allow_register` | `true` |
 | `require_email_verification` | `false` |
 | `max_login_failures` | `3` |

@@ -14,9 +14,29 @@ from services.bootstrap import CURRENT_SCHEMA_VERSION
 from services.release_info import APP_RELEASE_ID
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
-SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_migration", "emergency"}
+SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
 RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
 SERVER_MODES = {"preprod", "test", "superweak"}
+RESETTABLE_TABLES = {
+    "appeals",
+    "comments",
+    "direct_messages",
+    "dm_threads",
+    "encrypted_file_keys",
+    "file_access_logs",
+    "file_scan_results",
+    "messages",
+    "moderation_proposals",
+    "moderation_votes",
+    "notifications",
+    "posts",
+    "reports",
+    "storage_files",
+    "storage_quota_log",
+    "uploaded_files",
+    "user_mod_notes",
+    "violations",
+}
 
 
 @dataclass
@@ -122,6 +142,18 @@ def _safe_extract_tar(archive_path, target_dir):
             if target not in final.parents and final != target:
                 raise ValueError(f"archive member escapes target: {member.name}")
         tar.extractall(target)
+
+
+def _parse_daily_snapshot_time(value):
+    text = str(value or "03:00").strip()
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+    if not match:
+        return 3, 0, "03:00"
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        return 3, 0, "03:00"
+    return hour, minute, f"{hour:02d}:{minute:02d}"
 
 
 class SnapshotService:
@@ -376,11 +408,120 @@ class SnapshotService:
         for root in self.file_roots:
             if root.exists() and root.is_dir():
                 for child in root.iterdir():
-                    if child.is_dir():
+                    if child.is_symlink():
+                        child.unlink()
+                    elif child.is_dir():
                         shutil.rmtree(child)
                     else:
                         child.unlink()
             root.mkdir(parents=True, exist_ok=True)
+
+    def _existing_resettable_tables(self, conn):
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        existing = {row["name"] if isinstance(row, sqlite3.Row) else row[0] for row in rows}
+        return sorted(existing & RESETTABLE_TABLES)
+
+    def daily_snapshot_status(self, *, settings, now=None):
+        now = now or datetime.now()
+        settings = dict(settings or {})
+        enabled_raw = settings.get("snapshot_daily_auto_enabled", False)
+        enabled = enabled_raw if isinstance(enabled_raw, bool) else str(enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+        hour, minute, normalized_time = _parse_daily_snapshot_time(settings.get("snapshot_daily_time"))
+        today = now.date().isoformat()
+        last_date = str(settings.get("snapshot_daily_last_date") or "")
+        due_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        due = enabled and last_date != today and now >= due_at
+        reason = "due"
+        if not enabled:
+            reason = "disabled"
+        elif last_date == today:
+            reason = "already_created_today"
+        elif now < due_at:
+            reason = "before_scheduled_time"
+        return {
+            "enabled": enabled,
+            "configured_time": normalized_time,
+            "today": today,
+            "last_date": last_date,
+            "due": due,
+            "reason": reason,
+            "due_at": due_at.isoformat(),
+            "checked_at": now.isoformat(),
+        }
+
+    def create_daily_snapshot_if_due(self, *, actor, settings, save_settings=None, now=None, force=False, notes=None):
+        now = now or datetime.now()
+        status = self.daily_snapshot_status(settings=settings, now=now)
+        if not force and not status["due"]:
+            return {"ok": True, "created": False, "status": status}
+
+        result = self.create_snapshot(
+            snapshot_type="scheduled",
+            actor=actor,
+            notes=notes or f"daily auto snapshot {status['today']}",
+        )
+        if not result.ok:
+            return {
+                "ok": False,
+                "created": False,
+                "msg": "daily snapshot 建立失敗",
+                "error": result.error,
+                "status": status,
+            }
+        if save_settings:
+            save_settings({"snapshot_daily_last_date": status["today"]})
+        return {
+            "ok": True,
+            "created": True,
+            "snapshot_id": result.snapshot_id,
+            "status": {**status, "last_date": status["today"], "due": False, "reason": "created"},
+        }
+
+    def reset_runtime_state(self, *, actor, confirm, reason):
+        if confirm != "RESET_RUNTIME_STATE":
+            return {"ok": False, "msg": "confirm 必須等於 RESET_RUNTIME_STATE"}
+
+        actor_id = self._actor_id(actor)
+        actor_name = self._actor_name(actor)
+        pre = self.create_snapshot(snapshot_type="pre_reset", actor=actor, notes=f"Before runtime reset: {reason or ''}")
+        if not pre.ok:
+            return {"ok": False, "msg": "pre_reset snapshot failed", "error": pre.error}
+
+        reset_at = datetime.now().isoformat()
+        conn = self.get_db()
+        cleared_tables = []
+        try:
+            self.ensure_schema(conn)
+            for table in self._existing_resettable_tables(conn):
+                conn.execute(f"DELETE FROM {table}")
+                cleared_tables.append(table)
+            if cleared_tables:
+                try:
+                    placeholders = ",".join("?" for _ in cleared_tables)
+                    conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", cleared_tables)
+                except Exception:
+                    pass
+            conn.commit()
+        finally:
+            conn.close()
+
+        self._clear_file_roots()
+        self.audit(
+            "SYSTEM_RUNTIME_RESET",
+            "-",
+            user=actor_name,
+            success=True,
+            detail=f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},reason={reason or ''},reset_at={reset_at}",
+        )
+        return {
+            "ok": True,
+            "msg": "runtime state reset",
+            "pre_reset_snapshot_id": pre.snapshot_id,
+            "cleared_tables": cleared_tables,
+            "reset_at": reset_at,
+        }
 
     def restore_snapshot(self, *, snapshot_id, actor, reason, dry_run=False):
         actor_id = self._actor_id(actor)
