@@ -480,6 +480,16 @@ review, thread review, pinned posts, locked threads, reactions, and automatic
 root reports when downvotes exceed the configured threshold. Managers can create
 forum categories from the community UI and assign new boards to a category.
 
+Reports and notifications expose these Phase 9 backend APIs:
+
+- `POST /api/reports`: submit a report for a chat message, forum post, forum thread, user, or other target.
+- `GET /api/admin/reports`: manager/root report queue with status filtering.
+- `POST /api/admin/reports/{id}/claim`: manager/root claim guard so two reviewers do not process the same report.
+- `POST /api/admin/reports/{id}/resolve`: approve/reject a claimed report and notify affected users.
+- `GET /api/notifications`: current user's notifications plus unread count.
+- `POST /api/notifications/{id}/read`: mark one notification as read.
+- `POST /api/notifications/read-all`: mark all current-user notifications as read.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and
@@ -548,6 +558,7 @@ keeping all behavior in one giant file.
 - `routes/chat.py`
 - `routes/users.py`
 - `routes/appeals.py`
+- `routes/reports_notifications.py`
 - `routes/moderation.py`
 - `routes/system_admin.py`
 - `routes/operations.py`
@@ -564,6 +575,7 @@ keeping all behavior in one giant file.
 - `services/governance_records.py`
 - `services/member_levels.py`
 - `services/moderation_proposals.py`
+- `services/notifications.py`
 - `services/permissions.py`
 - `services/release_info.py`
 - `services/snapshots.py`

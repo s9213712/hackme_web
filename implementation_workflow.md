@@ -128,14 +128,15 @@
 
 ## Phase 9：檢舉 / 申訴 / 通知
 
-- [ ] reports schema + user report API
-- [ ] appeals schema + user appeal API
-- [ ] report claim 機制
-- [ ] notifications schema
+- [x] reports schema + user report API
+- [x] appeals schema + user appeal API
+- [x] report claim 機制
+- [x] notifications schema + API：列表 / 單筆已讀 / 全部已讀
 - [ ] 通知鈴與通知列表 UI
 - [ ] WebSocket 即時通知
 - [ ] Email 通知摘要
-- [ ] 對應測試
+- [x] Phase 9 後端測試：reports / claim / resolve / notifications `11 passed`
+- [ ] Phase 9 UI / realtime / email 對應測試
 
 ## Phase 10：站內信
 

@@ -550,6 +550,41 @@ CREATE INDEX IF NOT EXISTS idx_appeal_status     ON violation_appeals(status);
 
 CREATE INDEX IF NOT EXISTS idx_appeal_user      ON violation_appeals(user_id);
 
+CREATE TABLE IF NOT EXISTS reports (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type          TEXT NOT NULL,
+    target_id            INTEGER,
+    reporter_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reported_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reason               TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'pending',
+    claimed_by_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    claimed_by_username  TEXT,
+    claimed_at           TEXT,
+    reviewed_by          TEXT,
+    reviewed_at          TEXT,
+    review_note          TEXT,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    UNIQUE(target_type, target_id, reporter_user_id, reason)
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type            TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    link            TEXT,
+    is_read         INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    read_at         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_reports_claimed ON reports(claimed_by_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at);
+
 CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_at);

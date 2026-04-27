@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 21
+CURRENT_SCHEMA_VERSION = 22
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -25,6 +25,7 @@ SCHEMA_MIGRATIONS = (
     (19, "integrity guard schema"),
     (20, "cloud drive attachment references and grants schema"),
     (21, "cloud drive optional deep antivirus policy columns"),
+    (22, "reports and notifications schema"),
 )
 
 _STATE = {
@@ -356,6 +357,49 @@ def _repair_existing_legacy_tables(
             repair(conn)
 
 
+def _ensure_reports_notifications_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reports (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type          TEXT NOT NULL,
+            target_id            INTEGER,
+            reporter_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reported_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reason               TEXT NOT NULL,
+            status               TEXT NOT NULL DEFAULT 'pending',
+            claimed_by_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            claimed_by_username  TEXT,
+            claimed_at           TEXT,
+            reviewed_by          TEXT,
+            reviewed_at          TEXT,
+            review_note          TEXT,
+            created_at           TEXT NOT NULL,
+            updated_at           TEXT NOT NULL,
+            UNIQUE(target_type, target_id, reporter_user_id, reason)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type            TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            body            TEXT NOT NULL,
+            link            TEXT,
+            is_read         INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            read_at         TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_claimed ON reports(claimed_by_user_id, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at)")
+
+
 def apply_schema_migrations(
     conn,
     ensure_secure_audit_columns,
@@ -419,6 +463,8 @@ def apply_schema_migrations(
             ensure_security_support_schema(conn)
         elif version == 21:
             ensure_security_support_schema(conn)
+        elif version == 22:
+            _ensure_reports_notifications_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",

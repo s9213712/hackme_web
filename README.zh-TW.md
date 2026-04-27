@@ -453,6 +453,16 @@ root 可在「管理台 -> 伺服器 -> 設定 -> 雲端硬碟」設定
 建立 root 待審檢舉。管理員可在社群 UI 新增討論分類，建立版面時可指定
 所屬分類。
 
+Phase 9 檢舉與通知後端 API：
+
+- `POST /api/reports`：對聊天訊息、論壇貼文、論壇主題、使用者或其他目標送出檢舉。
+- `GET /api/admin/reports`：manager/root 檢舉佇列，可依狀態過濾。
+- `POST /api/admin/reports/{id}/claim`：manager/root 領取檢舉，避免兩位審核者同時處理。
+- `POST /api/admin/reports/{id}/resolve`：核准/拒絕已領取的檢舉，並通知相關使用者。
+- `GET /api/notifications`：目前使用者通知列表與未讀數。
+- `POST /api/notifications/{id}/read`：將單筆通知標為已讀。
+- `POST /api/notifications/read-all`：將目前使用者所有通知標為已讀。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI
@@ -519,6 +529,7 @@ root 可在「管理台 -> 伺服器 -> 設定 -> 雲端硬碟」設定
 - `routes/chat.py`
 - `routes/users.py`
 - `routes/appeals.py`
+- `routes/reports_notifications.py`
 - `routes/moderation.py`
 - `routes/system_admin.py`
 - `routes/operations.py`
@@ -535,6 +546,7 @@ root 可在「管理台 -> 伺服器 -> 設定 -> 雲端硬碟」設定
 - `services/governance_records.py`
 - `services/member_levels.py`
 - `services/moderation_proposals.py`
+- `services/notifications.py`
 - `services/permissions.py`
 - `services/release_info.py`
 - `services/snapshots.py`
