@@ -932,6 +932,18 @@
       <label>電話</label>
       <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
     </div>
+    <div class="field">
+      <label>頭像上傳（JPEG / PNG / GIF，會走雲端硬碟掃描與圖片去 EXIF）</label>
+      <input type="file" id="edit-user-avatar-file" accept="image/png,image/jpeg,image/gif" />
+      <div class="settings-option-grid" style="margin-top:.45rem;">
+        <div class="field"><label>裁切 X</label><input type="number" id="edit-avatar-crop-x" min="0" value="0" /></div>
+        <div class="field"><label>裁切 Y</label><input type="number" id="edit-avatar-crop-y" min="0" value="0" /></div>
+        <div class="field"><label>裁切寬</label><input type="number" id="edit-avatar-crop-width" min="0" value="0" /></div>
+        <div class="field"><label>裁切高</label><input type="number" id="edit-avatar-crop-height" min="0" value="0" /></div>
+      </div>
+      <button type="button" id="edit-user-avatar-upload" class="btn">上傳頭像</button>
+      <div id="edit-user-avatar-status" style="margin-top:.35rem;font-size:.75rem;color:var(--muted);"></div>
+    </div>
     <div class="field" id="edit-user-role-field">
       <label>角色</label>
       <select id="edit-user-role">

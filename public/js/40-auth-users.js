@@ -188,6 +188,8 @@ async function editUser(userId) {
     id_number: source.id_number || "",
     birthdate: source.birthdate || "",
     phone: source.phone || "",
+    avatar_file_id: source.avatar_file_id || "",
+    avatar_crop: source.avatar_crop || {},
     role: source.role || "user",
     status: source.status || "active"
   };
@@ -208,6 +210,13 @@ async function editUser(userId) {
   setUserEditField("edit-user-idno", current.id_number);
   setUserEditField("edit-user-birthdate", current.birthdate);
   setUserEditField("edit-user-phone", current.phone);
+  setUserEditField("edit-avatar-crop-x", current.avatar_crop.x ?? 0);
+  setUserEditField("edit-avatar-crop-y", current.avatar_crop.y ?? 0);
+  setUserEditField("edit-avatar-crop-width", current.avatar_crop.width ?? 0);
+  setUserEditField("edit-avatar-crop-height", current.avatar_crop.height ?? 0);
+  setUserEditField("edit-user-avatar-file", "");
+  const avatarStatus = $("edit-user-avatar-status");
+  if (avatarStatus) avatarStatus.textContent = current.avatar_file_id ? `目前頭像 file_id: ${current.avatar_file_id}` : "尚未設定頭像";
   const editRole = $("edit-user-role");
   if (editRole) editRole.value = current.role;
   const editStatus = $("edit-user-status");
@@ -229,6 +238,42 @@ async function editUser(userId) {
   if (overlay) overlay.classList.add("show");
   const firstField = $("edit-user-nickname");
   if (firstField) firstField.focus();
+}
+
+async function uploadUserAvatar() {
+  if (!editingUserId) return;
+  const input = $("edit-user-avatar-file");
+  const file = input?.files?.[0];
+  if (!file) {
+    setUserEditMsg("請先選擇頭像檔案", false);
+    return;
+  }
+  const crop = {
+    x: parseInt($("edit-avatar-crop-x")?.value || "0", 10) || 0,
+    y: parseInt($("edit-avatar-crop-y")?.value || "0", 10) || 0,
+    width: parseInt($("edit-avatar-crop-width")?.value || "0", 10) || 0,
+    height: parseInt($("edit-avatar-crop-height")?.value || "0", 10) || 0,
+  };
+  const form = new FormData();
+  form.append("file", file);
+  form.append("crop_json", JSON.stringify(crop));
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/users/${editingUserId}/avatar`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  const status = $("edit-user-avatar-status");
+  if (json && json.ok) {
+    if (status) status.textContent = `頭像已更新 file_id: ${json.avatar_file_id}`;
+    setUserEditMsg("頭像已更新", true);
+    if (["manager", "super_admin"].includes(currentRole)) loadUsers();
+  } else {
+    setUserEditMsg(json.msg || "頭像上傳失敗", false);
+  }
 }
 
 async function submitEditUser() {

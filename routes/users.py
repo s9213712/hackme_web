@@ -1,8 +1,10 @@
+import json
 import re
 from datetime import datetime, timedelta
-from flask import request
+from flask import request, send_file
 
 from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
+from services.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
 
 
 def register_user_routes(app, deps):
@@ -44,6 +46,8 @@ def register_user_routes(app, deps):
     validate_password = deps["validate_password"]
     validate_phone = deps["validate_phone"]
     verify_password = deps["verify_password"]
+    get_member_level_rule = deps.get("get_member_level_rule")
+    storage_root = deps.get("STORAGE_DIR", ".")
 
     def trim_password_history(conn, user_id):
         conn.execute(
@@ -66,6 +70,15 @@ def register_user_routes(app, deps):
     def current_session_hash():
         tok = request.cookies.get("session_token")
         return hash_token(tok) if tok else ""
+
+    def ensure_avatar_user_columns(conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "avatar_file_id" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN avatar_file_id TEXT")
+        if "avatar_crop_json" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN avatar_crop_json TEXT")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
 
     @app.route("/api/account/sessions", methods=["GET"])
     @require_csrf_safe
@@ -187,11 +200,12 @@ def register_user_routes(app, deps):
             conn = get_db()
             try:
                 ensure_member_level_user_columns(conn)
+                ensure_avatar_user_columns(conn)
                 rows = conn.execute(
                     "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
                     "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
                     "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-                    "password_strength_score, blocked_until, violation_count "
+                    "password_strength_score, avatar_file_id, avatar_crop_json, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
                 data = [user_public_payload(r, include_sensitive=False) for r in rows]
@@ -309,11 +323,12 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
+            ensure_avatar_user_columns(conn)
             target = conn.execute(
                 "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, "
                 "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
                 "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-                "password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
+                "password_strength_score, avatar_file_id, avatar_crop_json, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -322,6 +337,125 @@ def register_user_routes(app, deps):
                 "ok": True,
                 "user": user_public_payload(target, include_sensitive=include_sensitive)
             })
+        finally:
+            conn.close()
+
+    def _parse_avatar_crop(raw):
+        if not raw:
+            return {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                return {}
+        if not isinstance(raw, dict):
+            return {}
+        crop = {}
+        for key in ("x", "y", "width", "height"):
+            try:
+                value = int(raw.get(key))
+            except Exception:
+                continue
+            if value < 0:
+                continue
+            crop[key] = min(value, 10000)
+        return crop if {"x", "y", "width", "height"} <= set(crop) else {}
+
+    @app.route("/api/admin/users/<int:user_id>/avatar", methods=["POST"])
+    @require_csrf
+    def user_avatar_upload(user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        is_self = int(actor["id"]) == int(user_id)
+        if not is_self and role_rank(actor_role) < role_rank("super_admin"):
+            return json_resp({"ok": False, "msg": "只有 root 可修改他人頭像"}), 403
+        if "file" not in request.files:
+            return json_resp({"ok": False, "msg": "缺少 file"}), 400
+        file_storage = request.files["file"]
+        mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
+        if mimetype not in {"image/jpeg", "image/png", "image/gif"}:
+            return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
+        conn = get_db()
+        try:
+            ensure_member_level_user_columns(conn)
+            ensure_avatar_user_columns(conn)
+            ensure_cloud_drive_attachment_schema(conn)
+            target = conn.execute("SELECT id, username, role, member_level, effective_level, sanction_status FROM users WHERE id=?", (user_id,)).fetchone()
+            if not target:
+                return json_resp({"ok": False, "msg": "找不到帳號"}), 404
+            rule = get_member_level_rule(conn, target["effective_level"] or target["member_level"]) if get_member_level_rule else None
+            result, msg = store_cloud_upload(
+                conn,
+                actor=dict(target),
+                member_rule=rule,
+                storage_root=storage_root,
+                file_storage=file_storage,
+                privacy_mode="public_attachment",
+                scan_now=True,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            if result.get("scan_status") not in {"clean", "not_required"}:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "頭像未通過安全掃描"}), 400
+            crop = _parse_avatar_crop(request.form.get("crop_json"))
+            conn.execute(
+                "UPDATE users SET avatar_file_id=?, avatar_crop_json=?, updated_at=? WHERE id=?",
+                (result["file_id"], json.dumps(crop, ensure_ascii=False), datetime.now().isoformat(), user_id),
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO cloud_file_refs (
+                    id, file_id, owner_user_id, context_type, context_id, attached_by, created_at, permission_snapshot_json
+                ) VALUES (?, ?, ?, 'avatar', ?, ?, ?, ?)
+                """,
+                (
+                    f"avatar_{user_id}_{result['file_id']}",
+                    result["file_id"],
+                    user_id,
+                    str(user_id),
+                    actor["id"],
+                    datetime.now().isoformat(),
+                    json.dumps({"public_avatar": True, "crop": crop}, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+            audit("USER_AVATAR_UPLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"target_id={user_id},file_id={result['file_id']}")
+            return json_resp({"ok": True, "avatar_file_id": result["file_id"], "avatar_crop": crop, "file": result})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/users/<int:user_id>/avatar", methods=["GET"])
+    @require_csrf_safe
+    def user_avatar_get(user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_member_level_user_columns(conn)
+            ensure_avatar_user_columns(conn)
+            ensure_cloud_drive_attachment_schema(conn)
+            row = conn.execute(
+                """
+                SELECT f.storage_path, f.mime_type_plain_for_public, f.scan_status, f.privacy_mode, f.deleted_at
+                FROM users u
+                JOIN uploaded_files f ON f.id=u.avatar_file_id
+                WHERE u.id=?
+                """,
+                (user_id,),
+            ).fetchone()
+            if not row or row["deleted_at"]:
+                return json_resp({"ok": False, "msg": "尚未設定頭像"}), 404
+            if not row["privacy_mode"].startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
+                return json_resp({"ok": False, "msg": "頭像尚未通過安全掃描"}), 403
+            path = resolve_file_storage_path(storage_root, row["storage_path"])
+            if not path.exists() or not path.is_file():
+                return json_resp({"ok": False, "msg": "頭像檔案不存在"}), 404
+            return send_file(path, mimetype=row["mime_type_plain_for_public"] or "application/octet-stream")
         finally:
             conn.close()
 
@@ -341,11 +475,12 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
+            ensure_avatar_user_columns(conn)
             target = conn.execute(
                 "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, "
                 "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
                 "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-                "password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
+                "password_strength_score, avatar_file_id, avatar_crop_json, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:

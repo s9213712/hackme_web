@@ -486,6 +486,13 @@ Phase 10 後端提供 1 對 1 站內信 API：
 建立收件者通知；啟用 `feature_dm_enabled` 後，登入 UI 會顯示「站內信」
 頁籤，支援建立私訊串、收發、已讀、軟刪除、刷新與封鎖使用者。
 
+### 頭像
+
+使用者可在帳號資料編輯視窗上傳頭像。頭像檔案會走同一套雲端硬碟 quota
+與掃描流程，包含可選圖片重新編碼去 EXIF，通過後在使用者資料保存
+`avatar_file_id` 與 `avatar_crop_json`。裁切值只是 UI 顯示 metadata，不會被
+當成檔案安全判斷依據。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI

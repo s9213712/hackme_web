@@ -564,7 +564,7 @@ def get_user_by_username(username):
             "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
             "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
             "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-            "password_strength_score, must_change_password, is_default_password, blocked_until, violation_count, chat_violation_warned "
+        "password_strength_score, must_change_password, is_default_password, avatar_file_id, avatar_crop_json, blocked_until, violation_count, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -576,6 +576,10 @@ def user_public_payload(row, *, include_sensitive=False):
     if not row:
         return None
     data = dict(row)
+    try:
+        avatar_crop = json.loads(data.get("avatar_crop_json") or "{}") if data.get("avatar_crop_json") else {}
+    except Exception:
+        avatar_crop = {}
     payload = {
         "id": data.get("id"),
         "username": data.get("username"),
@@ -598,6 +602,8 @@ def user_public_payload(row, *, include_sensitive=False):
         "password_strength_score": data.get("password_strength_score") or 0,
         "must_change_password": bool(data.get("must_change_password") or 0),
         "is_default_password": bool(data.get("is_default_password") or 0),
+        "avatar_file_id": data.get("avatar_file_id"),
+        "avatar_crop": avatar_crop if isinstance(avatar_crop, dict) else {},
         "role_label": ROLE_LABEL.get(data.get("role"), data.get("role")),
         "blocked_until": data.get("blocked_until"),
         "violation_count": data.get("violation_count") or 0,
@@ -1061,6 +1067,8 @@ register_public_routes(app, {
     "require_csrf": require_csrf,
     "score_password_strength": score_password_strength,
     "role_rank": role_rank,
+    "get_member_level_rule": get_member_level_rule,
+    "STORAGE_DIR": STORAGE_DIR,
     "store_csrf_token": store_csrf_token,
     "timing_delay": timing_delay,
     "validate_id_number": validate_id_number,

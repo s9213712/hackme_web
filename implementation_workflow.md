@@ -171,7 +171,7 @@
 - [x] Cloud Drive 附件 MVP 測試：cloud drive attachments `5 passed`
 - [x] 上傳 API：quota / scan pipeline / MIME magic bytes
 - [x] 圖片 re-encode 去 EXIF
-- [ ] 頭像上傳與裁切
+- [x] 頭像上傳與裁切
 - [ ] Markdown 富文字編輯器
 - [ ] CAPTCHA：none / math / image / turnstile
 - [ ] 對應測試

@@ -157,6 +157,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
         "violation_score", "sanction_status", "sanction_until", "level_updated_at",
         "level_updated_by", "level_update_reason", "locked_until", "password_strength_score",
         "must_change_password", "is_default_password", "deleted_at",
+        "avatar_file_id", "avatar_crop_json",
     } <= user_cols
     assert {"ip_hash", "login_at", "is_suspicious"} <= login_location_cols
     assert {

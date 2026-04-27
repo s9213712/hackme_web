@@ -517,6 +517,14 @@ DM also creates a notification for the recipient. When `feature_dm_enabled` is
 enabled, the logged-in UI shows a station-mail tab for thread creation, send,
 read, soft delete, refresh, and user blocking.
 
+### Avatars
+
+Users can upload avatars from the account edit dialog. Avatar files go through
+the same cloud drive quota and scan pipeline, including optional image
+re-encoding/EXIF stripping, then the user record stores `avatar_file_id` plus
+`avatar_crop_json`. The crop values are metadata for UI rendering and can be
+adjusted without trusting the client for file safety.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and

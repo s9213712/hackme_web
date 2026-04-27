@@ -54,6 +54,8 @@ PHASE1_USER_COLUMNS = (
     ("password_changed_at", "TEXT"),
     ("must_change_password", "INTEGER NOT NULL DEFAULT 0"),
     ("is_default_password", "INTEGER NOT NULL DEFAULT 0"),
+    ("avatar_file_id", "TEXT"),
+    ("avatar_crop_json", "TEXT"),
     ("updated_at", "TEXT"),
     ("deleted_at", "TEXT"),
 )

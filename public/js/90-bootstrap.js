@@ -57,6 +57,7 @@ function bindUiEvents() {
   const restartBtn   = $("restart-server-btn");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
+  const avatarUploadBtn = $("edit-user-avatar-upload");
   const chatCreateBtn = $("chat-create-room-btn");
   const chatJoinBtn = $("chat-join-room-btn");
   const chatRefreshRoomBtn = $("chat-room-refresh-btn");
@@ -162,6 +163,7 @@ function bindUiEvents() {
   if (driveRefreshBtn) driveRefreshBtn.addEventListener("click", loadDriveDashboard);
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
+  if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);
   if (userEditOverlay) userEditOverlay.addEventListener("click", (e) => {
     if (e.target === userEditOverlay) hideUserEditDialog();
   });
