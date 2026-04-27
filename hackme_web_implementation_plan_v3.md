@@ -310,12 +310,14 @@ server_settings
 
 ```text
 server_mode
-api_lan_only_enabled
-allowed_ip_whitelist       -- 允許存取的 IP 清單（CIDR 或 IP，pre_production 模式時生效）
+api_lan_only_enabled              -- IP 白名單（只允許指定 IP/區網訪問，與瀏覽器限制無關）
+allowed_ip_whitelist              -- 允許存取的 IP 清單（CIDR 或 IP，pre_production 模式時生效）
+browser_only_mode_enabled         -- 準上線模式：拒絕非瀏覽器 client（curl/Python/CLI → 403，瀏覽器 + maintenance_token 正常訪問）
+maintenance_bypass_token          -- SHA256 hash，root 自行設定，帶此 token 的 CLI 請求可通過 browser_only_mode（不為空時生效）
 csrf_enabled
 rate_limit_enabled
 audit_log_enabled
-login_ip_lock_enabled     -- pre_production：同 IP 同時登入不同帳號 → 阻擋
+login_ip_lock_enabled             -- pre_production：同 IP 同時登入不同帳號 → 阻擋
 excessive_points_ban_enabled
 auto_downgrade_enabled
 account_delete_enabled
@@ -899,6 +901,9 @@ pre_production 檢查：
 - rate limit enabled
 - audit log enabled
 - api_lan_only enabled 或客戶 IP 在 allowed_ip_whitelist 內
+- browser_only_mode enabled：User-Agent 不符合瀏覽器特徵 → 403
+  （帶有效 maintenance_bypass_token 者例外，可通過 CLI 緊急維護）
+  （瀏覽器 UA（Chrome/Firefox/Safari/Edge）直接通過）
 - login_ip_lock enabled
 - log hash chain valid
 - no active superweak sandbox
@@ -911,6 +916,7 @@ test 模式：
 - 關閉 auto_downgrade_enabled
 - 關閉 account_delete_enabled
 - 關閉 api_lan_only_enabled（**IP 白名單限制暫停，任何 IP 均可存取**）
+- 關閉 browser_only_mode_enabled（**關閉瀏覽器限制，任何 client 均可存取**）
 - 保留 CSRF / auth / permission check
 
 superweak 模式：
@@ -948,6 +954,7 @@ green / yellow / red
 - rate_limit enabled
 - audit_log enabled
 - api_lan_only enabled 或客戶 IP 在 allowed_ip_whitelist 內
+- browser_only_mode enabled（已啟動瀏覽器限制）
 - login_ip_lock enabled（同 IP 同時登入不同帳號被阻擋）
 - log hash chain valid
 - snapshot system healthy
@@ -1469,7 +1476,9 @@ rate_limit_enabled = true
 audit_log_enabled = true
 api_lan_only_enabled = true
 allowed_ip_whitelist = [root 設定的允許 IP 清單，空白 = 只允許本機 / 區網]
-login_ip_lock_enabled = true    -- 同 IP 同時登入不同帳號 → 阻擋
+browser_only_mode_enabled = true    -- 拒絕非瀏覽器 client（curl/Python/CLI → 403）
+maintenance_bypass_token = ''       -- CLI 緊急維護通道，設定後攜帶有效 token 可通過（不建議留空）
+login_ip_lock_enabled = true       -- 同 IP 同時登入不同帳號 → 阻擋
 excessive_points_ban_enabled = true
 auto_downgrade_enabled = true
 account_delete_enabled = true
@@ -1512,6 +1521,8 @@ login_ip_lock_enabled = false
 excessive_points_ban_enabled = false
 auto_downgrade_enabled = false
 account_delete_enabled = false
+browser_only_mode_enabled = false    -- 關閉瀏覽器限制，任何 client 均可存取
+maintenance_bypass_token = ''         -- 重置為空（test 環境不需要緊急維護通道）
 csrf_enabled = true
 rate_limit_enabled = true
 audit_log_enabled = true
@@ -2034,6 +2045,56 @@ root -> allowed
 
 ---
 
+### browser_only_mode 實作方式（Phase 3 附錄）
+
+**用途：** 準上線模式時，拒絕 curl / Python / Postman 等非瀏覽器 client，
+避免機器人腳本意外攻擊或錯誤操作，同時保留緊急維護 CLI 通道。
+
+**不通過的典型 client（被 403）：**
+```text
+curl
+Python-requests / urllib / httpx
+axios / node-fetch / fetch (Node.js)
+Postman / Insomnia (非瀏覽器 UA)
+任何未攜帶瀏覽器 UA 的 HTTP 工具
+```
+
+**通過的條件（滿足任一即通過）：**
+1. User-Agent 符合瀏覽器特徵（`Chrome`、`Firefox`、`Safari`、`Edge`）
+2. 帶有有效的 `Authorization: Bearer <maintenance_bypass_token>` header
+
+**拒絕流程：**
+```
+請求抵達
+  → 檢查 browser_only_mode_enabled 是否為 true
+  → 若為 false：直接通過（test / superweak 模式）
+  → 若為 true：
+      ├─ UA 為瀏覽器 → 通過
+      ├─ 有 Bearer token 且 hash 與 maintenance_bypass_token 比對成功 → 通過
+      └─ 否則 → 403 Forbidden
+```
+
+**maintenance_bypass_token 實作細節：**
+```text
+- 儲存：SHA256 hash（不儲存明文）
+- 格式：SHA256('<root_password>:<random_seed>')，由 root 自行生成
+- 攜帶方式：curl -H "Authorization: Bearer <token>" ...
+- 設定位置：server_settings key = 'maintenance_bypass_token'
+- 日誌區分：所有來自 maintenance_token 的請求在 audit log 中標記
+             event_type = 'maintenance_cli_access'，不同於一般 browser 訪問
+- 最小權限：maintenance_token 只豁免 browser_only_mode 檢查，
+            仍須通过 auth / permission / CSRF 等其他 middleware
+```
+
+**重要限制：**
+- `maintenance_bypass_token` 不為空時才生效（為空 = 關閉此緊急通道）
+- superweak 模式下 `browser_only_mode` 自動關閉，maintenance_token 無效
+- `maintenance_bypass_token` 不可用於跨 mode 提升權限（root 仍需密碼）
+
+---
+
+---
+
 ## Phase 4：Health / Security Center
 
 目標：
@@ -2187,6 +2248,29 @@ root -> allowed
 - snapshot checksum valid
 - DB integrity check valid
 
+## Phase 10：站內信系統（DM）
+
+目標：
+- direct_messages / dm_threads schema
+- DM API（收發 / 已讀 / 軟刪除）
+- DM UI（收件匣 + 對話串）
+- blocked_users 整合（阻擋 DM 送達）
+- daily_dm_limit 頻率限制
+
+交付：
+- schema：direct_messages、dm_threads、blocked_users
+- API：GET /api/dm/threads、POST /api/dm/threads/:user_id/messages、DELETE /api/dm/threads/:user_id
+- UI：DM 收件匣、對話串視圖
+- 頻率限制 middleware
+- tests
+
+驗收：
+- 會員可收發 DM
+- 被封鎖者無法送達 DM
+- 軟刪除雙方都刪才物理移除
+- daily_dm_limit 正確限制頻率
+- notification 正確觸發
+
 ## Phase 11：Storage 雲端硬碟與相簿
 
 目標：
@@ -2297,23 +2381,6 @@ feature/forum-governance-security-modes
 10. forum 權限與版主權限正確。
 11. audit log 可追蹤所有高風險操作。
 12. anomaly light 可反映錯誤與異常紀錄。
-
----
-
-# 13. 建議優先順序摘要
-
-最高優先：
-
-1. DB schema + permission middleware
-2. audit log + security_events
-3. member_level + admin vote
-4. server mode
-5. snapshot / restore / reset
-6. health lights
-7. forgot password
-8. forum / moderator
-9. reports / appeals / notifications
-10. anti-abuse / integrity checks
 
 ---
 
@@ -2990,99 +3057,6 @@ theme: 'light' | 'dark' | 'auto'
 
 ---
 
-## 15.17 補充 Phase（Phase 10–15）
-
-延續 v3 既有的 Phase 1–9，新增以下 Phase：
-
-### Phase 10：站內信系統（DM）
-
-目標：
-- direct_messages / dm_threads schema
-- DM API
-- DM UI（收件匣、寄件、對話串）
-- 封鎖用戶整合
-- 通知整合
-
-驗收：
-- 封鎖用戶無法送 DM
-- daily_dm_limit 生效
-- DM 可被檢舉
-
-### Phase 11：附件 / 頭像上傳
-
-目標：
-- attachments schema
-- 上傳 API（MIME 白名單、magic bytes 驗證）
-- 圖片 re-encode（去 EXIF）
-- 頭像裁切
-- 富文字編輯器圖片插入
-
-驗收：
-- 上傳非白名單 MIME 被拒
-- EXIF 已去除（exiftool 驗證）
-- 圖片 URL 不可被枚舉
-
-### Phase 12：用戶個人化（Profile、簽名、稱號）
-
-目標：
-- 個人主頁 API
-- 頭像顯示
-- 個人簽名顯示於發文下方
-- 自訂稱號（admin 核准）
-- 成就徽章展示
-
-驗收：
-- 個人資料修改有 audit log
-- 敏感欄位不公開
-- 自訂稱號需核准
-
-### Phase 13：文章互動（反應、引用、@提及、投票）
-
-目標：
-- post_reactions / comment_reactions
-- 引用回覆（parent_comment_id）
-- @mention 解析與通知
-- poll / poll_options / poll_votes
-- 文章編輯歷史
-
-驗收：
-- 自己的文章不可反應
-- 被提及者收到通知
-- 封鎖用戶的 @提及不觸發通知
-- 投票截止後不可再投
-
-### Phase 14：訂閱、追蹤、收藏、未讀
-
-目標：
-- thread_subscriptions / board_subscriptions
-- user_follows / blocked_users
-- bookmarks
-- user_read_states
-
-驗收：
-- 訂閱文章有新回覆時收通知
-- 封鎖用戶文章折疊
-- 版區未讀紅點正確
-
-### Phase 15：搜尋、熱門、成就、草稿、在線
-
-目標：
-- SQLite FTS5 全文搜尋
-- hot_score 計算與排行
-- achievement_definitions / user_achievements
-- 草稿 API
-- 在線狀態
-- 通知偏好設定
-- 深色模式前端
-
-驗收：
-- 搜尋可找到文章和用戶
-- 熱門排行隨反應數更新
-- 成就自動授予
-- 草稿自動儲存有效
-
----
-
 ## 15.18 新增 Schema 快速索引
 
 | 表名 | 用途 |
@@ -3622,10 +3596,844 @@ Zustand       → 全域 UI 狀態（currentUser、theme、serverMode）
 
 ---
 
+# 16. 前端架構與 UI 設計規範（UI_improve 整合）
+
+> 本章整合 UI_improve.md 的完整內容。
+> 現有問題診斷：UI 不是「不好看」，而是**沒有結構**——layout、page、component 混在一起，
+> API call 散落各處，CSS inline style 到處亂寫。目標是重構為有層次的論壇系統 UI。
+
+---
+
+## 16.1 三層架構原則（強制執行）
+
+```
+Layout 層（框架）→ Page 層（頁面）→ Component 層（元件）
+```
+
+**禁止事項：**
+
+- ❌ 在 Page 裡寫 layout 結構
+- ❌ 在 Component 裡直接呼叫 API（fetch/axios）
+- ❌ inline style 散落各處
+- ❌ `!important` 濫用
+- ❌ 每頁自己寫獨立 CSS
+
+---
+
+## 16.2 Layout 拆分
+
+建立三套獨立 layout：
+
+```text
+layouts/
+  MainLayout      → 一般會員 / 論壇瀏覽
+  AdminLayout     → admin / root 後台
+  AuthLayout      → 登入 / 註冊 / 忘記密碼
+```
+
+### MainLayout 結構
+
+```
+<Header />
+<NavBar />
+<div class="container">
+  <SidebarLeft />    ← 版區樹
+  <MainContent />    ← 頁面主體
+  <SidebarRight />   ← 用戶資訊 / 熱門 / 狀態燈
+</div>
+<Footer />
+```
+
+### AdminLayout 結構
+
+```
+<AdminHeader />      ← logo + mode badge + 用戶資訊
+<AdminSidebar />     ← 管理功能導覽
+<AdminContent />     ← 頁面主體
+```
+
+### AuthLayout 結構
+
+```
+<AuthCard />         ← 居中卡片，無 sidebar
+```
+
+---
+
+## 16.3 Header 設計
+
+| 區塊 | 內容 |
+|------|------|
+| 左側 | Logo（hackme_web）|
+| 中間 | 搜尋框（全站搜尋，呼叫 `/api/search`）|
+| 右側 | server mode badge + 頭像 + 會員等級 + 通知鈴 |
+
+**Server mode badge 樣式：**
+
+```
+[PRE_PROD]    → 綠底白字
+[TEST]        → 黃底黑字
+[SUPERWEAK]   → 紅底白字 + 閃爍動畫
+```
+
+---
+
+## 16.4 NavBar 設計
+
+```
+首頁 ／ 論壇 ／ 追蹤動態 ／ 安全中心（admin+）／ 管理後台（admin+）／ 健康狀態（root）
+```
+
+- 依角色動態顯示項目，不可見的項目不渲染（前端隱藏 ≠ 後端授權）。
+- active 頁面底線高亮。
+
+---
+
+## 16.5 SidebarLeft — 版區樹（類 eyny）
+
+```
+📁 技術討論
+  ├─ AI 研究
+  ├─ 程式設計
+  └─ 開源工具
+📁 資訊安全
+  ├─ 滲透測試
+  └─ 漏洞分析
+📁 閒聊水區
+```
+
+- 資料來自 `/api/forum/categories`，可折疊。
+- 各子版顯示未讀紅點（整合 Section 15.11 未讀追蹤）。
+- 版主名稱顯示在版區名旁（hover tooltip）。
+
+---
+
+## 16.6 SidebarRight — 資訊欄
+
+```
+┌─────────────────────┐
+│ [頭像] username      │  ← UserCard
+│ 等級：trusted VIP   │
+│ 積分：1234  威望：89 │
+├─────────────────────┤
+│ 最近通知（3 則）      │  ← 最新 3 筆 notifications
+├─────────────────────┤
+│ 熱門文章（5 篇）      │  ← /api/forum/trending
+├─────────────────────┤
+│ 🟢 準上線燈          │  ← HealthLight readiness
+│ 🟢 異常燈            │  ← HealthLight anomaly
+└─────────────────────┘
+```
+
+---
+
+## 16.7 Page 檔案結構
+
+```text
+pages/
+  forum/
+    index          → 版區列表（BoardList）
+    board/[id]     → 子版文章列表（PostList）
+    post/[id]      → 文章詳情（PostDetail + CommentList）
+    new-post       → 發文（RichTextEditor）
+    search         → 搜尋結果
+    trending       → 熱門文章
+    drafts         → 草稿列表
+    tags/[slug]    → 依標籤瀏覽
+  account/
+    profile        → 個人主頁
+    settings       → 帳號設定
+    security       → 密碼 / 2FA / 登入紀錄
+    notifications  → 通知列表
+    bookmarks      → 收藏
+    follows        → 追蹤 / 粉絲
+    dm/            → 站內信收件匣
+    dm/[user_id]   → 站內信對話
+    achievements   → 成就徽章
+  admin/
+    users          → 用戶管理
+    moderation     → 處分提案
+    reports        → 檢舉
+    appeals        → 申訴
+    forum          → 版區管理
+    security       → 安全事件
+    audit-logs     → Audit log
+    member-levels  → 等級規則
+    permission-matrix → 權限矩陣
+    achievements   → 成就管理
+  root/
+    server-mode    → 模式切換
+    security-settings → 安全設定
+    danger-zone    → Danger Zone
+    snapshots      → 快照管理
+    health         → 健康監控
+    integrity      → 完整性檢查
+  auth/
+    login
+    register
+    forgot-password
+    reset-password
+```
+
+---
+
+## 16.8 Component 元件規範
+
+### Forum 元件
+
+```text
+components/forum/
+  BoardList        → 版區列表（含未讀紅點）
+  BoardCard        → 單一版區卡片
+  PostList         → 文章列表
+  PostCard         → 文章摘要卡（標題 / 作者 / 時間 / 反應數 / 回覆數 / 瀏覽數）
+  PostDetail       → 文章全文（含編輯歷史入口）
+  CommentList      → 回覆列表（支援巢狀引用）
+  CommentItem      → 單則回覆（含引用區塊 / @提及 / 反應）
+  ReactionBar      → 按讚 / 表情反應列
+  PollWidget       → 投票元件
+  TagList          → 標籤列
+  RichTextEditor   → Markdown 編輯器（含圖片上傳、@補全）
+  SearchBar        → 搜尋框（含 debounce）
+  SearchResults    → 搜尋結果列表
+```
+
+### User 元件
+
+```text
+components/user/
+  UserCard         → 用戶卡片（頭像 / username / 等級 / 積分）
+  UserAvatar       → 頭像（fallback 首字母）
+  UserBadge        → 會員等級 badge（顏色對應 member_level）
+  AchievementBadge → 成就徽章
+  OnlineIndicator  → 在線狀態綠點
+```
+
+### Admin 元件
+
+```text
+components/admin/
+  ProposalCard     → 處分提案卡（含投票進度條）
+  VotePanel        → 投票按鈕組（approve / reject + 理由）
+  AuditLogTable    → Audit log 表格（含 hash chain 狀態）
+  ReportCard       → 檢舉卡片
+  UserStatusBadge  → 帳號狀態 badge（active / muted / suspended...）
+```
+
+
+### Storage 與相簿元件
+```text
+components/storage/
+  StorageQuotaBar   → 配額使用條（含 warning / full 顏色）
+  FileList          → 檔案列表（支援 grid / list view 切換）
+  FileCard          → 單一檔案卡片（圖片縮圖 / 名稱 / 大小 / 操作）
+  FolderTree        → 資料夾樹狀導航（遞迴支援）
+  TrashList         → 回收筒列表（含到期倒計時）
+  UploadZone        → 拖曳上傳區（含進度條 / 配額不足提示）
+  UploadButton      → 點擊上傳按鈕（支援多選）
+  FilePreviewModal  → 檔案預覽（含圖片燈箱 / PDF 嵌入 / 影片播放）
+  FileContextMenu   → 右鍵選單（重新命名 / 移動 / 下載 / 刪除）
+  BatchActionBar    → 批次操作列（批次刪除 / 批次移動）
+
+components/album/
+  AlbumCard         → 相簿卡片（封面圖 / 名稱 / 照片數 / 公開狀態）
+  AlbumGrid         → 相簿網格佈局（響應式 1-4 欄）
+  AlbumDetail       → 相簿詳情（照片牆 + 燈箱）
+  AlbumPhotoGrid    → 照片牆（masonry / 支援燈箱放大）
+  PhotoLightbox     → 燈箱放大檢視（左右切換 / 縮圖列）
+  AlbumShareModal   → 分享設定 modal（開關 / 密碼 / 連結複製）
+  AlbumEditor       → 相簿建立/編輯表單
+  AlbumFilePicker   → 從 storage 選擇照片加入相簿
+  SharedAlbumView   → 公開/密碼分享相簿視圖（無需登入可看）
+```
+
+### Security / System 元件
+
+```text
+components/security/
+  HealthLight      → 狀態燈（readiness / anomaly，green / yellow / red）
+  ModeIndicator    → Server mode badge（含閃爍邏輯）
+  SecurityEventList → 安全事件列表
+  HashChainStatus  → Audit log hash chain 完整性指示
+```
+
+### 通用元件
+
+```text
+components/common/
+  Modal            → 通用 modal（二次確認）
+  ConfirmDialog    → 高風險操作確認（含 confirm text 輸入）
+  LoadingSpinner   → 載入中
+  ErrorBanner      → 錯誤訊息
+  Pagination       → 分頁
+  Toast            → 短暫通知（操作成功 / 失敗）
+  EmptyState       → 空資料佔位
+  InfiniteScroll   → 無限滾動（可選替代 Pagination）
+```
+
+---
+
+## 16.9 顏色語意系統
+
+| 語意 | 顏色 | 用途 |
+|------|------|------|
+| 正常 / 成功 | 綠（#22c55e）| pre_production、操作成功、在線 |
+| 警告 | 黃（#eab308）| test mode、yellow health light |
+| 危險 / 錯誤 | 紅（#ef4444）| superweak、error、Danger Zone |
+| 一般操作 | 藍（#3b82f6）| 按鈕、連結、一般 badge |
+| 停用 | 灰（#9ca3af）| disabled 按鈕、已過期 |
+| 管理員 | 紫（#8b5cf6）| admin badge、proposal |
+| root | 橙（#f97316）| root badge、高風險操作 |
+
+---
+
+## 16.10 CSS / Style 規範
+
+**技術選擇**：TailwindCSS（優先）或 CSS Modules
+
+**標準間距**（Tailwind spacing scale）：
+
+```
+p-2 (8px) / p-3 (12px) / p-4 (16px) / p-6 (24px)
+gap-4 為預設 flex/grid 間距
+```
+
+**卡片風格（論壇核心元件）：**
+
+```css
+/* 卡片基底 */
+background: white;
+border: 1px solid #e5e7eb;   /* gray-200 */
+border-radius: 8px;
+box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+transition: box-shadow 0.15s;
+
+/* hover */
+box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+border-color: #93c5fd;       /* blue-300 */
+```
+
+**深色模式**（CSS custom properties）：
+
+```css
+:root { --bg: #ffffff; --text: #111827; --border: #e5e7eb; }
+[data-theme="dark"] { --bg: #1f2937; --text: #f9fafb; --border: #374151; }
+```
+
+---
+
+## 16.11 資料流架構
+
+### API Service 分層
+
+```text
+services/
+  authService      → login / logout / me / forgot / reset
+  forumService     → categories / boards / posts / comments
+  userService      → profile / follow / block / bookmark / dm
+  adminService     → proposals / reports / appeals / audit-logs
+  securityService  → events / health / mode / snapshots
+  searchService    → search / trending
+```
+
+每個 service 只負責 API 呼叫，不含業務邏輯。
+
+### 狀態管理建議
+
+```
+React Query   → 伺服器狀態（posts、notifications、health）
+Zustand       → 全域 UI 狀態（currentUser、theme、serverMode）
+```
+
+**禁止**：Component 直接 `fetch()` 或 `axios.get()`。
+
+### 全域狀態（Zustand store）
+
+```js
+{
+  currentUser: null,        // GET /api/me
+  serverMode: 'test',       // 從 API header X-Hackme-Web-Mode
+  theme: 'light',           // localStorage
+  unreadCount: 0,           // GET /api/notifications (unread count)
+  readinessLight: 'green',  // GET /api/health/readiness
+  anomalyLight: 'green',    // GET /api/health/anomaly
+}
+```
+
+---
+
+## 16.12 UX 行為規範
+
+| 行為 | 規範 |
+|------|------|
+| 分頁 | 每頁 20 筆，URL query `?page=n`，支援鍵盤上下頁 |
+| Sticky Header | 頁面捲動時 Header 固定頂部 |
+| Hover 摘要 | PostCard hover 顯示前 200 字預覽（tooltip 或 popover）|
+| 回覆樓層 | CommentItem 顯示 #1、#2…樓層號，可點擊 quote |
+| 快速編輯 | 作者發文後 30 分鐘內可 inline 編輯（不離開頁面）|
+| Loading 狀態 | 所有非同步操作顯示 LoadingSpinner 或 skeleton |
+| Error 狀態 | API 失敗顯示 ErrorBanner（含 retry 按鈕）|
+| 空資料 | 顯示 EmptyState 元件，不顯示空白頁 |
+| 操作回饋 | 所有 POST/PATCH/DELETE 操作完成後顯示 Toast |
+| 二次確認 | 高風險操作（刪除 / 停權 / reset）必須 ConfirmDialog |
+
+---
+
+## 16.13 Danger Zone UI 規範
+
+```
+┌──────────────────────────────────┐
+│  ⚠ DANGER ZONE                  │  ← 紅色頁首
+│  以下操作不可逆，請謹慎執行        │
+├──────────────────────────────────┤
+│  [RESET SERVER]                  │
+│  輸入確認文字：RESET HACKME_WEB  │
+│  原因：____________              │
+│  ⚠ 按下後立即清除所有資料         │
+│  [確認重置]  ← 輸入正確才可點     │
+├──────────────────────────────────┤
+│  [RESTORE SNAPSHOT]              │
+│  選擇快照：v20260427_120000 ▼    │
+│  確認文字：RESTORE               │
+│  [確認還原]                       │
+├──────────────────────────────────┤
+│  [ENABLE SUPERWEAK MODE]         │
+│  目前快照：v20260427_120000       │
+│  確認文字：ENABLE SUPERWEAK       │
+│  [進入沙盒模式]                   │
+└──────────────────────────────────┘
+```
+
+所有 Danger Zone 按鈕：
+- 預設為 disabled
+- 輸入正確 confirm_text 才啟用（前端 + 後端雙重驗證）
+- 點擊後顯示最終 Modal 二次確認
+
+---
+
+## 16.14 Proposal 投票 UI
+
+```
+┌──────────────────────────────────┐
+│  [Proposal #12]  ─ pending       │
+│  目標：user123                   │
+│  操作：suspend（停權 7 天）       │
+│  提案人：admin_alice             │
+│  原因：多次騷擾其他用戶           │
+├──────────────────────────────────┤
+│  票數進度：██████░░  2 / 3       │
+│  👍 approve (2)  👎 reject (0)   │
+├──────────────────────────────────┤
+│  理由：_______________           │
+│  [投 approve]  [投 reject]       │
+│  （已投票者顯示：您已投 approve） │
+└──────────────────────────────────┘
+```
+
+---
+
+## 16.15 UI Phase 補充（Phase 16）
+
+### Phase 16：UI 全面重構
+
+**分支名稱**：`feature/ui-forum-layout`
+
+目標（依序執行）：
+
+1. 刪除現有混亂 layout，建立 MainLayout / AdminLayout / AuthLayout
+2. 重構 Header（搜尋框、mode badge、通知鈴）
+3. 建立 SidebarLeft（版區樹，整合未讀紅點）
+4. 建立 SidebarRight（UserCard、HealthLight、熱門文章）
+5. 將所有 forum 頁面套入 MainLayout
+6. 將所有 admin/root 頁面套入 AdminLayout
+7. 建立通用 Component 庫（Modal、Toast、LoadingSpinner、EmptyState、Pagination）
+8. 所有列表改為 PostCard / BoardCard 卡片元件
+9. 所有高風險操作加入 ConfirmDialog
+10. 所有操作加入 loading / error / success 狀態
+11. 建立 services/ 分層，移除 component 直接 fetch
+12. 導入 Zustand 管理全域狀態（user / theme / serverMode）
+13. 實作深色模式切換（localStorage + CSS custom properties）
+14. 手機版底部 NavBar + FAB 發文按鈕
+15. 統一 CSS（移除所有 inline style，採 TailwindCSS 或 CSS Modules）
+
+驗收：
+
+```
+✔ UI 有清楚的三層結構（Layout / Page / Component）
+✔ forum 頁面視覺類似 eyny（版區列表 / 文章列表 / 文章詳情）
+✔ admin 後台清楚分離
+✔ root Danger Zone 明確且有防呆
+✔ server mode 在所有頁面可見
+✔ health 狀態燈在 sidebar 可見
+✔ 手機版（375px）不崩版
+✔ 所有操作有 loading / error / success feedback
+✔ 深色模式正常切換
+```
+
+---
+
+## 15.20 與主流論壇安全性及功能對標分析
+
+> 本節以 eyny（伊莉）、PTT、DCard、Stack Overflow、Reddit 為對照基準，
+> 識別 hackme_web 當前缺口，分為「安全性」、「權限管理」、「介面功能」三大類。
+> 已存在於文件中的項目（Section 1–16、15.1–15.19）不再重複。
+
+---
+
+### 15.20.1 安全性缺口（對標主流論壇標配）
+
+| 項目 | 現況 | eyny/PTT/DCard | 建議 |
+|------|------|----------------|------|
+| **CAPTCHA 機制** | ❌ 完全缺失 | eyny 註冊/登入有圖形驗證；PTT 連線需 Boyer 多層驗證 | 新增 `captcha_type` 欄位（`none`/`math`/`image`/`turnstile`），用於註冊/登入/高風險操作 |
+| **暴力破解鎖定** | ⚠️ `login_ip_lock_enabled` 只限制同 IP 登入不同帳號，未限制同帳號多密碼嘗試 | DCard 有帳號鎖定（5 次錯誤）；Stack Overflow 有 account lockout | 新增 `failed_login_attempts` + `locked_until` 欄位，達阈值鎖定並發 email 通知 |
+| **密碼強度檢查** | ⚠️ 有 `password_policy_enabled`，但無實際強度評分機制 | Reddit/Stack Overflow 強制 8+ 字、數字、特殊字元 | 加入 `password_strength_score`（0–4），前端即時回饋、後端強制達到門檻 |
+| **登入裝置管理** | ❌ 無 | DCard、Stack Overflow 有「活躍裝置」列表與遠端登出 | 新增 `user_sessions.device_info` + `user_sessions.user_agent`，API：`GET /api/account/sessions`、`DELETE /api/account/sessions/:id` |
+| **Session 固定防護** | ⚠️ 只在密碼重設時清除所有 session | 主流論壇標配 | 更換密碼後強制重新登入（invalidate 所有舊 session token） |
+| **Magic Link（無密碼登入）** | ❌ 無 | Auth0/reddit 可用 email magic link | 新增 `/api/auth/magic-link`（寄送一次性連結），支援不想設密碼的用戶 |
+| **資料匯出（GDPR 相容）** | ❌ 無 | DCard（GDPR）、Stack Overflow 有「下載我的資料」 | 新增 `data_export_requests` schema，background job 生成 ZIP（posts/comments/DM/個人資料），email 通知下載連結 |
+| **帳號永久刪除** | ⚌ 軟刪除（`is_deleted`）但無彻底刪除流程 | GDPR 要求；Stack Overflow 有「Delete Account」 | 新增 `account_deletion_requests` + 30 天 grace period，期滿物理刪除（含所有個資） |
+| **生物特徵驗證（WebAuthn）** | ❌ 無 | 進階安全選項 | 新增 `user_webauthn_credentials` 表，支援 FIDO2/WebAuthn 作為 2FA 替代方案 |
+| **IP 登入異常通知** | ❌ 無 | DCard、Steam 有新城市/IP 登入通知 | 新增 `login_location` 記錄，登入時比對，異常觸發 email 通知（但不禁用，僅通知） |
+
+**Schema 建議（CAPTCHA）：**
+
+```text
+captchas
+- id          INTEGER PRIMARY KEY
+- session_key TEXT NOT NULL          -- 綁定 client session
+- challenge   TEXT NOT NULL           -- 驗證問題/答案 hash
+- answer_hash TEXT NOT NULL            -- SHA256 of answer
+- expires_at  DATETIME NOT NULL
+- used        BOOLEAN NOT NULL DEFAULT false
+```
+
+```text
+user_sessions（追加欄位）
+- device_info    TEXT NULL            -- JSON: {browser, os, device}
+- user_agent     TEXT NULL
+- ip_country     TEXT NULL            -- GeoIP 查詢結果
+- last_activity_at DATETIME NOT NULL  -- 更新最後活躍時間
+```
+
+```text
+failed_login_attempts
+- id          INTEGER PRIMARY KEY
+- user_id     INTEGER NOT NULL REFERENCES users(id)
+- ip_hash     TEXT NOT NULL           -- 保護隱私，只存 hash
+- attempted_at DATETIME NOT NULL
+- success     BOOLEAN NOT NULL
+```
+
+```text
+login_locations
+- id          INTEGER PRIMARY KEY
+- user_id     INTEGER NOT NULL REFERENCES users(id)
+- ip_hash     TEXT NOT NULL
+- country     TEXT NULL
+- city        TEXT NULL
+- login_at    DATETIME NOT NULL
+- isSuspicious BOOLEAN NOT NULL DEFAULT false
+```
+
+```text
+data_export_requests
+- id          INTEGER PRIMARY KEY
+- user_id     INTEGER NOT NULL REFERENCES users(id)
+- status      TEXT NOT NULL           -- 'pending'|'processing'|'ready'|'expired'
+- file_path   TEXT NULL
+- requested_at DATETIME NOT NULL
+- expires_at  DATETIME NOT NULL
+```
+
+```text
+account_deletion_requests
+- id          INTEGER PRIMARY KEY
+- user_id     INTEGER NOT NULL REFERENCES users(id)
+- status      TEXT NOT NULL           -- 'pending'|'grace_period'|'completed'|'cancelled'
+- requested_at DATETIME NOT NULL
+- scheduled_at DATETIME NOT NULL       -- grace period 結束日（+30天）
+- completed_at DATETIME NULL
+```
+
+```text
+user_webauthn_credentials
+- id              INTEGER PRIMARY KEY
+- user_id         INTEGER NOT NULL REFERENCES users(id)
+- credential_id   TEXT NOT NULL UNIQUE  -- WebAuthn credential ID
+- public_key      TEXT NOT NULL
+- device_name     TEXT NULL
+- created_at      DATETIME NOT NULL
+- last_used_at    DATETIME NULL
+```
+
+**API 新增：**
+
+```text
+GET  /api/captcha/new              -- 產生新 CAPTCHA
+POST /api/captcha/verify           -- 驗證 CAPTCHA
+POST /api/auth/magic-link          -- 發送 Magic Link
+GET  /api/account/sessions         -- 列出活躍 sessions
+DELETE /api/account/sessions/:id   -- 登出指定裝置
+POST /api/account/sessions/logout-all -- 登出所有裝置
+GET  /api/account/devices           -- 登入裝置列表
+POST /api/account/data-export      -- 申請資料匯出
+GET  /api/account/data-export/:id  -- 下載匯出檔案
+POST /api/account/delete           -- 申請帳號刪除
+DELETE /api/account/sessions/:id/permanent -- 遠端終止盜用 session
+POST /api/account/webauthn/register     -- 註冊 WebAuthn
+POST /api/account/webauthn/authenticate -- WebAuthn 驗證
+```
+
+**Session 固定防護（實作要點）：**
+- 每次登入時重設 `session_token`（廢除舊 token、發新 token）
+- 密碼變更時：invalidate 所有 session（`sessions.is_active = false`），強制重新登入
+- Session 綁定 IP + User-Agent 指紋，異常時觸發 email 通知（不禁用）
+
+---
+
+### 15.20.2 權限管理缺口（對標 Moderator Tools 標配）
+
+| 項目 | 現況 | eyny/PTT/Stack Overflow | 建議 |
+|------|------|------------------------|------|
+| **文章類型（類型系統）** | ❌ `posts.status` 只有 `published/draft/hidden`，無文章類型區分 | PTT 有 [公告]、[協助]、[心得]、[情報]、[認證]；Stack Overflow 有 Question/Answer/Wiki | 新增 `post_type`：`normal`/`announcement`/`question`/`howto`/`review`/`nsfw`，不同類型有不同 UI 標記和功能限制 |
+| **置頂（Sticky Post）** | ⚠️ 只有版主可置頂，但無 API 文件化 | eyny 版主可「置頂」；Stack Overflow 有「pin」 | 在 `posts` 新增 `is_sticky BOOLEAN DEFAULT false`，API：`POST /api/forum/posts/:id/sticky`（限 moderator+） |
+| **鎖文（Lock）** | ⚠️ `status='hidden'` 可隱藏但非正式鎖文 | PTT 版主可 LOCK 文章（不可回覆） | 新增 `is_locked BOOLEAN DEFAULT false`，鎖文後不可再回覆（`POST /api/forum/comments` 回 403） |
+| **精華文（Curated/Pinned）** | ❌ 無 | PTT 有 m 文（精華）；Stack Overflow 有 Community Wiki | 新增 `is_curated BOOLEAN DEFAULT false`，精華文出現在版區頂部或精華區 |
+| **版主動作日誌** | ⚌ `moderation_history` 有少部分，但 moderator 自己操作的記錄不足 | eyny 版主操作有私人記錄 | `moderation_actions` 獨立表，記錄 moderator 每一個 action（含自動 mod：spam 自動刪除），可audit |
+| **版主評論（Mod Note）** | ❌ 無 | Reddit、Discord 有 Mod Note（僅 moderator 可見） | 新增 `post_mod_notes` / `user_mod_notes`，限 moderator+ 可見，普通會員看不見 |
+| **使用者積分/威望看不見具體來源** | ⚠️ 有 `points`/`reputation`，但無明細 | Stack Overflow 威望有 +10/-2 明細；Reddit 有 karma breakdown | 新增 `reputation_events` 表，記錄每次威望變化的原因（+$V: 被按讚；-$W: 被檢舉成功扣分） |
+| **舉報功能（Bounty）** | ❌ 無 | Stack Overflow 有賞金（自訂懸賞回答）；Reddit 有 Award | 新增 `post_bounties`：提問者可用積分懸賞，版主可將問答標記為 bounty，時間到了最高讚回答獲賞金 |
+| **維基文章（Wiki Post）** | ❌ 無 | PTT 部分板有 Wiki；Stack Overflow 有 Community Wiki | 新增 `is_wiki BOOLEAN DEFAULT false`，Wiki 文章可由多人編輯（所有 editor 共同作者），編輯歷史完整保留 |
+| **權限繼承與委託** | ❌ 無 | Discord 有「角色繼承」 | `moderator_permissions` 可設定：版主可委託部分權限（如：只能刪文、不能踢人） |
+| **舉報處理工作流（Claim）** | ⚌ `moderation_proposals` 有提案，但无人认领机制 | Reddit/Discord 版主可「claim」舉報單，claim 後其他人看不見 | 新增 `moderation_reports.claimed_by INTEGER REFERENCES users(id)`，`claimed_at`，避免多人重複處理 |
+
+**Schema 建議（文章類型與版主工具）：**
+
+```text
+posts（追加欄位）
+- post_type      TEXT NOT NULL DEFAULT 'normal'  -- 'normal'|'announcement'|'question'|'howto'|'review'|'nsfw'
+- is_sticky      BOOLEAN NOT NULL DEFAULT false
+- is_locked      BOOLEAN NOT NULL DEFAULT false
+- is_curated     BOOLEAN NOT NULL DEFAULT false
+- is_wiki        BOOLEAN NOT NULL DEFAULT false
+- wiki_contributors TEXT NOT NULL DEFAULT ''    -- JSON array of user_ids
+```
+
+```text
+moderation_actions
+- id           INTEGER PRIMARY KEY
+- moderator_id INTEGER NOT NULL REFERENCES users(id)
+- action_type  TEXT NOT NULL          -- 'hide'|'delete'|'lock'|'sticky'|'curate'|'warn'|'ban'
+- target_type  TEXT NOT NULL          -- 'post'|'comment'|'user'|'attachment'
+- target_id    INTEGER NOT NULL
+- reason       TEXT NULL
+- is_auto      BOOLEAN NOT NULL DEFAULT false   -- 系統自動執行的 action
+- created_at   DATETIME NOT NULL
+```
+
+```text
+user_mod_notes
+- id          INTEGER PRIMARY KEY
+- moderator_id INTEGER NOT NULL REFERENCES users(id)
+- user_id     INTEGER NOT NULL REFERENCES users(id)
+- note        TEXT NOT NULL
+- created_at  DATETIME NOT NULL
+```
+
+```text
+reputation_events
+- id            INTEGER PRIMARY KEY
+- user_id       INTEGER NOT NULL REFERENCES users(id)
+- delta         INTEGER NOT NULL            -- 正或負的變化量
+- reason        TEXT NOT NULL                -- 'post_upvoted'|'post_downvoted'|'comment_upvoted'|'answer_accepted'|'report_sustained'|'report_rejected'|'manual_adjustment'
+- source_user_id INTEGER NULL                -- 觸發者（如：誰按了你讚）
+- source_post_id INTEGER NULL                -- 關聯文章
+- created_at    DATETIME NOT NULL
+```
+
+```text
+post_bounties
+- id         INTEGER PRIMARY KEY
+- post_id    INTEGER NOT NULL UNIQUE REFERENCES posts(id) ON DELETE CASCADE
+- user_id    INTEGER NOT NULL REFERENCES users(id) -- 發起者（用自己的積分）
+- amount     INTEGER NOT NULL               -- 懸賞積分數量
+- status     TEXT NOT NULL DEFAULT 'active'  -- 'active'|'awarded'|'expired'|'cancelled'
+- ends_at    DATETIME NOT NULL
+- awarded_to_comment_id INTEGER NULL REFERENCES comments(id)
+- created_at DATETIME NOT NULL
+```
+
+```text
+moderation_reports（追加欄位）
+- claimed_by  INTEGER NULL REFERENCES users(id)
+- claimed_at  DATETIME NULL
+```
+
+```text
+forum_boards（追加欄位）
+- moderator_notes TEXT NULL   -- 僅 moderator+ 可見的版區內部備註
+```
+
+```text
+post_wiki_edits
+- id          INTEGER PRIMARY KEY
+- post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE
+- editor_id   INTEGER NOT NULL REFERENCES users(id)
+- old_body    TEXT NOT NULL
+- new_body    TEXT NOT NULL
+- edit_reason TEXT NULL
+- is_minor    BOOLEAN NOT NULL DEFAULT false
+- created_at  DATETIME NOT NULL
+```
+
+**API 新增：**
+
+```text
+PATCH /api/forum/posts/:id/type          -- 変更文章類型（moderator+）
+POST  /api/forum/posts/:id/sticky        -- 置頂/取消置頂（moderator+）
+POST  /api/forum/posts/:id/lock          -- 鎖文（moderator+）
+POST  /api/forum/posts/:id/curate       -- 加入精華（moderator+）
+POST  /api/forum/posts/:id/wiki/enable   -- 開啟維基模式（author+）
+PATCH /api/forum/posts/:id/wiki          -- 維基文章編輯（任何貢獻者）
+GET   /api/forum/posts/:id/wiki/history  -- 維基編輯歷史
+POST  /api/forum/posts/:id/bounty        -- 發起懸賞（積分）
+POST  /api/forum/posts/:id/bounty/award  -- 版主發放賞金（moderator+）
+POST  /api/forum/comments/:id/accept      -- 提問者接受為最佳解答（OP only）
+
+GET   /api/admin/moderation-actions       -- 版主操作日誌（admin+）
+GET   /api/admin/mod-notes/:user_id       -- 查看用戶版主備註（moderator+）
+POST  /api/admin/mod-notes/:user_id       -- 新增版主備註（moderator+）
+
+GET   /api/account/reputation/history     -- 威望變化明細
+GET   /api/account/reputation/summary    -- 威望總結（本月/本年/總計）
+
+POST  /api/forum/reports/:id/claim        -- 認領舉報單（moderator+）
+POST  /api/forum/reports/:id/unclaim      -- 取消認領（moderator+）
+```
+
+---
+
+### 15.20.3 介面功能缺口（對標主流論壇 UX 標配）
+
+| 項目 | 現況 | eyny/PTT/DCard | 建議 |
+|------|------|----------------|------|
+| **即時通知（WebSocket）** | ⚌ polling 方式，前端每 30 秒輪詢 | DCard、Discord 有 WebSocket 推送 | 新增 `notifications` WebSocket endpoint，支援即時 notification 推送 |
+| **引用層次視覺化** | ⚌ `parent_comment_id` 已存在但前端無縮排顯示 | Reddit 有 comment collapse/expand；PTT 有推文樓層引用 | 前端 Comment 元件加入 `margin-left` 縮排（遞迴 3 層後折疊），以及「展開回覆」功能 |
+| **即時聊天（Live Chat）** | ❌ 無 | Discord DM 即時；部分論壇有即時客服 | 可選 Phase 18：建立 `live_chatrooms` schema，基於 WebSocket 的多人聊天室（僅登入可進） |
+| **「瀏覽過的文章」歷史** | ❌ 無 | DCard 有瀏覽紀錄 | 新增 `user_browse_history`（可選，不永久儲存，僅用於「看過」標記或推薦），或者用 Redis 限時儲存 |
+| **Email 通知摘要** | ⚌ `notification_preferences` 有開關但無實際寄送機制 | DCard/Stack Overflow 有每日/每週 Email 摘要 | Background job 彙整未讀 notification，寄送 Email摘要（可設定頻率：即時/每日/每週） |
+| **文章修訂請求（Edit Suggestion）** | ❌ 無（Wiki 模式才有共同編輯） | Stack Overflow 有 Edit Suggestion（任何人可提，修後由 OP/ moderator 核准） | 新增 `post_edit_suggestions`，非 Wiki 文章也可讓他人提修改建議，OP/moderator 可 accept/reject |
+| **「常見問題」自動識別** | ❌ 無 | Stack Overflow 有「相似問題」提示 | 發文時 Backend 對比標題與 FTS 資料庫，彈出「這些問題可能相關」建議 |
+| **公告強制閱讀** | ⚌ `post_type='announcement'` 有但無強制閱讀追蹤 | 部分企業內部論壇有「我已閱讀」按鈕 | 新增 `post_read_receipts`（公告才有），版主可看誰已讀/未讀 |
+| **懶加載（Infinite Scroll）** | ⚌ 普通分頁，無無窮下滑 | DCard、Reddit 皆為 infinite scroll | 將文章列表 / 回覆列表改為 cursor-based 分頁 + 前端 infinite scroll（Intersection Observer） |
+| **Markdown 儲存/預覽** | ⚌ Section 15.16 有提到但無 Schema 支援 | - | 儲存原始 Markdown（含 raw body），編輯時直接渲染 Markdown，前端雙視圖（寫作/預覽） |
+| **Emoji 反应图示** | ⚌ `post_reactions` 有，但只有文字 label | Discord/Telegram 有豐富 Emoji | reaction 欄位支援 emoji 字串（如 👍❤️🎉），前端顯示實際 Emoji 而非文字 |
+| **多螢幕適配** | ⚌ Section 15.16 有深色模式但無適配量化標準 | - | 制定響應式斷點（375px/768px/1024px/1440px），各斷點有對應截圖驗收 |
+
+**Schema 建議（即時通知、文章修訂）：**
+
+```text
+notifications（追加欄位）
+- is_read       BOOLEAN NOT NULL DEFAULT false   -- 現有 is_read，需確認是否已覆蓋
+```
+
+```text
+post_read_receipts
+- id          INTEGER PRIMARY KEY
+- post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE
+- user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
+- read_at     DATETIME NOT NULL
+- UNIQUE(post_id, user_id)
+```
+
+```text
+post_edit_suggestions
+- id          INTEGER PRIMARY KEY
+- post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE
+- suggester_id INTEGER NOT NULL REFERENCES users(id)
+- suggested_title TEXT NULL
+- suggested_body  TEXT NOT NULL
+- status      TEXT NOT NULL DEFAULT 'pending'  -- 'pending'|'accepted'|'rejected'
+- reviewer_id INTEGER NULL REFERENCES users(id)
+- review_note TEXT NULL
+- created_at  DATETIME NOT NULL
+- reviewed_at DATETIME NULL
+```
+
+```text
+email_digest_subscriptions
+- id           INTEGER PRIMARY KEY
+- user_id      INTEGER NOT NULL UNIQUE REFERENCES users(id)
+- frequency    TEXT NOT NULL DEFAULT 'weekly'  -- 'instant'|'daily'|'weekly'
+- last_sent_at DATETIME NULL
+- created_at   DATETIME NOT NULL
+```
+
+**API 新增：**
+
+```text
+WebSocket /ws/notifications              -- 即時通知通道（需 auth token）
+GET  /api/notifications?cursor=<after>&limit=20  -- cursor 分頁
+POST /api/notifications/mark-all-read   -- 全部標為已讀
+
+POST /api/forum/posts/:id/read-receipt  -- 公告閱讀確認（POST，視為「我已讀」）
+
+GET  /api/forum/posts/:id/edit-suggestions
+POST /api/forum/posts/:id/edit-suggestions    -- 提交編輯建議（任何人）
+PATCH /api/forum/posts/:id/edit-suggestions/:sid -- OP/moderator accept/reject
+
+POST /api/forum/posts/:id/similar        -- 發文時查詢相似文章（POST title，回傳列表）
+GET  /api/forum/posts?cursor=<after>&limit=20  -- cursor 分頁（替換 offset）
+
+GET  /api/account/email-digest           -- 查詢目前的 email 摘要設定
+PATCH /api/account/email-digest          -- 更新頻率（instant/daily/weekly）
+```
+
+---
+
+### 15.20.4 缺口快速索引（15.20 範圍）
+
+| 類別 | 項目 | 檔次 |
+|------|------|------|
+| 安全 | CAPTCHA 機制 | ❌ 缺失 |
+| 安全 | 暴力破解鎖定（帳號層級） | ⚠️ 不完整 |
+| 安全 | 密碼強度評分 | ⚠️ 不完整 |
+| 安全 | 登入裝置管理 / 遠端登出 | ❌ 缺失 |
+| 安全 | Session 固定防護 | ⚠️ 不完整 |
+| 安全 | Magic Link 無密碼登入 | ❌ 缺失 |
+| 安全 | 資料匯出（GDPR） | ❌ 缺失 |
+| 安全 | 帳號永久刪除（30天猶豫期） | ❌ 缺失 |
+| 安全 | WebAuthn 生物特徵驗證 | ❌ 缺失 |
+| 安全 | IP 登入異常通知 | ❌ 缺失 |
+| 權限 | 文章類型系統 | ❌ 缺失 |
+| 權限 | 置頂 / 鎖文 / 精華文 | ⚠️ 不完整 |
+| 權限 | 版主動作日誌 | ⚌ 不完整 |
+| 權限 | Mod Note（隱藏備註） | ❌ 缺失 |
+| 權限 | 威望明細（reputation_events） | ❌ 缺失 |
+| 權限 | 賞金懸賞系統 | ❌ 缺失 |
+| 權限 | Wiki 共同編輯文章 | ❌ 缺失 |
+| 權限 | 版主權限委託 | ❌ 缺失 |
+| 權限 | 舉報處理 Claim 機制 | ⚌ 不完整 |
+| 介面 | WebSocket 即時通知 | ❌ 缺失 |
+| 介面 | 回覆引用層次視覺化 | ⚌ 不完整 |
+| 介面 | 即時聊天（Live Chat） | ❌ 缺失（可選 Phase 18） |
+| 介面 | 瀏覽過的文章歷史 | ❌ 缺失 |
+| 介面 | Email 通知摘要 | ❌ 缺失 |
+| 介面 | 文章修訂請求（Edit Suggestion） | ❌ 缺失 |
+| 介面 | 相似問題自動提示 | ❌ 缺失 |
+| 介面 | 公告強制閱讀確認 | ❌ 缺失 |
+| 介面 | Infinite Scroll（cursor 分頁） | ⚌ 不完整 |
+| 介面 | Markdown 原始格式儲存 | ⚌ 不完整 |
+| 介面 | Emoji reaction 顯示 | ⚌ 不完整 |
+| 介面 | 多螢幕響應式斷點標準 | ⚌ 不完整 |
+
+---
+
 # 17. 整份計畫優化執行順序
 
-> 以下是整合 v3 原有 Phase 1–9、Section 15 補充 Phase 10–15、以及 Section 16 UI Phase 16 後的
-> **完整建議執行優先順序**。以「先能跑、再能用、再好看、再完整」為原則排列。
+> 以下是整合 v3 原生 Phase 1–9、Section 15 補充 Phase 10–15、Section 15.20 對標 Phase 17、以及 Section 16 UI Phase 16 後的
+> **完整建議執行優先順序**。以「先能跑、再安全、再完整、再好用」為原則，
+> 參考 Stack Overflow/DCard/eyny 實作經驗重新排列。
 
 ---
 
@@ -3638,7 +4446,7 @@ Zustand       → 全域 UI 狀態（currentUser、theme、serverMode）
 | 1 | DB schema + migration 系統（users/sessions/audit/security_events）| Phase 1 |
 | 2 | 角色權限 middleware（role / member_level / status 三層檢查）| Phase 1 |
 | 3 | Audit log hash chain 基礎建設 | Phase 1 |
-| 4 | Security events 基礎建設 | Phase 1 |
+| 4 | Security events 完整 event_type 覆蓋 | Phase 1 + Phase 4 |
 | 5 | CSRF 中介層（已有，確認完整）| Phase 1 |
 | 6 | Rate limiting（已有，確認覆蓋所有 API）| Phase 1 |
 | 7 | 登入 / 登出 / session 管理（已有，確認安全）| Phase 1 |
@@ -3647,220 +4455,270 @@ Zustand       → 全域 UI 狀態（currentUser、theme、serverMode）
 
 ---
 
-## 第二優先級：用戶帳號完整性
+## 第二優先級：帳號安全強化（對標 DCard/Stack Overflow）
+
+參考 Section 15.20 安全性缺口，實作以下強化：
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
 | 8 | 忘記密碼 / 重設密碼（不洩漏帳號是否存在）| Phase 6 |
 | 9 | Email 驗證（發送 token，驗證後標記 email_verified）| Phase 6 |
-| 10 | 登出所有裝置（sessions/logout-all）| Phase 6 |
-| 11 | 預設密碼強制修改（is_default_password 檢查）| Phase 6 |
-| 12 | 密碼強度原則（password_policy_enabled）| Phase 6 |
+| 10 | 密碼強度評分（password_strength_score 0–4，前端即時回饋）| Phase 6 + Phase 17 |
+| 11 | 暴力破解鎖定（failed_login_attempts + locked_until，5次鎖定）| Phase 17 |
+| 12 | 登入裝置管理（user_sessions 增加 device_info / user_agent）| Phase 17 |
+| 13 | Session 固定防護（更換密碼時 invalidate 所有舊 session）| Phase 17 |
+| 14 | 預設密碼強制修改（is_default_password 檢查）| Phase 6 |
+| 15 | IP 登入異常通知（login_locations GeoIP 比對，email 通知）| Phase 17 |
+| 16 | 登出所有裝置（sessions/logout-all）| Phase 6 |
 
 ---
 
-## 第三優先級：會員治理與管理員制衡
+## 第三優先級：會員治理與管理員制衡（對標 PTT/Stack Overflow）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 13 | member_level_rules schema + API | Phase 2 |
-| 14 | moderation_proposals + 投票流程 | Phase 2 |
-| 15 | root override | Phase 2 |
-| 16 | 處分執行（mute / suspend / downgrade）| Phase 2 |
-| 17 | Proposal 投票 UI（ProposalCard + VotePanel）| Phase 2 + Phase 16 |
+| 17 | member_level_rules schema + API | Phase 2 |
+| 18 | moderation_proposals + 投票流程 | Phase 2 |
+| 19 | root override | Phase 2 |
+| 20 | 處分執行（mute / suspend / downgrade）| Phase 2 |
+| 21 | Proposal 投票 UI（ProposalCard + VotePanel）| Phase 2 + Phase 16 |
+| 22 | 版主動作日誌（moderation_actions 獨立表，auto mod 也要記錄）| Phase 17 |
+| 23 | Mod Note 隱藏備註（user_mod_notes，僅 moderator+ 可見）| Phase 17 |
+| 24 | 版主權限委託（moderator_permissions，細緻化授權）| Phase 17 |
+| 25 | 威望明細（reputation_events，每次變化有原因記錄）| Phase 17 |
 
 ---
 
-## 第四優先級：伺服器模式
+## 第四優先級：伺服器模式（對標 PTT/eyny）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 18 | server_settings schema | Phase 3 |
-| 19 | test mode（關閉 IP lock / auto downgrade 等）| Phase 3 |
-| 20 | pre_production 條件檢查（密碼 / CSRF / hash chain...）| Phase 3 |
-| 21 | superweak sandbox（隔離寫入，離開後復原）| Phase 3 |
-| 22 | ModeIndicator UI（所有頁面顯示 mode badge）| Phase 3 + Phase 16 |
+| 26 | server_settings schema + GET/PUT /api/root/ip-whitelist | Phase 3 + Phase 17 |
+| 26b | browser_only_mode middleware（UA 檢測 + maintenance_bypass_token Bearer auth）| Phase 3 + Phase 17 |
+| 27 | test mode（關閉 IP lock / auto downgrade 等）| Phase 3 |
+| 28 | pre_production 條件檢查（密碼 / CSRF / hash chain / IP 白名單）| Phase 3 |
+| 29 | superweak sandbox（隔離寫入，進入前 auto snapshot，離開後復原）| Phase 3 |
+| 30 | IP 白名單限制（同 IP 不可同時登入不同帳號，superweak exempt）| Phase 17 |
+| 31 | Magic Link 無密碼登入（/api/auth/magic-link）| Phase 17 |
+| 32 | ModeIndicator UI（所有頁面顯示 mode badge）| Phase 3 + Phase 16 |
 
 ---
 
-## 第五優先級：快照 / 還原 / 重設
+## 第五優先級：快照 / 還原 / 重設（對標版本控制思維）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 23 | snapshots schema + 建立 / 刪除 | Phase 5 |
-| 24 | restore 流程（checksum 驗證 / 暫停寫入 / 重建 index）| Phase 5 |
-| 25 | reset server 流程（auto snapshot + 清除 + 重建預設）| Phase 5 |
-| 26 | Danger Zone UI（ConfirmDialog + confirm text + 紅色區塊）| Phase 5 + Phase 16 |
+| 33 | snapshots schema + 建立 / 刪除 | Phase 5 |
+| 34 | restore 流程（checksum 驗證 / 暫停寫入 / 重建 index）| Phase 5 |
+| 35 | reset server 流程（auto snapshot + 清除 + 重建預設）| Phase 5 |
+| 36 | snapshot 自動排程（daily_auto）| Phase 9 |
+| 37 | Danger Zone UI（ConfirmDialog + confirm text + 紅色區塊）| Phase 5 + Phase 16 |
+
+**前置條件**：Phase 5 完成後才能進入 superweak 模式。
 
 ---
 
-## 第六優先級：健康監控與安全中心
+## 第六優先級：健康監控與安全中心（對標運維標配）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 27 | readiness light API（綠 / 黃 / 紅 + 原因列表）| Phase 4 |
-| 28 | anomaly light API（錯誤 / hash chain broken / DB integrity）| Phase 4 |
-| 29 | security events 完整 event_type 覆蓋 | Phase 4 |
-| 30 | hash chain 完整性檢查 API | Phase 4 |
-| 31 | HealthLight + HashChainStatus UI 元件 | Phase 4 + Phase 16 |
+| 38 | readiness light API（綠 / 黃 / 紅 + 原因列表）| Phase 4 |
+| 39 | anomaly light API（錯誤 / hash chain broken / DB integrity）| Phase 4 |
+| 40 | hash chain 完整性檢查 API | Phase 4 |
+| 41 | HealthLight + HashChainStatus UI 元件 | Phase 4 + Phase 16 |
+| 42 | DB integrity check dashboard | Phase 9 |
 
 ---
 
-## 第七優先級：論壇核心功能
+## 第七優先級：論壇核心功能（對標 eyny/PTT）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 32 | forum_categories + forum_boards schema | Phase 7 |
-| 33 | posts + comments CRUD（含 soft delete）| Phase 7 |
-| 34 | board_moderators + 版主權限 | Phase 7 |
-| 35 | newbie 發文進 pending_review 審核流程 | Phase 7 |
-| 36 | 貼文 pin / lock / feature | Phase 7 |
-| 37 | SidebarLeft 版區樹 UI | Phase 7 + Phase 16 |
-| 38 | PostList / PostCard / CommentList 元件 | Phase 7 + Phase 16 |
+| 43 | forum_categories + forum_boards schema | Phase 7 |
+| 44 | posts + comments CRUD（含 soft delete）| Phase 7 |
+| 45 | board_moderators + 版主權限 | Phase 7 |
+| 46 | newbie 發文進 pending_review 審核流程 | Phase 7 |
+| 47 | 文章類型系統（post_type：normal/announcement/question/howto/review/nsfw）| Phase 17 |
+| 48 | 置頂 / 鎖文 / 精華文（is_sticky / is_locked / is_curated + API）| Phase 17 |
+| 49 | 瀏覽次數（view_count，15 分鐘 session 去重）| Phase 13 |
+| 50 | SidebarLeft 版區樹 UI | Phase 7 + Phase 16 |
+| 51 | PostList / PostCard / CommentList 元件 | Phase 7 + Phase 16 |
 
 ---
 
-## 第八優先級：檢舉 / 申訴 / 通知
-
-| 順序 | 內容 | 對應 |
-|------|------|------|
-| 39 | reports schema + 用戶提交檢舉 | Phase 8 |
-| 40 | appeals schema + 用戶提交申訴 | Phase 8 |
-| 41 | notifications schema + 觸發 / 已讀 | Phase 8 |
-| 42 | 積分 / 威望計算服務 | Phase 8 |
-| 43 | 通知鈴 + 通知列表 UI | Phase 8 + Phase 16 |
-
----
-
-## 第九優先級：UI 架構重構
+## 第八優先級：UI 架構重構（對標 DCard/Reddit）
 
 在論壇核心功能可用後，重構 UI 分層架構（避免在混亂 UI 上繼續疊加功能）。
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 44 | 建立 MainLayout / AdminLayout / AuthLayout | Phase 16 |
-| 45 | 建立通用 Component 庫（Modal / Toast / LoadingSpinner / Pagination）| Phase 16 |
-| 46 | 所有 forum 頁面套入 MainLayout | Phase 16 |
-| 47 | 所有 admin/root 頁面套入 AdminLayout | Phase 16 |
-| 48 | services/ 分層（移除 component 直接 fetch）| Phase 16 |
-| 49 | Zustand 全域狀態（user / theme / serverMode）| Phase 16 |
-| 50 | 手機版適配（底部 NavBar + FAB）| Phase 16 |
+| 52 | 建立 MainLayout / AdminLayout / AuthLayout | Phase 16 |
+| 53 | 建立通用 Component 庫（Modal / Toast / LoadingSpinner / Pagination）| Phase 16 |
+| 54 | 所有 forum 頁面套入 MainLayout | Phase 16 |
+| 55 | 所有 admin/root 頁面套入 AdminLayout | Phase 16 |
+| 56 | services/ 分層（移除 component 直接 fetch）| Phase 16 |
+| 57 | Zustand 全域狀態（user / theme / serverMode）| Phase 16 |
+| 58 | 手機版適配（底部 NavBar + FAB，375px 不崩版）| Phase 16 |
+| 59 | 深色模式（CSS custom properties + localStorage）| Phase 12 + Phase 16 |
 
 ---
 
-## 第十優先級：站內信與附件（v3 宣告但未設計）
-
-### 第十b優先級：Storage 雲端硬碟與相簿（v3 新增）
+## 第九優先級：檢舉 / 申訴 / 通知（對標 Reddit/Discord）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 51b | user_storage / storage_files / storage_quota_log schema | Phase 11 |
-| 52b | albums / album_files schema + slug + share_token | Phase 11 |
-| 53b | 上傳下載 API（配額檢查 / MIME 驗證 / magic bytes）| Phase 11 |
-| 54b | 回收筒 API（soft delete / restore / permanent / empty）| Phase 11 |
-| 55b | 相簿 API（CRUD / add files / reorder / cover）| Phase 11 |
-| 56b | 分享連結 API（token / 密碼保護 / 過期）| Phase 11 |
-| 57b | Storage Admin API（全站統計 / 配額調整 / 同步）| Phase 11 |
-| 58b | FileManager 前端（拖曳上傳 / 資料夾樹 / 回收筒）| Phase 11 |
-| 59b | AlbumManager 前端（建立 / 照片管理 / 分享設定）| Phase 11 |
-| 60b | 回收筒清理 CRON / 配額同步 CRON | Phase 11 |
-
-
-
-| 順序 | 內容 | 對應 |
-|------|------|------|
-| 51 | direct_messages / dm_threads schema | Phase 10 |
-| 52 | DM API（收發 / 已讀 / 軟刪除）| Phase 10 |
-| 53 | DM UI（收件匣 + 對話串）| Phase 10 |
-| 54 | attachments schema + 上傳 API（MIME 白名單 + magic bytes）| Phase 11 |
-| 55 | 圖片 re-encode（去 EXIF）| Phase 11 |
-| 56 | 頭像上傳 + 裁切 | Phase 11 |
+| 60 | reports schema + 用戶提交檢舉 | Phase 8 |
+| 61 | appeals schema + 用戶提交申訴 | Phase 8 |
+| 62 | 舉報處理 Claim 機制（moderation_reports.claimed_by）| Phase 17 |
+| 63 | notifications schema + 觸發 / 已讀 | Phase 8 |
+| 64 | 積分 / 威望計算服務 | Phase 8 |
+| 65 | 通知鈴 + 通知列表 UI | Phase 8 + Phase 16 |
+| 66 | WebSocket 即時通知推送（/ws/notifications）| Phase 17 |
+| 67 | Email 通知摘要（即時 / 每日 / 每週，background job）| Phase 17 |
 
 ---
 
-## 第十一優先級：用戶個人化
+## 第十優先級：站內信（對標 PTT/DCard）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 57 | 個人主頁 API + UI（頭像 / bio / 積分展示）| Phase 12 |
-| 58 | 個人簽名檔（顯示於每則發文下方）| Phase 12 |
-| 59 | 自訂稱號（admin 核准流程）| Phase 12 |
-| 60 | 深色模式（CSS custom properties + localStorage）| Phase 12 + Phase 16 |
+| 68 | direct_messages / dm_threads schema | Phase 10 |
+| 69 | DM API（收發 / 已讀 / 軟刪除）| Phase 10 |
+| 70 | DM UI（收件匣 + 對話串）| Phase 10 |
+| 71 | 封鎖用戶整合（blocked_users，阻擋 DM 送達）| Phase 10 + Phase 14 |
 
 ---
 
-## 第十二優先級：文章互動
+## 第十一優先級：附件 / 圖片 / 頭像上傳（對標論壇標配）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 61 | post_reactions / comment_reactions | Phase 13 |
-| 62 | 瀏覽次數（view_count，15 分鐘 session 去重）| Phase 13 |
-| 63 | 引用回覆（parent_comment_id + quote_body）| Phase 13 |
-| 64 | @mention 解析與通知 | Phase 13 |
-| 65 | 文章編輯歷史（post_edit_history）| Phase 13 |
-| 66 | 文章投票 Poll（polls / poll_options / poll_votes）| Phase 13 |
-| 67 | RichTextEditor（Markdown + 圖片上傳 + @補全）| Phase 13 + Phase 16 |
+| 72 | attachments schema + 上傳 API（MIME 白名單 + magic bytes）| Phase 11 |
+| 73 | 圖片 re-encode（去除 EXIF metadata）| Phase 11 |
+| 74 | 頭像上傳 + 裁切 | Phase 11 |
+| 75 | 富文字編輯器（Markdown + 圖片上傳 + @username 補全）| Phase 13 + Phase 16 |
+| 76 | CAPTCHA 機制（none/math/image/turnstile，用於註冊/登入/高風險操作）| Phase 17 |
 
 ---
 
-## 第十三優先級：社交與訂閱
+## 第十二優先級：Storage 雲端硬碟與相簿（對標 Google Drive/iCloud）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 68 | 追蹤用戶 / 封鎖用戶（user_follows / blocked_users）| Phase 14 |
-| 69 | 訂閱文章 / 訂閱版區 | Phase 14 |
-| 70 | 文章收藏（bookmarks）| Phase 14 |
-| 71 | 未讀追蹤（user_read_states + 版區紅點）| Phase 14 |
-| 72 | 通知偏好設定 | Phase 14 + Section 15.15 |
+| 77 | user_storage / storage_files / storage_quota_log schema | Phase 11 |
+| 78 | albums / album_files schema + slug + share_token | Phase 11 |
+| 79 | 上傳下載 API（配額檢查 / MIME 驗證 / magic bytes / 路徑防遍歷）| Phase 11 |
+| 80 | 回收筒 API（soft delete / restore / permanent / empty）| Phase 11 |
+| 81 | 相簿 API（CRUD / add files / reorder / cover）| Phase 11 |
+| 82 | 分享連結 API（token / 密碼保護 / 過期）| Phase 11 |
+| 83 | Storage Admin API（全站統計 / 配額調整 / 同步）| Phase 11 |
+| 84 | FileManager 前端（拖曳上傳 / 資料夾樹 / 回收筒）| Phase 11 |
+| 85 | AlbumManager 前端（建立 / 照片管理 / 分享設定）| Phase 11 |
+| 86 | 回收筒清理 CRON / 配額同步 CRON | Phase 11 |
 
 ---
 
-## 第十四優先級：探索與標籤
+## 第十三優先級：用戶個人化（對標 DCard/Stack Overflow）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 73 | 全站搜尋（SQLite FTS5）| Phase 15 |
-| 74 | 標籤系統（tags / post_tags）| Phase 15 |
-| 75 | 熱門排行（hot_score 計算 + background job）| Phase 15 |
-| 76 | 草稿管理 + 前端 autosave（每 30 秒）| Phase 15 |
-| 77 | 在線名單（user_online_states）| Phase 15 |
-| 78 | 成就徽章（achievement_definitions / user_achievements）| Phase 15 |
+| 87 | 個人主頁 API + UI（頭像 / bio / 積分展示）| Phase 12 |
+| 88 | 個人簽名檔（顯示於每則發文下方）| Phase 12 |
+| 89 | 自訂稱號（admin 核准流程）| Phase 12 |
+| 90 | 成就徽章（achievement_definitions / user_achievements，自動授予）| Phase 15 |
+| 91 | 在線名單（user_online_states，Zustand 整合）| Phase 15 |
+| 92 | 通知偏好設定（notification_preferences，即時/每日/每週）| Phase 14 + Phase 17 |
 
 ---
 
-## 第十五優先級：防濫用與完整性強化
+## 第十四優先級：文章互動（對標 Stack Overflow/PTT）
 
 | 順序 | 內容 | 對應 |
 |------|------|------|
-| 79 | spam detection（發文頻率分析）| Phase 9 |
-| 80 | multi-account detection（IP + fingerprint）| Phase 9 |
-| 81 | snapshot 自動排程（daily_auto）| Phase 9 |
-| 82 | DB integrity check dashboard | Phase 9 |
+| 93 | post_reactions / comment_reactions（Emoji + 文字 label）| Phase 13 |
+| 94 | 引用回覆（parent_comment_id + quote_body，前端縮排顯示）| Phase 13 |
+| 95 | @mention 解析與通知（post_mentions，去除已封鎖通知）| Phase 13 |
+| 96 | 文章編輯歷史（post_edit_history，30分鐘內免 reason）| Phase 13 |
+| 97 | 文章投票 Poll（polls / poll_options / poll_votes）| Phase 13 |
+| 98 | Wiki 共同編輯文章（is_wiki，任何人可貢獻，post_wiki_edits）| Phase 17 |
+| 99 | 文章修訂請求（Edit Suggestion，非 Wiki 也可提，OP/moderator accept）| Phase 17 |
+| 100 | 賞金懸賞系統（post_bounties，用積分懸賞回答）| Phase 17 |
+| 101 | 公告強制閱讀確認（post_read_receipts，版主可看已讀/未讀）| Phase 17 |
+| 102 | 相似問題自動提示（發文時 FTS 比對標題）| Phase 17 |
+| 103 | 接受最佳解答（comment.accepted，OP 標記）| Phase 17 |
+
+---
+
+## 第十五優先級：社交與訂閱（對標 Reddit/DCard）
+
+| 順序 | 內容 | 對應 |
+|------|------|------|
+| 104 | 追蹤用戶 / 封鎖用戶（user_follows / blocked_users）| Phase 14 |
+| 105 | 訂閱文章 / 訂閱版區（thread_subscriptions / board_subscriptions）| Phase 14 |
+| 106 | 文章收藏（bookmarks，可加個人備註）| Phase 14 |
+| 107 | 未讀追蹤（user_read_states + 版區紅點 badge）| Phase 14 |
+| 108 | Infinite Scroll（cursor-based 分頁，Intersection Observer）| Phase 17 |
+
+---
+
+## 第十六優先級：探索與搜尋（對標 Stack Overflow/Reddit）
+
+| 順序 | 內容 | 對應 |
+|------|------|------|
+| 109 | 全站搜尋（SQLite FTS5，標題+內文，highlight + rate limit）| Phase 15 |
+| 110 | 標籤系統（tags / post_tags，每文最多 5 個）| Phase 15 |
+| 111 | 熱門排行（hot_score，15 分鐘 background job 更新）| Phase 15 |
+| 112 | 草稿管理（forum_drafts，前端每 30 秒 autosave）| Phase 15 |
+
+---
+
+## 第十七優先級：防濫用與進階安全（對標 Stack Overflow/Discord）
+
+| 順序 | 內容 | 對應 |
+|------|------|------|
+| 113 | spam detection（發文頻率分析）| Phase 9 |
+| 114 | multi-account detection（IP + fingerprint）| Phase 9 |
+| 115 | 資料匯出 GDPR（data_export_requests，ZIP + email 下載連結）| Phase 17 |
+| 116 | 帳號永久刪除（account_deletion_requests，30 天 grace period）| Phase 17 |
+| 117 | WebAuthn 生物特徵驗證（user_webauthn_credentials，FIDO2）| Phase 17 |
+
+---
+
+## 第十八優先級：可選進階功能（對標 Discord/企業論壇）
+
+| 順序 | 內容 | 對應 |
+|------|------|------|
+| 118 | 即時聊天（Live Chat，live_chatrooms + WebSocket）| Phase 18 |
+| 119 | 「瀏覽過的文章」歷史（user_browse_history，Redis 限時）| Phase 18 |
 
 ---
 
 ## 優先順序總表（縮略版）
 
 ```
-[立即做] 1–7   基礎安全地基（schema / permission / audit）
-[立即做] 8–12  帳號完整性（密碼重設 / 預設密碼 / session）
+[立即做]   1–7      基礎安全地基（schema / permission / audit / hash chain）
+[立即做]   8–16     帳號安全強化（暴力鎖定 / 強度評分 / 裝置管理 / Session 防護）
 
-[第一季] 13–17 會員治理 + admin 投票
-[第一季] 18–22 Server mode（test / pre_production / superweak）
-[第一季] 23–26 Snapshot / restore / reset
+[第一季]  17–25     會員治理（mod note / 動作日誌 / 威望明細 / 權限委託）
+[第一季]  26–32     Server mode（IP 白名單 / Magic Link / superweak）
+[第一季]  33–37     Snapshot / restore / reset / auto snapshot
 
-[第二季] 27–31 Health monitor + Security center
-[第二季] 32–38 論壇核心（版區 / 文章 / 版主）
-[第二季] 39–43 檢舉 / 申訴 / 通知
-[第二季] 44–50 UI 架構重構（Layout / Component / Services）
+[第二季]  38–42     Health monitor（readiness / anomaly / hash chain）
+[第二季]  43–51     論壇核心（版區 / 文章 / 版主 / 文章類型 / 置頂鎖文精華）
+[第二季]  52–59     UI 架構重構（Layout / Component / Services / Zustand）
 
-[第三季] 51–56 站內信 + 附件上傳
-[第三季] 57–60 用戶個人化（個人主頁 / 簽名 / 深色模式）
-[第三季] 61–67 文章互動（反應 / 引用 / @提及 / Poll）
+[第三季]  60–67     檢舉 / 申訴 / 通知（Claim / WebSocket / Email 摘要）
+[第三季]  68–71     站內信（DM + 封鎖整合）
+[第三季]  72–76     附件上傳 / 頭像 / CAPTCHA
 
-[第四季] 68–72 社交功能（追蹤 / 封鎖 / 訂閱 / 收藏）
-[第四季] 73–78 探索功能（搜尋 / 標籤 / 熱門 / 成就）
-[第四季] 79–82 防濫用 + 完整性強化
+[第四季]  77–86     Storage 雲端硬碟與相簿
+[第四季]  87–92     用戶個人化（主頁 / 簽名 / 成就 / 線上狀態）
+[第四季]  93–103    文章互動（反應 / 引用 / @提及 / Wiki / 賞金 / 修訂請求）
+[第四季]  104–108   社交訂閱（追蹤 / 封鎖 / 訂閱 / 收藏 / Infinite Scroll）
+
+[第五季]  109–112   探索搜尋（全文 FTS / 標籤 / 熱門排行 / 草稿）
+[第五季]  113–117   防濫用 + 進階安全（GDPR / 刪除 / WebAuthn）
+[可選]    118–119   即時聊天 / 瀏覽紀錄
 ```
 
 ---
@@ -3871,4 +4729,5 @@ Zustand       → 全域 UI 狀態（currentUser、theme、serverMode）
 2. **不得讓 UI 改動破壞後端安全邏輯**：Phase 16 只改前端，禁止修改後端驗證。
 3. **每個 Phase 都要有測試**：參照 Section 9（測試計畫）逐 Phase 補充對應測試案例。
 4. **Snapshot 必須在 Phase 5 完成後才能進入 superweak**：這是安全前置條件。
-5. **UI 重構（Phase 16）建議在 Phase 7–8 後進行**：先確保功能可用，再整理架構。
+5. **Phase 17 優先於 Phase 18**：GDPR 刪除、資料匯出、WebAuthn 屬於基本帳號安全，不應放在倒數第二優先。
+6. **UI 重構（Phase 16）建議在 Phase 7–8 後進行**：先確保功能可用，再整理架構。
