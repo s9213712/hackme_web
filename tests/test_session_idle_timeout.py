@@ -107,3 +107,35 @@ def test_active_session_refreshes_last_seen(tmp_path):
     finally:
         auth._STATE.clear()
         auth._STATE.update(original_state)
+
+
+def test_db_save_session_stores_device_info_when_column_exists(tmp_path):
+    db_path = tmp_path / "device.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE sessions ADD COLUMN device_info TEXT")
+    conn.execute("ALTER TABLE sessions ADD COLUMN ip_country TEXT")
+    conn.commit()
+    conn.close()
+    original_state = dict(auth._STATE)
+
+    try:
+        auth.configure_auth_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_user_by_username=lambda username: None,
+            fernet=None,
+            session_ttl=3600,
+            csrf_token_ttl=3600,
+            session_idle_timeout=180,
+        )
+        auth.db_save_session(1, "token", "127.0.0.1", "Mozilla/5.0 Chrome/120 Windows")
+
+        conn = sqlite3.connect(db_path)
+        row = conn.execute("SELECT device_info FROM sessions WHERE id=1").fetchone()
+        conn.close()
+
+        assert "Chrome" in row[0]
+        assert "Windows" in row[0]
+    finally:
+        auth._STATE.clear()
+        auth._STATE.update(original_state)

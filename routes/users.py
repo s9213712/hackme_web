@@ -23,6 +23,7 @@ def register_user_routes(app, deps):
     get_db = deps["get_db"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
+    hash_token = deps["hash_token"]
     is_feature_enabled = deps["is_feature_enabled"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
@@ -31,6 +32,8 @@ def register_user_routes(app, deps):
     revoke_user_sessions = deps["revoke_user_sessions"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
+    SESSION_COOKIE_SAMESITE = deps["SESSION_COOKIE_SAMESITE"]
+    SESSION_COOKIE_SECURE = deps["SESSION_COOKIE_SECURE"]
     enforce_password_strength = deps["enforce_password_strength"]
     role_rank = deps["role_rank"]
     score_password_strength = deps["score_password_strength"]
@@ -47,6 +50,121 @@ def register_user_routes(app, deps):
             ")",
             (user_id, user_id, PASSWORD_HISTORY_LIMIT)
         )
+
+    def parse_device_info(raw):
+        if not raw:
+            return {}
+        try:
+            import json
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    def current_session_hash():
+        tok = request.cookies.get("session_token")
+        return hash_token(tok) if tok else ""
+
+    @app.route("/api/account/sessions", methods=["GET"])
+    @require_csrf_safe
+    def account_sessions():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if not is_feature_enabled("feature_account_security_enabled"):
+            return json_resp({"ok":False,"msg":"帳號安全功能目前已關閉"}), 503
+
+        token_hash = current_session_hash()
+        now = datetime.now().isoformat()
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id, token_hash, ip_address, user_agent, device_info, ip_country, expires_at, is_revoked, revoked_at, last_seen, created_at "
+                "FROM sessions WHERE user_id=? ORDER BY COALESCE(last_seen, created_at) DESC",
+                (actor["id"],)
+            ).fetchall()
+            sessions = []
+            for row in rows:
+                sessions.append({
+                    "id": row["id"],
+                    "ip_address": row["ip_address"] or "",
+                    "user_agent": row["user_agent"] or "",
+                    "device_info": parse_device_info(row["device_info"] if "device_info" in row.keys() else ""),
+                    "ip_country": row["ip_country"] if "ip_country" in row.keys() else None,
+                    "expires_at": row["expires_at"],
+                    "is_revoked": bool(row["is_revoked"]),
+                    "revoked_at": row["revoked_at"],
+                    "last_seen": row["last_seen"],
+                    "created_at": row["created_at"],
+                    "is_current": bool(token_hash and row["token_hash"] == token_hash),
+                    "is_active": bool(not row["is_revoked"] and row["expires_at"] > now),
+                })
+            return json_resp({"ok":True,"sessions":sessions})
+        finally:
+            conn.close()
+
+    @app.route("/api/account/sessions/<int:session_id>", methods=["DELETE"])
+    @require_csrf
+    def account_session_revoke(session_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if not is_feature_enabled("feature_account_security_enabled"):
+            return json_resp({"ok":False,"msg":"帳號安全功能目前已關閉"}), 503
+
+        token_hash = current_session_hash()
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT id, token_hash, is_revoked FROM sessions WHERE id=? AND user_id=?",
+                (session_id, actor["id"])
+            ).fetchone()
+            if not row:
+                return json_resp({"ok":False,"msg":"找不到 session"}), 404
+            conn.execute(
+                "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=? AND user_id=?",
+                (datetime.now().isoformat(), session_id, actor["id"])
+            )
+            conn.commit()
+            audit("ACCOUNT_SESSION_REVOKED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"session_id={session_id},self={row['token_hash'] == token_hash}")
+            resp = json_resp({"ok":True,"msg":"裝置 session 已登出","current_revoked":row["token_hash"] == token_hash})
+            if row["token_hash"] == token_hash:
+                resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+                resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+            return resp
+        finally:
+            conn.close()
+
+    @app.route("/api/account/sessions/logout-all", methods=["POST"])
+    @require_csrf
+    def account_sessions_logout_all():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if not is_feature_enabled("feature_account_security_enabled"):
+            return json_resp({"ok":False,"msg":"帳號安全功能目前已關閉"}), 503
+
+        token_hash = current_session_hash()
+        keep_current = bool(request.get_json(silent=True) or {}) and bool((request.get_json(silent=True) or {}).get("keep_current"))
+        sql = "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE user_id=? AND is_revoked=0"
+        params = [datetime.now().isoformat(), actor["id"]]
+        if keep_current and token_hash:
+            sql += " AND token_hash<>?"
+            params.append(token_hash)
+        conn = get_db()
+        try:
+            cur = conn.execute(sql, tuple(params))
+            conn.commit()
+            audit("ACCOUNT_SESSIONS_REVOKED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"count={cur.rowcount},keep_current={keep_current}")
+            resp = json_resp({"ok":True,"msg":"已登出指定裝置","revoked_count":cur.rowcount,"current_revoked":not keep_current})
+            if not keep_current:
+                resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+                resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+            return resp
+        finally:
+            conn.close()
 
     @app.route("/api/admin/users", methods=["GET","POST"])
     @require_csrf_safe

@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_hash   TEXT    NOT NULL UNIQUE,
     ip_address   TEXT,
     user_agent   TEXT,
+    device_info  TEXT,
+    ip_country   TEXT,
     expires_at   TEXT    NOT NULL,
     is_revoked   INTEGER NOT NULL DEFAULT 0,
     revoked_at   TEXT,

@@ -21,6 +21,10 @@ def _ensure_session_columns(conn):
         conn.execute("ALTER TABLE sessions ADD COLUMN revoked_at TEXT")
     if "last_seen" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN last_seen TEXT")
+    if "device_info" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN device_info TEXT")
+    if "ip_country" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN ip_country TEXT")
     conn.execute("UPDATE sessions SET is_revoked=0 WHERE is_revoked IS NULL")
     conn.execute("UPDATE sessions SET last_seen=created_at WHERE last_seen IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
@@ -119,10 +123,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
     conn.close()
 
-    assert {"is_revoked", "revoked_at", "last_seen"} <= session_cols
+    assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
     assert "is_private" in chat_room_cols
     assert {"member_level", "trust_score", "points", "reputation", "locked_until", "password_strength_score", "deleted_at"} <= user_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     assert root_user["username"] == "root"
 
 

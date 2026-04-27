@@ -31,7 +31,7 @@
 - [x] 管理 API payload 帶出 `member_level` 與治理分數欄位
 - [x] `member_level` 建立/修改受 `feature_identity_governance_enabled` 控制
 - [x] 補 legacy users schema repair 測試
-- [x] 跑完整 pytest：`28 passed`
+- [x] 跑完整 pytest：`31 passed`
 - [x] 權限 middleware 統一化：role / member_level / status 三層檢查
 - [x] Security events event_type 覆蓋盤點與缺口補齊
 - [x] CSRF 覆蓋盤點：失敗事件寫入 `security_events`
@@ -42,8 +42,8 @@
 
 - [x] 密碼強度評分 `password_strength_score` 0-4
 - [x] 同帳號暴力破解鎖定：`failed_login_attempts` + `locked_until`
-- [ ] 登入裝置管理：session device info / UA / IP
-- [ ] 帳號 session API：列出裝置、遠端登出、全部登出
+- [x] 登入裝置管理：session device info / UA / IP
+- [x] 帳號 session API：列出裝置、遠端登出、全部登出
 - [ ] 更換密碼後 invalidate 舊 session 驗證補強
 - [ ] IP 登入異常記錄與通知事件
 - [ ] 對應後端測試

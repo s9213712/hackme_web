@@ -144,6 +144,33 @@ def _hash_token(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _device_info_from_user_agent(ua):
+    ua = ua or "-"
+    lowered = ua.lower()
+    browser = "Other"
+    if "edg/" in lowered:
+        browser = "Edge"
+    elif "chrome/" in lowered and "chromium" not in lowered:
+        browser = "Chrome"
+    elif "firefox/" in lowered:
+        browser = "Firefox"
+    elif "safari/" in lowered and "chrome/" not in lowered:
+        browser = "Safari"
+    os_name = "Other"
+    if "windows" in lowered:
+        os_name = "Windows"
+    elif "android" in lowered:
+        os_name = "Android"
+    elif "iphone" in lowered or "ipad" in lowered:
+        os_name = "iOS"
+    elif "mac os" in lowered or "macintosh" in lowered:
+        os_name = "macOS"
+    elif "linux" in lowered:
+        os_name = "Linux"
+    device = "Mobile" if any(token in lowered for token in ("mobile", "android", "iphone")) else "Desktop"
+    return json.dumps({"browser": browser, "os": os_name, "device": device}, ensure_ascii=False)
+
+
 def timing_delay():
     time.sleep(MIN_DELAY + random.uniform(0, MAX_DELAY - MIN_DELAY))
 
@@ -269,10 +296,17 @@ def db_save_session(user_id, token, ip, ua):
     conn = _STATE["get_db"]()
     now = datetime.now().isoformat()
     expires = (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat()
-    conn.execute(
-        "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, _hash_token(token), ip, ua, expires, now)
-    )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "device_info" in cols:
+        conn.execute(
+            "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now)
+        )
+    else:
+        conn.execute(
+            "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, _hash_token(token), ip, ua, expires, now)
+        )
     conn.commit()
     conn.close()
 

@@ -570,6 +570,8 @@ def ensure_session_columns(conn):
         ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
         ("revoked_at", "TEXT"),
         ("last_seen", "TEXT"),
+        ("device_info", "TEXT"),
+        ("ip_country", "TEXT"),
     ]
     for name, ddl in additions:
         if name not in cols:
@@ -828,6 +830,7 @@ register_public_routes(app, {
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "hash_password": hash_password,
+    "hash_token": hash_token,
     "is_feature_enabled": is_feature_enabled,
     "is_ip_blocked": is_ip_blocked,
     "is_rate_limited": is_rate_limited,
@@ -898,6 +901,7 @@ register_user_routes(app, {
     "get_db": get_db,
     "get_ua": get_ua,
     "hash_password": hash_password,
+    "hash_token": hash_token,
     "is_feature_enabled": is_feature_enabled,
     "json_resp": json_resp,
     "normalize_text": normalize_text,
@@ -906,6 +910,8 @@ register_user_routes(app, {
     "revoke_user_sessions": revoke_user_sessions,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
+    "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,
+    "SESSION_COOKIE_SECURE": SESSION_COOKIE_SECURE,
     "enforce_password_strength": enforce_password_strength,
     "score_password_strength": score_password_strength,
     "role_rank": role_rank,
