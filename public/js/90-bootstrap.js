@@ -8,6 +8,7 @@ function bindUiEvents() {
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
   const tabServerHealth = $("tab-server-health");
+  const tabServerIntegrity = $("tab-server-integrity");
   const tabServerSettings = $("tab-server-settings");
   const tabServerEnv = $("tab-server-env");
   const tabSettingsSecurity = $("tab-settings-security");
@@ -46,6 +47,9 @@ function bindUiEvents() {
   const settingsSave = $("settings-save-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const healthRefresh = $("health-refresh-btn");
+  const integrityRefresh = $("integrity-refresh-btn");
+  const integrityRescan = $("integrity-rescan-btn");
+  const integrityExport = $("integrity-export-btn");
   const integrityRepair = $("integrity-repair-btn");
   const restartBtn   = $("restart-server-btn");
   const editSaveBtn = $("user-edit-save");
@@ -79,6 +83,7 @@ function bindUiEvents() {
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
   if (tabServerHealth) tabServerHealth.addEventListener("click", () => switchServerTab("health"));
+  if (tabServerIntegrity) tabServerIntegrity.addEventListener("click", () => switchServerTab("integrity"));
   if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
   if (tabServerEnv) tabServerEnv.addEventListener("click", () => switchServerTab("env"));
   if (tabSettingsSecurity) tabSettingsSecurity.addEventListener("click", () => switchSettingsSection("security"));
@@ -197,6 +202,9 @@ function bindUiEvents() {
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
+  if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
+  if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);
+  if (integrityExport) integrityExport.addEventListener("click", exportIntegrityReport);
   if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
 }
@@ -216,6 +224,7 @@ $("reg-pw").addEventListener("keydown", (e) => {
     console.error("clock bootstrap failed", err);
   }
   setupInactivityTracking();
+  startServerConnectionMonitor();
   _csrfToken = readCookie("csrf_token");
   bindUiEvents();
   // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死

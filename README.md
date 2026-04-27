@@ -184,8 +184,8 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-013`
-- Current schema version: `18`
+- Current release ID: `2026.04.27-014`
+- Current schema version: `19`
 
 ### Governance and Member Levels
 
@@ -227,6 +227,7 @@ Configurable rule fields include:
 
 - permissions: post, comment, DM, upload, report
 - rate limits: post/comment/DM/upload limits
+- session idle timeout minutes
 - attachment size and quota
 - moderation requirement
 - report weight
@@ -304,6 +305,55 @@ Root can also set the next boot listen address through `server_listen_host` and
 `server_listen_port` in the server settings UI/API. Empty host or port `0`
 falls back to `HTML_LEARNING_HOST` / `HTML_LEARNING_PORT`. Changing these values
 requires a server restart because the running socket cannot be rebound safely.
+
+Maintenance mode forces every non-root API session to be revoked and clears the
+browser cookies. Root remains allowed so recovery and settings stay reachable.
+
+### Integrity Guard
+
+Integrity Guard detects unauthorized changes to protected application files.
+On startup it scans backend code, frontend code, security/auth/admin/root logic,
+snapshot/superweak/maintenance code, cloud drive/storage/upload/download code,
+migrations, dependency/config files, scripts, and the integrity checker/API
+itself. Runtime data such as uploads, storage, logs, snapshots, reports,
+caches, `node_modules`, `.git`, `__pycache__`, databases, and temp files are not
+hashed.
+
+The first deployment creates a signed `integrity_manifest.json` baseline. Later
+scans compare current files to that approved manifest and create
+`integrity_findings` for modified, added, or deleted files. Findings remain
+pending until root approves, rejects, or ignores them from the Integrity Guard
+root panel or API:
+
+- `GET /api/root/integrity/status`
+- `POST /api/root/integrity/rescan`
+- `GET /api/root/integrity/findings`
+- `GET /api/root/integrity/findings/<id>`
+- `POST /api/root/integrity/findings/<id>/approve`
+- `POST /api/root/integrity/findings/<id>/reject`
+- `POST /api/root/integrity/findings/<id>/ignore`
+- `GET /api/root/integrity/report`
+
+Approve requires the exact confirmation string
+`APPROVE INTEGRITY UPDATE`. Approving updates the signed manifest; rejecting or
+ignoring preserves the finding without trusting the change. All review actions
+write audit log entries. High-risk findings include auth, admin/root,
+maintenance, superweak, snapshot/restore, storage/upload/download, migrations,
+dependency lock/config files, `server.py`, and Integrity Guard itself.
+
+Preprod mode is blocked while pending or rejected high-risk findings exist.
+Strict mode (`integrity_guard_strict_mode`) blocks startup if high-risk findings
+are present. Integrity Guard detects unauthorized modifications, but it does not
+replace git, CI/CD, backups, host hardening, or offline review; a fully
+compromised host/root can still tamper with the runtime.
+
+Normal deployment workflow:
+
+1. Deploy trusted code.
+2. Start the server and open the Integrity Guard panel.
+3. Review pending findings.
+4. Approve only changes that match the intended deployment.
+5. Reject unexpected changes and restore from git/snapshot before rescanning.
 
 ### Health Center
 

@@ -28,12 +28,18 @@ let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
 const CHAT_POLL_MS = 2500;
-const INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
+const DEFAULT_INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
+let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
+let inactivityCountdownTimer = null;
+let inactivityDeadline = null;
+let inactivityWarned = false;
 let clockTimer = null;
 let siteConfig = {};
 let serverMeta = {};
 let currentSettingsSection = "security";
+let serverConnectionFailures = 0;
+let serverConnectionTimer = null;
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -61,15 +67,59 @@ function stopInactivityTimer() {
     clearTimeout(inactivityTimer);
     inactivityTimer = null;
   }
+  if (inactivityCountdownTimer) {
+    clearInterval(inactivityCountdownTimer);
+    inactivityCountdownTimer = null;
+  }
+  inactivityDeadline = null;
+  inactivityWarned = false;
+  const label = $("session-countdown-label");
+  if (label) {
+    label.textContent = currentUser ? "閒置登出：--:--" : "未登入";
+    label.style.color = "var(--muted)";
+  }
 }
 
 function resetInactivityTimer() {
   if (!currentUser) return;
   stopInactivityTimer();
+  inactivityDeadline = Date.now() + inactivityLogoutMs;
+  updateInactivityCountdown();
+  inactivityCountdownTimer = setInterval(updateInactivityCountdown, 1000);
   inactivityTimer = setTimeout(async () => {
     alert("已超過 3 分鐘未操作，系統將自動登出。");
     await doLogout();
-  }, INACTIVITY_LOGOUT_MS);
+  }, inactivityLogoutMs);
+}
+
+function updateInactivityCountdown() {
+  const label = $("session-countdown-label");
+  if (!label) return;
+  if (!currentUser || !inactivityDeadline) {
+    label.textContent = currentUser ? "閒置登出：--:--" : "未登入";
+    label.style.color = "var(--muted)";
+    return;
+  }
+  const remaining = Math.max(0, inactivityDeadline - Date.now());
+  const seconds = Math.ceil(remaining / 1000);
+  const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const ss = String(seconds % 60).padStart(2, "0");
+  label.textContent = `閒置登出：${mm}:${ss}`;
+  if (seconds <= 30) {
+    label.style.color = "#ff4f6d";
+    if (!inactivityWarned) {
+      inactivityWarned = true;
+      const msg = $("li-msg") || $("settings-msg");
+      if (msg) {
+        msg.textContent = "即將因閒置自動登出，請移動滑鼠或按鍵延長登入狀態。";
+        msg.style.color = "#ffb74d";
+      }
+    }
+  } else if (seconds <= 60) {
+    label.style.color = "#ffb74d";
+  } else {
+    label.style.color = "var(--muted)";
+  }
 }
 
 function setupInactivityTracking() {
@@ -146,6 +196,60 @@ async function loadSiteConfig() {
   } catch (err) {
     console.error("site config load failed", err);
   }
+}
+
+function setServerConnectionState(state, label) {
+  const dot = $("server-connection-dot");
+  const text = $("server-connection-label");
+  if (!dot || !text) return;
+  const colors = {
+    online: ["#4caf50", "rgba(76,175,80,.75)"],
+    unstable: ["#ffb74d", "rgba(255,183,77,.75)"],
+    offline: ["#ff4f6d", "rgba(255,79,109,.75)"],
+  };
+  const [color, glow] = colors[state] || colors.unstable;
+  dot.style.background = color;
+  dot.style.boxShadow = `0 0 10px ${glow}`;
+  text.textContent = label;
+}
+
+async function checkServerConnection() {
+  const started = Date.now();
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 3500);
+  try {
+    const res = await fetch(API + "/version", {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: ctrl.signal
+    });
+    clearTimeout(timeout);
+    const latency = Date.now() - started;
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error("bad status");
+    serverConnectionFailures = 0;
+    if (json.maintenance_mode) {
+      setServerConnectionState("unstable", "維護模式");
+    } else if (latency > 1800) {
+      setServerConnectionState("unstable", `連線不穩 ${latency}ms`);
+    } else {
+      setServerConnectionState("online", "伺服器正常");
+    }
+  } catch (_) {
+    clearTimeout(timeout);
+    serverConnectionFailures += 1;
+    if (serverConnectionFailures >= 2) {
+      setServerConnectionState("offline", "伺服器離線");
+    } else {
+      setServerConnectionState("unstable", "連線不穩");
+    }
+  }
+}
+
+function startServerConnectionMonitor() {
+  if (serverConnectionTimer) clearInterval(serverConnectionTimer);
+  checkServerConnection();
+  serverConnectionTimer = setInterval(checkServerConnection, 8000);
 }
 
 function getCsrfToken() { return _csrfToken; }
@@ -444,6 +548,8 @@ function setAuthState(json, showLoginHero = false) {
   currentUserId = json.id || null;
   currentRole = json.role || "user";
   currentMustChangePassword = !!json.must_change_password;
+  const idleMinutes = Number(json.session_idle_timeout_minutes || 3);
+  inactivityLogoutMs = Math.max(1, idleMinutes) * 60 * 1000;
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
   $("success-screen").classList.add("show");
@@ -539,6 +645,7 @@ function resetAuthState() {
   currentUserId = null;
   currentRole = "user";
   currentMustChangePassword = false;
+  inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
   forcedPasswordChangeMode = false;
   canManageUsers = false;
   users = [];

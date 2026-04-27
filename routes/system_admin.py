@@ -14,6 +14,7 @@ from services.access_controls import (
     maintenance_bypass_expires_at,
 )
 from services.bootstrap import CURRENT_SCHEMA_VERSION, get_schema_version
+from services.integrity_guard import CONFIRM_APPROVE
 from services.member_levels import (
     DEFAULT_MEMBER_LEVEL_RULES,
     ensure_member_level_rules_schema,
@@ -61,6 +62,7 @@ def register_system_admin_routes(app, deps):
     save_settings = deps["save_settings"]
     server_mode_service = deps.get("server_mode_service")
     snapshot_service = deps.get("snapshot_service")
+    integrity_guard = deps.get("integrity_guard")
     verify_audit_integrity = deps["verify_audit_integrity"]
 
     def require_root_actor():
@@ -207,6 +209,14 @@ def register_system_admin_routes(app, deps):
                 add_check("snapshot_service", False, str(exc), severity="degraded")
         else:
             add_check("snapshot_service", False, "unavailable", severity="degraded")
+        if integrity_guard:
+            try:
+                integrity = integrity_guard.status()
+                high_pending = int((integrity.get("summary") or {}).get("high_risk_pending") or 0)
+                pending = int((integrity.get("summary") or {}).get("pending") or 0)
+                add_check("integrity_guard", high_pending == 0, f"pending={pending},high={high_pending}", severity="critical")
+            except Exception as exc:
+                add_check("integrity_guard", False, str(exc), severity="critical")
 
         status = "ok"
         if any((not item["ok"]) and item["severity"] == "critical" for item in checks):
@@ -365,6 +375,98 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         return json_resp({"ok": True, "database": db_integrity_summary()})
+
+    @app.route("/api/root/integrity/status", methods=["GET"])
+    @require_csrf_safe
+    def root_integrity_status():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        return json_resp({"ok":True,"integrity":integrity_guard.status()})
+
+    @app.route("/api/root/integrity/rescan", methods=["POST"])
+    @require_csrf
+    def root_integrity_rescan():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        result = integrity_guard.scan(actor=actor["username"], create_initial_manifest=True)
+        audit("INTEGRITY_RESCAN", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), detail=f"status={result.get('status') or result.get('last_scan', {}).get('status')}")
+        return json_resp({"ok":bool(result.get("ok", True)),"integrity":result}), (200 if result.get("ok", True) else 500)
+
+    @app.route("/api/root/integrity/findings", methods=["GET"])
+    @require_csrf_safe
+    def root_integrity_findings():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        status = request.args.get("status") or None
+        return json_resp({"ok":True,"findings":integrity_guard.list_findings(status=status)})
+
+    @app.route("/api/root/integrity/findings/<int:finding_id>", methods=["GET"])
+    @require_csrf_safe
+    def root_integrity_finding(finding_id):
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        finding = integrity_guard.get_finding(finding_id)
+        if not finding:
+            return json_resp({"ok":False,"msg":"找不到 integrity finding"}), 404
+        return json_resp({"ok":True,"finding":finding})
+
+    def handle_integrity_review(finding_id, action):
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = integrity_guard.review_finding(
+            finding_id,
+            action=action,
+            actor=actor,
+            note=data.get("note") or "",
+            confirm=data.get("confirm") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/integrity/findings/<int:finding_id>/approve", methods=["POST"])
+    @require_csrf
+    def root_integrity_approve(finding_id):
+        return handle_integrity_review(finding_id, "approve")
+
+    @app.route("/api/root/integrity/findings/<int:finding_id>/reject", methods=["POST"])
+    @require_csrf
+    def root_integrity_reject(finding_id):
+        return handle_integrity_review(finding_id, "reject")
+
+    @app.route("/api/root/integrity/findings/<int:finding_id>/ignore", methods=["POST"])
+    @require_csrf
+    def root_integrity_ignore(finding_id):
+        return handle_integrity_review(finding_id, "ignore")
+
+    @app.route("/api/root/integrity/report", methods=["GET"])
+    @require_csrf_safe
+    def root_integrity_report():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        return json_resp({"ok":True,"report":integrity_guard.export_report(),"approve_confirm":CONFIRM_APPROVE})
 
     # ── 系統參數（超級管理者 only）───────────────────────────────────────────────
     @app.route("/api/admin/settings", methods=["GET","PUT"])

@@ -169,6 +169,37 @@
 
     textarea:focus { border-color: var(--accent); }
 
+    .settings-option-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: .45rem .7rem;
+      margin-bottom: 1rem;
+    }
+
+    .settings-option-grid .field {
+      margin-bottom: 0;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+    }
+
+    .settings-option-grid label {
+      margin-bottom: 0;
+      color: var(--text);
+      line-height: 1.35;
+    }
+
+    .settings-option-grid input[type="checkbox"] {
+      width: auto;
+      margin-right: .35rem;
+    }
+
+    .session-countdown {
+      margin-top: .35rem;
+      font-size: .72rem;
+      color: var(--muted);
+    }
+
     .drive-dashboard-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));

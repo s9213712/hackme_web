@@ -30,6 +30,7 @@ def register_public_routes(app, deps):
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
     get_feature_settings = deps["get_feature_settings"]
+    get_member_level_rule = deps.get("get_member_level_rule")
     get_system_settings = deps["get_system_settings"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
@@ -127,6 +128,7 @@ def register_public_routes(app, deps):
                 "module_community_min_role": settings.get("module_community_min_role"),
                 "module_appeals_min_role": settings.get("module_appeals_min_role"),
                 "module_accounts_min_role": settings.get("module_accounts_min_role"),
+                "maintenance_mode": bool(settings.get("maintenance_mode", False)),
                 **features,
             },
             "server_meta": {
@@ -145,6 +147,7 @@ def register_public_routes(app, deps):
             "release_id": SERVER_RELEASE_ID,
             "version": SERVER_VERSION,
             "started_at": SERVER_STARTED_AT,
+            "maintenance_mode": bool(get_system_settings().get("maintenance_mode", False)),
         })
 
     @app.route("/api/password-strength", methods=["POST"])
@@ -432,6 +435,15 @@ def register_public_routes(app, deps):
         if not ctx:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         role = "super_admin" if ctx["username"] == "root" else ctx["role"]
+        effective_level = dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal"
+        session_idle_timeout_minutes = 3
+        if get_member_level_rule:
+            conn = get_db()
+            try:
+                rule = get_member_level_rule(conn, effective_level) or {}
+                session_idle_timeout_minutes = max(1, int(rule.get("session_idle_timeout_minutes") or 3))
+            finally:
+                conn.close()
         return json_resp({
             "ok": True,
             "id": ctx["id"],
@@ -440,7 +452,8 @@ def register_public_routes(app, deps):
             "role_label": ROLE_LABEL.get(role, role),
             "status": ctx["status"],
             "base_level": dict(ctx).get("base_level") or dict(ctx).get("member_level") or "normal",
-            "effective_level": dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal",
+            "effective_level": effective_level,
+            "session_idle_timeout_minutes": session_idle_timeout_minutes,
             "trust_score": dict(ctx).get("trust_score") or 0,
             "reputation": dict(ctx).get("reputation") or 0,
             "violation_score": dict(ctx).get("violation_score") or dict(ctx).get("violation_count") or 0,

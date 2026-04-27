@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS member_level_rules (
     min_reputation         INTEGER NOT NULL DEFAULT 0,
     max_violation_score    INTEGER NOT NULL DEFAULT 0,
     downgrade_violation_threshold INTEGER NOT NULL DEFAULT 0,
+    session_idle_timeout_minutes INTEGER NOT NULL DEFAULT 3,
     require_admin_approval INTEGER NOT NULL DEFAULT 0,
     require_root_approval  INTEGER NOT NULL DEFAULT 0,
     created_at             TEXT NOT NULL,
@@ -314,6 +315,51 @@ CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level,
 CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_file_keys(file_id, recipient_user_id);
 CREATE INDEX IF NOT EXISTS idx_file_scan_results_file ON file_scan_results(file_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_file_access_logs_file ON file_access_logs(file_id, created_at);
+
+CREATE TABLE IF NOT EXISTS integrity_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    category TEXT,
+    risk_level TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    old_hash TEXT,
+    new_hash TEXT,
+    old_size INTEGER,
+    new_size INTEGER,
+    old_mtime TEXT,
+    new_mtime TEXT,
+    detected_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS integrity_scan_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    files_checked INTEGER NOT NULL DEFAULT 0,
+    findings_created INTEGER NOT NULL DEFAULT 0,
+    high_risk_count INTEGER NOT NULL DEFAULT 0,
+    manifest_valid INTEGER NOT NULL DEFAULT 0,
+    manifest_signature_valid INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS integrity_manifest_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version INTEGER NOT NULL,
+    manifest_hash TEXT NOT NULL,
+    manifest_signature TEXT NOT NULL,
+    approved_by TEXT NOT NULL,
+    approved_at TEXT NOT NULL,
+    note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_integrity_findings_status ON integrity_findings(status, risk_level, detected_at);
+CREATE INDEX IF NOT EXISTS idx_integrity_findings_path ON integrity_findings(file_path, status);
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,

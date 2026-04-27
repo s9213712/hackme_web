@@ -1,15 +1,16 @@
 function switchServerTab(tab) {
   currentServerTab = tab;
-  ["health", "settings", "env"].forEach((name) => {
+  ["health", "integrity", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-server-health", "tab-server-settings", "tab-server-env"].forEach((id) => {
+  ["tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
   });
   if (tab === "health") loadServerHealth();
+  if (tab === "integrity") loadIntegrityGuard();
   if (tab === "settings") loadSettings();
   if (tab === "env") loadServerEnv();
 }
@@ -500,7 +501,8 @@ const MEMBER_LEVEL_INT_FIELDS = [
   ["min_trust_score", "升等 trust_score"],
   ["min_reputation", "升等 reputation"],
   ["max_violation_score", "升等最大違規分"],
-  ["downgrade_violation_threshold", "降級/處分建議門檻"]
+  ["downgrade_violation_threshold", "降級/處分建議門檻"],
+  ["session_idle_timeout_minutes", "閒置登出分鐘"]
 ];
 const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "require_scan_before_download",
@@ -667,6 +669,8 @@ async function loadSettings() {
   if ($("s-root-ip-whitelist-enabled")) $("s-root-ip-whitelist-enabled").checked = !!s.root_ip_whitelist_enabled;
   if ($("s-root-ip-whitelist")) $("s-root-ip-whitelist").value = s.root_ip_whitelist || "";
   if ($("s-browser-only-mode-enabled")) $("s-browser-only-mode-enabled").checked = !!s.browser_only_mode_enabled;
+  if ($("s-integrity-guard-enabled")) $("s-integrity-guard-enabled").checked = s.integrity_guard_enabled !== false;
+  if ($("s-integrity-guard-strict-mode")) $("s-integrity-guard-strict-mode").checked = !!s.integrity_guard_strict_mode;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
@@ -818,6 +822,143 @@ async function repairIntegrityChains() {
   if (currentAdminTab === "violations") await loadViolations(violationsPage, violationTargetUser);
 }
 
+async function loadIntegrityGuard() {
+  if (!currentUser || currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const [statusRes, findingsRes] = await Promise.all([
+    fetch(API + "/root/integrity/status", { credentials: "same-origin", headers: { "X-CSRF-Token": csrf || "" } }),
+    fetch(API + "/root/integrity/findings?status=pending", { credentials: "same-origin", headers: { "X-CSRF-Token": csrf || "" } })
+  ]);
+  const statusJson = await statusRes.json().catch(() => ({}));
+  const findingsJson = await findingsRes.json().catch(() => ({}));
+  const summary = $("integrity-summary");
+  const warning = $("integrity-warning");
+  const list = $("integrity-findings");
+  if (!summary || !warning || !list) return;
+  if (!statusJson.ok) {
+    summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(statusJson.msg || "Integrity Guard 狀態讀取失敗")}</div>`;
+    warning.textContent = "";
+    list.innerHTML = "";
+    return;
+  }
+  const ig = statusJson.integrity || {};
+  const s = ig.summary || {};
+  const last = ig.last_scan || {};
+  const cards = [
+    ["受保護檔案", String(ig.protected_files || 0), "#82b1ff"],
+    ["Pending", String(s.pending || 0), (s.pending || 0) ? "#ffb74d" : "#4caf50"],
+    ["High Risk", String(s.high_risk_pending || 0), (s.high_risk_pending || 0) ? "#ff4f6d" : "#4caf50"],
+    ["Modified", String(s.modified || 0), (s.modified || 0) ? "#ffb74d" : "#82b1ff"],
+    ["Added", String(s.added || 0), (s.added || 0) ? "#ffb74d" : "#82b1ff"],
+    ["Deleted", String(s.deleted || 0), (s.deleted || 0) ? "#ff4f6d" : "#82b1ff"],
+    ["上次掃描", sanitize(last.finished_at || last.started_at || "-"), "#82b1ff"],
+    ["Manifest 簽章", last.manifest_signature_valid === 1 ? "有效" : "未驗證/異常", last.manifest_signature_valid === 1 ? "#4caf50" : "#ff4f6d"],
+  ];
+  summary.innerHTML = cards.map(([label, value, color]) => `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
+      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
+      <div style="font-size:1rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-all;">${value}</div>
+    </div>
+  `).join("");
+  if ((s.high_risk_pending || 0) > 0) {
+    warning.innerHTML = `<span style="color:#ff4f6d;font-weight:700;">高風險警告：</span>此變更涉及安全核心、root、admin、auth、snapshot、storage 或 Integrity Guard 本身。pending/rejected high risk finding 會阻止進入準上線模式。`;
+  } else if ((s.pending || 0) > 0) {
+    warning.innerHTML = `<span style="color:#ffb74d;font-weight:700;">待處理：</span>存在尚未審核的檔案完整性變更，請確認是否為合法部署。`;
+  } else {
+    warning.innerHTML = `<span style="color:#4caf50;font-weight:700;">正常：</span>目前沒有 pending finding。`;
+  }
+  const findings = Array.isArray(findingsJson.findings) ? findingsJson.findings : [];
+  if (!findings.length) {
+    list.innerHTML = "<p style='color:var(--muted);text-align:center;padding:1rem;'>目前沒有 pending integrity finding</p>";
+    return;
+  }
+  list.innerHTML = findings.map((f) => `
+    <div style="border:1px solid ${f.risk_level === "high" ? "rgba(255,79,109,.45)" : "rgba(255,255,255,.1)"};border-radius:9px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
+      <div style="display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;">
+        <strong>#${f.id}</strong>
+        <span style="color:${f.risk_level === "high" ? "#ff4f6d" : f.risk_level === "medium" ? "#ffb74d" : "#82b1ff"};">${sanitize(f.risk_level || "")}</span>
+        <span style="color:#82b1ff;">${sanitize(f.change_type || "")}</span>
+        <span style="word-break:break-all;">${sanitize(f.file_path || "")}</span>
+        <span style="margin-left:auto;color:var(--muted);">${sanitize(f.detected_at || "")}</span>
+      </div>
+      <div style="color:var(--muted);margin-top:.35rem;word-break:break-all;">old=${sanitize(f.old_hash || "-")} · new=${sanitize(f.new_hash || "-")}</div>
+      <div style="color:var(--muted);margin-top:.2rem;">size ${f.old_size ?? "-"} -> ${f.new_size ?? "-"} · category=${sanitize(f.category || "")}</div>
+      <div class="admin-toolbar" style="display:flex;gap:.45rem;margin-top:.5rem;">
+        <button class="btn btn-primary" data-integrity-action="approve" data-finding-id="${f.id}">approve</button>
+        <button class="btn" data-integrity-action="reject" data-finding-id="${f.id}">reject</button>
+        <button class="btn" data-integrity-action="ignore" data-finding-id="${f.id}">ignore</button>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-integrity-action]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewIntegrityFinding(btn.getAttribute("data-finding-id"), btn.getAttribute("data-integrity-action")));
+  });
+}
+
+async function rescanIntegrityGuard() {
+  if (!confirm("重新掃描會比對目前檔案與已核准 manifest，異常不會自動核准。")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/integrity/rescan", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.ok ? "Integrity Guard 掃描完成" : (json.msg || "掃描失敗"));
+  await loadIntegrityGuard();
+}
+
+async function reviewIntegrityFinding(id, action) {
+  if (!id || !action) return;
+  let confirmText = "";
+  let note = "";
+  if (action === "approve") {
+    alert("approve 代表你確認這些檔案變更是合法部署或可信修改，系統將更新 hash manifest。");
+    confirmText = prompt("請輸入 APPROVE INTEGRITY UPDATE 以確認：") || "";
+    if (confirmText !== "APPROVE INTEGRITY UPDATE") {
+      alert("確認字串不正確，已取消 approve。");
+      return;
+    }
+  } else {
+    if (!confirm(`確定要 ${action} 這筆 integrity finding？`)) return;
+  }
+  note = prompt("審核備註（可留空）：") || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/root/integrity/findings/${encodeURIComponent(id)}/${action}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: confirmText, note })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "操作完成" : "操作失敗"));
+  await loadIntegrityGuard();
+}
+
+async function exportIntegrityReport() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/integrity/report", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    alert(json.msg || "匯出失敗");
+    return;
+  }
+  const blob = new Blob([JSON.stringify(json.report || {}, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "integrity_report.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function saveSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -830,6 +971,8 @@ async function saveSettings() {
     root_ip_whitelist_enabled: !!$("s-root-ip-whitelist-enabled")?.checked,
     root_ip_whitelist: $("s-root-ip-whitelist")?.value || "",
     browser_only_mode_enabled: !!$("s-browser-only-mode-enabled")?.checked,
+    integrity_guard_enabled: !!$("s-integrity-guard-enabled")?.checked,
+    integrity_guard_strict_mode: !!$("s-integrity-guard-strict-mode")?.checked,
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),

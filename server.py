@@ -114,6 +114,7 @@ from services.identity import (
     role_rank,
 )
 from services.governance_records import ensure_governance_records_schema
+from services.integrity_guard import IntegrityGuard, ensure_integrity_schema
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
@@ -697,6 +698,7 @@ def ensure_security_support_schema(conn):
     ensure_governance_records_schema(conn)
     ensure_snapshot_schema(conn)
     ensure_upload_security_schema(conn)
+    ensure_integrity_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "
@@ -826,7 +828,15 @@ snapshot_service = SnapshotService(
         os.path.join(BASE_DIR, ".env"),
     ],
 )
-server_mode_service = ServerModeService(snapshot_service=snapshot_service, get_db=get_db, audit=audit)
+ROOT_INTEGRITY_SIGNING_KEY = os.environ.get("ROOT_INTEGRITY_SIGNING_KEY", "").encode("utf-8") or _INTEGRITY_KEY
+integrity_guard = IntegrityGuard(
+    base_dir=BASE_DIR,
+    manifest_path=os.path.join(BASE_DIR, "integrity_manifest.json"),
+    signing_key=ROOT_INTEGRITY_SIGNING_KEY,
+    get_db=get_db,
+    audit=audit,
+)
+server_mode_service = ServerModeService(snapshot_service=snapshot_service, get_db=get_db, audit=audit, integrity_guard=integrity_guard)
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
@@ -947,6 +957,18 @@ def restrict_cors():
     actor = get_current_user_ctx()
     if actor and actor["username"] == "root":
         return None
+    if actor:
+        try:
+            revoke_user_sessions(actor["id"])
+            audit("MAINTENANCE_FORCED_LOGOUT", get_client_ip(), user=actor["username"], success=True, detail=f"path={request.path}")
+        except Exception:
+            pass
+        resp = json_resp(maintenance_bypass_required_payload(
+            "系統進入緊急維護模式，非 root 帳號已強制登出。"
+        ), 503)
+        resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        return resp
     return json_resp(maintenance_bypass_required_payload(
         "系統進入緊急維護模式，請等待最高管理者處理，或由 root 提供維護旁路 token。"
     )), 503
@@ -1019,6 +1041,7 @@ register_public_routes(app, {
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,
     "get_feature_settings": get_feature_settings,
+    "get_member_level_rule": get_member_level_rule,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "hash_password": hash_password,
@@ -1159,6 +1182,7 @@ register_operation_routes(app, {
     "secure_add_violation": secure_add_violation,
     "server_mode_service": server_mode_service,
     "snapshot_service": snapshot_service,
+    "integrity_guard": integrity_guard,
     "verify_audit_integrity": verify_audit_integrity,
     "verify_violation_integrity": verify_violation_integrity,
 })
@@ -1201,6 +1225,12 @@ if __name__ == "__main__":
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
+    if get_system_settings().get("integrity_guard_enabled", True):
+        integrity_status = integrity_guard.scan(actor="system-startup", create_initial_manifest=True)
+        if get_system_settings().get("integrity_guard_strict_mode", False):
+            high_risk = (integrity_status.get("summary") or {}).get("high_risk_pending", 0)
+            if high_risk:
+                raise SystemExit("Integrity Guard strict mode blocked startup due to high risk findings")
     start_daily_snapshot_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")

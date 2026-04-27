@@ -9,6 +9,13 @@
 </head>
 <body>
   <div class="clock" id="clock">⏰ 載入時間中...</div>
+  <div id="server-connection-light" style="position:fixed;top:12px;right:12px;z-index:9999;display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;border-radius:12px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);font-size:.75rem;color:var(--muted);backdrop-filter:blur(8px);">
+    <span id="server-connection-dot" style="width:10px;height:10px;border-radius:50%;background:#ffb74d;box-shadow:0 0 10px rgba(255,183,77,.65);flex:0 0 auto;"></span>
+    <span>
+      <span id="server-connection-label">連線檢查中</span>
+      <span id="session-countdown-label" class="session-countdown" style="display:block;">未登入</span>
+    </span>
+  </div>
 
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
 <div class="card" id="auth-card">
@@ -494,6 +501,7 @@
       <div class="mini-title">⚙️ 伺服器管理</div>
       <div class="tabs" style="margin-top:.65rem;margin-bottom:.7rem;">
         <button class="tab active" id="tab-server-health">健康度</button>
+        <button class="tab" id="tab-server-integrity">Integrity Guard</button>
         <button class="tab" id="tab-server-settings">伺服器設定</button>
         <button class="tab" id="tab-server-env">系統環境</button>
       </div>
@@ -507,6 +515,17 @@
         <div id="server-health-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;margin-bottom:.9rem;"></div>
       </div>
 
+      <div class="form-section" id="sec-server-integrity">
+        <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.65rem;">
+          <button class="btn btn-primary" type="button" id="integrity-refresh-btn">重新整理</button>
+          <button class="btn" type="button" id="integrity-rescan-btn">重新掃描</button>
+          <button class="btn" type="button" id="integrity-export-btn">匯出報告</button>
+        </div>
+        <div id="integrity-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div id="integrity-warning" style="font-size:.8rem;margin-bottom:.65rem;"></div>
+        <div id="integrity-findings" style="max-height:420px;overflow:auto;font-size:.72rem;"></div>
+      </div>
+
       <div class="form-section" id="sec-server-settings">
         <form id="settings-form" style="margin-top:.6rem;">
           <div class="tabs" style="margin-bottom:.85rem;">
@@ -518,6 +537,7 @@
             <button class="tab" type="button" id="tab-settings-member-levels">會員等級</button>
           </div>
           <div class="form-section active" id="sec-settings-security">
+            <div class="settings-option-grid">
             <div class="field">
               <label><input type="checkbox" id="s-maintenance-mode" /> 維護模式（只允許 root 操作）</label>
             </div>
@@ -544,6 +564,13 @@
               <label><input type="checkbox" id="s-browser-only-mode-enabled" /> Browser-only 模式（阻擋非瀏覽器請求）</label>
             </div>
             <div class="field">
+              <label><input type="checkbox" id="s-integrity-guard-enabled" /> 啟用 Integrity Guard 啟動掃描</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="s-integrity-guard-strict-mode" /> Integrity Guard strict mode（高風險異常時阻擋啟動）</label>
+            </div>
+            </div>
+            <div class="field">
               <label>登入失敗鎖定次數</label>
               <input type="number" id="s-max-fail" min="1" max="20" />
             </div>
@@ -554,6 +581,7 @@
           </div>
           <div class="form-section" id="sec-settings-features">
             <div class="mini-title" style="margin-bottom:.8rem;">既有功能開關</div>
+            <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-feature-chat-enabled" /> 聊天室</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-community-enabled" /> 討論區 / 公告 / 留言</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-accounts-enabled" /> 帳號管理</label></div>
@@ -562,7 +590,9 @@
             <div class="field"><label><input type="checkbox" id="s-feature-violation-center-enabled" /> 違規中心</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-reports-enabled" /> 檢舉審核</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-system-health-enabled" /> 系統健康燈</label></div>
+            </div>
             <div class="mini-title" style="margin:1rem 0 .8rem;">新工程功能開關</div>
+            <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-feature-identity-governance-enabled" /> 身份治理欄位 / 會員等級</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-account-security-enabled" /> 帳號安全強化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-member-governance-enabled" /> 會員治理與投票</label></div>
@@ -579,6 +609,7 @@
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-privacy-uploads-enabled" /> 隱私分級上傳 / E2EE</label></div>
+            </div>
           </div>
           <div class="form-section" id="sec-settings-appearance">
             <div class="mini-title" style="margin-bottom:.8rem;">站點外觀設定</div>
@@ -691,12 +722,14 @@
             </div>
             <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">安全政策</div>
+            <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-cd-require-scan-before-download" /> 下載前要求掃描</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-block-unclean-downloads" /> 阻擋未掃描乾淨的下載</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-warn-high-risk-downloads" /> 高風險下載前警告</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-allow-inline-preview-for-high-risk" /> 允許高風險檔案 inline preview</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-e2ee-server-scan-claim-allowed" /> 允許 E2EE 宣稱已完成伺服器掃描</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-revoke-shares-on-suspension" /> 停權時撤銷分享</label></div>
+            </div>
             <div class="field">
               <label>壓縮檔最多檔案數</label>
               <input type="number" id="s-cd-max-archive-files" min="0" />

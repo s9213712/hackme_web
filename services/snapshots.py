@@ -623,10 +623,11 @@ class SnapshotService:
 
 
 class ServerModeService:
-    def __init__(self, *, snapshot_service, get_db, audit):
+    def __init__(self, *, snapshot_service, get_db, audit, integrity_guard=None):
         self.snapshot_service = snapshot_service
         self.get_db = get_db
         self.audit = audit
+        self.integrity_guard = integrity_guard
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
@@ -643,6 +644,14 @@ class ServerModeService:
     def switch_mode(self, *, target_mode, actor, confirm, notes=None):
         if target_mode not in SERVER_MODES:
             return {"ok": False, "msg": "server mode 錯誤"}
+        if target_mode == "preprod" and self.integrity_guard:
+            allowed, high_risk_count = self.integrity_guard.can_enter_preprod()
+            if not allowed:
+                return {
+                    "ok": False,
+                    "msg": "存在 pending/rejected high risk Integrity Guard finding，不允許進入準上線模式",
+                    "high_risk_count": high_risk_count,
+                }
         if target_mode == "superweak":
             return self.enter_superweak(actor=actor, confirm=confirm, notes=notes)
         conn = self.get_db()

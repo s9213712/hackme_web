@@ -98,13 +98,14 @@ def test_update_member_level_rule_validates_and_serializes(tmp_path):
         rule, err = update_member_level_rule(
             conn,
             "normal",
-            {"can_post": False, "daily_post_limit": 3, "max_attachment_size_mb": 8, "report_weight": 4},
+            {"can_post": False, "daily_post_limit": 3, "max_attachment_size_mb": 8, "report_weight": 4, "session_idle_timeout_minutes": 7},
         )
         assert err is None
         assert rule["can_post"] is False
         assert rule["daily_post_limit"] == 3
         assert rule["max_attachment_size_mb"] == 8
         assert rule["report_weight"] == 4
+        assert rule["session_idle_timeout_minutes"] == 7
 
         rule, err = update_member_level_rule(conn, "normal", {"daily_dm_limit": -1})
         assert rule is None

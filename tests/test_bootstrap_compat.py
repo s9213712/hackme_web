@@ -135,6 +135,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     scan_result_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_scan_results)").fetchall()}
     access_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_access_logs)").fetchall()}
     cloud_policy_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cloud_drive_security_policies)").fetchall()}
+    integrity_finding_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_findings)").fetchall()}
+    integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
+    integrity_manifest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_manifest_versions)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username, must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
     conn.close()
@@ -151,7 +154,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {
         "level", "can_post", "can_comment", "can_report", "daily_post_limit",
         "post_rate_limit_per_hour", "attachment_quota_mb", "report_weight",
-        "downgrade_violation_threshold", "require_admin_approval",
+        "downgrade_violation_threshold", "session_idle_timeout_minutes", "require_admin_approval",
     } <= member_rule_cols
     assert {"actor", "target_user", "old_base_level", "new_effective_level", "reason", "source"} <= member_audit_cols
     assert {"target_user_id", "action_type", "status", "required_votes", "approve_count"} <= proposal_cols
@@ -167,7 +170,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"scanner_name", "result", "details_json"} <= scan_result_cols
     assert {"file_id", "actor_user_id", "action", "result"} <= access_log_cols
     assert {"scope", "block_unclean_downloads", "max_archive_files", "max_daily_downloads"} <= cloud_policy_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+    assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
+    assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
+    assert {"manifest_hash", "manifest_signature", "approved_by"} <= integrity_manifest_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     assert root_user["username"] == "root"
     assert root_user["must_change_password"] == 1
     assert root_user["is_default_password"] == 1
