@@ -74,6 +74,23 @@ CREATE TABLE IF NOT EXISTS login_locations (
     is_suspicious INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS member_level_rules (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    level                  TEXT NOT NULL UNIQUE,
+    can_post               INTEGER NOT NULL DEFAULT 1,
+    can_comment            INTEGER NOT NULL DEFAULT 1,
+    can_send_dm            INTEGER NOT NULL DEFAULT 1,
+    can_upload_attachment  INTEGER NOT NULL DEFAULT 0,
+    daily_post_limit       INTEGER NOT NULL DEFAULT 10,
+    daily_dm_limit         INTEGER NOT NULL DEFAULT 20,
+    max_attachment_size_mb INTEGER NOT NULL DEFAULT 0,
+    requires_moderation    INTEGER NOT NULL DEFAULT 0,
+    min_points             INTEGER NOT NULL DEFAULT 0,
+    min_trust_score        INTEGER NOT NULL DEFAULT 0,
+    created_at             TEXT NOT NULL,
+    updated_at             TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -220,6 +237,8 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    ON login_attempts(ip_address
 CREATE INDEX IF NOT EXISTS idx_login_attempts_time   ON login_attempts(attempted_at);
 
 CREATE INDEX IF NOT EXISTS idx_login_attempts_user   ON login_attempts(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_member_level_rules_level ON member_level_rules(level);
 
 CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
 

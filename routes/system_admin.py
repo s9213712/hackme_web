@@ -7,6 +7,12 @@ import time
 from datetime import datetime
 from flask import request
 
+from services.member_levels import (
+    DEFAULT_MEMBER_LEVEL_RULES,
+    ensure_member_level_rules_schema,
+    update_member_level_rule,
+)
+
 
 def register_system_admin_routes(app, deps):
     ANCHOR_DIR = deps["ANCHOR_DIR"]
@@ -172,6 +178,58 @@ def register_system_admin_routes(app, deps):
         audit("FEATURE_FLAGS_CHANGED", get_client_ip(), user=actor["username"], success=True,
               detail=str(updates))
         return json_resp({"ok":True,"msg":"功能開關已更新","features":updates})
+
+    @app.route("/api/admin/member-level-rules", methods=["GET"])
+    @require_csrf_safe
+    def admin_member_level_rules():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可管理會員等級規則"}), 403
+
+        conn = get_db()
+        try:
+            ensure_member_level_rules_schema(conn)
+            conn.commit()
+            rows = conn.execute("SELECT * FROM member_level_rules").fetchall()
+            by_level = {row["level"]: dict(row) for row in rows}
+            rules = []
+            for level in DEFAULT_MEMBER_LEVEL_RULES:
+                row = by_level.get(level)
+                if row:
+                    for key in ("can_post", "can_comment", "can_send_dm", "can_upload_attachment", "requires_moderation"):
+                        row[key] = bool(row.get(key))
+                    rules.append(row)
+            return json_resp({"ok":True,"rules":rules})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/member-level-rules/<level>", methods=["PUT"])
+    @require_csrf_safe
+    def admin_update_member_level_rule(level):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可管理會員等級規則"}), 403
+
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+
+        conn = get_db()
+        try:
+            rule, err = update_member_level_rule(conn, level, data)
+            if err:
+                return json_resp({"ok":False,"msg":err}), 400
+            conn.commit()
+            audit("MEMBER_LEVEL_RULE_UPDATED", get_client_ip(), user=actor["username"], success=True,
+                  detail=f"level={level}, rule={rule}")
+            return json_resp({"ok":True,"msg":"會員等級規則已更新","rule":rule})
+        finally:
+            conn.close()
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])
     @require_csrf

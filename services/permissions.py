@@ -2,9 +2,16 @@ from services.identity import role_rank
 
 ACTIVE_STATUS = "active"
 RESTRICTED_WRITE_ACTIONS = {
+    "chat_dm_create",
     "chat_send",
     "community_thread_create",
     "community_reply",
+}
+ACTION_RULE_FIELDS = {
+    "chat_dm_create": "can_send_dm",
+    "chat_send": "can_comment",
+    "community_thread_create": "can_post",
+    "community_reply": "can_comment",
 }
 
 
@@ -39,7 +46,7 @@ def require_role(actor, min_role):
     return True, "", 200
 
 
-def require_member_action(actor, action):
+def require_member_action(actor, action, rule=None):
     ok, msg, status = require_active_actor(actor)
     if not ok:
         return ok, msg, status
@@ -48,4 +55,8 @@ def require_member_action(actor, action):
         return False, "會員等級已停權，暫停互動功能", 403
     if member_level == "restricted" and action in RESTRICTED_WRITE_ACTIONS:
         return False, "會員等級受限，暫停發文、留言與聊天", 403
+    if rule:
+        rule_field = ACTION_RULE_FIELDS.get(action)
+        if rule_field and not bool(rule.get(rule_field)):
+            return False, "會員等級規則不允許此操作", 403
     return True, "", 200

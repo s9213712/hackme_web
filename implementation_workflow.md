@@ -50,7 +50,8 @@
 
 ## Phase 3：會員治理與管理員制衡
 
-- [ ] `member_level_rules` schema + API
+- [x] `member_level_rules` schema + API
+- [x] `member_level_rules` 接入聊天、主題、留言權限檢查（受 `feature_member_governance_enabled` 控制）
 - [ ] `moderation_proposals` schema + API
 - [ ] `moderation_votes` schema + API
 - [ ] admin 高風險操作改 proposal + vote
@@ -58,7 +59,8 @@
 - [ ] 版主動作日誌 `moderation_actions`
 - [ ] Mod Note `user_mod_notes`
 - [ ] 威望明細 `reputation_events`
-- [ ] 對應測試
+- [x] 會員等級規則對應測試：`37 passed`
+- [ ] Phase 3 其餘治理功能對應測試
 
 ## Phase 4：伺服器模式
 

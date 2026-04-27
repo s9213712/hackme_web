@@ -107,6 +107,7 @@ from services.identity import (
     ensure_user_identity_columns,
     role_rank,
 )
+from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.password_strength import enforce_password_strength, score_password_strength
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -614,6 +615,7 @@ def ensure_security_support_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_login_locations_ip ON login_locations(ip_hash)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at)")
+    ensure_member_level_rules_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "
@@ -886,6 +888,8 @@ register_chat_routes(app, {
     "get_db": get_db,
     "get_request_csrf_token": get_request_csrf_token,
     "get_ua": get_ua,
+    "get_member_level_rule": get_member_level_rule,
+    "is_feature_enabled": is_feature_enabled,
     "json_resp": json_resp,
     "normalize_text": normalize_text,
     "parse_positive_int": parse_positive_int,
@@ -958,9 +962,11 @@ register_operation_routes(app, {
     "get_db": get_db,
     "get_latest_violation": get_latest_violation,
     "get_feature_settings": get_feature_settings,
+    "get_member_level_rule": get_member_level_rule,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "is_audit_chain_enabled": is_audit_chain_enabled,
+    "is_feature_enabled": is_feature_enabled,
     "json_resp": json_resp,
     "normalize_text": normalize_text,
     "parse_iso_to_datetime": parse_iso_to_datetime,
