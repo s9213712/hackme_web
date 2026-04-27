@@ -493,6 +493,12 @@ Phase 10 後端提供 1 對 1 站內信 API：
 `avatar_file_id` 與 `avatar_crop_json`。裁切值只是 UI 顯示 metadata，不會被
 當成檔案安全判斷依據。
 
+### Markdown 編輯器
+
+公告、版面說明/版規、主題與回覆 textarea 會顯示輕量 Markdown 工具列與
+安全預覽，支援粗體、斜體、行內程式碼、引用與連結插入，不需額外第三方
+前端套件。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI

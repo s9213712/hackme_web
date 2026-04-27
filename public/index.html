@@ -202,7 +202,7 @@
               </div>
               <div class="field">
                 <label>公告內容</label>
-                <textarea id="community-announcement-content" rows="4" maxlength="3000" placeholder="輸入公告內容"></textarea>
+                <textarea id="community-announcement-content" data-markdown-editor="1" rows="4" maxlength="3000" placeholder="輸入公告內容"></textarea>
               </div>
               <div class="field">
                 <label><input type="checkbox" id="community-announcement-pinned" /> 置頂公告</label>
@@ -223,11 +223,11 @@
             </div>
             <div class="field">
               <label>討論區說明</label>
-              <textarea id="community-board-description" rows="4" maxlength="1200" placeholder="說明討論主題、規則與用途"></textarea>
+              <textarea id="community-board-description" data-markdown-editor="1" rows="4" maxlength="1200" placeholder="說明討論主題、規則與用途"></textarea>
             </div>
             <div class="field">
               <label>版規</label>
-              <textarea id="community-board-rules" rows="4" maxlength="2000" placeholder="例如：禁止人身攻擊、禁止外流個資、禁止洗版"></textarea>
+              <textarea id="community-board-rules" data-markdown-editor="1" rows="4" maxlength="2000" placeholder="例如：禁止人身攻擊、禁止外流個資、禁止洗版"></textarea>
             </div>
             <div class="settings-option-grid">
               <div class="field">
@@ -298,7 +298,7 @@
               </div>
               <div class="field">
                 <label>內容</label>
-                <textarea id="community-thread-content" rows="4" maxlength="4000" placeholder="輸入主題內容"></textarea>
+                <textarea id="community-thread-content" data-markdown-editor="1" rows="4" maxlength="4000" placeholder="輸入主題內容"></textarea>
               </div>
               <button class="btn btn-primary" id="community-thread-submit" type="button">發布主題</button>
             </div>
@@ -323,7 +323,7 @@
             <div id="community-reply-box" style="display:none;margin-top:.75rem;">
               <div class="field">
                 <label>留言回覆</label>
-                <textarea id="community-reply-content" rows="4" maxlength="3000" placeholder="輸入回覆內容"></textarea>
+                <textarea id="community-reply-content" data-markdown-editor="1" rows="4" maxlength="3000" placeholder="輸入回覆內容"></textarea>
               </div>
               <button class="btn btn-primary" id="community-reply-submit" type="button">送出留言</button>
             </div>
@@ -1051,6 +1051,7 @@
 <script src="/js/30-appeals.js" defer></script>
 <script src="/js/32-notifications.js" defer></script>
 <script src="/js/33-dm.js" defer></script>
+<script src="/js/34-markdown-editor.js" defer></script>
 <script src="/js/35-drive.js" defer></script>
 <script src="/js/40-auth-users.js" defer></script>
 <script src="/js/50-admin.js" defer></script>

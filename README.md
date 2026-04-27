@@ -525,6 +525,13 @@ re-encoding/EXIF stripping, then the user record stores `avatar_file_id` plus
 `avatar_crop_json`. The crop values are metadata for UI rendering and can be
 adjusted without trusting the client for file safety.
 
+### Markdown Editor
+
+Community text areas for announcements, board descriptions/rules, threads, and
+replies include a lightweight Markdown toolbar and sanitized preview. The editor
+supports common formatting helpers such as bold, italic, inline code, quote, and
+link insertion without adding a third-party dependency.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and
