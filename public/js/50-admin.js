@@ -16,11 +16,11 @@ function switchServerTab(tab) {
 
 function switchSettingsSection(tab) {
   currentSettingsSection = tab;
-  ["security", "appearance", "system"].forEach((name) => {
+  ["security", "features", "appearance", "system"].forEach((name) => {
     const sec = $("sec-settings-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-settings-security", "tab-settings-appearance", "tab-settings-system"].forEach((id) => {
+  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-settings-" + tab);
@@ -315,8 +315,42 @@ async function loadSettings() {
   if ($("s-site-muted")) $("s-site-muted").value = s.site_muted || "#8888aa";
   if ($("s-site-layout-mode")) $("s-site-layout-mode").value = s.site_layout_mode || "centered";
   if ($("s-site-density")) $("s-site-density").value = s.site_density || "comfortable";
+  FEATURE_SETTING_KEYS.forEach((key) => {
+    const el = $(featureSettingInputId(key));
+    if (el) el.checked = !!s[key];
+  });
   applySiteConfig(s);
   switchSettingsSection(currentSettingsSection || "security");
+}
+
+const FEATURE_SETTING_KEYS = [
+  "feature_chat_enabled",
+  "feature_community_enabled",
+  "feature_accounts_enabled",
+  "feature_appeals_enabled",
+  "feature_audit_log_enabled",
+  "feature_violation_center_enabled",
+  "feature_reports_enabled",
+  "feature_system_health_enabled",
+  "feature_identity_governance_enabled",
+  "feature_account_security_enabled",
+  "feature_member_governance_enabled",
+  "feature_server_modes_enabled",
+  "feature_snapshot_restore_enabled",
+  "feature_health_center_enabled",
+  "feature_forum_core_enabled",
+  "feature_ui_rebuild_enabled",
+  "feature_reports_notifications_enabled",
+  "feature_dm_enabled",
+  "feature_attachments_enabled",
+  "feature_storage_albums_enabled",
+  "feature_personalization_enabled",
+  "feature_social_search_enabled",
+  "feature_advanced_security_enabled"
+];
+
+function featureSettingInputId(key) {
+  return "s-" + key.replaceAll("_", "-");
 }
 
 function formatBytes(bytes) {
@@ -421,6 +455,10 @@ async function saveSettings() {
     site_layout_mode: $("s-site-layout-mode")?.value || "centered",
     site_density: $("s-site-density")?.value || "comfortable"
   };
+  FEATURE_SETTING_KEYS.forEach((key) => {
+    const el = $(featureSettingInputId(key));
+    if (el) payload[key] = !!el.checked;
+  });
   const res = await fetch(API + "/admin/settings", {
     method: "PUT",
     credentials: "same-origin",

@@ -46,6 +46,8 @@ function getModuleMinRole(moduleKey, fallbackRole) {
 }
 
 function canAccessModule(moduleKey, role = currentRole) {
+  const featureKey = `feature_${moduleKey}_enabled`;
+  if (siteConfig && siteConfig[featureKey] === false) return false;
   const fallback = moduleKey === "accounts" ? "manager" : "user";
   return clientRoleRank(role || "user") >= clientRoleRank(getModuleMinRole(moduleKey, fallback));
 }

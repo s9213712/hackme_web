@@ -26,6 +26,7 @@ def register_public_routes(app, deps):
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
+    get_feature_settings = deps["get_feature_settings"]
     get_system_settings = deps["get_system_settings"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
@@ -83,6 +84,7 @@ def register_public_routes(app, deps):
     @app.route("/api/site-config", methods=["GET"])
     def get_site_config():
         settings = get_system_settings()
+        features = get_feature_settings()
         return json_resp({
             "ok": True,
             "site_config": {
@@ -98,6 +100,7 @@ def register_public_routes(app, deps):
                 "module_community_min_role": settings.get("module_community_min_role"),
                 "module_appeals_min_role": settings.get("module_appeals_min_role"),
                 "module_accounts_min_role": settings.get("module_accounts_min_role"),
+                **features,
             },
             "server_meta": {
                 "version": SERVER_VERSION,

@@ -53,11 +53,14 @@ from services.auth import (
 from services.settings import (
     DEFAULT_SETTINGS,
     configure_settings_service,
+    get_feature_settings,
     get_system_settings,
     init_system_settings_table,
+    is_feature_enabled,
     load_settings,
     refresh_system_settings,
     save_settings,
+    save_feature_settings,
     _import_legacy_settings_files,
     _seed_missing_settings_to_db,
 )
@@ -94,6 +97,14 @@ from services.chat_support import (
     configure_chat_support_service,
     ensure_official_chat_room,
     ensure_user_official_room_membership,
+)
+from services.identity import (
+    ACCOUNT_STATUSES,
+    MEMBER_LEVELS,
+    ROLE_LABEL,
+    ROLE_RANK,
+    ensure_user_identity_columns,
+    role_rank,
 )
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -348,13 +359,32 @@ def is_ip_blocking_enabled():
         return bool(settings.get("ip_blocking_enabled", False))
     return bool(IP_BLOCKING_ENABLED)
 
+
+FEATURE_ROUTE_GATES = (
+    ("feature_chat_enabled", ("/api/chat/", "/api/chat/rooms", "/api/chat/messages")),
+    ("feature_community_enabled", ("/api/community/", "/api/community")),
+    ("feature_appeals_enabled", ("/api/appeals", "/api/admin/appeals")),
+    ("feature_reports_enabled", ("/api/admin/message-reports", "/api/admin/community-post-reports")),
+    ("feature_audit_log_enabled", ("/api/admin/audit", "/api/audit")),
+    ("feature_violation_center_enabled", ("/api/admin/violations", "/api/admin/users/")),
+    ("feature_accounts_enabled", ("/api/admin/users",)),
+    ("feature_system_health_enabled", ("/api/admin/health",)),
+)
+
+
+def feature_gate_for_path(path):
+    if path.startswith("/api/admin/users/") and (
+        path.endswith("/violation") or path.endswith("/reset-violations")
+    ):
+        return "feature_violation_center_enabled"
+    if path.startswith("/api/admin/users"):
+        return "feature_accounts_enabled"
+    for key, prefixes in FEATURE_ROUTE_GATES:
+        if any(path == prefix or path.startswith(prefix) for prefix in prefixes):
+            return key
+    return None
+
 # ── Domain constants / validation helpers ─────────────────────────────────────
-ROLE_RANK = {"user": 0, "manager": 1, "super_admin": 2}
-ROLE_LABEL = {
-    "super_admin": "最高管理者",
-    "manager": "管理者",
-    "user": "一般用戶",
-}
 MAX_MANAGERS = 5
 MAX_EXTRA_SUPER_ADMINS = _env_int("HTML_LEARNING_MAX_EXTRA_SUPER_ADMINS", 2, minimum=0)
 PASSWORD_HISTORY_LIMIT = _env_int("HTML_LEARNING_PASSWORD_HISTORY_LIMIT", 5, minimum=1)
@@ -364,10 +394,6 @@ SESSION_IDLE_TIMEOUT_SECONDS = _env_int("HTML_LEARNING_SESSION_IDLE_SECONDS", SE
 OFFICIAL_CHAT_ROOM_NAME = "官方聊天室"
 
 PW_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]).{8,128}$")
-
-
-def role_rank(role):
-    return ROLE_RANK.get(role or "user", 0)
 
 
 def normalize_text(v):
@@ -484,6 +510,10 @@ def user_public_payload(row, *, include_sensitive=False):
         "email": data.get("email"),
         "status": data.get("status"),
         "role": data.get("role"),
+        "member_level": data.get("member_level") or "normal",
+        "trust_score": data.get("trust_score") or 0,
+        "points": data.get("points") or 0,
+        "reputation": data.get("reputation") or 0,
         "role_label": ROLE_LABEL.get(data.get("role"), data.get("role")),
         "blocked_until": data.get("blocked_until"),
         "violation_count": data.get("violation_count") or 0,
@@ -506,22 +536,7 @@ def user_public_payload(row, *, include_sensitive=False):
 
 
 def ensure_user_columns(conn):
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-    additions = [
-        ("role", "TEXT NOT NULL DEFAULT 'user'"),
-        ("nickname", "TEXT"),
-        ("real_name", "TEXT"),
-        ("birthdate", "TEXT"),
-        ("id_number", "TEXT"),
-        ("phone", "TEXT"),
-        ("blocked_until", "TEXT"),
-        ("violation_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("chat_violation_warned", "INTEGER NOT NULL DEFAULT 0"),
-        ("updated_at", "TEXT"),
-    ]
-    for name, ddl in additions:
-        if name not in cols:
-            conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+    ensure_user_identity_columns(conn)
 
 
 def ensure_secure_audit_columns(conn):
@@ -761,6 +776,24 @@ def restrict_cors():
         return None
     return json_resp({"ok":False,"msg":"系統進入緊急維護模式，請等待最高管理者處理"}, 503)
 
+
+@app.before_request
+def enforce_feature_flags():
+    if request.method == "OPTIONS" or not request.path.startswith("/api"):
+        return None
+    # The settings endpoints must stay reachable, otherwise root can lock the
+    # site into a disabled state with no way back through the UI/API.
+    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/me", "/api/login", "/api/logout"):
+        return None
+    feature_key = feature_gate_for_path(request.path)
+    if not feature_key or is_feature_enabled(feature_key):
+        return None
+    return json_resp({
+        "ok": False,
+        "msg": "此功能目前已由 root 關閉",
+        "feature": feature_key,
+    }, 503)
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 register_public_routes(app, {
     "CSRF_TOKEN_TTL": CSRF_TOKEN_TTL,
@@ -781,6 +814,7 @@ register_public_routes(app, {
     "get_client_ip": get_client_ip,
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,
+    "get_feature_settings": get_feature_settings,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "hash_password": hash_password,
@@ -830,8 +864,10 @@ register_chat_routes(app, {
 })
 
 register_user_routes(app, {
+    "ACCOUNT_STATUSES": ACCOUNT_STATUSES,
     "MAX_MANAGERS": MAX_MANAGERS,
     "MAX_EXTRA_SUPER_ADMINS": MAX_EXTRA_SUPER_ADMINS,
+    "MEMBER_LEVELS": MEMBER_LEVELS,
     "PASSWORD_HISTORY_LIMIT": PASSWORD_HISTORY_LIMIT,
     "ROLE_LABEL": ROLE_LABEL,
     "ROLE_RANK": ROLE_RANK,
@@ -849,6 +885,7 @@ register_user_routes(app, {
     "get_db": get_db,
     "get_ua": get_ua,
     "hash_password": hash_password,
+    "is_feature_enabled": is_feature_enabled,
     "json_resp": json_resp,
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
@@ -883,6 +920,7 @@ register_operation_routes(app, {
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,
     "get_latest_violation": get_latest_violation,
+    "get_feature_settings": get_feature_settings,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "is_audit_chain_enabled": is_audit_chain_enabled,
@@ -895,6 +933,7 @@ register_operation_routes(app, {
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
     "role_rank": role_rank,
+    "save_feature_settings": save_feature_settings,
     "save_settings": save_settings,
     "secure_add_violation": secure_add_violation,
     "verify_audit_integrity": verify_audit_integrity,

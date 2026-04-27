@@ -20,6 +20,7 @@ def register_system_admin_routes(app, deps):
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
+    get_feature_settings = deps["get_feature_settings"]
     get_system_settings = deps["get_system_settings"]
     is_audit_chain_enabled = deps["is_audit_chain_enabled"]
     json_resp = deps["json_resp"]
@@ -28,6 +29,7 @@ def register_system_admin_routes(app, deps):
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
+    save_feature_settings = deps["save_feature_settings"]
     save_settings = deps["save_settings"]
     verify_audit_integrity = deps["verify_audit_integrity"]
 
@@ -144,6 +146,32 @@ def register_system_admin_routes(app, deps):
         audit("SETTINGS_CHANGED", get_client_ip(), user=actor["username"],
               detail=str(settings))
         return json_resp({"ok":True,"msg":"系統參數已更新","settings":settings})
+
+    @app.route("/api/admin/features", methods=["GET", "PUT"])
+    @require_csrf_safe
+    def admin_features():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可修改功能開關"}), 403
+
+        if request.method == "GET":
+            return json_resp({"ok":True,"features":get_feature_settings()})
+
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+
+        updates = save_feature_settings(data)
+        if not updates:
+            return json_resp({"ok":False,"msg":"沒有可寫入的功能開關"}), 400
+        audit("FEATURE_FLAGS_CHANGED", get_client_ip(), user=actor["username"], success=True,
+              detail=str(updates))
+        return json_resp({"ok":True,"msg":"功能開關已更新","features":updates})
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])
     @require_csrf

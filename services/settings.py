@@ -29,7 +29,32 @@ DEFAULT_SETTINGS = {
     "module_appeals_min_role": "user",
     "module_accounts_min_role": "manager",
     "chat_filter_rules_json": "",
+    "feature_chat_enabled": True,
+    "feature_community_enabled": True,
+    "feature_accounts_enabled": True,
+    "feature_appeals_enabled": True,
+    "feature_audit_log_enabled": True,
+    "feature_violation_center_enabled": True,
+    "feature_reports_enabled": True,
+    "feature_system_health_enabled": True,
+    "feature_identity_governance_enabled": True,
+    "feature_account_security_enabled": False,
+    "feature_member_governance_enabled": False,
+    "feature_server_modes_enabled": False,
+    "feature_snapshot_restore_enabled": False,
+    "feature_health_center_enabled": True,
+    "feature_forum_core_enabled": True,
+    "feature_ui_rebuild_enabled": False,
+    "feature_reports_notifications_enabled": True,
+    "feature_dm_enabled": False,
+    "feature_attachments_enabled": False,
+    "feature_storage_albums_enabled": False,
+    "feature_personalization_enabled": False,
+    "feature_social_search_enabled": False,
+    "feature_advanced_security_enabled": False,
 }
+
+FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))
 
 _SETTINGS_LOCK = threading.Lock()
 _SYSTEM_SETTINGS = None
@@ -169,3 +194,24 @@ def save_settings(data):
         conn.close()
     refresh_system_settings()
     return updates
+
+
+def is_feature_enabled(feature_key):
+    key = str(feature_key or "")
+    if not key.startswith("feature_"):
+        key = f"feature_{key}_enabled"
+    settings = get_system_settings()
+    default = DEFAULT_SETTINGS.get(key, False)
+    return bool(settings.get(key, default))
+
+
+def get_feature_settings():
+    settings = get_system_settings()
+    return {key: bool(settings.get(key, DEFAULT_SETTINGS[key])) for key in FEATURE_FLAG_KEYS}
+
+
+def save_feature_settings(data):
+    if not isinstance(data, dict):
+        return {}
+    updates = {key: value for key, value in data.items() if key in FEATURE_FLAG_KEYS}
+    return save_settings(updates)

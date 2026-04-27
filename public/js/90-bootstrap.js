@@ -10,6 +10,7 @@ function bindUiEvents() {
   const tabServerSettings = $("tab-server-settings");
   const tabServerEnv = $("tab-server-env");
   const tabSettingsSecurity = $("tab-settings-security");
+  const tabSettingsFeatures = $("tab-settings-features");
   const tabSettingsAppearance = $("tab-settings-appearance");
   const tabSettingsSystem = $("tab-settings-system");
   const tabUsers    = $("tab-users");
@@ -72,6 +73,7 @@ function bindUiEvents() {
   if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
   if (tabServerEnv) tabServerEnv.addEventListener("click", () => switchServerTab("env"));
   if (tabSettingsSecurity) tabSettingsSecurity.addEventListener("click", () => switchSettingsSection("security"));
+  if (tabSettingsFeatures) tabSettingsFeatures.addEventListener("click", () => switchSettingsSection("features"));
   if (tabSettingsAppearance) tabSettingsAppearance.addEventListener("click", () => switchSettingsSection("appearance"));
   if (tabSettingsSystem) tabSettingsSystem.addEventListener("click", () => switchSettingsSection("system"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));

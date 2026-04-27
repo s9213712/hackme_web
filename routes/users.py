@@ -4,8 +4,10 @@ from flask import request
 
 
 def register_user_routes(app, deps):
+    ACCOUNT_STATUSES = deps["ACCOUNT_STATUSES"]
     MAX_MANAGERS = deps["MAX_MANAGERS"]
     MAX_EXTRA_SUPER_ADMINS = deps["MAX_EXTRA_SUPER_ADMINS"]
+    MEMBER_LEVELS = deps["MEMBER_LEVELS"]
     PASSWORD_HISTORY_LIMIT = deps["PASSWORD_HISTORY_LIMIT"]
     ROLE_LABEL = deps["ROLE_LABEL"]
     ROLE_RANK = deps["ROLE_RANK"]
@@ -21,6 +23,7 @@ def register_user_routes(app, deps):
     get_db = deps["get_db"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
+    is_feature_enabled = deps["is_feature_enabled"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
     parse_birthdate = deps["parse_birthdate"]
@@ -62,7 +65,7 @@ def register_user_routes(app, deps):
             conn = get_db()
             try:
                 rows = conn.execute(
-                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, violation_count "
+                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
                 data = [user_public_payload(r, include_sensitive=False) for r in rows]
@@ -96,11 +99,17 @@ def register_user_routes(app, deps):
         phone = normalize_text(data.get("phone"))
         role = normalize_text(data.get("role")) or "user"
         status = normalize_text(data.get("status")) or "active"
+        identity_governance_enabled = is_feature_enabled("feature_identity_governance_enabled")
+        member_level = normalize_text(data.get("member_level")) or "normal"
 
         if role not in ROLE_RANK:
             return json_resp({"ok":False,"msg":"不支援的角色"}), 400
-        if status not in ("active","inactive"):
+        if status not in ACCOUNT_STATUSES:
             return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
+        if not identity_governance_enabled and "member_level" in data:
+            return json_resp({"ok":False,"msg":"身份治理功能目前已關閉"}), 503
+        if member_level not in MEMBER_LEVELS:
+            return json_resp({"ok":False,"msg":"會員等級錯誤"}), 400
         if not username or len(username) < 3:
             return json_resp({"ok":False,"msg":"帳號至少 3 字元"}), 400
         if len(username) > 32:
@@ -138,9 +147,9 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"帳號已存在"}), 409
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, role, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), role, status, now, now)
+                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), role, status, member_level, now, now)
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
@@ -169,7 +178,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, blocked_until, violation_count FROM users WHERE id=?",
+                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -197,7 +206,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, blocked_until, violation_count FROM users WHERE id=?",
+                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -252,12 +261,24 @@ def register_user_routes(app, deps):
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更帳號狀態"}), 403
                 val = normalize_text(data["status"])
-                if val not in ("active","inactive","pending","rejected"):
+                if val not in ACCOUNT_STATUSES:
                     return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
                 updates.append("status=?")
                 params.append(val)
                 if val != "active":
                     revoke_sessions_needed = True
+            if "member_level" in data:
+                if not is_feature_enabled("feature_identity_governance_enabled"):
+                    return json_resp({"ok":False,"msg":"身份治理功能目前已關閉"}), 503
+                if is_self:
+                    return json_resp({"ok":False,"msg":"不可自行變更會員等級"}), 403
+                if role_rank(actor_role) < role_rank("super_admin"):
+                    return json_resp({"ok":False,"msg":"只有最高權限可變更會員等級"}), 403
+                val = normalize_text(data["member_level"])
+                if val not in MEMBER_LEVELS:
+                    return json_resp({"ok":False,"msg":"會員等級錯誤"}), 400
+                updates.append("member_level=?")
+                params.append(val)
             if "role" in data:
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403

@@ -142,6 +142,18 @@ CREATE TABLE IF NOT EXISTS users (
     phone            TEXT,
     -- Account status
     status     TEXT    NOT NULL DEFAULT 'active',
+    member_level TEXT  NOT NULL DEFAULT 'normal',
+    trust_score INTEGER NOT NULL DEFAULT 0,
+    points INTEGER NOT NULL DEFAULT 0,
+    reputation INTEGER NOT NULL DEFAULT 0,
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    two_factor_enabled INTEGER NOT NULL DEFAULT 0,
+    failed_login_count INTEGER NOT NULL DEFAULT 0,
+    last_login_at TEXT,
+    password_changed_at TEXT,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    is_default_password INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT,
     -- Timestamps
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
