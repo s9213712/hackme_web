@@ -184,7 +184,24 @@ def _check_quota(conn, actor, member_rule, size_bytes):
     return True, ""
 
 
-def store_cloud_upload(conn, *, actor, member_rule, storage_root, file_storage, privacy_mode="public_attachment", scan_now=True):
+def store_cloud_upload(
+    conn,
+    *,
+    actor,
+    member_rule,
+    storage_root,
+    file_storage,
+    privacy_mode="public_attachment",
+    encrypted_metadata=None,
+    encrypted_file_key=None,
+    wrapped_by="user_public_key",
+    ciphertext_sha256=None,
+    encryption_algorithm=None,
+    encryption_version=None,
+    nonce=None,
+    client_scan_report=None,
+    scan_now=True,
+):
     ensure_cloud_drive_attachment_schema(conn)
     filename = safe_public_filename(getattr(file_storage, "filename", "") or "upload.bin")
     stream = getattr(file_storage, "stream", file_storage)
@@ -219,8 +236,16 @@ def store_cloud_upload(conn, *, actor, member_rule, storage_root, file_storage, 
         privacy_mode=privacy_mode,
         size_bytes=size_bytes,
         original_filename=filename,
+        encrypted_metadata=encrypted_metadata,
+        encrypted_file_key=encrypted_file_key,
+        wrapped_by=wrapped_by,
         mime_type=getattr(file_storage, "mimetype", None),
+        ciphertext_sha256=ciphertext_sha256,
         plaintext_sha256=None,
+        encryption_algorithm=encryption_algorithm,
+        encryption_version=encryption_version,
+        nonce=nonce,
+        client_scan_report=client_scan_report,
         user=actor,
         scan_now=False,
     )
@@ -236,6 +261,158 @@ def store_cloud_upload(conn, *, actor, member_rule, storage_root, file_storage, 
         result["risk_level"] = scan_result["risk_level"]
         result["scan_result"] = scan_result
     return result, None
+
+
+def get_file_status(conn, *, actor, file_id):
+    ensure_cloud_drive_attachment_schema(conn)
+    row = _file_row(conn, file_id)
+    if not row or row["deleted_at"]:
+        return None, "找不到檔案或檔案已刪除"
+    if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager_or_root(actor):
+        allowed, _, _ = can_download_file(conn, actor=actor, file_id=file_id)
+        if not allowed:
+            return None, "沒有檔案權限"
+    scans = conn.execute(
+        """
+        SELECT scanner_name, result, malware_name, scan_completed_at, created_at
+        FROM file_scan_results
+        WHERE file_id=?
+        ORDER BY created_at DESC
+        LIMIT 20
+        """,
+        (file_id,),
+    ).fetchall()
+    grants = conn.execute(
+        """
+        SELECT id, granted_to_user_id, granted_to_role, granted_to_group_id,
+               context_type, context_id, can_download, can_preview, expires_at,
+               revoked_at, created_at
+        FROM file_access_grants
+        WHERE file_id=?
+        ORDER BY created_at DESC
+        """,
+        (file_id,),
+    ).fetchall()
+    keys = []
+    if row["privacy_mode"].startswith("e2ee") and (
+        int(row["owner_user_id"]) == int(actor["id"]) or is_manager_or_root(actor)
+    ):
+        keys = conn.execute(
+            """
+            SELECT id, recipient_user_id, wrapped_by, key_version, created_at, revoked_at
+            FROM encrypted_file_keys
+            WHERE file_id=?
+            ORDER BY created_at DESC
+            """,
+            (file_id,),
+        ).fetchall()
+    data = serialize_file_row(row)
+    data["scan_results"] = [dict(scan) for scan in scans]
+    data["access_grants"] = [dict(grant) for grant in grants]
+    data["encrypted_key_recipients"] = [dict(key) for key in keys]
+    return data, None
+
+
+def share_e2ee_file(
+    conn,
+    *,
+    actor,
+    file_id,
+    recipient_user_id,
+    encrypted_file_key,
+    wrapped_by="recipient_public_key",
+    context_type="dm",
+    context_id=None,
+):
+    ensure_cloud_drive_attachment_schema(conn)
+    row = _file_row(conn, file_id)
+    if not row or row["deleted_at"]:
+        return None, "找不到檔案或檔案已刪除"
+    if int(row["owner_user_id"]) != int(actor["id"]):
+        return None, "只能分享自己的 E2EE 檔案"
+    if not row["privacy_mode"].startswith("e2ee"):
+        return None, "只有 E2EE 檔案需要加密金鑰分享"
+    try:
+        recipient_user_id = int(recipient_user_id)
+    except Exception:
+        return None, "recipient_user_id 錯誤"
+    if recipient_user_id == int(actor["id"]):
+        return None, "不需要分享給自己"
+    if not str(encrypted_file_key or "").strip():
+        return None, "缺少 encrypted_file_key"
+    recipient = conn.execute("SELECT id FROM users WHERE id=?", (recipient_user_id,)).fetchone()
+    if not recipient:
+        return None, "找不到分享對象"
+    context_type = validate_context_type(context_type)
+    context_id = _context_id(context_id or f"file-share:{file_id}")
+    now = _now()
+    key_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO encrypted_file_keys (
+            id, file_id, recipient_user_id, encrypted_file_key, wrapped_by, key_version, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (key_id, file_id, recipient_user_id, str(encrypted_file_key), str(wrapped_by or "recipient_public_key"), 1, now),
+    )
+    grant_id = _insert_grant(
+        conn,
+        file_id=file_id,
+        user_id=recipient_user_id,
+        role=None,
+        group_id=None,
+        context_type=context_type,
+        context_id=context_id,
+        can_preview=True,
+    )
+    _create_file_access_log(
+        conn,
+        file_id=file_id,
+        actor_user_id=actor["id"],
+        action="share",
+        result="allowed",
+        reason=f"recipient_user_id={recipient_user_id}",
+    )
+    return {"key_id": key_id, "grant_id": grant_id, "recipient_user_id": recipient_user_id}, None
+
+
+def revoke_e2ee_file_share(conn, *, actor, file_id, recipient_user_id):
+    ensure_cloud_drive_attachment_schema(conn)
+    row = _file_row(conn, file_id)
+    if not row or row["deleted_at"]:
+        return None, "找不到檔案或檔案已刪除"
+    if int(row["owner_user_id"]) != int(actor["id"]) and not is_manager_or_root(actor):
+        return None, "只能撤銷自己的檔案分享"
+    try:
+        recipient_user_id = int(recipient_user_id)
+    except Exception:
+        return None, "recipient_user_id 錯誤"
+    now = _now()
+    key_cur = conn.execute(
+        """
+        UPDATE encrypted_file_keys
+        SET revoked_at=?
+        WHERE file_id=? AND recipient_user_id=? AND revoked_at IS NULL
+        """,
+        (now, file_id, recipient_user_id),
+    )
+    grant_cur = conn.execute(
+        """
+        UPDATE file_access_grants
+        SET revoked_at=?
+        WHERE file_id=? AND granted_to_user_id=? AND revoked_at IS NULL
+        """,
+        (now, file_id, recipient_user_id),
+    )
+    _create_file_access_log(
+        conn,
+        file_id=file_id,
+        actor_user_id=actor["id"],
+        action="revoke_share",
+        result="allowed",
+        reason=f"recipient_user_id={recipient_user_id}",
+    )
+    return {"revoked_keys": key_cur.rowcount, "revoked_grants": grant_cur.rowcount}, None
 
 
 def _file_row(conn, file_id):

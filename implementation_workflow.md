@@ -163,7 +163,8 @@
 - [x] Cloud Drive 附件 schema：`cloud_file_refs` / `file_access_grants` / `announcement_attachment_requests`
 - [x] Cloud Drive 上傳 / 既有檔案附加 / 下載權限 API
 - [x] 公告附件 request + root approve/reject，核准後轉 root-owned 管理層文件
-- [x] Cloud Drive 附件 MVP 測試：cloud drive attachments `3 passed`
+- [x] 相容 `/api/files/*` API：upload / status / download / E2EE share / revoke
+- [x] Cloud Drive 附件 MVP 測試：cloud drive attachments `5 passed`
 - [x] 上傳 API：quota / scan pipeline / MIME magic bytes
 - [ ] 圖片 re-encode 去 EXIF
 - [ ] 頭像上傳與裁切

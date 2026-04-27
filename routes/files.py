@@ -9,9 +9,12 @@ from services.cloud_drive import (
     can_download_file,
     create_announcement_attachment_request,
     ensure_cloud_drive_attachment_schema,
+    get_file_status,
     list_cloud_files,
     resolve_file_storage_path,
     review_announcement_attachment_request,
+    revoke_e2ee_file_share,
+    share_e2ee_file,
     soft_delete_cloud_file,
     store_cloud_upload,
 )
@@ -86,6 +89,17 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    def _form_json_value(name):
+        raw = (request.form.get(name) or "").strip()
+        if not raw:
+            return None
+        try:
+            import json
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    @app.route("/api/files/upload", methods=["POST"])
     @app.route("/api/cloud-drive/upload", methods=["POST"])
     @require_csrf
     def cloud_drive_upload():
@@ -115,6 +129,14 @@ def register_file_routes(app, deps):
                 storage_root=storage_root,
                 file_storage=request.files["file"],
                 privacy_mode=privacy_mode,
+                encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
+                encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
+                wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
+                ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
+                encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
+                encryption_version=(request.form.get("encryption_version") or "").strip() or None,
+                nonce=(request.form.get("nonce") or "").strip() or None,
+                client_scan_report=_form_json_value("client_scan_report"),
                 scan_now=True,
             )
             if msg:
@@ -174,6 +196,22 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/files/<file_id>/status", methods=["GET"])
+    @require_csrf_safe
+    def file_status(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            status, msg = get_file_status(conn, actor=actor, file_id=file_id)
+            if msg:
+                return json_resp({"ok": False, "msg": msg}), 403
+            return json_resp({"ok": True, "file": status})
+        finally:
+            conn.close()
+
     @app.route("/api/cloud-drive/refs", methods=["GET"])
     @require_csrf_safe
     def cloud_drive_refs():
@@ -206,6 +244,7 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/files/<file_id>/download", methods=["GET"])
     @app.route("/api/cloud-drive/files/<file_id>/download", methods=["GET"])
     @require_csrf_safe
     def cloud_drive_download(file_id):
@@ -227,6 +266,66 @@ def register_file_routes(app, deps):
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return send_file(path, as_attachment=True, download_name=row["original_filename_plain_for_public"] or "download.bin")
+        finally:
+            conn.close()
+
+    @app.route("/api/files/<file_id>/share", methods=["POST"])
+    @require_csrf
+    def file_share(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            result, msg = share_e2ee_file(
+                conn,
+                actor=actor,
+                file_id=file_id,
+                recipient_user_id=data.get("recipient_user_id"),
+                encrypted_file_key=data.get("encrypted_file_key"),
+                wrapped_by=data.get("wrapped_by") or "recipient_public_key",
+                context_type=data.get("context_type") or "dm",
+                context_id=data.get("context_id"),
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("FILE_E2EE_SHARE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}, recipient_user_id={result['recipient_user_id']}")
+            return json_resp({"ok": True, "share": result})
+        finally:
+            conn.close()
+
+    @app.route("/api/files/<file_id>/share/revoke", methods=["POST"])
+    @require_csrf
+    def file_share_revoke(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            result, msg = revoke_e2ee_file_share(
+                conn,
+                actor=actor,
+                file_id=file_id,
+                recipient_user_id=data.get("recipient_user_id"),
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("FILE_E2EE_SHARE_REVOKE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}, recipient_user_id={data.get('recipient_user_id')}")
+            return json_resp({"ok": True, "revoked": result})
         finally:
             conn.close()
 

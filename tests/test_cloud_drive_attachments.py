@@ -209,3 +209,81 @@ def test_announcement_attachment_requires_root_approval_before_visible(tmp_path)
     refs_after = client.get("/api/cloud-drive/refs?context_type=announcement&context_id=1")
     assert refs_after.status_code == 200
     assert refs_after.get_json()["refs"][0]["file_id"] == file_id
+
+
+def test_legacy_files_api_upload_status_and_download_alias(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"legacy alias"), "legacy.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    status = client.get(f"/api/files/{file_id}/status")
+    assert status.status_code == 200
+    payload = status.get_json()["file"]
+    assert payload["id"] == file_id
+    assert payload["privacy_mode"] == "public_attachment"
+
+    download = client.get(f"/api/files/{file_id}/download")
+    assert download.status_code == 200
+    assert download.data == b"legacy alias"
+
+
+def test_e2ee_share_and_revoke_controls_download_grant(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/files/upload",
+        data={
+            "file": (io.BytesIO(b"ciphertext"), "vault.bin"),
+            "privacy_mode": "e2ee_vault",
+            "encrypted_metadata": "sealed:filename",
+            "encrypted_file_key": "sealed:owner-key",
+            "ciphertext_sha256": "a" * 64,
+            "encryption_algorithm": "XChaCha20-Poly1305",
+            "encryption_version": "1",
+            "nonce": "nonce",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    shared = client.post(
+        f"/api/files/{file_id}/share",
+        json={
+            "recipient_user_id": 2,
+            "encrypted_file_key": "sealed:bob-key",
+            "context_type": "dm",
+            "context_id": "room-1",
+        },
+    )
+    assert shared.status_code == 200
+
+    actor_box["actor"] = _actor(2, "bob")
+    download = client.get(f"/api/files/{file_id}/download")
+    assert download.status_code == 200
+    assert download.data == b"ciphertext"
+
+    actor_box["actor"] = _actor(1, "alice")
+    revoked = client.post(f"/api/files/{file_id}/share/revoke", json={"recipient_user_id": 2})
+    assert revoked.status_code == 200
+    assert revoked.get_json()["revoked"]["revoked_keys"] == 1
+
+    actor_box["actor"] = _actor(2, "bob")
+    denied = client.get(f"/api/files/{file_id}/download")
+    assert denied.status_code == 403

@@ -430,6 +430,11 @@ Cloud drive safety now exposes:
 - `GET /api/files/quota`: current user storage usage, remaining bytes, file count, per-level upload limits, and grouping by privacy/risk/scan status.
 - `GET /api/files/security-policy`: active cloud drive safety policy plus user-visible restrictions.
 - `GET /api/files/privacy-modes`: the four privacy modes and their user-facing warnings.
+- `POST /api/files/upload`: compatibility upload API backed by the same cloud drive storage/quota/scan pipeline.
+- `GET /api/files/{file_id}/status`: file status, scan results, grants, and E2EE recipient key metadata visible to the owner/root.
+- `GET /api/files/{file_id}/download`: compatibility download API with the same permission and scan checks as cloud drive downloads.
+- `POST /api/files/{file_id}/share`: E2EE share API; stores a recipient-wrapped file key and creates a download grant.
+- `POST /api/files/{file_id}/share/revoke`: revokes recipient-wrapped file keys and active grants.
 - `GET/PUT /api/admin/cloud-drive/security-policy`: root-managed scan, archive, preview, E2EE claim, share revocation, and download quota policy.
 - `GET /api/cloud-drive/files`: list the current user's cloud drive files.
 - `POST /api/cloud-drive/upload`: upload into the owner's cloud drive and optionally attach the uploaded file to a context.
