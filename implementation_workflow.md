@@ -170,7 +170,7 @@
 - [x] 相容 `/api/files/*` API：upload / status / download / E2EE share / revoke
 - [x] Cloud Drive 附件 MVP 測試：cloud drive attachments `5 passed`
 - [x] 上傳 API：quota / scan pipeline / MIME magic bytes
-- [ ] 圖片 re-encode 去 EXIF
+- [x] 圖片 re-encode 去 EXIF
 - [ ] 頭像上傳與裁切
 - [ ] Markdown 富文字編輯器
 - [ ] CAPTCHA：none / math / image / turnstile

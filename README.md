@@ -429,6 +429,10 @@ Optional host packages:
 - YARA: install `yara`, place rules in a local file/directory, enable
   `yara_enabled`, and set `yara_rules_path`. If `yara` or rules are missing,
   YARA is skipped and recorded as `not_required`.
+- Pillow: optional for image metadata stripping. Install `Pillow` and keep
+  `image_reencode_enabled=true` to re-encode JPEG/PNG/GIF uploads and remove
+  EXIF/metadata before download release. If Pillow is missing, this step is
+  skipped and recorded without breaking uploads.
 - ZIP/Office deep checks: no external package is required. ZIP recursion is
   bounded by `max_archive_depth`, `max_archive_files`, and
   `max_archive_uncompressed_bytes`.
@@ -436,7 +440,8 @@ Optional host packages:
 For server-readable `public_attachment` and `private_scannable` files, the
 central scan flow performs magic-byte validation, Office macro detection, ZIP
 archive safety checks, optional recursive ZIP member scanning, optional YARA
-matching, and optional ClamAV scanning before a pending file can become `clean`.
+matching, optional image re-encoding/EXIF stripping, and optional ClamAV scanning
+before a pending file can become `clean`.
 Infected files become `quarantined` by default. E2EE files are never advertised
 as fully server-scanned because the server cannot decrypt their content.
 

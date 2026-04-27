@@ -13,6 +13,7 @@ from services.upload_security import (
     get_cloud_drive_safety_summary,
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
+    reencode_image_strip_metadata,
     safe_public_filename,
     scan_archive_members,
     update_cloud_drive_security_policy,
@@ -54,6 +55,8 @@ def test_cloud_drive_security_policy_defaults_are_safe():
         assert policy["deep_archive_scan_enabled"] is True
         assert policy["max_archive_depth"] == 2
         assert policy["office_macro_scan_enabled"] is True
+        assert policy["image_reencode_enabled"] is True
+        assert policy["image_reencode_max_pixels"] == 25_000_000
         assert policy["yara_enabled"] is False
     finally:
         conn.close()
@@ -73,6 +76,8 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
                 "deep_archive_scan_enabled": True,
                 "max_archive_depth": 3,
                 "office_macro_scan_enabled": True,
+                "image_reencode_enabled": False,
+                "image_reencode_max_pixels": 12345,
                 "yara_enabled": True,
                 "yara_command": "/usr/bin/yara",
                 "yara_rules_path": "/etc/yara/rules",
@@ -87,6 +92,8 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         assert policy["scanner_enabled"] is False
         assert policy["max_archive_files"] == 12
         assert policy["max_archive_depth"] == 3
+        assert policy["image_reencode_enabled"] is False
+        assert policy["image_reencode_max_pixels"] == 12345
         assert policy["yara_enabled"] is True
         assert policy["yara_command"] == "/usr/bin/yara"
         assert policy["yara_rules_path"] == "/etc/yara/rules"
@@ -293,6 +300,63 @@ def test_magic_mime_rejects_executable_disguised_as_image(tmp_path):
     result = check_magic_mime_safety(disguised, filename="avatar.png", declared_mime="image/png")
     assert result["ok"] is False
     assert result["reason"] == "executable_magic_mismatch"
+
+
+def test_image_reencode_strips_jpeg_exif_metadata(tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    image_path = tmp_path / "avatar.jpg"
+    image = Image.new("RGB", (16, 16), color=(20, 40, 60))
+    exif = Image.Exif()
+    exif[270] = "private camera note"
+    image.save(image_path, format="JPEG", exif=exif)
+
+    before = Image.open(image_path)
+    assert before.getexif().get(270) == "private camera note"
+    before.close()
+
+    result = reencode_image_strip_metadata(image_path, filename="avatar.jpg")
+    assert result["ok"] is True
+    assert result["result"] == "clean"
+
+    after = Image.open(image_path)
+    try:
+        assert after.getexif().get(270) is None
+    finally:
+        after.close()
+
+
+def test_scan_uploaded_file_records_image_reencode_result(tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    conn = _conn()
+    image_path = tmp_path / "avatar.jpg"
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(image_path, format="JPEG")
+    update_cloud_drive_security_policy(conn, {"scanner_enabled": False, "scanner_backend": "disabled"})
+    try:
+        result = create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path=str(image_path),
+            privacy_mode="public_attachment",
+            size_bytes=image_path.stat().st_size,
+            original_filename="avatar.jpg",
+            mime_type="image/jpeg",
+            user={"effective_level": "trusted"},
+            scan_now=True,
+        )
+        scanner = conn.execute(
+            "SELECT result, details_json FROM file_scan_results WHERE file_id=? AND scanner_name='image-reencode'",
+            (result["file_id"],),
+        ).fetchone()
+        row = conn.execute("SELECT size_bytes, plaintext_sha256 FROM uploaded_files WHERE id=?", (result["file_id"],)).fetchone()
+        assert scanner["result"] == "clean"
+        assert row["size_bytes"] == image_path.stat().st_size
+        assert row["plaintext_sha256"]
+    finally:
+        conn.close()
 
 
 def test_scan_uploaded_file_records_clean_clamav_result(tmp_path, monkeypatch):

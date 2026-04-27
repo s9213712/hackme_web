@@ -180,7 +180,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {
         "scope", "block_unclean_downloads", "max_archive_files", "max_daily_downloads",
         "deep_archive_scan_enabled", "max_archive_depth", "office_macro_scan_enabled",
-        "yara_enabled", "yara_command", "yara_rules_path",
+        "image_reencode_enabled", "image_reencode_max_pixels", "yara_enabled", "yara_command", "yara_rules_path",
     } <= cloud_policy_cols
     assert {"file_id", "context_type", "context_id", "permission_snapshot_json"} <= cloud_ref_cols
     assert {"file_id", "granted_to_user_id", "context_type", "can_download", "revoked_at"} <= grant_cols

@@ -526,11 +526,13 @@ const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "validate_magic_mime",
   "deep_archive_scan_enabled",
   "office_macro_scan_enabled",
+  "image_reencode_enabled",
   "yara_enabled"
 ];
 const CLOUD_DRIVE_POLICY_INT_FIELDS = [
   "scanner_timeout_seconds",
   "max_archive_depth",
+  "image_reencode_max_pixels",
   "max_archive_files",
   "max_archive_uncompressed_bytes",
   "max_daily_downloads"

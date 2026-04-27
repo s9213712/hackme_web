@@ -821,6 +821,7 @@
             <div class="field"><label><input type="checkbox" id="s-cd-validate-magic-mime" /> 檢查副檔名/MIME 偽裝</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-deep-archive-scan-enabled" /> 遞迴檢查 ZIP 內容</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-office-macro-scan-enabled" /> 檢查 Office 巨集</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-image-reencode-enabled" /> 圖片重新編碼去除 EXIF</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-yara-enabled" /> 啟用 YARA 規則掃描</label></div>
             </div>
             <div class="field">
@@ -841,6 +842,10 @@
             <div class="field">
               <label>ZIP 遞迴深度（0-5，軟需求）</label>
               <input type="number" id="s-cd-max-archive-depth" min="0" max="5" />
+            </div>
+            <div class="field">
+              <label>圖片重新編碼最大像素（軟需求，Pillow 未安裝時自動略過）</label>
+              <input type="number" id="s-cd-image-reencode-max-pixels" min="0" max="100000000" />
             </div>
             <div class="field">
               <label>壓縮檔最多檔案數</label>

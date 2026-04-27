@@ -39,6 +39,7 @@ EXECUTABLE_EXTENSIONS = {
 ARCHIVE_EXTENSIONS = {".zip", ".7z", ".rar", ".tar", ".gz"}
 OFFICE_EXTENSIONS = {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".xlsm", ".docm", ".pptm"}
 MACRO_OFFICE_EXTENSIONS = {".xlsm", ".docm", ".pptm"}
+REENCODABLE_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
 
 DEFAULT_FILE_TYPE_POLICIES = {
     "executable": {
@@ -116,6 +117,8 @@ DEFAULT_CLOUD_DRIVE_SECURITY_POLICY = {
     "deep_archive_scan_enabled": True,
     "max_archive_depth": 2,
     "office_macro_scan_enabled": True,
+    "image_reencode_enabled": True,
+    "image_reencode_max_pixels": 25_000_000,
     "yara_enabled": False,
     "yara_command": "",
     "yara_rules_path": "",
@@ -141,11 +144,13 @@ CLOUD_DRIVE_POLICY_BOOL_FIELDS = {
     "validate_magic_mime",
     "deep_archive_scan_enabled",
     "office_macro_scan_enabled",
+    "image_reencode_enabled",
     "yara_enabled",
 }
 CLOUD_DRIVE_POLICY_INT_FIELDS = {
     "scanner_timeout_seconds",
     "max_archive_depth",
+    "image_reencode_max_pixels",
     "max_archive_files",
     "max_archive_uncompressed_bytes",
     "max_daily_downloads",
@@ -311,6 +316,8 @@ def ensure_upload_security_schema(conn):
             deep_archive_scan_enabled INTEGER NOT NULL DEFAULT 1,
             max_archive_depth INTEGER NOT NULL DEFAULT 2,
             office_macro_scan_enabled INTEGER NOT NULL DEFAULT 1,
+            image_reencode_enabled INTEGER NOT NULL DEFAULT 1,
+            image_reencode_max_pixels INTEGER NOT NULL DEFAULT 25000000,
             yara_enabled INTEGER NOT NULL DEFAULT 0,
             yara_command TEXT,
             yara_rules_path TEXT,
@@ -350,6 +357,8 @@ def _ensure_cloud_drive_policy_columns(conn):
         "deep_archive_scan_enabled": "INTEGER NOT NULL DEFAULT 1",
         "max_archive_depth": "INTEGER NOT NULL DEFAULT 2",
         "office_macro_scan_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "image_reencode_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "image_reencode_max_pixels": "INTEGER NOT NULL DEFAULT 25000000",
         "yara_enabled": "INTEGER NOT NULL DEFAULT 0",
         "yara_command": "TEXT",
         "yara_rules_path": "TEXT",
@@ -403,10 +412,11 @@ def seed_default_cloud_drive_security_policy(conn):
             scanner_timeout_seconds, fail_closed_on_scanner_error,
             quarantine_on_infected, validate_magic_mime,
             deep_archive_scan_enabled, max_archive_depth,
-            office_macro_scan_enabled, yara_enabled, yara_command, yara_rules_path,
+            office_macro_scan_enabled, image_reencode_enabled, image_reencode_max_pixels,
+            yara_enabled, yara_command, yara_rules_path,
             max_archive_files, max_archive_uncompressed_bytes, max_daily_downloads,
             notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             policy["scope"],
@@ -426,6 +436,8 @@ def seed_default_cloud_drive_security_policy(conn):
             1 if policy["deep_archive_scan_enabled"] else 0,
             int(policy["max_archive_depth"]),
             1 if policy["office_macro_scan_enabled"] else 0,
+            1 if policy["image_reencode_enabled"] else 0,
+            int(policy["image_reencode_max_pixels"]),
             1 if policy["yara_enabled"] else 0,
             policy["yara_command"],
             policy["yara_rules_path"],
@@ -519,6 +531,8 @@ def serialize_cloud_drive_security_policy(row):
             "deep_archive_scan_enabled": bool(row["deep_archive_scan_enabled"]),
             "max_archive_depth": int(row["max_archive_depth"]),
             "office_macro_scan_enabled": bool(row["office_macro_scan_enabled"]),
+            "image_reencode_enabled": bool(row["image_reencode_enabled"]),
+            "image_reencode_max_pixels": int(row["image_reencode_max_pixels"]),
             "yara_enabled": bool(row["yara_enabled"]),
             "yara_command": row["yara_command"],
             "yara_rules_path": row["yara_rules_path"],
@@ -541,10 +555,11 @@ def serialize_cloud_drive_security_policy(row):
         "validate_magic_mime",
         "deep_archive_scan_enabled",
         "office_macro_scan_enabled",
+        "image_reencode_enabled",
         "yara_enabled",
     ):
         data[key] = bool(data.get(key))
-    for key in ("scanner_timeout_seconds", "max_archive_depth", "max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
+    for key in ("scanner_timeout_seconds", "max_archive_depth", "image_reencode_max_pixels", "max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
         data[key] = int(data.get(key) or 0)
     data["scanner_backend"] = str(data.get("scanner_backend") or "disabled")
     data["scanner_command"] = str(data.get("scanner_command") or "")
@@ -584,6 +599,8 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
                 return None, "scanner_timeout_seconds 必須至少 1 秒"
             if key == "max_archive_depth" and value > 5:
                 return None, "max_archive_depth 不可大於 5"
+            if key == "image_reencode_max_pixels" and value > 100_000_000:
+                return None, "image_reencode_max_pixels 不可大於 100000000"
             updates.append(f"{key}=?")
             params.append(value)
     if "scanner_backend" in data:
@@ -845,6 +862,68 @@ def check_magic_mime_safety(path, filename=None, declared_mime=None):
     return result
 
 
+def reencode_image_strip_metadata(path, *, filename=None, max_pixels=25_000_000):
+    ext = file_extension(filename or path)
+    if ext not in REENCODABLE_IMAGE_EXTENSIONS:
+        return {"ok": True, "result": "not_required", "reason": "not_reencodable_image"}
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return {"ok": True, "result": "skipped", "reason": "pillow_not_installed"}
+
+    target = Path(path)
+    before_size = target.stat().st_size
+    try:
+        with Image.open(target) as img:
+            frames = getattr(img, "n_frames", 1)
+            if frames and frames > 1:
+                return {"ok": True, "result": "skipped", "reason": "animated_image"}
+            width, height = img.size
+            pixels = int(width or 0) * int(height or 0)
+            if pixels <= 0:
+                return {"ok": False, "result": "failed", "reason": "invalid_dimensions"}
+            if pixels > int(max_pixels or 25_000_000):
+                return {"ok": True, "result": "skipped", "reason": "image_too_large", "pixels": pixels}
+
+            clean = ImageOps.exif_transpose(img)
+            fmt = (img.format or "").upper()
+            save_kwargs = {}
+            if ext in {".jpg", ".jpeg"}:
+                fmt = "JPEG"
+                if clean.mode not in {"RGB", "L"}:
+                    clean = clean.convert("RGB")
+                save_kwargs = {"quality": 92, "optimize": True}
+            elif ext == ".png":
+                fmt = "PNG"
+                save_kwargs = {"optimize": True}
+            elif ext == ".gif":
+                fmt = "GIF"
+            else:
+                return {"ok": True, "result": "not_required", "reason": "unsupported_extension"}
+
+            tmp = target.with_suffix(target.suffix + ".reencode.tmp")
+            clean.save(tmp, format=fmt, **save_kwargs)
+            os.replace(tmp, target)
+            after_size = target.stat().st_size
+            return {
+                "ok": True,
+                "result": "clean",
+                "reason": "metadata_stripped",
+                "format": fmt,
+                "pixels": pixels,
+                "old_size": before_size,
+                "new_size": after_size,
+            }
+    except Exception as exc:
+        try:
+            tmp = target.with_suffix(target.suffix + ".reencode.tmp")
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        return {"ok": False, "result": "failed", "reason": "image_reencode_failed", "error": exc.__class__.__name__}
+
+
 def _record_scan_result(conn, *, file_id, scanner_name, result, scanner_version=None, started_at=None, malware_name=None, details=None):
     now = datetime.now().isoformat()
     conn.execute(
@@ -1098,6 +1177,23 @@ def scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime
             status = "quarantined" if policy["quarantine_on_infected"] else "infected"
             _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
             return {"scan_status": status, "risk_level": "high", "results": results}
+
+    if policy.get("image_reencode_enabled"):
+        image_result = reencode_image_strip_metadata(
+            path,
+            filename=filename or row["original_filename_plain_for_public"],
+            max_pixels=policy.get("image_reencode_max_pixels") or 25_000_000,
+        )
+        scan_result_name = "clean" if image_result.get("ok") else "failed"
+        if image_result.get("result") in {"skipped", "not_required"}:
+            scan_result_name = "not_required"
+        _record_scan_result(conn, file_id=file_id, scanner_name="image-reencode", result=scan_result_name, details=image_result)
+        results.append({"scanner": "image-reencode", **image_result})
+        if image_result.get("result") == "clean":
+            conn.execute(
+                "UPDATE uploaded_files SET size_bytes=?, plaintext_sha256=?, updated_at=? WHERE id=?",
+                (int(image_result.get("new_size") or path.stat().st_size), sha256_file(path), datetime.now().isoformat(), file_id),
+            )
 
     if policy.get("office_macro_scan_enabled") and file_extension(filename or row["original_filename_plain_for_public"] or path) in OFFICE_EXTENSIONS:
         office_result = check_office_macro_safety(path, filename=filename or row["original_filename_plain_for_public"])

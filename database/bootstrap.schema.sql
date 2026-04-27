@@ -344,6 +344,8 @@ CREATE TABLE IF NOT EXISTS cloud_drive_security_policies (
     deep_archive_scan_enabled INTEGER NOT NULL DEFAULT 1,
     max_archive_depth INTEGER NOT NULL DEFAULT 2,
     office_macro_scan_enabled INTEGER NOT NULL DEFAULT 1,
+    image_reencode_enabled INTEGER NOT NULL DEFAULT 1,
+    image_reencode_max_pixels INTEGER NOT NULL DEFAULT 25000000,
     yara_enabled INTEGER NOT NULL DEFAULT 0,
     yara_command TEXT,
     yara_rules_path TEXT,
