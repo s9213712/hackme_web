@@ -309,6 +309,31 @@ def get_schema_version(conn):
         return 0
 
 
+def _table_exists(conn, table_name):
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _repair_existing_legacy_tables(
+    conn,
+    ensure_secure_audit_columns,
+    ensure_user_columns,
+    ensure_appeal_columns,
+    ensure_session_columns,
+):
+    for table_name, repair in (
+        ("secure_audit", ensure_secure_audit_columns),
+        ("users", ensure_user_columns),
+        ("violation_appeals", ensure_appeal_columns),
+        ("sessions", ensure_session_columns),
+    ):
+        if _table_exists(conn, table_name):
+            repair(conn)
+
+
 def apply_schema_migrations(
     conn,
     ensure_secure_audit_columns,
@@ -365,6 +390,15 @@ def init_db(
 ):
     conn = _STATE["get_db"]()
     schema_path = _STATE.get("schema_path") or (_STATE["db_path"] + '.schema.sql')
+    # Existing SQLite tables may predate newer columns referenced by schema indexes.
+    # Repair known legacy tables before replaying the full schema script.
+    _repair_existing_legacy_tables(
+        conn,
+        ensure_secure_audit_columns,
+        ensure_user_columns,
+        ensure_appeal_columns,
+        ensure_session_columns,
+    )
     conn.executescript(open(schema_path, 'r', encoding='utf-8').read())
     ensure_secure_audit_columns(conn)
     ensure_user_columns(conn)
@@ -399,18 +433,22 @@ def init_db(
 
     now = datetime.now().isoformat()
 
-    root_password = _bootstrap_password("HTML_LEARNING_ROOT_PASSWORD", "root", required=True)
     root_row = conn.execute("SELECT id FROM users WHERE username='root'").fetchone()
+    root_password = None
     if root_row:
         root_id = root_row["id"]
         conn.execute("UPDATE users SET role='super_admin', status='active', updated_at=? WHERE id=?", (now, root_id))
+        has_root_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (root_id,)).fetchone()
+        if not has_root_pw:
+            root_password = _bootstrap_password("HTML_LEARNING_ROOT_PASSWORD", "root", required=True)
     else:
+        root_password = _bootstrap_password("HTML_LEARNING_ROOT_PASSWORD", "root", required=True)
         root_cur = conn.execute(
             "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)",
             ("root", now, now)
         )
         root_id = root_cur.lastrowid
-    has_root_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (root_id,)).fetchone()
+        has_root_pw = None
     if not has_root_pw:
         _insert_password_record(conn, root_id, root_password, hash_password, now)
 

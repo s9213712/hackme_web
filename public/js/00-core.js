@@ -258,17 +258,23 @@ function renderChatMessages(messages) {
   list.innerHTML = messages.map((m) => {
     const isSelf = String(m.sender || "") === String(currentUser || "");
     const cls = ["chat-msg"];
+    const actions = [];
     if (isSelf) cls.push("self");
+    if (!isSelf && m.id) actions.push(`<button class="chat-report-btn" type="button" data-report-message="${m.id}">檢舉</button>`);
+    if (canDeleteChatMessage(m)) actions.push(`<button class="chat-delete-btn" type="button" data-delete-message="${m.id}">刪除</button>`);
     return `
       <div class="${cls.join(" ")}">
         <span class="meta">${sanitize(formatChatTime(m.created_at))} · ${sanitize(m.sender || "系統")}</span>
         ${sanitize(m.content || "")}
-        ${!isSelf && m.id ? `<button class="chat-report-btn" type="button" data-report-message="${m.id}">檢舉</button>` : ""}
+        ${actions.join("")}
       </div>
     `;
   }).join("");
   list.querySelectorAll("button[data-report-message]").forEach((btn) => {
     btn.addEventListener("click", () => reportChatMessage(parseInt(btn.getAttribute("data-report-message"), 10)));
+  });
+  list.querySelectorAll("button[data-delete-message]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteChatMessage(parseInt(btn.getAttribute("data-delete-message"), 10)));
   });
   list.scrollTop = list.scrollHeight;
 }

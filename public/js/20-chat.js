@@ -241,3 +241,29 @@ async function reportChatMessage(messageId) {
   setChatMsg("chat-room-warn", json.msg || (json.ok ? "檢舉已送出" : "檢舉失敗"), !!json.ok);
 }
 
+function canDeleteChatMessage(message) {
+  if (!message || !message.id) return false;
+  if (String(message.sender || "") === String(currentUser || "")) return true;
+  const currentRoom = chatRooms.find((room) => Number(room.id) === Number(selectedChatRoomId));
+  if (currentRoom && Number(currentRoom.owner_user_id) === Number(currentUserId)) return true;
+  return clientRoleRank(currentRole || "user") >= clientRoleRank("manager");
+}
+
+async function deleteChatMessage(messageId) {
+  if (!messageId) return;
+  if (!confirm("確定要刪除此留言嗎？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/messages/${messageId}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    setChatMsg("chat-room-warn", json.msg || "訊息已刪除", true);
+    if (selectedChatRoomId) await loadChatMessages(selectedChatRoomId, true);
+    return;
+  }
+  setChatMsg("chat-room-warn", json.msg || "刪除訊息失敗", false);
+}

@@ -3,6 +3,28 @@ from datetime import datetime
 from flask import request
 
 
+def actor_role(actor):
+    return "super_admin" if actor and actor.get("username") == "root" else (actor.get("role") or "user")
+
+
+def can_delete_chat_message(actor, message_row, role_rank):
+    if not actor or not message_row:
+        return False
+    if message_row["sender_id"] == actor["id"]:
+        return True
+    if message_row["owner_user_id"] == actor["id"]:
+        return True
+
+    actor_rank = role_rank(actor_role(actor))
+    if actor_rank >= role_rank("super_admin"):
+        return True
+    if actor_rank < role_rank("manager"):
+        return False
+
+    target_role = "super_admin" if message_row["sender_username"] == "root" else (message_row["sender_role"] or "user")
+    return role_rank(target_role) < actor_rank
+
+
 def register_chat_routes(app, deps):
     CHAT_MESSAGE_MAX_LEN = deps["CHAT_MESSAGE_MAX_LEN"]
     OFFICIAL_CHAT_ROOM_NAME = deps["OFFICIAL_CHAT_ROOM_NAME"]
@@ -378,6 +400,53 @@ def register_chat_routes(app, deps):
             audit("CHAT_MESSAGE_REPORTED", get_client_ip(), user=actor["username"],
                   detail=f"message_id={message_id},reported={msg['sender_username']},reason={reason}")
             return json_resp({"ok":True,"msg":"檢舉已送出，等待超級管理員審核"})
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/messages/<int:message_id>", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def delete_chat_message(message_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+
+        conn = get_db()
+        try:
+            msg = conn.execute(
+                "SELECT m.id, m.room_id, m.sender_id, m.is_blocked, u.username AS sender_username, "
+                "u.role AS sender_role, r.owner_user_id "
+                "FROM chat_messages m "
+                "LEFT JOIN users u ON u.id=m.sender_id "
+                "LEFT JOIN chat_rooms r ON r.id=m.room_id "
+                "WHERE m.id=?",
+                (message_id,),
+            ).fetchone()
+            if not msg:
+                return json_resp({"ok":False,"msg":"找不到訊息"}), 404
+            if msg["is_blocked"]:
+                return json_resp({"ok":True,"msg":"訊息已刪除"})
+
+            member = conn.execute(
+                "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+                (msg["room_id"], actor["id"]),
+            ).fetchone()
+            if not member and role_rank(actor_role(actor)) < role_rank("manager"):
+                return json_resp({"ok":False,"msg":"你不在此聊天室"}), 403
+            if not can_delete_chat_message(actor, msg, role_rank):
+                return json_resp({"ok":False,"msg":"你沒有刪除此訊息的權限"}), 403
+
+            conn.execute(
+                "UPDATE chat_messages SET is_blocked=1, blocked_reason=? WHERE id=?",
+                (f"deleted_by={actor['username']}", message_id),
+            )
+            conn.commit()
+            audit(
+                "CHAT_MESSAGE_DELETED",
+                get_client_ip(),
+                user=actor["username"],
+                detail=f"message_id={message_id},room_id={msg['room_id']},target={msg['sender_username'] or '-'}",
+            )
+            return json_resp({"ok":True,"msg":"訊息已刪除"})
         finally:
             conn.close()
 
