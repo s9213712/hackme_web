@@ -436,11 +436,29 @@ CREATE TABLE IF NOT EXISTS album_files (
     UNIQUE(album_id, file_id)
 );
 
+CREATE TABLE IF NOT EXISTS storage_share_links (
+    id TEXT PRIMARY KEY,
+    storage_file_id TEXT NOT NULL REFERENCES storage_files(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    can_download INTEGER NOT NULL DEFAULT 1,
+    can_preview INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT,
+    revoked_at TEXT,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at TEXT,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_user_id, virtual_path);
 CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id);
 CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at);
 
 CREATE TABLE IF NOT EXISTS cloud_file_refs (
     id TEXT PRIMARY KEY,

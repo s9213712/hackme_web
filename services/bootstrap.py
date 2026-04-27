@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 24
+CURRENT_SCHEMA_VERSION = 25
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -28,6 +28,7 @@ SCHEMA_MIGRATIONS = (
     (22, "reports and notifications schema"),
     (23, "direct messages schema"),
     (24, "storage files and albums schema"),
+    (25, "storage share links schema"),
 )
 
 _STATE = {
@@ -519,6 +520,10 @@ def apply_schema_migrations(
         elif version == 23:
             _ensure_dm_schema(conn)
         elif version == 24:
+            from services.storage_albums import ensure_storage_album_schema
+
+            ensure_storage_album_schema(conn)
+        elif version == 25:
             from services.storage_albums import ensure_storage_album_schema
 
             ensure_storage_album_schema(conn)

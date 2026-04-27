@@ -21,17 +21,22 @@ from services.cloud_drive import (
 from services.storage_albums import (
     add_album_file,
     create_album,
+    create_share_link,
     create_storage_file_entry,
     delete_album,
     ensure_storage_album_schema,
     get_album,
     get_storage_file,
     list_albums,
+    list_share_links,
     list_storage_files,
     list_storage_trash,
     purge_storage_file,
     remove_album_file,
+    resolve_share_token,
     restore_storage_file,
+    revoke_share_link,
+    mark_share_link_accessed,
     sync_user_storage_summary,
     trash_storage_file,
     update_album,
@@ -429,6 +434,89 @@ def register_file_routes(app, deps):
             conn.commit()
             audit("STORAGE_ALBUM_FILE_REMOVE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album_id}, album_file_id={album_file_id}")
             return json_resp({"ok": True, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/share-links", methods=["GET", "POST"])
+    @require_csrf_safe
+    def storage_share_links():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            if request.method == "GET":
+                links = list_share_links(conn, actor=actor, storage_file_id=request.args.get("storage_file_id"))
+                return json_resp({"ok": True, "share_links": links})
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            link, msg = create_share_link(
+                conn,
+                actor=actor,
+                storage_file_id=data.get("storage_file_id"),
+                expires_at=data.get("expires_at") or None,
+                can_preview=bool(data.get("can_preview", False)),
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_SHARE_LINK_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"share_link_id={link['id']}")
+            return json_resp({"ok": True, "share_link": link})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/share-links/<link_id>/revoke", methods=["POST"])
+    @require_csrf
+    def storage_share_link_revoke(link_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            link, msg = revoke_share_link(conn, actor=actor, link_id=link_id)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 404
+            conn.commit()
+            audit("STORAGE_SHARE_LINK_REVOKE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"share_link_id={link_id}")
+            return json_resp({"ok": True, "share_link": link})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/<token>/download", methods=["GET"])
+    def storage_share_link_download(token):
+        conn = get_db()
+        try:
+            row, reason = resolve_share_token(conn, token)
+            if not row:
+                return json_resp({"ok": False, "msg": "分享連結不存在或已失效", "reason": reason}), 404
+            policy = get_cloud_drive_security_policy(conn)
+            if policy.get("block_unclean_downloads") and not str(row["privacy_mode"]).startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
+                return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
+            if _requires_download_warning(policy, row):
+                confirmed = (
+                    request.args.get("confirm_high_risk") == "1"
+                    or request.headers.get("X-Confirm-High-Risk-Download", "").lower() in {"1", "true", "yes"}
+                )
+                if not confirmed:
+                    return json_resp({
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "msg": "此分享檔案為高風險或無法完整掃描，請確認信任來源後再下載。",
+                        "risk_level": row["risk_level"],
+                        "scan_status": row["scan_status"],
+                    }), 409
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            mark_share_link_accessed(conn, row["id"])
+            log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return send_file(path, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
         finally:
             conn.close()
 

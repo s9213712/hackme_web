@@ -308,6 +308,47 @@ def test_storage_album_rejects_other_users_file(tmp_path):
     assert denied.status_code == 400
 
 
+def test_storage_share_link_download_and_revoke(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"shared data"), "shared.txt"),
+            "virtual_path": "shared.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    created = client.post("/api/storage/share-links", json={"storage_file_id": storage_file_id})
+    assert created.status_code == 200
+    share_link = created.get_json()["share_link"]
+    assert share_link["token"]
+
+    listed = client.get("/api/storage/share-links").get_json()["share_links"]
+    assert listed[0]["id"] == share_link["id"]
+    assert "token" not in listed[0]
+
+    actor_box["actor"] = _actor(3, "mallory")
+    downloaded = client.get(f"/api/storage/shared/{share_link['token']}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.data == b"shared data"
+
+    actor_box["actor"] = _actor(1, "alice")
+    revoked = client.post(f"/api/storage/share-links/{share_link['id']}/revoke")
+    assert revoked.status_code == 200
+    assert revoked.get_json()["share_link"]["revoked_at"]
+    denied = client.get(f"/api/storage/shared/{share_link['token']}/download")
+    assert denied.status_code == 404
+
+
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

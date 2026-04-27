@@ -183,7 +183,7 @@
 - [x] 上傳下載 API
 - [x] 回收筒 API
 - [x] 相簿 API
-- [ ] 分享連結 API
+- [x] 分享連結 API
 - [ ] Storage Admin API
 - [ ] FileManager UI
 - [ ] AlbumManager UI

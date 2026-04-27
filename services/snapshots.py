@@ -38,6 +38,7 @@ RESETTABLE_TABLES = {
     "reports",
     "storage_files",
     "storage_quota_log",
+    "storage_share_links",
     "uploaded_files",
     "user_storage",
     "user_mod_notes",

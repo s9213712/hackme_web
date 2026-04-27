@@ -559,6 +559,10 @@ underlying Cloud Drive file so existing message/forum references are not broken.
 Album APIs include owner-only `GET/POST /api/storage/albums`,
 `GET/PUT/DELETE /api/storage/albums/{id}`, plus add/remove file membership under
 `/api/storage/albums/{id}/files`.
+Share-link APIs include `GET/POST /api/storage/share-links`,
+`POST /api/storage/share-links/{id}/revoke`, and public
+`GET /api/storage/shared/{token}/download`. Tokens are stored as hashes, shown
+only once on creation, can expire or be revoked, and do not bypass scan policy.
 
 ### Feature Flags and Defaults
 

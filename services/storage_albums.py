@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import uuid
 from datetime import datetime
 
@@ -85,11 +87,32 @@ def ensure_storage_album_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS storage_share_links (
+            id TEXT PRIMARY KEY,
+            storage_file_id TEXT NOT NULL REFERENCES storage_files(id) ON DELETE CASCADE,
+            file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            can_download INTEGER NOT NULL DEFAULT 1,
+            can_preview INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            revoked_at TEXT,
+            access_count INTEGER NOT NULL DEFAULT 0,
+            last_accessed_at TEXT,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_user_id, virtual_path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at)")
 
 
 def normalize_virtual_path(path, display_name=None):
@@ -544,3 +567,122 @@ def remove_album_file(conn, *, actor, album_id, album_file_id):
     conn.execute("UPDATE album_files SET deleted_at=? WHERE id=?", (now, album_file_id))
     conn.execute("UPDATE albums SET updated_at=? WHERE id=?", (now, album_id))
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
+
+
+def _hash_share_token(token):
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def create_share_link(conn, *, actor, storage_file_id, expires_at=None, can_preview=False):
+    ensure_storage_album_schema(conn)
+    storage_file = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+    if not storage_file or storage_file.get("deleted_at") or storage_file.get("file_deleted_at") or int(storage_file.get("is_trashed") or 0):
+        return None, "找不到 storage 檔案或檔案已刪除"
+    token = secrets.token_urlsafe(32)
+    now = _now()
+    link_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO storage_share_links (
+            id, storage_file_id, file_id, owner_user_id, token_hash, can_download,
+            can_preview, expires_at, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        """,
+        (
+            link_id,
+            storage_file_id,
+            storage_file["file_id"],
+            int(actor["id"]),
+            _hash_share_token(token),
+            1 if can_preview else 0,
+            str(expires_at or "").strip() or None,
+            int(actor["id"]),
+            now,
+        ),
+    )
+    link = get_share_link(conn, actor=actor, link_id=link_id)
+    link["token"] = token
+    return link, None
+
+
+def list_share_links(conn, *, actor, storage_file_id=None):
+    ensure_storage_album_schema(conn)
+    where = "owner_user_id=?"
+    params = [int(actor["id"])]
+    if storage_file_id:
+        where += " AND storage_file_id=?"
+        params.append(str(storage_file_id))
+    rows = conn.execute(
+        f"""
+        SELECT id, storage_file_id, file_id, owner_user_id, can_download, can_preview,
+               expires_at, revoked_at, access_count, last_accessed_at, created_by, created_at
+        FROM storage_share_links
+        WHERE {where}
+        ORDER BY created_at DESC
+        """,
+        tuple(params),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_share_link(conn, *, actor, link_id):
+    row = conn.execute(
+        """
+        SELECT id, storage_file_id, file_id, owner_user_id, can_download, can_preview,
+               expires_at, revoked_at, access_count, last_accessed_at, created_by, created_at
+        FROM storage_share_links
+        WHERE id=? AND owner_user_id=?
+        """,
+        (link_id, int(actor["id"])),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def revoke_share_link(conn, *, actor, link_id):
+    ensure_storage_album_schema(conn)
+    link = get_share_link(conn, actor=actor, link_id=link_id)
+    if not link:
+        return None, "找不到分享連結"
+    if link.get("revoked_at"):
+        return link, None
+    conn.execute("UPDATE storage_share_links SET revoked_at=? WHERE id=?", (_now(), link_id))
+    return get_share_link(conn, actor=actor, link_id=link_id), None
+
+
+def resolve_share_token(conn, token):
+    ensure_storage_album_schema(conn)
+    row = conn.execute(
+        """
+        SELECT sl.*, sf.display_name, sf.deleted_at AS storage_deleted_at, sf.is_trashed,
+               f.storage_path, f.original_filename_plain_for_public, f.scan_status, f.risk_level,
+               f.privacy_mode, f.deleted_at AS file_deleted_at
+        FROM storage_share_links sl
+        JOIN storage_files sf ON sf.id=sl.storage_file_id
+        JOIN uploaded_files f ON f.id=sl.file_id
+        WHERE sl.token_hash=?
+        """,
+        (_hash_share_token(token),),
+    ).fetchone()
+    if not row:
+        return None, "not_found"
+    data = dict(row)
+    if data.get("revoked_at"):
+        return None, "revoked"
+    if data.get("expires_at") and data["expires_at"] <= _now():
+        return None, "expired"
+    if data.get("storage_deleted_at") or data.get("file_deleted_at") or int(data.get("is_trashed") or 0):
+        return None, "deleted"
+    if not int(data.get("can_download") or 0):
+        return None, "download_disabled"
+    return data, ""
+
+
+def mark_share_link_accessed(conn, link_id):
+    conn.execute(
+        """
+        UPDATE storage_share_links
+        SET access_count=access_count + 1, last_accessed_at=?
+        WHERE id=?
+        """,
+        (_now(), link_id),
+    )
