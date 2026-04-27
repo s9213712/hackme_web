@@ -34,6 +34,97 @@ https://127.0.0.1:5000/
 
 初始化帳號不再硬編碼。全新資料庫啟動時，`root` 會從 `HTML_LEARNING_ROOT_PASSWORD` 建立；只有在設定 `HTML_LEARNING_MANAGER_PASSWORD`、`HTML_LEARNING_TEST_PASSWORD` 時，才會建立 `admin` 與 `test`。
 
+## 部署常見問題
+
+### 執行 `python3 server.py` 後網站打不開
+
+先確認伺服器實際 listen 的 host 與 port。內建 Flask server 預設使用
+`HTML_LEARNING_HOST=0.0.0.0` 與 `HTML_LEARNING_PORT=5000`。
+
+```bash
+export HTML_LEARNING_HOST=0.0.0.0
+export HTML_LEARNING_PORT=5000
+python3 server.py
+```
+
+如果 root 已經在管理 UI 修改 `server_listen_host` 或
+`server_listen_port`，請先重啟伺服器再測試。bind 設定只會在下次啟動生效。
+
+### 要開 `http://` 還是 `https://`？
+
+如果專案根目錄存在 `cert.pem` 與 `key.pem`，服務會用 HTTPS 啟動；否則會用
+HTTP。啟動 log 會印出實際 scheme。
+
+### 全新資料庫 root 登不進去
+
+第一次成功初始化資料庫前，必須先設定 `HTML_LEARNING_ROOT_PASSWORD`。如果
+database 已經用其他密碼建立，就請使用原本 root 密碼；只有在你確定要重建全新
+站台時，才刪除並重建資料庫。
+
+### 改了環境變數但設定沒有變
+
+多數 runtime 設定在 bootstrap 後會存到 SQLite 的 `system_settings`。root 可在
+伺服器設定 UI 調整。環境變數主要是首次部署、目錄與 bind 的啟動 fallback。
+
+### 資料庫與上傳檔案應該放哪裡？
+
+請使用可持久化路徑，不要放在暫存目錄。預設重要資料在 `database/`、
+`storage/`、`logs/`、`anchors/`、`chats/`。正式部署可改成絕對路徑：
+
+```bash
+export HTML_LEARNING_DB_DIR=/var/lib/hackme_web/database
+export HTML_LEARNING_STORAGE_DIR=/var/lib/hackme_web/storage
+export HTML_LEARNING_LOG_DIR=/var/log/hackme_web
+```
+
+不要把 `HTML_LEARNING_STORAGE_DIR` 指到 `/`、`/etc`、專案根目錄或 `public/`；
+啟動時會拒絕危險 storage root，避免路徑穿越或覆蓋網站檔案。
+
+### 顯示 maintenance mode 擋住存取
+
+用瀏覽器登入 root 後，在伺服器設定關閉維護模式；或由 root 輪替 maintenance
+bypass token，並在 API request 帶：
+
+```text
+X-Maintenance-Bypass-Token: <raw-token>
+```
+
+請使用輪替後只顯示一次的明文 token，不是 `maintenance_bypass_token_hash`。
+
+### 如何確認伺服器跑的是最新版本？
+
+看登入頁底部的發佈號，或呼叫：
+
+```bash
+curl http://127.0.0.1:5000/api/version
+```
+
+它應該與 `services/release_info.py` 和 README 內的發佈號一致。
+
+### 管理 UI 顯示 listen IP/port 需要重啟
+
+這是預期行為。root 可以先儲存 `server_listen_host` 與
+`server_listen_port`，但已啟動的 socket 不會熱換，必須重啟服務器才會套用。
+
+### 靜態頁面有出現，但 API 全部失敗
+
+確認瀏覽器使用的 scheme、host、port 與 server 啟動 log 印出的位址一致。如果
+放在 nginx/Caddy 後面，也要確認 forwarded headers 只在 trusted proxy IP 下啟用。
+
+### push 或部署前該跑什麼？
+
+建議跑與 CI 相同的本機 gate：
+
+```bash
+python3 scripts/pre_push_checks.py
+```
+
+開發中若只想快速檢查，可跑：
+
+```bash
+PYTHONPATH=. python3 -m pytest -q tests
+```
+
 ## 專案目的
 
 很多示範型登入系統只做到 login、logout 與少數保護路由。

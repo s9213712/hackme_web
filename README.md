@@ -36,6 +36,104 @@ https://127.0.0.1:5000/
 
 Bootstrap accounts are no longer hard-coded. On a fresh database, `root` is created from `HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if `HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set.
 
+## Deployment FAQ
+
+### The site does not open after `python3 server.py`
+
+Check which host and port the server is listening on. By default, the built-in
+Flask server uses `HTML_LEARNING_HOST=0.0.0.0` and
+`HTML_LEARNING_PORT=5000`.
+
+```bash
+export HTML_LEARNING_HOST=0.0.0.0
+export HTML_LEARNING_PORT=5000
+python3 server.py
+```
+
+If root changed `server_listen_host` or `server_listen_port` in the admin UI,
+restart the server before testing again. Bind changes only apply on next boot.
+
+### Should I open `http://` or `https://`?
+
+If `cert.pem` and `key.pem` exist in the project root, the app starts with HTTPS.
+Otherwise it starts with HTTP. The startup log prints the actual scheme.
+
+### Root login does not work on a fresh database
+
+Set `HTML_LEARNING_ROOT_PASSWORD` before the first successful database
+initialization. If the database was already created without the intended value,
+use the existing root password or recreate the database only if you intentionally
+want a fresh instance.
+
+### I changed environment variables but nothing changed
+
+Most runtime settings are stored in SQLite `system_settings` after bootstrap.
+Root can change them from the server settings UI. Environment variables are
+mostly boot-time fallbacks for fresh deployments and directory/bind defaults.
+
+### Where should I put the database and uploads?
+
+Use persistent paths outside temporary directories. Important runtime data lives
+in `database/`, `storage/`, `logs/`, `anchors/`, and `chats/` by default. For
+production-style deployment, set absolute paths such as:
+
+```bash
+export HTML_LEARNING_DB_DIR=/var/lib/hackme_web/database
+export HTML_LEARNING_STORAGE_DIR=/var/lib/hackme_web/storage
+export HTML_LEARNING_LOG_DIR=/var/log/hackme_web
+```
+
+Do not point `HTML_LEARNING_STORAGE_DIR` at `/`, `/etc`, the project root, or
+`public/`; startup validation rejects dangerous storage roots.
+
+### The server says maintenance mode blocks access
+
+Log in as root through a browser, disable maintenance mode in server settings,
+or rotate a maintenance bypass token and send it with:
+
+```text
+X-Maintenance-Bypass-Token: <raw-token>
+```
+
+Use the raw token shown once after rotation, not
+`maintenance_bypass_token_hash`.
+
+### How do I confirm the server is running the latest code?
+
+Check the release ID at the bottom of the login page or call:
+
+```bash
+curl http://127.0.0.1:5000/api/version
+```
+
+It should match `services/release_info.py` and the README release ID.
+
+### Admin UI says listen IP/port needs restart
+
+That is expected. Root can save `server_listen_host` and `server_listen_port`
+from the UI, but the running socket remains unchanged until the service is
+restarted.
+
+### Static files load but API calls fail
+
+Verify you are using the same scheme, host, and port that the server printed at
+startup. Also check reverse proxy headers if running behind nginx/Caddy; only
+enable forwarded headers when the proxy IP is trusted.
+
+### What should I run before pushing or deploying?
+
+Run the same local gate used by CI:
+
+```bash
+python3 scripts/pre_push_checks.py
+```
+
+For faster focused verification during development, run:
+
+```bash
+PYTHONPATH=. python3 -m pytest -q tests
+```
+
 ## Why This Project Exists
 
 Many demo auth apps stop at login, logout, and a few protected routes.
