@@ -488,6 +488,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
+  const governanceTab = $("tab-governance");
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
@@ -496,6 +497,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
+  if (governanceTab) governanceTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentRole === "super_admin" ? "" : "none";
 

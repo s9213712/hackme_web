@@ -63,7 +63,7 @@
 - [x] 會員等級規則對應測試：`37 passed`
 - [x] moderation proposal / vote 對應測試：`39 passed`
 - [x] governance records / Mod Note / reputation 對應測試：`40 passed`
-- [ ] Phase 3 UI 與細部整合測試
+- [x] Phase 3 UI 與細部整合測試：治理頁籤、提案建立/投票/執行/root override、會員規則摘要；JS syntax + 完整 pytest `93 passed`
 
 ## Phase 4：伺服器模式
 

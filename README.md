@@ -184,7 +184,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-010`
+- Current release ID: `2026.04.27-011`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -235,6 +235,7 @@ base level, old/new effective level, reason, source, and timestamp.
 - `moderation_proposals` and `moderation_votes` support admin voting workflows.
 - Supported proposal actions: `warn`, `mute`, `restrict`, `suspend`, `delete`, `downgrade_level`, `force_password_reset`.
 - Approved proposals can be executed; root can override.
+- The admin UI includes a Governance tab for proposal creation, voting, execution, and member rule summaries.
 - Governance records are stored in `moderation_actions`, `user_mod_notes`, and `reputation_events`.
 
 ### Snapshot, Restore, and Server Modes

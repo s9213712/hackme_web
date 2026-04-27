@@ -89,16 +89,17 @@ function switchModuleTab(tab) {
 
 function switchAdminTab(tab) {
   currentAdminTab = tab;
-  ["users","audit","violations","appeals","reports"].forEach(t => {
+  ["users","audit","violations","governance","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-audit","tab-violations","tab-appeals","tab-reports"].forEach(id => {
+  ["tab-users","tab-audit","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
   if (tab === "audit") loadAudit(0);
   if (tab === "violations") loadViolations(0);
+  if (tab === "governance") loadGovernanceDashboard();
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
   if (tab === "reports") loadAdminReports(0, adminReportStatus);
 }
@@ -291,6 +292,183 @@ async function resetViolations(userId) {
   } else {
     alert(json.msg || "歸零失敗");
   }
+}
+
+// ── Governance UI ───────────────────────────────────────────
+async function loadGovernanceDashboard() {
+  await Promise.allSettled([loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
+}
+
+async function loadMemberLevelRulesSummary() {
+  const container = $("member-level-rules-list");
+  if (!container) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/member-level-rules", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    container.innerHTML = `<div style="color:#ffb74d;">${sanitize(json.msg || "會員規則僅 root 可讀取或功能尚未啟用")}</div>`;
+    return;
+  }
+  const rules = json.rules || {};
+  container.innerHTML = Object.keys(rules).sort().map((level) => {
+    const r = rules[level] || {};
+    const flags = [
+      r.can_post ? "發文" : "禁發文",
+      r.can_comment ? "留言" : "禁留言",
+      r.can_dm ? "私訊" : "禁私訊",
+      r.can_upload ? "上傳" : "禁上傳",
+      r.requires_post_review ? "發文需審" : "免審"
+    ].join(" · ");
+    return `<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.6rem;background:rgba(0,0,0,.2);">
+      <div style="font-weight:700;color:#e0e0f0;">${sanitize(level)}</div>
+      <div style="color:var(--muted);margin-top:.2rem;">${sanitize(flags)}</div>
+      <div style="color:#82b1ff;margin-top:.25rem;">post ${r.daily_post_limit ?? "-"} · comment ${r.daily_comment_limit ?? "-"} · report weight ${r.report_weight ?? "-"}</div>
+    </div>`;
+  }).join("");
+}
+
+async function loadGovernanceProposals() {
+  const list = $("governance-proposal-list");
+  const msg = $("governance-msg");
+  if (!list) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const status = $("governance-proposal-status")?.value || "";
+  const url = API + "/admin/moderation/proposals" + (status ? "?status=" + encodeURIComponent(status) : "");
+  const res = await fetch(url, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    list.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "治理提案讀取失敗")}</div>`;
+    if (msg) msg.textContent = "";
+    return;
+  }
+  const proposals = Array.isArray(json.proposals) ? json.proposals : [];
+  if (msg) msg.textContent = `共 ${proposals.length} 筆`;
+  if (!proposals.length) {
+    list.innerHTML = "<p style='color:var(--muted);text-align:center;padding:1rem;'>目前沒有治理提案</p>";
+    return;
+  }
+  list.innerHTML = proposals.map((p) => {
+    const target = p.target?.username || `#${p.target_user_id}`;
+    const proposer = p.proposed_by?.username || `#${p.proposed_by_user_id}`;
+    const votes = (p.votes || []).map(v => `${sanitize(v.voter_username || "")}:${sanitize(v.vote || "")}`).join(" · ") || "尚無投票";
+    const canVote = p.status === "pending";
+    const canExecute = p.status === "approved";
+    const canOverride = currentUser === "root" && p.status !== "executed";
+    return `<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+        <strong>#${p.id}</strong>
+        <span style="color:#82b1ff;">${sanitize(p.action_type || "")}</span>
+        <span>target=${sanitize(target)}</span>
+        <span style="color:${p.status === "approved" ? "#4caf50" : p.status === "rejected" ? "#ff4f6d" : "#ffb74d"};">${sanitize(p.status || "")}</span>
+        <span style="margin-left:auto;color:var(--muted);">${p.approve_count || 0}/${p.required_votes || 0} approve · ${p.reject_count || 0} reject</span>
+      </div>
+      <div style="color:var(--muted);margin-top:.25rem;">proposer=${sanitize(proposer)} · expires=${sanitize(p.expires_at || "")}</div>
+      <div style="margin-top:.35rem;white-space:pre-wrap;">${sanitize(p.reason || "")}</div>
+      <div style="color:var(--muted);margin-top:.35rem;">votes: ${votes}</div>
+      <div class="admin-toolbar" style="display:flex;gap:.45rem;margin-top:.5rem;">
+        ${canVote ? `<button class="btn btn-primary" data-governance-vote="approve" data-proposal-id="${p.id}">同意</button><button class="btn" data-governance-vote="reject" data-proposal-id="${p.id}">否決</button>` : ""}
+        ${canExecute ? `<button class="btn btn-primary" data-governance-execute="${p.id}">執行</button>` : ""}
+        ${canOverride ? `<button class="btn" style="color:#ffb74d;" data-governance-override="${p.id}">root override</button>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll("button[data-governance-vote]").forEach((btn) => {
+    btn.addEventListener("click", () => voteGovernanceProposal(btn.getAttribute("data-proposal-id"), btn.getAttribute("data-governance-vote")));
+  });
+  list.querySelectorAll("button[data-governance-execute]").forEach((btn) => {
+    btn.addEventListener("click", () => executeGovernanceProposal(btn.getAttribute("data-governance-execute")));
+  });
+  list.querySelectorAll("button[data-governance-override]").forEach((btn) => {
+    btn.addEventListener("click", () => overrideGovernanceProposal(btn.getAttribute("data-governance-override")));
+  });
+}
+
+async function createGovernanceProposal() {
+  const targetId = parseInt($("governance-target-user-id")?.value || "0", 10);
+  const reason = ($("governance-reason")?.value || "").trim();
+  if (!targetId || !reason) {
+    alert("請填目標 user id 與提案原因");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    target_user_id: targetId,
+    action_type: $("governance-action-type")?.value || "warn",
+    action_value: ($("governance-action-value")?.value || "").trim() || null,
+    required_votes: parseInt($("governance-required-votes")?.value || "2", 10),
+    ttl_hours: parseInt($("governance-ttl-hours")?.value || "72", 10),
+    reason
+  };
+  const res = await fetch(API + "/admin/moderation/proposals", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "治理提案已建立" : "治理提案建立失敗"));
+  if (json.ok) {
+    if ($("governance-reason")) $("governance-reason").value = "";
+    await loadGovernanceProposals();
+  }
+}
+
+async function voteGovernanceProposal(proposalId, vote) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const comment = prompt("投票備註（可空白）") || "";
+  const res = await fetch(API + `/admin/moderation/proposals/${proposalId}/vote`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ vote, comment })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "已完成投票" : "投票失敗"));
+  await loadGovernanceProposals();
+}
+
+async function executeGovernanceProposal(proposalId) {
+  if (!confirm("確定執行已通過的治理提案？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/moderation/proposals/${proposalId}/execute`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "治理提案已執行" : "執行失敗"));
+  await Promise.all([loadGovernanceProposals(), loadUsers()]);
+}
+
+async function overrideGovernanceProposal(proposalId) {
+  if (currentUser !== "root" || !confirm("確定 root override 並立即執行此提案？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/root/moderation/proposals/${proposalId}/override`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "root override 已執行" : "override 失敗"));
+  await Promise.all([loadGovernanceProposals(), loadUsers()]);
+}
+
+function openGovernanceProposalForUser(userId, username) {
+  switchAdminTab("governance");
+  if ($("governance-target-user-id")) $("governance-target-user-id").value = userId;
+  if ($("governance-reason")) $("governance-reason").value = `針對 ${username || "user #" + userId} 建立治理提案：`;
 }
 
 // ── Settings & restart ───────────────────────────────────────

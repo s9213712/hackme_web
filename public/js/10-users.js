@@ -82,6 +82,14 @@ function renderUsers() {
         });
         actionButtons.push(detailBtn);
       }
+      const governanceBtn = document.createElement("button");
+      governanceBtn.className = "btn";
+      governanceBtn.type = "button";
+      governanceBtn.textContent = "治理";
+      governanceBtn.title = "建立治理提案";
+      governanceBtn.style.color = "#ffb74d";
+      governanceBtn.addEventListener("click", () => openGovernanceProposalForUser(u.id, u.username));
+      actionButtons.push(governanceBtn);
       if (violCount > 0) {
         const resetBtn = document.createElement("button");
         resetBtn.className = "btn";

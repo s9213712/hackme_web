@@ -17,6 +17,7 @@ function bindUiEvents() {
   const tabUsers    = $("tab-users");
   const tabAudit    = $("tab-audit");
   const tabViol     = $("tab-violations");
+  const tabGovernance = $("tab-governance");
   const tabAppeals  = $("tab-appeals");
   const tabReports  = $("tab-reports");
   const liBtn       = $("li-btn");
@@ -31,6 +32,8 @@ function bindUiEvents() {
   const adminAddCancelBtn = $("admin-add-cancel");
   const auditRefresh = $("audit-refresh");
   const violRefresh  = $("violations-refresh");
+  const governanceRefresh = $("governance-refresh");
+  const governanceCreate = $("governance-create-proposal");
   const appealSubmit = $("appeal-submit-btn");
   const appealRefresh = $("appeal-refresh-btn");
   const reportRefresh = $("admin-reports-refresh");
@@ -82,6 +85,7 @@ function bindUiEvents() {
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
   if (tabAudit)    tabAudit.addEventListener("click",    () => switchAdminTab("audit"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
+  if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
@@ -180,6 +184,9 @@ function bindUiEvents() {
   if (violRefresh) violRefresh.addEventListener("click", () => loadViolations(violationsPage, violationTargetUser));
   if ($("violations-prev")) $("violations-prev").addEventListener("click", () => loadViolations(Math.max(0, violationsPage - 1), violationTargetUser));
   if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
+  if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
+  if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
+  if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);

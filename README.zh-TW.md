@@ -175,7 +175,7 @@ PYTHONPATH=. python3 -m pytest -q tests
 登入頁底部會顯示發佈號，`GET /api/version` 也會回傳同一個版本資訊。
 每次正式發布請更新 `services/release_info.py`。
 
-- 目前發佈號：`2026.04.27-010`
+- 目前發佈號：`2026.04.27-011`
 - 目前 schema version：`18`
 
 ### 會員制度
@@ -226,6 +226,7 @@ base level、old/new effective level、reason、source 與 created_at。
 - `moderation_proposals` / `moderation_votes` 支援 admin 投票流程。
 - 支援動作：`warn`、`mute`、`restrict`、`suspend`、`delete`、`downgrade_level`、`force_password_reset`。
 - 提案通過後才可執行；root 可 override。
+- 管理 UI 已提供「會員治理」頁籤，可建立提案、投票、執行、root override，並查看會員規則摘要。
 - 治理紀錄分散在 `moderation_actions`、`user_mod_notes`、`reputation_events`。
 
 ### 快照、還原與伺服器模式

@@ -334,6 +334,7 @@
         <button class="tab active" id="tab-users">帳號管理</button>
         <button class="tab" id="tab-audit">審計日誌</button>
         <button class="tab" id="tab-violations">違規計次</button>
+        <button class="tab" id="tab-governance">會員治理</button>
         <button class="tab" id="tab-appeals">申覆審核</button>
         <button class="tab" id="tab-reports">訊息檢舉</button>
       </div>
@@ -393,6 +394,49 @@
         </div>
         <div id="violation-users" style="max-height:180px;overflow-y:auto;margin-bottom:.6rem;"></div>
         <div id="violation-entries" style="max-height:320px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
+      </div>
+
+      <!-- ── 會員治理 ── -->
+      <div class="form-section" id="sec-governance">
+        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.65rem;">
+          <button class="btn btn-primary" id="governance-refresh" type="button">重新整理治理狀態</button>
+          <select id="governance-proposal-status" style="padding:.55rem;border-radius:8px;background:rgba(0,0,0,.3);border:1.5px solid rgba(255,255,255,.1);color:#e0e0f0;font-size:.85rem;">
+            <option value="pending">待投票</option>
+            <option value="approved">已通過</option>
+            <option value="rejected">已否決</option>
+            <option value="executed">已執行</option>
+            <option value="">全部</option>
+          </select>
+          <span id="governance-msg" style="font-size:.75rem;color:var(--muted);"></span>
+        </div>
+        <div class="admin-tools" style="margin-bottom:.8rem;">
+          <div class="mini-title">建立治理提案</div>
+          <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;">
+            <input type="number" id="governance-target-user-id" min="1" placeholder="目標 user id" />
+            <select id="governance-action-type">
+              <option value="warn">warn</option>
+              <option value="mute">mute</option>
+              <option value="restrict">restrict</option>
+              <option value="suspend">suspend</option>
+              <option value="downgrade_level">downgrade_level</option>
+              <option value="force_password_reset">force_password_reset</option>
+              <option value="delete">delete</option>
+            </select>
+            <input type="text" id="governance-action-value" placeholder="動作值，例如 normal 或到期時間" />
+            <input type="number" id="governance-required-votes" min="1" max="10" value="2" />
+            <input type="number" id="governance-ttl-hours" min="1" max="720" value="72" />
+            <button class="btn btn-primary" id="governance-create-proposal" type="button">送出提案</button>
+          </div>
+          <textarea id="governance-reason" rows="3" maxlength="1000" placeholder="提案原因，必填" style="margin-top:.55rem;"></textarea>
+        </div>
+        <div class="admin-tools" style="margin-bottom:.8rem;">
+          <div class="mini-title">會員等級規則摘要</div>
+          <div id="member-level-rules-list" style="font-size:.72rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.55rem;"></div>
+        </div>
+        <div class="admin-tools">
+          <div class="mini-title">治理提案</div>
+          <div id="governance-proposal-list" style="max-height:360px;overflow:auto;font-size:.72rem;"></div>
+        </div>
       </div>
 
       <!-- ── 申覆審核 ── -->
