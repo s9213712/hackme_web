@@ -219,6 +219,86 @@ CREATE TABLE IF NOT EXISTS server_modes (
     notes              TEXT
 );
 
+CREATE TABLE IF NOT EXISTS uploaded_files (
+    id TEXT PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    storage_path TEXT NOT NULL,
+    privacy_mode TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    scan_status TEXT NOT NULL,
+    original_filename_encrypted TEXT,
+    original_filename_plain_for_public TEXT,
+    mime_type_encrypted TEXT,
+    mime_type_plain_for_public TEXT,
+    size_bytes INTEGER NOT NULL,
+    ciphertext_sha256 TEXT,
+    plaintext_sha256 TEXT,
+    encryption_algorithm TEXT,
+    encryption_version TEXT,
+    nonce TEXT,
+    client_scan_report_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    deleted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS encrypted_file_keys (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    encrypted_file_key TEXT NOT NULL,
+    wrapped_by TEXT NOT NULL,
+    key_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS file_scan_results (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    scanner_name TEXT NOT NULL,
+    scanner_version TEXT,
+    scan_started_at TEXT,
+    scan_completed_at TEXT,
+    result TEXT NOT NULL,
+    malware_name TEXT,
+    details_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS file_access_logs (
+    id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    actor_user_id INTEGER,
+    action TEXT NOT NULL,
+    ip TEXT,
+    user_agent TEXT,
+    result TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS file_type_policies (
+    category TEXT PRIMARY KEY,
+    extensions_json TEXT NOT NULL,
+    public_allowed INTEGER NOT NULL,
+    private_scannable_allowed INTEGER NOT NULL,
+    e2ee_allowed INTEGER NOT NULL,
+    default_risk_level TEXT NOT NULL,
+    allow_public_share INTEGER NOT NULL,
+    requires_scan INTEGER NOT NULL,
+    warn_on_download INTEGER NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status);
+CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_file_keys(file_id, recipient_user_id);
+CREATE INDEX IF NOT EXISTS idx_file_scan_results_file ON file_scan_results(file_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_file_access_logs_file ON file_access_logs(file_id, created_at);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,

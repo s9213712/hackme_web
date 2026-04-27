@@ -52,6 +52,7 @@ DEFAULT_SETTINGS = {
     "feature_personalization_enabled": False,
     "feature_social_search_enabled": False,
     "feature_advanced_security_enabled": False,
+    "feature_privacy_uploads_enabled": False,
 }
 
 FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))

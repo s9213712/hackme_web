@@ -130,6 +130,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     snapshot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     restore_event_cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshot_restore_events)").fetchall()}
     server_mode_cols = {row["name"] for row in conn.execute("PRAGMA table_info(server_modes)").fetchall()}
+    uploaded_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(uploaded_files)").fetchall()}
+    encrypted_key_cols = {row["name"] for row in conn.execute("PRAGMA table_info(encrypted_file_keys)").fetchall()}
+    scan_result_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_scan_results)").fetchall()}
+    access_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_access_logs)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
     conn.close()
@@ -156,7 +160,11 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"id", "type", "status", "storage_path", "checksum"} <= snapshot_cols
     assert {"id", "snapshot_id", "restore_mode", "pre_restore_snapshot_id"} <= restore_event_cols
     assert {"current_mode", "previous_mode", "active_snapshot_id"} <= server_mode_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    assert {"privacy_mode", "risk_level", "scan_status", "client_scan_report_json"} <= uploaded_file_cols
+    assert {"file_id", "recipient_user_id", "encrypted_file_key", "revoked_at"} <= encrypted_key_cols
+    assert {"scanner_name", "result", "details_json"} <= scan_result_cols
+    assert {"file_id", "actor_user_id", "action", "result"} <= access_log_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     assert root_user["username"] == "root"
 
 

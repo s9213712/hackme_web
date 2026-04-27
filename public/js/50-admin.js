@@ -346,7 +346,8 @@ const FEATURE_SETTING_KEYS = [
   "feature_storage_albums_enabled",
   "feature_personalization_enabled",
   "feature_social_search_enabled",
-  "feature_advanced_security_enabled"
+  "feature_advanced_security_enabled",
+  "feature_privacy_uploads_enabled"
 ];
 
 function featureSettingInputId(key) {

@@ -84,8 +84,8 @@ https://127.0.0.1:5000/
 登入頁底部會顯示發佈號，`GET /api/version` 也會回傳同一個版本資訊。
 每次正式發布請更新 `services/release_info.py`。
 
-- 目前發佈號：`2026.04.27-003`
-- 目前 schema version：`16`
+- 目前發佈號：`2026.04.27-004`
+- 目前 schema version：`17`
 
 ### 會員制度
 
@@ -169,6 +169,22 @@ snapshot 內容包含：
 snapshot。離開時預設應還原該 snapshot；root 也可以明確選擇保留 dirty
 state，但會寫入高風險 audit log。
 
+### 隱私分級上傳安全
+
+隱私上傳系統 Phase 1 已落地：DB 會記錄檔案 privacy mode、risk level、
+scan status、E2EE encrypted file key、掃描結果、存取紀錄與可配置的檔案
+類型政策。
+
+支援模式：
+
+- `public_attachment`：公開附件，伺服器可讀明文且必須掃描。
+- `private_scannable`：私密但可掃描，上傳後可進入加密保存。
+- `e2ee_vault`：只保存客戶端密文，server/root/admin 不可解密。
+- `e2ee_vault_with_client_scan`：E2EE 加本機掃描回報，但回報不可完全信任。
+
+預設政策會禁止 executable 類型公開/私密可掃描上傳，E2EE 檔案標記為
+`unknown_encrypted` 或高風險，壓縮檔與巨集文件必須掃描後才能釋出。
+
 ### 功能開關與預設值
 
 功能開關存在 DB-backed `system_settings`，root 可在管理 UI 調整。
@@ -198,6 +214,7 @@ state，但會寫入高風險 audit log。
 | `feature_personalization_enabled` | `false` |
 | `feature_social_search_enabled` | `false` |
 | `feature_advanced_security_enabled` | `false` |
+| `feature_privacy_uploads_enabled` | `false` |
 
 其他重要預設：
 

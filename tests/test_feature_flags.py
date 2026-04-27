@@ -59,6 +59,8 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/admin/users/7/violation") == "feature_violation_center_enabled"
     assert feature_gate_for_path("/api/admin/audit") == "feature_audit_log_enabled"
     assert feature_gate_for_path("/api/admin/message-reports") == "feature_reports_enabled"
+    assert feature_gate_for_path("/api/files/upload") == "feature_privacy_uploads_enabled"
+    assert feature_gate_for_path("/api/crypto/init") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/admin/settings") is None
 
 

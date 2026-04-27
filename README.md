@@ -86,8 +86,8 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-003`
-- Current schema version: `16`
+- Current release ID: `2026.04.27-004`
+- Current schema version: `17`
 
 ### Governance and Member Levels
 
@@ -171,6 +171,23 @@ Entering `superweak` requires root confirmation and automatically creates a
 `before_superweak` snapshot. Exiting can restore that snapshot by default or let
 root explicitly keep the dirty state with a high-risk audit event.
 
+### Privacy Upload Security
+
+Phase 1 of the privacy upload system is in place. The DB now tracks file
+privacy mode, risk level, scan status, encrypted file keys, scan results,
+access logs, and configurable file type policies.
+
+Supported upload modes:
+
+- `public_attachment`: server-readable public files that must be scanned.
+- `private_scannable`: private files that can be scanned before encrypted storage.
+- `e2ee_vault`: client-encrypted ciphertext only; server/root/admin cannot decrypt.
+- `e2ee_vault_with_client_scan`: E2EE plus an untrusted client scan report.
+
+Default risk policy blocks executable-like files from public/private uploads,
+marks E2EE files as `unknown_encrypted` or high risk, and requires archives and
+macro documents to be scanned before release.
+
 ### Feature Flags and Defaults
 
 Feature flags live in DB-backed `system_settings` and are editable by root under
@@ -201,6 +218,7 @@ the admin settings UI.
 | `feature_personalization_enabled` | `false` |
 | `feature_social_search_enabled` | `false` |
 | `feature_advanced_security_enabled` | `false` |
+| `feature_privacy_uploads_enabled` | `false` |
 
 Other important defaults:
 

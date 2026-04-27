@@ -113,6 +113,7 @@ from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
+from services.upload_security import ensure_upload_security_schema
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -379,6 +380,7 @@ FEATURE_ROUTE_GATES = (
     ("feature_violation_center_enabled", ("/api/admin/violations", "/api/admin/users/")),
     ("feature_accounts_enabled", ("/api/admin/users",)),
     ("feature_system_health_enabled", ("/api/admin/health",)),
+    ("feature_privacy_uploads_enabled", ("/api/files/", "/api/files", "/api/crypto/")),
 )
 
 
@@ -637,6 +639,7 @@ def ensure_security_support_schema(conn):
     ensure_moderation_proposals_schema(conn)
     ensure_governance_records_schema(conn)
     ensure_snapshot_schema(conn)
+    ensure_upload_security_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "

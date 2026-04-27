@@ -19,7 +19,7 @@
 - [x] 新工程功能納入開關：identity / account security / governance / modes / snapshot / storage 等
 - [x] 後端集中式 feature gate，功能關閉時 API 回 `503`
 - [x] 管理 UI 新增「功能」設定頁籤
-- [ ] 每次功能批次完成後更新本文件勾選狀態
+- [x] 每次功能批次完成後更新本文件勾選狀態
 - [x] 功能分支推送到遠端
 - [ ] 建立 PR，等待 CI 與 review
 
@@ -67,24 +67,28 @@
 
 ## Phase 4：伺服器模式
 
-- [ ] `server_settings` schema 整理
+- [x] `server_modes` schema 整理
 - [ ] root IP whitelist API
 - [ ] `browser_only_mode` middleware
 - [ ] maintenance bypass token
-- [ ] test mode
-- [ ] pre-production 條件檢查
-- [ ] superweak sandbox 前置條件確認
-- [ ] 對應測試
+- [x] test mode
+- [x] pre-production 條件檢查
+- [x] superweak sandbox 前置條件確認
+- [x] superweak 進入前自動建立 `before_superweak` snapshot
+- [x] superweak 離開時可 restore 或保留 dirty state
+- [x] 對應測試
 
 ## Phase 5：Snapshot / Restore / Reset
 
-- [ ] snapshot schema
-- [ ] 手動 snapshot API
-- [ ] restore API
+- [x] snapshot schema
+- [x] 手動 snapshot API
+- [x] restore API
 - [ ] reset API
 - [ ] daily auto snapshot
-- [ ] Danger Zone 後端安全檢查
-- [ ] 對應測試
+- [x] Danger Zone 後端安全檢查
+- [x] tar restore path traversal 防護
+- [x] restore 前自動 pre_restore snapshot
+- [x] 對應測試
 
 ## Phase 6：健康監控與安全中心
 
@@ -137,6 +141,12 @@
 
 ## Phase 11：附件 / 頭像 / CAPTCHA
 
+- [x] 隱私分級上傳 Phase 1：`uploaded_files` / `encrypted_file_keys` / `file_scan_results` / `file_access_logs`
+- [x] 檔案類型政策 table：`file_type_policies`
+- [x] 上傳模式政策：`public_attachment` / `private_scannable` / `e2ee_vault` / `e2ee_vault_with_client_scan`
+- [x] 風險分級基礎：`low` / `medium` / `high` / `blocked` / `unknown_encrypted`
+- [x] root 功能開關：`feature_privacy_uploads_enabled`
+- [x] Phase 1 對應測試：完整 pytest `64 passed`
 - [ ] attachments schema
 - [ ] 上傳 API：MIME 白名單 + magic bytes
 - [ ] 圖片 re-encode 去 EXIF
