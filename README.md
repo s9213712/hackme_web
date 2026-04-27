@@ -508,8 +508,9 @@ Phase 10 backend APIs provide private station-mail style conversations:
 - `DELETE /api/dm/blocks/{user_id}`: unblock a user.
 
 DM delivery uses `dm_threads`, `direct_messages`, and `blocked_users`. Sending a
-DM also creates a notification for the recipient. The web DM UI is still a
-future Phase 10 item.
+DM also creates a notification for the recipient. When `feature_dm_enabled` is
+enabled, the logged-in UI shows a station-mail tab for thread creation, send,
+read, soft delete, refresh, and user blocking.
 
 ### Feature Flags and Defaults
 

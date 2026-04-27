@@ -27,6 +27,8 @@ let selectedReportIds = new Set();
 let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
+let dmThreads = [];
+let selectedDmThreadId = null;
 const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
@@ -595,6 +597,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
+  const tabModuleDm = $("tab-module-dm");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAppeals = $("tab-module-appeals");
@@ -604,6 +607,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
+  if (tabModuleDm) tabModuleDm.style.display = canAccessModule("dm") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
@@ -634,11 +638,13 @@ function setAuthState(json, showLoginHero = false) {
     ? "accounts"
     : canAccessModule("chat")
       ? "chat"
-      : canAccessModule("community")
-        ? "community"
-        : canAccessModule("privacy_uploads")
-          ? "drive"
-          : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+      : canAccessModule("dm")
+        ? "dm"
+        : canAccessModule("community")
+          ? "community"
+          : canAccessModule("privacy_uploads")
+            ? "drive"
+            : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
   resetInactivityTimer();
 }
@@ -666,10 +672,12 @@ function resetAuthState() {
   }
   $("admin-wrap").className = "admin-wrap";
   const moduleChat = $("module-chat");
+  const moduleDm = $("module-dm");
   const moduleAccounts = $("module-accounts");
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
   if (moduleChat) moduleChat.classList.remove("active");
+  if (moduleDm) moduleDm.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");
@@ -679,6 +687,8 @@ function resetAuthState() {
   $("auth-card").style.display = "";
   selectedChatRoomId = null;
   chatRooms = [];
+  selectedDmThreadId = null;
+  dmThreads = [];
   const chatWarn = $("chat-room-warn");
   if (chatWarn) chatWarn.className = "msg";
   const chatRoomList = $("chat-room-list");

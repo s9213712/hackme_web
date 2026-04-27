@@ -136,6 +136,7 @@
 
   <div class="tabs" id="module-main-tabs" style="margin-top:.75rem;margin-bottom:.65rem;">
     <button class="tab active" id="tab-module-chat">聊天</button>
+    <button class="tab" id="tab-module-dm" style="display:none;">站內信</button>
     <button class="tab" id="tab-module-community">討論區</button>
     <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
     <button class="tab" id="tab-module-appeals">申覆</button>
@@ -387,6 +388,35 @@
         <div id="drive-file-list" class="drive-file-list"></div>
       </div>
       <div id="drive-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-dm">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">✉️ 站內信</div>
+      <div class="chat-toolbar">
+        <input type="text" id="dm-target-user" maxlength="32" placeholder="收件人帳號" />
+        <button class="btn btn-primary" id="dm-create-thread-btn" type="button">開始私訊</button>
+        <button class="btn" id="dm-refresh-btn" type="button">重新整理</button>
+      </div>
+      <div class="chat-layout">
+        <div class="chat-room-list-wrap">
+          <div class="mini-title">私訊串</div>
+          <div id="dm-thread-list"></div>
+        </div>
+        <div class="chat-room-main">
+          <div class="chat-room-header">
+            <strong id="dm-thread-title">請先選擇或建立私訊串</strong>
+            <button class="btn" id="dm-block-user-btn" type="button" style="display:none;width:auto;padding:.4rem .7rem;">封鎖此人</button>
+          </div>
+          <div id="dm-message-list" class="chat-room-messages"></div>
+          <div id="dm-warn" class="msg" style="margin-top:.55rem;"></div>
+          <div class="chat-composer">
+            <textarea id="dm-message-input" rows="2" maxlength="1000" placeholder="輸入站內信，最多 1000 字"></textarea>
+            <button class="btn btn-primary" id="dm-send-btn" type="button">送出</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1003,6 +1033,7 @@
 <script src="/js/25-community.js" defer></script>
 <script src="/js/30-appeals.js" defer></script>
 <script src="/js/32-notifications.js" defer></script>
+<script src="/js/33-dm.js" defer></script>
 <script src="/js/35-drive.js" defer></script>
 <script src="/js/40-auth-users.js" defer></script>
 <script src="/js/50-admin.js" defer></script>

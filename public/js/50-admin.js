@@ -36,24 +36,28 @@ function switchModuleTab(tab) {
   const canAccessAppeals = currentRole !== "super_admin" && canAccessModule("appeals");
   const canAccessCommunity = !!currentUser && canAccessModule("community");
   const canAccessChat = !!currentUser && canAccessModule("chat");
+  const canAccessDm = !!currentUser && canAccessModule("dm");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
 
   let normTab = tab;
-  if (tab === "chat" && !canAccessChat) normTab = canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")));
-  if (tab === "community" && !canAccessCommunity) normTab = canAccessChat ? "chat" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")));
-  if (tab === "drive" && !canAccessDrive) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessAppeals ? "appeals" : "accounts"));
-  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals"));
-  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : (canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals")));
-  if (tab === "appeals" && !canAccessAppeals) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "accounts"));
+  if (tab === "chat" && !canAccessChat) normTab = canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))));
+  if (tab === "dm" && !canAccessDm) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : "accounts")));
+  if (tab === "community" && !canAccessCommunity) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))));
+  if (tab === "drive" && !canAccessDrive) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessAppeals ? "appeals" : "accounts")));
+  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals")));
+  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : (canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals"))));
+  if (tab === "appeals" && !canAccessAppeals) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "accounts")));
 
   currentModuleTab = normTab;
   const modChat = $("module-chat");
+  const modDm = $("module-dm");
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
+  const mDm = $("tab-module-dm");
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
   const mAccounts = $("tab-module-accounts");
@@ -61,12 +65,14 @@ function switchModuleTab(tab) {
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
+  if (modDm) modDm.classList.toggle("active", normTab === "dm");
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
+  if (mDm) mDm.classList.toggle("active", normTab === "dm");
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
@@ -75,6 +81,9 @@ function switchModuleTab(tab) {
 
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
+  }
+  if (normTab === "dm" && canAccessDm && typeof loadDmThreads === "function") {
+    loadDmThreads();
   }
   if (normTab === "server" && canAccessServer) {
     switchServerTab(currentServerTab || "health");

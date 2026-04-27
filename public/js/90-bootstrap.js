@@ -2,6 +2,7 @@ function bindUiEvents() {
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
+  const tabModuleDm = $("tab-module-dm");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAccounts = $("tab-module-accounts");
@@ -62,6 +63,11 @@ function bindUiEvents() {
   const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
   const chatSendBtn = $("chat-send-btn");
   const chatInput = $("chat-message-input");
+  const dmCreateBtn = $("dm-create-thread-btn");
+  const dmRefreshBtn = $("dm-refresh-btn");
+  const dmSendBtn = $("dm-send-btn");
+  const dmInput = $("dm-message-input");
+  const dmBlockBtn = $("dm-block-user-btn");
   const communityAnnouncementBtn = $("community-announcement-submit");
   const communityCategoryCreateBtn = $("community-category-create-btn");
   const communityBoardRequestBtn = $("community-board-request-btn");
@@ -80,6 +86,7 @@ function bindUiEvents() {
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
+  if (tabModuleDm) tabModuleDm.addEventListener("click", () => switchModuleTab("dm"));
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
@@ -122,6 +129,10 @@ function bindUiEvents() {
     if (selectedChatRoomId) loadChatMessages(selectedChatRoomId, false);
   });
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
+  if (dmCreateBtn) dmCreateBtn.addEventListener("click", createDmThread);
+  if (dmRefreshBtn) dmRefreshBtn.addEventListener("click", loadDmThreads);
+  if (dmSendBtn) dmSendBtn.addEventListener("click", sendDmMessage);
+  if (dmBlockBtn) dmBlockBtn.addEventListener("click", blockSelectedDmUser);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
   if (communityCategoryCreateBtn) communityCategoryCreateBtn.addEventListener("click", createCommunityCategory);
   if (communityBoardRequestBtn) communityBoardRequestBtn.addEventListener("click", requestCommunityBoard);
@@ -168,6 +179,12 @@ function bindUiEvents() {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       sendChatMessage();
+    }
+  });
+  if (dmInput) dmInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      sendDmMessage();
     }
   });
 

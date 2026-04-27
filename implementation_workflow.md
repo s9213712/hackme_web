@@ -143,9 +143,10 @@
 
 - [x] direct_messages / dm_threads schema
 - [x] DM API：收發 / 已讀 / 軟刪除
-- [ ] DM UI
+- [x] DM UI
 - [x] blocked_users 阻擋 DM
 - [x] Phase 10 後端測試：DM thread / send / read / soft delete / block
+- [x] Phase 10 DM UI 靜態測試
 
 ## Phase 11：附件 / 頭像 / CAPTCHA
 

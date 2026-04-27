@@ -480,7 +480,8 @@ Phase 10 後端提供 1 對 1 站內信 API：
 - `DELETE /api/dm/blocks/{user_id}`：解除封鎖。
 
 站內信使用 `dm_threads`、`direct_messages`、`blocked_users`。送出私訊會同時
-建立收件者通知；網頁 DM UI 仍是後續 Phase 10 項目。
+建立收件者通知；啟用 `feature_dm_enabled` 後，登入 UI 會顯示「站內信」
+頁籤，支援建立私訊串、收發、已讀、軟刪除、刷新與封鎖使用者。
 
 ### 功能開關與預設值
 
