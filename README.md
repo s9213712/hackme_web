@@ -184,7 +184,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-011`
+- Current release ID: `2026.04.27-012`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -212,6 +212,12 @@ member under restriction keeps `base_level=vip`, but receives
 | `vip` | highest quotas, uploads enabled, promotion requires admin/root approval |
 | `restricted` | read-only interaction model, no post/comment/DM/upload |
 | `suspended` | login only for appeal/notification surfaces; no interaction/reporting |
+
+Bootstrap accounts (`root`, `admin`, and `test` when configured through their
+environment variables) are marked with `must_change_password=1` when their
+initial password is created. Their first login is allowed only far enough to
+change that default password, then the user must sign in again with the new
+password.
 
 Rules are loaded from the DB table `member_level_rules`, not hard-coded at route
 level. Root can update rule rows through `/api/admin/member-level-rules`.

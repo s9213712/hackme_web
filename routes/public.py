@@ -294,7 +294,9 @@ def register_public_routes(app, deps):
         conn = get_db()
         try:
             user_row = conn.execute(
-                "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role FROM users WHERE username=?", (username,)
+                "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role, "
+                "must_change_password, is_default_password FROM users WHERE username=?",
+                (username,)
             ).fetchone()
 
             # Always do timing-consuming verify to prevent timing oracles
@@ -367,7 +369,12 @@ def register_public_routes(app, deps):
                 conn.commit()
 
                 audit("LOGIN_OK", ip, username, ua=ua, success=True)
-                resp = json_resp({"ok":True,"msg":"恭喜登入成功"})
+                resp = json_resp({
+                    "ok": True,
+                    "msg": "恭喜登入成功",
+                    "must_change_password": bool(user_row["must_change_password"] or 0),
+                    "is_default_password": bool(user_row["is_default_password"] or 0),
+                })
                 resp.set_cookie("session_token", token, max_age=SESSION_TTL,
                                 httponly=True, samesite=SESSION_COOKIE_SAMESITE,
                                 secure=SESSION_COOKIE_SECURE)
@@ -439,6 +446,8 @@ def register_public_routes(app, deps):
             "violation_score": dict(ctx).get("violation_score") or dict(ctx).get("violation_count") or 0,
             "sanction_status": dict(ctx).get("sanction_status") or "none",
             "sanction_until": dict(ctx).get("sanction_until"),
+            "must_change_password": bool(dict(ctx).get("must_change_password") or 0),
+            "is_default_password": bool(dict(ctx).get("is_default_password") or 0),
             "nickname": decrypt_field(ctx["nickname"]),
             "birthdate": decrypt_field(ctx["birthdate"]),
             "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,

@@ -483,6 +483,8 @@ def register_user_routes(app, deps):
                 params.append(strength["score"])
                 updates.append("password_changed_at=?")
                 params.append(datetime.now().isoformat())
+                updates.append("must_change_password=0")
+                updates.append("is_default_password=0")
                 trim_password_history(conn, user_id)
                 revoke_sessions_needed = True
             if "username" in data:

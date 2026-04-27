@@ -542,7 +542,7 @@ def get_user_by_username(username):
             "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
             "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
             "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-            "password_strength_score, blocked_until, violation_count, chat_violation_warned "
+            "password_strength_score, must_change_password, is_default_password, blocked_until, violation_count, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -574,6 +574,8 @@ def user_public_payload(row, *, include_sensitive=False):
         "level_updated_by": data.get("level_updated_by"),
         "level_update_reason": data.get("level_update_reason"),
         "password_strength_score": data.get("password_strength_score") or 0,
+        "must_change_password": bool(data.get("must_change_password") or 0),
+        "is_default_password": bool(data.get("is_default_password") or 0),
         "role_label": ROLE_LABEL.get(data.get("role"), data.get("role")),
         "blocked_until": data.get("blocked_until"),
         "violation_count": data.get("violation_count") or 0,
@@ -954,6 +956,26 @@ def enforce_feature_flags():
         "msg": "此功能目前已由 root 關閉",
         "feature": feature_key,
     }, 503)
+
+
+@app.before_request
+def enforce_required_password_change():
+    if request.method == "OPTIONS" or not request.path.startswith("/api"):
+        return None
+    allowed = {"/api/csrf-token", "/api/logout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength"}
+    if request.path in allowed:
+        return None
+    actor = get_current_user_ctx()
+    if not actor or not dict(actor).get("must_change_password"):
+        return None
+    match = re.fullmatch(r"/api/admin/users/(\d+)", request.path or "")
+    if request.method == "PUT" and match and int(match.group(1)) == int(actor["id"]):
+        return None
+    return json_resp({
+        "ok": False,
+        "msg": "此預設帳號初次登入必須先變更密碼",
+        "must_change_password": True,
+    }), 403
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 register_public_routes(app, {

@@ -136,7 +136,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     access_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_access_logs)").fetchall()}
     cloud_policy_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cloud_drive_security_policies)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
-    root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
+    root_user = conn.execute("SELECT username, must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
     conn.close()
 
     assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
@@ -144,7 +144,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {
         "member_level", "base_level", "effective_level", "trust_score", "points", "reputation",
         "violation_score", "sanction_status", "sanction_until", "level_updated_at",
-        "level_updated_by", "level_update_reason", "locked_until", "password_strength_score", "deleted_at",
+        "level_updated_by", "level_update_reason", "locked_until", "password_strength_score",
+        "must_change_password", "is_default_password", "deleted_at",
     } <= user_cols
     assert {"ip_hash", "login_at", "is_suspicious"} <= login_location_cols
     assert {
@@ -168,6 +169,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"scope", "block_unclean_downloads", "max_archive_files", "max_daily_downloads"} <= cloud_policy_cols
     assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     assert root_user["username"] == "root"
+    assert root_user["must_change_password"] == 1
+    assert root_user["is_default_password"] == 1
 
 
 def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, monkeypatch):

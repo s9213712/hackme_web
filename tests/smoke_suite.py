@@ -8,6 +8,10 @@ import urllib.parse
 import urllib.request
 from http.cookiejar import CookieJar
 
+SMOKE_ROOT_PASSWORD = "Root@1234!Smoke"
+SMOKE_ADMIN_PASSWORD = "Admin@1234!Smoke"
+SMOKE_USER_PASSWORD = "Test@1234!Smoke"
+
 
 class SmokeFailure(RuntimeError):
     pass
@@ -55,7 +59,7 @@ class Client:
             raise SmokeFailure(f"failed to fetch csrf token: {res['status']} {res['text'][:200]}")
         return res["json"]["csrf_token"]
 
-    def login(self, username, password):
+    def login(self, username, password, *, rotate_to=None):
         csrf = self.fetch_csrf()
         res = self.request(
             "POST",
@@ -65,6 +69,22 @@ class Client:
         )
         if res["status"] != 200 or not res["json"].get("ok"):
             raise SmokeFailure(f"login failed for {username}: {res['status']} {res['text'][:200]}")
+        if res["json"].get("must_change_password"):
+            if not rotate_to:
+                raise SmokeFailure(f"{username} requires password change but no rotate_to password was provided")
+            me = self.me()
+            assert_status(f"{username} /api/me before password rotation", me, 200)
+            csrf = self.fetch_csrf()
+            changed = self.request(
+                "PUT",
+                f"/api/admin/users/{me['json']['id']}",
+                body={"current_password": password, "password": rotate_to, "password_confirm": rotate_to},
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert_status(f"{username} forced password change", changed, 200)
+            assert_json_ok(f"{username} forced password change", changed)
+            self.jar.clear()
+            return self.login(username, rotate_to)
         return res
 
     def me(self):
@@ -86,6 +106,14 @@ def assert_status(label, response, expected):
 def assert_json_ok(label, response):
     if not response["json"].get("ok"):
         raise SmokeFailure(f"{label}: expected ok=true body={response['text'][:240]}")
+
+
+def login_default_or_rotated(client, username, default_password, rotated_password):
+    try:
+        return client.login(username, rotated_password, rotate_to=rotated_password)
+    except SmokeFailure:
+        client.jar.clear()
+        return client.login(username, default_password, rotate_to=rotated_password)
 
 
 def run_functional_suite(base_url):
@@ -113,9 +141,9 @@ def run_functional_suite(base_url):
     assert_status("register smokeprobe", register, 200)
     assert_json_ok("register smokeprobe", register)
 
-    root.login("root", "root")
-    admin.login("admin", "admin")
-    user.login("test", "test")
+    login_default_or_rotated(root, "root", "root", SMOKE_ROOT_PASSWORD)
+    login_default_or_rotated(admin, "admin", "admin", SMOKE_ADMIN_PASSWORD)
+    login_default_or_rotated(user, "test", "test", SMOKE_USER_PASSWORD)
 
     root_me = root.me()
     assert_status("root /api/me", root_me, 200)
@@ -194,8 +222,8 @@ def run_security_suite(base_url):
 
     admin = Client(base_url)
     user = Client(base_url)
-    admin.login("admin", "admin")
-    user.login("test", "test")
+    login_default_or_rotated(admin, "admin", "admin", SMOKE_ADMIN_PASSWORD)
+    login_default_or_rotated(user, "test", "test", SMOKE_USER_PASSWORD)
 
     invalid_auth = user.request("POST", "/api/logout", headers={"X-CSRF-Token": "invalid-token"})
     assert_status("logout invalid csrf", invalid_auth, 403)
@@ -215,7 +243,7 @@ def run_security_suite(base_url):
     post_logout = user.me()
     assert_status("/api/me after logout", post_logout, 401)
 
-    user.login("test", "test")
+    user.login("test", SMOKE_USER_PASSWORD)
     no_csrf_chat = user.request("POST", "/api/chat/rooms", body={"name": "deny-room"})
     assert_status("chat create without csrf", no_csrf_chat, 403)
 

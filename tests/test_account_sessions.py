@@ -171,6 +171,8 @@ def test_password_change_revokes_existing_sessions(tmp_path):
             blocked_until TEXT,
             violation_count INTEGER NOT NULL DEFAULT 0,
             password_changed_at TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            is_default_password INTEGER NOT NULL DEFAULT 1,
             updated_at TEXT
         );
         CREATE TABLE user_passwords (
@@ -196,7 +198,8 @@ def test_password_change_revokes_existing_sessions(tmp_path):
         """
     )
     conn.execute(
-        "INSERT INTO users (id, username, role, status, updated_at) VALUES (1, 'alice', 'user', 'active', '2026-01-01T00:00:00')"
+        "INSERT INTO users (id, username, role, status, must_change_password, is_default_password, updated_at) "
+        "VALUES (1, 'alice', 'user', 'active', 1, 1, '2026-01-01T00:00:00')"
     )
     conn.execute(
         "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, 'oldpass', '2026-01-01T00:00:00')"
@@ -224,8 +227,10 @@ def test_password_change_revokes_existing_sessions(tmp_path):
     assert res.status_code == 200
 
     conn = sqlite3.connect(db_path)
+    user_flags = conn.execute("SELECT must_change_password, is_default_password FROM users WHERE id=1").fetchone()
     revoked = conn.execute("SELECT COUNT(*) FROM sessions WHERE is_revoked=1").fetchone()[0]
     passwords = conn.execute("SELECT COUNT(*) FROM user_passwords WHERE user_id=1").fetchone()[0]
     conn.close()
     assert revoked == 2
     assert passwords == 2
+    assert user_flags == (0, 0)

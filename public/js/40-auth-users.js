@@ -40,6 +40,17 @@ async function doLogin() {
   }
 }
 
+async function forceDefaultPasswordChange() {
+  if (!currentUserId) return;
+  forcedPasswordChangeMode = true;
+  await editUser(currentUserId);
+  setUserEditMsg("此預設帳號初次登入必須先變更密碼。變更完成後請用新密碼重新登入。", false);
+  const cancelBtn = $("user-edit-cancel");
+  if (cancelBtn) cancelBtn.style.display = "none";
+  const passwordInput = $("edit-user-pw");
+  if (passwordInput) passwordInput.focus();
+}
+
 async function doRegister() {
   const user = $("reg-user").value.trim();
   const pw   = $("reg-pw").value;
@@ -207,6 +218,8 @@ async function editUser(userId) {
   if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (currentPwField) currentPwField.style.display = editingUserIsSelf ? "" : "none";
+  const cancelBtn = $("user-edit-cancel");
+  if (cancelBtn) cancelBtn.style.display = forcedPasswordChangeMode ? "none" : "";
   setUserEditField("edit-user-current-pw", "");
   setUserEditField("edit-user-pw", "");
   setUserEditField("edit-user-pw-confirm", "");
@@ -259,6 +272,11 @@ async function submitEditUser() {
     if (editingUserIsSelf) payload.current_password = currentPassword;
   }
 
+  if (forcedPasswordChangeMode && !payload.password) {
+    setUserEditMsg("初次登入必須設定新密碼", false);
+    return;
+  }
+
   if (!Object.keys(payload).length) {
     setUserEditMsg("未變更任何欄位", false);
     return;
@@ -274,6 +292,13 @@ async function submitEditUser() {
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
+    if (forcedPasswordChangeMode) {
+      forcedPasswordChangeMode = false;
+      currentMustChangePassword = false;
+      alert("密碼已更新，請使用新密碼重新登入。");
+      resetAuthState();
+      return;
+    }
     hideUserEditDialog();
     if (["manager", "super_admin"].includes(currentRole)) loadUsers();
     return;

@@ -175,7 +175,7 @@ PYTHONPATH=. python3 -m pytest -q tests
 登入頁底部會顯示發佈號，`GET /api/version` 也會回傳同一個版本資訊。
 每次正式發布請更新 `services/release_info.py`。
 
-- 目前發佈號：`2026.04.27-011`
+- 目前發佈號：`2026.04.27-012`
 - 目前 schema version：`18`
 
 ### 會員制度
@@ -203,6 +203,10 @@ PYTHONPATH=. python3 -m pytest -q tests
 | `vip` | 最高配額，可上傳，升等需 admin/root 核准 |
 | `restricted` | 只能閱讀，不能發文、留言、私訊、上傳 |
 | `suspended` | 只能登入、查看通知與申訴入口，不能互動或檢舉 |
+
+Bootstrap 預設帳號（`root`，以及有設定環境變數時建立的 `admin`、`test`）
+在初始密碼建立時會標記 `must_change_password=1`。第一次登入只允許完成
+預設密碼變更，變更後必須用新密碼重新登入。
 
 權限與門檻都從 DB table `member_level_rules` 載入，不在 route 內 hardcode。
 root 可透過 `/api/admin/member-level-rules` 調整每級規則。

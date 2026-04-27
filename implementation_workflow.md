@@ -45,6 +45,7 @@
 - [x] 登入裝置管理：session device info / UA / IP
 - [x] 帳號 session API：列出裝置、遠端登出、全部登出
 - [x] 更換密碼後 invalidate 舊 session 驗證補強
+- [x] bootstrap 預設帳號首次登入強制變更密碼
 - [x] IP 登入異常記錄與通知事件
 - [x] 對應後端測試
 

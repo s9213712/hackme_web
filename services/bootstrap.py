@@ -82,6 +82,13 @@ def _insert_password_record(conn, user_id, password, hash_password, now):
     _trim_password_history(conn, user_id)
 
 
+def _mark_default_account_password(conn, user_id, now):
+    conn.execute(
+        "UPDATE users SET must_change_password=1, is_default_password=1, updated_at=? WHERE id=?",
+        (now, user_id)
+    )
+
+
 def _bootstrap_password(env_name, username, *, required):
     password = os.environ.get(env_name, "").strip()
     if password:
@@ -488,6 +495,7 @@ def init_db(
         has_root_pw = None
     if not has_root_pw:
         _insert_password_record(conn, root_id, root_password, hash_password, now)
+        _mark_default_account_password(conn, root_id, now)
 
     admin_password = _bootstrap_password("HTML_LEARNING_MANAGER_PASSWORD", "admin", required=False)
     if admin_password:
@@ -504,6 +512,7 @@ def init_db(
         has_admin_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (admin_id,)).fetchone()
         if not has_admin_pw:
             _insert_password_record(conn, admin_id, admin_password, hash_password, now)
+            _mark_default_account_password(conn, admin_id, now)
 
     test_password = _bootstrap_password("HTML_LEARNING_TEST_PASSWORD", "test", required=False)
     if test_password:
@@ -520,6 +529,7 @@ def init_db(
         has_test_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (test_id,)).fetchone()
         if not has_test_pw:
             _insert_password_record(conn, test_id, test_password, hash_password, now)
+            _mark_default_account_password(conn, test_id, now)
 
     ensure_official_chat_room(conn)
     _STATE["refresh_system_settings"]()

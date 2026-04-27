@@ -5,6 +5,8 @@ let _csrfToken = null;
 let currentUser = null;
 let currentUserId = null;
 let currentRole = "user";
+let currentMustChangePassword = false;
+let forcedPasswordChangeMode = false;
 let canManageUsers = false;
 let currentModuleTab = "chat";
 let currentServerTab = "health";
@@ -284,6 +286,7 @@ function renderChatMessages(messages) {
 }
 
 function hideUserEditDialog() {
+  if (forcedPasswordChangeMode) return;
   const overlay = $("user-edit-overlay");
   if (overlay) {
     overlay.classList.remove("show");
@@ -440,6 +443,7 @@ function setAuthState(json, showLoginHero = false) {
   currentUser = json.username || null;
   currentUserId = json.id || null;
   currentRole = json.role || "user";
+  currentMustChangePassword = !!json.must_change_password;
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
   $("success-screen").classList.add("show");
@@ -501,6 +505,12 @@ function setAuthState(json, showLoginHero = false) {
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentRole === "super_admin" ? "" : "none";
 
+  if (currentMustChangePassword) {
+    resetInactivityTimer();
+    setTimeout(() => forceDefaultPasswordChange(), 0);
+    return;
+  }
+
   if (currentRole === "manager" || currentRole === "super_admin") {
     loadUsers();
     if (currentRole === "super_admin") {
@@ -528,6 +538,8 @@ function resetAuthState() {
   currentUser = null;
   currentUserId = null;
   currentRole = "user";
+  currentMustChangePassword = false;
+  forcedPasswordChangeMode = false;
   canManageUsers = false;
   users = [];
   currentServerTab = "health";

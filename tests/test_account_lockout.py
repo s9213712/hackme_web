@@ -93,6 +93,8 @@ def _seed_db(db_path):
             locked_until TEXT,
             failed_login_count INTEGER NOT NULL DEFAULT 0,
             last_login_at TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 0,
+            is_default_password INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT
         );
         CREATE TABLE user_passwords (
