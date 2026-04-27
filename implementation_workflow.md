@@ -57,12 +57,13 @@
 - [x] admin 高風險操作 proposal + vote 後可執行
 - [x] root override
 - [x] 基本處分執行：warn / mute / restrict / suspend / delete / downgrade_level / force_password_reset
-- [ ] 版主動作日誌 `moderation_actions`
-- [ ] Mod Note `user_mod_notes`
-- [ ] 威望明細 `reputation_events`
+- [x] 版主動作日誌 `moderation_actions`
+- [x] Mod Note `user_mod_notes`
+- [x] 威望明細 `reputation_events`
 - [x] 會員等級規則對應測試：`37 passed`
 - [x] moderation proposal / vote 對應測試：`39 passed`
-- [ ] Phase 3 其餘治理功能對應測試
+- [x] governance records / Mod Note / reputation 對應測試：`40 passed`
+- [ ] Phase 3 UI 與細部整合測試
 
 ## Phase 4：伺服器模式
 

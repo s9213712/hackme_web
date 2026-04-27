@@ -107,6 +107,7 @@ from services.identity import (
     ensure_user_identity_columns,
     role_rank,
 )
+from services.governance_records import ensure_governance_records_schema
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
@@ -618,6 +619,7 @@ def ensure_security_support_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at)")
     ensure_member_level_rules_schema(conn)
     ensure_moderation_proposals_schema(conn)
+    ensure_governance_records_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "

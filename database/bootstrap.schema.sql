@@ -118,6 +118,35 @@ CREATE TABLE IF NOT EXISTS moderation_votes (
     UNIQUE(proposal_id, voter_user_id)
 );
 
+CREATE TABLE IF NOT EXISTS moderation_actions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    moderator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    action_type  TEXT NOT NULL,
+    target_type  TEXT NOT NULL,
+    target_id    INTEGER NOT NULL,
+    reason       TEXT,
+    is_auto      INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_mod_notes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    moderator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    note         TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reputation_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    delta          INTEGER NOT NULL,
+    reason         TEXT NOT NULL,
+    source_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source_post_id INTEGER,
+    created_at     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -270,6 +299,12 @@ CREATE INDEX IF NOT EXISTS idx_member_level_rules_level ON member_level_rules(le
 CREATE INDEX IF NOT EXISTS idx_moderation_proposals_status ON moderation_proposals(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_moderation_proposals_target ON moderation_proposals(target_user_id);
 CREATE INDEX IF NOT EXISTS idx_moderation_votes_proposal ON moderation_votes(proposal_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_actions_target ON moderation_actions(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_actions_moderator ON moderation_actions(moderator_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_user_mod_notes_user ON user_mod_notes(user_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_reputation_events_user ON reputation_events(user_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
 

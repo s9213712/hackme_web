@@ -5,8 +5,11 @@ import time
 from datetime import datetime
 from flask import request
 
+from services.governance_records import (
+    ensure_governance_records_schema,
+    record_moderation_action,
+)
 from services.moderation_proposals import (
-    ACTION_TYPES,
     VOTES,
     cast_action_value,
     create_moderation_proposal,
@@ -86,6 +89,15 @@ def register_moderation_routes(app, deps):
             return False, "權限不足", 403
         return True, "", 200
 
+    def require_moderator_actor(actor):
+        if not actor:
+            return False, "未登入", 401
+        if not is_feature_enabled("feature_member_governance_enabled"):
+            return False, "會員治理功能目前已關閉", 503
+        if role_rank(actor_role(actor)) < role_rank("moderator"):
+            return False, "權限不足", 403
+        return True, "", 200
+
     def proposal_payload(conn, row):
         proposal = proposal_row_to_dict(row)
         if not proposal:
@@ -146,7 +158,152 @@ def register_moderation_routes(app, deps):
             revoke_target_sessions = True
         else:
             return None, "不支援的提案動作", None
+        record_moderation_action(
+            conn,
+            moderator_id=actor["id"],
+            action_type=action_type,
+            target_type="user",
+            target_id=target["id"],
+            reason=proposal["reason"],
+            is_auto=False,
+        )
         return target, None, revoke_target_sessions
+
+    @app.route("/api/admin/moderation-actions", methods=["GET"])
+    @require_csrf_safe
+    def moderation_actions():
+        actor = get_current_user_ctx()
+        ok, msg, status_code = require_moderator_actor(actor)
+        if not ok:
+            return json_resp({"ok":False,"msg":msg}), status_code
+        limit = parse_positive_int(request.args.get("limit", 50), default=50, min_value=1, max_value=200)
+        page = parse_positive_int(request.args.get("page", 0), default=0, min_value=0)
+        if limit is None or page is None:
+            return json_resp({"ok":False,"msg":"分頁參數錯誤"}), 400
+        conn = get_db()
+        try:
+            ensure_governance_records_schema(conn)
+            rows = conn.execute(
+                "SELECT a.id, a.action_type, a.target_type, a.target_id, a.reason, a.is_auto, a.created_at, "
+                "u.username AS moderator_username "
+                "FROM moderation_actions a JOIN users u ON u.id=a.moderator_id "
+                "ORDER BY a.id DESC LIMIT ? OFFSET ?",
+                (limit, page * limit),
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) AS c FROM moderation_actions").fetchone()["c"]
+            return json_resp({
+                "ok": True,
+                "actions": [{**dict(row), "is_auto": bool(row["is_auto"])} for row in rows],
+                "total": total,
+                "page": page,
+                "limit": limit,
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/mod-notes/<int:user_id>", methods=["GET", "POST"])
+    @require_csrf_safe
+    def user_mod_notes(user_id):
+        actor = get_current_user_ctx()
+        ok, msg, status_code = require_moderator_actor(actor)
+        if not ok:
+            return json_resp({"ok":False,"msg":msg}), status_code
+        conn = get_db()
+        try:
+            ensure_governance_records_schema(conn)
+            target = conn.execute("SELECT id, username FROM users WHERE id=?", (user_id,)).fetchone()
+            if not target:
+                return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+            if request.method == "GET":
+                rows = conn.execute(
+                    "SELECT n.id, n.note, n.created_at, u.username AS moderator_username "
+                    "FROM user_mod_notes n JOIN users u ON u.id=n.moderator_id "
+                    "WHERE n.user_id=? ORDER BY n.id DESC LIMIT 100",
+                    (user_id,),
+                ).fetchall()
+                return json_resp({"ok":True,"target":dict(target),"notes":[dict(row) for row in rows]})
+
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+            note = normalize_text(data.get("note")) if isinstance(data, dict) else ""
+            if not note:
+                return json_resp({"ok":False,"msg":"備註不可為空"}), 400
+            conn.execute(
+                "INSERT INTO user_mod_notes (moderator_id, user_id, note, created_at) VALUES (?, ?, ?, ?)",
+                (actor["id"], user_id, note[:2000], datetime.now().isoformat()),
+            )
+            record_moderation_action(
+                conn,
+                moderator_id=actor["id"],
+                action_type="mod_note",
+                target_type="user",
+                target_id=user_id,
+                reason=note[:1000],
+                is_auto=False,
+            )
+            conn.commit()
+            audit("USER_MOD_NOTE_CREATED", get_client_ip(), user=actor["username"], success=True,
+                  detail=f"target={target['username']}")
+            return json_resp({"ok":True,"msg":"版主備註已新增"})
+        finally:
+            conn.close()
+
+    @app.route("/api/account/reputation/history", methods=["GET"])
+    @require_csrf_safe
+    def account_reputation_history():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if not is_feature_enabled("feature_member_governance_enabled"):
+            return json_resp({"ok":False,"msg":"會員治理功能目前已關閉"}), 503
+        limit = parse_positive_int(request.args.get("limit", 50), default=50, min_value=1, max_value=200)
+        if limit is None:
+            return json_resp({"ok":False,"msg":"limit 參數錯誤"}), 400
+        conn = get_db()
+        try:
+            ensure_governance_records_schema(conn)
+            rows = conn.execute(
+                "SELECT id, delta, reason, source_user_id, source_post_id, created_at "
+                "FROM reputation_events WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                (actor["id"], limit),
+            ).fetchall()
+            return json_resp({"ok":True,"events":[dict(row) for row in rows]})
+        finally:
+            conn.close()
+
+    @app.route("/api/account/reputation/summary", methods=["GET"])
+    @require_csrf_safe
+    def account_reputation_summary():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if not is_feature_enabled("feature_member_governance_enabled"):
+            return json_resp({"ok":False,"msg":"會員治理功能目前已關閉"}), 503
+        conn = get_db()
+        try:
+            ensure_governance_records_schema(conn)
+            current = conn.execute("SELECT reputation FROM users WHERE id=?", (actor["id"],)).fetchone()
+            totals = conn.execute(
+                "SELECT "
+                "COALESCE(SUM(delta), 0) AS total_delta, "
+                "COALESCE(SUM(CASE WHEN created_at >= datetime('now', '-30 days') THEN delta ELSE 0 END), 0) AS last_30_days, "
+                "COALESCE(SUM(CASE WHEN created_at >= datetime('now', '-365 days') THEN delta ELSE 0 END), 0) AS last_365_days "
+                "FROM reputation_events WHERE user_id=?",
+                (actor["id"],),
+            ).fetchone()
+            return json_resp({
+                "ok": True,
+                "summary": {
+                    "current_reputation": int(current["reputation"] or 0) if current else 0,
+                    "total_delta": int(totals["total_delta"] or 0),
+                    "last_30_days": int(totals["last_30_days"] or 0),
+                    "last_365_days": int(totals["last_365_days"] or 0),
+                }
+            })
+        finally:
+            conn.close()
 
     @app.route("/api/admin/moderation/proposals", methods=["GET", "POST"])
     @require_csrf_safe

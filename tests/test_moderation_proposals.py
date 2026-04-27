@@ -3,6 +3,7 @@ import sqlite3
 from flask import Flask, jsonify
 
 from routes.moderation import register_moderation_routes
+from services.governance_records import add_reputation_event, ensure_governance_records_schema
 
 
 def _role_rank(role):
@@ -55,6 +56,7 @@ def _seed_users(db_path):
             role TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             member_level TEXT NOT NULL DEFAULT 'normal',
+            reputation INTEGER NOT NULL DEFAULT 0,
             must_change_password INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
             updated_at TEXT,
@@ -103,10 +105,12 @@ def test_moderation_proposal_vote_and_execute(tmp_path):
     conn = sqlite3.connect(db_path)
     row = conn.execute("SELECT status, member_level FROM users WHERE id=4").fetchone()
     proposal_status = conn.execute("SELECT status FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()[0]
+    action = conn.execute("SELECT action_type, target_type, target_id FROM moderation_actions LIMIT 1").fetchone()
     conn.close()
 
     assert row == ("suspended", "suspended")
     assert proposal_status == "executed"
+    assert action == ("suspend", "user", 4)
     assert revoked == [4]
 
 
@@ -131,3 +135,35 @@ def test_root_override_executes_pending_proposal(tmp_path):
     row = conn.execute("SELECT status, member_level FROM users WHERE id=4").fetchone()
     conn.close()
     assert row == ("limited", "restricted")
+
+
+def test_mod_notes_and_reputation_account_api(tmp_path):
+    db_path = tmp_path / "moderation.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    note = client.post("/api/admin/mod-notes/4", json={"note": "需要觀察留言品質"})
+    assert note.status_code == 200
+
+    notes = client.get("/api/admin/mod-notes/4")
+    assert notes.status_code == 200
+    assert notes.get_json()["notes"][0]["note"] == "需要觀察留言品質"
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    ensure_governance_records_schema(conn)
+    add_reputation_event(conn, user_id=4, delta=10, reason="post_upvoted", source_user_id=2)
+    conn.commit()
+    conn.close()
+
+    actor_box["actor"] = {"id": 4, "username": "alice", "role": "user"}
+    summary = client.get("/api/account/reputation/summary")
+    history = client.get("/api/account/reputation/history")
+
+    assert summary.status_code == 200
+    assert summary.get_json()["summary"]["current_reputation"] == 10
+    assert summary.get_json()["summary"]["total_delta"] == 10
+    assert history.status_code == 200
+    assert history.get_json()["events"][0]["delta"] == 10
