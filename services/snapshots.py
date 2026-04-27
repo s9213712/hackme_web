@@ -28,6 +28,8 @@ RESETTABLE_TABLES = {
     "cloud_file_refs",
     "file_access_grants",
     "announcement_attachment_requests",
+    "album_files",
+    "albums",
     "messages",
     "moderation_proposals",
     "moderation_votes",
@@ -37,6 +39,7 @@ RESETTABLE_TABLES = {
     "storage_files",
     "storage_quota_log",
     "uploaded_files",
+    "user_storage",
     "user_mod_notes",
     "violations",
 }

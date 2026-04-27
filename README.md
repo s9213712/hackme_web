@@ -541,6 +541,13 @@ to `captcha_ttl_seconds`. `turnstile` keeps the site-key setting visible, but
 registration fails with an actionable message until `TURNSTILE_SECRET_KEY` and
 server-side verification are configured.
 
+### Storage and Albums
+
+Phase 12 starts with DB-backed storage foundations: `user_storage`,
+`storage_files`, `storage_quota_log`, `albums`, and `album_files`. These tables
+separate logical file-manager state, quota accounting, trash state, and album
+membership from the physical `uploaded_files` records used by Cloud Drive.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and

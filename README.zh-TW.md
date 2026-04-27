@@ -507,6 +507,13 @@ root 可在管理設定頁選擇註冊 CAPTCHA 模式：`none`、`math`、`image
 site key 設定；若未配置 `TURNSTILE_SECRET_KEY` 與服務端驗證，註冊會明確提示
 root 調整，不會靜默放行。
 
+### Storage / 相簿
+
+Phase 12 先建立 DB-backed storage 基礎：`user_storage`、`storage_files`、
+`storage_quota_log`、`albums`、`album_files`。這些表把檔案管理器邏輯狀態、
+quota 記帳、回收筒狀態與相簿歸屬，和 Cloud Drive 實體檔案表
+`uploaded_files` 分開。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI

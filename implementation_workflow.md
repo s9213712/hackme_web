@@ -178,8 +178,8 @@
 
 ## Phase 12：Storage / 相簿
 
-- [ ] user_storage / storage_files / storage_quota_log schema
-- [ ] albums / album_files schema
+- [x] user_storage / storage_files / storage_quota_log schema
+- [x] albums / album_files schema
 - [ ] 上傳下載 API
 - [ ] 回收筒 API
 - [ ] 相簿 API

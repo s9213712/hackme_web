@@ -135,6 +135,11 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     scan_result_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_scan_results)").fetchall()}
     access_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_access_logs)").fetchall()}
     cloud_policy_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cloud_drive_security_policies)").fetchall()}
+    user_storage_cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_storage)").fetchall()}
+    storage_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_files)").fetchall()}
+    storage_quota_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_quota_log)").fetchall()}
+    album_cols = {row["name"] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
+    album_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(album_files)").fetchall()}
     cloud_ref_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cloud_file_refs)").fetchall()}
     grant_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_access_grants)").fetchall()}
     announcement_request_cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcement_attachment_requests)").fetchall()}
@@ -184,6 +189,11 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
         "deep_archive_scan_enabled", "max_archive_depth", "office_macro_scan_enabled",
         "image_reencode_enabled", "image_reencode_max_pixels", "yara_enabled", "yara_command", "yara_rules_path",
     } <= cloud_policy_cols
+    assert {"user_id", "quota_bytes", "used_bytes", "reserved_bytes", "file_count"} <= user_storage_cols
+    assert {"file_id", "owner_user_id", "virtual_path", "is_trashed", "deleted_at"} <= storage_file_cols
+    assert {"user_id", "delta_bytes", "before_used_bytes", "after_used_bytes", "source"} <= storage_quota_log_cols
+    assert {"owner_user_id", "title", "visibility", "cover_file_id", "deleted_at"} <= album_cols
+    assert {"album_id", "storage_file_id", "file_id", "sort_order", "caption"} <= album_file_cols
     assert {"file_id", "context_type", "context_id", "permission_snapshot_json"} <= cloud_ref_cols
     assert {"file_id", "granted_to_user_id", "context_type", "can_download", "revoked_at"} <= grant_cols
     assert {"file_id", "requested_by", "announcement_id", "status", "reviewed_by"} <= announcement_request_cols
@@ -196,7 +206,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
     assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
     assert {"manifest_hash", "manifest_signature", "approved_by"} <= integrity_manifest_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
     assert root_user["username"] == "root"
     assert root_user["must_change_password"] == 1
     assert root_user["is_default_password"] == 1
