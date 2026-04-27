@@ -133,8 +133,19 @@ def _post_row(db_path, post_id):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT id, is_pinned, is_hidden, hidden_reason FROM forum_posts WHERE id=?",
+        "SELECT id, content, is_pinned, is_hidden, hidden_reason, is_deleted, deleted_by, edited_by FROM forum_posts WHERE id=?",
         (post_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def _thread_row(db_path, thread_id):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, title, content, is_deleted, deleted_by, edited_by FROM forum_threads WHERE id=?",
+        (thread_id,)
     ).fetchone()
     conn.close()
     return row
@@ -283,12 +294,88 @@ def test_manager_can_delete_announcement_thread_and_post(tmp_path):
     post = client.delete(f"/api/community/posts/{ids['post']}")
     assert post.status_code == 200
     assert post.get_json()["ok"] is True
-    assert _count(db_path, "forum_posts") == 0
+    assert _count(db_path, "forum_posts") == 1
+    assert _post_row(db_path, ids["post"])["is_deleted"] == 1
 
     thread = client.delete(f"/api/community/threads/{ids['thread']}")
     assert thread.status_code == 200
     assert thread.get_json()["ok"] is True
-    assert _count(db_path, "forum_threads") == 0
+    assert _count(db_path, "forum_threads") == 1
+    assert _thread_row(db_path, ids["thread"])["is_deleted"] == 1
+
+
+def test_soft_deleted_thread_and_post_are_hidden_from_users(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    delete_post = client.delete(f"/api/community/posts/{ids['post']}")
+    assert delete_post.status_code == 200
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    detail = client.get(f"/api/community/threads/{ids['thread']}")
+    assert detail.status_code == 200
+    assert detail.get_json()["posts"] == []
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    delete_thread = client.delete(f"/api/community/threads/{ids['thread']}")
+    assert delete_thread.status_code == 200
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    hidden_detail = client.get(f"/api/community/threads/{ids['thread']}")
+    assert hidden_detail.status_code == 404
+
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+    listed = client.get(f"/api/community/boards/{board_id}/threads")
+    assert all(item["id"] != ids["thread"] for item in listed.get_json()["threads"])
+
+
+def test_author_can_update_own_thread_and_post(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    thread = client.put(
+        f"/api/community/threads/{ids['thread']}",
+        json={"title": "更新主題", "content": "更新內容"},
+    )
+    post = client.put(
+        f"/api/community/posts/{ids['post']}",
+        json={"content": "更新留言"},
+    )
+
+    assert thread.status_code == 200
+    assert post.status_code == 200
+    thread_row = _thread_row(db_path, ids["thread"])
+    post_row = _post_row(db_path, ids["post"])
+    assert thread_row["title"] == "更新主題"
+    assert thread_row["content"] == "更新內容"
+    assert thread_row["edited_by"] == "alice"
+    assert post_row["content"] == "更新留言"
+    assert post_row["edited_by"] == "alice"
+
+
+def test_user_cannot_update_other_user_thread_or_post(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    thread = client.put(
+        f"/api/community/threads/{ids['thread']}",
+        json={"title": "惡意修改", "content": "不應成功"},
+    )
+    post = client.put(
+        f"/api/community/posts/{ids['post']}",
+        json={"content": "不應成功"},
+    )
+
+    assert thread.status_code == 403
+    assert post.status_code == 403
 
 
 def test_user_cannot_delete_other_user_thread_or_post(tmp_path):
