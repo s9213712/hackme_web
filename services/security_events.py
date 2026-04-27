@@ -16,6 +16,16 @@ _CLEANUP_LOCK = threading.Lock()
 _LAST_EVENT_CLEANUP_AT = 0.0
 _EVENT_RETENTION_DAYS = 7
 _EVENT_CLEANUP_INTERVAL_SECONDS = 300
+SECURITY_EVENT_TYPES = {
+    "login_fail",
+    "ip_block",
+    "rate_limit",
+    "403_access",
+    "feature_disabled",
+    "csrf_fail",
+    "permission_denied",
+    "session_revoked",
+}
 
 
 def configure_security_events_service(*, get_db, get_system_settings, audit, is_ip_blocking_enabled):
@@ -80,6 +90,30 @@ def _check_window_limit(bucket, key, *, max_req, window_sec):
     return blocked, {"count": len(recent), "limit": max_req}
 
 
+def normalize_security_event_type(event_type):
+    event_type = str(event_type or "").strip().lower()
+    return event_type if event_type in SECURITY_EVENT_TYPES else "permission_denied"
+
+
+def record_security_event(event_type, ip, target_user=None, detail="", created_at=None):
+    _maybe_cleanup_old_events()
+    conn = _STATE["get_db"]()
+    try:
+        conn.execute(
+            "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                normalize_security_event_type(event_type),
+                ip or "-",
+                target_user,
+                detail or "",
+                created_at or datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def is_ip_blocked(ip):
     if not _STATE["is_ip_blocking_enabled"]():
         return False
@@ -127,13 +161,10 @@ def block_ip(ip, minutes=10, reason="multiple failures"):
             "ON CONFLICT(ip_address) DO UPDATE SET blocked_until=excluded.blocked_until, reason=excluded.reason, created_at=excluded.created_at",
             (ip, blocked_until, reason, datetime.now().isoformat())
         )
-        conn.execute(
-            "INSERT INTO security_events (event_type, ip_address, detail, created_at) VALUES ('ip_block', ?, ?, ?)",
-            (ip, f"blocked_until={blocked_until}", datetime.now().isoformat())
-        )
         conn.commit()
     finally:
         conn.close()
+    record_security_event("ip_block", ip, detail=f"blocked_until={blocked_until}")
     _maybe_cleanup_old_events()
 
 
@@ -145,8 +176,8 @@ def record_login_failure(ip, username="", ua="-", detail="-", lock_on=3):
     conn = _STATE["get_db"]()
     try:
         conn.execute(
-            "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) VALUES ('login_fail', ?, ?, ?, ?)",
-            (ip, username, detail, datetime.now().isoformat())
+            "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+            (normalize_security_event_type("login_fail"), ip, username, detail, datetime.now().isoformat())
         )
         since = (datetime.now() - timedelta(minutes=10)).isoformat()
         count = conn.execute(
@@ -184,13 +215,4 @@ def check_user_rate_limit(user_id, action, max_req=10, window_sec=3600):
 
 
 def record_403_access(ip, path, username="-"):
-    _maybe_cleanup_old_events()
-    conn = _STATE["get_db"]()
-    try:
-        conn.execute(
-            "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) VALUES ('403_access', ?, ?, ?, ?)",
-            (ip, username, f"path={path}", datetime.now().isoformat())
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    record_security_event("403_access", ip, target_user=username, detail=f"path={path}")

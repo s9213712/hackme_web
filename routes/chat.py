@@ -2,6 +2,8 @@ import sqlite3
 from datetime import datetime
 from flask import request
 
+from services.permissions import require_member_action
+
 
 def actor_role(actor):
     return "super_admin" if actor and actor.get("username") == "root" else (actor.get("role") or "user")
@@ -246,6 +248,10 @@ def register_chat_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
+        if request.method == "POST":
+            ok, msg, status = require_member_action(actor, "chat_send")
+            if not ok:
+                return json_resp({"ok":False,"msg":msg}), status
 
         conn = get_db()
         try:

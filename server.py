@@ -84,6 +84,7 @@ from services.security_events import (
     is_rate_limited,
     record_403_access,
     record_login_failure,
+    record_security_event,
 )
 from services.bootstrap import (
     apply_schema_migrations,
@@ -491,7 +492,7 @@ def get_user_by_username(username):
     conn = get_db()
     try:
         return conn.execute(
-            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, violation_count, chat_violation_warned "
+            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, blocked_until, violation_count, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -788,6 +789,13 @@ def enforce_feature_flags():
     feature_key = feature_gate_for_path(request.path)
     if not feature_key or is_feature_enabled(feature_key):
         return None
+    actor = get_current_user_ctx()
+    record_security_event(
+        "feature_disabled",
+        get_client_ip(),
+        target_user=(actor["username"] if actor else "-"),
+        detail=f"path={request.path},feature={feature_key}",
+    )
     return json_resp({
         "ok": False,
         "msg": "此功能目前已由 root 關閉",

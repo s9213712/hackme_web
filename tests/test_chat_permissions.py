@@ -146,6 +146,13 @@ def _message_block_state(db_path, message_id):
     return row[0]
 
 
+def _message_count(db_path):
+    conn = sqlite3.connect(db_path)
+    count = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0]
+    conn.close()
+    return count
+
+
 def test_manager_can_delete_user_message(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
@@ -183,3 +190,24 @@ def test_root_can_delete_manager_message(tmp_path):
     assert res.status_code == 200
     assert res.get_json()["ok"] is True
     assert _message_block_state(db_path, 3) == 1
+
+
+def test_restricted_member_cannot_send_chat_message(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {
+        "actor": {
+            "id": 3,
+            "username": "alice",
+            "role": "user",
+            "status": "active",
+            "member_level": "restricted",
+        }
+    }
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.post("/api/chat/rooms/1/messages", json={"content": "hello"})
+
+    assert res.status_code == 403
+    assert res.get_json()["ok"] is False
+    assert _message_count(db_path) == 3

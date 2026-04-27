@@ -1,6 +1,7 @@
 import sqlite3
 
 from services.identity import ensure_user_identity_columns, role_rank
+from services.permissions import require_member_action, require_role
 
 
 def test_ensure_user_identity_columns_repairs_legacy_users(tmp_path):
@@ -43,3 +44,17 @@ def test_role_rank_supports_governance_role_aliases():
     assert role_rank("admin") == role_rank("manager")
     assert role_rank("security_admin") > role_rank("moderator")
     assert role_rank("moderator") > role_rank("user")
+
+
+def test_permission_helpers_check_role_status_and_member_level():
+    manager = {"username": "admin", "role": "manager", "status": "active", "member_level": "normal"}
+    inactive = {"username": "bob", "role": "manager", "status": "inactive", "member_level": "normal"}
+    restricted = {"username": "alice", "role": "user", "status": "active", "member_level": "restricted"}
+    suspended = {"username": "eve", "role": "user", "status": "active", "member_level": "suspended"}
+
+    assert require_role(manager, "manager")[0] is True
+    assert require_role(manager, "super_admin") == (False, "權限不足", 403)
+    assert require_role(inactive, "user") == (False, "帳號狀態不可執行此操作", 403)
+    assert require_member_action(restricted, "community_thread_create") == (False, "會員等級受限，暫停發文、留言與聊天", 403)
+    assert require_member_action(restricted, "community_reaction")[0] is True
+    assert require_member_action(suspended, "community_reaction") == (False, "會員等級已停權，暫停互動功能", 403)

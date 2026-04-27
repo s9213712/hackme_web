@@ -3,6 +3,8 @@ from datetime import datetime
 
 from flask import request
 
+from services.permissions import require_member_action
+
 
 def register_community_routes(app, deps):
     COMMUNITY_POST_AUTO_HIDE_MIN_DISLIKES = 3
@@ -480,6 +482,9 @@ def register_community_routes(app, deps):
 
             if board["status"] != "approved":
                 return json_resp({"ok": False, "msg": "討論區尚未開放"}), 403
+            ok, msg, status_code = require_member_action(actor, "community_thread_create")
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), status_code
             try:
                 data = request.get_json(force=True)
             except Exception:
@@ -681,6 +686,9 @@ def register_community_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
+        ok, msg, status_code = require_member_action(actor, "community_reply")
+        if not ok:
+            return json_resp({"ok": False, "msg": msg}), status_code
 
         try:
             data = request.get_json(force=True)
@@ -727,6 +735,9 @@ def register_community_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
+        ok, msg, status_code = require_member_action(actor, "community_reaction")
+        if not ok:
+            return json_resp({"ok": False, "msg": msg}), status_code
         try:
             data = request.get_json(force=True)
         except Exception:

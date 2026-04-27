@@ -184,6 +184,35 @@ def test_user_cannot_delete_other_user_thread_or_post(tmp_path):
     assert thread.get_json()["ok"] is False
 
 
+def test_restricted_member_cannot_create_thread_or_reply(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {
+        "actor": {
+            "id": 3,
+            "username": "alice",
+            "role": "user",
+            "status": "active",
+            "member_level": "restricted",
+        }
+    }
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    create = client.post(
+        "/api/community/boards/1/threads",
+        json={"title": "受限發文", "content": "不應成功"},
+    )
+    reply = client.post(
+        f"/api/community/threads/{ids['thread']}/posts",
+        json={"content": "受限留言"},
+    )
+
+    assert create.status_code == 403
+    assert create.get_json()["ok"] is False
+    assert reply.status_code == 403
+    assert reply.get_json()["ok"] is False
+
+
 def test_manager_can_pin_post(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
