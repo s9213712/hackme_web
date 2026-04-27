@@ -2,7 +2,7 @@
 
 This project uses two layers of plaintext secret detection before code is merged:
 
-- `gitleaks detect --source . --no-git --redact`
+- `gitleaks detect --source "$(git rev-parse --show-toplevel)" --no-git --redact --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"`
 - `python3 scripts/security/scan_plaintext_secrets.py --fail-on high`
 
 The custom scanner checks project-specific plaintext patterns such as credential
@@ -13,16 +13,30 @@ Authorization headers, cookies, or JWT material.
 
 ## Local Setup
 
+`gitleaks` is a required external developer dependency. It is not listed in
+`requirements.txt` because it is a standalone CLI, not a Python package.
+
 Install pre-commit and gitleaks, then enable the hooks:
 
 ```bash
 python3 -m pip install --user pre-commit
+GITLEAKS_VERSION=8.30.1
+curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+install -m 0755 /tmp/gitleaks ~/.local/bin/gitleaks
+export PATH="$HOME/.local/bin:$PATH"
 pre-commit install
+gitleaks version
 ```
 
-Install `gitleaks` from the official project release instructions. The local
-hook fails closed when `gitleaks` is missing so commits cannot silently skip the
-generic scanner.
+On macOS, Homebrew is also acceptable:
+
+```bash
+brew install gitleaks
+```
+
+The local hook fails closed when `gitleaks` is missing so commits cannot
+silently skip the generic scanner.
 
 The gitleaks run uses `.gitleaks.toml` to exclude runtime/generated paths such
 as local DB files, private runtime keys, snapshots, cache directories, and

@@ -36,6 +36,32 @@ https://127.0.0.1:5000/
 
 Bootstrap accounts are no longer hard-coded. On a fresh database, `root` is created from `HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if `HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set.
 
+## Developer Security Dependencies
+
+Python dependencies are in `requirements.txt`. Secret scanning also requires the
+external `gitleaks` CLI because it is not a Python package.
+
+Install local security tooling:
+
+```bash
+python3 -m pip install --user pre-commit
+GITLEAKS_VERSION=8.30.1
+curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+install -m 0755 /tmp/gitleaks ~/.local/bin/gitleaks
+export PATH="$HOME/.local/bin:$PATH"
+pre-commit install
+gitleaks version
+```
+
+macOS users can install gitleaks with Homebrew:
+
+```bash
+brew install gitleaks
+```
+
+CI installs `gitleaks` automatically in `.github/workflows/security-secrets-scan.yml`.
+
 ## Deployment FAQ
 
 ### The site does not open after `python3 server.py`

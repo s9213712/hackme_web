@@ -5,7 +5,7 @@ repos:
         name: gitleaks secrets scan
         language: system
         pass_filenames: false
-        entry: bash -c 'if ! command -v gitleaks >/dev/null 2>&1; then echo "gitleaks is required. Install it from https://github.com/gitleaks/gitleaks before committing." >&2; exit 1; fi; gitleaks detect --source . --no-git --redact --verbose --config .gitleaks.toml'
+        entry: bash -c 'repo="$(git rev-parse --show-toplevel)"; if ! command -v gitleaks >/dev/null 2>&1; then echo "gitleaks is required before committing. See docs/security/secrets_scanning.md for Linux/macOS install commands." >&2; exit 1; fi; gitleaks detect --source "$repo" --no-git --redact --verbose --config "$repo/.gitleaks.toml"'
       - id: plaintext-secrets-scan
         name: plaintext secrets scan
         language: system

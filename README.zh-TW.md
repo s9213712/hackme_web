@@ -34,6 +34,32 @@ https://127.0.0.1:5000/
 
 初始化帳號不再硬編碼。全新資料庫啟動時，`root` 會從 `HTML_LEARNING_ROOT_PASSWORD` 建立；只有在設定 `HTML_LEARNING_MANAGER_PASSWORD`、`HTML_LEARNING_TEST_PASSWORD` 時，才會建立 `admin` 與 `test`。
 
+## 開發安全依賴
+
+Python 依賴放在 `requirements.txt`。敏感資料掃描另外需要外部
+`gitleaks` CLI，因為它不是 Python 套件，不適合放進 `requirements.txt`。
+
+安裝本機安全工具：
+
+```bash
+python3 -m pip install --user pre-commit
+GITLEAKS_VERSION=8.30.1
+curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+install -m 0755 /tmp/gitleaks ~/.local/bin/gitleaks
+export PATH="$HOME/.local/bin:$PATH"
+pre-commit install
+gitleaks version
+```
+
+macOS 可用 Homebrew：
+
+```bash
+brew install gitleaks
+```
+
+CI 會在 `.github/workflows/security-secrets-scan.yml` 自動安裝 `gitleaks`。
+
 ## 部署常見問題
 
 ### 執行 `python3 server.py` 後網站打不開
