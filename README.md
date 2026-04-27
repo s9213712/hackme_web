@@ -556,6 +556,9 @@ trash, `POST /api/storage/files/{id}/restore` restores it,
 `DELETE /api/storage/files/{id}/purge` permanently removes the storage entry,
 and `GET /api/storage/trash` lists trashed entries. Purging does not delete the
 underlying Cloud Drive file so existing message/forum references are not broken.
+Album APIs include owner-only `GET/POST /api/storage/albums`,
+`GET/PUT/DELETE /api/storage/albums/{id}`, plus add/remove file membership under
+`/api/storage/albums/{id}/files`.
 
 ### Feature Flags and Defaults
 

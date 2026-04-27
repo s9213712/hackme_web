@@ -519,7 +519,9 @@ quota 記帳、回收筒狀態與相簿歸屬，和 Cloud Drive 實體檔案表
 `POST /api/storage/files/{id}/restore` 還原，
 `DELETE /api/storage/files/{id}/purge` 永久移除 storage entry，
 `GET /api/storage/trash` 列出回收筒。永久移除不會刪 Cloud Drive 原始檔，
-避免破壞既有私訊/討論區引用。
+避免破壞既有私訊/討論區引用。相簿 API 提供 owner-only 的
+`GET/POST /api/storage/albums`、`GET/PUT/DELETE /api/storage/albums/{id}`，
+以及 `/api/storage/albums/{id}/files` 加入/移除相簿檔案。
 
 ### 功能開關與預設值
 

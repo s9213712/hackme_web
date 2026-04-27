@@ -182,7 +182,7 @@
 - [x] albums / album_files schema
 - [x] 上傳下載 API
 - [x] 回收筒 API
-- [ ] 相簿 API
+- [x] 相簿 API
 - [ ] 分享連結 API
 - [ ] Storage Admin API
 - [ ] FileManager UI

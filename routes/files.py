@@ -19,15 +19,22 @@ from services.cloud_drive import (
     store_cloud_upload,
 )
 from services.storage_albums import (
+    add_album_file,
+    create_album,
     create_storage_file_entry,
+    delete_album,
     ensure_storage_album_schema,
+    get_album,
     get_storage_file,
+    list_albums,
     list_storage_files,
     list_storage_trash,
     purge_storage_file,
+    remove_album_file,
     restore_storage_file,
     sync_user_storage_summary,
     trash_storage_file,
+    update_album,
 )
 from flask import request, send_file
 
@@ -299,6 +306,129 @@ def register_file_routes(app, deps):
             conn.commit()
             audit("STORAGE_FILE_PURGE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}")
             return json_resp({"ok": True, "purged": result})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/albums", methods=["GET", "POST"])
+    @require_csrf_safe
+    def storage_albums():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            if request.method == "GET":
+                albums = list_albums(conn, actor=actor, limit=100, offset=0)
+                return json_resp({"ok": True, "albums": albums})
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            album, msg = create_album(
+                conn,
+                actor=actor,
+                title=data.get("title"),
+                description=data.get("description") or "",
+                visibility=data.get("visibility") or "private",
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_ALBUM_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album['id']}")
+            return json_resp({"ok": True, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/albums/<album_id>", methods=["GET", "PUT", "DELETE"])
+    @require_csrf_safe
+    def storage_album_detail(album_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            if request.method == "GET":
+                album = get_album(conn, actor=actor, album_id=album_id, include_files=True)
+                if not album:
+                    return json_resp({"ok": False, "msg": "找不到相簿"}), 404
+                return json_resp({"ok": True, "album": album})
+            if request.method == "DELETE":
+                result, msg = delete_album(conn, actor=actor, album_id=album_id)
+                if msg:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": msg}), 404
+                conn.commit()
+                audit("STORAGE_ALBUM_DELETE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album_id}")
+                return json_resp({"ok": True, "deleted": result})
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            album, msg = update_album(
+                conn,
+                actor=actor,
+                album_id=album_id,
+                title=data.get("title") if "title" in data else None,
+                description=data.get("description") if "description" in data else None,
+                visibility=data.get("visibility") if "visibility" in data else None,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_ALBUM_UPDATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album_id}")
+            return json_resp({"ok": True, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/albums/<album_id>/files", methods=["POST"])
+    @require_csrf
+    def storage_album_add_file(album_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            album, msg = add_album_file(
+                conn,
+                actor=actor,
+                album_id=album_id,
+                storage_file_id=data.get("storage_file_id"),
+                file_id=data.get("file_id"),
+                caption=data.get("caption") or "",
+                sort_order=data.get("sort_order") or 0,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_ALBUM_FILE_ADD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album_id}")
+            return json_resp({"ok": True, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/albums/<album_id>/files/<album_file_id>", methods=["DELETE"])
+    @require_csrf
+    def storage_album_remove_file(album_id, album_file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            album, msg = remove_album_file(conn, actor=actor, album_id=album_id, album_file_id=album_file_id)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 404
+            conn.commit()
+            audit("STORAGE_ALBUM_FILE_REMOVE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album_id}, album_file_id={album_file_id}")
+            return json_resp({"ok": True, "album": album})
         finally:
             conn.close()
 

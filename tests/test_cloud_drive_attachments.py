@@ -230,6 +230,84 @@ def test_storage_trash_restore_and_purge_updates_listing_and_quota(tmp_path):
     assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 404
 
 
+def test_storage_album_crud_and_file_membership(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"album image"), "image.txt"),
+            "virtual_path": "photos/image.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    created = client.post("/api/storage/albums", json={"title": "Trip", "visibility": "unlisted"})
+    assert created.status_code == 200
+    album = created.get_json()["album"]
+    assert album["title"] == "Trip"
+    assert album["visibility"] == "unlisted"
+
+    added = client.post(
+        f"/api/storage/albums/{album['id']}/files",
+        json={"storage_file_id": storage_file_id, "caption": "cover", "sort_order": 2},
+    )
+    assert added.status_code == 200
+    files = added.get_json()["album"]["files"]
+    assert len(files) == 1
+    assert files[0]["caption"] == "cover"
+
+    updated = client.put(f"/api/storage/albums/{album['id']}", json={"title": "Trip 2", "visibility": "public"})
+    assert updated.status_code == 200
+    assert updated.get_json()["album"]["title"] == "Trip 2"
+
+    listed = client.get("/api/storage/albums")
+    assert listed.status_code == 200
+    assert listed.get_json()["albums"][0]["file_count"] == 1
+
+    album_file_id = files[0]["id"]
+    removed = client.delete(f"/api/storage/albums/{album['id']}/files/{album_file_id}")
+    assert removed.status_code == 200
+    assert removed.get_json()["album"]["files"] == []
+
+    deleted = client.delete(f"/api/storage/albums/{album['id']}")
+    assert deleted.status_code == 200
+    assert client.get(f"/api/storage/albums/{album['id']}").status_code == 404
+
+
+def test_storage_album_rejects_other_users_file(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"private"), "private.txt"),
+            "virtual_path": "private.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    actor_box["actor"] = _actor(2, "bob")
+    created = client.post("/api/storage/albums", json={"title": "Bob"})
+    album_id = created.get_json()["album"]["id"]
+    denied = client.post(f"/api/storage/albums/{album_id}/files", json={"storage_file_id": storage_file_id})
+    assert denied.status_code == 400
+
+
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

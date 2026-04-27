@@ -366,3 +366,181 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         reason="storage_file_purged",
     )
     return {"id": storage_file_id, "storage": summary}, None
+
+
+def _normalize_album_visibility(value):
+    visibility = str(value or "private").strip().lower()
+    return visibility if visibility in {"private", "unlisted", "public"} else "private"
+
+
+def _album_row(conn, album_id):
+    return conn.execute("SELECT * FROM albums WHERE id=?", (album_id,)).fetchone()
+
+
+def create_album(conn, *, actor, title, description="", visibility="private"):
+    ensure_storage_album_schema(conn)
+    title = str(title or "").strip()
+    if not title:
+        return None, "相簿名稱不可為空"
+    now = _now()
+    album_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO albums (
+            id, owner_user_id, title, description, visibility, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            album_id,
+            int(actor["id"]),
+            title[:120],
+            str(description or "")[:1000],
+            _normalize_album_visibility(visibility),
+            now,
+            now,
+        ),
+    )
+    return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
+
+
+def list_albums(conn, *, actor, include_deleted=False, limit=100, offset=0):
+    ensure_storage_album_schema(conn)
+    where = "owner_user_id=?"
+    params = [int(actor["id"])]
+    if not include_deleted:
+        where += " AND a.deleted_at IS NULL"
+    rows = conn.execute(
+        f"""
+        SELECT a.*, COUNT(af.id) AS file_count
+        FROM albums a
+        LEFT JOIN album_files af ON af.album_id=a.id AND af.deleted_at IS NULL
+        WHERE {where}
+        GROUP BY a.id
+        ORDER BY a.created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, int(limit), int(offset)),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_album(conn, *, actor, album_id, include_files=False):
+    ensure_storage_album_schema(conn)
+    row = _album_row(conn, album_id)
+    if not row or row["deleted_at"] or int(row["owner_user_id"]) != int(actor["id"]):
+        return None
+    data = dict(row)
+    if include_files:
+        files = conn.execute(
+            """
+            SELECT af.*, sf.display_name, sf.virtual_path, f.size_bytes, f.scan_status, f.risk_level
+            FROM album_files af
+            JOIN uploaded_files f ON f.id=af.file_id
+            LEFT JOIN storage_files sf ON sf.id=af.storage_file_id
+            WHERE af.album_id=? AND af.deleted_at IS NULL AND f.deleted_at IS NULL
+            ORDER BY af.sort_order ASC, af.created_at ASC
+            """,
+            (album_id,),
+        ).fetchall()
+        data["files"] = [dict(file_row) for file_row in files]
+    return data
+
+
+def update_album(conn, *, actor, album_id, title=None, description=None, visibility=None):
+    album = get_album(conn, actor=actor, album_id=album_id)
+    if not album:
+        return None, "找不到相簿"
+    fields = []
+    params = []
+    if title is not None:
+        title = str(title or "").strip()
+        if not title:
+            return None, "相簿名稱不可為空"
+        fields.append("title=?")
+        params.append(title[:120])
+    if description is not None:
+        fields.append("description=?")
+        params.append(str(description or "")[:1000])
+    if visibility is not None:
+        fields.append("visibility=?")
+        params.append(_normalize_album_visibility(visibility))
+    if not fields:
+        return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
+    fields.append("updated_at=?")
+    params.append(_now())
+    params.append(album_id)
+    conn.execute(f"UPDATE albums SET {', '.join(fields)} WHERE id=?", tuple(params))
+    return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
+
+
+def delete_album(conn, *, actor, album_id):
+    album = get_album(conn, actor=actor, album_id=album_id)
+    if not album:
+        return None, "找不到相簿"
+    now = _now()
+    conn.execute("UPDATE albums SET deleted_at=?, updated_at=? WHERE id=?", (now, now, album_id))
+    return {"id": album_id}, None
+
+
+def add_album_file(conn, *, actor, album_id, storage_file_id=None, file_id=None, caption="", sort_order=0):
+    album = get_album(conn, actor=actor, album_id=album_id)
+    if not album:
+        return None, "找不到相簿"
+    storage_file = None
+    if storage_file_id:
+        storage_file = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+        if not storage_file or storage_file.get("deleted_at") or int(storage_file.get("is_trashed") or 0):
+            return None, "找不到 storage 檔案或檔案已刪除"
+        file_id = storage_file["file_id"]
+    if not file_id:
+        return None, "缺少 file_id"
+    file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL", (str(file_id),)).fetchone()
+    if not file_row or int(file_row["owner_user_id"]) != int(actor["id"]):
+        return None, "只能加入自己的檔案"
+    existing = conn.execute(
+        "SELECT id FROM album_files WHERE album_id=? AND file_id=? AND deleted_at IS NULL",
+        (album_id, file_row["id"]),
+    ).fetchone()
+    if existing:
+        return None, "檔案已在相簿內"
+    now = _now()
+    album_file_id = uuid.uuid4().hex
+    try:
+        sort_order = int(sort_order)
+    except Exception:
+        sort_order = 0
+    conn.execute(
+        """
+        INSERT INTO album_files (
+            id, album_id, storage_file_id, file_id, sort_order, caption, added_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            album_file_id,
+            album_id,
+            storage_file_id,
+            file_row["id"],
+            sort_order,
+            str(caption or "")[:500],
+            int(actor["id"]),
+            now,
+        ),
+    )
+    conn.execute("UPDATE albums SET updated_at=? WHERE id=?", (now, album_id))
+    return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
+
+
+def remove_album_file(conn, *, actor, album_id, album_file_id):
+    album = get_album(conn, actor=actor, album_id=album_id)
+    if not album:
+        return None, "找不到相簿"
+    row = conn.execute(
+        "SELECT id FROM album_files WHERE id=? AND album_id=? AND deleted_at IS NULL",
+        (album_file_id, album_id),
+    ).fetchone()
+    if not row:
+        return None, "找不到相簿檔案"
+    now = _now()
+    conn.execute("UPDATE album_files SET deleted_at=? WHERE id=?", (now, album_file_id))
+    conn.execute("UPDATE albums SET updated_at=? WHERE id=?", (now, album_id))
+    return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
