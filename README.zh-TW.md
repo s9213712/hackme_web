@@ -524,7 +524,11 @@ quota 記帳、回收筒狀態與相簿歸屬，和 Cloud Drive 實體檔案表
 以及 `/api/storage/albums/{id}/files` 加入/移除相簿檔案。分享連結 API 提供
 `GET/POST /api/storage/share-links`、`POST /api/storage/share-links/{id}/revoke`
 與公開 `GET /api/storage/shared/{token}/download`；token 只保存 hash，建立時只
-顯示一次，可過期或撤銷，且不會繞過掃描政策。
+顯示一次，可過期或撤銷，且不會繞過掃描政策。雲端硬碟預覽支援登入後預覽
+音樂、影片、PDF、文字文件與壓縮檔目錄清單，入口為
+`/api/cloud-drive/files/{id}/preview`；影音/PDF 內容由 `/preview/content` 透過
+CSRF fetch blob。E2EE、未通過掃描或高風險檔案預設不允許 inline preview，
+除非 root 在安全政策明確開啟。
 
 ### 功能開關與預設值
 

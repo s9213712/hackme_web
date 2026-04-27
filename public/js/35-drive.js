@@ -85,7 +85,10 @@ function renderDriveFiles(files) {
           <strong>${sanitize(name)}</strong>
           <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(file.privacy_mode || "-")} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}</div>
         </div>
-        <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(file.id)}', ${warn ? "true" : "false"})">下載</button>
+        <div class="drive-file-actions">
+          <button class="btn" type="button" onclick="previewDriveFile('${sanitize(file.id)}')">預覽</button>
+          <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(file.id)}', ${warn ? "true" : "false"})">下載</button>
+        </div>
       </div>
     `;
   }).join("");
@@ -140,6 +143,81 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+let currentDrivePreviewUrl = "";
+
+function clearDrivePreviewUrl() {
+  if (currentDrivePreviewUrl) {
+    URL.revokeObjectURL(currentDrivePreviewUrl);
+    currentDrivePreviewUrl = "";
+  }
+}
+
+async function fetchDrivePreviewContent(fileId, csrf) {
+  const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.msg || "預覽內容讀取失敗");
+  }
+  clearDrivePreviewUrl();
+  currentDrivePreviewUrl = URL.createObjectURL(await res.blob());
+  return currentDrivePreviewUrl;
+}
+
+function renderDrivePreviewMetadata(preview) {
+  const panel = $("drive-preview-panel");
+  const card = $("drive-preview-card");
+  if (!panel || !card) return;
+  card.style.display = "block";
+  panel.innerHTML = `
+    <div><strong>${sanitize(preview.filename || "preview")}</strong></div>
+    <div class="drive-card-sub">${sanitize(preview.category || "-")} · ${formatDriveBytes(preview.size_bytes || 0)} · ${sanitize(preview.mime_type || "-")} · scan=${sanitize(preview.scan_status || "-")}</div>
+  `;
+}
+
+async function previewDriveFile(fileId) {
+  const panel = $("drive-preview-panel");
+  const card = $("drive-preview-card");
+  if (card) card.style.display = "block";
+  if (panel) panel.innerHTML = `<div class="drive-empty">讀取預覽中...</div>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "預覽失敗");
+    const preview = json.preview || {};
+    renderDrivePreviewMetadata(preview);
+    if (!panel) return;
+    if (preview.render_mode === "text") {
+      panel.innerHTML += `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+      return;
+    }
+    if (preview.render_mode === "archive") {
+      const entries = Array.isArray(preview.entries) ? preview.entries : [];
+      panel.innerHTML += `<div class="drive-preview-archive">${entries.map((entry) => `${entry.is_dir ? "[dir] " : ""}${sanitize(entry.name || "-")} · ${formatDriveBytes(entry.size || 0)}`).join("\n") || "壓縮檔內無可列出的項目"}</div>${preview.truncated ? '<div class="drive-card-sub">項目過多，已截斷顯示。</div>' : ""}`;
+      return;
+    }
+    if (preview.render_mode === "media") {
+      const url = await fetchDrivePreviewContent(fileId, csrf);
+      if (preview.category === "audio") panel.innerHTML += `<audio controls src="${url}"></audio>`;
+      else if (preview.category === "video") panel.innerHTML += `<video controls src="${url}"></video>`;
+      else if (preview.category === "pdf") panel.innerHTML += `<iframe src="${url}" title="PDF preview"></iframe>`;
+      else panel.innerHTML += `<div class="drive-empty">此檔案無可用預覽。</div>`;
+      return;
+    }
+    panel.innerHTML += `<div class="drive-empty">此檔案類型目前只提供 metadata，不支援 inline 預覽。</div>`;
+  } catch (err) {
+    clearDrivePreviewUrl();
+    if (panel) panel.innerHTML = `<div class="drive-empty">${sanitize(err.message || "預覽失敗")}</div>`;
+  }
 }
 
 async function loadDriveDashboard() {

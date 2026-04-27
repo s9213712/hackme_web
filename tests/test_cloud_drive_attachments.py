@@ -1,5 +1,6 @@
 import io
 import sqlite3
+import zipfile
 
 from flask import Flask, jsonify, make_response
 
@@ -347,6 +348,73 @@ def test_storage_share_link_download_and_revoke(tmp_path):
     assert revoked.get_json()["share_link"]["revoked_at"]
     denied = client.get(f"/api/storage/shared/{share_link['token']}/download")
     assert denied.status_code == 404
+
+
+def test_cloud_drive_text_and_archive_preview(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    text_upload = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"hello preview"), "note.txt")},
+        content_type="multipart/form-data",
+    )
+    assert text_upload.status_code == 200
+    text_file_id = text_upload.get_json()["file"]["file_id"]
+    text_preview = client.get(f"/api/cloud-drive/files/{text_file_id}/preview")
+    assert text_preview.status_code == 200
+    text_body = text_preview.get_json()["preview"]
+    assert text_body["render_mode"] == "text"
+    assert "hello preview" in text_body["text"]
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as archive:
+        archive.writestr("docs/readme.txt", "archive preview")
+    zip_buffer.seek(0)
+    archive_upload = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (zip_buffer, "bundle.zip"),
+            "privacy_mode": "private_scannable",
+        },
+        content_type="multipart/form-data",
+    )
+    assert archive_upload.status_code == 200
+    archive_file_id = archive_upload.get_json()["file"]["file_id"]
+    archive_preview = client.get(f"/api/cloud-drive/files/{archive_file_id}/preview")
+    assert archive_preview.status_code == 200
+    archive_body = archive_preview.get_json()["preview"]
+    assert archive_body["render_mode"] == "archive"
+    assert archive_body["entries"][0]["name"] == "docs/readme.txt"
+
+
+def test_cloud_drive_audio_preview_content(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"not real mp3 but preview route returns bytes"), "sound.mp3")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    metadata = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert metadata.status_code == 200
+    assert metadata.get_json()["preview"]["category"] == "audio"
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.data == b"not real mp3 but preview route returns bytes"
+    assert content.mimetype.startswith("audio/")
 
 
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):

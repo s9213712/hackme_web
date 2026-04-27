@@ -563,6 +563,11 @@ Share-link APIs include `GET/POST /api/storage/share-links`,
 `POST /api/storage/share-links/{id}/revoke`, and public
 `GET /api/storage/shared/{token}/download`. Tokens are stored as hashes, shown
 only once on creation, can expire or be revoked, and do not bypass scan policy.
+Cloud Drive preview supports authenticated previews for audio, video, PDF, text
+documents, and archive directory listings through `/api/cloud-drive/files/{id}/preview`;
+media/PDF content is fetched through `/preview/content` with CSRF headers.
+E2EE, unclean, or high-risk files are blocked from inline preview unless the root
+security policy explicitly permits the risk.
 
 ### Feature Flags and Defaults
 

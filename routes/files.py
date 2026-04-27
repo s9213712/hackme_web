@@ -18,6 +18,7 @@ from services.cloud_drive import (
     soft_delete_cloud_file,
     store_cloud_upload,
 )
+from services.file_previews import build_preview_metadata, preview_category
 from services.storage_albums import (
     add_album_file,
     create_album,
@@ -74,6 +75,15 @@ def register_file_routes(app, deps):
         if not policy.get("warn_high_risk_downloads"):
             return False
         return row["risk_level"] in {"high", "blocked", "unknown_encrypted"} or row["scan_status"] in {"infected", "quarantined", "failed", "unknown_encrypted"}
+
+    def _preview_allowed_by_policy(policy, row):
+        if row["privacy_mode"].startswith("e2ee"):
+            return False, "E2EE 檔案無法由伺服器預覽"
+        if policy.get("block_unclean_downloads") and row["scan_status"] not in {"clean", "not_required"}:
+            return False, "檔案尚未通過安全檢查"
+        if _requires_download_warning(policy, row) and not policy.get("allow_inline_preview_for_high_risk"):
+            return False, "高風險檔案目前不允許 inline preview"
+        return True, ""
 
     def _grant_user_ids_from_payload(data):
         raw = data.get("grant_user_ids") if isinstance(data, dict) else []
@@ -662,6 +672,70 @@ def register_file_routes(app, deps):
                 if allowed or row["attached_by"] == actor["id"] or row["owner_user_id"] == actor["id"] or _is_manager(actor):
                     refs.append({**dict(row), "can_download": allowed, "download_reason": reason})
             return json_resp({"ok": True, "refs": refs})
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/preview", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_preview(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if not allowed:
+                return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            preview = build_preview_metadata(row, path)
+            log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return json_resp({"ok": True, "preview": preview})
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/preview/content", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_preview_content(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            allowed, reason, row = can_download_file(conn, actor=actor, file_id=file_id, action="preview")
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if not allowed:
+                return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            policy = get_cloud_drive_security_policy(conn)
+            ok, msg = _preview_allowed_by_policy(policy, row)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), 403
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            category, mime_type = preview_category(row)
+            if category not in {"audio", "video", "pdf"}:
+                return json_resp({"ok": False, "msg": "此檔案類型不支援 inline content preview"}), 415
+            log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_content", result="allowed", reason=category, ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return send_file(
+                path,
+                as_attachment=False,
+                download_name=row["original_filename_plain_for_public"] or "preview",
+                mimetype=mime_type,
+                conditional=True,
+            )
         finally:
             conn.close()
 
