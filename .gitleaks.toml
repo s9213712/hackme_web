@@ -1,0 +1,31 @@
+title = "hackme_web gitleaks config"
+
+[allowlist]
+description = "Exclude runtime/generated paths; fake fixture values are governed by security/secrets_allowlist.yml."
+paths = [
+  '''^\.git/''',
+  '''^\.venv/''',
+  '''^venv/''',
+  '''^node_modules/''',
+  '''^vendor/''',
+  '''^dist/''',
+  '''^build/''',
+  '''^coverage/''',
+  '''^__pycache__/''',
+  '''/__pycache__/''',
+  '''^database/.*\.(db|sqlite|sqlite3)$''',
+  '''^storage/''',
+  '''^uploads/''',
+  '''^snapshots/''',
+  '''^security/reports/''',
+  '''^reports/''',
+  '''^logs/.*\.log$''',
+  '''^anchors/.*\.(json|jsonl)$''',
+  '''^chats/.*\.jsonl$''',
+  '''^cert\.pem$''',
+  '''^key\.pem$''',
+  '''^\.chain_seed$''',
+  '''^\.csrfkey$''',
+  '''^\.fkey$''',
+  '''^\.integrity_key$''',
+]

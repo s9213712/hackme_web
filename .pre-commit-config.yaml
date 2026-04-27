@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks-secrets
+        name: gitleaks secrets scan
+        language: system
+        pass_filenames: false
+        entry: bash -c 'if ! command -v gitleaks >/dev/null 2>&1; then echo "gitleaks is required. Install it from https://github.com/gitleaks/gitleaks before committing." >&2; exit 1; fi; gitleaks detect --source . --no-git --redact --verbose --config .gitleaks.toml'
+      - id: plaintext-secrets-scan
+        name: plaintext secrets scan
+        language: system
+        pass_filenames: false
+        entry: python3 scripts/security/scan_plaintext_secrets.py --fail-on high
