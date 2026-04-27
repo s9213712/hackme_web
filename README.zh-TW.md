@@ -79,6 +79,139 @@ https://127.0.0.1:5000/
 - 認證與 moderation 安全事件記錄
 - 聊天紀錄 sidecar 檔案加密落盤
 
+## 目前功能與預設值
+
+登入頁底部會顯示發佈號，`GET /api/version` 也會回傳同一個版本資訊。
+每次正式發布請更新 `services/release_info.py`。
+
+- 目前發佈號：`2026.04.27-003`
+- 目前 schema version：`16`
+
+### 會員制度
+
+會員資料已拆成可審計的基礎等級與實際生效等級：
+
+- `base_level`：原始會員等級
+- `effective_level`：實際生效等級
+- `trust_score`：信任分
+- `reputation`：聲望分
+- `violation_score`：違規分
+- `sanction_status`：`none`、`restricted`、`suspended`
+- `sanction_until`：處分到期時間，可為空
+- `level_updated_at`、`level_updated_by`、`level_update_reason`
+
+`restricted` / `suspended` 會優先覆蓋 `base_level`。例如 `vip` 被處分時，
+`base_level` 仍保留 `vip`，但 `effective_level` 會變成 `restricted` 或
+`suspended`，到期或解除處分後才恢復。
+
+| 等級 | 預設互動模型 |
+|---|---|
+| `newbie` | 可留言，發文低額度且需審核，不能私訊，不能上傳 |
+| `normal` | 可正常發文、留言、私訊，預設不能上傳 |
+| `trusted` | 較高額度，可上傳，檢舉權重較高 |
+| `vip` | 最高配額，可上傳，升等需 admin/root 核准 |
+| `restricted` | 只能閱讀，不能發文、留言、私訊、上傳 |
+| `suspended` | 只能登入、查看通知與申訴入口，不能互動或檢舉 |
+
+權限與門檻都從 DB table `member_level_rules` 載入，不在 route 內 hardcode。
+root 可透過 `/api/admin/member-level-rules` 調整每級規則。
+
+可配置欄位包括：
+
+- 權限：發文、留言、私訊、上傳、檢舉
+- rate limit：發文、留言、私訊、上傳
+- 附件大小與總配額
+- 發文是否需審核
+- 檢舉權重
+- 升等門檻：帳號天數、核准內容數、積分、信任分、聲望、最大違規分
+- 降級/處分門檻
+- 是否需要 admin/root 核准
+
+所有會員等級變更都會寫入 `member_level_audit`，包含 actor、target、old/new
+base level、old/new effective level、reason、source 與 created_at。
+
+### 管理員制衡與治理紀錄
+
+- `moderation_proposals` / `moderation_votes` 支援 admin 投票流程。
+- 支援動作：`warn`、`mute`、`restrict`、`suspend`、`delete`、`downgrade_level`、`force_password_reset`。
+- 提案通過後才可執行；root 可 override。
+- 治理紀錄分散在 `moderation_actions`、`user_mod_notes`、`reputation_events`。
+
+### 快照、還原與伺服器模式
+
+root 可用下列 API 管理回滾：
+
+- `POST /api/admin/snapshots`
+- `GET /api/admin/snapshots`
+- `GET /api/admin/snapshots/<snapshot_id>`
+- `POST /api/admin/snapshots/<snapshot_id>/restore`
+- `DELETE /api/admin/snapshots/<snapshot_id>`
+- `GET /api/admin/server-mode`
+- `POST /api/admin/server-mode`
+- `POST /api/admin/server-mode/exit-superweak`
+
+snapshot 內容包含：
+
+- SQLite database backup
+- upload/media runtime files archive
+- redacted config archive，不保存明文 secret
+- `metadata.json`
+- `manifest.json`
+- `checksums.sha256`
+
+伺服器模式：
+
+- `preprod`：一般強化模式
+- `test`：測試模式狀態
+- `superweak`：刻意弱化供內部演練
+
+進入 `superweak` 只能由 root 二次確認，且會自動建立 `before_superweak`
+snapshot。離開時預設應還原該 snapshot；root 也可以明確選擇保留 dirty
+state，但會寫入高風險 audit log。
+
+### 功能開關與預設值
+
+功能開關存在 DB-backed `system_settings`，root 可在管理 UI 調整。
+
+| 設定 | 預設 |
+|---|---:|
+| `feature_chat_enabled` | `true` |
+| `feature_community_enabled` | `true` |
+| `feature_accounts_enabled` | `true` |
+| `feature_appeals_enabled` | `true` |
+| `feature_audit_log_enabled` | `true` |
+| `feature_violation_center_enabled` | `true` |
+| `feature_reports_enabled` | `true` |
+| `feature_system_health_enabled` | `true` |
+| `feature_identity_governance_enabled` | `true` |
+| `feature_account_security_enabled` | `false` |
+| `feature_member_governance_enabled` | `false` |
+| `feature_server_modes_enabled` | `false` |
+| `feature_snapshot_restore_enabled` | `false` |
+| `feature_health_center_enabled` | `true` |
+| `feature_forum_core_enabled` | `true` |
+| `feature_ui_rebuild_enabled` | `false` |
+| `feature_reports_notifications_enabled` | `true` |
+| `feature_dm_enabled` | `false` |
+| `feature_attachments_enabled` | `false` |
+| `feature_storage_albums_enabled` | `false` |
+| `feature_personalization_enabled` | `false` |
+| `feature_social_search_enabled` | `false` |
+| `feature_advanced_security_enabled` | `false` |
+
+其他重要預設：
+
+| 設定 | 預設 |
+|---|---:|
+| `audit_chain_enabled` | `false` |
+| `ip_blocking_enabled` | `true` |
+| `maintenance_mode` | `false` |
+| `allow_register` | `true` |
+| `require_email_verification` | `false` |
+| `max_login_failures` | `3` |
+| `block_duration_minutes` | `10` |
+| `session_ttl_hours` | `4` |
+
 ## 目前架構
 
 後端已從單一巨石檔拆成 route modules 與 service modules。
@@ -102,6 +235,12 @@ https://127.0.0.1:5000/
 - `services/security_events.py`
 - `services/bootstrap.py`
 - `services/chat_support.py`
+- `services/governance_records.py`
+- `services/member_levels.py`
+- `services/moderation_proposals.py`
+- `services/permissions.py`
+- `services/release_info.py`
+- `services/snapshots.py`
 
 ### 前端結構
 

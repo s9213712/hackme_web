@@ -81,6 +81,140 @@ This repository is useful when you need a local target that also includes:
 - security event logging for auth and moderation activity
 - encrypted chat transcript sidecar storage at rest
 
+## Current Feature Inventory
+
+Release ID is shown at the bottom of the login page and returned by
+`GET /api/version`. Bump `services/release_info.py` for each published build.
+
+- Current release ID: `2026.04.27-003`
+- Current schema version: `16`
+
+### Governance and Member Levels
+
+Member level data is split into durable base state and effective runtime state:
+
+- `base_level`: original member level
+- `effective_level`: actual active level after sanctions
+- `trust_score`: trust score
+- `reputation`: reputation score
+- `violation_score`: violation score
+- `sanction_status`: `none`, `restricted`, or `suspended`
+- `sanction_until`: optional sanction expiry
+- `level_updated_at`, `level_updated_by`, `level_update_reason`
+
+`restricted` and `suspended` always override `base_level`. For example, a `vip`
+member under restriction keeps `base_level=vip`, but receives
+`effective_level=restricted` until the sanction expires or is cleared.
+
+| Level | Default Interaction Model |
+|---|---|
+| `newbie` | comments allowed, posts moderated/limited, no DM, no uploads |
+| `normal` | normal post/comment/DM, no uploads by default |
+| `trusted` | higher limits, uploads enabled, higher report weight |
+| `vip` | highest quotas, uploads enabled, promotion requires admin/root approval |
+| `restricted` | read-only interaction model, no post/comment/DM/upload |
+| `suspended` | login only for appeal/notification surfaces; no interaction/reporting |
+
+Rules are loaded from the DB table `member_level_rules`, not hard-coded at route
+level. Root can update rule rows through `/api/admin/member-level-rules`.
+
+Configurable rule fields include:
+
+- permissions: post, comment, DM, upload, report
+- rate limits: post/comment/DM/upload limits
+- attachment size and quota
+- moderation requirement
+- report weight
+- promotion thresholds: account age, approved content, points, trust, reputation, max violation score
+- downgrade threshold
+- admin/root approval requirements
+
+All member level changes write `member_level_audit` with actor, target, old/new
+base level, old/new effective level, reason, source, and timestamp.
+
+### Moderation Governance
+
+- `moderation_proposals` and `moderation_votes` support admin voting workflows.
+- Supported proposal actions: `warn`, `mute`, `restrict`, `suspend`, `delete`, `downgrade_level`, `force_password_reset`.
+- Approved proposals can be executed; root can override.
+- Governance records are stored in `moderation_actions`, `user_mod_notes`, and `reputation_events`.
+
+### Snapshot, Restore, and Server Modes
+
+Root can manage operational rollback through:
+
+- `POST /api/admin/snapshots`
+- `GET /api/admin/snapshots`
+- `GET /api/admin/snapshots/<snapshot_id>`
+- `POST /api/admin/snapshots/<snapshot_id>/restore`
+- `DELETE /api/admin/snapshots/<snapshot_id>`
+- `GET /api/admin/server-mode`
+- `POST /api/admin/server-mode`
+- `POST /api/admin/server-mode/exit-superweak`
+
+Snapshot contents include:
+
+- SQLite database backup
+- runtime user files archive from upload/media roots
+- redacted config archive, excluding plaintext secrets
+- `metadata.json`
+- `manifest.json`
+- `checksums.sha256`
+
+Server modes:
+
+- `preprod`: normal hardened mode
+- `test`: test mode state holder
+- `superweak`: intentionally weakened mode for controlled testing
+
+Entering `superweak` requires root confirmation and automatically creates a
+`before_superweak` snapshot. Exiting can restore that snapshot by default or let
+root explicitly keep the dirty state with a high-risk audit event.
+
+### Feature Flags and Defaults
+
+Feature flags live in DB-backed `system_settings` and are editable by root under
+the admin settings UI.
+
+| Setting | Default |
+|---|---:|
+| `feature_chat_enabled` | `true` |
+| `feature_community_enabled` | `true` |
+| `feature_accounts_enabled` | `true` |
+| `feature_appeals_enabled` | `true` |
+| `feature_audit_log_enabled` | `true` |
+| `feature_violation_center_enabled` | `true` |
+| `feature_reports_enabled` | `true` |
+| `feature_system_health_enabled` | `true` |
+| `feature_identity_governance_enabled` | `true` |
+| `feature_account_security_enabled` | `false` |
+| `feature_member_governance_enabled` | `false` |
+| `feature_server_modes_enabled` | `false` |
+| `feature_snapshot_restore_enabled` | `false` |
+| `feature_health_center_enabled` | `true` |
+| `feature_forum_core_enabled` | `true` |
+| `feature_ui_rebuild_enabled` | `false` |
+| `feature_reports_notifications_enabled` | `true` |
+| `feature_dm_enabled` | `false` |
+| `feature_attachments_enabled` | `false` |
+| `feature_storage_albums_enabled` | `false` |
+| `feature_personalization_enabled` | `false` |
+| `feature_social_search_enabled` | `false` |
+| `feature_advanced_security_enabled` | `false` |
+
+Other important defaults:
+
+| Setting | Default |
+|---|---:|
+| `audit_chain_enabled` | `false` |
+| `ip_blocking_enabled` | `true` |
+| `maintenance_mode` | `false` |
+| `allow_register` | `true` |
+| `require_email_verification` | `false` |
+| `max_login_failures` | `3` |
+| `block_duration_minutes` | `10` |
+| `session_ttl_hours` | `4` |
+
 ## Current Architecture
 
 The backend is now split into route modules and service modules instead of
@@ -105,6 +239,12 @@ keeping all behavior in one giant file.
 - `services/security_events.py`
 - `services/bootstrap.py`
 - `services/chat_support.py`
+- `services/governance_records.py`
+- `services/member_levels.py`
+- `services/moderation_proposals.py`
+- `services/permissions.py`
+- `services/release_info.py`
+- `services/snapshots.py`
 
 ### Frontend Structure
 
