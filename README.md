@@ -61,6 +61,11 @@ brew install gitleaks
 ```
 
 CI installs `gitleaks` automatically in `.github/workflows/security-secrets-scan.yml`.
+For this workstation, the verified local binary is
+`/home/s92137/.local/bin/gitleaks` and `gitleaks version` should print
+`8.30.1`. If the command is not found after installation, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell startup file and reopen the
+terminal.
 
 ## Deployment FAQ
 
