@@ -101,6 +101,13 @@ def register_community_routes(app, deps):
     def can_manage_community(actor):
         return role_rank(actor_role(actor)) >= role_rank("manager")
 
+    def can_delete_community_content(actor, author_user_id=None, owner_user_id=None):
+        if not actor:
+            return False
+        if can_manage_community(actor):
+            return True
+        return actor["id"] in (author_user_id, owner_user_id)
+
     def board_payload(row):
         return {
             "id": row["id"],
@@ -504,7 +511,7 @@ def register_community_routes(app, deps):
         finally:
             conn.close()
 
-    @app.route("/api/community/threads/<int:thread_id>", methods=["GET"])
+    @app.route("/api/community/threads/<int:thread_id>", methods=["GET", "DELETE"])
     @require_csrf_safe
     def community_thread_detail(thread_id):
         actor = get_current_user_ctx()
@@ -529,8 +536,24 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "權限不足"}), 403
             if thread["status"] != "approved" and not manageable and thread["author_user_id"] != actor["id"]:
                 return json_resp({"ok": False, "msg": "此主題尚未公開"}), 403
+
+            if request.method == "DELETE":
+                if not can_delete_community_content(actor, thread["author_user_id"], thread["owner_user_id"]):
+                    return json_resp({"ok": False, "msg": "你沒有刪除此主題的權限"}), 403
+                conn.execute("DELETE FROM forum_threads WHERE id=?", (thread_id,))
+                conn.commit()
+                audit(
+                    "COMMUNITY_THREAD_DELETE",
+                    get_client_ip(),
+                    user=actor["username"],
+                    success=True,
+                    ua=get_ua(),
+                    detail=f"thread_id={thread_id}, title={thread['title']}"
+                )
+                return json_resp({"ok": True, "msg": "主題已刪除"})
+
             posts = conn.execute(
-                "SELECT id, content, author_username, created_at, updated_at FROM forum_posts WHERE thread_id=? ORDER BY created_at ASC",
+                "SELECT id, content, author_user_id, author_username, created_at, updated_at FROM forum_posts WHERE thread_id=? ORDER BY created_at ASC",
                 (thread_id,)
             ).fetchall()
             return json_resp({
@@ -555,6 +578,7 @@ def register_community_routes(app, deps):
                 "posts": [{
                     "id": row["id"],
                     "content": row["content"],
+                    "author_user_id": row["author_user_id"],
                     "author_username": row["author_username"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
@@ -606,6 +630,47 @@ def register_community_routes(app, deps):
             conn.commit()
             audit("COMMUNITY_THREAD_REPLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"thread_id={thread_id}")
             return json_resp({"ok": True, "msg": "留言已送出"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/posts/<int:post_id>", methods=["DELETE"])
+    @require_csrf
+    def community_delete_post(post_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            post = conn.execute(
+                "SELECT p.id, p.thread_id, p.author_user_id, p.author_username, t.author_user_id AS thread_author_user_id, "
+                "b.owner_user_id, b.status AS board_status "
+                "FROM forum_posts p "
+                "JOIN forum_threads t ON t.id=p.thread_id "
+                "JOIN forum_boards b ON b.id=t.board_id "
+                "WHERE p.id=?",
+                (post_id,)
+            ).fetchone()
+            if not post:
+                return json_resp({"ok": False, "msg": "找不到留言"}), 404
+            accessible = post["board_status"] == "approved" or can_manage_community(actor) or post["owner_user_id"] == actor["id"]
+            if not accessible:
+                return json_resp({"ok": False, "msg": "權限不足"}), 403
+            if not can_delete_community_content(actor, post["author_user_id"], post["owner_user_id"]):
+                return json_resp({"ok": False, "msg": "你沒有刪除此留言的權限"}), 403
+
+            conn.execute("DELETE FROM forum_posts WHERE id=?", (post_id,))
+            conn.commit()
+            audit(
+                "COMMUNITY_POST_DELETE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"post_id={post_id}, thread_id={post['thread_id']}, author={post['author_username']}"
+            )
+            return json_resp({"ok": True, "msg": "留言已刪除"})
         finally:
             conn.close()
 

@@ -55,6 +55,7 @@ function bindUiEvents() {
   const communityThreadPrevBtn = $("community-thread-prev");
   const communityThreadNextBtn = $("community-thread-next");
   const communityThreadLockToggle = $("community-thread-lock-toggle");
+  const communityThreadDeleteBtn = $("community-thread-delete-btn");
   const communityBoardSearch = $("community-board-search");
   const communityThreadSearch = $("community-thread-search");
   const userEditOverlay = $("user-edit-overlay");
@@ -112,6 +113,7 @@ function bindUiEvents() {
     openCommunityBoard(selectedCommunityBoardId);
   });
   if (communityThreadLockToggle) communityThreadLockToggle.addEventListener("click", toggleCommunityThreadLock);
+  if (communityThreadDeleteBtn) communityThreadDeleteBtn.addEventListener("click", deleteCommunityThread);
   if (communityBoardSearch) communityBoardSearch.addEventListener("input", (e) => {
     communityBoardQuery = e?.target?.value || "";
     renderCommunityBoards();

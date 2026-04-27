@@ -528,9 +528,11 @@
       letter-spacing: .01em;
     }
 
-    .chat-report-btn {
+    .chat-report-btn,
+    .chat-delete-btn {
       display: inline-block;
       margin-top: .32rem;
+      margin-right: .25rem;
       padding: .2rem .45rem;
       width: auto;
       border-radius: 6px;
@@ -544,6 +546,17 @@
     .chat-report-btn:hover {
       color: var(--text);
       background: rgba(255,255,255,.12);
+    }
+
+    .chat-delete-btn {
+      color: #ffb3bf;
+      border-color: rgba(255,79,109,.34);
+      background: rgba(255,79,109,.08);
+    }
+
+    .chat-delete-btn:hover {
+      color: #fff;
+      background: rgba(255,79,109,.22);
     }
 
     .chat-msg.warning {

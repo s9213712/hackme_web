@@ -20,6 +20,15 @@ function communityStatusLabel(status) {
   return status || "未知";
 }
 
+function canManageCommunity() {
+  return currentRole === "manager" || currentRole === "super_admin";
+}
+
+function canDeleteCommunityItem(authorUserId, ownerUserId) {
+  if (canManageCommunity()) return true;
+  return Number(currentUserId) === Number(authorUserId) || Number(currentUserId) === Number(ownerUserId);
+}
+
 function renderCommunityAnnouncements() {
   const list = $("community-announcement-list");
   const editor = $("community-announcement-editor");
@@ -195,10 +204,13 @@ function renderCommunityThreadDetail(thread, posts) {
   const replyBox = $("community-reply-box");
   const lockTools = $("community-thread-lock-tools");
   const lockToggle = $("community-thread-lock-toggle");
+  const deleteThreadBtn = $("community-thread-delete-btn");
   if (heading) heading.textContent = thread ? thread.title : "主題內容";
   if (replyBox) replyBox.style.display = thread && thread.board_status === "approved" && thread.status === "approved" && !thread.is_locked ? "block" : "none";
-  if (lockTools) lockTools.style.display = thread && (currentRole === "manager" || currentRole === "super_admin") ? "flex" : "none";
+  if (lockTools) lockTools.style.display = thread && (canManageCommunity() || canDeleteCommunityItem(thread.author_user_id)) ? "flex" : "none";
   if (lockToggle && thread) lockToggle.textContent = thread.is_locked ? "解除鎖定" : "鎖定主題";
+  if (lockToggle) lockToggle.style.display = thread && canManageCommunity() ? "" : "none";
+  if (deleteThreadBtn) deleteThreadBtn.style.display = thread && canDeleteCommunityItem(thread.author_user_id) ? "" : "none";
   if (!detail) return;
   if (!thread) {
     detail.innerHTML = "<p style='color:var(--muted);'>請選擇主題以查看內容與留言</p>";
@@ -207,7 +219,10 @@ function renderCommunityThreadDetail(thread, posts) {
   const replies = Array.isArray(posts) && posts.length
     ? posts.map((post) => `
         <div class="community-card">
-          <div class="community-meta">${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}</div>
+          <div class="community-card-head">
+            <div class="community-meta">${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}</div>
+            ${canDeleteCommunityItem(post.author_user_id, thread.author_user_id) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
+          </div>
           <div class="community-body">${sanitize(post.content || "")}</div>
         </div>
       `).join("")
@@ -221,6 +236,9 @@ function renderCommunityThreadDetail(thread, posts) {
     <div class="mini-title" style="margin:.8rem 0 .45rem;">留言區</div>
     ${replies}
   `;
+  detail.querySelectorAll("button[data-delete-community-post]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteCommunityPost(parseInt(btn.getAttribute("data-delete-community-post"), 10)));
+  });
 }
 
 async function loadAnnouncements() {
@@ -460,6 +478,42 @@ async function replyCommunityThread() {
     if ($("community-reply-content")) $("community-reply-content").value = "";
     await openCommunityThread(selectedCommunityThreadId);
     await openCommunityBoard(selectedCommunityBoardId);
+  }
+}
+
+async function deleteCommunityThread() {
+  if (!selectedCommunityThreadId) return;
+  if (!confirm("確定要刪除此主題？回覆也會一併刪除。")) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "主題刪除失敗", !!json.ok);
+  if (json.ok) {
+    selectedCommunityThreadId = null;
+    selectedCommunityThread = null;
+    renderCommunityThreadDetail(null, []);
+    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId);
+  }
+}
+
+async function deleteCommunityPost(postId) {
+  if (!postId) return;
+  if (!confirm("確定要刪除此留言？")) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/posts/" + postId, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "留言刪除失敗", !!json.ok);
+  if (json.ok && selectedCommunityThreadId) {
+    await openCommunityThread(selectedCommunityThreadId);
+    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId);
   }
 }
 
