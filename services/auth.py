@@ -8,7 +8,9 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 import argon2
-from flask import jsonify, make_response, request
+from flask import has_request_context, jsonify, make_response, request
+
+from services.security_events import record_security_event
 
 SESSION_TTL = 3600 * 4
 CSRF_TOKEN_TTL = SESSION_TTL
@@ -53,6 +55,23 @@ def json_resp(data, status=200):
     r.headers["X-Content-Type-Options"] = "nosniff"
     r.headers["Cache-Control"] = "no-store"
     return r
+
+
+def _request_ip():
+    if not has_request_context():
+        return "-"
+    return (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote_addr
+            or "-")
+
+
+def _record_csrf_failure(reason, username="-"):
+    record_security_event(
+        "csrf_fail",
+        _request_ip(),
+        target_user=username or "-",
+        detail=f"path={request.path},reason={reason}",
+    )
 
 
 def generate_csrf_dummy():
@@ -199,11 +218,14 @@ def require_csrf(f):
 
         if user:
             if not verify_csrf_token(csrf_tok, user):
+                _record_csrf_failure("invalid_authenticated", user)
                 return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
         else:
             if not csrf_tok:
+                _record_csrf_failure("missing_public", body_username or "-")
                 return json_resp({"ok": False, "msg": "CSRF token 缺失"}), 403
             if not verify_csrf_token(csrf_tok, "__public__") and not (body_username and verify_csrf_token(csrf_tok, body_username)):
+                _record_csrf_failure("invalid_public", body_username or "-")
                 return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
 
         delete_csrf_token(csrf_tok)
@@ -222,6 +244,7 @@ def require_csrf_safe(f):
         if not user:
             return json_resp({"ok": False, "msg": "未登入"}), 401
         if not verify_csrf_token(csrf_tok, user):
+            _record_csrf_failure("invalid_safe", user)
             return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
         return f(*args, **kwargs)
     return decorated
@@ -262,6 +285,7 @@ def db_delete_session(token):
             (datetime.now().isoformat(), _hash_token(token))
         )
         conn.commit()
+        record_security_event("session_revoked", _request_ip(), detail="single_session_logout")
     finally:
         conn.close()
 
@@ -274,6 +298,7 @@ def revoke_user_sessions(user_id):
             (datetime.now().isoformat(), user_id)
         )
         conn.commit()
+        record_security_event("session_revoked", "-", target_user=str(user_id), detail="user_sessions_revoked")
     finally:
         conn.close()
 
@@ -317,6 +342,7 @@ def db_get_user_from_token(token):
                     (now_iso, row["id"])
                 )
                 conn.commit()
+                record_security_event("session_revoked", "-", target_user=row["username"], detail="idle_timeout")
                 return None
 
         conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))

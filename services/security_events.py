@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
@@ -64,7 +65,10 @@ def _maybe_cleanup_old_events():
         try:
             cutoff = (datetime.now() - timedelta(days=_EVENT_RETENTION_DAYS)).isoformat()
             now_iso = datetime.now().isoformat()
-            conn.execute("DELETE FROM security_events WHERE created_at<?", (cutoff,))
+            try:
+                conn.execute("DELETE FROM security_events WHERE created_at<?", (cutoff,))
+            except sqlite3.OperationalError:
+                return
             try:
                 conn.execute("DELETE FROM ip_blocks WHERE blocked_until<?", (now_iso,))
             except Exception:
@@ -96,6 +100,8 @@ def normalize_security_event_type(event_type):
 
 
 def record_security_event(event_type, ip, target_user=None, detail="", created_at=None):
+    if not callable(_STATE.get("get_db")):
+        return
     _maybe_cleanup_old_events()
     conn = _STATE["get_db"]()
     try:
@@ -110,6 +116,8 @@ def record_security_event(event_type, ip, target_user=None, detail="", created_a
             ),
         )
         conn.commit()
+    except sqlite3.OperationalError:
+        pass
     finally:
         conn.close()
 
@@ -206,12 +214,23 @@ def clear_failed_logins(ip):
 
 
 def is_rate_limited(ip, max_req=30, window_sec=60):
-    return _check_window_limit(_RATE_LIMIT_BUCKETS, str(ip), max_req=max_req, window_sec=window_sec)
+    blocked, info = _check_window_limit(_RATE_LIMIT_BUCKETS, str(ip), max_req=max_req, window_sec=window_sec)
+    if blocked:
+        record_security_event("rate_limit", ip, detail=f"limit={max_req},window={window_sec}")
+    return blocked, info
 
 
 def check_user_rate_limit(user_id, action, max_req=10, window_sec=3600):
     key = (int(user_id), str(action))
-    return _check_window_limit(_USER_RATE_LIMIT_BUCKETS, key, max_req=max_req, window_sec=window_sec)
+    blocked, info = _check_window_limit(_USER_RATE_LIMIT_BUCKETS, key, max_req=max_req, window_sec=window_sec)
+    if blocked:
+        record_security_event(
+            "rate_limit",
+            "-",
+            target_user=str(user_id),
+            detail=f"action={action},limit={max_req},window={window_sec}",
+        )
+    return blocked, info
 
 
 def record_403_access(ip, path, username="-"):

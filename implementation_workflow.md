@@ -31,12 +31,12 @@
 - [x] 管理 API payload 帶出 `member_level` 與治理分數欄位
 - [x] `member_level` 建立/修改受 `feature_identity_governance_enabled` 控制
 - [x] 補 legacy users schema repair 測試
-- [x] 跑完整 pytest：`23 passed`
+- [x] 跑完整 pytest：`24 passed`
 - [x] 權限 middleware 統一化：role / member_level / status 三層檢查
 - [x] Security events event_type 覆蓋盤點與缺口補齊
-- [ ] CSRF 覆蓋盤點
-- [ ] Rate limit 覆蓋盤點
-- [ ] Session 管理安全盤點
+- [x] CSRF 覆蓋盤點：失敗事件寫入 `security_events`
+- [x] Rate limit 覆蓋盤點：阻擋事件寫入 `security_events`
+- [x] Session 管理安全盤點：登出 / revoke / idle timeout 寫入 `security_events`
 
 ## Phase 2：帳號安全強化
 
