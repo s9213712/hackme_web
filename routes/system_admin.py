@@ -22,11 +22,13 @@ def register_system_admin_routes(app, deps):
     DB_PATH = deps["DB_PATH"]
     LOG_DIR = deps["LOG_DIR"]
     SERVER_LOG_PATH = deps["SERVER_LOG_PATH"]
+    STORAGE_DIR = deps.get("STORAGE_DIR")
     activate_emergency_lockdown = deps["activate_emergency_lockdown"]
     audit = deps["audit"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
+    get_ua = deps.get("get_ua", lambda: "-")
     get_feature_settings = deps["get_feature_settings"]
     get_system_settings = deps["get_system_settings"]
     is_audit_chain_enabled = deps["is_audit_chain_enabled"]
@@ -38,7 +40,17 @@ def register_system_admin_routes(app, deps):
     role_rank = deps["role_rank"]
     save_feature_settings = deps["save_feature_settings"]
     save_settings = deps["save_settings"]
+    server_mode_service = deps.get("server_mode_service")
+    snapshot_service = deps.get("snapshot_service")
     verify_audit_integrity = deps["verify_audit_integrity"]
+
+    def require_root_actor():
+        actor = get_current_user_ctx()
+        if not actor:
+            return None, (json_resp({"ok":False,"msg":"未登入"}), 401)
+        if actor["username"] != "root":
+            return None, (json_resp({"ok":False,"msg":"只有 root 可執行此操作"}), 403)
+        return actor, None
 
     @app.route("/api/admin/health", methods=["GET"])
     @require_csrf_safe
@@ -229,6 +241,127 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":True,"msg":"會員等級規則已更新","rule":rule})
         finally:
             conn.close()
+
+    @app.route("/api/admin/snapshots", methods=["GET", "POST"])
+    @require_csrf_safe
+    def admin_snapshots():
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if request.method == "GET":
+            return json_resp({"ok":True,"snapshots":snapshot_service.list_snapshots(actor=actor)})
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        snapshot_type = data.get("type") or "manual"
+        if snapshot_type == "before_superweak" and actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"before_superweak snapshot 必須由 root 建立"}), 403
+        result = snapshot_service.create_snapshot(snapshot_type=snapshot_type, actor=actor, notes=data.get("notes") or "")
+        if not result.ok:
+            return json_resp({"ok":False,"msg":"snapshot 建立失敗","error":result.error,"snapshot_id":result.snapshot_id}), 500
+        return json_resp({"ok":True,"snapshot_id":result.snapshot_id,"status":result.status})
+
+    @app.route("/api/admin/snapshots/<snapshot_id>", methods=["GET", "DELETE"])
+    @require_csrf_safe
+    def admin_snapshot_detail(snapshot_id):
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            if request.method == "GET":
+                snapshot = snapshot_service.get_snapshot(snapshot_id=snapshot_id, actor=actor)
+                if not snapshot:
+                    return json_resp({"ok":False,"msg":"找不到 snapshot"}), 404
+                return json_resp({"ok":True,"snapshot":snapshot})
+            result = snapshot_service.delete_snapshot(snapshot_id=snapshot_id, actor=actor, reason=request.args.get("reason") or "root delete")
+            return json_resp(result)
+        except ValueError as exc:
+            return json_resp({"ok":False,"msg":str(exc)}), 400
+
+    @app.route("/api/admin/snapshots/<snapshot_id>/restore", methods=["POST"])
+    @require_csrf
+    def admin_snapshot_restore(snapshot_id):
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        dry_run = bool(data.get("dry_run"))
+        confirm = data.get("confirm")
+        if dry_run:
+            if confirm != "DRY_RUN":
+                return json_resp({"ok":False,"msg":"dry_run confirm 必須等於 DRY_RUN"}), 400
+        elif confirm != "RESTORE":
+            return json_resp({"ok":False,"msg":"confirm 必須等於 RESTORE"}), 400
+        try:
+            result = snapshot_service.restore_snapshot(
+                snapshot_id=snapshot_id,
+                actor=actor,
+                reason=data.get("reason") or "",
+                dry_run=dry_run,
+            )
+        except ValueError as exc:
+            return json_resp({"ok":False,"msg":str(exc)}), 400
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/admin/server-mode", methods=["GET", "POST"])
+    @require_csrf_safe
+    def admin_server_mode():
+        if not server_mode_service:
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if request.method == "GET":
+            return json_resp({"ok":True,"mode":server_mode_service.get_current_mode()})
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.switch_mode(
+            target_mode=data.get("mode"),
+            actor=actor,
+            confirm=data.get("confirm"),
+            notes=data.get("notes") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/admin/server-mode/exit-superweak", methods=["POST"])
+    @require_csrf
+    def admin_exit_superweak():
+        if not server_mode_service:
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.exit_superweak(
+            actor=actor,
+            action=data.get("action"),
+            confirm=data.get("confirm"),
+            reason=data.get("reason") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])
     @require_csrf

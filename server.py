@@ -112,6 +112,7 @@ from services.member_levels import ensure_member_level_rules_schema, get_member_
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
 from services.release_info import APP_NAME, APP_RELEASE_ID
+from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -130,6 +131,7 @@ DB_PATH = os.path.join(DB_DIR, "database.db")
 LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(BASE_DIR, "logs"))
 CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(BASE_DIR, "chats"))
 ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(BASE_DIR, "anchors"))
+STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(BASE_DIR, "storage"))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
 SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
@@ -141,6 +143,7 @@ os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
 os.makedirs(ANCHOR_DIR, exist_ok=True)
+os.makedirs(STORAGE_DIR, exist_ok=True)
 
 
 def _load_or_create_text_secret(env_name, path, *, generator):
@@ -633,6 +636,7 @@ def ensure_security_support_schema(conn):
     ensure_member_level_rules_schema(conn)
     ensure_moderation_proposals_schema(conn)
     ensure_governance_records_schema(conn)
+    ensure_snapshot_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "
@@ -743,6 +747,26 @@ configure_chat_support_service(
     official_chat_room_name=OFFICIAL_CHAT_ROOM_NAME,
     encrypt_field=encrypt_field,
 )
+snapshot_service = SnapshotService(
+    get_db=get_db,
+    db_path=DB_PATH,
+    base_dir=BASE_DIR,
+    storage_root=STORAGE_DIR,
+    audit=audit,
+    file_roots=[
+        CHAT_DIR,
+        os.path.join(BASE_DIR, "uploads"),
+        os.path.join(BASE_DIR, "avatars"),
+        os.path.join(BASE_DIR, "attachments"),
+        os.path.join(BASE_DIR, "media"),
+    ],
+    config_files=[
+        os.path.join(BASE_DIR, "system_settings.json"),
+        os.path.join(BASE_DIR, "settings.json"),
+        os.path.join(BASE_DIR, ".env"),
+    ],
+)
+server_mode_service = ServerModeService(snapshot_service=snapshot_service, get_db=get_db, audit=audit)
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
@@ -969,6 +993,7 @@ register_operation_routes(app, {
     "DB_PATH": DB_PATH,
     "LOG_DIR": LOG_DIR,
     "SERVER_LOG_PATH": SERVER_LOG_PATH,
+    "STORAGE_DIR": STORAGE_DIR,
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,
     "SESSION_COOKIE_SECURE": SESSION_COOKIE_SECURE,
     "VIOLATION_APPEAL_WINDOW_HOURS": VIOLATION_APPEAL_WINDOW_HOURS,
@@ -999,6 +1024,8 @@ register_operation_routes(app, {
     "save_feature_settings": save_feature_settings,
     "save_settings": save_settings,
     "secure_add_violation": secure_add_violation,
+    "server_mode_service": server_mode_service,
+    "snapshot_service": snapshot_service,
     "verify_audit_integrity": verify_audit_integrity,
     "verify_violation_integrity": verify_violation_integrity,
 })

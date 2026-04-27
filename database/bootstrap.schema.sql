@@ -174,6 +174,51 @@ CREATE TABLE IF NOT EXISTS reputation_events (
     created_at     TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS snapshots (
+    id                  TEXT PRIMARY KEY,
+    type                TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    created_by          INTEGER NOT NULL,
+    created_at          TEXT NOT NULL,
+    completed_at        TEXT,
+    app_version         TEXT,
+    schema_version      TEXT,
+    source_mode         TEXT,
+    includes_json       TEXT NOT NULL,
+    storage_path        TEXT NOT NULL,
+    db_dump_path        TEXT,
+    files_archive_path  TEXT,
+    config_archive_path TEXT,
+    checksum            TEXT,
+    size_bytes          INTEGER,
+    notes               TEXT,
+    error_message       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_restore_events (
+    id                      TEXT PRIMARY KEY,
+    snapshot_id             TEXT NOT NULL,
+    restored_by             INTEGER NOT NULL,
+    started_at              TEXT NOT NULL,
+    completed_at            TEXT,
+    status                  TEXT NOT NULL,
+    restore_mode            TEXT NOT NULL,
+    pre_restore_snapshot_id TEXT,
+    checksum_verified       INTEGER NOT NULL DEFAULT 0,
+    dry_run                 INTEGER NOT NULL DEFAULT 0,
+    error_message           TEXT
+);
+
+CREATE TABLE IF NOT EXISTS server_modes (
+    id                 INTEGER PRIMARY KEY CHECK (id = 1),
+    current_mode       TEXT NOT NULL,
+    previous_mode      TEXT,
+    active_snapshot_id TEXT,
+    mode_changed_by    INTEGER,
+    mode_changed_at    TEXT,
+    notes              TEXT
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -341,6 +386,9 @@ CREATE INDEX IF NOT EXISTS idx_moderation_actions_moderator ON moderation_action
 CREATE INDEX IF NOT EXISTS idx_user_mod_notes_user ON user_mod_notes(user_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_reputation_events_user ON reputation_events(user_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_type_status ON snapshots(type, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_snapshot_restore_events_snapshot ON snapshot_restore_events(snapshot_id);
 
 CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
 

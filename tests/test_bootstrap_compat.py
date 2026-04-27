@@ -127,6 +127,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     moderation_action_cols = {row["name"] for row in conn.execute("PRAGMA table_info(moderation_actions)").fetchall()}
     mod_note_cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_mod_notes)").fetchall()}
     reputation_event_cols = {row["name"] for row in conn.execute("PRAGMA table_info(reputation_events)").fetchall()}
+    snapshot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+    restore_event_cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshot_restore_events)").fetchall()}
+    server_mode_cols = {row["name"] for row in conn.execute("PRAGMA table_info(server_modes)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
     conn.close()
@@ -150,7 +153,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"moderator_id", "action_type", "target_type", "target_id"} <= moderation_action_cols
     assert {"moderator_id", "user_id", "note"} <= mod_note_cols
     assert {"user_id", "delta", "reason", "source_user_id"} <= reputation_event_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    assert {"id", "type", "status", "storage_path", "checksum"} <= snapshot_cols
+    assert {"id", "snapshot_id", "restore_mode", "pre_restore_snapshot_id"} <= restore_event_cols
+    assert {"current_mode", "previous_mode", "active_snapshot_id"} <= server_mode_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     assert root_user["username"] == "root"
 
 
