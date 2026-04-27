@@ -121,8 +121,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
 
     assert {"is_revoked", "revoked_at", "last_seen"} <= session_cols
     assert "is_private" in chat_room_cols
-    assert {"member_level", "trust_score", "points", "reputation", "deleted_at"} <= user_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7]
+    assert {"member_level", "trust_score", "points", "reputation", "password_strength_score", "deleted_at"} <= user_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8]
     assert root_user["username"] == "root"
 
 

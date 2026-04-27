@@ -29,7 +29,7 @@ def test_ensure_user_identity_columns_repairs_legacy_users(tmp_path):
     ).fetchone()
     conn.close()
 
-    assert {"role", "member_level", "trust_score", "points", "reputation", "deleted_at"} <= cols
+    assert {"role", "member_level", "trust_score", "points", "reputation", "password_strength_score", "deleted_at"} <= cols
     assert user["role"] == "user"
     assert user["member_level"] == "normal"
     assert user["status"] == "active"

@@ -31,7 +31,9 @@ def register_user_routes(app, deps):
     revoke_user_sessions = deps["revoke_user_sessions"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
+    enforce_password_strength = deps["enforce_password_strength"]
     role_rank = deps["role_rank"]
+    score_password_strength = deps["score_password_strength"]
     user_public_payload = deps["user_public_payload"]
     validate_id_number = deps["validate_id_number"]
     validate_password = deps["validate_password"]
@@ -65,7 +67,7 @@ def register_user_routes(app, deps):
             conn = get_db()
             try:
                 rows = conn.execute(
-                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, blocked_until, violation_count "
+                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
                 data = [user_public_payload(r, include_sensitive=False) for r in rows]
@@ -137,8 +139,13 @@ def register_user_routes(app, deps):
                 ok, msg = validate_password(password)
                 if not ok:
                     return json_resp({"ok":False,"msg":msg}), 400
+                if is_feature_enabled("feature_account_security_enabled"):
+                    ok, msg, strength = enforce_password_strength(password, min_score=3)
+                    if not ok:
+                        return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
         else:
             return json_resp({"ok":False,"msg":"新建帳號必須指定密碼"}), 400
+        strength = score_password_strength(password)
 
         conn = get_db()
         try:
@@ -147,9 +154,9 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"帳號已存在"}), 409
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), role, status, member_level, now, now)
+                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, password_strength_score, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), role, status, member_level, strength["score"], now, now)
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
@@ -178,7 +185,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, blocked_until, violation_count FROM users WHERE id=?",
+                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -206,7 +213,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, blocked_until, violation_count FROM users WHERE id=?",
+                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -321,10 +328,19 @@ def register_user_routes(app, deps):
                     ok, msg = validate_password(pw)
                     if not ok:
                         return json_resp({"ok":False,"msg":msg}), 400
+                    if is_feature_enabled("feature_account_security_enabled"):
+                        ok, msg, strength = enforce_password_strength(pw, min_score=3)
+                        if not ok:
+                            return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
+                strength = score_password_strength(pw)
                 conn.execute(
                     "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                     (user_id, hash_password(pw), datetime.now().isoformat())
                 )
+                updates.append("password_strength_score=?")
+                params.append(strength["score"])
+                updates.append("password_changed_at=?")
+                params.append(datetime.now().isoformat())
                 trim_password_history(conn, user_id)
                 revoke_sessions_needed = True
             if "username" in data:

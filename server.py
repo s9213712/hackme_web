@@ -107,6 +107,7 @@ from services.identity import (
     ensure_user_identity_columns,
     role_rank,
 )
+from services.password_strength import enforce_password_strength, score_password_strength
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -492,7 +493,7 @@ def get_user_by_username(username):
     conn = get_db()
     try:
         return conn.execute(
-            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, blocked_until, violation_count, chat_violation_warned "
+            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -515,6 +516,7 @@ def user_public_payload(row, *, include_sensitive=False):
         "trust_score": data.get("trust_score") or 0,
         "points": data.get("points") or 0,
         "reputation": data.get("reputation") or 0,
+        "password_strength_score": data.get("password_strength_score") or 0,
         "role_label": ROLE_LABEL.get(data.get("role"), data.get("role")),
         "blocked_until": data.get("blocked_until"),
         "violation_count": data.get("violation_count") or 0,
@@ -826,6 +828,7 @@ register_public_routes(app, {
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "hash_password": hash_password,
+    "is_feature_enabled": is_feature_enabled,
     "is_ip_blocked": is_ip_blocked,
     "is_rate_limited": is_rate_limited,
     "json_resp": json_resp,
@@ -835,11 +838,13 @@ register_public_routes(app, {
     "parse_birthdate": parse_birthdate,
     "record_login_failure": record_login_failure,
     "require_csrf": require_csrf,
+    "score_password_strength": score_password_strength,
     "role_rank": role_rank,
     "store_csrf_token": store_csrf_token,
     "timing_delay": timing_delay,
     "validate_id_number": validate_id_number,
     "validate_password": validate_password,
+    "enforce_password_strength": enforce_password_strength,
     "validate_phone": validate_phone,
     "verify_csrf_double_submit": verify_csrf_double_submit,
     "verify_password": verify_password,
@@ -901,6 +906,8 @@ register_user_routes(app, {
     "revoke_user_sessions": revoke_user_sessions,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
+    "enforce_password_strength": enforce_password_strength,
+    "score_password_strength": score_password_strength,
     "role_rank": role_rank,
     "user_public_payload": user_public_payload,
     "validate_id_number": validate_id_number,

@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS users (
     email_verified INTEGER NOT NULL DEFAULT 0,
     two_factor_enabled INTEGER NOT NULL DEFAULT 0,
     failed_login_count INTEGER NOT NULL DEFAULT 0,
+    password_strength_score INTEGER NOT NULL DEFAULT 0,
     last_login_at TEXT,
     password_changed_at TEXT,
     must_change_password INTEGER NOT NULL DEFAULT 0,

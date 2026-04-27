@@ -30,6 +30,7 @@ def register_public_routes(app, deps):
     get_system_settings = deps["get_system_settings"]
     get_ua = deps["get_ua"]
     hash_password = deps["hash_password"]
+    is_feature_enabled = deps["is_feature_enabled"]
     is_ip_blocked = deps["is_ip_blocked"]
     is_rate_limited = deps["is_rate_limited"]
     json_resp = deps["json_resp"]
@@ -39,10 +40,12 @@ def register_public_routes(app, deps):
     parse_birthdate = deps["parse_birthdate"]
     record_login_failure = deps["record_login_failure"]
     require_csrf = deps["require_csrf"]
+    score_password_strength = deps["score_password_strength"]
     store_csrf_token = deps["store_csrf_token"]
     timing_delay = deps["timing_delay"]
     validate_id_number = deps["validate_id_number"]
     validate_password = deps["validate_password"]
+    enforce_password_strength = deps["enforce_password_strength"]
     validate_phone = deps["validate_phone"]
     verify_csrf_double_submit = deps["verify_csrf_double_submit"]
     verify_password = deps["verify_password"]
@@ -108,6 +111,20 @@ def register_public_routes(app, deps):
             },
         })
 
+    @app.route("/api/password-strength", methods=["POST"])
+    def password_strength():
+        ip = get_client_ip()
+        blocked, info = is_rate_limited(ip, max_req=30, window_sec=60)
+        if blocked:
+            return json_resp({"ok": False, "msg": f"請求太頻繁（{info['limit']}次/分鐘）"}), 429
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        password = data.get("password", "") if isinstance(data, dict) and isinstance(data.get("password"), str) else ""
+        result = score_password_strength(password)
+        return json_resp({"ok": True, **result})
+
     @app.route("/api/register", methods=["POST"])
     def register():
         ip, ua = get_client_ip(), get_ua()
@@ -168,6 +185,12 @@ def register_public_routes(app, deps):
         if not ok:
             audit("REGISTER_BAD_PW", ip, username, ua=ua, detail=msg)
             return json_resp({"ok":False,"msg":msg}), 400
+        strength = score_password_strength(password)
+        if is_feature_enabled("feature_account_security_enabled"):
+            strong_enough, msg, strength = enforce_password_strength(password, min_score=3)
+            if not strong_enough:
+                audit("REGISTER_WEAK_PW", ip, username, ua=ua, detail=msg)
+                return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
 
         conn = get_db()
         try:
@@ -180,9 +203,9 @@ def register_public_routes(app, deps):
 
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', ?, ?)",
-                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), now, now)
+                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, password_strength_score, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', ?, ?, ?)",
+                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), strength["score"], now, now)
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
