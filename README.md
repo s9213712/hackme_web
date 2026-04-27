@@ -412,18 +412,33 @@ Default risk policy blocks executable-like files from public/private uploads,
 marks E2EE files as `unknown_encrypted` or high risk, and requires archives and
 macro documents to be scanned before release.
 
-Local malware scanning is designed for free self-hosted tools. Root can enable
-the `clamav` backend, optionally pin a scanner command path, set scan timeout,
-choose fail-closed behavior, quarantine infected files, and keep extension/MIME
-magic-byte validation enabled. If no command is configured, the service looks
-for `clamdscan` first and then `clamscan`. Install ClamAV on the host and keep
-signatures updated with `freshclam` before enabling strict production use.
+Local malware scanning is designed for free self-hosted tools and is treated as
+a soft dependency. Root can enable the `clamav` backend, optionally pin a scanner
+command path, set scan timeout, choose fail-closed behavior, quarantine infected
+files, enable Office macro checks, recursively inspect ZIP members, and keep
+extension/MIME magic-byte validation enabled. If no ClamAV command is configured,
+the service looks for `clamdscan` first and then `clamscan`; if neither exists,
+the scan is recorded as unavailable/skipped so normal website features still
+work unless root explicitly configures stricter policy.
+
+Optional host packages:
+
+- ClamAV: install `clamav` / `clamav-daemon`, run `freshclam`, and set
+  `scanner_backend=clamav`. Use `scanner_command=/usr/bin/clamdscan` or leave it
+  blank for auto-detect.
+- YARA: install `yara`, place rules in a local file/directory, enable
+  `yara_enabled`, and set `yara_rules_path`. If `yara` or rules are missing,
+  YARA is skipped and recorded as `not_required`.
+- ZIP/Office deep checks: no external package is required. ZIP recursion is
+  bounded by `max_archive_depth`, `max_archive_files`, and
+  `max_archive_uncompressed_bytes`.
 
 For server-readable `public_attachment` and `private_scannable` files, the
-central scan flow performs magic-byte validation, zip archive safety checks, and
-ClamAV scanning before a pending file can become `clean`. Infected files become
-`quarantined` by default. E2EE files are never advertised as fully server-scanned
-because the server cannot decrypt their content.
+central scan flow performs magic-byte validation, Office macro detection, ZIP
+archive safety checks, optional recursive ZIP member scanning, optional YARA
+matching, and optional ClamAV scanning before a pending file can become `clean`.
+Infected files become `quarantined` by default. E2EE files are never advertised
+as fully server-scanned because the server cannot decrypt their content.
 
 Cloud drive safety now exposes:
 

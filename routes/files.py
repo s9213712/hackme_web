@@ -47,6 +47,11 @@ def register_file_routes(app, deps):
         role = "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
         return role_rank(role) >= role_rank("manager")
 
+    def _requires_download_warning(policy, row):
+        if not policy.get("warn_high_risk_downloads"):
+            return False
+        return row["risk_level"] in {"high", "blocked", "unknown_encrypted"} or row["scan_status"] in {"infected", "quarantined", "failed", "unknown_encrypted"}
+
     def _grant_user_ids_from_payload(data):
         raw = data.get("grant_user_ids") if isinstance(data, dict) else []
         if raw is None:
@@ -260,6 +265,19 @@ def register_file_routes(app, deps):
             if not allowed:
                 conn.commit()
                 return json_resp({"ok": False, "msg": "沒有下載權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            policy = get_cloud_drive_security_policy(conn)
+            confirmed = (
+                request.args.get("confirm_high_risk") == "1"
+                or request.headers.get("X-Confirm-High-Risk-Download", "").lower() in {"1", "true", "yes"}
+            )
+            if _requires_download_warning(policy, row) and not confirmed:
+                return json_resp({
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "msg": "此檔案為高風險或無法完整掃描，請確認信任來源後再下載。",
+                    "risk_level": row["risk_level"],
+                    "scan_status": row["scan_status"],
+                }), 409
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404

@@ -4,10 +4,12 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 
@@ -111,6 +113,12 @@ DEFAULT_CLOUD_DRIVE_SECURITY_POLICY = {
     "fail_closed_on_scanner_error": True,
     "quarantine_on_infected": True,
     "validate_magic_mime": True,
+    "deep_archive_scan_enabled": True,
+    "max_archive_depth": 2,
+    "office_macro_scan_enabled": True,
+    "yara_enabled": False,
+    "yara_command": "",
+    "yara_rules_path": "",
     "max_archive_files": 200,
     "max_archive_uncompressed_bytes": 50 * 1024 * 1024,
     "max_daily_downloads": 500,
@@ -131,14 +139,18 @@ CLOUD_DRIVE_POLICY_BOOL_FIELDS = {
     "fail_closed_on_scanner_error",
     "quarantine_on_infected",
     "validate_magic_mime",
+    "deep_archive_scan_enabled",
+    "office_macro_scan_enabled",
+    "yara_enabled",
 }
 CLOUD_DRIVE_POLICY_INT_FIELDS = {
     "scanner_timeout_seconds",
+    "max_archive_depth",
     "max_archive_files",
     "max_archive_uncompressed_bytes",
     "max_daily_downloads",
 }
-CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "notes"}
+CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "yara_command", "yara_rules_path", "notes"}
 
 ALLOWED_SCANNER_BACKENDS = {"disabled", "clamav"}
 
@@ -296,6 +308,12 @@ def ensure_upload_security_schema(conn):
             fail_closed_on_scanner_error INTEGER NOT NULL,
             quarantine_on_infected INTEGER NOT NULL,
             validate_magic_mime INTEGER NOT NULL,
+            deep_archive_scan_enabled INTEGER NOT NULL DEFAULT 1,
+            max_archive_depth INTEGER NOT NULL DEFAULT 2,
+            office_macro_scan_enabled INTEGER NOT NULL DEFAULT 1,
+            yara_enabled INTEGER NOT NULL DEFAULT 0,
+            yara_command TEXT,
+            yara_rules_path TEXT,
             max_archive_files INTEGER NOT NULL,
             max_archive_uncompressed_bytes INTEGER NOT NULL,
             max_daily_downloads INTEGER NOT NULL,
@@ -329,6 +347,12 @@ def _ensure_cloud_drive_policy_columns(conn):
         "fail_closed_on_scanner_error": "INTEGER NOT NULL DEFAULT 1",
         "quarantine_on_infected": "INTEGER NOT NULL DEFAULT 1",
         "validate_magic_mime": "INTEGER NOT NULL DEFAULT 1",
+        "deep_archive_scan_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "max_archive_depth": "INTEGER NOT NULL DEFAULT 2",
+        "office_macro_scan_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "yara_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "yara_command": "TEXT",
+        "yara_rules_path": "TEXT",
     }
     for column, definition in definitions.items():
         if column not in columns:
@@ -378,9 +402,11 @@ def seed_default_cloud_drive_security_policy(conn):
             scanner_enabled, scanner_backend, scanner_command,
             scanner_timeout_seconds, fail_closed_on_scanner_error,
             quarantine_on_infected, validate_magic_mime,
+            deep_archive_scan_enabled, max_archive_depth,
+            office_macro_scan_enabled, yara_enabled, yara_command, yara_rules_path,
             max_archive_files, max_archive_uncompressed_bytes, max_daily_downloads,
             notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             policy["scope"],
@@ -397,6 +423,12 @@ def seed_default_cloud_drive_security_policy(conn):
             1 if policy["fail_closed_on_scanner_error"] else 0,
             1 if policy["quarantine_on_infected"] else 0,
             1 if policy["validate_magic_mime"] else 0,
+            1 if policy["deep_archive_scan_enabled"] else 0,
+            int(policy["max_archive_depth"]),
+            1 if policy["office_macro_scan_enabled"] else 0,
+            1 if policy["yara_enabled"] else 0,
+            policy["yara_command"],
+            policy["yara_rules_path"],
             int(policy["max_archive_files"]),
             int(policy["max_archive_uncompressed_bytes"]),
             int(policy["max_daily_downloads"]),
@@ -477,6 +509,19 @@ def serialize_cloud_drive_security_policy(row):
             "allow_inline_preview_for_high_risk": bool(row["allow_inline_preview_for_high_risk"]),
             "e2ee_server_scan_claim_allowed": bool(row["e2ee_server_scan_claim_allowed"]),
             "revoke_shares_on_suspension": bool(row["revoke_shares_on_suspension"]),
+            "scanner_enabled": bool(row["scanner_enabled"]),
+            "scanner_backend": row["scanner_backend"],
+            "scanner_command": row["scanner_command"],
+            "scanner_timeout_seconds": int(row["scanner_timeout_seconds"]),
+            "fail_closed_on_scanner_error": bool(row["fail_closed_on_scanner_error"]),
+            "quarantine_on_infected": bool(row["quarantine_on_infected"]),
+            "validate_magic_mime": bool(row["validate_magic_mime"]),
+            "deep_archive_scan_enabled": bool(row["deep_archive_scan_enabled"]),
+            "max_archive_depth": int(row["max_archive_depth"]),
+            "office_macro_scan_enabled": bool(row["office_macro_scan_enabled"]),
+            "yara_enabled": bool(row["yara_enabled"]),
+            "yara_command": row["yara_command"],
+            "yara_rules_path": row["yara_rules_path"],
             "max_archive_files": int(row["max_archive_files"]),
             "max_archive_uncompressed_bytes": int(row["max_archive_uncompressed_bytes"]),
             "max_daily_downloads": int(row["max_daily_downloads"]),
@@ -494,12 +539,17 @@ def serialize_cloud_drive_security_policy(row):
         "fail_closed_on_scanner_error",
         "quarantine_on_infected",
         "validate_magic_mime",
+        "deep_archive_scan_enabled",
+        "office_macro_scan_enabled",
+        "yara_enabled",
     ):
         data[key] = bool(data.get(key))
-    for key in ("scanner_timeout_seconds", "max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
+    for key in ("scanner_timeout_seconds", "max_archive_depth", "max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
         data[key] = int(data.get(key) or 0)
     data["scanner_backend"] = str(data.get("scanner_backend") or "disabled")
     data["scanner_command"] = str(data.get("scanner_command") or "")
+    data["yara_command"] = str(data.get("yara_command") or "")
+    data["yara_rules_path"] = str(data.get("yara_rules_path") or "")
     return data
 
 
@@ -532,6 +582,8 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
                 return None, f"{key} 不可小於 0"
             if key == "scanner_timeout_seconds" and value < 1:
                 return None, "scanner_timeout_seconds 必須至少 1 秒"
+            if key == "max_archive_depth" and value > 5:
+                return None, "max_archive_depth 不可大於 5"
             updates.append(f"{key}=?")
             params.append(value)
     if "scanner_backend" in data:
@@ -543,6 +595,12 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
     if "scanner_command" in data:
         updates.append("scanner_command=?")
         params.append(str(data.get("scanner_command") or "").strip()[:500])
+    if "yara_command" in data:
+        updates.append("yara_command=?")
+        params.append(str(data.get("yara_command") or "").strip()[:500])
+    if "yara_rules_path" in data:
+        updates.append("yara_rules_path=?")
+        params.append(str(data.get("yara_rules_path") or "").strip()[:500])
     if "notes" in data:
         updates.append("notes=?")
         params.append(str(data.get("notes") or "")[:1000])
@@ -696,26 +754,64 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def check_zip_archive_safety(path, *, max_files=200, max_uncompressed_bytes=50 * 1024 * 1024):
-    result = {"ok": True, "reason": "ok", "file_count": 0, "uncompressed_bytes": 0}
-    try:
-        with zipfile.ZipFile(path) as archive:
+def check_zip_archive_safety(path, *, max_files=200, max_uncompressed_bytes=50 * 1024 * 1024, recursive=False, max_depth=2):
+    result = {"ok": True, "reason": "ok", "file_count": 0, "uncompressed_bytes": 0, "max_depth_seen": 0}
+
+    def walk_zip(blob, depth):
+        with zipfile.ZipFile(blob) as archive:
             infos = archive.infolist()
-            result["file_count"] = len(infos)
-            if len(infos) > max_files:
-                return {**result, "ok": False, "reason": "too_many_files"}
-            total = 0
             for info in infos:
+                if info.is_dir():
+                    continue
                 member = Path(info.filename)
                 if member.is_absolute() or ".." in member.parts:
-                    return {**result, "ok": False, "reason": "path_traversal"}
-                total += int(info.file_size or 0)
-                if total > max_uncompressed_bytes:
-                    return {**result, "ok": False, "reason": "zip_bomb"}
-            result["uncompressed_bytes"] = total
-            return result
+                    return False, "path_traversal"
+                result["file_count"] += 1
+                result["max_depth_seen"] = max(result["max_depth_seen"], depth)
+                if result["file_count"] > max_files:
+                    return False, "too_many_files"
+                result["uncompressed_bytes"] += int(info.file_size or 0)
+                if result["uncompressed_bytes"] > max_uncompressed_bytes:
+                    return False, "zip_bomb"
+                if recursive and depth < max_depth and file_extension(info.filename) == ".zip":
+                    nested = archive.read(info)
+                    ok, reason = walk_zip(BytesIO(nested), depth + 1)
+                    if not ok:
+                        return False, reason
+        return True, "ok"
+
+    try:
+        ok, reason = walk_zip(path, 0)
+        return {**result, "ok": ok, "reason": reason}
     except zipfile.BadZipFile:
         return {**result, "ok": False, "reason": "bad_zip"}
+
+
+def check_office_macro_safety(path, filename=None):
+    ext = file_extension(filename or path)
+    result = {"ok": True, "reason": "ok", "extension": ext, "macro_indicators": []}
+    if ext not in OFFICE_EXTENSIONS:
+        return {**result, "reason": "not_office"}
+    if ext in MACRO_OFFICE_EXTENSIONS:
+        result["macro_indicators"].append("macro_enabled_extension")
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as archive:
+                names = [name.lower() for name in archive.namelist()]
+            for marker in ("vbaproject.bin", "macrosheets/", "xl4macrosheets/"):
+                if any(marker in name for name in names):
+                    result["macro_indicators"].append(marker.rstrip("/"))
+        else:
+            with open(path, "rb") as f:
+                sample = f.read(1024 * 1024).lower()
+            for marker in (b"vba", b"macros", b"attribut vb_"):
+                if marker in sample:
+                    result["macro_indicators"].append(marker.decode("ascii", errors="ignore"))
+    except Exception as exc:
+        return {**result, "ok": False, "reason": "office_macro_scan_failed", "error": exc.__class__.__name__}
+    if result["macro_indicators"]:
+        return {**result, "ok": False, "reason": "macro_detected"}
+    return result
 
 
 def detect_magic_mime(path):
@@ -798,11 +894,64 @@ def _parse_clamav_output(output):
     return None
 
 
+def _resolve_yara_command(policy):
+    configured = str(policy.get("yara_command") or "").strip()
+    if configured:
+        return configured
+    return shutil.which("yara")
+
+
+def run_yara_scan(path, *, policy):
+    if not policy.get("yara_enabled"):
+        return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_disabled"}}
+    rules_path = str(policy.get("yara_rules_path") or "").strip()
+    if not rules_path:
+        return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_rules_not_configured"}}
+    command = _resolve_yara_command(policy)
+    if not command:
+        return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_command_not_found"}}
+    started_at = datetime.now().isoformat()
+    timeout = int(policy.get("scanner_timeout_seconds") or 60)
+    command_parts = shlex.split(command)
+    if not command_parts:
+        return {"result": "not_required", "malware_name": None, "scan_started_at": started_at, "details": {"reason": "empty_yara_command"}}
+    try:
+        completed = subprocess.run(
+            [*command_parts, "-r", rules_path, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "result": "failed",
+            "malware_name": None,
+            "scan_started_at": started_at,
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+        }
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+    details = {
+        "returncode": completed.returncode,
+        "command": os.path.basename(command_parts[0]),
+        "rules_path": rules_path,
+        "output_tail": output[-1000:],
+    }
+    if completed.returncode not in {0, 1} and not output:
+        return {"result": "failed", "malware_name": None, "scan_started_at": started_at, "details": details}
+    if completed.stdout.strip():
+        rule_name = completed.stdout.strip().split()[0]
+        return {"result": "infected", "malware_name": rule_name, "scan_started_at": started_at, "details": details}
+    if completed.returncode not in {0, 1}:
+        return {"result": "failed", "malware_name": None, "scan_started_at": started_at, "details": details}
+    return {"result": "clean", "malware_name": None, "scan_started_at": started_at, "details": details}
+
+
 def run_clamav_scan(path, *, policy):
     command = _resolve_clamav_command(policy)
     if not command:
         return {
-            "result": "failed",
+            "result": "not_required",
             "malware_name": None,
             "details": {"reason": "clamav_command_not_found"},
         }
@@ -844,6 +993,78 @@ def run_clamav_scan(path, *, policy):
     return {"result": "failed", "malware_name": None, "scan_started_at": started_at, "details": details}
 
 
+def scan_archive_members(path, *, policy):
+    if not policy.get("deep_archive_scan_enabled"):
+        return {"ok": True, "reason": "disabled", "files_scanned": 0, "results": []}
+    if not zipfile.is_zipfile(path):
+        return {"ok": True, "reason": "not_zip", "files_scanned": 0, "results": []}
+
+    max_files = int(policy.get("max_archive_files") or 200)
+    max_bytes = int(policy.get("max_archive_uncompressed_bytes") or 50 * 1024 * 1024)
+    max_depth = int(policy.get("max_archive_depth") or 2)
+    state = {"files": 0, "bytes": 0, "results": []}
+
+    def scan_one_file(file_path, member_name):
+        magic = check_magic_mime_safety(file_path, filename=member_name)
+        state["results"].append({"scanner": "archive-member-magic", "member": member_name, **magic})
+        if not magic["ok"]:
+            return False, "member_magic_mismatch"
+        yara = run_yara_scan(file_path, policy=policy)
+        if yara["result"] not in {"not_required"}:
+            state["results"].append({"scanner": "archive-member-yara", "member": member_name, **yara})
+        if yara["result"] == "infected":
+            return False, "member_yara_match"
+        if yara["result"] == "failed" and policy.get("fail_closed_on_scanner_error"):
+            return False, "member_yara_failed"
+        if policy.get("scanner_enabled") and policy.get("scanner_backend") == "clamav":
+            clamav = run_clamav_scan(file_path, policy=policy)
+            if clamav["result"] not in {"not_required"}:
+                state["results"].append({"scanner": "archive-member-clamav", "member": member_name, **clamav})
+            if clamav["result"] == "infected":
+                return False, "member_clamav_infected"
+            if clamav["result"] == "failed" and policy.get("fail_closed_on_scanner_error"):
+                return False, "member_clamav_failed"
+        return True, "ok"
+
+    def walk_zip(zip_blob, depth, base, temp_root):
+        with zipfile.ZipFile(zip_blob) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                member = Path(info.filename)
+                if member.is_absolute() or ".." in member.parts:
+                    return False, "path_traversal"
+                state["files"] += 1
+                state["bytes"] += int(info.file_size or 0)
+                if state["files"] > max_files:
+                    return False, "too_many_files"
+                if state["bytes"] > max_bytes:
+                    return False, "zip_bomb"
+                member_name = f"{base}{info.filename}"
+                data = archive.read(info)
+                if depth < max_depth and file_extension(info.filename) == ".zip":
+                    ok, reason = walk_zip(BytesIO(data), depth + 1, f"{member_name}!", temp_root)
+                    if not ok:
+                        return False, reason
+                    continue
+                safe_name = uuid.uuid4().hex
+                target = Path(temp_root) / safe_name
+                target.write_bytes(data)
+                ok, reason = scan_one_file(target, member_name)
+                if not ok:
+                    return False, reason
+        return True, "ok"
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="upload-scan-") as temp_root:
+            ok, reason = walk_zip(path, 0, "", temp_root)
+        return {"ok": ok, "reason": reason, "files_scanned": state["files"], "uncompressed_bytes": state["bytes"], "results": state["results"]}
+    except zipfile.BadZipFile:
+        return {"ok": False, "reason": "bad_zip", "files_scanned": state["files"], "results": state["results"]}
+    except Exception as exc:
+        return {"ok": False, "reason": "archive_member_scan_failed", "error": exc.__class__.__name__, "files_scanned": state["files"], "results": state["results"]}
+
+
 def scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime=None):
     ensure_upload_security_schema(conn)
     row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
@@ -878,17 +1099,58 @@ def scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime
             _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
             return {"scan_status": status, "risk_level": "high", "results": results}
 
+    if policy.get("office_macro_scan_enabled") and file_extension(filename or row["original_filename_plain_for_public"] or path) in OFFICE_EXTENSIONS:
+        office_result = check_office_macro_safety(path, filename=filename or row["original_filename_plain_for_public"])
+        result_name = "clean" if office_result["ok"] else "infected"
+        _record_scan_result(conn, file_id=file_id, scanner_name="office-macro", result=result_name, details=office_result)
+        results.append({"scanner": "office-macro", **office_result})
+        if not office_result["ok"]:
+            status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+            _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+            return {"scan_status": status, "risk_level": "high", "results": results}
+
     if file_extension(filename or row["original_filename_plain_for_public"] or path) in ARCHIVE_EXTENSIONS:
         archive_result = check_zip_archive_safety(
             path,
             max_files=policy["max_archive_files"],
             max_uncompressed_bytes=policy["max_archive_uncompressed_bytes"],
+            recursive=policy.get("deep_archive_scan_enabled"),
+            max_depth=policy.get("max_archive_depth"),
         )
         result_name = "clean" if archive_result["ok"] else "infected"
         _record_scan_result(conn, file_id=file_id, scanner_name="archive-safety", result=result_name, details=archive_result)
         results.append({"scanner": "archive-safety", **archive_result})
         if not archive_result["ok"]:
             status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+            _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+            return {"scan_status": status, "risk_level": "high", "results": results}
+        archive_member_result = scan_archive_members(path, policy=policy)
+        member_result_name = "clean" if archive_member_result["ok"] else "infected"
+        _record_scan_result(conn, file_id=file_id, scanner_name="archive-member-scan", result=member_result_name, details=archive_member_result)
+        results.append({"scanner": "archive-member-scan", **archive_member_result})
+        if not archive_member_result["ok"]:
+            status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+            _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+            return {"scan_status": status, "risk_level": "high", "results": results}
+
+    yara = run_yara_scan(path, policy=policy)
+    if yara["result"] != "not_required":
+        _record_scan_result(
+            conn,
+            file_id=file_id,
+            scanner_name="yara",
+            started_at=yara.get("scan_started_at"),
+            result=yara["result"],
+            malware_name=yara.get("malware_name"),
+            details=yara.get("details") or {},
+        )
+        results.append({"scanner": "yara", **yara})
+        if yara["result"] == "infected":
+            status = "quarantined" if policy["quarantine_on_infected"] else "infected"
+            _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
+            return {"scan_status": status, "risk_level": "high", "results": results}
+        if yara["result"] == "failed" and policy["fail_closed_on_scanner_error"]:
+            status = "quarantined"
             _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
             return {"scan_status": status, "risk_level": "high", "results": results}
 
@@ -922,6 +1184,9 @@ def scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime
         status = "quarantined" if policy["quarantine_on_infected"] else "infected"
         _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high")
         return {"scan_status": status, "risk_level": "high", "results": results}
+    if clamav["result"] == "not_required":
+        _update_file_scan_state(conn, file_id, scan_status="not_required")
+        return {"scan_status": "not_required", "risk_level": row["risk_level"], "results": results}
 
     status = "quarantined" if policy["fail_closed_on_scanner_error"] else "failed"
     _update_file_scan_state(conn, file_id, scan_status=status, risk_level="high" if policy["fail_closed_on_scanner_error"] else None)

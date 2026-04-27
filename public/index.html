@@ -367,6 +367,11 @@
       <div class="admin-toolbar" style="margin-top:.75rem;">
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
+      <div class="drive-card" style="margin-top:1rem;">
+        <div class="drive-card-title">我的檔案</div>
+        <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。</div>
+        <div id="drive-file-list" class="drive-file-list"></div>
+      </div>
       <div id="drive-msg" class="msg"></div>
     </div>
   </div>
@@ -770,6 +775,9 @@
             <div class="field"><label><input type="checkbox" id="s-cd-fail-closed-on-scanner-error" /> 掃描失敗時封鎖</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-quarantine-on-infected" /> 偵測異常時隔離</label></div>
             <div class="field"><label><input type="checkbox" id="s-cd-validate-magic-mime" /> 檢查副檔名/MIME 偽裝</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-deep-archive-scan-enabled" /> 遞迴檢查 ZIP 內容</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-office-macro-scan-enabled" /> 檢查 Office 巨集</label></div>
+            <div class="field"><label><input type="checkbox" id="s-cd-yara-enabled" /> 啟用 YARA 規則掃描</label></div>
             </div>
             <div class="field">
               <label>本地掃描器</label>
@@ -787,6 +795,10 @@
               <input type="number" id="s-cd-scanner-timeout-seconds" min="1" />
             </div>
             <div class="field">
+              <label>ZIP 遞迴深度（0-5，軟需求）</label>
+              <input type="number" id="s-cd-max-archive-depth" min="0" max="5" />
+            </div>
+            <div class="field">
               <label>壓縮檔最多檔案數</label>
               <input type="number" id="s-cd-max-archive-files" min="0" />
             </div>
@@ -797,6 +809,14 @@
             <div class="field">
               <label>每日下載上限</label>
               <input type="number" id="s-cd-max-daily-downloads" min="0" />
+            </div>
+            <div class="field">
+              <label>YARA 命令路徑（空白代表自動尋找 yara；未安裝不影響網站）</label>
+              <input type="text" id="s-cd-yara-command" placeholder="/usr/bin/yara" />
+            </div>
+            <div class="field">
+              <label>YARA 規則檔或規則目錄（空白代表不執行 YARA）</label>
+              <input type="text" id="s-cd-yara-rules-path" placeholder="/etc/yara/rules" />
             </div>
             <div class="field">
               <label>政策備註</label>

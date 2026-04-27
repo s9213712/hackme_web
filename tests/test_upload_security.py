@@ -5,6 +5,7 @@ import pytest
 
 from services.upload_security import (
     check_magic_mime_safety,
+    check_office_macro_safety,
     check_zip_archive_safety,
     create_uploaded_file_record,
     ensure_upload_security_schema,
@@ -13,6 +14,7 @@ from services.upload_security import (
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
     safe_public_filename,
+    scan_archive_members,
     update_cloud_drive_security_policy,
 )
 
@@ -49,6 +51,10 @@ def test_cloud_drive_security_policy_defaults_are_safe():
         assert policy["scanner_backend"] == "clamav"
         assert policy["fail_closed_on_scanner_error"] is True
         assert policy["max_archive_files"] == 200
+        assert policy["deep_archive_scan_enabled"] is True
+        assert policy["max_archive_depth"] == 2
+        assert policy["office_macro_scan_enabled"] is True
+        assert policy["yara_enabled"] is False
     finally:
         conn.close()
 
@@ -64,6 +70,12 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
                 "scanner_backend": "disabled",
                 "scanner_timeout_seconds": 10,
                 "scanner_enabled": False,
+                "deep_archive_scan_enabled": True,
+                "max_archive_depth": 3,
+                "office_macro_scan_enabled": True,
+                "yara_enabled": True,
+                "yara_command": "/usr/bin/yara",
+                "yara_rules_path": "/etc/yara/rules",
                 "max_daily_downloads": 40,
                 "notes": "root tuned policy",
             },
@@ -74,6 +86,10 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         assert policy["scanner_timeout_seconds"] == 10
         assert policy["scanner_enabled"] is False
         assert policy["max_archive_files"] == 12
+        assert policy["max_archive_depth"] == 3
+        assert policy["yara_enabled"] is True
+        assert policy["yara_command"] == "/usr/bin/yara"
+        assert policy["yara_rules_path"] == "/etc/yara/rules"
         assert policy["max_daily_downloads"] == 40
         assert policy["notes"] == "root tuned policy"
 
@@ -223,6 +239,53 @@ def test_zip_archive_path_traversal_is_rejected(tmp_path):
     assert result["reason"] == "path_traversal"
 
 
+def test_recursive_zip_archive_detects_nested_path_traversal(tmp_path):
+    nested = tmp_path / "nested.zip"
+    with zipfile.ZipFile(nested, "w") as zf:
+        zf.writestr("../escape.txt", "bad")
+    outer = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.write(nested, "nested.zip")
+
+    result = check_zip_archive_safety(outer, recursive=True, max_depth=2)
+    assert result["ok"] is False
+    assert result["reason"] == "path_traversal"
+
+
+def test_office_macro_scan_detects_vba_project_in_docx(tmp_path):
+    doc = tmp_path / "macro.docx"
+    with zipfile.ZipFile(doc, "w") as zf:
+        zf.writestr("word/document.xml", "<w:document/>")
+        zf.writestr("word/vbaProject.bin", b"macro")
+
+    result = check_office_macro_safety(doc, filename="macro.docx")
+    assert result["ok"] is False
+    assert result["reason"] == "macro_detected"
+    assert "vbaproject.bin" in result["macro_indicators"]
+
+
+def test_archive_member_scan_detects_disguised_executable(tmp_path):
+    archive = tmp_path / "payload.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("avatar.png", b"MZ" + b"\x00" * 16)
+
+    result = scan_archive_members(
+        archive,
+        policy={
+            "deep_archive_scan_enabled": True,
+            "max_archive_files": 10,
+            "max_archive_uncompressed_bytes": 1024 * 1024,
+            "max_archive_depth": 1,
+            "yara_enabled": False,
+            "scanner_enabled": False,
+            "scanner_backend": "disabled",
+            "fail_closed_on_scanner_error": False,
+        },
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "member_magic_mismatch"
+
+
 def test_magic_mime_rejects_executable_disguised_as_image(tmp_path):
     disguised = tmp_path / "avatar.png"
     disguised.write_bytes(b"MZ" + b"\x00" * 32)
@@ -295,7 +358,7 @@ def test_scan_uploaded_file_quarantines_infected_clamav_result(tmp_path, monkeyp
         conn.close()
 
 
-def test_scan_uploaded_file_fail_closed_when_clamav_missing(tmp_path, monkeypatch):
+def test_scan_uploaded_file_soft_skips_when_clamav_missing(tmp_path, monkeypatch):
     conn = _conn()
     sample = tmp_path / "note.txt"
     sample.write_text("hello", encoding="utf-8")
@@ -312,9 +375,9 @@ def test_scan_uploaded_file_fail_closed_when_clamav_missing(tmp_path, monkeypatc
             scan_now=True,
         )
         row = conn.execute("SELECT scan_status, risk_level FROM uploaded_files WHERE id=?", (result["file_id"],)).fetchone()
-        assert result["scan_status"] == "quarantined"
-        assert row["scan_status"] == "quarantined"
-        assert row["risk_level"] == "high"
+        assert result["scan_status"] == "not_required"
+        assert row["scan_status"] == "not_required"
+        assert row["risk_level"] == "low"
     finally:
         conn.close()
 

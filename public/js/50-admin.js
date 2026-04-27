@@ -514,17 +514,23 @@ const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "scanner_enabled",
   "fail_closed_on_scanner_error",
   "quarantine_on_infected",
-  "validate_magic_mime"
+  "validate_magic_mime",
+  "deep_archive_scan_enabled",
+  "office_macro_scan_enabled",
+  "yara_enabled"
 ];
 const CLOUD_DRIVE_POLICY_INT_FIELDS = [
   "scanner_timeout_seconds",
+  "max_archive_depth",
   "max_archive_files",
   "max_archive_uncompressed_bytes",
   "max_daily_downloads"
 ];
 const CLOUD_DRIVE_POLICY_TEXT_FIELDS = [
   "scanner_backend",
-  "scanner_command"
+  "scanner_command",
+  "yara_command",
+  "yara_rules_path"
 ];
 
 function cloudDrivePolicyInputId(key) {

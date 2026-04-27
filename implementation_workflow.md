@@ -160,6 +160,7 @@
 - [x] 本地 ClamAV 掃描抽象層：magic-byte / zip safety / clamav result 寫入 `file_scan_results`
 - [x] root 可配置掃描器：啟用、backend、命令路徑、逾時、fail-closed、quarantine、MIME 檢查
 - [x] 本地掃描對應測試：upload security `15 passed`
+- [x] 軟需求防毒補強：Office macro detection / ZIP 遞迴逐檔檢查 / 可選 YARA / 高風險下載二次確認
 - [x] Cloud Drive 附件 schema：`cloud_file_refs` / `file_access_grants` / `announcement_attachment_requests`
 - [x] Cloud Drive 上傳 / 既有檔案附加 / 下載權限 API
 - [x] 公告附件 request + root approve/reject，核准後轉 root-owned 管理層文件

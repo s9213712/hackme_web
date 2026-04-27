@@ -302,6 +302,28 @@
       font-size: .73rem;
     }
 
+    .drive-file-list {
+      display: grid;
+      gap: .55rem;
+    }
+
+    .drive-file-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      padding: .65rem .75rem;
+      background: rgba(255,255,255,.035);
+    }
+
+    .drive-file-row strong {
+      color: var(--text);
+      font-size: .84rem;
+      word-break: break-all;
+    }
+
     /* ── Password field with toggle ──────────────────────── */
     .pw-wrap {
       position: relative;

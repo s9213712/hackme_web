@@ -63,17 +63,102 @@ function renderDriveDashboard(payload) {
   renderDriveGroupedStats("drive-mode-summary", quota.by_privacy_mode, "尚無隱私模式統計");
 }
 
+function driveFileNeedsWarning(file) {
+  const risk = file && file.risk_level;
+  const status = file && file.scan_status;
+  return ["high", "blocked", "unknown_encrypted"].includes(risk) || ["infected", "quarantined", "failed", "unknown_encrypted"].includes(status);
+}
+
+function renderDriveFiles(files) {
+  const list = $("drive-file-list");
+  if (!list) return;
+  if (!Array.isArray(files) || !files.length) {
+    list.innerHTML = `<div class="drive-empty">尚無雲端檔案</div>`;
+    return;
+  }
+  list.innerHTML = files.map((file) => {
+    const name = file.original_filename_plain_for_public || file.id || "download.bin";
+    const warn = driveFileNeedsWarning(file);
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(name)}</strong>
+          <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(file.privacy_mode || "-")} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}</div>
+        </div>
+        <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(file.id)}', ${warn ? "true" : "false"})">下載</button>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadDriveFiles(csrf) {
+  const list = $("drive-file-list");
+  if (!list) return;
+  const res = await fetch(API + "/cloud-drive/files", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    list.innerHTML = `<div class="drive-empty">${sanitize(json.msg || "檔案列表讀取失敗")}</div>`;
+    return;
+  }
+  renderDriveFiles(json.files || []);
+}
+
+async function downloadDriveFile(fileId, likelyHighRisk) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const doFetch = (confirmed) => fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/download${confirmed ? "?confirm_high_risk=1" : ""}`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  let res = await doFetch(false);
+  if (res.status === 409 || likelyHighRisk) {
+    let warningText = "此檔案可能高風險、未完整掃描或為 E2EE 密文。請確認你信任來源後再下載。";
+    if (res.status === 409) {
+      const json = await res.json().catch(() => ({}));
+      warningText = json.msg || warningText;
+    }
+    if (!window.confirm(warningText)) return;
+    res = await doFetch(true);
+  }
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    alert(json.msg || "下載失敗");
+    return;
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const name = match ? match[1] : "download.bin";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function loadDriveDashboard() {
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
   const msg = $("drive-msg");
   try {
-    const res = await fetch(API + "/files/security-policy", { credentials: "same-origin" });
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/files/security-policy", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
     const json = await res.json().catch(() => ({}));
     if (!json.ok) {
       if (msg) flash(msg, json.msg || "雲端硬碟狀態讀取失敗", false);
       return;
     }
     renderDriveDashboard(json);
+    await loadDriveFiles(csrf);
     if (msg) msg.className = "msg";
   } catch (err) {
     if (msg) flash(msg, "雲端硬碟狀態讀取失敗", false);

@@ -276,6 +276,10 @@ def test_e2ee_share_and_revoke_controls_download_grant(tmp_path):
 
     actor_box["actor"] = _actor(2, "bob")
     download = client.get(f"/api/files/{file_id}/download")
+    assert download.status_code == 409
+    assert download.get_json()["requires_confirmation"] is True
+
+    download = client.get(f"/api/files/{file_id}/download?confirm_high_risk=1")
     assert download.status_code == 200
     assert download.data == b"ciphertext"
 
