@@ -147,6 +147,61 @@ def _announcement_active(db_path, announcement_id):
     return active
 
 
+def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    boards = client.get("/api/community/boards").get_json()["boards"]
+    board = next(item for item in boards if item["id"])
+
+    assert board["slug"].startswith("board-")
+    assert board["visibility"] == "public"
+    assert board["sort_order"] == 100
+    assert board["is_active"] is True
+    assert board["last_activity_at"]
+
+
+def test_manager_can_update_board_visibility_and_inactive_blocks_users(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    update = client.put(
+        f"/api/community/boards/{board_id}",
+        json={"visibility": "private", "is_active": False, "sort_order": 5},
+    )
+    assert update.status_code == 200
+    assert update.get_json()["ok"] is True
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    listed = client.get("/api/community/boards").get_json()["boards"]
+    assert all(item["id"] != board_id for item in listed)
+    blocked = client.get(f"/api/community/boards/{board_id}/threads")
+    assert blocked.status_code == 403
+
+
+def test_non_manager_cannot_update_board(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.put(f"/api/community/boards/{board_id}", json={"visibility": "private"})
+
+    assert res.status_code == 403
+    assert res.get_json()["ok"] is False
+
+
 def test_manager_can_create_category_and_assign_board(tmp_path):
     db_path = tmp_path / "community.db"
     conn = sqlite3.connect(db_path)

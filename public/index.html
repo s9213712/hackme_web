@@ -214,6 +214,20 @@
               <label>版規</label>
               <textarea id="community-board-rules" rows="4" maxlength="2000" placeholder="例如：禁止人身攻擊、禁止外流個資、禁止洗版"></textarea>
             </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>可見性</label>
+                <select id="community-board-visibility">
+                  <option value="public">公開</option>
+                  <option value="unlisted">不列入公開列表</option>
+                  <option value="private">私人</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>排序</label>
+                <input type="number" id="community-board-sort" min="0" max="9999" value="100" />
+              </div>
+            </div>
             <button class="btn btn-primary" id="community-board-request-btn" type="button">送出申請</button>
             <div id="community-board-request-msg" class="msg"></div>
           </div>

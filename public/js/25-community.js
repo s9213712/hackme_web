@@ -21,6 +21,13 @@ function communityStatusLabel(status) {
   return status || "未知";
 }
 
+function communityVisibilityLabel(visibility) {
+  if (visibility === "public") return "公開";
+  if (visibility === "unlisted") return "不公開列表";
+  if (visibility === "private") return "私人";
+  return visibility || "公開";
+}
+
 function canManageCommunity() {
   return currentRole === "manager" || currentRole === "super_admin";
 }
@@ -169,7 +176,7 @@ function renderCommunityBoards() {
         <strong>${sanitize(board.title || "")}</strong>
         <span class="community-badge ${sanitize(board.status || "")}">${communityStatusLabel(board.status)}</span>
       </div>
-      <div class="community-meta">分類：${sanitize(board.category?.name || "未分類")} · 版主：${sanitize(board.owner_username || "")}</div>
+      <div class="community-meta">分類：${sanitize(board.category?.name || "未分類")} · 版主：${sanitize(board.owner_username || "")} · ${communityVisibilityLabel(board.visibility)}${board.is_active === false ? " · 停用" : ""}</div>
       <div class="community-body">${sanitize(board.description || "")}</div>
       <div class="community-meta">主題 ${board.thread_count || 0} · 留言 ${board.post_count || 0}</div>
     </button>
@@ -192,7 +199,7 @@ function renderCommunityThreads(board) {
   if (heading) heading.textContent = board ? board.title : "請先選擇討論區";
   if (meta) {
     meta.textContent = board
-      ? `${board.category?.name || "未分類"} · ${board.owner_username || "-"} · ${communityStatusLabel(board.status)}${board.review_note ? ` · ${board.review_note}` : ""}`
+      ? `${board.category?.name || "未分類"} · ${board.owner_username || "-"} · ${communityStatusLabel(board.status)} · ${communityVisibilityLabel(board.visibility)}${board.is_active === false ? " · 停用" : ""}${board.review_note ? ` · ${board.review_note}` : ""}`
       : "";
   }
   if (rulesView) {
@@ -403,7 +410,9 @@ async function requestCommunityBoard() {
       category_id: $("community-board-category")?.value || null,
       title: $("community-board-title")?.value || "",
       description: $("community-board-description")?.value || "",
-      rules: $("community-board-rules")?.value || ""
+      rules: $("community-board-rules")?.value || "",
+      visibility: $("community-board-visibility")?.value || "public",
+      sort_order: $("community-board-sort")?.value || 100
     })
   });
   const json = await res.json().catch(() => ({}));
@@ -412,6 +421,8 @@ async function requestCommunityBoard() {
     if ($("community-board-title")) $("community-board-title").value = "";
     if ($("community-board-description")) $("community-board-description").value = "";
     if ($("community-board-rules")) $("community-board-rules").value = "";
+    if ($("community-board-visibility")) $("community-board-visibility").value = "public";
+    if ($("community-board-sort")) $("community-board-sort").value = "100";
     await loadCommunityBoards();
     if (currentRole === "manager" || currentRole === "super_admin") await loadCommunityBoardReviews();
   }

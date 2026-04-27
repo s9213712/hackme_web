@@ -103,7 +103,7 @@
 ## Phase 7：論壇核心功能
 
 - [x] forum_categories schema
-- [ ] forum_boards schema 整理
+- [x] forum_boards schema 整理
 - [ ] posts/comments CRUD 與 soft delete
 - [ ] board_moderators 與版主權限
 - [ ] newbie 發文 pending_review
@@ -111,6 +111,7 @@
 - [ ] 置頂 / 鎖文 / 精華
 - [ ] view_count 15 分鐘去重
 - [x] forum_categories 對應測試：社群測試 `8 passed`
+- [x] forum_boards schema 對應測試：社群測試 `11 passed`
 - [ ] 對應測試
 
 ## Phase 8：UI 架構重構
