@@ -2,6 +2,8 @@ import re
 from datetime import datetime, timedelta
 from flask import request
 
+from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
+
 
 def register_user_routes(app, deps):
     ACCOUNT_STATUSES = deps["ACCOUNT_STATUSES"]
@@ -184,8 +186,12 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"權限不足"}), 403
             conn = get_db()
             try:
+                ensure_member_level_user_columns(conn)
                 rows = conn.execute(
-                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count "
+                    "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
+                    "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
+                    "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
+                    "password_strength_score, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
                 data = [user_public_payload(r, include_sensitive=False) for r in rows]
@@ -272,9 +278,9 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"帳號已存在"}), 409
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, password_strength_score, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), role, status, member_level, strength["score"], now, now)
+                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), role, status, member_level, member_level, member_level, strength["score"], now, now)
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
@@ -302,8 +308,12 @@ def register_user_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_member_level_user_columns(conn)
             target = conn.execute(
-                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
+                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, "
+                "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
+                "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
+                "password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -330,8 +340,12 @@ def register_user_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_member_level_user_columns(conn)
             target = conn.execute(
-                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
+                "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, "
+                "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
+                "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
+                "password_strength_score, blocked_until, violation_count FROM users WHERE id=?",
                 (user_id,)
             ).fetchone()
             if not target:
@@ -356,6 +370,7 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
             revoke_sessions_needed = False
+            level_changed = False
             updates = []
             params = []
             if "nickname" in data:
@@ -392,18 +407,27 @@ def register_user_routes(app, deps):
                 params.append(val)
                 if val != "active":
                     revoke_sessions_needed = True
-            if "member_level" in data:
+            if "member_level" in data or "base_level" in data or "sanction_status" in data or "sanction_until" in data:
                 if not is_feature_enabled("feature_identity_governance_enabled"):
                     return json_resp({"ok":False,"msg":"身份治理功能目前已關閉"}), 503
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更會員等級"}), 403
                 if role_rank(actor_role) < role_rank("super_admin"):
                     return json_resp({"ok":False,"msg":"只有最高權限可變更會員等級"}), 403
-                val = normalize_text(data["member_level"])
-                if val not in MEMBER_LEVELS:
-                    return json_resp({"ok":False,"msg":"會員等級錯誤"}), 400
-                updates.append("member_level=?")
-                params.append(val)
+                val = normalize_text(data.get("base_level") or data.get("member_level") or target["base_level"] or target["member_level"])
+                level_user, err = apply_member_level_change(
+                    conn,
+                    user_id,
+                    actor=actor["username"],
+                    source="root" if actor["username"] == "root" else "admin",
+                    base_level=val,
+                    sanction_status=normalize_text(data.get("sanction_status")) if "sanction_status" in data else None,
+                    sanction_until=normalize_text(data.get("sanction_until")) if data.get("sanction_until") else None,
+                    reason=normalize_text(data.get("level_update_reason") or data.get("reason") or "admin user update"),
+                )
+                if err:
+                    return json_resp({"ok":False,"msg":err}), 400
+                level_changed = True
             if "role" in data:
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403
@@ -465,7 +489,7 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"不允許變更帳號名稱"}), 400
 
             pw_payload = "password" in data and isinstance(data["password"], str) and data["password"]
-            if not updates and not pw_payload:
+            if not updates and not pw_payload and not level_changed:
                 return json_resp({"ok":False,"msg":"未提供可更新欄位"}), 400
 
             if pw_payload and not updates:
@@ -476,6 +500,8 @@ def register_user_routes(app, deps):
                 params.append(user_id)
                 sql = "UPDATE users SET " + ", ".join(updates) + " WHERE id=?"
                 conn.execute(sql, params)
+                conn.commit()
+            elif level_changed:
                 conn.commit()
             if revoke_sessions_needed:
                 revoke_user_sessions(user_id)

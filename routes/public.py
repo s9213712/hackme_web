@@ -239,8 +239,8 @@ def register_public_routes(app, deps):
 
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, password_strength_score, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', ?, ?, ?)",
+                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', 'newbie', 'newbie', 'newbie', ?, ?, ?)",
                 (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), strength["score"], now, now)
             )
             conn.execute(
@@ -432,6 +432,13 @@ def register_public_routes(app, deps):
             "role": role,
             "role_label": ROLE_LABEL.get(role, role),
             "status": ctx["status"],
+            "base_level": dict(ctx).get("base_level") or dict(ctx).get("member_level") or "normal",
+            "effective_level": dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal",
+            "trust_score": dict(ctx).get("trust_score") or 0,
+            "reputation": dict(ctx).get("reputation") or 0,
+            "violation_score": dict(ctx).get("violation_score") or dict(ctx).get("violation_count") or 0,
+            "sanction_status": dict(ctx).get("sanction_status") or "none",
+            "sanction_until": dict(ctx).get("sanction_until"),
             "nickname": decrypt_field(ctx["nickname"]),
             "birthdate": decrypt_field(ctx["birthdate"]),
             "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,

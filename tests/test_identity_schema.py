@@ -55,6 +55,6 @@ def test_permission_helpers_check_role_status_and_member_level():
     assert require_role(manager, "manager")[0] is True
     assert require_role(manager, "super_admin") == (False, "權限不足", 403)
     assert require_role(inactive, "user") == (False, "帳號狀態不可執行此操作", 403)
-    assert require_member_action(restricted, "community_thread_create") == (False, "會員等級受限，暫停發文、留言與聊天", 403)
+    assert require_member_action(restricted, "community_thread_create") == (False, "會員等級受限，僅可閱讀不可互動", 403)
     assert require_member_action(restricted, "community_reaction")[0] is True
-    assert require_member_action(suspended, "community_reaction") == (False, "會員等級已停權，暫停互動功能", 403)
+    assert require_member_action(suspended, "community_reaction") == (False, "會員等級已停權，僅可登入、查看通知與申訴", 403)

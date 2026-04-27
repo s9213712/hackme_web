@@ -14,9 +14,7 @@ def register_community_routes(app, deps):
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
-    get_member_level_rule = deps.get("get_member_level_rule")
     get_ua = deps["get_ua"]
-    is_feature_enabled = deps.get("is_feature_enabled", lambda key: False)
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
     parse_positive_int = deps["parse_positive_int"]
@@ -153,11 +151,6 @@ def register_community_routes(app, deps):
         if can_manage_community(actor):
             return True
         return actor["id"] in (author_user_id, owner_user_id)
-
-    def member_rule_for(conn, actor):
-        if not get_member_level_rule or not is_feature_enabled("feature_member_governance_enabled"):
-            return None
-        return get_member_level_rule(conn, actor.get("member_level") or "normal")
 
     def ensure_auto_hidden_post_report(conn, post_id, actor_id, dislike_count, auto_hide_threshold):
         post = conn.execute(
@@ -492,7 +485,7 @@ def register_community_routes(app, deps):
             ok, msg, status_code = require_member_action(
                 actor,
                 "community_thread_create",
-                member_rule_for(conn, actor),
+                conn=conn,
             )
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), status_code
@@ -711,7 +704,7 @@ def register_community_routes(app, deps):
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            ok, msg, status_code = require_member_action(actor, "community_reply", member_rule_for(conn, actor))
+            ok, msg, status_code = require_member_action(actor, "community_reply", conn=conn)
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), status_code
             thread = conn.execute(
@@ -756,7 +749,7 @@ def register_community_routes(app, deps):
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            ok, msg, status_code = require_member_action(actor, "community_reaction", member_rule_for(conn, actor))
+            ok, msg, status_code = require_member_action(actor, "community_reaction", conn=conn)
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), status_code
             post = conn.execute(

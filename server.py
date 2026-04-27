@@ -498,7 +498,10 @@ def get_user_by_username(username):
     conn = get_db()
     try:
         return conn.execute(
-            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, trust_score, points, reputation, password_strength_score, blocked_until, violation_count, chat_violation_warned "
+            "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
+            "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
+            "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
+            "password_strength_score, blocked_until, violation_count, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -518,9 +521,17 @@ def user_public_payload(row, *, include_sensitive=False):
         "status": data.get("status"),
         "role": data.get("role"),
         "member_level": data.get("member_level") or "normal",
+        "base_level": data.get("base_level") or data.get("member_level") or "normal",
+        "effective_level": data.get("effective_level") or data.get("member_level") or "normal",
         "trust_score": data.get("trust_score") or 0,
         "points": data.get("points") or 0,
         "reputation": data.get("reputation") or 0,
+        "violation_score": data.get("violation_score") or data.get("violation_count") or 0,
+        "sanction_status": data.get("sanction_status") or "none",
+        "sanction_until": data.get("sanction_until"),
+        "level_updated_at": data.get("level_updated_at"),
+        "level_updated_by": data.get("level_updated_by"),
+        "level_update_reason": data.get("level_update_reason"),
         "password_strength_score": data.get("password_strength_score") or 0,
         "role_label": ROLE_LABEL.get(data.get("role"), data.get("role")),
         "blocked_until": data.get("blocked_until"),

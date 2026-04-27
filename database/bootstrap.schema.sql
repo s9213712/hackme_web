@@ -81,14 +81,41 @@ CREATE TABLE IF NOT EXISTS member_level_rules (
     can_comment            INTEGER NOT NULL DEFAULT 1,
     can_send_dm            INTEGER NOT NULL DEFAULT 1,
     can_upload_attachment  INTEGER NOT NULL DEFAULT 0,
+    can_report             INTEGER NOT NULL DEFAULT 1,
     daily_post_limit       INTEGER NOT NULL DEFAULT 10,
     daily_dm_limit         INTEGER NOT NULL DEFAULT 20,
+    post_rate_limit_per_hour INTEGER NOT NULL DEFAULT 10,
+    comment_rate_limit_per_hour INTEGER NOT NULL DEFAULT 40,
+    dm_rate_limit_per_day  INTEGER NOT NULL DEFAULT 20,
+    upload_rate_limit_per_day INTEGER NOT NULL DEFAULT 0,
     max_attachment_size_mb INTEGER NOT NULL DEFAULT 0,
+    attachment_quota_mb    INTEGER NOT NULL DEFAULT 0,
     requires_moderation    INTEGER NOT NULL DEFAULT 0,
+    report_weight          INTEGER NOT NULL DEFAULT 1,
+    min_account_age_days   INTEGER NOT NULL DEFAULT 0,
+    min_approved_content_count INTEGER NOT NULL DEFAULT 0,
     min_points             INTEGER NOT NULL DEFAULT 0,
     min_trust_score        INTEGER NOT NULL DEFAULT 0,
+    min_reputation         INTEGER NOT NULL DEFAULT 0,
+    max_violation_score    INTEGER NOT NULL DEFAULT 0,
+    downgrade_violation_threshold INTEGER NOT NULL DEFAULT 0,
+    require_admin_approval INTEGER NOT NULL DEFAULT 0,
+    require_root_approval  INTEGER NOT NULL DEFAULT 0,
     created_at             TEXT NOT NULL,
     updated_at             TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS member_level_audit (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor               TEXT NOT NULL,
+    target_user         TEXT NOT NULL,
+    old_base_level      TEXT,
+    new_base_level      TEXT,
+    old_effective_level TEXT,
+    new_effective_level TEXT,
+    reason              TEXT NOT NULL,
+    source              TEXT NOT NULL,
+    created_at          TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS moderation_proposals (
@@ -228,9 +255,17 @@ CREATE TABLE IF NOT EXISTS users (
     -- Account status
     status     TEXT    NOT NULL DEFAULT 'active',
     member_level TEXT  NOT NULL DEFAULT 'normal',
+    base_level TEXT NOT NULL DEFAULT 'normal',
+    effective_level TEXT NOT NULL DEFAULT 'normal',
     trust_score INTEGER NOT NULL DEFAULT 0,
     points INTEGER NOT NULL DEFAULT 0,
     reputation INTEGER NOT NULL DEFAULT 0,
+    violation_score INTEGER NOT NULL DEFAULT 0,
+    sanction_status TEXT NOT NULL DEFAULT 'none',
+    sanction_until TEXT,
+    level_updated_at TEXT,
+    level_updated_by TEXT,
+    level_update_reason TEXT,
     email_verified INTEGER NOT NULL DEFAULT 0,
     two_factor_enabled INTEGER NOT NULL DEFAULT 0,
     failed_login_count INTEGER NOT NULL DEFAULT 0,
@@ -295,6 +330,7 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_time   ON login_attempts(attempted
 CREATE INDEX IF NOT EXISTS idx_login_attempts_user   ON login_attempts(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_member_level_rules_level ON member_level_rules(level);
+CREATE INDEX IF NOT EXISTS idx_member_level_audit_target ON member_level_audit(target_user, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_moderation_proposals_status ON moderation_proposals(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_moderation_proposals_target ON moderation_proposals(target_user_id);

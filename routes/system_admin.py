@@ -10,6 +10,7 @@ from flask import request
 from services.member_levels import (
     DEFAULT_MEMBER_LEVEL_RULES,
     ensure_member_level_rules_schema,
+    serialize_member_level_rule,
     update_member_level_rule,
 )
 
@@ -198,9 +199,7 @@ def register_system_admin_routes(app, deps):
             for level in DEFAULT_MEMBER_LEVEL_RULES:
                 row = by_level.get(level)
                 if row:
-                    for key in ("can_post", "can_comment", "can_send_dm", "can_upload_attachment", "requires_moderation"):
-                        row[key] = bool(row.get(key))
-                    rules.append(row)
+                    rules.append(serialize_member_level_rule(row))
             return json_resp({"ok":True,"rules":rules})
         finally:
             conn.close()

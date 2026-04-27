@@ -108,7 +108,7 @@ def test_moderation_proposal_vote_and_execute(tmp_path):
     action = conn.execute("SELECT action_type, target_type, target_id FROM moderation_actions LIMIT 1").fetchone()
     conn.close()
 
-    assert row == ("suspended", "suspended")
+    assert row == ("active", "suspended")
     assert proposal_status == "executed"
     assert action == ("suspend", "user", 4)
     assert revoked == [4]
@@ -134,7 +134,7 @@ def test_root_override_executes_pending_proposal(tmp_path):
     conn = sqlite3.connect(db_path)
     row = conn.execute("SELECT status, member_level FROM users WHERE id=4").fetchone()
     conn.close()
-    assert row == ("limited", "restricted")
+    assert row == ("active", "restricted")
 
 
 def test_mod_notes_and_reputation_account_api(tmp_path):

@@ -26,6 +26,8 @@ ACCOUNT_STATUSES = {"active", "inactive", "pending", "rejected", "limited", "mut
 PHASE1_USER_COLUMNS = (
     ("role", "TEXT NOT NULL DEFAULT 'user'"),
     ("member_level", "TEXT NOT NULL DEFAULT 'normal'"),
+    ("base_level", "TEXT NOT NULL DEFAULT 'normal'"),
+    ("effective_level", "TEXT NOT NULL DEFAULT 'normal'"),
     ("nickname", "TEXT"),
     ("real_name", "TEXT"),
     ("birthdate", "TEXT"),
@@ -37,6 +39,12 @@ PHASE1_USER_COLUMNS = (
     ("trust_score", "INTEGER NOT NULL DEFAULT 0"),
     ("points", "INTEGER NOT NULL DEFAULT 0"),
     ("reputation", "INTEGER NOT NULL DEFAULT 0"),
+    ("violation_score", "INTEGER NOT NULL DEFAULT 0"),
+    ("sanction_status", "TEXT NOT NULL DEFAULT 'none'"),
+    ("sanction_until", "TEXT"),
+    ("level_updated_at", "TEXT"),
+    ("level_updated_by", "TEXT"),
+    ("level_update_reason", "TEXT"),
     ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
     ("two_factor_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ("failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
@@ -62,4 +70,7 @@ def ensure_user_identity_columns(conn):
             conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
     conn.execute("UPDATE users SET role='user' WHERE role IS NULL OR role=''")
     conn.execute("UPDATE users SET member_level='normal' WHERE member_level IS NULL OR member_level=''")
+    conn.execute("UPDATE users SET base_level=member_level WHERE base_level IS NULL OR base_level=''")
+    conn.execute("UPDATE users SET effective_level=base_level WHERE effective_level IS NULL OR effective_level=''")
+    conn.execute("UPDATE users SET sanction_status='none' WHERE sanction_status IS NULL OR sanction_status=''")
     conn.execute("UPDATE users SET status='active' WHERE status IS NULL OR status=''")

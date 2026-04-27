@@ -9,6 +9,7 @@ from services.governance_records import (
     ensure_governance_records_schema,
     record_moderation_action,
 )
+from services.member_levels import apply_member_level_change
 from services.moderation_proposals import (
     VOTES,
     cast_action_value,
@@ -143,16 +144,39 @@ def register_moderation_routes(app, deps):
             conn.execute("UPDATE users SET status='muted', updated_at=? WHERE id=?", (now, target["id"]))
             revoke_target_sessions = True
         elif action_type == "restrict":
-            conn.execute("UPDATE users SET status='limited', member_level='restricted', updated_at=? WHERE id=?", (now, target["id"]))
+            apply_member_level_change(
+                conn,
+                target["id"],
+                actor=actor["username"],
+                source="vote" if actor["username"] != "root" else "root",
+                sanction_status="restricted",
+                sanction_until=proposal.get("action_value") if proposal.get("action_value") else None,
+                reason=proposal["reason"],
+            )
             revoke_target_sessions = True
         elif action_type == "suspend":
-            conn.execute("UPDATE users SET status='suspended', member_level='suspended', updated_at=? WHERE id=?", (now, target["id"]))
+            apply_member_level_change(
+                conn,
+                target["id"],
+                actor=actor["username"],
+                source="vote" if actor["username"] != "root" else "root",
+                sanction_status="suspended",
+                sanction_until=proposal.get("action_value") if proposal.get("action_value") else None,
+                reason=proposal["reason"],
+            )
             revoke_target_sessions = True
         elif action_type == "delete":
             conn.execute("UPDATE users SET status='deleted', deleted_at=?, updated_at=? WHERE id=?", (now, now, target["id"]))
             revoke_target_sessions = True
         elif action_type == "downgrade_level":
-            conn.execute("UPDATE users SET member_level=?, updated_at=? WHERE id=?", (action_value or "restricted", now, target["id"]))
+            apply_member_level_change(
+                conn,
+                target["id"],
+                actor=actor["username"],
+                source="vote" if actor["username"] != "root" else "root",
+                base_level=action_value or "restricted",
+                reason=proposal["reason"],
+            )
         elif action_type == "force_password_reset":
             conn.execute("UPDATE users SET must_change_password=1, updated_at=? WHERE id=?", (now, target["id"]))
             revoke_target_sessions = True

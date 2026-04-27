@@ -1,32 +1,47 @@
 from services.identity import role_rank
+from services.member_levels import get_member_level_rule, refresh_user_effective_level
 
 ACTIVE_STATUS = "active"
-RESTRICTED_WRITE_ACTIONS = {
-    "chat_dm_create",
-    "chat_send",
-    "community_thread_create",
-    "community_reply",
-}
 ACTION_RULE_FIELDS = {
     "chat_dm_create": "can_send_dm",
     "chat_send": "can_comment",
     "community_thread_create": "can_post",
     "community_reply": "can_comment",
+    "community_reaction": None,
+    "report_create": "can_report",
+    "upload_attachment": "can_upload_attachment",
+}
+ACTION_RATE_LIMIT_FIELDS = {
+    "community_thread_create": "post_rate_limit_per_hour",
+    "community_reply": "comment_rate_limit_per_hour",
+    "chat_send": "comment_rate_limit_per_hour",
+    "chat_dm_create": "dm_rate_limit_per_day",
+    "upload_attachment": "upload_rate_limit_per_day",
 }
 
 
+def _actor_dict(actor):
+    return dict(actor or {})
+
+
 def actor_role(actor):
-    if actor and actor.get("username") == "root":
+    data = _actor_dict(actor)
+    if data.get("username") == "root":
         return "super_admin"
-    return (actor or {}).get("role") or "user"
+    return data.get("role") or "user"
 
 
 def actor_status(actor):
-    return (actor or {}).get("status") or ACTIVE_STATUS
+    return _actor_dict(actor).get("status") or ACTIVE_STATUS
 
 
-def actor_member_level(actor):
-    return (actor or {}).get("member_level") or "normal"
+def actor_base_level(actor):
+    data = _actor_dict(actor)
+    return data.get("base_level") or data.get("member_level") or "normal"
+
+
+def actor_effective_level(actor):
+    return _actor_dict(actor).get("effective_level") or actor_base_level(actor)
 
 
 def require_active_actor(actor):
@@ -46,17 +61,83 @@ def require_role(actor, min_role):
     return True, "", 200
 
 
-def require_member_action(actor, action, rule=None):
+def get_permission_rule(conn, actor):
+    data = _actor_dict(actor)
+    has_explicit_sanction_level = (
+        not data.get("base_level")
+        and not data.get("effective_level")
+        and data.get("member_level") in {"restricted", "suspended"}
+    )
+    if conn is not None and data.get("id") and not has_explicit_sanction_level:
+        refreshed = refresh_user_effective_level(conn, data["id"], reason="permission check")
+        if refreshed:
+            actor = {**data, **refreshed}
+    return get_member_level_rule(conn, actor_effective_level(actor)) if conn is not None else None
+
+
+def _provided_or_loaded_rule(actor, rule=None, conn=None):
+    if rule:
+        return rule
+    if conn is None:
+        return None
+    return get_permission_rule(conn, actor)
+
+
+def _rule_allows(actor, permission, rule=None, conn=None, target=None):
+    if actor_effective_level(actor) == "suspended":
+        return False
+    if permission is None:
+        return True
+    loaded_rule = _provided_or_loaded_rule(actor, rule=rule, conn=conn)
+    if not loaded_rule:
+        return actor_effective_level(actor) not in {"restricted", "suspended"}
+    return bool(loaded_rule.get(permission))
+
+
+def can_post(user, conn=None):
+    return _rule_allows(user, "can_post", conn=conn)
+
+
+def can_comment(user, conn=None):
+    return _rule_allows(user, "can_comment", conn=conn)
+
+
+def can_upload(user, conn=None):
+    return _rule_allows(user, "can_upload_attachment", conn=conn)
+
+
+def can_dm(user, target=None, conn=None):
+    user_data = _actor_dict(user)
+    target_data = _actor_dict(target) if target else None
+    if target_data and target_data.get("id") == user_data.get("id"):
+        return False
+    return _rule_allows(user, "can_send_dm", conn=conn, target=target)
+
+
+def can_report(user, conn=None):
+    return _rule_allows(user, "can_report", conn=conn)
+
+
+def get_rate_limit(user, action, conn=None, rule=None):
+    loaded_rule = _provided_or_loaded_rule(user, rule=rule, conn=conn)
+    if not loaded_rule:
+        return None
+    field = ACTION_RATE_LIMIT_FIELDS.get(action)
+    if not field:
+        return None
+    return int(loaded_rule.get(field) or 0)
+
+
+def require_member_action(actor, action, rule=None, conn=None, target=None):
     ok, msg, status = require_active_actor(actor)
     if not ok:
         return ok, msg, status
-    member_level = actor_member_level(actor)
-    if member_level == "suspended":
-        return False, "會員等級已停權，暫停互動功能", 403
-    if member_level == "restricted" and action in RESTRICTED_WRITE_ACTIONS:
-        return False, "會員等級受限，暫停發文、留言與聊天", 403
-    if rule:
-        rule_field = ACTION_RULE_FIELDS.get(action)
-        if rule_field and not bool(rule.get(rule_field)):
-            return False, "會員等級規則不允許此操作", 403
+    effective_level = actor_effective_level(actor)
+    if effective_level == "suspended":
+        return False, "會員等級已停權，僅可登入、查看通知與申訴", 403
+    rule_field = ACTION_RULE_FIELDS.get(action)
+    if not _rule_allows(actor, rule_field, rule=rule, conn=conn, target=target):
+        if effective_level == "restricted":
+            return False, "會員等級受限，僅可閱讀不可互動", 403
+        return False, "會員等級規則不允許此操作", 403
     return True, "", 200

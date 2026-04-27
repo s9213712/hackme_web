@@ -42,9 +42,7 @@ def register_chat_routes(app, deps):
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
-    get_member_level_rule = deps.get("get_member_level_rule")
     get_request_csrf_token = deps["get_request_csrf_token"]
-    is_feature_enabled = deps.get("is_feature_enabled", lambda key: False)
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
     parse_positive_int = deps["parse_positive_int"]
@@ -52,11 +50,6 @@ def register_chat_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
     verify_csrf_token = deps["verify_csrf_token"]
-
-    def member_rule_for(conn, actor):
-        if not get_member_level_rule or not is_feature_enabled("feature_member_governance_enabled"):
-            return None
-        return get_member_level_rule(conn, actor.get("member_level") or "normal")
 
     @app.route("/api/chat/rooms", methods=["GET", "POST"], strict_slashes=False)
     @require_csrf_safe
@@ -121,7 +114,7 @@ def register_chat_routes(app, deps):
             conn.execute("BEGIN")
             target_row = None
             if target_user:
-                ok, msg, status = require_member_action(actor, "chat_dm_create", member_rule_for(conn, actor))
+                ok, msg, status = require_member_action(actor, "chat_dm_create", conn=conn)
                 if not ok:
                     return json_resp({"ok":False,"msg":msg}), status
                 target_row = conn.execute(
@@ -261,7 +254,7 @@ def register_chat_routes(app, deps):
         conn = get_db()
         try:
             if request.method == "POST":
-                ok, msg, status = require_member_action(actor, "chat_send", member_rule_for(conn, actor))
+                ok, msg, status = require_member_action(actor, "chat_send", conn=conn)
                 if not ok:
                     return json_resp({"ok":False,"msg":msg}), status
             ensure_user_official_room_membership(conn, actor["id"])
