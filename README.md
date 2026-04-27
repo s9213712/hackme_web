@@ -490,6 +490,10 @@ Reports and notifications expose these Phase 9 backend APIs:
 - `POST /api/notifications/{id}/read`: mark one notification as read.
 - `POST /api/notifications/read-all`: mark all current-user notifications as read.
 
+The logged-in UI shows a notification center in the success toolbar. It polls
+the notification API, shows an unread badge, and supports single/all read
+actions without relying on WebSocket delivery.
+
 ### Feature Flags and Defaults
 
 Feature flags and operational settings live in DB-backed `system_settings` and

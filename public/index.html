@@ -117,6 +117,20 @@
   </div>
   <div class="success-toolbar">
     <button class="btn" id="self-edit-btn">修改我的資料</button>
+    <div class="notification-center" id="notification-center">
+      <button class="btn notification-toggle" id="notification-toggle" type="button">
+        通知 <span id="notification-badge" class="notification-badge" style="display:none;">0</span>
+      </button>
+      <div class="notification-panel" id="notification-panel" aria-live="polite">
+        <div class="notification-panel-head">
+          <strong>通知中心</strong>
+          <button class="btn" id="notification-read-all" type="button">全部已讀</button>
+        </div>
+        <div id="notification-list" class="notification-list">
+          <p style="color:var(--muted);">尚未載入通知</p>
+        </div>
+      </div>
+    </div>
     <button class="btn" id="logout-btn">登出</button>
   </div>
 
@@ -988,6 +1002,7 @@
 <script src="/js/20-chat.js" defer></script>
 <script src="/js/25-community.js" defer></script>
 <script src="/js/30-appeals.js" defer></script>
+<script src="/js/32-notifications.js" defer></script>
 <script src="/js/35-drive.js" defer></script>
 <script src="/js/40-auth-users.js" defer></script>
 <script src="/js/50-admin.js" defer></script>

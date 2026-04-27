@@ -40,6 +40,8 @@ let serverMeta = {};
 let currentSettingsSection = "security";
 let serverConnectionFailures = 0;
 let serverConnectionTimer = null;
+let notificationPollTimer = null;
+let notificationsOpen = false;
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -623,6 +625,7 @@ function setAuthState(json, showLoginHero = false) {
       loadAdminAppeals();
     }
   }
+  if (typeof startNotificationPoll === "function") startNotificationPoll();
   loadChatRooms();
   if (currentRole !== "super_admin") {
     loadUserAppeals();
@@ -653,6 +656,7 @@ function resetAuthState() {
   editingUserIsSelf = false;
   stopInactivityTimer();
   stopChatPoll();
+  if (typeof stopNotificationPoll === "function") stopNotificationPoll();
   hideUserEditDialog();
   $("success-screen").classList.remove("show");
   const welcomeMsg = $("welcome-msg");

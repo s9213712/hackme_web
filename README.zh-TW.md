@@ -463,6 +463,9 @@ Phase 9 檢舉與通知後端 API：
 - `POST /api/notifications/{id}/read`：將單筆通知標為已讀。
 - `POST /api/notifications/read-all`：將目前使用者所有通知標為已讀。
 
+登入後 UI 會在成功畫面工具列顯示通知中心，定期輪詢通知 API、顯示未讀
+badge，並支援單筆已讀與全部已讀；目前不依賴 WebSocket 即時推送。
+
 ### 功能開關與預設值
 
 功能開關與營運設定存在 DB-backed `system_settings`，root 可在管理 UI

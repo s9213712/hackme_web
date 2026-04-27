@@ -26,6 +26,8 @@ function bindUiEvents() {
   const liBtn       = $("li-btn");
   const regBtn      = $("reg-btn");
   const logoutBtn   = $("logout-btn");
+  const notificationToggle = $("notification-toggle");
+  const notificationReadAll = $("notification-read-all");
   const selfEditBtn = $("self-edit-btn");
   const adminRefresh = $("admin-refresh");
   const adminBulkApproveBtn = $("admin-bulk-approve");
@@ -102,6 +104,8 @@ function bindUiEvents() {
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
+  if (notificationToggle) notificationToggle.addEventListener("click", toggleNotificationPanel);
+  if (notificationReadAll) notificationReadAll.addEventListener("click", markAllNotificationsRead);
   if (selfEditBtn) selfEditBtn.addEventListener("click", () => {
     if (currentUserId) editUser(currentUserId);
   });
@@ -157,6 +161,7 @@ function bindUiEvents() {
     if (e.key === "Escape") {
       hideUserEditDialog();
       hideAdminAddDialog();
+      closeNotificationPanel();
     }
   });
   if (chatInput) chatInput.addEventListener("keydown", (e) => {

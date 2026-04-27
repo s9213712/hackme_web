@@ -200,6 +200,97 @@
       color: var(--muted);
     }
 
+    .notification-center {
+      position: relative;
+      display: inline-flex;
+    }
+
+    .notification-toggle {
+      position: relative;
+      min-width: 82px;
+    }
+
+    .notification-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      margin-left: .35rem;
+      padding: 0 .35rem;
+      border-radius: 999px;
+      background: var(--danger);
+      color: #fff;
+      font-size: .72rem;
+      font-weight: 800;
+    }
+
+    .notification-panel {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: calc(100% + .5rem);
+      width: min(360px, 86vw);
+      max-height: 420px;
+      overflow: hidden;
+      background: rgba(18,18,34,.98);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      z-index: 20;
+    }
+
+    .notification-panel.show {
+      display: block;
+    }
+
+    .notification-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .5rem;
+      padding: .75rem;
+      border-bottom: 1px solid rgba(255,255,255,.09);
+    }
+
+    .notification-list {
+      max-height: 345px;
+      overflow: auto;
+      padding: .35rem .75rem .75rem;
+    }
+
+    .notification-item {
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      padding: .65rem .15rem;
+    }
+
+    .notification-item.unread {
+      border-left: 3px solid var(--accent2);
+      padding-left: .55rem;
+      background: rgba(0,212,170,.06);
+    }
+
+    .notification-title {
+      display: flex;
+      justify-content: space-between;
+      gap: .75rem;
+      font-weight: 700;
+      font-size: .88rem;
+    }
+
+    .notification-body {
+      color: var(--muted);
+      font-size: .78rem;
+      margin-top: .28rem;
+      word-break: break-word;
+    }
+
+    .notification-meta {
+      color: var(--muted);
+      font-size: .68rem;
+      margin-top: .35rem;
+    }
+
     .drive-dashboard-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
