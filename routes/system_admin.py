@@ -9,7 +9,25 @@ from flask import request
 
 
 def register_system_admin_routes(app, deps):
-    globals().update(deps)
+    ANCHOR_DIR = deps["ANCHOR_DIR"]
+    BASE_DIR = deps["BASE_DIR"]
+    CHAT_DIR = deps["CHAT_DIR"]
+    DB_PATH = deps["DB_PATH"]
+    LOG_DIR = deps["LOG_DIR"]
+    SERVER_LOG_PATH = deps["SERVER_LOG_PATH"]
+    activate_emergency_lockdown = deps["activate_emergency_lockdown"]
+    audit = deps["audit"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    get_system_settings = deps["get_system_settings"]
+    is_audit_chain_enabled = deps["is_audit_chain_enabled"]
+    json_resp = deps["json_resp"]
+    require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
+    role_rank = deps["role_rank"]
+    save_settings = deps["save_settings"]
+    verify_audit_integrity = deps["verify_audit_integrity"]
 
     @app.route("/api/admin/health", methods=["GET"])
     @require_csrf_safe
@@ -77,9 +95,8 @@ def register_system_admin_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
-        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if role_rank(actor_role) < role_rank("super_admin"):
-            return json_resp({"ok":False,"msg":"只有最高管理者可查看系統環境"}), 403
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可查看系統環境"}), 403
 
         db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
         log_files = [name for name in os.listdir(LOG_DIR) if os.path.isfile(os.path.join(LOG_DIR, name))] if os.path.isdir(LOG_DIR) else []
@@ -90,13 +107,10 @@ def register_system_admin_routes(app, deps):
             "environment": {
                 "platform": platform.platform(),
                 "python_version": sys.version.split()[0],
-                "base_dir": BASE_DIR,
-                "database_path": DB_PATH,
                 "database_bytes": db_size,
                 "log_files": len(log_files),
                 "chat_files": len(chat_files),
                 "anchor_files": len(anchor_files),
-                "pid": os.getpid(),
             }
         })
 

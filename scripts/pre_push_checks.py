@@ -108,6 +108,9 @@ def start_server(runtime_root, port):
         "HTML_LEARNING_ANCHOR_DIR": str(runtime_root / "anchors"),
         "HTML_LEARNING_HOST": "127.0.0.1",
         "HTML_LEARNING_PORT": str(port),
+        "HTML_LEARNING_ROOT_PASSWORD": "root",
+        "HTML_LEARNING_MANAGER_PASSWORD": "admin",
+        "HTML_LEARNING_TEST_PASSWORD": "test",
         "PYTHONUNBUFFERED": "1",
     })
     for name in ("database", "logs", "chats", "anchors"):

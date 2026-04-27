@@ -39,6 +39,7 @@ from services.auth import (
     json_resp,
     make_csrf_token,
     make_token,
+    revoke_user_sessions,
     require_csrf,
     require_csrf_safe,
     store_csrf_token,
@@ -65,10 +66,12 @@ from services.violations import (
     detect_chat_violation,
     get_latest_violation,
     parse_iso_to_datetime,
+    secure_add_violation,
     verify_violation_integrity,
 )
 from services.security_events import (
     block_ip,
+    check_user_rate_limit,
     clear_failed_logins,
     configure_security_events_service,
     is_ip_blocked,
@@ -117,10 +120,48 @@ os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
 os.makedirs(ANCHOR_DIR, exist_ok=True)
-# ── Hash-chain integrity key (server-side only, not exposed to client) ───────
-# Seed derived from SECRET_KEY so it survives restarts (prevents chain-break on reboot)
+
+
+def _load_or_create_text_secret(env_name, path, *, generator):
+    env_value = os.environ.get(env_name, "").strip()
+    if env_value:
+        return env_value
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = f.read().strip()
+            if value:
+                return value
+        except Exception:
+            pass
+    value = generator()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(value)
+    os.chmod(path, 0o600)
+    return value
+
+
+def _load_or_create_binary_secret(env_name, path, *, generator):
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return env_value.encode("utf-8")
+    if os.path.exists(path):
+        try:
+            with open(path, "rb") as f:
+                value = f.read()
+            if value:
+                return value
+        except Exception:
+            pass
+    value = generator()
+    with open(path, "wb") as f:
+        f.write(value)
+    os.chmod(path, 0o600)
+    return value
+
+
+# ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
 def _get_chain_seed():
-    # Try to read persisted seed
     seed_file = os.path.join(BASE_DIR, ".chain_seed")
     if os.path.exists(seed_file):
         try:
@@ -128,22 +169,26 @@ def _get_chain_seed():
                 return f.read().strip()
         except Exception:
             pass
-    # First run — generate and persist
-    import secrets as _s
-    seed = _s.token_hex(24)
+    seed = secrets.token_hex(24)
     with open(seed_file, "w") as f:
         f.write(seed)
-    os.chmod(seed_file, 0o600)  # readable only by owner
+    os.chmod(seed_file, 0o600)
     return seed
 
 CHAIN_SEED = _get_chain_seed()
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
-SECRET_KEY = os.environ.get("SESSION_SECRET",
-    open(os.path.join(BASE_DIR, ".fkey")).read() if os.path.exists(os.path.join(BASE_DIR, ".fkey")) else secrets.token_hex(32)
+SECRET_KEY = _load_or_create_text_secret(
+    "SESSION_SECRET",
+    os.path.join(BASE_DIR, ".fkey"),
+    generator=lambda: secrets.token_hex(32),
 )
 
-_INTEGRITY_KEY = SECRET_KEY.encode()  # HMAC 金鑰（在 SECRET_KEY 之後定義）
+_INTEGRITY_KEY = _load_or_create_binary_secret(
+    "INTEGRITY_SECRET_KEY",
+    os.path.join(BASE_DIR, ".integrity_key"),
+    generator=lambda: secrets.token_bytes(32),
+)
 
 
 def _build_fernet(secret):
@@ -232,6 +277,18 @@ def _env_bool(name, default=False):
         return default
     return str(value).strip().lower() in {"1", "true", "on", "yes"}
 
+
+def _env_int(name, default, minimum=None):
+    raw = os.environ.get(name)
+    try:
+        value = int(str(raw).strip()) if raw is not None else int(default)
+    except Exception:
+        value = int(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
 def _env_session_samesite():
     s = os.environ.get("SESSION_COOKIE_SAMESITE", "Strict").strip().lower()
     return "Strict" if s in {"", "strict"} else ("Lax" if s == "lax" else "None")
@@ -246,11 +303,11 @@ SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
 SESSION_COOKIE_SAMESITE = _env_session_samesite()
 
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
-CSRF_SECRET_KEY = os.environ.get("CSRF_SECRET_KEY",
-    open(os.path.join(BASE_DIR, ".csrfkey")).read().strip()
-    if os.path.exists(os.path.join(BASE_DIR, ".csrfkey")) else None
-) or (lambda: (open(os.path.join(BASE_DIR, ".csrfkey"), "w").write(secrets.token_hex(32)),
-               secrets.token_hex(32)))()
+CSRF_SECRET_KEY = _load_or_create_text_secret(
+    "CSRF_SECRET_KEY",
+    os.path.join(BASE_DIR, ".csrfkey"),
+    generator=lambda: secrets.token_hex(32),
+)
 
 
 def get_client_ip():
@@ -296,6 +353,8 @@ ROLE_LABEL = {
     "user": "一般用戶",
 }
 MAX_MANAGERS = 5
+MAX_EXTRA_SUPER_ADMINS = _env_int("HTML_LEARNING_MAX_EXTRA_SUPER_ADMINS", 2, minimum=0)
+PASSWORD_HISTORY_LIMIT = _env_int("HTML_LEARNING_PASSWORD_HISTORY_LIMIT", 5, minimum=1)
 VIOLATION_APPEAL_WINDOW_HOURS = 24
 CHAT_MESSAGE_MAX_LEN = 500
 OFFICIAL_CHAT_ROOM_NAME = "官方聊天室"
@@ -410,18 +469,14 @@ def get_user_by_username(username):
         conn.close()
 
 
-def user_public_payload(row):
+def user_public_payload(row, *, include_sensitive=False):
     if not row:
         return None
     data = dict(row)
-    return {
+    payload = {
         "id": data.get("id"),
         "username": data.get("username"),
         "nickname": decrypt_field(data.get("nickname")),
-        "real_name": decrypt_field(data.get("real_name")),
-        "birthdate": decrypt_field(data.get("birthdate")),
-        "id_number": decrypt_field(data.get("id_number")),
-        "phone": decrypt_field(data.get("phone")),
         "email": data.get("email"),
         "status": data.get("status"),
         "role": data.get("role"),
@@ -429,6 +484,21 @@ def user_public_payload(row):
         "blocked_until": data.get("blocked_until"),
         "violation_count": data.get("violation_count") or 0,
     }
+    if include_sensitive:
+        payload.update({
+            "real_name": decrypt_field(data.get("real_name")),
+            "birthdate": decrypt_field(data.get("birthdate")),
+            "id_number": decrypt_field(data.get("id_number")),
+            "phone": decrypt_field(data.get("phone")),
+        })
+    else:
+        payload.update({
+            "real_name": "",
+            "birthdate": "",
+            "id_number": "",
+            "phone": "",
+        })
+    return payload
 
 
 def ensure_user_columns(conn):
@@ -470,6 +540,59 @@ def ensure_appeal_columns(conn):
     for name, ddl in additions:
         if name not in cols:
             conn.execute(f"ALTER TABLE violation_appeals ADD COLUMN {name} {ddl}")
+
+
+def ensure_session_columns(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    additions = [
+        ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
+        ("revoked_at", "TEXT"),
+    ]
+    for name, ddl in additions:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {ddl}")
+    conn.execute("UPDATE sessions SET is_revoked=0 WHERE is_revoked IS NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked)")
+
+
+def ensure_security_support_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ip_blocks (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address     TEXT NOT NULL UNIQUE,
+            blocked_until  TEXT NOT NULL,
+            reason         TEXT,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ip_blocks_ip ON ip_blocks(ip_address)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ip_blocks_until ON ip_blocks(blocked_until)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at)")
+
+    legacy_rows = conn.execute(
+        "SELECT ip_address, detail, created_at FROM security_events "
+        "WHERE event_type='ip_block' ORDER BY id DESC"
+    ).fetchall()
+    seen = set()
+    for row in legacy_rows:
+        ip = row["ip_address"]
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
+        detail = row["detail"] or ""
+        match = re.search(r"blocked_until=([0-9T:\-\.]+)", detail)
+        if not match:
+            continue
+        blocked_until = match.group(1)
+        conn.execute(
+            "INSERT OR IGNORE INTO ip_blocks (ip_address, blocked_until, reason, created_at) VALUES (?, ?, ?, ?)",
+            (ip, blocked_until, detail, row["created_at"] or datetime.now().isoformat())
+        )
+
 
 def db_get_user_role(username):
     conn = get_db()
@@ -678,6 +801,7 @@ register_chat_routes(app, {
     "add_violation": add_violation,
     "append_chat_record": append_chat_record,
     "audit": audit,
+    "check_user_rate_limit": check_user_rate_limit,
     "db_get_user_from_token": db_get_user_from_token,
     "db_get_user_role": db_get_user_role,
     "delete_csrf_token": delete_csrf_token,
@@ -699,10 +823,13 @@ register_chat_routes(app, {
 
 register_user_routes(app, {
     "MAX_MANAGERS": MAX_MANAGERS,
+    "MAX_EXTRA_SUPER_ADMINS": MAX_EXTRA_SUPER_ADMINS,
+    "PASSWORD_HISTORY_LIMIT": PASSWORD_HISTORY_LIMIT,
     "ROLE_LABEL": ROLE_LABEL,
     "ROLE_RANK": ROLE_RANK,
     "add_violation": add_violation,
     "audit": audit,
+    "check_user_rate_limit": check_user_rate_limit,
     "count_role": count_role,
     "db_get_user_from_token": db_get_user_from_token,
     "db_get_user_role": db_get_user_role,
@@ -718,6 +845,7 @@ register_user_routes(app, {
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
     "parse_positive_int": parse_positive_int,
+    "revoke_user_sessions": revoke_user_sessions,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
     "role_rank": role_rank,
@@ -725,6 +853,7 @@ register_user_routes(app, {
     "validate_id_number": validate_id_number,
     "validate_password": validate_password,
     "validate_phone": validate_phone,
+    "verify_password": verify_password,
 })
 
 register_operation_routes(app, {
@@ -741,6 +870,7 @@ register_operation_routes(app, {
     "activate_emergency_lockdown": activate_emergency_lockdown,
     "add_violation": add_violation,
     "audit": audit,
+    "check_user_rate_limit": check_user_rate_limit,
     "get_client_ip": get_client_ip,
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,
@@ -756,6 +886,7 @@ register_operation_routes(app, {
     "require_csrf_safe": require_csrf_safe,
     "role_rank": role_rank,
     "save_settings": save_settings,
+    "secure_add_violation": secure_add_violation,
     "verify_audit_integrity": verify_audit_integrity,
     "verify_violation_integrity": verify_violation_integrity,
 })
@@ -766,6 +897,8 @@ if __name__ == "__main__":
         ensure_secure_audit_columns=ensure_secure_audit_columns,
         ensure_user_columns=ensure_user_columns,
         ensure_appeal_columns=ensure_appeal_columns,
+        ensure_security_support_schema=ensure_security_support_schema,
+        ensure_session_columns=ensure_session_columns,
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
@@ -777,7 +910,6 @@ if __name__ == "__main__":
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
     scheme = "https" if has_ssl else "http"
     print(f"\n🌐  hackme_web server running at {scheme}://localhost:5000")
-    print(f"    Default credentials: root / root")
     print(f"    SSL: {'enabled' if has_ssl else 'disabled (add cert.pem + key.pem to enable)'}")
     print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")

@@ -28,6 +28,7 @@ DEFAULT_SETTINGS = {
     "module_community_min_role": "user",
     "module_appeals_min_role": "user",
     "module_accounts_min_role": "manager",
+    "chat_filter_rules_json": "",
 }
 
 _SETTINGS_LOCK = threading.Lock()

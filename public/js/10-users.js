@@ -113,6 +113,12 @@ function renderUsers() {
     }
     const tr = document.createElement("tr");
     if (isBlocked) tr.style.opacity = "0.5";
+    const appendTextCell = (value) => {
+      const td = document.createElement("td");
+      td.textContent = value == null ? "" : String(value);
+      tr.appendChild(td);
+      return td;
+    };
     const selectCell = document.createElement("td");
     if (canReviewPending) {
       const checkbox = document.createElement("input");
@@ -131,21 +137,43 @@ function renderUsers() {
     const actions = document.createElement("div");
     actions.className = "action";
     actionButtons.forEach((btn) => actions.appendChild(btn));
-    let statusLabel = `<span style="color:#4caf50;">正常</span>`;
-    if (u.status === "pending") statusLabel = `<span style="color:#ffb74d;">待審核</span>`;
-    else if (u.status === "rejected") statusLabel = `<span style="color:#ff4f6d;">已駁回</span>`;
-    else if (u.status === "inactive") statusLabel = `<span style="color:#9e9e9e;">停用</span>`;
-    if (isBlocked) statusLabel = `<span style="color:#ff4f6d;">封鎖中</span>`;
-    const violDisplay = (u.violation_count || 0) > 0 ? `<span style="color:#ff4f6d;font-weight:bold;">${u.violation_count}</span>` : "0";
-    tr.innerHTML = `
-      <td>${u.id}</td>
-      <td>${sanitize(u.username || "")}</td>
-      <td>${sanitize(u.nickname || "")}</td>
-      <td>${sanitize(u.real_name || "")}</td>
-      <td>${sanitize(u.role_label || u.role || "")}</td>
-      <td>${statusLabel}</td>
-      <td>${violDisplay}</td>
-    `;
+    appendTextCell(u.id);
+    appendTextCell(u.username || "");
+    appendTextCell(u.nickname || "");
+    appendTextCell(u.real_name || "");
+    appendTextCell(u.role_label || u.role || "");
+    const statusCell = document.createElement("td");
+    const statusSpan = document.createElement("span");
+    statusSpan.textContent = "正常";
+    statusSpan.style.color = "#4caf50";
+    if (u.status === "pending") {
+      statusSpan.textContent = "待審核";
+      statusSpan.style.color = "#ffb74d";
+    } else if (u.status === "rejected") {
+      statusSpan.textContent = "已駁回";
+      statusSpan.style.color = "#ff4f6d";
+    } else if (u.status === "inactive") {
+      statusSpan.textContent = "停用";
+      statusSpan.style.color = "#9e9e9e";
+    }
+    if (isBlocked) {
+      statusSpan.textContent = "封鎖中";
+      statusSpan.style.color = "#ff4f6d";
+    }
+    statusCell.appendChild(statusSpan);
+    tr.appendChild(statusCell);
+    const violationCell = document.createElement("td");
+    const violationCount = u.violation_count || 0;
+    if (violationCount > 0) {
+      const violationSpan = document.createElement("span");
+      violationSpan.textContent = String(violationCount);
+      violationSpan.style.color = "#ff4f6d";
+      violationSpan.style.fontWeight = "bold";
+      violationCell.appendChild(violationSpan);
+    } else {
+      violationCell.textContent = "0";
+    }
+    tr.appendChild(violationCell);
     tr.insertBefore(selectCell, tr.firstChild);
     const actionCell = document.createElement("td");
     actionCell.appendChild(actions);

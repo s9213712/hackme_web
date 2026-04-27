@@ -1,6 +1,8 @@
+import logging
 import json
 import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 
 _STATE = {
@@ -10,6 +12,7 @@ _STATE = {
 }
 
 _json_locks = {}
+_json_locks_mutex = threading.Lock()
 
 
 def configure_chat_support_service(*, chat_dir, official_chat_room_name, encrypt_field):
@@ -21,10 +24,25 @@ def configure_chat_support_service(*, chat_dir, official_chat_room_name, encrypt
     migrate_plaintext_chat_transcripts()
 
 
-def _get_json_lock(path):
-    if path not in _json_locks:
-        _json_locks[path] = threading.Lock()
-    return _json_locks[path]
+@contextmanager
+def _json_file_lock(path):
+    with _json_locks_mutex:
+        lock, ref_count = _json_locks.get(path, (threading.Lock(), 0))
+        _json_locks[path] = (lock, ref_count + 1)
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _json_locks_mutex:
+            current = _json_locks.get(path)
+            if not current or current[0] is not lock:
+                return
+            remaining = current[1] - 1
+            if remaining <= 0:
+                _json_locks.pop(path, None)
+            else:
+                _json_locks[path] = (lock, remaining)
 
 
 def _seal_chat_entry(entry):
@@ -42,7 +60,7 @@ def migrate_plaintext_chat_transcripts():
             continue
         path = os.path.join(chat_dir, name)
         try:
-            with _get_json_lock(path):
+            with _json_file_lock(path):
                 with open(path, "r", encoding="utf-8") as f:
                     raw_lines = f.readlines()
                 changed = False
@@ -83,11 +101,13 @@ def append_chat_record(room_id, message_id, sender, content, created_at):
             "content": content,
             "created_at": created_at,
         })
-        with _get_json_lock(path):
+        with _json_file_lock(path):
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return True
     except Exception:
-        pass
+        logging.getLogger(__name__).exception("append_chat_record failed for room %s", room_id)
+        return False
 
 
 def ensure_official_chat_room(conn):

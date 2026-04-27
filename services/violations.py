@@ -7,11 +7,11 @@ MAX_VIOLATIONS = {"manager": 3, "user": 5}
 NO_AUTO_PENALTY_USERS = {"admin"}
 CHAT_WARNING_CATEGORY_WORDS = {
     "色情": [
-        "色情", "性", "性行為", "亂倫", "裸體", "裸照", "porn", "pornhub", "xvideos", "sex", "sexy",
+        "色情", "性行為", "亂倫", "裸體", "裸照", "porn", "pornhub", "xvideos", "sex", "sexy",
         "erotic", "sexual", "adult", "pornography", "露骨", "pussy", "摳穴", "口交", "肛交", "做愛"
     ],
     "血腥": [
-        "血腥", "血", "暴力", "殺", "殺人", "刀", "槍", "肢解", "gore", "weapon", "knife", "gun", "shoot", "殘忍", "毆打"
+        "血腥", "暴力", "殺人", "刀", "槍", "肢解", "gore", "weapon", "knife", "gun", "shoot", "殘忍", "毆打"
     ],
     "自殺": [
         "自殺", "suicide", "想死", "死亡", "自殘", "我不想活", "結束生命", "hang", "自盡", "活著太累", "不想活", "結束自己"
@@ -49,7 +49,28 @@ def _violation_chain_hash(prev_hash, entry_json):
     return hmac.new(_STATE["integrity_key"], (prev_hash + entry_json).encode(), "sha256").hexdigest()
 
 
-def secure_add_violation(user_id, username, role, points, reason, triggered_by, actor_username):
+def _get_chat_warning_words():
+    settings = _STATE["get_system_settings"]() or {}
+    raw_rules = settings.get("chat_filter_rules_json", "")
+    if isinstance(raw_rules, str) and raw_rules.strip():
+        try:
+            payload = json.loads(raw_rules)
+            if isinstance(payload, dict):
+                parsed = {}
+                for label, keywords in payload.items():
+                    if not isinstance(label, str) or not isinstance(keywords, list):
+                        continue
+                    clean = [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+                    if clean:
+                        parsed[label.strip()] = clean
+                if parsed:
+                    return parsed
+        except Exception:
+            pass
+    return {label: list(keywords) for label, keywords in CHAT_WARNING_CATEGORY_WORDS.items()}
+
+
+def secure_add_violation(user_id, username, role, points, reason, triggered_by, actor_username, update_user_counter=True):
     ts = datetime.now().isoformat(timespec="milliseconds")
     entry = {
         "user_id": user_id, "username": username, "points": points,
@@ -60,6 +81,7 @@ def secure_add_violation(user_id, username, role, points, reason, triggered_by, 
 
     conn = _STATE["get_db"]()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         prev_row = conn.execute(
             "SELECT entry_hash FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
             (user_id,)
@@ -70,21 +92,32 @@ def secure_add_violation(user_id, username, role, points, reason, triggered_by, 
             "INSERT INTO secure_violations (user_id, username, points, reason, triggered_by, actor_username, created_at, prev_hash, entry_hash) VALUES (?,?,?,?,?,?,?,?,?)",
             (user_id, username, points, reason, triggered_by, actor_username, ts, prev_hash, entry_hash)
         )
+        if update_user_counter:
+            row = conn.execute(
+                "UPDATE users SET violation_count = violation_count + ? WHERE id = ? RETURNING violation_count",
+                (points, user_id)
+            ).fetchone()
+            if not row:
+                raise ValueError(f"user_id={user_id} not found")
+            new_count = row["violation_count"]
+        else:
+            row = conn.execute(
+                "SELECT violation_count FROM users WHERE id=?",
+                (user_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError(f"user_id={user_id} not found")
+            new_count = row["violation_count"]
         conn.commit()
+        return entry_hash, new_count
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
-
-    conn2 = _STATE["get_db"]()
-    try:
-        new_count = conn2.execute(
-            "UPDATE users SET violation_count = violation_count + ? WHERE id = ? RETURNING violation_count",
-            (points, user_id)
-        ).fetchone()["violation_count"]
-        conn2.commit()
-    finally:
-        conn2.close()
-
-    return entry_hash, new_count
 
 
 def verify_violation_integrity(user_id):
@@ -189,7 +222,7 @@ def detect_chat_violation(text):
         return False, None
     normalized = text.lower().strip()
     compact = re.sub(r"\s+", "", normalized)
-    for label, keys in CHAT_WARNING_CATEGORY_WORDS.items():
+    for label, keys in _get_chat_warning_words().items():
         for keyword in keys:
             if not keyword:
                 continue

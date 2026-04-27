@@ -2,12 +2,13 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
     (3, "ensure violation_appeals columns"),
     (4, "ensure system_settings baseline rows"),
+    (5, "session revocation and security support schema"),
 )
 
 _STATE = {
@@ -34,6 +35,47 @@ _STATE = {
 
 def configure_bootstrap_service(**kwargs):
     _STATE.update(kwargs)
+
+
+def _env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _password_history_limit():
+    raw = os.environ.get("HTML_LEARNING_PASSWORD_HISTORY_LIMIT", "5")
+    try:
+        return max(1, int(str(raw).strip()))
+    except Exception:
+        return 5
+
+
+def _trim_password_history(conn, user_id):
+    conn.execute(
+        "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
+        "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+        ")",
+        (user_id, user_id, _password_history_limit())
+    )
+
+
+def _insert_password_record(conn, user_id, password, hash_password, now):
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+        (user_id, hash_password(password), now)
+    )
+    _trim_password_history(conn, user_id)
+
+
+def _bootstrap_password(env_name, username, *, required):
+    password = os.environ.get(env_name, "").strip()
+    if password:
+        return password
+    if required:
+        raise RuntimeError(f"{env_name} is required to bootstrap the initial {username} account")
+    return None
 
 
 def _safe_iso(value, fallback=None):
@@ -266,7 +308,14 @@ def get_schema_version(conn):
         return 0
 
 
-def apply_schema_migrations(conn, ensure_secure_audit_columns, ensure_user_columns, ensure_appeal_columns):
+def apply_schema_migrations(
+    conn,
+    ensure_secure_audit_columns,
+    ensure_user_columns,
+    ensure_appeal_columns,
+    ensure_session_columns,
+    ensure_security_support_schema,
+):
     current = get_schema_version(conn)
     if current >= CURRENT_SCHEMA_VERSION:
         return {"previous": current, "applied": [], "current": current}
@@ -285,6 +334,9 @@ def apply_schema_migrations(conn, ensure_secure_audit_columns, ensure_user_colum
         elif version == 4:
             _STATE["init_system_settings_table"](conn)
             _STATE["seed_missing_settings"](conn)
+        elif version == 5:
+            ensure_session_columns(conn)
+            ensure_security_support_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
@@ -295,16 +347,34 @@ def apply_schema_migrations(conn, ensure_secure_audit_columns, ensure_user_colum
     return {"previous": current, "applied": applied, "current": max(current, applied[-1] if applied else current)}
 
 
-def init_db(*, ensure_secure_audit_columns, ensure_user_columns, ensure_appeal_columns, ensure_official_chat_room, hash_password):
+def init_db(
+    *,
+    ensure_secure_audit_columns,
+    ensure_user_columns,
+    ensure_appeal_columns,
+    ensure_session_columns,
+    ensure_security_support_schema,
+    ensure_official_chat_room,
+    hash_password,
+):
     conn = _STATE["get_db"]()
     schema_path = _STATE.get("schema_path") or (_STATE["db_path"] + '.schema.sql')
     conn.executescript(open(schema_path, 'r', encoding='utf-8').read())
     ensure_secure_audit_columns(conn)
     ensure_user_columns(conn)
     ensure_appeal_columns(conn)
+    ensure_session_columns(conn)
+    ensure_security_support_schema(conn)
     _STATE["init_system_settings_table"](conn)
     _STATE["seed_missing_settings"](conn)
-    migration_plan = apply_schema_migrations(conn, ensure_secure_audit_columns, ensure_user_columns, ensure_appeal_columns)
+    migration_plan = apply_schema_migrations(
+        conn,
+        ensure_secure_audit_columns,
+        ensure_user_columns,
+        ensure_appeal_columns,
+        ensure_session_columns,
+        ensure_security_support_schema,
+    )
     conn.commit()
     if migration_plan["applied"]:
         _STATE["audit"]("DB_SCHEMA_MIGRATION", "127.0.0.1", user="system", detail=f"schema migrated from v{migration_plan['previous']} to v{migration_plan['current']}")
@@ -322,41 +392,53 @@ def init_db(*, ensure_secure_audit_columns, ensure_user_columns, ensure_appeal_c
     conn.execute("UPDATE users SET role='user' WHERE role IS NULL OR role=''")
 
     now = datetime.now().isoformat()
+
+    root_password = _bootstrap_password("HTML_LEARNING_ROOT_PASSWORD", "root", required=True)
     root_row = conn.execute("SELECT id FROM users WHERE username='root'").fetchone()
     if root_row:
         root_id = root_row["id"]
         conn.execute("UPDATE users SET role='super_admin', status='active', updated_at=? WHERE id=?", (now, root_id))
     else:
-        root_cur = conn.execute("INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)", ("root", now, now))
+        root_cur = conn.execute(
+            "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)",
+            ("root", now, now)
+        )
         root_id = root_cur.lastrowid
-        conn.execute("INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)", (root_id, hash_password("root"), now))
     has_root_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (root_id,)).fetchone()
     if not has_root_pw:
-        conn.execute("INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)", (root_id, hash_password("root"), now))
+        _insert_password_record(conn, root_id, root_password, hash_password, now)
 
-    row = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()
-    if row:
-        admin_id = row["id"]
-        conn.execute("UPDATE users SET role='manager', status='active', updated_at=? WHERE username='admin'", (now,))
-    else:
-        mgr_cur = conn.execute("INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'manager', ?, ?)", ("admin", now, now))
-        admin_id = mgr_cur.lastrowid
-        conn.execute("INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)", (admin_id, hash_password("admin"), now))
-    has_admin_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (admin_id,)).fetchone()
-    if not has_admin_pw:
-        conn.execute("INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)", (admin_id, hash_password("admin"), now))
+    admin_password = _bootstrap_password("HTML_LEARNING_MANAGER_PASSWORD", "admin", required=False)
+    if admin_password:
+        row = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()
+        if row:
+            admin_id = row["id"]
+            conn.execute("UPDATE users SET role='manager', status='active', updated_at=? WHERE username='admin'", (now,))
+        else:
+            mgr_cur = conn.execute(
+                "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'manager', ?, ?)",
+                ("admin", now, now)
+            )
+            admin_id = mgr_cur.lastrowid
+        has_admin_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (admin_id,)).fetchone()
+        if not has_admin_pw:
+            _insert_password_record(conn, admin_id, admin_password, hash_password, now)
 
-    row = conn.execute("SELECT id FROM users WHERE username='test'").fetchone()
-    if row:
-        test_id = row["id"]
-        conn.execute("UPDATE users SET role='user', status='active', updated_at=? WHERE username='test'", (now,))
-    else:
-        test_cur = conn.execute("INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'user', ?, ?)", ("test", now, now))
-        test_id = test_cur.lastrowid
-        conn.execute("INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)", (test_id, hash_password("test"), now))
-    has_test_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (test_id,)).fetchone()
-    if not has_test_pw:
-        conn.execute("INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)", (test_id, hash_password("test"), now))
+    test_password = _bootstrap_password("HTML_LEARNING_TEST_PASSWORD", "test", required=False)
+    if test_password:
+        row = conn.execute("SELECT id FROM users WHERE username='test'").fetchone()
+        if row:
+            test_id = row["id"]
+            conn.execute("UPDATE users SET role='user', status='active', updated_at=? WHERE username='test'", (now,))
+        else:
+            test_cur = conn.execute(
+                "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'user', ?, ?)",
+                ("test", now, now)
+            )
+            test_id = test_cur.lastrowid
+        has_test_pw = conn.execute("SELECT 1 FROM user_passwords WHERE user_id=? LIMIT 1", (test_id,)).fetchone()
+        if not has_test_pw:
+            _insert_password_record(conn, test_id, test_password, hash_password, now)
 
     ensure_official_chat_room(conn)
     _STATE["refresh_system_settings"]()

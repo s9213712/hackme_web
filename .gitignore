@@ -9,6 +9,7 @@ database/database.db.bak
 .chain_seed
 .fkey
 .csrfkey
+.integrity_key
 SECURITY.md
 
 *.log

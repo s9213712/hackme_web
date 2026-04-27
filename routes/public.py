@@ -8,7 +8,43 @@ from flask import make_response, request, send_from_directory
 
 
 def register_public_routes(app, deps):
-    globals().update(deps)
+    CSRF_TOKEN_TTL = deps["CSRF_TOKEN_TTL"]
+    PUBLIC_DIR = deps["PUBLIC_DIR"]
+    ROLE_LABEL = deps["ROLE_LABEL"]
+    SERVER_STARTED_AT = deps["SERVER_STARTED_AT"]
+    SERVER_VERSION = deps["SERVER_VERSION"]
+    SESSION_COOKIE_SAMESITE = deps["SESSION_COOKIE_SAMESITE"]
+    SESSION_COOKIE_SECURE = deps["SESSION_COOKIE_SECURE"]
+    SESSION_TTL = deps["SESSION_TTL"]
+    audit = deps["audit"]
+    db_delete_session = deps["db_delete_session"]
+    db_get_user_from_token = deps["db_get_user_from_token"]
+    db_save_session = deps["db_save_session"]
+    decrypt_field = deps["decrypt_field"]
+    encrypt_field = deps["encrypt_field"]
+    ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    get_system_settings = deps["get_system_settings"]
+    get_ua = deps["get_ua"]
+    hash_password = deps["hash_password"]
+    is_ip_blocked = deps["is_ip_blocked"]
+    is_rate_limited = deps["is_rate_limited"]
+    json_resp = deps["json_resp"]
+    make_csrf_token = deps["make_csrf_token"]
+    make_token = deps["make_token"]
+    normalize_text = deps["normalize_text"]
+    parse_birthdate = deps["parse_birthdate"]
+    record_login_failure = deps["record_login_failure"]
+    require_csrf = deps["require_csrf"]
+    store_csrf_token = deps["store_csrf_token"]
+    timing_delay = deps["timing_delay"]
+    validate_id_number = deps["validate_id_number"]
+    validate_password = deps["validate_password"]
+    validate_phone = deps["validate_phone"]
+    verify_csrf_double_submit = deps["verify_csrf_double_submit"]
+    verify_password = deps["verify_password"]
 
     @app.route("/")
     def index():
@@ -253,7 +289,7 @@ def register_public_routes(app, deps):
                 conn.commit()
 
                 audit("LOGIN_OK", ip, username, ua=ua, success=True)
-                resp = json_resp({"ok":True,"msg":"恭喜登入成功","token":token})
+                resp = json_resp({"ok":True,"msg":"恭喜登入成功"})
                 resp.set_cookie("session_token", token, max_age=SESSION_TTL,
                                 httponly=True, samesite=SESSION_COOKIE_SAMESITE,
                                 secure=SESSION_COOKIE_SECURE)

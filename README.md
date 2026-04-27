@@ -22,6 +22,9 @@ service:
 
 ```bash
 python3 -m pip install -r requirements.txt
+export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
+export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
+export HTML_LEARNING_TEST_PASSWORD='change-this-test-password'
 python3 server.py
 ```
 
@@ -31,11 +34,7 @@ Then open:
 https://127.0.0.1:5000/
 ```
 
-Default local accounts:
-
-- `root / root` — `super_admin`
-- `admin / admin` — `manager`
-- `test / test` — `user`
+Bootstrap accounts are no longer hard-coded. On a fresh database, `root` is created from `HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if `HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set.
 
 ## Why This Project Exists
 
@@ -144,6 +143,7 @@ The frontend no longer relies on a single large application file.
 - `logs/` holds runtime logs
 - `anchors/` holds audit-chain head snapshots
 - `chats/` holds encrypted chat transcript sidecars
+- `.fkey`, `.csrfkey`, `.integrity_key`, and `.chain_seed` are generated on first boot and must be persisted across restarts
 
 For test automation, all of these directories can be overridden with:
 
@@ -196,7 +196,7 @@ The shell entrypoint remains available:
 
 `tests/smoke_suite.py` covers a focused set of end-to-end checks:
 
-- default account login for `root`, `admin`, and `test`
+- configured bootstrap account login for `root`, `admin`, and `test`
 - `/api/me` role verification
 - admin access allowed for manager routes
 - low-privilege access denied for admin routes

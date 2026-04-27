@@ -203,8 +203,11 @@ async function editUser(userId) {
   if (editStatus) editStatus.value = current.status;
   const roleField = $("edit-user-role-field");
   const statusField = $("edit-user-status-field");
+  const currentPwField = $("edit-user-current-pw-field");
   if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
+  if (currentPwField) currentPwField.style.display = editingUserIsSelf ? "" : "none";
+  setUserEditField("edit-user-current-pw", "");
   setUserEditField("edit-user-pw", "");
   setUserEditField("edit-user-pw-confirm", "");
   setUserEditMsg("");
@@ -226,6 +229,7 @@ async function submitEditUser() {
   const phone = $("edit-user-phone")?.value.trim() || "";
   const role = $("edit-user-role")?.value || "";
   const status = $("edit-user-status")?.value || "";
+  const currentPassword = $("edit-user-current-pw")?.value || "";
   const password = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
 
@@ -246,8 +250,13 @@ async function submitEditUser() {
       setUserEditMsg("若要修改密碼，兩次都要輸入", false);
       return;
     }
+    if (editingUserIsSelf && !currentPassword) {
+      setUserEditMsg("修改自己的密碼時必須輸入目前密碼", false);
+      return;
+    }
     payload.password = password;
     payload.password_confirm = passwordConfirm;
+    if (editingUserIsSelf) payload.current_password = currentPassword;
   }
 
   if (!Object.keys(payload).length) {

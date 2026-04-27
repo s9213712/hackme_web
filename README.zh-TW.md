@@ -20,6 +20,9 @@
 
 ```bash
 python3 -m pip install -r requirements.txt
+export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
+export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
+export HTML_LEARNING_TEST_PASSWORD='change-this-test-password'
 python3 server.py
 ```
 
@@ -29,11 +32,7 @@ python3 server.py
 https://127.0.0.1:5000/
 ```
 
-預設本機帳號：
-
-- `root / root` — `super_admin`
-- `admin / admin` — `manager`
-- `test / test` — `user`
+初始化帳號不再硬編碼。全新資料庫啟動時，`root` 會從 `HTML_LEARNING_ROOT_PASSWORD` 建立；只有在設定 `HTML_LEARNING_MANAGER_PASSWORD`、`HTML_LEARNING_TEST_PASSWORD` 時，才會建立 `admin` 與 `test`。
 
 ## 專案目的
 
@@ -141,6 +140,7 @@ https://127.0.0.1:5000/
 - `logs/`：runtime log
 - `anchors/`：audit chain 錨點
 - `chats/`：加密聊天 sidecar
+- `.fkey`、`.csrfkey`、`.integrity_key`、`.chain_seed` 會在首次啟動時自動建立，重啟後必須持續保留
 
 測試與 CI 可覆寫這些目錄：
 
@@ -193,7 +193,7 @@ python3 scripts/pre_push_checks.py
 
 `tests/smoke_suite.py` 目前涵蓋：
 
-- `root`、`admin`、`test` 預設帳號登入
+- 透過 bootstrap 環境變數建立的 `root`、`admin`、`test` 帳號登入
 - `/api/me` 角色檢查
 - manager 可用管理 API
 - 一般使用者被正確拒於管理 API 之外

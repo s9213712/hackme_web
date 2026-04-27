@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS csrf_tokens (
     expires_at   TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ip_blocks (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip_address     TEXT    NOT NULL UNIQUE,
+    blocked_until  TEXT    NOT NULL,
+    reason         TEXT,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -102,6 +110,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     ip_address   TEXT,
     user_agent   TEXT,
     expires_at   TEXT    NOT NULL,
+    is_revoked   INTEGER NOT NULL DEFAULT 0,
+    revoked_at   TEXT,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -172,6 +182,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_room_members_room ON chat_room_members(room_
 CREATE INDEX IF NOT EXISTS idx_chat_room_members_user ON chat_room_members(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_csrf_token_hash ON csrf_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_ip_blocks_ip ON ip_blocks(ip_address);
+CREATE INDEX IF NOT EXISTS idx_ip_blocks_until ON ip_blocks(blocked_until);
 
 CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    ON login_attempts(ip_address);
 
@@ -184,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_sec_event_ip    ON security_events(ip_address);
 CREATE INDEX IF NOT EXISTS idx_sec_event_time  ON security_events(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_sec_event_type  ON security_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_sec_event_type_ip_time ON security_events(event_type, ip_address, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_sec_viol_actor  ON secure_violations(actor_username);
 
@@ -198,5 +213,9 @@ CREATE INDEX IF NOT EXISTS idx_secure_audit_ts    ON secure_audit(ts);
 CREATE INDEX IF NOT EXISTS idx_secure_audit_user   ON secure_audit(user);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_revoked ON sessions(is_revoked);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id     ON sessions(user_id);

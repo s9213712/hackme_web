@@ -4,7 +4,18 @@ from flask import request
 
 
 def register_community_routes(app, deps):
-    globals().update(deps)
+    audit = deps["audit"]
+    check_user_rate_limit = deps["check_user_rate_limit"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    get_ua = deps["get_ua"]
+    json_resp = deps["json_resp"]
+    normalize_text = deps["normalize_text"]
+    parse_positive_int = deps["parse_positive_int"]
+    require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
+    role_rank = deps["role_rank"]
 
     def ensure_community_schema(conn):
         conn.executescript("""
@@ -340,9 +351,13 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "權限不足"}), 403
 
             if request.method == "GET":
-                q = normalize_text(request.args.get("q"))[:120]
-                page = max(0, int(request.args.get("page", 0) or 0))
-                limit = min(20, max(1, int(request.args.get("limit", 10) or 10)))
+                q = (normalize_text(request.args.get("q")) or "")[:120]
+                page = parse_positive_int(request.args.get("page", 0), default=0, min_value=0)
+                if page is None:
+                    return json_resp({"ok": False, "msg": "page 參數格式錯誤"}), 400
+                limit = parse_positive_int(request.args.get("limit", 10), default=10, min_value=1, max_value=20)
+                if limit is None:
+                    return json_resp({"ok": False, "msg": "limit 參數格式錯誤"}), 400
                 like = f"%{q}%"
                 where = "board_id=?"
                 params = [board_id]
@@ -397,6 +412,9 @@ def register_community_routes(app, deps):
             content = normalize_text(data.get("content"))[:4000]
             if not title or not content:
                 return json_resp({"ok": False, "msg": "主題標題與內容不可為空"}), 400
+            blocked, info = check_user_rate_limit(actor["id"], "community_thread_create", max_req=5, window_sec=300)
+            if blocked:
+                return json_resp({"ok": False, "msg": f"發文太頻繁（{info['limit']} 次 / 5 分鐘）"}), 429
             now = datetime.now().isoformat()
             status = "approved" if manageable else "pending"
             conn.execute(
@@ -559,6 +577,9 @@ def register_community_routes(app, deps):
         content = normalize_text(data.get("content"))[:3000]
         if not content:
             return json_resp({"ok": False, "msg": "留言內容不可為空"}), 400
+        blocked, info = check_user_rate_limit(actor["id"], "community_thread_reply", max_req=10, window_sec=300)
+        if blocked:
+            return json_resp({"ok": False, "msg": f"留言太頻繁（{info['limit']} 次 / 5 分鐘）"}), 429
 
         conn = get_db()
         try:

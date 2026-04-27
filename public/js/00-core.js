@@ -378,6 +378,7 @@ setupPwToggle("reg-pw", "reg-pw-toggle");
 setupPwToggle("reg-pw-confirm", "reg-pw-confirm-toggle");
 setupPwToggle("admin-add-pw", "admin-add-pw-toggle");
 setupPwToggle("admin-add-pw-confirm", "admin-add-pw-confirm-toggle");
+setupPwToggle("edit-user-current-pw", "edit-user-current-pw-toggle");
 setupPwToggle("edit-user-pw", "edit-user-pw-toggle");
 setupPwToggle("edit-user-pw-confirm", "edit-user-pw-confirm-toggle");
 

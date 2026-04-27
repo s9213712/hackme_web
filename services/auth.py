@@ -59,18 +59,27 @@ def verify_csrf_double_submit(body_token):
         return False
     tok_hash = hashlib.sha256(cookie_tok.encode()).hexdigest()
     conn = _STATE["get_db"]()
-    row = conn.execute(
-        "SELECT 1 FROM csrf_tokens WHERE token_hash=? AND expires_at>?",
-        (tok_hash, datetime.now().isoformat())
-    ).fetchone()
-    conn.close()
-    if not row:
+    try:
+        now = datetime.now().isoformat()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT 1 FROM csrf_tokens WHERE token_hash=? AND expires_at>?",
+            (tok_hash, now)
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (tok_hash,))
+        conn.commit()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return False
-    conn = _STATE["get_db"]()
-    conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (tok_hash,))
-    conn.commit()
-    conn.close()
-    return True
+    finally:
+        conn.close()
 
 
 def hash_password(pw):
@@ -116,12 +125,16 @@ def make_csrf_token():
 def store_csrf_token(token, username):
     conn = _STATE["get_db"]()
     expires = (datetime.now() + timedelta(seconds=_STATE["csrf_token_ttl"])).isoformat()
-    conn.execute(
-        "INSERT OR REPLACE INTO csrf_tokens (token_hash, username, expires_at) VALUES (?, ?, ?)",
-        (hashlib.sha256(token.encode()).hexdigest(), username, expires)
-    )
-    conn.commit()
-    conn.close()
+    now = datetime.now().isoformat()
+    try:
+        conn.execute("DELETE FROM csrf_tokens WHERE expires_at<=?", (now,))
+        conn.execute(
+            "INSERT OR REPLACE INTO csrf_tokens (token_hash, username, expires_at) VALUES (?, ?, ?)",
+            (hashlib.sha256(token.encode()).hexdigest(), username, expires)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def verify_csrf_token(token, username):
@@ -231,26 +244,53 @@ def db_save_session(user_id, token, ip, ua):
 
 def db_delete_session(token):
     conn = _STATE["get_db"]()
-    conn.execute("DELETE FROM sessions WHERE token_hash=?", (_hash_token(token),))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE token_hash=?",
+            (datetime.now().isoformat(), _hash_token(token))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def revoke_user_sessions(user_id):
+    conn = _STATE["get_db"]()
+    try:
+        conn.execute(
+            "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE user_id=? AND is_revoked=0",
+            (datetime.now().isoformat(), user_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def db_clean_expired_sessions():
     conn = _STATE["get_db"]()
-    conn.execute("DELETE FROM sessions WHERE expires_at < ?", (datetime.now().isoformat(),))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "DELETE FROM sessions WHERE expires_at < ? OR is_revoked=1",
+            (datetime.now().isoformat(),)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def db_get_user_from_token(token):
     conn = _STATE["get_db"]()
-    row = conn.execute(
-        "SELECT u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?",
-        (_hash_token(token), datetime.now().isoformat())
-    ).fetchone()
-    conn.close()
-    return row["username"] if row else None
+    try:
+        row = conn.execute(
+            "SELECT u.username FROM sessions s "
+            "JOIN users u ON u.id=s.user_id "
+            "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0 "
+            "AND u.status='active'",
+            (_hash_token(token), datetime.now().isoformat())
+        ).fetchone()
+        return row["username"] if row else None
+    finally:
+        conn.close()
 
 
 def get_current_user_ctx():

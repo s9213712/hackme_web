@@ -18,6 +18,7 @@ _STATE = {
 }
 
 _audit_lock = threading.Lock()
+_audit_db_lock = threading.Lock()
 _anchor_lock = threading.Lock()
 _last_audit_anchor_at = 0.0
 
@@ -119,30 +120,31 @@ def audit(action, ip, user="-", success=False, ua="-", detail="-"):
     entry_json = canonical_json(entry)
     entry_hash = _entry_hash(entry_json)
 
-    conn = _STATE["get_db"]()
     audit_id = None
-    try:
-        prev_row = conn.execute(
-            "SELECT chain_hash FROM secure_audit ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        prev_hash = prev_row["chain_hash"] if prev_row else _STATE["chain_seed"]
-        chain_hash = _chain_hash(prev_hash, entry_hash)
+    with _audit_db_lock:
+        conn = _STATE["get_db"]()
         try:
-            cur = conn.execute(
-                "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (ts, action, ip, user, 1 if success else 0, ua, detail, prev_hash, entry_hash, chain_hash)
-            )
-        except sqlite3.OperationalError:
-            cur = conn.execute(
-                "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, chain_hash) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (ts, action, ip, user, 1 if success else 0, ua, detail, chain_hash)
-            )
-        audit_id = cur.lastrowid
-        conn.commit()
-    finally:
-        conn.close()
+            prev_row = conn.execute(
+                "SELECT chain_hash FROM secure_audit ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = prev_row["chain_hash"] if prev_row else _STATE["chain_seed"]
+            chain_hash = _chain_hash(prev_hash, entry_hash)
+            try:
+                cur = conn.execute(
+                    "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, prev_hash, entry_hash, chain_hash) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (ts, action, ip, user, 1 if success else 0, ua, detail, prev_hash, entry_hash, chain_hash)
+                )
+            except sqlite3.OperationalError:
+                cur = conn.execute(
+                    "INSERT INTO secure_audit (ts, action, ip, user, success, ua, detail, chain_hash) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (ts, action, ip, user, 1 if success else 0, ua, detail, chain_hash)
+                )
+            audit_id = cur.lastrowid
+            conn.commit()
+        finally:
+            conn.close()
 
     file_entry = dict(entry)
     file_entry["_entry_hash"] = entry_hash
@@ -208,4 +210,3 @@ def verify_audit_integrity(start_id=None, end_id=None):
         return True, None, f"integrity OK ({len(rows)} entries verified); {anchor_details}"
     finally:
         conn.close()
-

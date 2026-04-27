@@ -4,7 +4,28 @@ from flask import request
 
 
 def register_chat_routes(app, deps):
-    globals().update(deps)
+    CHAT_MESSAGE_MAX_LEN = deps["CHAT_MESSAGE_MAX_LEN"]
+    OFFICIAL_CHAT_ROOM_NAME = deps["OFFICIAL_CHAT_ROOM_NAME"]
+    add_violation = deps["add_violation"]
+    append_chat_record = deps["append_chat_record"]
+    audit = deps["audit"]
+    check_user_rate_limit = deps["check_user_rate_limit"]
+    db_get_user_from_token = deps["db_get_user_from_token"]
+    db_get_user_role = deps["db_get_user_role"]
+    delete_csrf_token = deps["delete_csrf_token"]
+    detect_chat_violation = deps["detect_chat_violation"]
+    ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    get_request_csrf_token = deps["get_request_csrf_token"]
+    json_resp = deps["json_resp"]
+    normalize_text = deps["normalize_text"]
+    parse_positive_int = deps["parse_positive_int"]
+    require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
+    role_rank = deps["role_rank"]
+    verify_csrf_token = deps["verify_csrf_token"]
 
     @app.route("/api/chat/rooms", methods=["GET", "POST"], strict_slashes=False)
     @require_csrf_safe
@@ -60,7 +81,11 @@ def register_chat_routes(app, deps):
             return json_resp({"ok":False,"msg":"不能指定自己為對象"}), 400
 
         conn = get_db()
+        room_id = None
+        invite_username = None
+        detail = None
         try:
+            conn.execute("BEGIN")
             target_row = None
             if target_user:
                 target_row = conn.execute(
@@ -88,23 +113,32 @@ def register_chat_routes(app, deps):
             detail = f"room_id={room_id}, name={name}"
             if target_row:
                 detail += f", target={target_row['username']}"
-            audit("CHAT_ROOM_CREATED", ip, user=actor["username"], detail=detail)
-            invite_username = target_row["username"] if target_row else None
-            return json_resp({
-                "ok": True,
-                "msg": "聊天室已建立",
-                "room": {
-                    "id": room_id,
-                    "name": name,
-                    "owner_user_id": urow_id,
-                    "owner_username": actor["username"],
-                    "target_username": invite_username
-                }
-            })
         except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return json_resp({"ok":False,"msg":"建立聊天室失敗"}), 500
         finally:
             conn.close()
+
+        if detail:
+            try:
+                audit("CHAT_ROOM_CREATED", ip, user=actor["username"], detail=detail)
+            except Exception:
+                pass
+        invite_username = target_row["username"] if target_row else None
+        return json_resp({
+            "ok": True,
+            "msg": "聊天室已建立",
+            "room": {
+                "id": room_id,
+                "name": name,
+                "owner_user_id": urow_id,
+                "owner_username": actor["username"],
+                "target_username": invite_username
+            }
+        })
 
     @app.route("/api/chat/rooms/<int:room_id>/join", methods=["POST"], strict_slashes=False)
     @require_csrf
@@ -207,6 +241,9 @@ def register_chat_routes(app, deps):
                 return json_resp({"ok":False,"msg":"訊息不可為空"}), 400
             if len(content) > CHAT_MESSAGE_MAX_LEN:
                 return json_resp({"ok":False,"msg":f"訊息過長，最多 {CHAT_MESSAGE_MAX_LEN} 字"}), 400
+            blocked, info = check_user_rate_limit(actor["id"], "chat_send", max_req=20, window_sec=60)
+            if blocked:
+                return json_resp({"ok":False,"msg":f"訊息發送過於頻繁（每分鐘最多 {info['limit']} 則）"}), 429
 
             is_bad, bad_reason = detect_chat_violation(content)
             if is_bad:
@@ -246,8 +283,10 @@ def register_chat_routes(app, deps):
                 (room_id, actor["id"], content, created_at)
             )
             conn.commit()
-            append_chat_record(room_id, cur.lastrowid, actor["username"], content, created_at)
-            return json_resp({"ok":True,"msg":"訊息已送出"})
+            transcript_synced = append_chat_record(room_id, cur.lastrowid, actor["username"], content, created_at)
+            if not transcript_synced:
+                audit("CHAT_TRANSCRIPT_WRITE_FAILED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},message_id={cur.lastrowid}")
+            return json_resp({"ok":True,"msg":"訊息已送出","transcript_synced":transcript_synced})
         finally:
             conn.close()
 

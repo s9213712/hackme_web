@@ -1,11 +1,36 @@
 import json
 import os
+import threading
+import time
 from datetime import datetime
 from flask import request
 
+_VIOLATION_INTEGRITY_CACHE = {
+    "head_id": None,
+    "checked_at": 0.0,
+    "payload": None,
+}
+_VIOLATION_INTEGRITY_CACHE_LOCK = threading.Lock()
+
 
 def register_moderation_routes(app, deps):
-    globals().update(deps)
+    AUDIT_LOG_PATH = deps["AUDIT_LOG_PATH"]
+    activate_emergency_lockdown = deps["activate_emergency_lockdown"]
+    add_violation = deps["add_violation"]
+    audit = deps["audit"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    is_audit_chain_enabled = deps["is_audit_chain_enabled"]
+    json_resp = deps["json_resp"]
+    normalize_text = deps["normalize_text"]
+    parse_positive_int = deps["parse_positive_int"]
+    require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
+    role_rank = deps["role_rank"]
+    secure_add_violation = deps["secure_add_violation"]
+    verify_audit_integrity = deps["verify_audit_integrity"]
+    verify_violation_integrity = deps["verify_violation_integrity"]
 
     # ── 查詢所有違規記錄（可驗證 integrity）──────────────────────────────────────
     @app.route("/api/admin/violations", methods=["GET"])
@@ -71,15 +96,32 @@ def register_moderation_routes(app, deps):
                 if target:
                     integrity_ok, integrity_broken, integrity_details = verify_violation_integrity(target["id"])
             else:
-                for u in conn.execute("SELECT id FROM users WHERE username<>'root' ORDER BY id ASC").fetchall():
-                    ok, broken_at, details = verify_violation_integrity(u["id"])
-                    if not ok:
-                        integrity_ok = False
-                        integrity_broken = broken_at
-                        integrity_details = details
-                        break
-                if integrity_ok:
-                    integrity_details = "integrity OK"
+                head_row = conn.execute("SELECT MAX(id) AS head_id FROM secure_violations").fetchone()
+                head_id = head_row["head_id"] if head_row else None
+                cached = None
+                with _VIOLATION_INTEGRITY_CACHE_LOCK:
+                    if (
+                        _VIOLATION_INTEGRITY_CACHE["payload"] is not None
+                        and _VIOLATION_INTEGRITY_CACHE["head_id"] == head_id
+                        and time.monotonic() - _VIOLATION_INTEGRITY_CACHE["checked_at"] < 300
+                    ):
+                        cached = dict(_VIOLATION_INTEGRITY_CACHE["payload"])
+                if cached is None:
+                    cached = {"ok": True, "broken_at": None, "details": "integrity OK"}
+                    for u in conn.execute("SELECT id FROM users WHERE username<>'root' ORDER BY id ASC").fetchall():
+                        ok, broken_at, details = verify_violation_integrity(u["id"])
+                        if not ok:
+                            cached = {"ok": False, "broken_at": broken_at, "details": details}
+                            break
+                    with _VIOLATION_INTEGRITY_CACHE_LOCK:
+                        _VIOLATION_INTEGRITY_CACHE.update({
+                            "head_id": head_id,
+                            "checked_at": time.monotonic(),
+                            "payload": dict(cached),
+                        })
+                integrity_ok = cached["ok"]
+                integrity_broken = cached["broken_at"]
+                integrity_details = cached["details"]
 
             return json_resp({
                 "ok":      True,
@@ -114,6 +156,16 @@ def register_moderation_routes(app, deps):
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
 
+            secure_add_violation(
+                user_id,
+                target["username"],
+                target["role"],
+                0,
+                f"violations_reset by {actor['username']} (previous: {target['violation_count']})",
+                "super_admin",
+                actor["username"],
+                update_user_counter=False,
+            )
             conn.execute("UPDATE users SET violation_count=0 WHERE id=?", (user_id,))
             conn.commit()
             audit("VIOLATIONS_RESET", get_client_ip(), user=actor["username"],

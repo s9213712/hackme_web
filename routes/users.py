@@ -4,7 +4,44 @@ from flask import request
 
 
 def register_user_routes(app, deps):
-    globals().update(deps)
+    MAX_MANAGERS = deps["MAX_MANAGERS"]
+    MAX_EXTRA_SUPER_ADMINS = deps["MAX_EXTRA_SUPER_ADMINS"]
+    PASSWORD_HISTORY_LIMIT = deps["PASSWORD_HISTORY_LIMIT"]
+    ROLE_LABEL = deps["ROLE_LABEL"]
+    ROLE_RANK = deps["ROLE_RANK"]
+    add_violation = deps["add_violation"]
+    audit = deps["audit"]
+    check_user_rate_limit = deps["check_user_rate_limit"]
+    count_role = deps["count_role"]
+    decrypt_field = deps["decrypt_field"]
+    encrypt_field = deps["encrypt_field"]
+    ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    get_ua = deps["get_ua"]
+    hash_password = deps["hash_password"]
+    json_resp = deps["json_resp"]
+    normalize_text = deps["normalize_text"]
+    parse_birthdate = deps["parse_birthdate"]
+    parse_positive_int = deps["parse_positive_int"]
+    revoke_user_sessions = deps["revoke_user_sessions"]
+    require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
+    role_rank = deps["role_rank"]
+    user_public_payload = deps["user_public_payload"]
+    validate_id_number = deps["validate_id_number"]
+    validate_password = deps["validate_password"]
+    validate_phone = deps["validate_phone"]
+    verify_password = deps["verify_password"]
+
+    def trim_password_history(conn, user_id):
+        conn.execute(
+            "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
+            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+            ")",
+            (user_id, user_id, PASSWORD_HISTORY_LIMIT)
+        )
 
     @app.route("/api/admin/users", methods=["GET","POST"])
     @require_csrf_safe
@@ -28,7 +65,7 @@ def register_user_routes(app, deps):
                     "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
-                data = [user_public_payload(r) for r in rows]
+                data = [user_public_payload(r, include_sensitive=False) for r in rows]
             finally:
                 conn.close()
             return json_resp({
@@ -109,6 +146,7 @@ def register_user_routes(app, deps):
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                 (cur.lastrowid, hash_password(password), now)
             )
+            trim_password_history(conn, cur.lastrowid)
             conn.commit()
             audit("ADMIN_CREATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target={username}, role={role}")
@@ -126,6 +164,7 @@ def register_user_routes(app, deps):
         is_self = actor["id"] == user_id
         if role_rank(actor_role) < role_rank("manager") and not is_self:
             return json_resp({"ok":False,"msg":"權限不足"}), 403
+        include_sensitive = is_self or actor["username"] == "root"
 
         conn = get_db()
         try:
@@ -137,19 +176,7 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
             return json_resp({
                 "ok": True,
-                "user": {
-                    "id": target["id"],
-                    "username": target["username"],
-                    "nickname": decrypt_field(target["nickname"]),
-                    "real_name": decrypt_field(target["real_name"]),
-                    "birthdate": decrypt_field(target["birthdate"]),
-                    "id_number": decrypt_field(target["id_number"]),
-                    "phone": decrypt_field(target["phone"]),
-                    "role": target["role"],
-                    "status": target["status"],
-                    "blocked_until": target["blocked_until"],
-                    "violation_count": target["violation_count"] or 0,
-                }
+                "user": user_public_payload(target, include_sensitive=include_sensitive)
             })
         finally:
             conn.close()
@@ -194,6 +221,7 @@ def register_user_routes(app, deps):
             if not isinstance(data, dict):
                 return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
+            revoke_sessions_needed = False
             updates = []
             params = []
             if "nickname" in data:
@@ -228,21 +256,46 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
                 updates.append("status=?")
                 params.append(val)
+                if val != "active":
+                    revoke_sessions_needed = True
             if "role" in data:
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403
+                if actor["username"] != "root":
+                    return json_resp({"ok":False,"msg":"只有 root 可變更角色"}), 403
                 val = normalize_text(data["role"])
                 if val not in ROLE_RANK:
                     return json_resp({"ok":False,"msg":"不支援的角色"}), 400
                 if target["username"] == "root" and val != "super_admin":
                     return json_resp({"ok":False,"msg":"最高管理者角色不可變更"}), 403
+                if val == "manager" and target["role"] != "manager" and count_role("manager") >= MAX_MANAGERS:
+                    return json_resp({"ok":False,"msg":f"管理者已達上限（{MAX_MANAGERS} 人）"}), 409
+                if val == "super_admin" and target["role"] != "super_admin" and count_role("super_admin") >= MAX_EXTRA_SUPER_ADMINS:
+                    return json_resp({"ok":False,"msg":f"非 root 最高管理者已達上限（{MAX_EXTRA_SUPER_ADMINS} 人）"}), 409
                 updates.append("role=?")
                 params.append(val)
             if "password" in data and isinstance(data["password"], str) and data["password"]:
-                pw = data["password"][:128]  # 截斷防止超長密碼
+                action_name = "password_change" if is_self else "admin_password_reset"
+                limit = 5 if is_self else 20
+                blocked, info = check_user_rate_limit(actor["id"], action_name, max_req=limit, window_sec=3600)
+                if blocked:
+                    return json_resp({"ok":False,"msg":f"密碼操作過於頻繁（每小時最多 {info['limit']} 次）"}), 429
+                pw = data["password"][:128]
                 pw_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
-                if pw_confirm and pw != pw_confirm:
+                if not pw_confirm:
+                    return json_resp({"ok":False,"msg":"請再次輸入新密碼"}), 400
+                if pw_confirm != pw:
                     return json_resp({"ok":False,"msg":"兩次密碼輸入不一致"}), 400
+                if is_self:
+                    current_pw = data.get("current_password","") if isinstance(data.get("current_password"), str) else ""
+                    if not current_pw:
+                        return json_resp({"ok":False,"msg":"請輸入目前密碼"}), 400
+                    current_row = conn.execute(
+                        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                        (user_id,)
+                    ).fetchone()
+                    if not current_row or not verify_password(current_row["password_hash"], current_pw):
+                        return json_resp({"ok":False,"msg":"目前密碼錯誤"}), 403
                 if actor_role != "super_admin":
                     ok, msg = validate_password(pw)
                     if not ok:
@@ -251,6 +304,8 @@ def register_user_routes(app, deps):
                     "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                     (user_id, hash_password(pw), datetime.now().isoformat())
                 )
+                trim_password_history(conn, user_id)
+                revoke_sessions_needed = True
             if "username" in data:
                 return json_resp({"ok":False,"msg":"不允許變更帳號名稱"}), 400
 
@@ -267,6 +322,8 @@ def register_user_routes(app, deps):
                 sql = "UPDATE users SET " + ", ".join(updates) + " WHERE id=?"
                 conn.execute(sql, params)
                 conn.commit()
+            if revoke_sessions_needed:
+                revoke_user_sessions(user_id)
             audit("ADMIN_UPDATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target_id={user_id},self={is_self}")
             return json_resp({"ok":True,"msg":"帳號已更新"})
@@ -342,7 +399,7 @@ def register_user_routes(app, deps):
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
-        action = normalize_text(data.get("action")).lower() or "block"
+        action = (normalize_text(data.get("action")) or "").lower() or "block"
         minutes = data.get("minutes", 30)
         if not isinstance(minutes, int):
             try:
@@ -359,6 +416,8 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
             if target["username"] == "root" and actor_role != "super_admin":
                 return json_resp({"ok":False,"msg":"無權限封鎖最高管理者"}), 403
+            if actor["username"] != "root" and role_rank(actor_role) <= role_rank(target["role"]):
+                return json_resp({"ok":False,"msg":"無法封鎖同級或更高階帳號"}), 403
 
             if action == "unblock":
                 conn.execute("UPDATE users SET status='active', blocked_until=NULL WHERE id=?", (user_id,))
@@ -370,6 +429,7 @@ def register_user_routes(app, deps):
             blocked_until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
             conn.execute("UPDATE users SET status='inactive', blocked_until=? WHERE id=?", (blocked_until, user_id))
             conn.commit()
+            revoke_user_sessions(user_id)
             audit("ADMIN_BLOCK_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target_id={user_id}, minutes={minutes}")
             return json_resp({"ok":True,"msg":f"帳號已封鎖 {minutes} 分鐘"})
@@ -385,8 +445,8 @@ def register_user_routes(app, deps):
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if role_rank(actor_role) < role_rank("super_admin"):
-            return json_resp({"ok":False,"msg":"權限不足"}), 403
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可晉升帳號"}), 403
 
         conn = get_db()
         try:
@@ -407,7 +467,8 @@ def register_user_routes(app, deps):
                 limit = MAX_MANAGERS
                 if count_role("manager") >= limit:
                     return json_resp({"ok":False,"msg":f"管理者已達上限（{limit} 人）"}), 400
-            # super_admin 限額 1 不需要檢查（root 不可變）
+            if to_role == "super_admin" and count_role("super_admin") >= MAX_EXTRA_SUPER_ADMINS:
+                return json_resp({"ok":False,"msg":f"非 root 最高管理者已達上限（{MAX_EXTRA_SUPER_ADMINS} 人）"}), 409
 
             conn.execute("UPDATE users SET role=?, violation_count=0, updated_at=? WHERE id=?",
                          (to_role, datetime.now().isoformat(), user_id))
@@ -426,8 +487,8 @@ def register_user_routes(app, deps):
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if role_rank(actor_role) < role_rank("super_admin"):
-            return json_resp({"ok":False,"msg":"只有最高管理者可降級帳號"}), 403
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可降級帳號"}), 403
 
         conn = get_db()
         try:
@@ -440,12 +501,15 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"最高管理者帳號不可降級"}), 403
             from_role = target["role"]
             if from_role == "user":
-                # 一般用戶 → 刪除
-                audit("USER_DELETED_BY_ADMIN", get_client_ip(), user=actor["username"],
-                      detail=f"user_id={user_id} demoted from user (delete)")
-                conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+                conn.execute(
+                    "UPDATE users SET status='inactive', blocked_until=NULL, updated_at=? WHERE id=?",
+                    (datetime.now().isoformat(), user_id)
+                )
                 conn.commit()
-                return json_resp({"ok":True,"msg":"一般用戶已刪除"})
+                revoke_user_sessions(user_id)
+                audit("USER_DEACTIVATED_BY_ADMIN", get_client_ip(), user=actor["username"],
+                      detail=f"user_id={user_id} deactivated from user demotion")
+                return json_resp({"ok":True,"msg":"帳號已停用"})
             # 管理者 → 一般用戶
             conn.execute("UPDATE users SET role='user', violation_count=0, updated_at=? WHERE id=?",
                          (datetime.now().isoformat(), user_id))

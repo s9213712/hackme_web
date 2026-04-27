@@ -3,7 +3,19 @@ from flask import request
 
 
 def register_appeal_routes(app, deps):
-    globals().update(deps)
+    VIOLATION_APPEAL_WINDOW_HOURS = deps["VIOLATION_APPEAL_WINDOW_HOURS"]
+    audit = deps["audit"]
+    check_user_rate_limit = deps["check_user_rate_limit"]
+    get_client_ip = deps["get_client_ip"]
+    get_current_user_ctx = deps["get_current_user_ctx"]
+    get_db = deps["get_db"]
+    get_latest_violation = deps["get_latest_violation"]
+    json_resp = deps["json_resp"]
+    normalize_text = deps["normalize_text"]
+    parse_iso_to_datetime = deps["parse_iso_to_datetime"]
+    parse_positive_int = deps["parse_positive_int"]
+    require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
 
     def _serialize_appeal_row(r):
         if not r:
@@ -64,16 +76,19 @@ def register_appeal_routes(app, deps):
                 "FROM violation_appeals WHERE user_id=? ORDER BY id DESC LIMIT 20",
                 (user_id,)
             ).fetchall()
-            appeal_rows = conn.execute(
-                "SELECT id, latest_violation_id, violation_count_snapshot, penalty_points, reason, status, reviewed_by, reviewed_at, review_note, created_at "
-                "FROM violation_appeals WHERE user_id=? ORDER BY id DESC",
-                (user_id,)
-            ).fetchall()
             appeal_by_violation = {}
-            for appeal in appeal_rows:
-                vid = appeal["latest_violation_id"]
-                if vid and vid not in appeal_by_violation:
-                    appeal_by_violation[vid] = appeal
+            violation_ids = [row["id"] for row in violation_rows]
+            if violation_ids:
+                placeholders = ",".join("?" for _ in violation_ids)
+                appeal_rows = conn.execute(
+                    "SELECT id, latest_violation_id, violation_count_snapshot, penalty_points, reason, status, reviewed_by, reviewed_at, review_note, created_at "
+                    f"FROM violation_appeals WHERE user_id=? AND latest_violation_id IN ({placeholders}) ORDER BY id DESC",
+                    [user_id, *violation_ids]
+                ).fetchall()
+                for appeal in appeal_rows:
+                    vid = appeal["latest_violation_id"]
+                    if vid and vid not in appeal_by_violation:
+                        appeal_by_violation[vid] = appeal
 
             now = datetime.now()
             latest_dt = parse_iso_to_datetime(latest_violation["created_at"]) if latest_violation else None
@@ -133,6 +148,9 @@ def register_appeal_routes(app, deps):
         conn = get_db()
         try:
             user_id = actor["id"]
+            blocked, info = check_user_rate_limit(user_id, "appeal_submit", max_req=5, window_sec=3600)
+            if blocked:
+                return json_resp({"ok":False,"msg":f"申覆提交過於頻繁（每小時最多 {info['limit']} 次）"}), 429
             try:
                 data = request.get_json(force=True)
             except Exception:
@@ -278,10 +296,10 @@ def register_appeal_routes(app, deps):
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
-        action = normalize_text(data.get("action")).lower()
+        action = (normalize_text(data.get("action")) or "").lower()
         if action not in ("approve", "reject"):
             return json_resp({"ok":False,"msg":"action 必須是 approve 或 reject"}), 400
-        note = normalize_text(data.get("note"))[:200]
+        note = (normalize_text(data.get("note")) or "")[:200]
 
         conn = get_db()
         try:
