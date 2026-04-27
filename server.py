@@ -26,6 +26,11 @@ from services.audit import (
     repair_audit_chain,
     verify_audit_integrity,
 )
+from services.access_controls import (
+    client_ip_allowed,
+    is_browser_user_agent,
+    verify_maintenance_bypass_token,
+)
 from services.auth import (
     CSRF_TOKEN_TTL,
     SESSION_TTL,
@@ -369,6 +374,29 @@ def is_ip_blocking_enabled():
     if "ip_blocking_enabled" in settings:
         return bool(settings.get("ip_blocking_enabled", False))
     return bool(IP_BLOCKING_ENABLED)
+
+
+def get_request_maintenance_bypass_token():
+    return (
+        request.headers.get("X-Maintenance-Bypass-Token", "")
+        or request.args.get("maintenance_bypass_token", "")
+        or ""
+    )
+
+
+def has_valid_maintenance_bypass(settings=None):
+    settings = settings or get_system_settings()
+    return verify_maintenance_bypass_token(
+        get_request_maintenance_bypass_token(),
+        settings.get("maintenance_bypass_token_hash", ""),
+    )
+
+
+def root_ip_is_allowed(settings=None):
+    settings = settings or get_system_settings()
+    if not settings.get("root_ip_whitelist_enabled", False):
+        return True
+    return client_ip_allowed(get_client_ip(), settings.get("root_ip_whitelist", ""))
 
 
 FEATURE_ROUTE_GATES = (
@@ -816,6 +844,50 @@ def extra_security_headers(response):
 
 # ── CORS (tightly scoped — no wildcard) ────────────────────────────────────────
 @app.before_request
+def enforce_root_ip_whitelist():
+    if request.method == "OPTIONS" or not request.path.startswith("/api"):
+        return None
+    settings = get_system_settings()
+    if not settings.get("root_ip_whitelist_enabled", False):
+        return None
+    if request.path == "/api/login":
+        data = request.get_json(silent=True) if request.is_json else {}
+        username = normalize_text(data.get("username")) if isinstance(data, dict) else ""
+        if username == "root" and not root_ip_is_allowed(settings):
+            record_security_event("permission_denied", get_client_ip(), target_user="root", detail="root_ip_whitelist_login")
+            return json_resp({"ok":False,"msg":"root IP 不在允許清單內"}), 403
+        return None
+    actor = get_current_user_ctx()
+    if actor and actor["username"] == "root" and not root_ip_is_allowed(settings):
+        record_security_event("permission_denied", get_client_ip(), target_user="root", detail=f"root_ip_whitelist:path={request.path}")
+        return json_resp({"ok":False,"msg":"root IP 不在允許清單內"}), 403
+    return None
+
+
+@app.before_request
+def enforce_browser_only_mode():
+    if request.method == "OPTIONS" or not request.path.startswith("/api"):
+        return None
+    settings = get_system_settings()
+    if not settings.get("browser_only_mode_enabled", False):
+        return None
+    if has_valid_maintenance_bypass(settings):
+        return None
+    if request.path in ("/api/version", "/api/site-config"):
+        return None
+    if is_browser_user_agent(request.headers.get("User-Agent", "")):
+        return None
+    actor = get_current_user_ctx()
+    record_security_event(
+        "permission_denied",
+        get_client_ip(),
+        target_user=(actor["username"] if actor else "-"),
+        detail=f"browser_only_mode:path={request.path}",
+    )
+    return json_resp({"ok":False,"msg":"browser-only mode 已啟用，請使用瀏覽器存取"}), 403
+
+
+@app.before_request
 def restrict_cors():
     if request.method == "OPTIONS":
         origin = request.headers.get("Origin", "")
@@ -825,6 +897,8 @@ def restrict_cors():
 
     settings = get_system_settings()
     if not settings.get("maintenance_mode", False):
+        return None
+    if has_valid_maintenance_bypass(settings):
         return None
     if not request.path.startswith("/api"):
         return None

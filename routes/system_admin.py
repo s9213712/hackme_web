@@ -7,6 +7,11 @@ import time
 from datetime import datetime
 from flask import request
 
+from services.access_controls import (
+    access_control_settings_payload,
+    generate_maintenance_bypass_token,
+    hash_maintenance_bypass_token,
+)
 from services.bootstrap import CURRENT_SCHEMA_VERSION, get_schema_version
 from services.member_levels import (
     DEFAULT_MEMBER_LEVEL_RULES,
@@ -385,6 +390,58 @@ def register_system_admin_routes(app, deps):
         audit("FEATURE_FLAGS_CHANGED", get_client_ip(), user=actor["username"], success=True,
               detail=str(updates))
         return json_resp({"ok":True,"msg":"功能開關已更新","features":updates})
+
+    @app.route("/api/admin/access-controls", methods=["GET", "PUT"])
+    @require_csrf_safe
+    def admin_access_controls():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if request.method == "GET":
+            return json_resp({"ok":True,"access_controls":access_control_settings_payload(get_system_settings())})
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        updates = {}
+        for key in ("root_ip_whitelist_enabled", "root_ip_whitelist", "browser_only_mode_enabled"):
+            if key in data:
+                updates[key] = data[key]
+        if "clear_maintenance_bypass_token" in data and data.get("clear_maintenance_bypass_token"):
+            updates["maintenance_bypass_token_hash"] = ""
+        if not updates:
+            return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
+        saved = save_settings(updates)
+        audit("ACCESS_CONTROLS_CHANGED", get_client_ip(), user=actor["username"], success=True,
+              detail=str(access_control_settings_payload({**get_system_settings(), **saved})))
+        return json_resp({"ok":True,"msg":"存取控制設定已更新","access_controls":access_control_settings_payload(get_system_settings())})
+
+    @app.route("/api/admin/access-controls/maintenance-bypass-token", methods=["POST"])
+    @require_csrf
+    def admin_rotate_maintenance_bypass_token():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        if data.get("confirm") != "ROTATE":
+            return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE"}), 400
+        token = generate_maintenance_bypass_token()
+        save_settings({"maintenance_bypass_token_hash": hash_maintenance_bypass_token(token)})
+        audit("MAINTENANCE_BYPASS_TOKEN_ROTATED", get_client_ip(), user=actor["username"], success=True,
+              detail="token_hash_rotated")
+        return json_resp({
+            "ok": True,
+            "msg": "maintenance bypass token 已更新，token 只會顯示這一次",
+            "token": token,
+            "access_controls": access_control_settings_payload(get_system_settings()),
+        })
 
     @app.route("/api/admin/member-level-rules", methods=["GET"])
     @require_csrf_safe

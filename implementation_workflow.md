@@ -68,15 +68,15 @@
 ## Phase 4：伺服器模式
 
 - [x] `server_modes` schema 整理
-- [ ] root IP whitelist API
-- [ ] `browser_only_mode` middleware
-- [ ] maintenance bypass token
+- [x] root IP whitelist API
+- [x] `browser_only_mode` middleware
+- [x] maintenance bypass token
 - [x] test mode
 - [x] pre-production 條件檢查
 - [x] superweak sandbox 前置條件確認
 - [x] superweak 進入前自動建立 `before_superweak` snapshot
 - [x] superweak 離開時可 restore 或保留 dirty state
-- [x] 對應測試
+- [x] 對應測試：完整 pytest `79 passed`
 
 ## Phase 5：Snapshot / Restore / Reset
 

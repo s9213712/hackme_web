@@ -86,7 +86,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-006`
+- Current release ID: `2026.04.27-007`
 - Current schema version: `18`
 
 ### Governance and Member Levels
@@ -171,6 +171,17 @@ Entering `superweak` requires root confirmation and automatically creates a
 `before_superweak` snapshot. Exiting can restore that snapshot by default or let
 root explicitly keep the dirty state with a high-risk audit event.
 
+Server access controls:
+
+- `GET /api/admin/access-controls`: root-only read of root IP whitelist, browser-only mode, and maintenance bypass token state.
+- `PUT /api/admin/access-controls`: root-only update for `root_ip_whitelist_enabled`, `root_ip_whitelist`, `browser_only_mode_enabled`, and bypass token clearing.
+- `POST /api/admin/access-controls/maintenance-bypass-token`: root-only token rotation; the raw token is returned once and only its hash is stored.
+
+Root IP whitelist blocks root login and root API usage from non-whitelisted IPs
+when enabled. Browser-only mode blocks non-browser API clients unless they hold
+a valid maintenance bypass token. Maintenance bypass tokens can temporarily
+allow API access during maintenance mode without disabling maintenance globally.
+
 ### Health Center
 
 Root health diagnostics now expose separate machine-readable probes:
@@ -246,6 +257,10 @@ Other important defaults:
 | `audit_chain_enabled` | `false` |
 | `ip_blocking_enabled` | `true` |
 | `maintenance_mode` | `false` |
+| `root_ip_whitelist_enabled` | `false` |
+| `root_ip_whitelist` | empty |
+| `browser_only_mode_enabled` | `false` |
+| `maintenance_bypass_token_hash` | empty |
 | `allow_register` | `true` |
 | `require_email_verification` | `false` |
 | `max_login_failures` | `3` |
