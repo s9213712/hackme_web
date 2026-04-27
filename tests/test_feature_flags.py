@@ -2,8 +2,11 @@ import sqlite3
 
 from flask import Flask, jsonify, make_response
 
+from routes.files import register_file_routes
 from routes.system_admin import register_system_admin_routes
 from services import settings
+from services.member_levels import ensure_member_level_rules_schema
+from services.upload_security import ensure_upload_security_schema
 from server import feature_gate_for_path
 
 
@@ -60,8 +63,59 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/admin/audit") == "feature_audit_log_enabled"
     assert feature_gate_for_path("/api/admin/message-reports") == "feature_reports_enabled"
     assert feature_gate_for_path("/api/files/upload") == "feature_privacy_uploads_enabled"
+    assert feature_gate_for_path("/api/files/quota") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/crypto/init") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/admin/settings") is None
+
+
+def test_file_quota_endpoint_returns_user_usage(tmp_path):
+    db_path = tmp_path / "files.db"
+    app = Flask(__name__)
+    app.testing = True
+    actor = {
+        "id": 1,
+        "username": "alice",
+        "role": "user",
+        "member_level": "trusted",
+        "effective_level": "trusted",
+        "sanction_status": "none",
+    }
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    conn = get_db()
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'alice')")
+    ensure_member_level_rules_schema(conn)
+    ensure_upload_security_schema(conn)
+    conn.execute(
+        "INSERT INTO uploaded_files (id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status, size_bytes, created_at) "
+        "VALUES ('f1', 1, 'storage/f1', 'public_attachment', 'low', 'clean', 1024, '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    register_file_routes(app, {
+        "get_current_user_ctx": lambda: actor,
+        "get_db": get_db,
+        "get_member_level_rule": lambda conn, level: {
+            "can_upload_attachment": True,
+            "attachment_quota_mb": 2,
+            "max_attachment_size_mb": 1,
+            "upload_rate_limit_per_day": 10,
+        },
+        "json_resp": _json_resp,
+        "require_csrf_safe": _passthrough,
+    })
+    client = app.test_client()
+    res = client.get("/api/files/quota")
+    data = res.get_json()
+    assert res.status_code == 200
+    assert data["quota"]["used_bytes"] == 1024
+    assert data["quota"]["remaining_bytes"] == 2 * 1024 * 1024 - 1024
 
 
 def test_admin_features_endpoint_is_root_only():

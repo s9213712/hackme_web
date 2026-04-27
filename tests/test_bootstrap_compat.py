@@ -134,6 +134,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     encrypted_key_cols = {row["name"] for row in conn.execute("PRAGMA table_info(encrypted_file_keys)").fetchall()}
     scan_result_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_scan_results)").fetchall()}
     access_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(file_access_logs)").fetchall()}
+    cloud_policy_cols = {row["name"] for row in conn.execute("PRAGMA table_info(cloud_drive_security_policies)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username FROM users WHERE username='root'").fetchone()
     conn.close()
@@ -164,7 +165,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"file_id", "recipient_user_id", "encrypted_file_key", "revoked_at"} <= encrypted_key_cols
     assert {"scanner_name", "result", "details_json"} <= scan_result_cols
     assert {"file_id", "actor_user_id", "action", "result"} <= access_log_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    assert {"scope", "block_unclean_downloads", "max_archive_files", "max_daily_downloads"} <= cloud_policy_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     assert root_user["username"] == "root"
 
 

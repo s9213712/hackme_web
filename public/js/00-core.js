@@ -484,6 +484,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
   const tabModuleCommunity = $("tab-module-community");
+  const tabModuleDrive = $("tab-module-drive");
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
@@ -491,6 +492,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
+  if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
@@ -513,7 +515,9 @@ function setAuthState(json, showLoginHero = false) {
       ? "chat"
       : canAccessModule("community")
         ? "community"
-        : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+        : canAccessModule("privacy_uploads")
+          ? "drive"
+          : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
   resetInactivityTimer();
 }

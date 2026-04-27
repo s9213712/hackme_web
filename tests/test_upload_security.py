@@ -8,6 +8,9 @@ from services.upload_security import (
     create_uploaded_file_record,
     ensure_upload_security_schema,
     evaluate_upload_policy,
+    get_cloud_drive_safety_summary,
+    get_cloud_drive_security_policy,
+    get_user_cloud_drive_usage,
     safe_public_filename,
 )
 
@@ -29,6 +32,18 @@ def test_upload_security_schema_seeds_file_type_policies():
         assert policies["executable"] == "high"
         assert policies["archive"] == "medium"
         assert policies["default"] == "low"
+    finally:
+        conn.close()
+
+
+def test_cloud_drive_security_policy_defaults_are_safe():
+    conn = _conn()
+    try:
+        policy = get_cloud_drive_security_policy(conn)
+        assert policy["block_unclean_downloads"] is True
+        assert policy["warn_high_risk_downloads"] is True
+        assert policy["e2ee_server_scan_claim_allowed"] is False
+        assert policy["max_archive_files"] == 200
     finally:
         conn.close()
 
@@ -87,6 +102,56 @@ def test_e2ee_record_does_not_store_plaintext_filename_or_file_key():
         assert row["plaintext_sha256"] is None
         assert key_row["encrypted_file_key"] == "sealed:file-key"
         assert "secret-tax.pdf" not in str(dict(row))
+    finally:
+        conn.close()
+
+
+def test_cloud_drive_usage_reports_used_and_remaining_quota():
+    conn = _conn()
+    try:
+        create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/public/a.txt",
+            privacy_mode="public_attachment",
+            size_bytes=256,
+            original_filename="a.txt",
+            user={"effective_level": "trusted"},
+        )
+        create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/e2ee/blob.bin",
+            privacy_mode="e2ee_vault",
+            size_bytes=512,
+            encrypted_metadata="sealed",
+            encrypted_file_key="sealed-key",
+            user={"effective_level": "vip"},
+        )
+        usage = get_user_cloud_drive_usage(
+            conn,
+            {"id": 1, "role": "user", "effective_level": "trusted", "sanction_status": "none"},
+            member_rule={"can_upload_attachment": True, "attachment_quota_mb": 1, "max_attachment_size_mb": 1, "upload_rate_limit_per_day": 10},
+        )
+        assert usage["used_bytes"] == 768
+        assert usage["total_bytes"] == 1024 * 1024
+        assert usage["remaining_bytes"] == 1024 * 1024 - 768
+        assert usage["by_privacy_mode"]["public_attachment"]["count"] == 1
+        assert usage["by_privacy_mode"]["e2ee_vault"]["count"] == 1
+    finally:
+        conn.close()
+
+
+def test_cloud_drive_safety_summary_restricted_user_cannot_upload():
+    conn = _conn()
+    try:
+        summary = get_cloud_drive_safety_summary(
+            conn,
+            {"id": 1, "role": "user", "effective_level": "restricted", "sanction_status": "restricted"},
+            member_rule={"can_upload_attachment": True, "attachment_quota_mb": 10, "max_attachment_size_mb": 1},
+        )
+        assert summary["usage"]["can_upload"] is False
+        assert any("restricted" in item for item in summary["restrictions"])
     finally:
         conn.close()
 

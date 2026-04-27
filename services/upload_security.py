@@ -93,6 +93,23 @@ DEFAULT_FILE_TYPE_POLICIES = {
     },
 }
 
+DEFAULT_CLOUD_DRIVE_SECURITY_POLICY = {
+    "scope": "default",
+    "require_scan_before_download": True,
+    "block_unclean_downloads": True,
+    "warn_high_risk_downloads": True,
+    "allow_inline_preview_for_high_risk": False,
+    "e2ee_server_scan_claim_allowed": False,
+    "revoke_shares_on_suspension": True,
+    "max_archive_files": 200,
+    "max_archive_uncompressed_bytes": 50 * 1024 * 1024,
+    "max_daily_downloads": 500,
+    "notes": (
+        "Cloud drive files are governed by privacy mode, scan status, risk level, "
+        "member level quota, and share/download restrictions."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class UploadPolicyDecision:
@@ -206,12 +223,32 @@ def ensure_upload_security_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cloud_drive_security_policies (
+            scope TEXT PRIMARY KEY,
+            require_scan_before_download INTEGER NOT NULL,
+            block_unclean_downloads INTEGER NOT NULL,
+            warn_high_risk_downloads INTEGER NOT NULL,
+            allow_inline_preview_for_high_risk INTEGER NOT NULL,
+            e2ee_server_scan_claim_allowed INTEGER NOT NULL,
+            revoke_shares_on_suspension INTEGER NOT NULL,
+            max_archive_files INTEGER NOT NULL,
+            max_archive_uncompressed_bytes INTEGER NOT NULL,
+            max_daily_downloads INTEGER NOT NULL,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_file_keys(file_id, recipient_user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_scan_results_file ON file_scan_results(file_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file_access_logs_file ON file_access_logs(file_id, created_at)")
     seed_default_file_type_policies(conn)
+    seed_default_cloud_drive_security_policy(conn)
 
 
 def seed_default_file_type_policies(conn):
@@ -243,6 +280,37 @@ def seed_default_file_type_policies(conn):
                 now,
             ),
         )
+
+
+def seed_default_cloud_drive_security_policy(conn):
+    now = datetime.now().isoformat()
+    policy = DEFAULT_CLOUD_DRIVE_SECURITY_POLICY
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO cloud_drive_security_policies (
+            scope, require_scan_before_download, block_unclean_downloads,
+            warn_high_risk_downloads, allow_inline_preview_for_high_risk,
+            e2ee_server_scan_claim_allowed, revoke_shares_on_suspension,
+            max_archive_files, max_archive_uncompressed_bytes, max_daily_downloads,
+            notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            policy["scope"],
+            1 if policy["require_scan_before_download"] else 0,
+            1 if policy["block_unclean_downloads"] else 0,
+            1 if policy["warn_high_risk_downloads"] else 0,
+            1 if policy["allow_inline_preview_for_high_risk"] else 0,
+            1 if policy["e2ee_server_scan_claim_allowed"] else 0,
+            1 if policy["revoke_shares_on_suspension"] else 0,
+            int(policy["max_archive_files"]),
+            int(policy["max_archive_uncompressed_bytes"]),
+            int(policy["max_daily_downloads"]),
+            policy["notes"],
+            now,
+            now,
+        ),
+    )
 
 
 def normalize_privacy_mode(value):
@@ -301,6 +369,139 @@ def get_file_type_policy(conn, category):
         "notes": fallback["notes"],
         "created_at": now,
         "updated_at": now,
+    }
+
+
+def serialize_cloud_drive_security_policy(row):
+    if not row:
+        row = DEFAULT_CLOUD_DRIVE_SECURITY_POLICY
+        return {
+            "scope": row["scope"],
+            "require_scan_before_download": bool(row["require_scan_before_download"]),
+            "block_unclean_downloads": bool(row["block_unclean_downloads"]),
+            "warn_high_risk_downloads": bool(row["warn_high_risk_downloads"]),
+            "allow_inline_preview_for_high_risk": bool(row["allow_inline_preview_for_high_risk"]),
+            "e2ee_server_scan_claim_allowed": bool(row["e2ee_server_scan_claim_allowed"]),
+            "revoke_shares_on_suspension": bool(row["revoke_shares_on_suspension"]),
+            "max_archive_files": int(row["max_archive_files"]),
+            "max_archive_uncompressed_bytes": int(row["max_archive_uncompressed_bytes"]),
+            "max_daily_downloads": int(row["max_daily_downloads"]),
+            "notes": row["notes"],
+        }
+    data = dict(row)
+    for key in (
+        "require_scan_before_download",
+        "block_unclean_downloads",
+        "warn_high_risk_downloads",
+        "allow_inline_preview_for_high_risk",
+        "e2ee_server_scan_claim_allowed",
+        "revoke_shares_on_suspension",
+    ):
+        data[key] = bool(data.get(key))
+    for key in ("max_archive_files", "max_archive_uncompressed_bytes", "max_daily_downloads"):
+        data[key] = int(data.get(key) or 0)
+    return data
+
+
+def get_cloud_drive_security_policy(conn, scope="default"):
+    ensure_upload_security_schema(conn)
+    row = conn.execute(
+        "SELECT * FROM cloud_drive_security_policies WHERE scope=?",
+        (scope or "default",),
+    ).fetchone()
+    return serialize_cloud_drive_security_policy(row)
+
+
+def _sum_uploaded_file_bytes(conn, owner_user_id):
+    row = conn.execute(
+        "SELECT COALESCE(SUM(size_bytes), 0) AS used_bytes, COUNT(*) AS file_count "
+        "FROM uploaded_files WHERE owner_user_id=? AND deleted_at IS NULL",
+        (int(owner_user_id),),
+    ).fetchone()
+    return int(row["used_bytes"] or 0), int(row["file_count"] or 0)
+
+
+def _count_grouped(conn, owner_user_id, field):
+    if field not in {"privacy_mode", "risk_level", "scan_status"}:
+        raise ValueError("unsupported usage grouping")
+    rows = conn.execute(
+        f"SELECT {field} AS name, COUNT(*) AS count, COALESCE(SUM(size_bytes), 0) AS bytes "
+        "FROM uploaded_files WHERE owner_user_id=? AND deleted_at IS NULL GROUP BY "
+        f"{field}",
+        (int(owner_user_id),),
+    ).fetchall()
+    return {row["name"]: {"count": int(row["count"] or 0), "bytes": int(row["bytes"] or 0)} for row in rows}
+
+
+def get_user_cloud_drive_usage(conn, user, member_rule=None):
+    ensure_upload_security_schema(conn)
+    data = dict(user or {})
+    user_id = int(data.get("id") or 0)
+    role = data.get("role") or "user"
+    effective_level = data.get("effective_level") or data.get("member_level") or "newbie"
+    sanction_status = data.get("sanction_status") or "none"
+    rule = member_rule or {}
+    quota_mb = int(rule.get("attachment_quota_mb") or 0)
+    max_file_size_mb = int(rule.get("max_attachment_size_mb") or 0)
+    upload_rate_limit_per_day = int(rule.get("upload_rate_limit_per_day") or 0)
+    can_upload = bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"}
+
+    used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
+    total_bytes = None if role == "super_admin" else quota_mb * 1024 * 1024
+    remaining_bytes = None if total_bytes is None else max(0, total_bytes - used_bytes)
+    percent_used = 0.0
+    if total_bytes and total_bytes > 0:
+        percent_used = min(100.0, round((used_bytes / total_bytes) * 100, 2))
+    elif total_bytes == 0 and used_bytes > 0:
+        percent_used = 100.0
+
+    return {
+        "user_id": user_id,
+        "effective_level": effective_level,
+        "can_upload": can_upload,
+        "quota_source": "super_admin_unlimited" if role == "super_admin" else "member_level_rules.attachment_quota_mb",
+        "used_bytes": used_bytes,
+        "total_bytes": total_bytes,
+        "remaining_bytes": remaining_bytes,
+        "percent_used": percent_used,
+        "file_count": file_count,
+        "max_file_size_bytes": None if role == "super_admin" else max_file_size_mb * 1024 * 1024,
+        "upload_rate_limit_per_day": None if role == "super_admin" else upload_rate_limit_per_day,
+        "by_privacy_mode": _count_grouped(conn, user_id, "privacy_mode"),
+        "by_risk_level": _count_grouped(conn, user_id, "risk_level"),
+        "by_scan_status": _count_grouped(conn, user_id, "scan_status"),
+    }
+
+
+def get_cloud_drive_safety_summary(conn, user, member_rule=None):
+    policy = get_cloud_drive_security_policy(conn)
+    usage = get_user_cloud_drive_usage(conn, user, member_rule=member_rule)
+    effective_level = usage["effective_level"]
+    restrictions = []
+    if not usage["can_upload"]:
+        restrictions.append("目前會員等級或處分狀態不可上傳")
+    if policy["block_unclean_downloads"]:
+        restrictions.append("public/private 檔案需掃描為 clean 才能下載")
+    if policy["warn_high_risk_downloads"]:
+        restrictions.append("high / unknown_encrypted 下載前必須顯示風險警告")
+    if not policy["allow_inline_preview_for_high_risk"]:
+        restrictions.append("高風險檔案不提供 inline preview")
+    if not policy["e2ee_server_scan_claim_allowed"]:
+        restrictions.append("E2EE 檔案不可宣稱已完成伺服器完整掃毒")
+    if effective_level in {"restricted", "suspended"}:
+        restrictions.append("restricted/suspended 不可新增上傳或分享")
+
+    modes = {
+        "public_attachment": "可掃毒、可預覽、站方可處理明文",
+        "private_scannable": "可掃毒、掃描後伺服器端加密保存",
+        "e2ee_vault": "端到端加密，server/root/admin 不可讀，掃毒能力受限",
+        "e2ee_vault_with_client_scan": "端到端加密加本機掃描回報，回報不可完全信任",
+    }
+    return {
+        "policy": policy,
+        "usage": usage,
+        "modes": modes,
+        "restrictions": restrictions,
     }
 
 

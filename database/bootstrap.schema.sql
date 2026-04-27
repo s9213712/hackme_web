@@ -293,6 +293,22 @@ CREATE TABLE IF NOT EXISTS file_type_policies (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS cloud_drive_security_policies (
+    scope TEXT PRIMARY KEY,
+    require_scan_before_download INTEGER NOT NULL,
+    block_unclean_downloads INTEGER NOT NULL,
+    warn_high_risk_downloads INTEGER NOT NULL,
+    allow_inline_preview_for_high_risk INTEGER NOT NULL,
+    e2ee_server_scan_claim_allowed INTEGER NOT NULL,
+    revoke_shares_on_suspension INTEGER NOT NULL,
+    max_archive_files INTEGER NOT NULL,
+    max_archive_uncompressed_bytes INTEGER NOT NULL,
+    max_daily_downloads INTEGER NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status);
 CREATE INDEX IF NOT EXISTS idx_encrypted_file_keys_file_recipient ON encrypted_file_keys(file_id, recipient_user_id);

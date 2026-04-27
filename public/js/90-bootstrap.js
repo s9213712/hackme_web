@@ -3,6 +3,7 @@ function bindUiEvents() {
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
   const tabModuleCommunity = $("tab-module-community");
+  const tabModuleDrive = $("tab-module-drive");
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
@@ -59,6 +60,7 @@ function bindUiEvents() {
   const communityThreadDeleteBtn = $("community-thread-delete-btn");
   const communityBoardSearch = $("community-board-search");
   const communityThreadSearch = $("community-thread-search");
+  const driveRefreshBtn = $("drive-refresh-btn");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
 
@@ -66,6 +68,7 @@ function bindUiEvents() {
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
+  if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
@@ -125,6 +128,7 @@ function bindUiEvents() {
     communityThreadPage = 0;
     if (selectedCommunityBoardId) openCommunityBoard(selectedCommunityBoardId);
   });
+  if (driveRefreshBtn) driveRefreshBtn.addEventListener("click", loadDriveDashboard);
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (userEditOverlay) userEditOverlay.addEventListener("click", (e) => {

@@ -116,6 +116,7 @@
   <div class="tabs" id="module-main-tabs" style="margin-top:.75rem;margin-bottom:.65rem;">
     <button class="tab active" id="tab-module-chat">聊天</button>
     <button class="tab" id="tab-module-community">討論區</button>
+    <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
     <button class="tab" id="tab-module-appeals">申覆</button>
     <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
     <button class="tab" id="tab-module-server" style="display:none;">伺服器管理</button>
@@ -283,6 +284,46 @@
         <button class="btn" type="button" id="appeal-refresh-btn">刷新申覆</button>
       </div>
       <div id="appeal-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-drive">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">☁️ 雲端硬碟安全中心</div>
+      <div class="drive-dashboard-grid">
+        <div class="drive-card drive-usage-card">
+          <div class="drive-card-title">容量使用狀態</div>
+          <div class="drive-usage-main">
+            <span id="drive-used-label">-</span>
+            <span id="drive-total-label">/ -</span>
+          </div>
+          <div class="drive-quota-bar" aria-label="雲端硬碟用量">
+            <div id="drive-quota-bar-fill"></div>
+          </div>
+          <div class="drive-card-sub" id="drive-remaining-label">剩餘容量：-</div>
+          <div class="drive-card-sub" id="drive-limit-label">單檔限制：- · 每日上傳：-</div>
+        </div>
+
+        <div class="drive-card">
+          <div class="drive-card-title">安全措施</div>
+          <ul id="drive-security-list" class="drive-list"></ul>
+        </div>
+
+        <div class="drive-card">
+          <div class="drive-card-title">檔案狀態統計</div>
+          <div id="drive-risk-summary" class="drive-summary"></div>
+          <div id="drive-scan-summary" class="drive-summary"></div>
+        </div>
+
+        <div class="drive-card">
+          <div class="drive-card-title">隱私模式</div>
+          <div id="drive-mode-summary" class="drive-summary"></div>
+        </div>
+      </div>
+      <div class="admin-toolbar" style="margin-top:.75rem;">
+        <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
+      </div>
+      <div id="drive-msg" class="msg"></div>
     </div>
   </div>
 
@@ -717,6 +758,7 @@
 <script src="/js/20-chat.js" defer></script>
 <script src="/js/25-community.js" defer></script>
 <script src="/js/30-appeals.js" defer></script>
+<script src="/js/35-drive.js" defer></script>
 <script src="/js/40-auth-users.js" defer></script>
 <script src="/js/50-admin.js" defer></script>
 <script src="/js/90-bootstrap.js" defer></script>

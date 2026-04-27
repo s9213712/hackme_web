@@ -86,8 +86,8 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-004`
-- Current schema version: `17`
+- Current release ID: `2026.04.27-005`
+- Current schema version: `18`
 
 ### Governance and Member Levels
 
@@ -187,6 +187,16 @@ Supported upload modes:
 Default risk policy blocks executable-like files from public/private uploads,
 marks E2EE files as `unknown_encrypted` or high risk, and requires archives and
 macro documents to be scanned before release.
+
+Cloud drive safety now exposes:
+
+- `GET /api/files/quota`: current user storage usage, remaining bytes, file count, per-level upload limits, and grouping by privacy/risk/scan status.
+- `GET /api/files/security-policy`: active cloud drive safety policy plus user-visible restrictions.
+- `GET /api/files/privacy-modes`: the four privacy modes and their user-facing warnings.
+
+The logged-in UI includes a cloud drive tab that shows used capacity, remaining
+capacity, single-file limit, daily upload limit, risk distribution, scan status,
+privacy mode distribution, and the currently enforced safety measures.
 
 ### Feature Flags and Defaults
 
