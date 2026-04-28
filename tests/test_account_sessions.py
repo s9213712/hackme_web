@@ -234,3 +234,78 @@ def test_password_change_revokes_existing_sessions(tmp_path):
     assert revoked == 2
     assert passwords == 2
     assert user_flags == (0, 0)
+
+
+def test_password_change_rejects_same_as_current_password(tmp_path):
+    db_path = tmp_path / "app.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT NOT NULL DEFAULT 'normal',
+            trust_score INTEGER NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL DEFAULT 0,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            password_strength_score INTEGER NOT NULL DEFAULT 0,
+            blocked_until TEXT,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            password_changed_at TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            is_default_password INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            device_info TEXT,
+            ip_country TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, must_change_password, is_default_password, updated_at) "
+        "VALUES (1, 'alice', 'user', 'active', 1, 1, '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, 'oldpass', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "status": "active"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    res = client.put(
+        "/api/admin/users/1",
+        json={"current_password": "oldpass", "password": "oldpass", "password_confirm": "oldpass"},
+    )
+
+    assert res.status_code == 400
+    assert res.get_json()["msg"] == "新密碼不可與目前密碼相同"
+
+    conn = sqlite3.connect(db_path)
+    passwords = conn.execute("SELECT COUNT(*) FROM user_passwords WHERE user_id=1").fetchone()[0]
+    conn.close()
+    assert passwords == 1

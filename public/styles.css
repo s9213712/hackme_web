@@ -1042,6 +1042,7 @@
       padding: 1.2rem;
       background: rgba(0,0,0,.58);
       z-index: 20;
+      overflow: auto;
     }
 
     .user-edit-overlay.show {
@@ -1049,13 +1050,23 @@
     }
 
     .user-edit-modal {
-      width: min(500px, 94vw);
+      box-sizing: border-box;
+      width: min(500px, calc(100vw - 2.4rem));
+      max-height: calc(100vh - 2.4rem);
+      overflow: auto;
       background: var(--surface);
       border: 1px solid rgba(255,255,255,.08);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
       padding: 1.05rem 1.05rem 1rem;
       position: relative;
+    }
+
+    .user-edit-modal input,
+    .user-edit-modal select,
+    .user-edit-modal textarea {
+      max-width: 100%;
+      min-width: 0;
     }
 
     .edit-user-actions {
@@ -1176,5 +1187,26 @@
       .chat-room-main { min-height: 0; }
       .chat-composer { grid-template-columns: 1fr; }
       .chat-composer .btn { width: 100%; }
+    }
+
+    @media (max-width: 560px) {
+      .user-edit-overlay {
+        align-items: flex-start;
+        padding: .6rem;
+      }
+
+      .user-edit-modal {
+        width: calc(100vw - 1.2rem);
+        max-height: calc(100vh - 1.2rem);
+        padding: .85rem;
+      }
+
+      .edit-user-actions {
+        flex-direction: column;
+      }
+
+      .edit-user-actions .btn {
+        width: 100%;
+      }
     }
   

@@ -611,16 +611,18 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":"請再次輸入新密碼"}), 400
                 if pw_confirm != pw:
                     return json_resp({"ok":False,"msg":"兩次密碼輸入不一致"}), 400
+                current_row = conn.execute(
+                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (user_id,)
+                ).fetchone()
                 if is_self:
                     current_pw = data.get("current_password","") if isinstance(data.get("current_password"), str) else ""
                     if not current_pw:
                         return json_resp({"ok":False,"msg":"請輸入目前密碼"}), 400
-                    current_row = conn.execute(
-                        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
-                        (user_id,)
-                    ).fetchone()
                     if not current_row or not verify_password(current_row["password_hash"], current_pw):
                         return json_resp({"ok":False,"msg":"目前密碼錯誤"}), 403
+                if current_row and verify_password(current_row["password_hash"], pw):
+                    return json_resp({"ok":False,"msg":"新密碼不可與目前密碼相同"}), 400
                 if actor_role != "super_admin":
                     ok, msg = validate_password(pw)
                     if not ok:
