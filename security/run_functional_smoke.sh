@@ -460,6 +460,21 @@ run_checks() {
 
   create_smoke_user
 
+  request "points wallet root" "GET" "/api/points/wallet" "200"
+  request "points catalog" "GET" "/api/points/catalog" "200"
+  request "points rules" "GET" "/api/points/rules" "200"
+  if [[ -n "${SMOKE_USER_ID:-}" ]]; then
+    request "points admin credit smoke user" "POST" "/api/admin/points/adjust" "200" "{\"user_id\":$SMOKE_USER_ID,\"currency_type\":\"soft\",\"direction\":\"credit\",\"amount\":25,\"reason\":\"functional smoke seed\"}"
+    request "points admin wallet smoke user" "GET" "/api/admin/points/wallets/${SMOKE_USER_ID}" "200"
+    request "points admin ledger" "GET" "/api/admin/points/ledger?limit=20" "200"
+    request "points chain seal" "POST" "/api/root/points/chain/seal" "200" '{"limit":100}'
+    request "points chain verify" "GET" "/api/root/points/chain/verify" "200"
+    request "points economy stats" "GET" "/api/admin/points/economy/stats" "200"
+  else
+    skip "points admin credit smoke user" "smoke user id missing"
+    skip "points chain seal/verify" "smoke user id missing"
+  fi
+
   request "community announcements list" "GET" "/api/community/announcements" "200"
   request "community create announcement" "POST" "/api/community/announcements" "200" '{"title":"Smoke Announcement","content":"functional smoke announcement","is_pinned":true}'
   request "community categories list" "GET" "/api/community/categories" "200"
@@ -624,6 +639,7 @@ $(cat "$RESULTS_TSV")
 - authentication: CSRF bootstrap, root login, forced default-password change, session identity
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
+- PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, economy stats
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, and server reset verification that removes the baseline post
 - storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete, remote download capability checks
 - ComfyUI integration: model endpoint wiring and optional backend availability check

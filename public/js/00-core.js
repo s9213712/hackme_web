@@ -75,6 +75,7 @@ const SIDEBAR_ICON_PATHS = {
   drive: '<path d="M4 8h16l-2 10H6z"/><path d="m7 8 2-3h6l2 3"/>',
   image: '<path d="M5 5h14v14H5z"/><path d="m7 16 4-4 3 3 2-2 2 3"/><path d="M8.5 8.5h.01"/>',
   spark: '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/>',
+  wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H19v14H6.5A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 11h4v4h-4z"/><path d="M7 5V3.8L17 5"/>',
   appeal: '<path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><path d="M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   shield: '<path d="M12 3 20 6v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-5"/>',
@@ -109,6 +110,7 @@ const SIDEBAR_MENU_CONFIG = [
   },
   { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
+  { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
   { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
   {
     tabId: "tab-module-accounts",
@@ -836,6 +838,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleComfyui = $("tab-module-comfyui");
+  const tabModuleEconomy = $("tab-module-economy");
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
@@ -849,6 +852,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleAlbums) tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
+  if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (typeof syncSidebarMenuVisibility === "function") {
     syncSidebarMenuVisibility();
@@ -873,6 +877,9 @@ function setAuthState(json, showLoginHero = false) {
     }
   }
   if (typeof startNotificationPoll === "function") startNotificationPoll();
+  if (typeof loadEconomyDashboard === "function" && canAccessModule("economy")) {
+    loadEconomyDashboard();
+  }
   loadChatRooms();
   if (currentRole !== "super_admin") {
     loadUserAppeals();
@@ -889,7 +896,9 @@ function setAuthState(json, showLoginHero = false) {
             ? "drive"
             : canAccessModule("comfyui")
               ? "comfyui"
-              : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+              : canAccessModule("economy")
+                ? "economy"
+                : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
@@ -930,6 +939,7 @@ function resetAuthState() {
   const moduleDrive = $("module-drive");
   const moduleAlbums = $("module-albums");
   const moduleComfyui = $("module-comfyui");
+  const moduleEconomy = $("module-economy");
   const moduleAccounts = $("module-accounts");
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
@@ -940,6 +950,7 @@ function resetAuthState() {
   if (moduleDrive) moduleDrive.classList.remove("active");
   if (moduleAlbums) moduleAlbums.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
+  if (moduleEconomy) moduleEconomy.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");

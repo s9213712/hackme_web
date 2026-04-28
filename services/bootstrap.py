@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 25
+CURRENT_SCHEMA_VERSION = 26
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -29,6 +29,7 @@ SCHEMA_MIGRATIONS = (
     (23, "direct messages schema"),
     (24, "storage files and albums schema"),
     (25, "storage share links schema"),
+    (26, "points economy private chain schema"),
 )
 
 _STATE = {
@@ -601,6 +602,10 @@ def apply_schema_migrations(
             from services.storage_albums import ensure_storage_album_schema
 
             ensure_storage_album_schema(conn)
+        elif version == 26:
+            from services.points_chain import ensure_points_economy_schema
+
+            ensure_points_economy_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
@@ -620,6 +625,7 @@ def init_db(
     ensure_security_support_schema,
     ensure_official_chat_room,
     hash_password,
+    ensure_points_economy_schema=None,
 ):
     conn = _STATE["get_db"]()
     schema_path = _STATE.get("schema_path") or (_STATE["db_path"] + '.schema.sql')
@@ -638,6 +644,9 @@ def init_db(
     ensure_appeal_columns(conn)
     ensure_session_columns(conn)
     ensure_security_support_schema(conn)
+    if ensure_points_economy_schema is None:
+        from services.points_chain import ensure_points_economy_schema
+    ensure_points_economy_schema(conn)
     _STATE["init_system_settings_table"](conn)
     _STATE["seed_missing_settings"](conn)
     migration_plan = apply_schema_migrations(

@@ -9,6 +9,7 @@ function bindUiEvents() {
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAlbums = $("tab-module-albums");
   const tabModuleComfyui = $("tab-module-comfyui");
+  const tabModuleEconomy = $("tab-module-economy");
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
@@ -144,6 +145,11 @@ function bindUiEvents() {
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
   const comfyuiDiscardBtn = $("comfyui-discard-btn");
+  const economyRefreshBtn = $("economy-refresh-btn");
+  const economyAdminRefreshBtn = $("economy-admin-refresh-btn");
+  const economyAdjustBtn = $("economy-adjust-btn");
+  const economySealBtn = $("economy-seal-btn");
+  const economyVerifyBtn = $("economy-verify-btn");
   const sidebarToggle = $("sidebar-toggle");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
@@ -158,6 +164,7 @@ function bindUiEvents() {
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
   if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
+  if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
@@ -274,6 +281,11 @@ function bindUiEvents() {
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
   if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
   if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
+  if (economyRefreshBtn) economyRefreshBtn.addEventListener("click", loadEconomyDashboard);
+  if (economyAdminRefreshBtn) economyAdminRefreshBtn.addEventListener("click", loadEconomyAdmin);
+  if (economyAdjustBtn) economyAdjustBtn.addEventListener("click", submitEconomyAdjustment);
+  if (economySealBtn) economySealBtn.addEventListener("click", sealPointsChainBlock);
+  if (economyVerifyBtn) economyVerifyBtn.addEventListener("click", verifyPointsChain);
   if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
     setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
   });

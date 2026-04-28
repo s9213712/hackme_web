@@ -52,9 +52,10 @@ function switchModuleTab(tab) {
   const canAccessAlbums = canAccessDrive;
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
+  const canAccessEconomy = !!currentUser && canAccessModule("economy");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessComfyui ? "comfyui" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm" && !canAccessDm) normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
@@ -62,6 +63,7 @@ function switchModuleTab(tab) {
   if (tab === "drive" && !canAccessDrive) normTab = fallbackModule();
   if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
+  if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
   if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
   if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
   if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
@@ -74,6 +76,7 @@ function switchModuleTab(tab) {
   const modDrive = $("module-drive");
   const modAlbums = $("module-albums");
   const modComfyui = $("module-comfyui");
+  const modEconomy = $("module-economy");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
@@ -84,6 +87,7 @@ function switchModuleTab(tab) {
   const mDrive = $("tab-module-drive");
   const mAlbums = $("tab-module-albums");
   const mComfyui = $("tab-module-comfyui");
+  const mEconomy = $("tab-module-economy");
   const mAccounts = $("tab-module-accounts");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
@@ -95,6 +99,7 @@ function switchModuleTab(tab) {
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
   if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
+  if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
@@ -105,6 +110,7 @@ function switchModuleTab(tab) {
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
+  if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
@@ -130,6 +136,9 @@ function switchModuleTab(tab) {
   }
   if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
     loadComfyuiModels();
+  }
+  if (normTab === "economy" && canAccessEconomy && typeof loadEconomyDashboard === "function") {
+    loadEconomyDashboard();
   }
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
@@ -989,7 +998,8 @@ const FEATURE_SETTING_KEYS = [
   "feature_social_search_enabled",
   "feature_advanced_security_enabled",
   "feature_privacy_uploads_enabled",
-  "feature_comfyui_enabled"
+  "feature_comfyui_enabled",
+  "feature_economy_enabled"
 ];
 
 function featureSettingInputId(key) {

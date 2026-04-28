@@ -119,6 +119,7 @@ from services.integrity_guard import IntegrityGuard, ensure_integrity_schema
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
+from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server_bind import effective_server_bind, effective_server_ssl
@@ -855,6 +856,11 @@ integrity_guard = IntegrityGuard(
     get_db=get_db,
     audit=audit,
 )
+points_service = PointsLedgerService(
+    get_db=get_db,
+    chain_secret=CHAIN_SEED,
+    audit=audit,
+)
 server_mode_service = ServerModeService(
     snapshot_service=snapshot_service,
     get_db=get_db,
@@ -1205,6 +1211,7 @@ register_operation_routes(app, {
     "normalize_text": normalize_text,
     "parse_iso_to_datetime": parse_iso_to_datetime,
     "parse_positive_int": parse_positive_int,
+    "points_service": points_service,
     "repair_audit_chain": repair_audit_chain,
     "repair_violation_chains": repair_violation_chains,
     "require_csrf": require_csrf,
@@ -1293,6 +1300,7 @@ if __name__ == "__main__":
         ensure_user_columns=ensure_user_columns,
         ensure_appeal_columns=ensure_appeal_columns,
         ensure_security_support_schema=ensure_security_support_schema,
+        ensure_points_economy_schema=ensure_points_economy_schema,
         ensure_session_columns=ensure_session_columns,
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,

@@ -153,6 +153,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     integrity_finding_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_findings)").fetchall()}
     integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
     integrity_manifest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_manifest_versions)").fetchall()}
+    points_wallet_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_wallets)").fetchall()}
+    points_ledger_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_ledger)").fetchall()}
+    points_block_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_chain_blocks)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username, must_change_password, is_default_password, member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
     conn.close()
@@ -208,7 +211,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
     assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
     assert {"manifest_hash", "manifest_signature", "approved_by"} <= integrity_manifest_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+    assert {"user_id", "soft_balance", "hard_balance", "soft_frozen", "hard_frozen", "wallet_status"} <= points_wallet_cols
+    assert {"ledger_uuid", "public_account_id", "currency_type", "direction", "amount", "ledger_hash", "previous_ledger_hash"} <= points_ledger_cols
+    assert {"block_number", "previous_block_hash", "merkle_root", "block_hash", "first_ledger_id", "last_ledger_id"} <= points_block_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
     assert root_user["username"] == "root"
     assert root_user["must_change_password"] == 1
     assert root_user["is_default_password"] == 1

@@ -78,6 +78,7 @@ DEFAULT_SETTINGS = {
     "feature_advanced_security_enabled": False,
     "feature_privacy_uploads_enabled": True,
     "feature_comfyui_enabled": True,
+    "feature_economy_enabled": True,
     "integrity_guard_enabled": True,
     "integrity_guard_strict_mode": False,
     "security_pending_chat_reports_threshold": 10,

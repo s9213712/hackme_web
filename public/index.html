@@ -220,6 +220,7 @@
         <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
+        <button class="tab" id="tab-module-economy" style="display:none;">積分錢包</button>
         <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
@@ -844,6 +845,74 @@
     </div>
   </div>
 
+  <div class="module-section" id="module-economy">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">PointsChain 積分錢包</div>
+      <div class="drive-dashboard-grid">
+        <div class="drive-card">
+          <div class="drive-card-title">我的餘額</div>
+          <div class="settings-option-grid economy-wallet-grid">
+            <div><span class="drive-card-sub">soft points</span><strong id="economy-soft-balance">0</strong><small id="economy-soft-frozen">凍結 0</small></div>
+            <div><span class="drive-card-sub">hard points</span><strong id="economy-hard-balance">0</strong><small id="economy-hard-frozen">凍結 0</small></div>
+            <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-wallet-status">-</strong><small id="economy-public-account">-</small></div>
+          </div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">服務價格</div>
+              <div class="drive-card-sub">所有價格由後端 catalog 決定</div>
+            </div>
+            <button class="btn" id="economy-refresh-btn" type="button">重新整理</button>
+          </div>
+          <div id="economy-catalog-list" class="drive-file-list"></div>
+        </div>
+      </div>
+      <div class="drive-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">我的帳本</div>
+            <div class="drive-card-sub">append-only ledger；封塊後可產生 Merkle proof</div>
+          </div>
+        </div>
+        <div id="economy-ledger-list" class="drive-file-list"></div>
+      </div>
+      <div class="drive-card" id="economy-admin-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">管理員調整與審核</div>
+            <div class="drive-card-sub">補償、扣回與高價值獎勵都會寫入 PointsChain ledger</div>
+          </div>
+          <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
+        </div>
+        <div class="settings-option-grid">
+          <div class="field"><label>使用者 ID</label><input type="number" id="economy-adjust-user-id" min="1" /></div>
+          <div class="field"><label>幣種</label><select id="economy-adjust-currency"><option value="soft">soft</option><option value="hard">hard</option></select></div>
+          <div class="field"><label>方向</label><select id="economy-adjust-direction"><option value="credit">加點</option><option value="debit">扣點</option></select></div>
+          <div class="field"><label>數量</label><input type="number" id="economy-adjust-amount" min="1" value="1" /></div>
+          <div class="field"><label>原因</label><input type="text" id="economy-adjust-reason" maxlength="160" placeholder="必填，會進入 audit log" /></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-adjust-btn" type="button">送出調整</button></div>
+        </div>
+        <div id="economy-admin-ledger-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        <div id="economy-pending-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+      </div>
+      <div class="drive-card" id="economy-root-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">root 鏈管理</div>
+            <div class="drive-card-sub">單節點私有鏈封塊、驗證與稽核狀態</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn" id="economy-seal-btn" type="button">封存未封帳本</button>
+            <button class="btn" id="economy-verify-btn" type="button">驗證全鏈</button>
+          </div>
+        </div>
+        <pre id="economy-chain-status" style="max-height:240px;overflow:auto;font-size:.72rem;background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;"></pre>
+      </div>
+      <div id="economy-msg" class="msg"></div>
+    </div>
+  </div>
+
   <div class="module-section" id="module-dm">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
       <div class="mini-title">✉️ 站內信</div>
@@ -1338,6 +1407,7 @@
             <div class="field"><label><input type="checkbox" id="s-feature-attachments-enabled" /> 附件 / 頭像 / CAPTCHA</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-storage-albums-enabled" /> Storage / 相簿</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分錢包</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-personalization-enabled" /> 個人化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
@@ -1839,6 +1909,7 @@
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/40-auth-users.js?v=20260428-forum-pages" defer></script>
 <script src="/js/50-admin.js?v=20260429-sidebar" defer></script>
+<script src="/js/55-economy.js?v=20260429-pointschain" defer></script>
 <script src="/js/90-bootstrap.js?v=20260428-forum-pages" defer></script>
 </body>
 </html>
