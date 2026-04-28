@@ -1,7 +1,6 @@
 import base64
 import hashlib
 import re
-import time
 from datetime import datetime, timedelta
 
 import argon2
@@ -275,7 +274,7 @@ def register_public_routes(app, deps):
         try:
             existing = conn.execute("SELECT 1 FROM users WHERE username=?",(username,)).fetchone()
             if existing:
-                time.sleep(0.3)
+                timing_delay()
                 audit("REGISTER_DUP", ip, username, ua=ua, success=False)
                 # Return generic — don't reveal account exists
                 return json_resp({"ok":False,"msg":"註冊失敗，請稍後再試"}), 409

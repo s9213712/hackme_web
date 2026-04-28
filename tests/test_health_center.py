@@ -134,3 +134,15 @@ def test_health_center_requires_super_admin(tmp_path):
     app = _make_app(tmp_path, actor={"id": 2, "username": "admin", "role": "manager"})
     res = app.test_client().get("/api/admin/health/readiness")
     assert res.status_code == 403
+
+
+def test_unknown_path_options_does_not_advertise_unsafe_methods(tmp_path):
+    app = _make_app(tmp_path)
+    res = app.test_client().open("/not-real-pentest-path", method="OPTIONS")
+
+    assert res.status_code == 404
+    allow = res.headers["Allow"]
+    assert "PUT" not in allow
+    assert "DELETE" not in allow
+    assert "PATCH" not in allow
+    assert allow == "GET, POST, HEAD, OPTIONS"

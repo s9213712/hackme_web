@@ -1086,8 +1086,11 @@ def register_system_admin_routes(app, deps):
         finally:
             conn.close()
 
-    @app.route("/<path:invalid>", methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
+    @app.route("/<path:invalid>", methods=["GET", "POST", "OPTIONS"], provide_automatic_options=False)
     def catch_all(invalid):
         ip, ua = get_client_ip(), get_ua()
         audit("404_CATCHALL", ip, ua=ua, detail=f"path={invalid}")
-        return json_resp({"ok":False,"msg":"Not found"}), 404
+        resp = json_resp({"ok":False,"msg":"Not found"})
+        if request.method == "OPTIONS":
+            resp.headers["Allow"] = "GET, POST, HEAD, OPTIONS"
+        return resp, 404
