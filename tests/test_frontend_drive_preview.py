@@ -79,9 +79,9 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="sidebar-toggle"' in index_html
     assert 'id="album-gallery-list"' in index_html
     assert 'id="album-viewer-card"' in index_html
-    assert '/js/35-drive.js?v=20260428-drive-progress' in index_html
-    assert '/styles.css?v=20260429-sidebar' in index_html
-    assert '/js/00-core.js?v=20260429-sidebar' in index_html
+    assert '/js/35-drive.js?v=20260429-torrent-upload' in index_html
+    assert '/styles.css?v=20260429-sidebar-polish' in index_html
+    assert '/js/00-core.js?v=20260429-sidebar-polish' in index_html
     assert '/js/50-admin.js?v=20260429-sidebar' in index_html
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js
@@ -89,10 +89,16 @@ def test_album_viewer_has_dedicated_module():
     assert "driveTransferRows" in drive_js
     assert "xhrUploadWithProgress" in drive_js
     assert "/cloud-drive/remote-download/tasks" in drive_js
+    assert 'id="drive-remote-torrent-file"' in index_html
+    assert "/cloud-drive/remote-download/torrent-tasks" in drive_js
+    assert "FormData" in drive_js
     assert "async function loadAlbumGallery()" in drive_js
     assert "async function openAlbumViewer(id)" in drive_js
     assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js
     assert "SIDEBAR_MENU_CONFIG" in core_js
+    assert "SIDEBAR_ICON_PATHS" in core_js
+    assert "sidebar-footer" in index_html
+    assert "sidebar-current-user" in index_html
     assert "SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
     assert "localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
     assert "data-sidebar-action" in core_js

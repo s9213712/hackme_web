@@ -349,21 +349,27 @@ async function loadRemoteDownloadCapabilities() {
   }
   const caps = json.capabilities || {};
   if (status) {
-    status.textContent = caps.bt_magnet
-      ? `Direct link 可用，BT/magnet 可用（${caps.aria2c_path || "aria2c"}）`
-      : "Direct link 可用；BT/magnet 不可用，伺服器需安裝 aria2c";
+    status.textContent = caps.bt_magnet || caps.bt_file
+      ? `Direct link 可用，magnet / .torrent 可用（${caps.aria2c_path || "aria2c"}）`
+      : "Direct link 可用；magnet / .torrent 不可用，伺服器需安裝 aria2c";
   }
 }
 
 async function startRemoteDriveDownload() {
   const url = ($("drive-remote-url")?.value || "").trim();
-  if (!url) {
-    alert("請輸入下載網址");
+  const torrentInput = $("drive-remote-torrent-file");
+  const torrentFile = torrentInput?.files?.[0] || null;
+  if (!url && !torrentFile) {
+    alert("請輸入下載網址，或上傳 .torrent BT 種子檔");
+    return;
+  }
+  if (url && torrentFile) {
+    alert("下載網址和 BT 種子檔請擇一使用");
     return;
   }
   const transferId = addDriveTransferRow({
     kind: "remote_download",
-    name: url,
+    name: torrentFile ? torrentFile.name : url,
     loaded_bytes: 0,
     total_bytes: null,
     progress_percent: 0,
@@ -377,16 +383,30 @@ async function startRemoteDriveDownload() {
   }
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/cloud-drive/remote-download/tasks", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
-      body: JSON.stringify({
-        url,
-        privacy_mode: $("drive-remote-privacy-mode")?.value || "private_scannable",
-        virtual_path: $("drive-remote-virtual-path")?.value || ""
-      })
-    });
+    let res;
+    if (torrentFile) {
+      const form = new FormData();
+      form.append("torrent_file", torrentFile);
+      form.append("privacy_mode", $("drive-remote-privacy-mode")?.value || "private_scannable");
+      form.append("virtual_path", $("drive-remote-virtual-path")?.value || "");
+      res = await fetch(API + "/cloud-drive/remote-download/torrent-tasks", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": getCsrfToken() || "" },
+        body: form
+      });
+    } else {
+      res = await fetch(API + "/cloud-drive/remote-download/tasks", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+        body: JSON.stringify({
+          url,
+          privacy_mode: $("drive-remote-privacy-mode")?.value || "private_scannable",
+          virtual_path: $("drive-remote-virtual-path")?.value || ""
+        })
+      });
+    }
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載失敗（HTTP ${res.status}）`);
     const task = json.task || {};
@@ -399,6 +419,7 @@ async function startRemoteDriveDownload() {
     });
     await pollRemoteDownloadTask(task.id, transferId);
     if ($("drive-remote-url")) $("drive-remote-url").value = "";
+    if (torrentInput) torrentInput.value = "";
     flash($("drive-msg"), json.msg || "遠端下載已保存", true);
     await loadDriveDashboard();
     removeDriveTransferRow(transferId);

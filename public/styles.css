@@ -154,6 +154,8 @@
       position: sticky;
       top: 4.25rem;
       min-height: calc(100vh - 5.25rem);
+      display: flex;
+      flex-direction: column;
       border: 1px solid rgba(255,255,255,.08);
       border-radius: 10px;
       background: rgba(0,0,0,.24);
@@ -194,6 +196,16 @@
       line-height: 1;
     }
 
+    .sidebar-icon-svg {
+      width: 1.05rem;
+      height: 1.05rem;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
     .sidebar-toggle {
       display: inline-grid;
       place-items: center;
@@ -219,6 +231,16 @@
       margin: 0;
       padding: 0;
       background: transparent;
+      flex: 1 1 auto;
+    }
+
+    .sidebar-group {
+      color: var(--muted);
+      font-size: .68rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: .65rem .45rem .2rem;
     }
 
     .sidebar-nav .tab {
@@ -283,11 +305,72 @@
       background: rgba(255,255,255,.07);
     }
 
+    .sidebar-footer {
+      display: flex;
+      flex-direction: column;
+      gap: .45rem;
+      padding-top: .65rem;
+      margin-top: .65rem;
+      border-top: 1px solid rgba(255,255,255,.08);
+    }
+
+    .sidebar-user-card,
+    .sidebar-server-state {
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      min-height: 2.35rem;
+      padding: .38rem .45rem;
+      border-radius: 8px;
+      background: rgba(255,255,255,.04);
+      color: var(--muted);
+      overflow: hidden;
+    }
+
+    .sidebar-user-avatar {
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 2rem;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      background: rgba(0,212,170,.13);
+      color: var(--accent2);
+      font-weight: 800;
+    }
+
+    .sidebar-user-meta {
+      display: flex;
+      flex-direction: column;
+      gap: .08rem;
+      min-width: 0;
+    }
+
+    .sidebar-user-name {
+      color: var(--text);
+      font-size: .78rem;
+      font-weight: 700;
+    }
+
+    .sidebar-user-role {
+      font-size: .7rem;
+    }
+
+    .sidebar-server-dot {
+      width: .68rem;
+      height: .68rem;
+      border-radius: 50%;
+      background: #ffb74d;
+      box-shadow: 0 0 10px rgba(255,183,77,.75);
+      flex: 0 0 auto;
+    }
+
     .app-main {
       min-width: 0;
       text-align: left;
     }
 
+    body.sidebar-collapsed .sidebar-group,
     body.sidebar-collapsed .sidebar-label,
     body.sidebar-collapsed .sidebar-caret,
     body.sidebar-collapsed .sidebar-submenu {
@@ -299,7 +382,9 @@
     }
 
     body.sidebar-collapsed .sidebar-head,
-    body.sidebar-collapsed .sidebar-nav .tab {
+    body.sidebar-collapsed .sidebar-nav .tab,
+    body.sidebar-collapsed .sidebar-user-card,
+    body.sidebar-collapsed .sidebar-server-state {
       justify-content: center;
     }
 
@@ -832,6 +917,7 @@
         justify-content: center;
       }
 
+      .sidebar-group,
       .sidebar-label,
       .sidebar-caret,
       .sidebar-submenu {

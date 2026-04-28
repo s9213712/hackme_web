@@ -5,6 +5,7 @@ let _csrfToken = null;
 let currentUser = null;
 let currentUserId = null;
 let currentRole = "user";
+let currentRoleLabel = "user";
 let currentMustChangePassword = false;
 let forcedPasswordChangeMode = false;
 let canManageUsers = false;
@@ -67,16 +68,29 @@ function canAccessModule(moduleKey, role = currentRole) {
 function $(id) { return document.getElementById(id); }
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "hackme_web.sidebar.collapsed";
+const SIDEBAR_ICON_PATHS = {
+  chat: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H9l-5 4v-4.5A2.5 2.5 0 0 1 4 12.5z"/>',
+  mail: '<path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/>',
+  bell: '<path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+  forum: '<path d="M5 5h14v9H8l-3 3z"/><path d="M8 8h8M8 11h5"/>',
+  drive: '<path d="M4 8h16l-2 10H6z"/><path d="m7 8 2-3h6l2 3"/>',
+  image: '<path d="M5 5h14v14H5z"/><path d="m7 16 4-4 3 3 2-2 2 3"/><path d="M8.5 8.5h.01"/>',
+  spark: '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/>',
+  appeal: '<path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><path d="M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  shield: '<path d="M12 3 20 6v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-5"/>',
+};
 const SIDEBAR_MENU_CONFIG = [
-  { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "C", label: "聊天" },
-  { tabId: "tab-module-dm", module: "dm", tab: "dm", icon: "M", label: "站內信" },
-  { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "N", label: "公告" },
+  { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "chat", label: "聊天", group: "日常" },
+  { tabId: "tab-module-dm", module: "dm", tab: "dm", icon: "mail", label: "站內信", group: "日常" },
+  { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "bell", label: "公告", group: "社群" },
   {
     tabId: "tab-module-community",
     module: "community",
     tab: "community",
-    icon: "F",
+    icon: "forum",
     label: "討論區",
+    group: "社群",
     submenu: [
       { label: "看板清單", action: "module:community" },
       { label: "主題審核", action: "community:review" },
@@ -86,22 +100,24 @@ const SIDEBAR_MENU_CONFIG = [
     tabId: "tab-module-drive",
     module: "privacy_uploads",
     tab: "drive",
-    icon: "D",
+    icon: "drive",
     label: "雲端硬碟",
+    group: "工具",
     submenu: [
       { label: "檔案清單", action: "module:drive" },
       { label: "相簿", action: "module:albums" },
     ],
   },
-  { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "P", label: "相簿" },
-  { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "A", label: "AI 產圖" },
-  { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "R", label: "申覆", hideForSuperAdmin: true },
+  { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },
+  { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
+  { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
   {
     tabId: "tab-module-accounts",
     module: "accounts",
     tab: "accounts",
-    icon: "U",
+    icon: "users",
     label: "帳號管理",
+    group: "管理",
     submenu: [
       { label: "帳號", action: "admin:users" },
       { label: "違規計次", action: "admin:violations" },
@@ -114,8 +130,9 @@ const SIDEBAR_MENU_CONFIG = [
     tabId: "tab-module-server",
     role: "super_admin",
     tab: "server",
-    icon: "S",
+    icon: "shield",
     label: "安全中心",
+    group: "管理",
     submenu: [
       { label: "總覽", action: "server:security" },
       { label: "審計日誌", action: "server:audit" },
@@ -126,6 +143,11 @@ const SIDEBAR_MENU_CONFIG = [
     ],
   },
 ];
+
+function sidebarIconSvg(icon) {
+  const paths = SIDEBAR_ICON_PATHS[icon] || SIDEBAR_ICON_PATHS.chat;
+  return `<svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths}</svg>`;
+}
 
 function sidebarItemForTab(tabId) {
   return SIDEBAR_MENU_CONFIG.find((item) => item.tabId === tabId);
@@ -142,15 +164,25 @@ function decorateSidebarMenu() {
   SIDEBAR_MENU_CONFIG.forEach((item) => {
     const button = $(item.tabId);
     if (!button || button.dataset.sidebarDecorated === "1") return;
+    if (item.group && !$("sidebar-group-" + item.group)) {
+      const group = document.createElement("div");
+      group.className = "sidebar-group";
+      group.id = "sidebar-group-" + item.group;
+      group.dataset.sidebarGroup = item.group;
+      group.textContent = item.group;
+      button.insertAdjacentElement("beforebegin", group);
+    }
     button.dataset.sidebarDecorated = "1";
     button.dataset.sidebarTab = item.tab;
+    button.dataset.sidebarGroup = item.group || "";
     button.title = item.label;
-    button.innerHTML = `<span class="sidebar-icon" aria-hidden="true">${sanitize(item.icon)}</span><span class="sidebar-label">${sanitize(item.label)}</span>${item.submenu ? '<span class="sidebar-caret">›</span>' : ""}`;
+    button.innerHTML = `<span class="sidebar-icon">${sidebarIconSvg(item.icon)}</span><span class="sidebar-label">${sanitize(item.label)}</span>${item.submenu ? '<span class="sidebar-caret">›</span>' : ""}`;
     if (item.submenu && !$(item.tabId + "-submenu")) {
       const submenu = document.createElement("div");
       submenu.className = "sidebar-submenu";
       submenu.id = item.tabId + "-submenu";
       submenu.dataset.parentTab = item.tab;
+      submenu.dataset.sidebarGroup = item.group || "";
       submenu.innerHTML = item.submenu.map((sub) => `<button class="sidebar-subitem" type="button" data-sidebar-action="${sanitize(sub.action)}">${sanitize(sub.label)}</button>`).join("");
       button.insertAdjacentElement("afterend", submenu);
     }
@@ -180,14 +212,30 @@ function restoreSidebarState() {
 
 function syncSidebarMenuVisibility() {
   decorateSidebarMenu();
+  const visibleGroups = new Set();
   SIDEBAR_MENU_CONFIG.forEach((item) => {
     const button = $(item.tabId);
     const submenu = $(item.tabId + "-submenu");
     const visible = canShowSidebarItem(item);
     if (button) button.style.display = visible ? "" : "none";
     if (submenu) submenu.style.display = visible ? "" : "none";
+    if (visible && item.group) visibleGroups.add(item.group);
   });
+  document.querySelectorAll("[data-sidebar-group]").forEach((group) => {
+    if (!group.classList.contains("sidebar-group")) return;
+    group.style.display = visibleGroups.has(group.dataset.sidebarGroup || "") ? "" : "none";
+  });
+  updateSidebarIdentity();
   updateSidebarActiveState();
+}
+
+function updateSidebarIdentity() {
+  const user = $("sidebar-current-user");
+  const role = $("sidebar-current-role");
+  const avatar = $("sidebar-user-avatar");
+  if (user) user.textContent = currentUser || "未登入";
+  if (role) role.textContent = currentRoleLabel || currentRole || "-";
+  if (avatar) avatar.textContent = currentUser ? String(currentUser).slice(0, 1).toUpperCase() : "-";
 }
 
 function updateSidebarActiveState() {
@@ -202,7 +250,7 @@ function updateSidebarActiveState() {
       const action = sub.dataset.sidebarAction || "";
       let active = false;
       if (action.startsWith("server:")) active = currentModuleTab === "server" && currentServerTab === action.split(":")[1];
-      if (action.startsWith("admin:")) active = currentModuleTab === "accounts" && currentAdminTab === action.split(":")[1];
+      if (action.startsWith("admin:")) active = currentModuleTab === "accounts" && typeof currentAdminTab !== "undefined" && currentAdminTab === action.split(":")[1];
       if (action === "module:" + currentModuleTab) active = true;
       if (action === "community:review") active = currentModuleTab === "community" && typeof communityMode !== "undefined" && communityMode === "review";
       sub.classList.toggle("active", active);
@@ -371,18 +419,22 @@ async function loadSiteConfig() {
 }
 
 function setServerConnectionState(state, label) {
-  const dot = $("server-connection-dot");
-  const text = $("server-connection-label");
-  if (!dot || !text) return;
+  const dots = [$("server-connection-dot"), $("sidebar-server-dot")].filter(Boolean);
+  const labels = [$("server-connection-label"), $("sidebar-server-label")].filter(Boolean);
+  if (!dots.length || !labels.length) return;
   const colors = {
     online: ["#4caf50", "rgba(76,175,80,.75)"],
     unstable: ["#ffb74d", "rgba(255,183,77,.75)"],
     offline: ["#ff4f6d", "rgba(255,79,109,.75)"],
   };
   const [color, glow] = colors[state] || colors.unstable;
-  dot.style.background = color;
-  dot.style.boxShadow = `0 0 10px ${glow}`;
-  text.textContent = label;
+  dots.forEach((dot) => {
+    dot.style.background = color;
+    dot.style.boxShadow = `0 0 10px ${glow}`;
+  });
+  labels.forEach((text) => {
+    text.textContent = label;
+  });
 }
 
 async function checkServerConnection() {
@@ -719,6 +771,7 @@ function setAuthState(json, showLoginHero = false) {
   currentUser = json.username || null;
   currentUserId = json.id || null;
   currentRole = json.role || "user";
+  currentRoleLabel = json.role_label || currentRole || "user";
   currentMustChangePassword = !!json.must_change_password;
   const idleMinutes = Number(json.session_idle_timeout_minutes ?? 10);
   inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
@@ -840,6 +893,7 @@ function resetAuthState() {
   currentUser = null;
   currentUserId = null;
   currentRole = "user";
+  currentRoleLabel = "user";
   currentMustChangePassword = false;
   inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
   forcedPasswordChangeMode = false;
@@ -847,6 +901,7 @@ function resetAuthState() {
   users = [];
   currentServerTab = "security";
   editingUserIsSelf = false;
+  updateSidebarIdentity();
   stopInactivityTimer();
   stopChatPoll();
   if (typeof stopNotificationPoll === "function") stopNotificationPoll();

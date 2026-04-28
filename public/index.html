@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-sidebar" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-sidebar-polish" />
 </head>
 <body>
   <div class="clock" id="clock">⏰ 載入時間中...</div>
@@ -214,6 +214,19 @@
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
       </nav>
+      <div class="sidebar-footer" id="sidebar-footer">
+        <div class="sidebar-user-card">
+          <span class="sidebar-user-avatar" id="sidebar-user-avatar">-</span>
+          <span class="sidebar-user-meta">
+            <span class="sidebar-label sidebar-user-name" id="sidebar-current-user">未登入</span>
+            <span class="sidebar-label sidebar-user-role" id="sidebar-current-role">-</span>
+          </span>
+        </div>
+        <div class="sidebar-server-state" id="sidebar-server-state">
+          <span class="sidebar-server-dot" id="sidebar-server-dot"></span>
+          <span class="sidebar-label" id="sidebar-server-label">連線檢查中</span>
+        </div>
+      </div>
     </aside>
     <main class="app-main" id="app-main">
 
@@ -557,7 +570,7 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">遠端下載到雲端硬碟</div>
-            <div class="drive-card-sub" id="drive-remote-download-status">支援 direct link；BT/magnet 需伺服器安裝 aria2c。</div>
+            <div class="drive-card-sub" id="drive-remote-download-status">支援 direct link、magnet；上傳 .torrent 需伺服器安裝 aria2c。</div>
           </div>
           <button class="btn" id="drive-remote-capability-btn" type="button">檢查能力</button>
         </div>
@@ -565,6 +578,10 @@
           <div class="field">
             <label>下載網址</label>
             <input type="url" id="drive-remote-url" placeholder="https://example.com/file.zip 或 magnet:?" />
+          </div>
+          <div class="field">
+            <label>BT 種子檔</label>
+            <input type="file" id="drive-remote-torrent-file" accept=".torrent,application/x-bittorrent" />
           </div>
           <div class="field">
             <label>隱私模式</label>
@@ -582,7 +599,7 @@
             <button class="btn btn-primary" id="drive-remote-download-btn" type="button">開始下載</button>
           </div>
         </div>
-        <div class="drive-card-sub">遠端下載會套用你的雲端硬碟配額與掃描政策；不接受 localhost、內網或本機檔案路徑。</div>
+        <div class="drive-card-sub">貼網址或選 .torrent 擇一下載。遠端下載會套用你的雲端硬碟配額與掃描政策；網址不接受 localhost、內網或本機檔案路徑。</div>
       </div>
       <div class="drive-card" style="margin-top:1rem;">
         <div class="drive-card-title">我的檔案</div>
@@ -1708,7 +1725,7 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260429-sidebar" defer></script>
+<script src="/js/00-core.js?v=20260429-sidebar-polish" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
 <script src="/js/20-chat.js?v=20260428-forum-pages" defer></script>
 <script src="/js/25-community.js?v=20260428-forum-pages" defer></script>
@@ -1716,7 +1733,7 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/33-dm.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260428-drive-progress" defer></script>
+<script src="/js/35-drive.js?v=20260429-torrent-upload" defer></script>
 <script src="/js/36-comfyui.js?v=20260428-comfyui-status" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/40-auth-users.js?v=20260428-forum-pages" defer></script>

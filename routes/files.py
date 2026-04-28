@@ -1,5 +1,7 @@
 import hashlib
+import os
 import shutil
+import tempfile
 import threading
 import uuid
 
@@ -8,6 +10,7 @@ from services.upload_security import (
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
     log_file_access,
+    safe_public_filename,
     scan_uploaded_file,
 )
 from datetime import datetime
@@ -26,7 +29,7 @@ from services.cloud_drive import (
     store_cloud_upload,
 )
 from services.file_previews import build_preview_metadata, preview_category
-from services.remote_downloads import RemoteDownloadError, download_remote_url, remote_download_capabilities, validate_remote_url
+from services.remote_downloads import RemoteDownloadError, download_remote_url, download_torrent_file_with_aria2, remote_download_capabilities, validate_remote_url
 from services.storage_albums import (
     add_album_file,
     create_album,
@@ -161,6 +164,8 @@ def register_file_routes(app, deps):
             "phase": task.get("phase"),
             "filename": task.get("filename"),
             "url": task.get("url"),
+            "source_type": task.get("source_type"),
+            "torrent_filename": task.get("torrent_filename"),
             "loaded_bytes": task.get("loaded_bytes"),
             "total_bytes": task.get("total_bytes"),
             "progress_percent": task.get("progress_percent"),
@@ -226,13 +231,23 @@ def register_file_routes(app, deps):
             conn.close()
             conn = None
 
+            source_type = task.get("source_type") or "url"
             _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
-            downloaded = download_remote_url(
-                task["url"],
-                timeout_seconds=task["timeout_seconds"],
-                max_bytes=max_bytes,
-                progress_callback=_remote_progress_updater(task_id),
-            )
+            if source_type == "torrent_file":
+                downloaded = download_torrent_file_with_aria2(
+                    task["torrent_path"],
+                    display_name=task.get("torrent_filename") or "BT 檔案",
+                    timeout_seconds=task["timeout_seconds"],
+                    max_bytes=max_bytes,
+                    progress_callback=_remote_progress_updater(task_id),
+                )
+            else:
+                downloaded = download_remote_url(
+                    task["url"],
+                    timeout_seconds=task["timeout_seconds"],
+                    max_bytes=max_bytes,
+                    progress_callback=_remote_progress_updater(task_id),
+                )
             _task_update(task_id, status="running", phase="saving", filename=downloaded.filename, msg="保存到雲端硬碟")
             file_storage = _DownloadedFileStorage(downloaded)
             conn = get_db()
@@ -294,6 +309,8 @@ def register_file_routes(app, deps):
                 file_storage.close()
             if downloaded and downloaded.cleanup_dir:
                 shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
+            if task.get("torrent_cleanup_dir"):
+                shutil.rmtree(task["torrent_cleanup_dir"], ignore_errors=True)
             if conn:
                 conn.close()
 
@@ -1096,10 +1113,14 @@ def register_file_routes(app, deps):
         task = {
             "id": task_id,
             "kind": "remote_download",
+            "source_type": "url",
             "status": "queued",
             "phase": "queued",
             "filename": "",
             "url": url,
+            "torrent_filename": "",
+            "torrent_path": "",
+            "torrent_cleanup_dir": "",
             "owner_user_id": int(_actor_value(actor, "id")),
             "actor": actor_snapshot,
             "privacy_mode": privacy_mode,
@@ -1122,6 +1143,85 @@ def register_file_routes(app, deps):
         worker = threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True)
         worker.start()
         return json_resp({"ok": True, "task": _task_snapshot(task)}, 202)
+
+    @app.route("/api/cloud-drive/remote-download/torrent-tasks", methods=["POST"])
+    @require_csrf
+    def cloud_drive_remote_download_torrent_task_create():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        uploaded = request.files.get("torrent_file") or request.files.get("torrent")
+        if not uploaded or not uploaded.filename:
+            return json_resp({"ok": False, "msg": "請上傳 .torrent BT 種子檔"}), 400
+        filename = safe_public_filename(uploaded.filename)
+        if not filename.lower().endswith(".torrent"):
+            return json_resp({"ok": False, "msg": "只接受 .torrent BT 種子檔"}), 400
+
+        tmpdir = tempfile.mkdtemp(prefix="hackme_torrent_")
+        torrent_path = os.path.join(tmpdir, filename)
+        try:
+            uploaded.save(torrent_path)
+            try:
+                torrent_size = os.path.getsize(torrent_path)
+            except OSError:
+                torrent_size = 0
+            if torrent_size <= 0:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return json_resp({"ok": False, "msg": "BT 種子檔是空的"}), 400
+            if torrent_size > 2 * 1024 * 1024:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return json_resp({"ok": False, "msg": "BT 種子檔太大，請上傳 2MB 以內的 .torrent"}), 400
+
+            privacy_mode = str(request.form.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
+            virtual_path = str(request.form.get("virtual_path") or "").strip()
+            task_id = uuid.uuid4().hex
+            try:
+                actor_snapshot = dict(actor)
+            except Exception:
+                actor_snapshot = {
+                    "id": _actor_value(actor, "id"),
+                    "username": _actor_value(actor, "username"),
+                    "role": _actor_value(actor, "role"),
+                    "member_level": _actor_value(actor, "member_level"),
+                    "effective_level": _actor_value(actor, "effective_level"),
+                }
+            now = datetime.now().isoformat()
+            task = {
+                "id": task_id,
+                "kind": "remote_download",
+                "source_type": "torrent_file",
+                "status": "queued",
+                "phase": "queued",
+                "filename": filename,
+                "url": f"BT 檔案：{filename}",
+                "torrent_filename": filename,
+                "torrent_path": torrent_path,
+                "torrent_cleanup_dir": tmpdir,
+                "owner_user_id": int(_actor_value(actor, "id")),
+                "actor": actor_snapshot,
+                "privacy_mode": privacy_mode,
+                "virtual_path": virtual_path,
+                "timeout_seconds": 1800,
+                "loaded_bytes": 0,
+                "total_bytes": None,
+                "progress_percent": 0,
+                "msg": "BT 種子檔已加入下載佇列",
+                "error": "",
+                "file": None,
+                "storage_file": None,
+                "ip": get_client_ip(),
+                "ua": get_ua(),
+                "created_at": now,
+                "updated_at": now,
+            }
+            with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                _REMOTE_DOWNLOAD_TASKS[task_id] = task
+            worker = threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True)
+            worker.start()
+            return json_resp({"ok": True, "task": _task_snapshot(task)}, 202)
+        except Exception:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise
 
     @app.route("/api/cloud-drive/remote-download/tasks/<task_id>", methods=["GET"])
     @require_csrf_safe

@@ -934,3 +934,77 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     assert body["progress_percent"] == 100
     assert body["file"]["filename"] == "remote-task.txt"
     assert body["storage_file"]["virtual_path"] == "/Downloads/remote-task.txt"
+
+
+def test_remote_download_task_accepts_uploaded_torrent_file(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "torrent-result.txt"
+    source.write_text("torrent task content", encoding="utf-8")
+    captured = {}
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "torrent-result.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(torrent_path, **kwargs):
+        captured["torrent_path"] = torrent_path
+        captured["display_name"] = kwargs.get("display_name")
+        progress = kwargs.get("progress_callback")
+        assert torrent_path.endswith("sample.torrent")
+        assert progress
+        progress({"phase": "downloading", "filename": "sample.torrent", "loaded_bytes": 0, "total_bytes": None})
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_torrent_file_with_aria2", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/torrent-tasks",
+        data={
+            "torrent_file": (io.BytesIO(b"d8:announce0:e"), "sample.torrent"),
+            "privacy_mode": "private_scannable",
+            "virtual_path": "/Downloads/torrent-result.txt",
+        },
+    )
+    assert created.status_code == 202
+    task = created.get_json()["task"]
+    assert task["source_type"] == "torrent_file"
+    assert task["torrent_filename"] == "sample.torrent"
+    task_id = task["id"]
+
+    body = {}
+    for _ in range(30):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+        assert status.status_code == 200
+        body = status.get_json()["task"]
+        if body["status"] == "completed":
+            break
+        time.sleep(0.02)
+
+    assert captured["display_name"] == "sample.torrent"
+    assert body["status"] == "completed"
+    assert body["file"]["filename"] == "torrent-result.txt"
+    assert body["storage_file"]["virtual_path"] == "/Downloads/torrent-result.txt"
+
+
+def test_remote_download_torrent_upload_rejects_non_torrent(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    res = client.post(
+        "/api/cloud-drive/remote-download/torrent-tasks",
+        data={"torrent_file": (io.BytesIO(b"not torrent"), "note.txt")},
+    )
+
+    assert res.status_code == 400
+    assert ".torrent" in res.get_json()["msg"]

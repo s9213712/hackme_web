@@ -36,6 +36,7 @@ def remote_download_capabilities():
     return {
         "direct_link": True,
         "bt_magnet": bool(aria2c),
+        "bt_file": bool(aria2c),
         "aria2c_path": aria2c or "",
     }
 
@@ -170,10 +171,10 @@ def _aria2_failure_message(proc, log_path):
     return f"BT/magnet 下載失敗：{detail}"
 
 
-def download_magnet_with_aria2(url, *, timeout_seconds=300, progress_callback=None):
+def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds=300, max_bytes=None, progress_callback=None):
     aria2c = shutil.which("aria2c")
     if not aria2c:
-        raise RemoteDownloadError("BT/magnet 下載需要先安裝 aria2c")
+        raise RemoteDownloadError("BT 下載需要先安裝 aria2c")
     tmpdir = tempfile.mkdtemp(prefix="hackme_bt_")
     log_path = os.path.join(tmpdir, "aria2.log")
     cmd = [
@@ -188,10 +189,10 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, progress_callback=No
         "--auto-file-renaming=true",
         "--summary-interval=0",
         "--console-log-level=warn",
-        url,
+        source,
     ]
     try:
-        _emit_progress(progress_callback, phase="downloading", filename="BT/magnet", loaded_bytes=None, total_bytes=None)
+        _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=None, total_bytes=None)
         proc = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout_seconds)
         if proc.returncode != 0:
             raise RemoteDownloadError(_aria2_failure_message(proc, log_path))
@@ -201,7 +202,11 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, progress_callback=No
             if path.is_file() and not path.name.endswith(".aria2") and path.name != "aria2.log"
         ]
         if not files:
-            raise RemoteDownloadError("BT/magnet 沒有產生可保存的檔案")
+            raise RemoteDownloadError("BT 下載沒有產生可保存的檔案")
+        if max_bytes is not None:
+            total_downloaded = sum(os.path.getsize(path) for path in files)
+            if total_downloaded > int(max_bytes):
+                raise RemoteDownloadError("BT 下載內容超過容量限制")
         if len(files) == 1:
             target = files[0]
             filename = safe_public_filename(Path(target).name)
@@ -218,14 +223,36 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, progress_callback=No
         return DownloadedFile(path=target, filename=filename, mimetype=mimetype, cleanup_dir=tmpdir)
     except subprocess.TimeoutExpired as exc:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        raise RemoteDownloadError("BT/magnet 下載逾時") from exc
+        raise RemoteDownloadError("BT 下載逾時") from exc
     except Exception:
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise
 
 
+def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, progress_callback=None):
+    return _download_bt_with_aria2(
+        url,
+        source_label="BT/magnet",
+        timeout_seconds=timeout_seconds,
+        max_bytes=max_bytes,
+        progress_callback=progress_callback,
+    )
+
+
+def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", timeout_seconds=300, max_bytes=None, progress_callback=None):
+    if not os.path.isfile(torrent_path):
+        raise RemoteDownloadError("找不到 BT 種子檔")
+    return _download_bt_with_aria2(
+        torrent_path,
+        source_label=display_name or "BT 檔案",
+        timeout_seconds=timeout_seconds,
+        max_bytes=max_bytes,
+        progress_callback=progress_callback,
+    )
+
+
 def download_remote_url(url, *, timeout_seconds=120, max_bytes=None, progress_callback=None):
     parsed = validate_remote_url(url)
     if parsed["kind"] == "magnet":
-        return download_magnet_with_aria2(parsed["url"], timeout_seconds=timeout_seconds, progress_callback=progress_callback)
+        return download_magnet_with_aria2(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback)
     return download_direct_link(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback)
