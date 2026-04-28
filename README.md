@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.04.27-015`**
+**Current Release ID: `2026.04.29-016`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
@@ -79,6 +79,19 @@ are intentionally ignored by git:
 - `.fkey`, `.csrfkey`, `.integrity_key`, `.chain_seed`
 - `integrity_manifest.json`
 - runtime payloads under `reports/bugs/` and local reports under `security/reports/`
+
+## Current UI Shell
+
+The logged-in application uses a full-viewport sidebar layout. The sidebar is
+flush with the browser's left edge, can collapse to icon-only mode, stores its
+collapsed state in `localStorage`, and is built from the config-driven
+`SIDEBAR_MENU_CONFIG` in `public/js/00-core.js`.
+
+The sidebar owns account and server status: current user, role, member level,
+server connectivity, and inactivity countdown. Quick actions remain in the
+top-right as compact symbol buttons for profile editing, notifications, bug
+reports, and logout. The main content area uses the remaining viewport width
+instead of the previous centered post-login wrapper.
 
 ## Developer Security Dependencies
 
@@ -283,7 +296,7 @@ This repository is useful when you need a local target that also includes:
 Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
-- Current release ID: `2026.04.27-015`
+- Current release ID: `2026.04.29-016`
 - Current schema version: `25`
 
 ### Governance and Member Levels
@@ -530,6 +543,10 @@ Cloud drive safety and attachment integration now expose:
 - `GET /api/cloud-drive/files`: list the current user's cloud drive files.
 - `POST /api/cloud-drive/upload`: upload into the owner's cloud drive and optionally attach the uploaded file to a context.
 - `POST /api/cloud-drive/attach-existing`: attach an existing cloud drive file to `dm`, `group_chat`, `forum_post`, or `forum_comment` without copying the physical file.
+- `GET /api/cloud-drive/remote-download/capabilities`: report server remote-download support.
+- `POST /api/cloud-drive/remote-download/tasks`: queue a direct-link or magnet remote download into Cloud Drive.
+- `POST /api/cloud-drive/remote-download/torrent-tasks`: upload a `.torrent` file and queue it through the same Cloud Drive save pipeline.
+- `GET /api/cloud-drive/remote-download/tasks/{task_id}`: poll remote-download status and progress.
 - `PUT /api/cloud-drive/files/{file_id}/text`: owner-only online text editing for safe text previews.
 - `DELETE /api/cloud-drive/files/{file_id}`: owner/root soft delete; deleted originals invalidate all references and downloads return 404.
 - `GET /api/cloud-drive/files/{file_id}/download`: download after server-side permission, scan status, and deletion checks.
@@ -538,7 +555,12 @@ Cloud drive safety and attachment integration now expose:
 
 The logged-in UI includes a cloud drive tab that shows used capacity, remaining
 capacity, single-file limit, daily upload limit, risk distribution, scan status,
-privacy mode distribution, and the currently enforced safety measures.
+privacy mode distribution, and the currently enforced safety measures. It also
+includes progress rows for local uploads and remote downloads. Remote downloads
+support HTTP/HTTPS direct links, magnet links, and uploaded `.torrent` files
+when `aria2c` is installed on the server. Downloaded results are saved through
+the same quota, scan, privacy-mode, and logical-folder pipeline as normal Cloud
+Drive uploads.
 
 Messages, group chats, direct messages, forum posts/comments, and announcements
 store only `cloud_file_refs` records. The physical file is stored once under the
@@ -568,9 +590,9 @@ Reports and notifications expose these Phase 9 backend APIs:
 - `POST /api/notifications/{id}/read`: mark one notification as read.
 - `POST /api/notifications/read-all`: mark all current-user notifications as read.
 
-The logged-in UI shows a notification center in the success toolbar. It polls
-the notification API, shows an unread badge, and supports single/all read
-actions without relying on WebSocket delivery.
+The logged-in UI shows a compact top-right notification button. It polls the
+notification API, shows an unread badge, and supports single/all read actions
+without relying on WebSocket delivery.
 
 ### Direct Messages
 
@@ -781,6 +803,7 @@ The frontend no longer relies on a single large application file.
 - `public/js/33-dm.js` contains direct message UI logic
 - `public/js/34-markdown-editor.js` contains the lightweight Markdown editor
 - `public/js/35-drive.js` contains cloud drive, attachment, preview, and storage UI logic
+- `public/js/36-comfyui.js` contains ComfyUI status/model/generation UI logic
 - `public/js/37-bug-report.js` contains user bug report UI logic
 - `public/js/40-auth-users.js` contains login, registration, and profile actions
 - `public/js/50-admin.js` contains admin, audit, settings, and health views

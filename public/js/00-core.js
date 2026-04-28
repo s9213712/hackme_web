@@ -232,9 +232,11 @@ function syncSidebarMenuVisibility() {
 function updateSidebarIdentity() {
   const user = $("sidebar-current-user");
   const role = $("sidebar-current-role");
+  const level = $("sidebar-current-level");
   const avatar = $("sidebar-user-avatar");
   if (user) user.textContent = currentUser || "未登入";
   if (role) role.textContent = currentRoleLabel || currentRole || "-";
+  if (level) level.textContent = currentUser ? (level.dataset.memberLevel || "-") : "-";
   if (avatar) avatar.textContent = currentUser ? String(currentUser).slice(0, 1).toUpperCase() : "-";
 }
 
@@ -419,8 +421,8 @@ async function loadSiteConfig() {
 }
 
 function setServerConnectionState(state, label) {
-  const dots = [$("server-connection-dot"), $("sidebar-server-dot")].filter(Boolean);
-  const labels = [$("server-connection-label"), $("sidebar-server-label")].filter(Boolean);
+  const dots = [$("sidebar-server-dot")].filter(Boolean);
+  const labels = [$("sidebar-server-label")].filter(Boolean);
   if (!dots.length || !labels.length) return;
   const colors = {
     online: ["#4caf50", "rgba(76,175,80,.75)"],
@@ -778,6 +780,7 @@ function setAuthState(json, showLoginHero = false) {
   if (inactivityLogoutMs > 0) resetInactivityTimer();
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
+  document.body.classList.add("app-authenticated");
   $("success-screen").classList.add("show");
   const loginHero = $("login-success-hero");
   if (loginHero) {
@@ -786,11 +789,17 @@ function setAuthState(json, showLoginHero = false) {
       setTimeout(() => loginHero.classList.remove("show"), 2800);
     }
   }
-  $("me-user").textContent = sanitize(currentUser || "-");
-  $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
+  if ($("me-user")) $("me-user").textContent = sanitize(currentUser || "-");
+  if ($("me-role")) $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
   const levelEl = $("me-level");
   if (levelEl) levelEl.textContent = sanitize(json.effective_level || json.member_level || "-");
-  $("me-nickname").textContent = sanitize(json.nickname || "-");
+  if ($("me-nickname")) $("me-nickname").textContent = sanitize(json.nickname || "-");
+  const sidebarLevel = $("sidebar-current-level");
+  if (sidebarLevel) {
+    sidebarLevel.dataset.memberLevel = json.effective_level || json.member_level || "-";
+    sidebarLevel.textContent = sidebarLevel.dataset.memberLevel;
+  }
+  updateSidebarIdentity();
   const selfEditBtn = $("self-edit-btn");
   if (selfEditBtn) selfEditBtn.style.display = currentUser ? "" : "none";
   const welcomeMsg = $("welcome-msg");
@@ -906,6 +915,7 @@ function resetAuthState() {
   stopChatPoll();
   if (typeof stopNotificationPoll === "function") stopNotificationPoll();
   hideUserEditDialog();
+  document.body.classList.remove("app-authenticated");
   $("success-screen").classList.remove("show");
   const welcomeMsg = $("welcome-msg");
   if (welcomeMsg) {

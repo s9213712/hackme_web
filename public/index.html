@@ -5,18 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-sidebar-polish" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-ui-final" />
 </head>
 <body>
-  <div class="clock" id="clock">⏰ 載入時間中...</div>
-  <div id="server-connection-light" style="position:fixed;top:12px;right:12px;z-index:9999;display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;border-radius:12px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);font-size:.75rem;color:var(--muted);backdrop-filter:blur(8px);">
-    <span id="server-connection-dot" style="width:10px;height:10px;border-radius:50%;background:#ffb74d;box-shadow:0 0 10px rgba(255,183,77,.65);flex:0 0 auto;"></span>
-    <span>
-      <span id="server-connection-label">連線檢查中</span>
-      <span id="session-countdown-label" class="session-countdown" style="display:block;">未登入</span>
-    </span>
-  </div>
-
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
 <div class="card" id="auth-card">
 
@@ -167,17 +158,11 @@
     <h2>恭喜登入成功</h2>
     <p id="welcome-msg" style="color:var(--muted); margin-top:.5rem">歡迎回來！</p>
   </div>
-  <div class="info-grid">
-    <div>使用者：<span id="me-user">-</span></div>
-    <div>角色：<span id="me-role">-</span></div>
-    <div>會員等級：<span id="me-level">-</span></div>
-    <div>暱稱：<span id="me-nickname">-</span></div>
-  </div>
-  <div class="success-toolbar">
-    <button class="btn" id="self-edit-btn">修改我的資料</button>
+  <div class="app-action-bar" aria-label="快速操作">
+    <button class="btn icon-action-btn" id="self-edit-btn" type="button" title="修改資料" aria-label="修改資料">✎</button>
     <div class="notification-center" id="notification-center">
-      <button class="btn notification-toggle" id="notification-toggle" type="button">
-        通知 <span id="notification-badge" class="notification-badge" style="display:none;">0</span>
+      <button class="btn icon-action-btn notification-toggle" id="notification-toggle" type="button" title="通知" aria-label="通知">
+        🔔 <span id="notification-badge" class="notification-badge" style="display:none;">0</span>
       </button>
       <div class="notification-panel" id="notification-panel" aria-live="polite">
         <div class="notification-panel-head">
@@ -189,10 +174,9 @@
         </div>
       </div>
     </div>
-    <button class="btn" id="bug-report-open-btn" type="button">回報 Bug</button>
-    <button class="btn" id="logout-btn">登出</button>
+    <button class="btn icon-action-btn" id="bug-report-open-btn" type="button" title="回報 Bug" aria-label="回報 Bug">!</button>
+    <button class="btn icon-action-btn" id="logout-btn" type="button" title="登出" aria-label="登出">⏻</button>
   </div>
-
   <div class="app-shell" id="app-shell">
     <aside class="app-sidebar" id="app-sidebar" aria-label="主要功能">
       <div class="sidebar-head">
@@ -220,11 +204,15 @@
           <span class="sidebar-user-meta">
             <span class="sidebar-label sidebar-user-name" id="sidebar-current-user">未登入</span>
             <span class="sidebar-label sidebar-user-role" id="sidebar-current-role">-</span>
+            <span class="sidebar-label sidebar-user-role" id="sidebar-current-level">-</span>
           </span>
         </div>
         <div class="sidebar-server-state" id="sidebar-server-state">
           <span class="sidebar-server-dot" id="sidebar-server-dot"></span>
-          <span class="sidebar-label" id="sidebar-server-label">連線檢查中</span>
+          <span class="sidebar-server-meta">
+            <span class="sidebar-label" id="sidebar-server-label">連線檢查中</span>
+            <span class="sidebar-label session-countdown" id="session-countdown-label">未登入</span>
+          </span>
         </div>
       </div>
     </aside>
@@ -1725,7 +1713,7 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260429-sidebar-polish" defer></script>
+<script src="/js/00-core.js?v=20260429-ui-final" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
 <script src="/js/20-chat.js?v=20260428-forum-pages" defer></script>
 <script src="/js/25-community.js?v=20260428-forum-pages" defer></script>
