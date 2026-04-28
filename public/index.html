@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260428-drive-progress" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-sidebar" />
 </head>
 <body>
   <div class="clock" id="clock">⏰ 載入時間中...</div>
@@ -193,18 +193,29 @@
     <button class="btn" id="logout-btn">登出</button>
   </div>
 
-  <div class="tabs" id="module-main-tabs" style="margin-top:.75rem;margin-bottom:.65rem;">
-    <button class="tab active" id="tab-module-chat">聊天</button>
-    <button class="tab" id="tab-module-dm" style="display:none;">站內信</button>
-    <button class="tab" id="tab-module-announcements">公告</button>
-    <button class="tab" id="tab-module-community">討論區</button>
-    <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
-    <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
-    <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
-    <button class="tab" id="tab-module-appeals">申覆</button>
-    <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
-    <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
-  </div>
+  <div class="app-shell" id="app-shell">
+    <aside class="app-sidebar" id="app-sidebar" aria-label="主要功能">
+      <div class="sidebar-head">
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-icon">H</span>
+          <span class="sidebar-label">hackme_web</span>
+        </div>
+        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="收合側邊欄" aria-expanded="true">‹</button>
+      </div>
+      <nav class="tabs sidebar-nav" id="module-main-tabs">
+        <button class="tab active" id="tab-module-chat">聊天</button>
+        <button class="tab" id="tab-module-dm" style="display:none;">站內信</button>
+        <button class="tab" id="tab-module-announcements">公告</button>
+        <button class="tab" id="tab-module-community">討論區</button>
+        <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
+        <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
+        <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
+        <button class="tab" id="tab-module-appeals">申覆</button>
+        <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
+        <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
+      </nav>
+    </aside>
+    <main class="app-main" id="app-main">
 
   <div class="module-section active" id="module-chat">
     <div class="admin-tools" id="chat-section" style="margin-top: .95rem; text-align: left;">
@@ -1480,6 +1491,9 @@
     </div>
   </div>
 
+    </main>
+  </div>
+
   <div id="user-edit-overlay" class="user-edit-overlay">
   <div class="user-edit-modal">
     <div class="mini-title">修改帳號資料</div>
@@ -1694,7 +1708,7 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260428-comfyui-status" defer></script>
+<script src="/js/00-core.js?v=20260429-sidebar" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
 <script src="/js/20-chat.js?v=20260428-forum-pages" defer></script>
 <script src="/js/25-community.js?v=20260428-forum-pages" defer></script>
@@ -1706,7 +1720,7 @@
 <script src="/js/36-comfyui.js?v=20260428-comfyui-status" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/40-auth-users.js?v=20260428-forum-pages" defer></script>
-<script src="/js/50-admin.js?v=20260428-comfyui-status" defer></script>
+<script src="/js/50-admin.js?v=20260429-sidebar" defer></script>
 <script src="/js/90-bootstrap.js?v=20260428-forum-pages" defer></script>
 </body>
 </html>

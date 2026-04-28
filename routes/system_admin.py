@@ -425,6 +425,12 @@ def register_system_admin_routes(app, deps):
             "environment": {
                 "platform": platform.platform(),
                 "python_version": sys.version.split()[0],
+                "pid": os.getpid(),
+                "base_dir": BASE_DIR,
+                "database_path": DB_PATH,
+                "log_dir": LOG_DIR,
+                "chat_dir": CHAT_DIR,
+                "anchor_dir": ANCHOR_DIR,
                 "database_bytes": db_size,
                 "log_files": len(log_files),
                 "chat_files": len(chat_files),

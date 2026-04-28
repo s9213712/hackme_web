@@ -66,6 +66,173 @@ function canAccessModule(moduleKey, role = currentRole) {
 
 function $(id) { return document.getElementById(id); }
 
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "hackme_web.sidebar.collapsed";
+const SIDEBAR_MENU_CONFIG = [
+  { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "C", label: "聊天" },
+  { tabId: "tab-module-dm", module: "dm", tab: "dm", icon: "M", label: "站內信" },
+  { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "N", label: "公告" },
+  {
+    tabId: "tab-module-community",
+    module: "community",
+    tab: "community",
+    icon: "F",
+    label: "討論區",
+    submenu: [
+      { label: "看板清單", action: "module:community" },
+      { label: "主題審核", action: "community:review" },
+    ],
+  },
+  {
+    tabId: "tab-module-drive",
+    module: "privacy_uploads",
+    tab: "drive",
+    icon: "D",
+    label: "雲端硬碟",
+    submenu: [
+      { label: "檔案清單", action: "module:drive" },
+      { label: "相簿", action: "module:albums" },
+    ],
+  },
+  { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "P", label: "相簿" },
+  { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "A", label: "AI 產圖" },
+  { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "R", label: "申覆", hideForSuperAdmin: true },
+  {
+    tabId: "tab-module-accounts",
+    module: "accounts",
+    tab: "accounts",
+    icon: "U",
+    label: "帳號管理",
+    submenu: [
+      { label: "帳號", action: "admin:users" },
+      { label: "違規計次", action: "admin:violations" },
+      { label: "會員治理", action: "admin:governance" },
+      { label: "申覆審核", action: "admin:appeals" },
+      { label: "訊息檢舉", action: "admin:reports" },
+    ],
+  },
+  {
+    tabId: "tab-module-server",
+    role: "super_admin",
+    tab: "server",
+    icon: "S",
+    label: "安全中心",
+    submenu: [
+      { label: "總覽", action: "server:security" },
+      { label: "審計日誌", action: "server:audit" },
+      { label: "健康度", action: "server:health" },
+      { label: "Integrity Guard", action: "server:integrity" },
+      { label: "伺服器設定", action: "server:settings" },
+      { label: "系統環境", action: "server:env" },
+    ],
+  },
+];
+
+function sidebarItemForTab(tabId) {
+  return SIDEBAR_MENU_CONFIG.find((item) => item.tabId === tabId);
+}
+
+function canShowSidebarItem(item) {
+  if (!item || !currentUser) return false;
+  if (item.hideForSuperAdmin && currentRole === "super_admin") return false;
+  if (item.role === "super_admin") return currentRole === "super_admin";
+  return canAccessModule(item.module);
+}
+
+function decorateSidebarMenu() {
+  SIDEBAR_MENU_CONFIG.forEach((item) => {
+    const button = $(item.tabId);
+    if (!button || button.dataset.sidebarDecorated === "1") return;
+    button.dataset.sidebarDecorated = "1";
+    button.dataset.sidebarTab = item.tab;
+    button.title = item.label;
+    button.innerHTML = `<span class="sidebar-icon" aria-hidden="true">${sanitize(item.icon)}</span><span class="sidebar-label">${sanitize(item.label)}</span>${item.submenu ? '<span class="sidebar-caret">›</span>' : ""}`;
+    if (item.submenu && !$(item.tabId + "-submenu")) {
+      const submenu = document.createElement("div");
+      submenu.className = "sidebar-submenu";
+      submenu.id = item.tabId + "-submenu";
+      submenu.dataset.parentTab = item.tab;
+      submenu.innerHTML = item.submenu.map((sub) => `<button class="sidebar-subitem" type="button" data-sidebar-action="${sanitize(sub.action)}">${sanitize(sub.label)}</button>`).join("");
+      button.insertAdjacentElement("afterend", submenu);
+    }
+  });
+}
+
+function setSidebarCollapsed(collapsed) {
+  document.body.classList.toggle("sidebar-collapsed", !!collapsed);
+  const toggle = $("sidebar-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.setAttribute("aria-label", collapsed ? "展開側邊欄" : "收合側邊欄");
+  }
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch (err) {}
+  updateSidebarActiveState();
+}
+
+function restoreSidebarState() {
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+  } catch (err) {}
+  setSidebarCollapsed(collapsed);
+}
+
+function syncSidebarMenuVisibility() {
+  decorateSidebarMenu();
+  SIDEBAR_MENU_CONFIG.forEach((item) => {
+    const button = $(item.tabId);
+    const submenu = $(item.tabId + "-submenu");
+    const visible = canShowSidebarItem(item);
+    if (button) button.style.display = visible ? "" : "none";
+    if (submenu) submenu.style.display = visible ? "" : "none";
+  });
+  updateSidebarActiveState();
+}
+
+function updateSidebarActiveState() {
+  const collapsed = document.body.classList.contains("sidebar-collapsed");
+  SIDEBAR_MENU_CONFIG.forEach((item) => {
+    const submenu = $(item.tabId + "-submenu");
+    const button = $(item.tabId);
+    if (!submenu || !button) return;
+    const isActive = button.classList.contains("active");
+    submenu.classList.toggle("show", isActive && !collapsed);
+    submenu.querySelectorAll("[data-sidebar-action]").forEach((sub) => {
+      const action = sub.dataset.sidebarAction || "";
+      let active = false;
+      if (action.startsWith("server:")) active = currentModuleTab === "server" && currentServerTab === action.split(":")[1];
+      if (action.startsWith("admin:")) active = currentModuleTab === "accounts" && currentAdminTab === action.split(":")[1];
+      if (action === "module:" + currentModuleTab) active = true;
+      if (action === "community:review") active = currentModuleTab === "community" && typeof communityMode !== "undefined" && communityMode === "review";
+      sub.classList.toggle("active", active);
+    });
+  });
+}
+
+function runSidebarAction(action) {
+  if (!action) return;
+  const [scope, value] = action.split(":");
+  if (scope === "module" && value && typeof switchModuleTab === "function") {
+    switchModuleTab(value);
+    return;
+  }
+  if (scope === "server" && value && typeof switchModuleTab === "function" && typeof switchServerTab === "function") {
+    switchModuleTab("server");
+    switchServerTab(value);
+    return;
+  }
+  if (scope === "admin" && value && typeof switchModuleTab === "function" && typeof switchAdminTab === "function") {
+    switchModuleTab("accounts");
+    switchAdminTab(value);
+    return;
+  }
+  if (action === "community:review" && typeof switchModuleTab === "function") {
+    switchModuleTab("community");
+    if (typeof switchCommunityMode === "function") switchCommunityMode("review");
+  }
+}
+
 function stopInactivityTimer() {
   if (inactivityTimer) {
     clearTimeout(inactivityTimer);
@@ -621,6 +788,10 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAlbums) tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
+  if (typeof syncSidebarMenuVisibility === "function") {
+    syncSidebarMenuVisibility();
+    restoreSidebarState();
+  }
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (governanceTab) governanceTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
@@ -658,6 +829,7 @@ function setAuthState(json, showLoginHero = false) {
               ? "comfyui"
               : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
     refreshComfyuiStatus({ switchAway: true });
   }
@@ -707,6 +879,7 @@ function resetAuthState() {
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");
   if (typeof setComfyuiTabAvailability === "function") setComfyuiTabAvailability(null);
+  if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
   $("me-user").textContent = "-";
   $("me-role").textContent = "-";
   $("me-nickname").textContent = "-";

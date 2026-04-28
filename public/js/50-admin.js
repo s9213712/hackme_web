@@ -18,6 +18,7 @@ function switchServerTab(tab) {
     loadServerMode();
   }
   if (tab === "env") loadServerEnv();
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 function switchSettingsSection(tab) {
@@ -131,6 +132,7 @@ function switchModuleTab(tab) {
   if (normTab === "accounts" && canAccessAccounts && currentAdminTab) {
     if (!$("sec-" + currentAdminTab)) switchAdminTab("users");
   }
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 function switchAdminTab(tab) {
@@ -147,6 +149,7 @@ function switchAdminTab(tab) {
   if (tab === "governance") loadGovernanceDashboard();
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
   if (tab === "reports") loadAdminReports(0, adminReportStatus);
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 // ── Audit log ───────────────────────────────────────────────

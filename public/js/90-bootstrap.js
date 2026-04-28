@@ -1,4 +1,5 @@
 function bindUiEvents() {
+  if (typeof decorateSidebarMenu === "function") decorateSidebarMenu();
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
@@ -135,6 +136,7 @@ function bindUiEvents() {
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
   const comfyuiDiscardBtn = $("comfyui-discard-btn");
+  const sidebarToggle = $("sidebar-toggle");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
   const bugReportOverlay = $("bug-report-overlay");
@@ -261,6 +263,19 @@ function bindUiEvents() {
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
   if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
   if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
+  if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
+    setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+  });
+  const sidebarNav = $("module-main-tabs");
+  if (sidebarNav) {
+    sidebarNav.addEventListener("click", (event) => {
+      const sub = event.target?.closest?.("[data-sidebar-action]");
+      if (!sub) return;
+      event.preventDefault();
+      event.stopPropagation();
+      runSidebarAction(sub.dataset.sidebarAction || "");
+    });
+  }
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);

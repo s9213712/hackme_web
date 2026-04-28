@@ -209,8 +209,9 @@ def register_file_routes(app, deps):
         actor = task["actor"]
         downloaded = None
         file_storage = None
-        conn = get_db()
+        conn = None
         try:
+            conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
@@ -222,6 +223,8 @@ def register_file_routes(app, deps):
                 max_bytes = int(remaining)
             if max_file is not None:
                 max_bytes = min(max_bytes, int(max_file)) if max_bytes is not None else int(max_file)
+            conn.close()
+            conn = None
 
             _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
             downloaded = download_remote_url(
@@ -232,6 +235,9 @@ def register_file_routes(app, deps):
             )
             _task_update(task_id, status="running", phase="saving", filename=downloaded.filename, msg="保存到雲端硬碟")
             file_storage = _DownloadedFileStorage(downloaded)
+            conn = get_db()
+            ensure_cloud_drive_attachment_schema(conn)
+            ensure_storage_album_schema(conn)
             upload_result, msg = store_cloud_upload(
                 conn,
                 actor=actor,
@@ -275,10 +281,12 @@ def register_file_routes(app, deps):
                 storage_file=storage_file,
             )
         except RemoteDownloadError as exc:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             _task_update(task_id, status="failed", phase="failed", error=str(exc), msg=str(exc))
         except Exception as exc:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             audit("CLOUD_DRIVE_REMOTE_DOWNLOAD_ERROR", task.get("ip") or "", user=actor.get("username"), success=False, ua=task.get("ua") or "", detail=exc.__class__.__name__)
             _task_update(task_id, status="failed", phase="failed", error=f"遠端下載失敗：{exc.__class__.__name__}", msg=f"遠端下載失敗：{exc.__class__.__name__}")
         finally:
@@ -286,7 +294,8 @@ def register_file_routes(app, deps):
                 file_storage.close()
             if downloaded and downloaded.cleanup_dir:
                 shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
-            conn.close()
+            if conn:
+                conn.close()
 
     @app.route("/api/admin/storage/summary", methods=["GET"])
     @require_csrf_safe
@@ -1143,10 +1152,11 @@ def register_file_routes(app, deps):
         virtual_path = str(data.get("virtual_path") or "").strip()
         timeout_seconds = 1800 if url.startswith("magnet:?") else 120
 
-        conn = get_db()
+        conn = None
         downloaded = None
         file_storage = None
         try:
+            conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
@@ -1158,9 +1168,14 @@ def register_file_routes(app, deps):
                 max_bytes = int(remaining)
             if max_file is not None:
                 max_bytes = min(max_bytes, int(max_file)) if max_bytes is not None else int(max_file)
+            conn.close()
+            conn = None
 
             downloaded = download_remote_url(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
             file_storage = _DownloadedFileStorage(downloaded)
+            conn = get_db()
+            ensure_cloud_drive_attachment_schema(conn)
+            ensure_storage_album_schema(conn)
             upload_result, msg = store_cloud_upload(
                 conn,
                 actor=actor,
@@ -1195,15 +1210,16 @@ def register_file_routes(app, deps):
                 payload["storage_file"] = storage_file
             return json_resp(payload)
         except RemoteDownloadError as exc:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             return json_resp({"ok": False, "msg": str(exc)}), 400
         finally:
             if file_storage:
                 file_storage.close()
             if downloaded and downloaded.cleanup_dir:
-                import shutil
                 shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
-            conn.close()
+            if conn:
+                conn.close()
 
     @app.route("/api/cloud-drive/attach-existing", methods=["POST"])
     @require_csrf

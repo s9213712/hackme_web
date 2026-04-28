@@ -75,9 +75,14 @@ def test_album_viewer_has_dedicated_module():
 
     assert 'id="tab-module-albums"' in index_html
     assert 'id="module-albums"' in index_html
+    assert 'id="app-sidebar"' in index_html
+    assert 'id="sidebar-toggle"' in index_html
     assert 'id="album-gallery-list"' in index_html
     assert 'id="album-viewer-card"' in index_html
     assert '/js/35-drive.js?v=20260428-drive-progress' in index_html
+    assert '/styles.css?v=20260429-sidebar' in index_html
+    assert '/js/00-core.js?v=20260429-sidebar' in index_html
+    assert '/js/50-admin.js?v=20260429-sidebar' in index_html
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js
     assert "data-drive-action" in drive_js
@@ -87,7 +92,12 @@ def test_album_viewer_has_dedicated_module():
     assert "async function loadAlbumGallery()" in drive_js
     assert "async function openAlbumViewer(id)" in drive_js
     assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js
+    assert "SIDEBAR_MENU_CONFIG" in core_js
+    assert "SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
+    assert "localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
+    assert "data-sidebar-action" in core_js
     assert 'switchModuleTab("albums")' in bootstrap_js
+    assert "sidebarToggle.addEventListener" in bootstrap_js
     assert 'normTab === "albums"' in admin_js
 
 

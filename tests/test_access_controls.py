@@ -218,6 +218,18 @@ def test_invalid_comfyui_api_port_is_rejected():
     assert state["comfyui_api_port"] == 8192
 
 
+def test_admin_environment_exposes_paths_and_pid():
+    app, _ = _admin_app()
+    client = app.test_client()
+
+    res = client.get("/api/admin/environment")
+    assert res.status_code == 200
+    env = res.get_json()["environment"]
+    assert env["pid"] > 0
+    assert env["base_dir"] == "."
+    assert env["database_path"] == "missing.db"
+
+
 def test_effective_server_bind_falls_back_to_environment():
     bind = effective_server_bind(
         {"server_listen_host": "", "server_listen_port": 0},
