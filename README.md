@@ -23,6 +23,8 @@ service:
 ## Fast Start
 
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
 python3 -m pip install -r requirements.txt
 export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
 export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
@@ -33,10 +35,50 @@ python3 server.py
 Then open:
 
 ```text
-https://127.0.0.1:5000/
+http://127.0.0.1:5000/
 ```
 
-Bootstrap accounts are no longer hard-coded. On a fresh database, `root` is created from `HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if `HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set. These three bootstrap accounts remain supported as the default account set, but first login forces a password change when the password still matches the configured bootstrap environment value.
+If `cert.pem` and `key.pem` exist in the project root, the app starts with
+HTTPS and the startup log prints the HTTPS URL instead. Bootstrap accounts are
+no longer hard-coded. On a fresh database, `root` is created from
+`HTML_LEARNING_ROOT_PASSWORD`; `admin` and `test` are only created if
+`HTML_LEARNING_MANAGER_PASSWORD` and `HTML_LEARNING_TEST_PASSWORD` are set. These
+three bootstrap accounts remain supported as the default account set, but first
+login forces a password change when the password still matches the configured
+bootstrap environment value.
+
+## Clean Checkout Verification
+
+The repository is intended to run from tracked source files only. Runtime state
+is generated at boot and should not be committed.
+
+The current branch was verified by exporting `HEAD` with `git archive` into a
+fresh `/tmp` directory, confirming no SQLite database, logs, generated keys, or
+integrity manifest were present, and running:
+
+```bash
+/tmp/hackme_web_clean_20260428/security/run_functional_smoke.sh --port 50741
+```
+
+That clean-copy run started the server, logged in as root, changed the bootstrap
+password, created a baseline forum post, created an in-app snapshot, exercised
+the main admin/community/chat/DM/file/report/security-center flows, restored the
+snapshot, and verified server reset removed the baseline post. Result:
+`0 failures`.
+
+For your own clean deployment, clone the repository, install
+`requirements.txt`, set the bootstrap password environment variables, and run
+`python3 server.py`. The following files/directories are created at runtime and
+are intentionally ignored by git:
+
+- `database/database.db`
+- `logs/`
+- `storage/`
+- `chats/*.jsonl`
+- `anchors/*.json` and `anchors/*.jsonl`
+- `.fkey`, `.csrfkey`, `.integrity_key`, `.chain_seed`
+- `integrity_manifest.json`
+- runtime payloads under `reports/bugs/` and local reports under `security/reports/`
 
 ## Developer Security Dependencies
 
@@ -154,8 +196,9 @@ curl -b cookies.txt http://127.0.0.1:5000/api/admin/bug-reports
 
 When asking the agent to continue maintenance, point it at `reports/bugs/` so
 the saved reports can be triaged, fixed, tested, and then archived or removed.
-The repository tracks only `reports/.gitkeep` and `reports/bugs/.gitkeep`; bug
-payloads remain local runtime data.
+The repository tracks only `reports/attacks/.gitkeep` and
+`reports/bugs/.gitkeep`; bug payloads and pentest reports remain local runtime
+data.
 
 ### Admin UI says listen IP/port needs restart
 
@@ -241,7 +284,7 @@ Release ID is shown at the bottom of the login page and returned by
 `GET /api/version`. Bump `services/release_info.py` for each published build.
 
 - Current release ID: `2026.04.27-015`
-- Current schema version: `19`
+- Current schema version: `25`
 
 ### Governance and Member Levels
 
@@ -766,7 +809,9 @@ The frontend no longer relies on a single large application file.
 - `logs/` holds runtime logs
 - `anchors/` holds audit-chain head snapshots
 - `chats/` holds encrypted chat transcript sidecars
+- `storage/` holds uploaded cloud-drive and album files
 - `reports/bugs/` holds local runtime bug reports and is ignored by git
+- `security/reports/` holds local security and functional test reports and is ignored by git
 - `.fkey`, `.csrfkey`, `.integrity_key`, and `.chain_seed` are generated on first boot and must be persisted across restarts
 
 For test automation, all of these directories can be overridden with:
@@ -775,6 +820,7 @@ For test automation, all of these directories can be overridden with:
 - `HTML_LEARNING_LOG_DIR`
 - `HTML_LEARNING_CHAT_DIR`
 - `HTML_LEARNING_ANCHOR_DIR`
+- `HTML_LEARNING_STORAGE_DIR`
 - `HTML_LEARNING_REPORTS_DIR`
 - `HTML_LEARNING_HOST`
 - `HTML_LEARNING_PORT`
@@ -857,7 +903,8 @@ same isolated smoke harness.
 | `public/js/` | split frontend logic |
 | `public/styles.css` | frontend styling |
 | `database/bootstrap.schema.sql` | bootstrap schema |
-| `reports/` | local runtime bug reports; only `.gitkeep` files are tracked |
+| `reports/` | runtime report root; only `attacks/.gitkeep` and `bugs/.gitkeep` are tracked |
+| `security/` | pentest runner, functional smoke runner, security docs, and ignored local security reports |
 | `security/secrets_allowlist.yml` | expiring allowlist for plaintext secret scan findings |
 | `docs/security/secrets_scanning.md` | developer guide for gitleaks/custom secret scanning |
 | `scripts/run_prod.sh` | production startup helper |
