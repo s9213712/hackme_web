@@ -14,7 +14,7 @@ from services.security_events import record_security_event
 
 SESSION_TTL = 3600 * 4
 CSRF_TOKEN_TTL = SESSION_TTL
-SESSION_IDLE_TIMEOUT = 3 * 60
+SESSION_IDLE_TIMEOUT = 10 * 60
 MIN_DELAY = 0.25
 MAX_DELAY = 0.90
 
