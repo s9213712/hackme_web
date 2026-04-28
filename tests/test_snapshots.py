@@ -196,6 +196,38 @@ def test_superweak_keep_dirty_state_requires_root_confirmation(tmp_path):
     assert any(call[0][0] == "SUPERWEAK_EXIT_KEEP_DIRTY_STATE" for call in audit_log)
 
 
+def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    saved_settings = []
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        save_settings=lambda data: saved_settings.append(dict(data)) or dict(data),
+    )
+    actor = {"id": 1, "username": "root"}
+
+    saved = mode.save_profile(
+        name="staging_lockdown",
+        label="Staging Lockdown",
+        description="custom staging thresholds",
+        settings={"ip_blocking_enabled": True, "integrity_guard_strict_mode": True},
+        thresholds={"security_pending_chat_reports_threshold": 3},
+        actor=actor,
+    )
+    assert saved["ok"] is True
+    assert saved["profile"]["is_builtin"] is False
+
+    switched = mode.switch_mode(target_mode="staging_lockdown", actor=actor, confirm="", notes="test custom")
+
+    assert switched["ok"] is True
+    assert switched["mode"]["current_mode"] == "staging_lockdown"
+    assert saved_settings[-1]["ip_blocking_enabled"] is True
+    assert saved_settings[-1]["security_pending_chat_reports_threshold"] == 3
+    assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
+
+
 def test_daily_snapshot_runs_once_after_configured_time(tmp_path):
     audit_log = []
     service, _, _ = _service(tmp_path, audit_log)
@@ -305,6 +337,9 @@ class _FakeSnapshotService:
 class _FakeServerModeService:
     def get_current_mode(self):
         return {"current_mode": "preprod", "previous_mode": None, "active_snapshot_id": None}
+
+    def list_profiles(self):
+        return [{"name": "preprod", "label": "preprod（準上線）", "is_builtin": True}]
 
     def switch_mode(self, **kwargs):
         return {"ok": True, "mode": {"current_mode": kwargs["target_mode"]}}

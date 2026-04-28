@@ -1,14 +1,15 @@
 function switchServerTab(tab) {
   currentServerTab = tab;
-  ["health", "integrity", "settings", "env"].forEach((name) => {
+  ["security", "health", "integrity", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
+  ["tab-server-security", "tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
   });
+  if (tab === "security") loadSecurityCenter();
   if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
   if (tab === "integrity") loadIntegrityGuard();
   if (tab === "settings") {
@@ -89,7 +90,7 @@ function switchModuleTab(tab) {
     loadDmThreads();
   }
   if (normTab === "server" && canAccessServer) {
-    switchServerTab(currentServerTab || "health");
+    switchServerTab(currentServerTab || "security");
   }
   if (normTab === "drive" && canAccessDrive) {
     loadDriveDashboard();
@@ -875,6 +876,235 @@ function formatBytes(bytes) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const SECURITY_CONTROL_KEYS = [
+  "maintenance_mode",
+  "audit_chain_enabled",
+  "ip_blocking_enabled",
+  "login_violation_enabled",
+  "rate_limit_violation_enabled",
+  "root_ip_whitelist_enabled",
+  "root_ip_whitelist",
+  "browser_only_mode_enabled",
+  "integrity_guard_enabled",
+  "integrity_guard_strict_mode"
+];
+const SECURITY_THRESHOLD_KEYS = [
+  "max_login_failures",
+  "block_duration_minutes",
+  "security_pending_chat_reports_threshold",
+  "security_pending_appeals_threshold",
+  "security_pending_moderation_proposals_threshold",
+  "security_quarantined_files_threshold",
+  "security_unknown_encrypted_files_threshold",
+  "security_log_tail_lines"
+];
+
+function securityInputId(prefix, key) {
+  return prefix + "-" + key.replaceAll("_", "-");
+}
+
+function renderSecuritySummary(sc) {
+  const summary = $("security-center-summary");
+  if (!summary) return;
+  const anomaly = sc.anomaly || {};
+  const readiness = sc.readiness || {};
+  const audit = sc.audit_integrity || {};
+  const mode = sc.mode || {};
+  const settings = sc.settings || {};
+  const signalCount = Array.isArray(anomaly.signals) ? anomaly.signals.length : 0;
+  const cards = [
+    ["Readiness", readiness.status || "-", readiness.status === "ok" ? "#4caf50" : "#ff4f6d"],
+    ["Anomaly", anomaly.status || "ok", anomaly.status === "ok" ? "#4caf50" : anomaly.status === "critical" ? "#ff4f6d" : "#ffb74d"],
+    ["Signals", String(signalCount), signalCount ? "#ffb74d" : "#4caf50"],
+    ["Audit Chain", audit.enabled === false ? "停用" : audit.ok ? "完整" : "異常", audit.enabled === false ? "#9e9e9e" : audit.ok ? "#4caf50" : "#ff4f6d"],
+    ["Server Mode", mode.current_mode || "preprod", mode.current_mode === "superweak" ? "#ff4f6d" : "#82b1ff"],
+    ["Maintenance", settings.maintenance_mode ? "啟用" : "關閉", settings.maintenance_mode ? "#ff4f6d" : "#4caf50"],
+  ];
+  summary.innerHTML = cards.map(([label, value, color]) => `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
+      <div style="font-size:.68rem;color:var(--muted);">${sanitize(label)}</div>
+      <div style="font-size:1rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-word;">${sanitize(value)}</div>
+    </div>
+  `).join("");
+}
+
+function populateSecurityProfiles(profiles, selectedMode) {
+  const select = $("security-mode-select");
+  if (!select) return;
+  const rows = Array.isArray(profiles) ? profiles : [];
+  select.innerHTML = rows.map((profile) => `
+    <option value="${sanitize(profile.name || "")}" ${profile.name === selectedMode ? "selected" : ""}>
+      ${sanitize(profile.label || profile.name || "")}${profile.is_builtin ? " · builtin" : " · custom"}
+    </option>
+  `).join("");
+}
+
+async function loadSecurityCenter() {
+  if (!currentUser || currentRole !== "super_admin") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/security-center", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  const sc = json.security_center || {};
+  if (!json.ok) {
+    const summary = $("security-center-summary");
+    if (summary) summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "安全中心讀取失敗")}</div>`;
+    return;
+  }
+  renderSecuritySummary(sc);
+  const settings = sc.settings || {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!settings[key];
+    else el.value = settings[key] || "";
+  });
+  const thresholds = sc.thresholds || {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (el) el.value = thresholds[key] ?? 0;
+  });
+  const mode = sc.mode || {};
+  populateSecurityProfiles(sc.profiles || [], mode.current_mode || "preprod");
+  const modeStatus = $("security-mode-status");
+  if (modeStatus) {
+    const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
+    const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
+    modeStatus.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
+    modeStatus.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
+  }
+  const auditBox = $("security-audit-entries");
+  if (auditBox) {
+    const rows = sc.audit_entries || [];
+    auditBox.innerHTML = rows.length ? rows.map((e) => `
+      <div style="border-bottom:1px solid rgba(255,255,255,.08);padding:.32rem .2rem;word-break:break-all;">
+        <span style="color:#888;">${sanitize(e.timestamp || "")}</span>
+        <span style="color:${e.success ? "#4caf50" : "#ff4f6d"};">${e.success ? "OK" : "FAIL"}</span>
+        <span style="color:#e0e0e0;">${sanitize(e.action || "")}</span>
+        <span style="color:#82b1ff;">${sanitize(e.actor || "")}</span>
+        <span style="color:#888;">${sanitize(e.details || "")}</span>
+      </div>
+    `).join("") : "<p style='color:var(--muted);'>暫無審計資料</p>";
+  }
+  const logBox = $("security-server-log");
+  if (logBox) {
+    const log = sc.server_log || {};
+    logBox.textContent = log.exists ? (log.lines || []).join("\n") : `server log 不存在：${log.path || "-"}`;
+  }
+}
+
+async function saveSecurityCenterControls() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  });
+  const res = await fetch(API + "/admin/security-center/controls", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("security-controls-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "安全機制開關已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) await loadSecurityCenter();
+}
+
+async function saveSecurityThresholds() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (el) payload[key] = parseInt(el.value || "0", 10);
+  });
+  const res = await fetch(API + "/admin/security-center/thresholds", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("security-thresholds-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "安全閾值已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) await loadSecurityCenter();
+}
+
+async function applySecurityMode() {
+  const target = $("security-mode-select")?.value || "preprod";
+  const confirmText = $("security-mode-confirm")?.value || "";
+  const notes = $("security-mode-notes")?.value || "";
+  if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
+    alert("進入 superweak 必須輸入 ENABLE_SUPERWEAK");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/server-mode", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ mode: target, confirm: confirmText, notes })
+  });
+  const json = await res.json().catch(() => ({}));
+  const status = $("security-mode-status");
+  if (status) {
+    status.textContent = json.ok ? "伺服器模式 / 安全設定檔已套用" : (json.msg || "套用失敗");
+    status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) {
+    if ($("security-mode-confirm")) $("security-mode-confirm").value = "";
+    await loadSecurityCenter();
+  }
+}
+
+async function saveSecurityProfile() {
+  let settings = {};
+  let thresholds = {};
+  try {
+    settings = JSON.parse($("security-profile-settings-json")?.value || "{}");
+    thresholds = JSON.parse($("security-profile-thresholds-json")?.value || "{}");
+  } catch (err) {
+    alert("settings JSON 或 thresholds JSON 格式錯誤");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    name: $("security-profile-name")?.value || "",
+    label: $("security-profile-label")?.value || "",
+    description: $("security-profile-description")?.value || "",
+    settings,
+    thresholds
+  };
+  const res = await fetch(API + "/admin/security-center/profiles", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("security-profile-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "自定義安全設定檔已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) await loadSecurityCenter();
+}
+
 async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -1507,4 +1737,3 @@ async function loadPlatformStats() {
   // Init select-all after DOM ready
   setupIntegritySelectAll();
 })();
-

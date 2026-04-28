@@ -9,6 +9,7 @@ function bindUiEvents() {
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
   const tabServerHealth = $("tab-server-health");
+  const tabServerSecurity = $("tab-server-security");
   const tabServerIntegrity = $("tab-server-integrity");
   const tabServerSettings = $("tab-server-settings");
   const tabServerEnv = $("tab-server-env");
@@ -63,6 +64,11 @@ function bindUiEvents() {
   const integrityBulkIgnore = $("integrity-bulk-ignore-btn");
   const integrityRepair = $("integrity-repair-btn");
   const restartBtn   = $("restart-server-btn");
+  const securityCenterRefresh = $("security-center-refresh-btn");
+  const securityControlsSave = $("security-controls-save-btn");
+  const securityThresholdsSave = $("security-thresholds-save-btn");
+  const securityModeApply = $("security-mode-apply-btn");
+  const securityProfileSave = $("security-profile-save-btn");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
   const avatarUploadBtn = $("edit-user-avatar-upload");
@@ -111,6 +117,7 @@ function bindUiEvents() {
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
+  if (tabServerSecurity) tabServerSecurity.addEventListener("click", () => switchServerTab("security"));
   if (tabServerHealth) tabServerHealth.addEventListener("click", () => switchServerTab("health"));
   if (tabServerIntegrity) tabServerIntegrity.addEventListener("click", () => switchServerTab("integrity"));
   if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
@@ -272,6 +279,11 @@ function bindUiEvents() {
   if (integrityBulkIgnore) integrityBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
   if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
+  if (securityCenterRefresh) securityCenterRefresh.addEventListener("click", loadSecurityCenter);
+  if (securityControlsSave) securityControlsSave.addEventListener("click", saveSecurityCenterControls);
+  if (securityThresholdsSave) securityThresholdsSave.addEventListener("click", saveSecurityThresholds);
+  if (securityModeApply) securityModeApply.addEventListener("click", applySecurityMode);
+  if (securityProfileSave) securityProfileSave.addEventListener("click", saveSecurityProfile);
 }
 
 $("li-pw").addEventListener("keydown", (e) => {

@@ -74,6 +74,12 @@ DEFAULT_SETTINGS = {
     "feature_privacy_uploads_enabled": True,
     "integrity_guard_enabled": True,
     "integrity_guard_strict_mode": False,
+    "security_pending_chat_reports_threshold": 10,
+    "security_pending_appeals_threshold": 10,
+    "security_pending_moderation_proposals_threshold": 10,
+    "security_quarantined_files_threshold": 0,
+    "security_unknown_encrypted_files_threshold": 50,
+    "security_log_tail_lines": 200,
 }
 
 FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))

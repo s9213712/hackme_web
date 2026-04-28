@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import re
@@ -240,16 +241,21 @@ def register_system_admin_routes(app, deps):
             signal("audit_chain_broken", "critical", audit_state["broken_at"], "ok", audit_state["details"])
         if settings.get("maintenance_mode", False):
             signal("maintenance_mode", "warning", True, False, "site is in maintenance mode")
-        if counts.get("pending_chat_reports", 0) >= 10:
-            signal("pending_chat_reports", "warning", counts["pending_chat_reports"], 10)
-        if counts.get("pending_appeals", 0) >= 10:
-            signal("pending_appeals", "warning", counts["pending_appeals"], 10)
-        if counts.get("pending_moderation_proposals", 0) >= 10:
-            signal("pending_moderation_proposals", "warning", counts["pending_moderation_proposals"], 10)
-        if counts.get("quarantined_files", 0) > 0:
-            signal("quarantined_files", "warning", counts["quarantined_files"], 0)
-        if counts.get("unknown_encrypted_files", 0) >= 50:
-            signal("unknown_encrypted_files", "info", counts["unknown_encrypted_files"], 50)
+        pending_chat_threshold = int(settings.get("security_pending_chat_reports_threshold", 10) or 10)
+        pending_appeals_threshold = int(settings.get("security_pending_appeals_threshold", 10) or 10)
+        pending_mod_threshold = int(settings.get("security_pending_moderation_proposals_threshold", 10) or 10)
+        quarantined_threshold = int(settings.get("security_quarantined_files_threshold", 0) or 0)
+        unknown_encrypted_threshold = int(settings.get("security_unknown_encrypted_files_threshold", 50) or 50)
+        if counts.get("pending_chat_reports", 0) >= pending_chat_threshold:
+            signal("pending_chat_reports", "warning", counts["pending_chat_reports"], pending_chat_threshold)
+        if counts.get("pending_appeals", 0) >= pending_appeals_threshold:
+            signal("pending_appeals", "warning", counts["pending_appeals"], pending_appeals_threshold)
+        if counts.get("pending_moderation_proposals", 0) >= pending_mod_threshold:
+            signal("pending_moderation_proposals", "warning", counts["pending_moderation_proposals"], pending_mod_threshold)
+        if counts.get("quarantined_files", 0) > quarantined_threshold:
+            signal("quarantined_files", "warning", counts["quarantined_files"], quarantined_threshold)
+        if counts.get("unknown_encrypted_files", 0) >= unknown_encrypted_threshold:
+            signal("unknown_encrypted_files", "info", counts["unknown_encrypted_files"], unknown_encrypted_threshold)
         if errors:
             signal("count_errors", "warning", len(errors), 0, str(errors))
 
@@ -259,6 +265,87 @@ def register_system_admin_routes(app, deps):
             if level_rank[item["level"]] > level_rank[status]:
                 status = item["level"]
         return {"status": status, "signals": signals, "counts": counts, "errors": errors, "audit_integrity": audit_state}
+
+    SECURITY_SETTING_KEYS = (
+        "maintenance_mode",
+        "audit_chain_enabled",
+        "ip_blocking_enabled",
+        "login_violation_enabled",
+        "rate_limit_violation_enabled",
+        "root_ip_whitelist_enabled",
+        "root_ip_whitelist",
+        "browser_only_mode_enabled",
+        "integrity_guard_enabled",
+        "integrity_guard_strict_mode",
+    )
+    SECURITY_THRESHOLD_KEYS = (
+        "max_login_failures",
+        "block_duration_minutes",
+        "security_pending_chat_reports_threshold",
+        "security_pending_appeals_threshold",
+        "security_pending_moderation_proposals_threshold",
+        "security_quarantined_files_threshold",
+        "security_unknown_encrypted_files_threshold",
+        "security_log_tail_lines",
+    )
+
+    def tail_file(path, max_lines=200):
+        try:
+            max_lines = max(1, min(int(max_lines), 1000))
+        except Exception:
+            max_lines = 200
+        if not path or not os.path.exists(path):
+            return {"path": path or "", "exists": False, "lines": []}
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()[-max_lines:]
+            return {"path": path, "exists": True, "lines": [line.rstrip("\n") for line in lines]}
+        except Exception as exc:
+            return {"path": path, "exists": True, "error": str(exc), "lines": []}
+
+    def recent_secure_audit(limit=50):
+        limit = max(1, min(int(limit or 50), 200))
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id, ts, action, ip, user, success, ua, detail, chain_hash "
+                "FROM secure_audit ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "timestamp": row["ts"],
+                    "action": row["action"],
+                    "ip": row["ip"],
+                    "actor": row["user"],
+                    "success": bool(row["success"]),
+                    "ua": row["ua"],
+                    "details": row["detail"],
+                    "_chain_hash": row["chain_hash"],
+                }
+                for row in rows
+            ]
+        except Exception:
+            return []
+        finally:
+            conn.close()
+
+    def security_center_payload():
+        settings = get_system_settings()
+        log_lines = int(settings.get("security_log_tail_lines", 200) or 200)
+        return {
+            "readiness": readiness_summary(),
+            "anomaly": anomaly_summary(),
+            "audit_integrity": audit_integrity_summary(),
+            "audit_entries": recent_secure_audit(50),
+            "server_log": tail_file(SERVER_LOG_PATH, log_lines),
+            "settings": {key: settings.get(key) for key in SECURITY_SETTING_KEYS},
+            "thresholds": {key: settings.get(key) for key in SECURITY_THRESHOLD_KEYS},
+            "features": get_feature_settings(),
+            "mode": server_mode_service.get_current_mode() if server_mode_service else None,
+            "profiles": server_mode_service.list_profiles() if server_mode_service else [],
+        }
 
     @app.route("/api/admin/health", methods=["GET"])
     @require_csrf_safe
@@ -377,6 +464,105 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         return json_resp({"ok": True, "database": db_integrity_summary()})
+
+    @app.route("/api/admin/security-center", methods=["GET"])
+    @require_csrf_safe
+    def admin_security_center():
+        _, error = require_super_admin_actor()
+        if error:
+            return error
+        return json_resp({"ok": True, "security_center": security_center_payload()})
+
+    @app.route("/api/admin/security-center/thresholds", methods=["PUT"])
+    @require_csrf_safe
+    def admin_security_center_thresholds():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        updates = {}
+        for key in SECURITY_THRESHOLD_KEYS:
+            if key not in data:
+                continue
+            try:
+                value = int(data.get(key))
+            except Exception:
+                return json_resp({"ok": False, "msg": f"{key} 必須是整數"}), 400
+            if value < 0 or value > 100000:
+                return json_resp({"ok": False, "msg": f"{key} 必須介於 0-100000"}), 400
+            updates[key] = value
+        if not updates:
+            return json_resp({"ok": False, "msg": "沒有可寫入的閾值"}), 400
+        saved = save_settings(updates)
+        audit("SECURITY_THRESHOLDS_CHANGED", get_client_ip(), user=actor["username"], success=True, detail=str(saved))
+        return json_resp({"ok": True, "msg": "安全閾值已更新", "thresholds": {key: get_system_settings().get(key) for key in SECURITY_THRESHOLD_KEYS}})
+
+    @app.route("/api/admin/security-center/controls", methods=["PUT"])
+    @require_csrf_safe
+    def admin_security_center_controls():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        updates = {key: data[key] for key in SECURITY_SETTING_KEYS if key in data}
+        if not updates:
+            return json_resp({"ok": False, "msg": "沒有可寫入的安全機制開關"}), 400
+        saved = save_settings(updates)
+        audit("SECURITY_CONTROLS_CHANGED", get_client_ip(), user=actor["username"], success=True, detail=str(saved))
+        return json_resp({"ok": True, "msg": "安全機制設定已更新", "settings": {key: get_system_settings().get(key) for key in SECURITY_SETTING_KEYS}})
+
+    @app.route("/api/admin/security-center/profiles", methods=["GET", "POST"])
+    @require_csrf_safe
+    def admin_security_profiles():
+        if not server_mode_service:
+            return json_resp({"ok": False, "msg": "server mode service unavailable"}), 503
+        if request.method == "GET":
+            _, error = require_super_admin_actor()
+            if error:
+                return error
+            return json_resp({"ok": True, "profiles": server_mode_service.list_profiles()})
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        settings = data.get("settings") or {}
+        thresholds = data.get("thresholds") or {}
+        if isinstance(settings, str):
+            try:
+                settings = json.loads(settings or "{}")
+            except Exception:
+                return json_resp({"ok": False, "msg": "settings JSON 格式錯誤"}), 400
+        if isinstance(thresholds, str):
+            try:
+                thresholds = json.loads(thresholds or "{}")
+            except Exception:
+                return json_resp({"ok": False, "msg": "thresholds JSON 格式錯誤"}), 400
+        result = server_mode_service.save_profile(
+            name=data.get("name"),
+            label=data.get("label"),
+            description=data.get("description") or "",
+            settings=settings,
+            thresholds=thresholds,
+            actor=actor,
+        )
+        if result.get("ok"):
+            audit("SECURITY_PROFILE_SAVED", get_client_ip(), user=actor["username"], success=True, detail=f"profile={result['profile']['name']}")
+        return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/root/integrity/status", methods=["GET"])
     @require_csrf_safe

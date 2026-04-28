@@ -9,7 +9,7 @@ let currentMustChangePassword = false;
 let forcedPasswordChangeMode = false;
 let canManageUsers = false;
 let currentModuleTab = "chat";
-let currentServerTab = "health";
+let currentServerTab = "security";
 let users = [];
 let editingUserId = null;
 let editingUserIsSelf = false;
@@ -662,7 +662,7 @@ function resetAuthState() {
   forcedPasswordChangeMode = false;
   canManageUsers = false;
   users = [];
-  currentServerTab = "health";
+  currentServerTab = "security";
   editingUserIsSelf = false;
   stopInactivityTimer();
   stopChatPoll();

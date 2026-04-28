@@ -17,6 +17,62 @@ SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
 RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
 SERVER_MODES = {"preprod", "test", "superweak"}
+BUILTIN_SECURITY_PROFILES = {
+    "preprod": {
+        "label": "preprod（準上線）",
+        "description": "接近正式部署的安全設定檔，要求完整性檢查通過。",
+        "settings": {
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 10,
+            "security_pending_appeals_threshold": 10,
+            "security_pending_moderation_proposals_threshold": 10,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 50,
+        },
+    },
+    "test": {
+        "label": "test（測試）",
+        "description": "一般測試設定檔，保留主要安全紀錄但降低啟動阻擋。",
+        "settings": {
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 20,
+            "security_pending_appeals_threshold": 20,
+            "security_pending_moderation_proposals_threshold": 20,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 100,
+        },
+    },
+    "superweak": {
+        "label": "superweak（弱化測試）",
+        "description": "高風險弱化測試模式，進入前會建立 before_superweak snapshot。",
+        "settings": {
+            "ip_blocking_enabled": False,
+            "login_violation_enabled": False,
+            "rate_limit_violation_enabled": False,
+            "integrity_guard_strict_mode": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 50,
+            "security_pending_appeals_threshold": 50,
+            "security_pending_moderation_proposals_threshold": 50,
+            "security_quarantined_files_threshold": 10,
+            "security_unknown_encrypted_files_threshold": 250,
+        },
+    },
+}
+PROFILE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 RESETTABLE_TABLES = {
     "appeals",
     "chat_message_reports",
@@ -124,6 +180,40 @@ def ensure_snapshot_schema(conn):
         "VALUES (1, 'preprod', NULL, NULL, NULL, ?, '')",
         (datetime.now().isoformat(),),
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS security_profiles (
+            name            TEXT PRIMARY KEY,
+            label           TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            settings_json   TEXT NOT NULL DEFAULT '{}',
+            thresholds_json TEXT NOT NULL DEFAULT '{}',
+            is_builtin      INTEGER NOT NULL DEFAULT 0,
+            created_by      INTEGER,
+            updated_by      INTEGER,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        )
+        """
+    )
+    now = datetime.now().isoformat()
+    for name, profile in BUILTIN_SECURITY_PROFILES.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO security_profiles
+            (name, label, description, settings_json, thresholds_json, is_builtin, created_by, updated_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                name,
+                profile["label"],
+                profile["description"],
+                json.dumps(profile["settings"], ensure_ascii=False, sort_keys=True),
+                json.dumps(profile["thresholds"], ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_type_status ON snapshots(type, status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_restore_events_snapshot ON snapshot_restore_events(snapshot_id)")
 
@@ -658,14 +748,95 @@ class SnapshotService:
 
 
 class ServerModeService:
-    def __init__(self, *, snapshot_service, get_db, audit, integrity_guard=None):
+    def __init__(self, *, snapshot_service, get_db, audit, integrity_guard=None, save_settings=None):
         self.snapshot_service = snapshot_service
         self.get_db = get_db
         self.audit = audit
         self.integrity_guard = integrity_guard
+        self.save_settings = save_settings
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
+
+    def _decode_profile(self, row):
+        if not row:
+            return None
+        data = dict(row)
+        for key in ("settings_json", "thresholds_json"):
+            try:
+                data[key.replace("_json", "")] = json.loads(data.get(key) or "{}")
+            except Exception:
+                data[key.replace("_json", "")] = {}
+            data.pop(key, None)
+        data["is_builtin"] = bool(data.get("is_builtin"))
+        return data
+
+    def list_profiles(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT * FROM security_profiles ORDER BY is_builtin DESC, name"
+            ).fetchall()
+            return [self._decode_profile(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_profile(self, name):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute("SELECT * FROM security_profiles WHERE name=?", (str(name or ""),)).fetchone()
+            return self._decode_profile(row)
+        finally:
+            conn.close()
+
+    def save_profile(self, *, name, label, description="", settings=None, thresholds=None, actor=None):
+        profile_name = str(name or "").strip().lower()
+        if not PROFILE_NAME_RE.fullmatch(profile_name):
+            return {"ok": False, "msg": "profile name 必須是 2-32 字元的小寫英數、底線或連字號，且以英文字母開頭"}
+        if profile_name in SERVER_MODES:
+            return {"ok": False, "msg": "內建模式不可覆寫，請使用自定義名稱"}
+        settings = settings if isinstance(settings, dict) else {}
+        thresholds = thresholds if isinstance(thresholds, dict) else {}
+        try:
+            actor_id = int(actor["id"] if actor else 0)
+        except Exception:
+            actor_id = int(actor.get("id") or 0) if hasattr(actor, "get") else 0
+        now = datetime.now().isoformat()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO security_profiles
+                (name, label, description, settings_json, thresholds_json, is_builtin, created_by, updated_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    label=excluded.label,
+                    description=excluded.description,
+                    settings_json=excluded.settings_json,
+                    thresholds_json=excluded.thresholds_json,
+                    updated_by=excluded.updated_by,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    profile_name,
+                    str(label or profile_name)[:80],
+                    str(description or "")[:500],
+                    json.dumps(settings, ensure_ascii=False, sort_keys=True),
+                    json.dumps(thresholds, ensure_ascii=False, sort_keys=True),
+                    actor_id,
+                    actor_id,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            profile = conn.execute("SELECT * FROM security_profiles WHERE name=?", (profile_name,)).fetchone()
+            return {"ok": True, "profile": self._decode_profile(profile)}
+        finally:
+            conn.close()
 
     def get_current_mode(self):
         conn = self.get_db()
@@ -677,7 +848,9 @@ class ServerModeService:
             conn.close()
 
     def switch_mode(self, *, target_mode, actor, confirm, notes=None):
-        if target_mode not in SERVER_MODES:
+        target_mode = str(target_mode or "").strip().lower()
+        profile = self.get_profile(target_mode)
+        if not profile:
             return {"ok": False, "msg": "server mode 錯誤"}
         if target_mode == "preprod" and self.integrity_guard:
             allowed, high_risk_count = self.integrity_guard.can_enter_preprod()
@@ -689,6 +862,12 @@ class ServerModeService:
                 }
         if target_mode == "superweak":
             return self.enter_superweak(actor=actor, confirm=confirm, notes=notes)
+        applied_settings = {}
+        if self.save_settings:
+            updates = {}
+            updates.update(profile.get("settings") or {})
+            updates.update(profile.get("thresholds") or {})
+            applied_settings = self.save_settings(updates) if updates else {}
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -698,8 +877,8 @@ class ServerModeService:
                 (current, target_mode, int(actor["id"]), datetime.now().isoformat(), notes or ""),
             )
             conn.commit()
-            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},reason={notes or ''}")
-            return {"ok": True, "mode": self.get_current_mode()}
+            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},profile={profile['name']},settings={applied_settings},reason={notes or ''}")
+            return {"ok": True, "mode": self.get_current_mode(), "profile": profile, "applied_settings": applied_settings}
         finally:
             conn.close()
 

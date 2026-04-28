@@ -849,7 +849,13 @@ integrity_guard = IntegrityGuard(
     get_db=get_db,
     audit=audit,
 )
-server_mode_service = ServerModeService(snapshot_service=snapshot_service, get_db=get_db, audit=audit, integrity_guard=integrity_guard)
+server_mode_service = ServerModeService(
+    snapshot_service=snapshot_service,
+    get_db=get_db,
+    audit=audit,
+    integrity_guard=integrity_guard,
+    save_settings=save_settings,
+)
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")

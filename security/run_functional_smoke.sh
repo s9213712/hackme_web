@@ -440,6 +440,11 @@ run_checks() {
   request "admin member rules" "GET" "/api/admin/member-level-rules" "200"
   request "admin platform stats" "GET" "/api/admin/platform-stats" "200"
   request "admin audit log" "GET" "/api/admin/audit" "200"
+  request "security center summary" "GET" "/api/admin/security-center" "200"
+  request "security center update thresholds" "PUT" "/api/admin/security-center/thresholds" "200" '{"security_pending_chat_reports_threshold":12,"security_pending_appeals_threshold":12,"security_pending_moderation_proposals_threshold":12,"security_quarantined_files_threshold":0,"security_unknown_encrypted_files_threshold":80,"security_log_tail_lines":120,"max_login_failures":3,"block_duration_minutes":10}'
+  request "security center update controls" "PUT" "/api/admin/security-center/controls" "200" '{"ip_blocking_enabled":true,"login_violation_enabled":true,"rate_limit_violation_enabled":true,"integrity_guard_enabled":true,"integrity_guard_strict_mode":false,"browser_only_mode_enabled":false}'
+  request "security center create custom profile" "POST" "/api/admin/security-center/profiles" "200" "{\"name\":\"smoke_profile_${RUN_ID,,}\",\"label\":\"Smoke Profile\",\"description\":\"functional smoke custom security profile\",\"settings\":{\"ip_blocking_enabled\":true,\"integrity_guard_strict_mode\":false},\"thresholds\":{\"security_pending_chat_reports_threshold\":7}}"
+  request "security center apply custom profile" "POST" "/api/admin/server-mode" "200" "{\"mode\":\"smoke_profile_${RUN_ID,,}\",\"confirm\":\"\",\"notes\":\"functional smoke custom profile\"}"
 
   create_smoke_user
 
@@ -558,6 +563,7 @@ $(cat "$RESULTS_TSV")
 - public/API basics: index, site config, version, password strength, captcha challenge
 - authentication: CSRF bootstrap, root login, forced default-password change, session identity
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
+- security center: aggregate security overview, audit data, server log, security controls, threshold update, custom profile creation, custom profile mode switch
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, and server reset verification that removes the baseline post
 - storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete
 - accounts: admin user creation/listing, account sessions when account-security feature is enabled

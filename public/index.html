@@ -158,7 +158,7 @@
     <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
     <button class="tab" id="tab-module-appeals">申覆</button>
     <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
-    <button class="tab" id="tab-module-server" style="display:none;">伺服器管理</button>
+    <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
   </div>
 
   <div class="module-section active" id="module-chat">
@@ -543,7 +543,6 @@
       <!-- Tabs -->
       <div class="tabs" style="margin-bottom:.6rem;">
         <button class="tab active" id="tab-users">帳號管理</button>
-        <button class="tab" id="tab-audit">審計日誌</button>
         <button class="tab" id="tab-violations">違規計次</button>
         <button class="tab" id="tab-governance">會員治理</button>
         <button class="tab" id="tab-appeals">申覆審核</button>
@@ -702,15 +701,102 @@
 
   <div class="module-section" id="module-server">
     <div class="admin-tools">
-      <div class="mini-title">⚙️ 伺服器管理</div>
+      <div class="mini-title">安全中心</div>
       <div class="tabs" style="margin-top:.65rem;margin-bottom:.7rem;">
-        <button class="tab active" id="tab-server-health">健康度</button>
+        <button class="tab active" id="tab-server-security">總覽</button>
+        <button class="tab" id="tab-server-health">健康度</button>
         <button class="tab" id="tab-server-integrity">Integrity Guard</button>
         <button class="tab" id="tab-server-settings">伺服器設定</button>
         <button class="tab" id="tab-server-env">系統環境</button>
       </div>
 
-      <div class="form-section active" id="sec-server-health">
+      <div class="form-section active" id="sec-server-security">
+        <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.65rem;">
+          <button class="btn btn-primary" type="button" id="security-center-refresh-btn">重新整理安全中心</button>
+          <button class="btn" type="button" id="security-controls-save-btn">儲存安全開關</button>
+          <button class="btn" type="button" id="security-thresholds-save-btn">儲存閾值</button>
+        </div>
+        <div id="security-center-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">安全機制開關</div>
+          <div class="settings-option-grid">
+            <div class="field"><label><input type="checkbox" id="sc-maintenance-mode" /> 維護模式</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-audit-chain-enabled" /> 審計 hash chain</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-ip-blocking-enabled" /> 錯誤登入鎖 IP</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-login-violation-enabled" /> 登入失敗寫入違規</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-rate-limit-violation-enabled" /> 速率限制寫入違規</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-root-ip-whitelist-enabled" /> root IP 白名單</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-browser-only-mode-enabled" /> Browser-only 模式</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-integrity-guard-enabled" /> Integrity Guard</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
+            <div class="field">
+              <label>root IP 白名單</label>
+              <textarea id="sc-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
+            </div>
+          </div>
+          <div id="security-controls-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">伺服器模式與安全設定檔</div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>目標模式 / 設定檔</label>
+              <select id="security-mode-select"></select>
+            </div>
+            <div class="field">
+              <label>確認字串（superweak 需 ENABLE_SUPERWEAK）</label>
+              <input type="text" id="security-mode-confirm" placeholder="需要時輸入確認字串" />
+            </div>
+            <div class="field">
+              <label>備註</label>
+              <input type="text" id="security-mode-notes" placeholder="切換原因" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" type="button" id="security-mode-apply-btn">套用設定檔</button>
+            </div>
+          </div>
+          <div id="security-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+          <div class="mini-title" style="margin:.9rem 0 .55rem;">新增自定義設定檔</div>
+          <div class="settings-option-grid">
+            <div class="field"><label>名稱</label><input type="text" id="security-profile-name" placeholder="staging_lockdown" /></div>
+            <div class="field"><label>顯示名稱</label><input type="text" id="security-profile-label" placeholder="Staging Lockdown" /></div>
+            <div class="field"><label>描述</label><input type="text" id="security-profile-description" placeholder="用途與風險說明" /></div>
+            <div class="field"><label>&nbsp;</label><button class="btn" type="button" id="security-profile-save-btn">儲存自定義設定檔</button></div>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field"><label>settings JSON</label><textarea id="security-profile-settings-json" rows="5" placeholder='{"ip_blocking_enabled":true}'></textarea></div>
+            <div class="field"><label>thresholds JSON</label><textarea id="security-profile-thresholds-json" rows="5" placeholder='{"security_pending_chat_reports_threshold":10}'></textarea></div>
+          </div>
+          <div id="security-profile-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">閾值管理</div>
+          <div class="settings-option-grid">
+            <div class="field"><label>登入失敗鎖定次數</label><input type="number" id="sc-max-login-failures" min="1" max="100000" /></div>
+            <div class="field"><label>封鎖時長（分鐘）</label><input type="number" id="sc-block-duration-minutes" min="1" max="100000" /></div>
+            <div class="field"><label>待審聊天室檢舉警戒</label><input type="number" id="sc-security-pending-chat-reports-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>待審申覆警戒</label><input type="number" id="sc-security-pending-appeals-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>待審治理提案警戒</label><input type="number" id="sc-security-pending-moderation-proposals-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>隔離檔案警戒</label><input type="number" id="sc-security-quarantined-files-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>未知加密檔案警戒</label><input type="number" id="sc-security-unknown-encrypted-files-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>Server log 顯示行數</label><input type="number" id="sc-security-log-tail-lines" min="1" max="1000" /></div>
+          </div>
+          <div id="security-thresholds-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
+        </div>
+        <div class="settings-option-grid">
+          <div>
+            <div class="mini-title" style="margin-bottom:.45rem;">近期審計資料</div>
+            <div id="security-audit-entries" style="max-height:300px;overflow:auto;font-size:.72rem;font-family:monospace;"></div>
+          </div>
+          <div>
+            <div class="mini-title" style="margin-bottom:.45rem;">Server log</div>
+            <pre id="security-server-log" style="max-height:300px;overflow:auto;font-size:.68rem;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;white-space:pre-wrap;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section" id="sec-server-health">
         <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
           <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
           <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
