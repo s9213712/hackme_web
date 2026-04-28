@@ -21,9 +21,9 @@ class ComfyUIImage:
 
 
 class ComfyUIClient:
-    def __init__(self, base_url="http://127.0.0.1:8192", timeout=20):
+    def __init__(self, base_url="http://127.0.0.1:8192", timeout=30):
         self.base_url = str(base_url or "http://127.0.0.1:8192").rstrip("/")
-        self.timeout = int(timeout or 20)
+        self.timeout = int(timeout or 30)
 
     def _url(self, path):
         return f"{self.base_url}{path}"
@@ -52,6 +52,16 @@ class ComfyUIClient:
         if not isinstance(values, list):
             values = []
         return [str(item) for item in values if str(item).strip()]
+
+    def health_check(self, *, timeout=3):
+        stats = self._json_request("/system_stats", timeout=timeout)
+        if not isinstance(stats, dict):
+            raise ComfyUIError("ComfyUI 狀態回應格式不正確")
+        return {
+            "ok": True,
+            "base_url": self.base_url,
+            "system": stats.get("system") or {},
+        }
 
     def get_sampler_options(self):
         info = self._json_request("/object_info/KSampler")
@@ -124,7 +134,7 @@ class ComfyUIClient:
             raise ComfyUIError("ComfyUI 未回傳 prompt_id")
         return str(prompt_id)
 
-    def wait_for_first_image(self, prompt_id, *, timeout_seconds=180, poll_interval=1.0):
+    def wait_for_first_image(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0):
         deadline = time.time() + int(timeout_seconds)
         last_status = None
         while time.time() < deadline:
@@ -162,7 +172,7 @@ class ComfyUIClient:
             raise ComfyUIError("ComfyUI 圖片內容為空")
         return ComfyUIImage(filename=filename, subfolder=subfolder, type=image_type, mime_type=content_type, data=data)
 
-    def generate_image(self, params, *, timeout_seconds=180):
+    def generate_image(self, params, *, timeout_seconds=600):
         workflow = self.build_text_to_image_workflow(params)
         prompt_id = self.queue_prompt(workflow)
         image_ref = self.wait_for_first_image(prompt_id, timeout_seconds=timeout_seconds)

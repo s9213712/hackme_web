@@ -45,7 +45,8 @@ function switchModuleTab(tab) {
   const canAccessDm = !!currentUser && canAccessModule("dm");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
   const canAccessAlbums = canAccessDrive;
-  const canAccessComfyui = !!currentUser && canAccessModule("comfyui");
+  const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
+  const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
 
   let normTab = tab;
   const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessComfyui ? "comfyui" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))));

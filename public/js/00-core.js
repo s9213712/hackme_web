@@ -658,6 +658,9 @@ function setAuthState(json, showLoginHero = false) {
               ? "comfyui"
               : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
+  if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
+    refreshComfyuiStatus({ switchAway: true });
+  }
   resetInactivityTimer();
 }
 
@@ -703,6 +706,7 @@ function resetAuthState() {
   if (moduleAccounts) moduleAccounts.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");
+  if (typeof setComfyuiTabAvailability === "function") setComfyuiTabAvailability(null);
   $("me-user").textContent = "-";
   $("me-role").textContent = "-";
   $("me-nickname").textContent = "-";

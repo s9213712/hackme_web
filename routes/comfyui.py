@@ -16,6 +16,8 @@ DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://127.0.0.1:8192")
 DEFAULT_COMFYUI_PORT = 8192
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
+DEFAULT_GENERATION_TIMEOUT_SECONDS = 600
+MAX_GENERATION_TIMEOUT_SECONDS = 1800
 
 
 class _MemoryFile:
@@ -72,6 +74,15 @@ def register_comfyui_routes(app, deps):
         active_client = active_client or _client()
         return json_resp({"ok": False, "msg": str(exc), "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url())}), 503
 
+    def _comfyui_unavailable_payload(exc, active_client=None):
+        active_client = active_client or _client()
+        return {
+            "ok": True,
+            "available": False,
+            "msg": str(exc),
+            "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+        }
+
     def _int_range(value, default, minimum, maximum, *, multiple_of=None):
         try:
             number = int(value)
@@ -127,6 +138,28 @@ def register_comfyui_routes(app, deps):
         }
         return params, None
 
+    @app.route("/api/comfyui/status", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_status():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        active_client = _client()
+        try:
+            if hasattr(active_client, "health_check"):
+                status = active_client.health_check(timeout=3)
+            else:
+                active_client.get_models()
+                status = {"ok": True}
+        except ComfyUIError as exc:
+            return json_resp(_comfyui_unavailable_payload(exc, active_client))
+        return json_resp({
+            "ok": True,
+            "available": True,
+            "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+            "system": status.get("system") if isinstance(status, dict) else {},
+        })
+
     @app.route("/api/comfyui/models", methods=["GET"])
     @require_csrf_safe
     def comfyui_models():
@@ -162,7 +195,15 @@ def register_comfyui_routes(app, deps):
             return json_resp({"ok": False, "msg": msg}), 400
         active_client = _client()
         try:
-            result = active_client.generate_image(params, timeout_seconds=_int_range(data.get("timeout_seconds"), 180, 30, 300))
+            result = active_client.generate_image(
+                params,
+                timeout_seconds=_int_range(
+                    data.get("timeout_seconds"),
+                    DEFAULT_GENERATION_TIMEOUT_SECONDS,
+                    30,
+                    MAX_GENERATION_TIMEOUT_SECONDS,
+                ),
+            )
         except ComfyUIError as exc:
             audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)

@@ -1,5 +1,6 @@
 import io
 import sqlite3
+import time
 import zipfile
 
 from flask import Flask, jsonify, make_response
@@ -838,6 +839,13 @@ def test_remote_download_capabilities_and_rejects_local_paths(tmp_path):
     assert blocked.status_code == 400
     assert "http" in blocked.get_json()["msg"]
 
+    blocked_task = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={"url": "file:///etc/passwd", "privacy_mode": "private_scannable"},
+    )
+    assert blocked_task.status_code == 400
+    assert "http" in blocked_task.get_json()["msg"]
+
 
 def test_remote_download_saves_to_cloud_drive_and_storage(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
@@ -875,3 +883,54 @@ def test_remote_download_saves_to_cloud_drive_and_storage(tmp_path, monkeypatch)
     assert res.status_code == 200
     assert body["file"]["filename"] == "remote.txt"
     assert body["storage_file"]["virtual_path"] == "/Downloads/remote.txt"
+
+
+def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "remote-task.txt"
+    source.write_text("remote task content", encoding="utf-8")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "remote-task.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        progress = kwargs.get("progress_callback")
+        assert progress
+        progress({"phase": "downloading", "filename": "remote-task.txt", "loaded_bytes": 5, "total_bytes": 20})
+        progress({"phase": "downloaded", "filename": "remote-task.txt", "loaded_bytes": 20, "total_bytes": 20})
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/remote-task.txt",
+            "privacy_mode": "private_scannable",
+            "virtual_path": "/Downloads/remote-task.txt",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+
+    body = {}
+    for _ in range(30):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+        assert status.status_code == 200
+        body = status.get_json()["task"]
+        if body["status"] == "completed":
+            break
+        time.sleep(0.02)
+
+    assert body["status"] == "completed"
+    assert body["progress_percent"] == 100
+    assert body["file"]["filename"] == "remote-task.txt"
+    assert body["storage_file"]["virtual_path"] == "/Downloads/remote-task.txt"

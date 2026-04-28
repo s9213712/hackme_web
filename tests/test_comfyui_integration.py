@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class FakeComfyUIClient:
     base_url = "http://fake-comfyui"
+    last_timeout_seconds = None
+
+    def health_check(self, *, timeout=3):
+        return {"ok": True, "system": {"os": "test"}}
 
     def get_models(self):
         return ["dream.safetensors", "photo.ckpt"]
@@ -25,6 +29,7 @@ class FakeComfyUIClient:
         return {"samplers": ["euler", "dpmpp_2m"], "schedulers": ["normal", "karras"]}
 
     def generate_image(self, params, *, timeout_seconds=180):
+        FakeComfyUIClient.last_timeout_seconds = timeout_seconds
         return {
             "prompt_id": "prompt-1",
             "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
@@ -59,6 +64,15 @@ def _actor():
         "effective_level": "trusted",
         "sanction_status": "none",
     }
+
+
+class OfflineComfyUIClient:
+    base_url = "http://fake-offline"
+
+    def health_check(self, *, timeout=3):
+        from services.comfyui_client import ComfyUIError
+
+        raise ComfyUIError("ComfyUI 連線失敗：refused")
 
 
 def _init_db(db_path):
@@ -125,6 +139,10 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert models.status_code == 200
     assert models.get_json()["models"] == ["dream.safetensors", "photo.ckpt"]
 
+    status = client.get("/api/comfyui/status")
+    assert status.status_code == 200
+    assert status.get_json()["available"] is True
+
     generated = client.post(
         "/api/comfyui/generate",
         json={
@@ -144,6 +162,43 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert body["image"]["prompt_id"] == "prompt-1"
     assert body["image"]["data_url"].startswith("data:image/png;base64,")
     assert body["image"]["seed"] == 123
+    assert FakeComfyUIClient.last_timeout_seconds == 600
+
+
+def test_comfyui_status_reports_offline_backend(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    app = Flask(__name__)
+    app.testing = True
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    register_comfyui_routes(app, {
+        "STORAGE_DIR": str(storage_root),
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": _actor,
+        "get_db": get_db,
+        "get_system_settings": lambda: {"feature_comfyui_enabled": True},
+        "get_member_level_rule": lambda conn, level: {},
+        "get_ua": lambda: "test-agent",
+        "json_resp": _json_resp,
+        "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
+        "comfyui_client": OfflineComfyUIClient(),
+    })
+
+    status = app.test_client().get("/api/comfyui/status")
+    assert status.status_code == 200
+    body = status.get_json()
+    assert body["ok"] is True
+    assert body["available"] is False
+    assert body["comfyui_url"] == "http://fake-offline"
 
 
 def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
@@ -185,13 +240,15 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-model-select"' in index_html
     assert 'id="comfyui-generate-btn"' in index_html
     assert 'id="comfyui-save-btn"' in index_html
-    assert "/js/36-comfyui.js?v=20260428-forum-pages" in index_html
+    assert "/js/36-comfyui.js?v=20260428-comfyui-status" in index_html
     assert 'id="s-comfyui-api-port"' in index_html
     assert 'tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none"' in core_js
     assert 'switchModuleTab("comfyui")' in bootstrap_js
     assert 'normTab === "comfyui"' in admin_js
     assert 'fetch(API + "/comfyui/generate"' in comfyui_js
     assert 'fetch(API + "/comfyui/save"' in comfyui_js
+    assert 'fetch(API + "/comfyui/status"' in comfyui_js
+    assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": True' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py
     assert "/api/comfyui/models" in smoke

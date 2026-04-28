@@ -2,6 +2,27 @@
 
 let comfyuiCurrentImage = null;
 let comfyuiModelsLoaded = false;
+let comfyuiServerAvailable = null;
+
+function setComfyuiTabAvailability(available, detail = "") {
+  comfyuiServerAvailable = available === null ? null : !!available;
+  const tab = $("tab-module-comfyui");
+  const unavailable = comfyuiServerAvailable === false;
+  if (tab) {
+    tab.disabled = unavailable;
+    tab.classList.toggle("disabled", unavailable);
+    tab.setAttribute("aria-disabled", unavailable ? "true" : "false");
+    tab.title = unavailable ? (detail || "ComfyUI 伺服器未連線") : "";
+  }
+  const status = $("comfyui-status");
+  if (status && unavailable) {
+    status.textContent = detail || "ComfyUI 伺服器未連線";
+  }
+}
+
+function isComfyuiAvailableForNavigation() {
+  return comfyuiServerAvailable !== false;
+}
 
 function setComfyuiMessage(text, ok = true) {
   const msg = $("comfyui-msg");
@@ -17,8 +38,9 @@ function setComfyuiMessage(text, ok = true) {
 function setComfyuiBusy(busy) {
   const generate = $("comfyui-generate-btn");
   const refresh = $("comfyui-refresh-btn");
+  const unavailable = comfyuiServerAvailable === false;
   if (generate) {
-    generate.disabled = !!busy;
+    generate.disabled = !!busy || unavailable;
     generate.textContent = busy ? "產生中..." : "產生圖片";
   }
   if (refresh) refresh.disabled = !!busy;
@@ -55,11 +77,54 @@ async function loadComfyuiModels() {
     fillComfyuiSelect("comfyui-sampler", json.samplers || [], "euler");
     fillComfyuiSelect("comfyui-scheduler", json.schedulers || [], "normal");
     comfyuiModelsLoaded = true;
+    setComfyuiTabAvailability(true);
     if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}，模型 ${Number((json.models || []).length)} 個`;
   } catch (err) {
     comfyuiModelsLoaded = false;
+    setComfyuiTabAvailability(false, err.message || "ComfyUI 伺服器未連線");
     if (status) status.textContent = "ComfyUI 未連線";
     setComfyuiMessage(err.message || "ComfyUI 模型讀取失敗", false);
+  }
+}
+
+async function refreshComfyuiStatus({ switchAway = true } = {}) {
+  if (!currentUser || !canAccessModule("comfyui")) {
+    setComfyuiTabAvailability(null);
+    return false;
+  }
+  const status = $("comfyui-status");
+  if (status) status.textContent = "檢測 ComfyUI 伺服器中...";
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await fetch(API + "/comfyui/status", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 狀態檢測失敗（HTTP ${res.status}）`);
+    const available = !!json.available;
+    const detail = available
+      ? `已偵測 ${json.comfyui_url || "ComfyUI"}`
+      : (json.msg || `找不到 ${json.comfyui_url || "ComfyUI"} 伺服器`);
+    setComfyuiTabAvailability(available, detail);
+    if (status) status.textContent = detail;
+    if (!available) {
+      comfyuiModelsLoaded = false;
+      setComfyuiBusy(false);
+      if (currentModuleTab === "comfyui" && switchAway && typeof switchModuleTab === "function") {
+        switchModuleTab("chat");
+      }
+    }
+    return available;
+  } catch (err) {
+    const message = err.message || "ComfyUI 伺服器未連線";
+    setComfyuiTabAvailability(false, message);
+    comfyuiModelsLoaded = false;
+    setComfyuiBusy(false);
+    if (currentModuleTab === "comfyui" && switchAway && typeof switchModuleTab === "function") {
+      switchModuleTab("chat");
+    }
+    return false;
   }
 }
 
@@ -87,9 +152,14 @@ function comfyuiPayload() {
 }
 
 async function generateComfyuiImage() {
+  if (comfyuiServerAvailable === false) {
+    setComfyuiMessage("ComfyUI 伺服器未連線，無法產圖。", false);
+    return;
+  }
   if (!comfyuiModelsLoaded) {
     await loadComfyuiModels();
   }
+  if (!comfyuiModelsLoaded) return;
   const preview = $("comfyui-preview");
   const meta = $("comfyui-result-meta");
   if (preview) preview.innerHTML = `<div class="drive-empty">產生圖片中...</div>`;
@@ -107,7 +177,7 @@ async function generateComfyuiImage() {
         "Content-Type": "application/json",
         "X-CSRF-Token": getCsrfToken() || ""
       },
-      body: JSON.stringify(comfyuiPayload())
+      body: JSON.stringify({ ...comfyuiPayload(), timeout_seconds: 900 })
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `產圖失敗（HTTP ${res.status}）`);

@@ -21,6 +21,8 @@ const DRIVE_PRIVACY_MODE_DESCRIPTIONS = {
   e2ee_vault_with_client_scan: "站方無法讀取，附本機掃描回報",
 };
 
+let driveTransferRows = [];
+
 function drivePrivacyModeLabel(mode) {
   return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
 }
@@ -135,14 +137,88 @@ function drivePrimaryAction(file) {
   return { action: "preview", label: "預覽" };
 }
 
+function driveTransferPercent(item) {
+  const raw = Number(item?.progress_percent);
+  if (Number.isFinite(raw)) return Math.max(0, Math.min(100, raw));
+  const loaded = Number(item?.loaded_bytes || 0);
+  const total = Number(item?.total_bytes || 0);
+  if (total > 0) return Math.max(0, Math.min(100, (loaded / total) * 100));
+  return null;
+}
+
+function addDriveTransferRow(item) {
+  const id = item.id || `transfer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const row = {
+    id,
+    kind: item.kind || "upload",
+    status: item.status || "running",
+    phase: item.phase || "starting",
+    name: item.name || item.filename || "處理中的檔案",
+    loaded_bytes: item.loaded_bytes || 0,
+    total_bytes: item.total_bytes ?? null,
+    progress_percent: item.progress_percent ?? 0,
+    msg: item.msg || "準備中",
+  };
+  driveTransferRows = [row, ...driveTransferRows.filter((existing) => existing.id !== id)];
+  renderDriveFiles(lastDriveFiles || []);
+  return id;
+}
+
+function updateDriveTransferRow(id, updates) {
+  let found = false;
+  driveTransferRows = driveTransferRows.map((item) => {
+    if (item.id !== id) return item;
+    found = true;
+    return { ...item, ...updates };
+  });
+  if (!found) {
+    addDriveTransferRow({ id, ...updates });
+    return;
+  }
+  renderDriveFiles(lastDriveFiles || []);
+}
+
+function removeDriveTransferRow(id) {
+  driveTransferRows = driveTransferRows.filter((item) => item.id !== id);
+  renderDriveFiles(lastDriveFiles || []);
+}
+
+function renderDriveTransferRow(item) {
+  const percent = driveTransferPercent(item);
+  const width = percent === null ? 100 : percent;
+  const label = percent === null ? "計算中" : `${Math.round(percent)}%`;
+  const bytes = item.total_bytes
+    ? `${formatDriveBytes(item.loaded_bytes || 0)} / ${formatDriveBytes(item.total_bytes)}`
+    : (item.loaded_bytes ? formatDriveBytes(item.loaded_bytes) : "等待資料");
+  const statusClass = item.status === "failed" ? "failed" : item.status === "completed" ? "completed" : "running";
+  return `
+    <div class="drive-file-row drive-transfer-row ${sanitize(statusClass)}">
+      <div>
+        <strong>${sanitize(item.name || item.filename || "處理中的檔案")}</strong>
+        <div class="drive-card-sub">${sanitize(item.kind === "remote_download" ? "下載中" : "上傳中")} · ${sanitize(item.msg || item.phase || "處理中")} · ${sanitize(bytes)}</div>
+        <div class="drive-progress" aria-label="${sanitize(label)}">
+          <div class="drive-progress-fill ${percent === null ? "indeterminate" : ""}" style="width:${width}%;"></div>
+        </div>
+      </div>
+      <div class="drive-file-actions">
+        <span class="drive-progress-label">${sanitize(label)}</span>
+      </div>
+    </div>
+  `;
+}
+
+let lastDriveFiles = [];
+
 function renderDriveFiles(files) {
   const list = $("drive-file-list");
   if (!list) return;
-  if (!Array.isArray(files) || !files.length) {
+  lastDriveFiles = Array.isArray(files) ? files : [];
+  const transferHtml = driveTransferRows.map(renderDriveTransferRow).join("");
+  if ((!Array.isArray(files) || !files.length) && !driveTransferRows.length) {
     list.innerHTML = `<div class="drive-empty">尚無雲端檔案</div>`;
     return;
   }
-  list.innerHTML = files.map((file) => {
+  const fileHtml = (Array.isArray(files) ? files : []).map((file) => {
     const name = file.original_filename_plain_for_public || file.id || "download.bin";
     const warn = driveFileNeedsWarning(file);
     const primary = drivePrimaryAction(file);
@@ -161,6 +237,7 @@ function renderDriveFiles(files) {
       </div>
     `;
   }).join("");
+  list.innerHTML = transferHtml + fileHtml;
 }
 
 async function loadDriveFiles(csrf) {
@@ -184,25 +261,77 @@ async function uploadDriveFile() {
     alert("請先選擇檔案");
     return;
   }
+  const file = input.files[0];
+  const transferId = addDriveTransferRow({
+    kind: "upload",
+    name: file.name,
+    loaded_bytes: 0,
+    total_bytes: file.size,
+    progress_percent: 0,
+    msg: "等待上傳",
+  });
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const form = new FormData();
-  form.append("file", input.files[0]);
+  form.append("file", file);
   form.append("privacy_mode", $("drive-upload-privacy-mode")?.value || "private_scannable");
-  const res = await fetch(API + "/cloud-drive/upload", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" },
-    body: form
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) {
-    const detail = json.error_code ? `${json.msg || "雲端硬碟上傳失敗"}（${json.error_code}）` : (json.msg || `雲端硬碟上傳失敗（HTTP ${res.status}）`);
+  try {
+    const { status, json } = await xhrUploadWithProgress(API + "/cloud-drive/upload", form, csrf, (event) => {
+      if (event.lengthComputable) {
+        updateDriveTransferRow(transferId, {
+          loaded_bytes: event.loaded,
+          total_bytes: event.total,
+          progress_percent: (event.loaded / event.total) * 100,
+          msg: event.loaded >= event.total ? "伺服器儲存與掃描中" : "上傳中",
+        });
+      } else {
+        updateDriveTransferRow(transferId, {
+          loaded_bytes: event.loaded || 0,
+          total_bytes: null,
+          progress_percent: null,
+          msg: "上傳中",
+        });
+      }
+    });
+    if (status < 200 || status >= 300 || !json.ok) {
+      const detail = json.error_code ? `${json.msg || "雲端硬碟上傳失敗"}（${json.error_code}）` : (json.msg || `雲端硬碟上傳失敗（HTTP ${status}）`);
+      updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
+      alert(detail);
+      return;
+    }
+    updateDriveTransferRow(transferId, { status: "completed", phase: "completed", msg: "上傳完成", progress_percent: 100, loaded_bytes: file.size, total_bytes: file.size });
+    input.value = "";
+    await loadDriveDashboard();
+    removeDriveTransferRow(transferId);
+  } catch (err) {
+    const detail = err.message || "雲端硬碟上傳失敗";
+    updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
     alert(detail);
-    return;
   }
-  input.value = "";
-  await loadDriveDashboard();
+}
+
+function xhrUploadWithProgress(url, form, csrf, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    xhr.upload.onprogress = (event) => {
+      if (typeof onProgress === "function") onProgress(event);
+    };
+    xhr.onload = () => {
+      let json = {};
+      try {
+        json = JSON.parse(xhr.responseText || "{}");
+      } catch (err) {
+        json = {};
+      }
+      resolve({ status: xhr.status, json });
+    };
+    xhr.onerror = () => reject(new Error("上傳連線失敗"));
+    xhr.ontimeout = () => reject(new Error("上傳逾時"));
+    xhr.send(form);
+  });
 }
 
 async function loadRemoteDownloadCapabilities() {
@@ -232,6 +361,14 @@ async function startRemoteDriveDownload() {
     alert("請輸入下載網址");
     return;
   }
+  const transferId = addDriveTransferRow({
+    kind: "remote_download",
+    name: url,
+    loaded_bytes: 0,
+    total_bytes: null,
+    progress_percent: 0,
+    msg: "建立下載任務",
+  });
   const button = $("drive-remote-download-btn");
   const oldText = button ? button.textContent : "";
   if (button) {
@@ -240,7 +377,7 @@ async function startRemoteDriveDownload() {
   }
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/cloud-drive/remote-download", {
+    const res = await fetch(API + "/cloud-drive/remote-download/tasks", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -252,16 +389,62 @@ async function startRemoteDriveDownload() {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載失敗（HTTP ${res.status}）`);
+    const task = json.task || {};
+    updateDriveTransferRow(transferId, {
+      id: transferId,
+      task_id: task.id,
+      status: task.status || "running",
+      phase: task.phase || "queued",
+      msg: task.msg || "已加入下載佇列",
+    });
+    await pollRemoteDownloadTask(task.id, transferId);
     if ($("drive-remote-url")) $("drive-remote-url").value = "";
     flash($("drive-msg"), json.msg || "遠端下載已保存", true);
     await loadDriveDashboard();
+    removeDriveTransferRow(transferId);
   } catch (err) {
+    updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: err.message || "遠端下載失敗", progress_percent: 100 });
     alert(err.message || "遠端下載失敗");
   } finally {
     if (button) {
       button.disabled = false;
       button.textContent = oldText || "開始下載";
     }
+  }
+}
+
+function driveSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollRemoteDownloadTask(taskId, transferId) {
+  if (!taskId) throw new Error("遠端下載任務建立失敗");
+  while (true) {
+    await driveSleep(900);
+    await fetchCsrfToken({ force: true });
+    const res = await fetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載狀態讀取失敗（HTTP ${res.status}）`);
+    const task = json.task || {};
+    updateDriveTransferRow(transferId, {
+      name: task.filename || task.url || "遠端下載",
+      status: task.status || "running",
+      phase: task.phase || "",
+      loaded_bytes: task.loaded_bytes,
+      total_bytes: task.total_bytes,
+      progress_percent: task.progress_percent,
+      msg: task.msg || "",
+    });
+    const status = $("drive-remote-download-status");
+    if (status) {
+      const percent = task.progress_percent === null || task.progress_percent === undefined ? "計算中" : `${Math.round(Number(task.progress_percent || 0))}%`;
+      status.textContent = `${task.msg || "遠端下載中"} · ${percent}`;
+    }
+    if (task.status === "completed") return task;
+    if (task.status === "failed") throw new Error(task.error || task.msg || "遠端下載失敗");
   }
 }
 

@@ -77,10 +77,13 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="module-albums"' in index_html
     assert 'id="album-gallery-list"' in index_html
     assert 'id="album-viewer-card"' in index_html
-    assert '/js/35-drive.js?v=20260428-forum-pages' in index_html
+    assert '/js/35-drive.js?v=20260428-drive-progress' in index_html
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js
     assert "data-drive-action" in drive_js
+    assert "driveTransferRows" in drive_js
+    assert "xhrUploadWithProgress" in drive_js
+    assert "/cloud-drive/remote-download/tasks" in drive_js
     assert "async function loadAlbumGallery()" in drive_js
     assert "async function openAlbumViewer(id)" in drive_js
     assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js

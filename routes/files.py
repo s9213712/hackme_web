@@ -1,4 +1,7 @@
 import hashlib
+import shutil
+import threading
+import uuid
 
 from services.upload_security import (
     get_cloud_drive_safety_summary,
@@ -23,7 +26,7 @@ from services.cloud_drive import (
     store_cloud_upload,
 )
 from services.file_previews import build_preview_metadata, preview_category
-from services.remote_downloads import RemoteDownloadError, download_remote_url, remote_download_capabilities
+from services.remote_downloads import RemoteDownloadError, download_remote_url, remote_download_capabilities, validate_remote_url
 from services.storage_albums import (
     add_album_file,
     create_album,
@@ -53,6 +56,10 @@ from services.storage_albums import (
 )
 from services.storage_maintenance import run_storage_maintenance, storage_maintenance_status
 from flask import request, send_file
+
+
+_REMOTE_DOWNLOAD_TASKS = {}
+_REMOTE_DOWNLOAD_TASKS_LOCK = threading.Lock()
 
 
 def register_file_routes(app, deps):
@@ -137,6 +144,149 @@ def register_file_routes(app, deps):
                 self.stream.close()
             except Exception:
                 pass
+
+    def _task_update(task_id, **changes):
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+            if not task:
+                return
+            task.update(changes)
+            task["updated_at"] = datetime.now().isoformat()
+
+    def _task_snapshot(task):
+        public = {
+            "id": task.get("id"),
+            "kind": task.get("kind"),
+            "status": task.get("status"),
+            "phase": task.get("phase"),
+            "filename": task.get("filename"),
+            "url": task.get("url"),
+            "loaded_bytes": task.get("loaded_bytes"),
+            "total_bytes": task.get("total_bytes"),
+            "progress_percent": task.get("progress_percent"),
+            "msg": task.get("msg"),
+            "error": task.get("error"),
+            "file": task.get("file"),
+            "storage_file": task.get("storage_file"),
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+        }
+        return public
+
+    def _get_remote_download_task(task_id):
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+            return dict(task) if task else None
+
+    def _remote_progress_updater(task_id):
+        def _callback(event):
+            loaded = event.get("loaded_bytes")
+            total = event.get("total_bytes")
+            percent = None
+            try:
+                if total:
+                    percent = max(0, min(100, round((int(loaded or 0) / int(total)) * 100, 1)))
+            except Exception:
+                percent = None
+            phase = event.get("phase") or "downloading"
+            msg = "下載中" if phase == "downloading" else "下載完成，準備保存"
+            _task_update(
+                task_id,
+                status="running",
+                phase=phase,
+                filename=event.get("filename"),
+                loaded_bytes=loaded,
+                total_bytes=total,
+                progress_percent=percent,
+                msg=msg,
+            )
+        return _callback
+
+    def _run_remote_download_task(task_id):
+        task = _get_remote_download_task(task_id)
+        if not task:
+            return
+        actor = task["actor"]
+        downloaded = None
+        file_storage = None
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            ensure_storage_album_schema(conn)
+            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
+            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
+            remaining = usage.get("remaining_bytes")
+            max_file = usage.get("max_file_size_bytes")
+            max_bytes = None
+            if remaining is not None:
+                max_bytes = int(remaining)
+            if max_file is not None:
+                max_bytes = min(max_bytes, int(max_file)) if max_bytes is not None else int(max_file)
+
+            _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
+            downloaded = download_remote_url(
+                task["url"],
+                timeout_seconds=task["timeout_seconds"],
+                max_bytes=max_bytes,
+                progress_callback=_remote_progress_updater(task_id),
+            )
+            _task_update(task_id, status="running", phase="saving", filename=downloaded.filename, msg="保存到雲端硬碟")
+            file_storage = _DownloadedFileStorage(downloaded)
+            upload_result, msg = store_cloud_upload(
+                conn,
+                actor=actor,
+                member_rule=rule,
+                storage_root=storage_root,
+                file_storage=file_storage,
+                privacy_mode=task["privacy_mode"],
+                scan_now=True,
+            )
+            if msg:
+                conn.rollback()
+                _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
+                return
+
+            storage_file = None
+            if task.get("virtual_path"):
+                file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
+                storage_file, msg = create_storage_file_entry(
+                    conn,
+                    actor=actor,
+                    file_row=file_row,
+                    virtual_path=task["virtual_path"],
+                    display_name=downloaded.filename,
+                    source="remote_download",
+                )
+                if msg:
+                    conn.rollback()
+                    _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
+                    return
+            conn.commit()
+            audit("CLOUD_DRIVE_REMOTE_DOWNLOAD", task.get("ip") or "", user=actor["username"], success=True, ua=task.get("ua") or "", detail=f"file_id={upload_result['file_id']}")
+            _task_update(
+                task_id,
+                status="completed",
+                phase="completed",
+                loaded_bytes=upload_result.get("size_bytes"),
+                total_bytes=upload_result.get("size_bytes"),
+                progress_percent=100,
+                msg="遠端下載已保存到雲端硬碟",
+                file={**upload_result, "filename": downloaded.filename},
+                storage_file=storage_file,
+            )
+        except RemoteDownloadError as exc:
+            conn.rollback()
+            _task_update(task_id, status="failed", phase="failed", error=str(exc), msg=str(exc))
+        except Exception as exc:
+            conn.rollback()
+            audit("CLOUD_DRIVE_REMOTE_DOWNLOAD_ERROR", task.get("ip") or "", user=actor.get("username"), success=False, ua=task.get("ua") or "", detail=exc.__class__.__name__)
+            _task_update(task_id, status="failed", phase="failed", error=f"遠端下載失敗：{exc.__class__.__name__}", msg=f"遠端下載失敗：{exc.__class__.__name__}")
+        finally:
+            if file_storage:
+                file_storage.close()
+            if downloaded and downloaded.cleanup_dir:
+                shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
+            conn.close()
 
     @app.route("/api/admin/storage/summary", methods=["GET"])
     @require_csrf_safe
@@ -902,6 +1052,81 @@ def register_file_routes(app, deps):
             return err
         return json_resp({"ok": True, "capabilities": remote_download_capabilities()})
 
+    @app.route("/api/cloud-drive/remote-download/tasks", methods=["POST"])
+    @require_csrf
+    def cloud_drive_remote_download_task_create():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        url = str(data.get("url") or "").strip()
+        if not url:
+            return json_resp({"ok": False, "msg": "請輸入下載網址"}), 400
+        try:
+            validate_remote_url(url)
+        except RemoteDownloadError as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        privacy_mode = str(data.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
+        virtual_path = str(data.get("virtual_path") or "").strip()
+        task_id = uuid.uuid4().hex
+        try:
+            actor_snapshot = dict(actor)
+        except Exception:
+            actor_snapshot = {
+                "id": _actor_value(actor, "id"),
+                "username": _actor_value(actor, "username"),
+                "role": _actor_value(actor, "role"),
+                "member_level": _actor_value(actor, "member_level"),
+                "effective_level": _actor_value(actor, "effective_level"),
+            }
+        now = datetime.now().isoformat()
+        task = {
+            "id": task_id,
+            "kind": "remote_download",
+            "status": "queued",
+            "phase": "queued",
+            "filename": "",
+            "url": url,
+            "owner_user_id": int(_actor_value(actor, "id")),
+            "actor": actor_snapshot,
+            "privacy_mode": privacy_mode,
+            "virtual_path": virtual_path,
+            "timeout_seconds": 1800 if url.startswith("magnet:?") else 120,
+            "loaded_bytes": 0,
+            "total_bytes": None,
+            "progress_percent": 0,
+            "msg": "已加入下載佇列",
+            "error": "",
+            "file": None,
+            "storage_file": None,
+            "ip": get_client_ip(),
+            "ua": get_ua(),
+            "created_at": now,
+            "updated_at": now,
+        }
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            _REMOTE_DOWNLOAD_TASKS[task_id] = task
+        worker = threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True)
+        worker.start()
+        return json_resp({"ok": True, "task": _task_snapshot(task)}, 202)
+
+    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_remote_download_task_status(task_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        task = _get_remote_download_task(str(task_id))
+        if not task:
+            return json_resp({"ok": False, "msg": "找不到下載任務"}), 404
+        if int(task.get("owner_user_id") or 0) != int(_actor_value(actor, "id")) and not _is_manager(actor):
+            return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
+        return json_resp({"ok": True, "task": _task_snapshot(task)})
+
     @app.route("/api/cloud-drive/remote-download", methods=["POST"])
     @require_csrf
     def cloud_drive_remote_download():
@@ -916,7 +1141,7 @@ def register_file_routes(app, deps):
         url = str(data.get("url") or "").strip()
         privacy_mode = str(data.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
         virtual_path = str(data.get("virtual_path") or "").strip()
-        timeout_seconds = 300 if url.startswith("magnet:?") else 120
+        timeout_seconds = 1800 if url.startswith("magnet:?") else 120
 
         conn = get_db()
         downloaded = None

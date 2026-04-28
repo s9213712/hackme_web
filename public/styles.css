@@ -128,6 +128,13 @@
       color: #fff;
     }
 
+    .tab:disabled,
+    .tab.disabled {
+      cursor: not-allowed;
+      opacity: .42;
+      filter: grayscale(.85);
+    }
+
     /* ── Form ─────────────────────────────────────────────── */
     .form-section { display: none; }
     .form-section.active { display: block; }
@@ -582,6 +589,54 @@
       color: var(--text);
       font-size: .84rem;
       word-break: break-all;
+    }
+
+    .drive-transfer-row {
+      border-color: rgba(100,181,246,.35);
+      background: rgba(100,181,246,.07);
+    }
+
+    .drive-transfer-row.failed {
+      border-color: rgba(255,79,109,.45);
+      background: rgba(255,79,109,.07);
+    }
+
+    .drive-transfer-row.completed {
+      border-color: rgba(76,175,80,.35);
+      background: rgba(76,175,80,.07);
+    }
+
+    .drive-progress {
+      position: relative;
+      height: 6px;
+      margin-top: .45rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,.1);
+    }
+
+    .drive-progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #64b5f6, #4caf50);
+      transition: width .2s ease;
+    }
+
+    .drive-progress-fill.indeterminate {
+      width: 45% !important;
+      animation: drive-progress-slide 1.1s ease-in-out infinite;
+    }
+
+    .drive-progress-label {
+      min-width: 3.5rem;
+      color: var(--muted);
+      font-size: .74rem;
+      text-align: right;
+    }
+
+    @keyframes drive-progress-slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(230%); }
     }
 
     .drive-file-actions {
