@@ -1,0 +1,413 @@
+任務：實作 Phase 1 Discord 單向同步（hackme_web -> Discord）
+
+目標：
+將 hackme_web 的公告區與指定公開討論區內容，同步到 Discord。
+本階段 Discord 只作 mirror / 通知入口，不接受 Discord 回寫。
+
+核心原則：
+- hackme_web 是 source of truth。
+- Discord 不是主系統。
+- 第一版只做「本站 -> Discord」。
+- 不同步私訊、群組聊天、私密板、E2EE 檔案、治理投票內容。
+- 附件只同步本站授權下載連結，不直接把私有檔案上傳到 Discord。
+
+一、先做現況盤點
+
+請先檢查並輸出：
+
+1. forum / announcement 相關檔案
+   - routes/community.py
+   - services/forum / community 相關 service
+   - database/bootstrap.schema.sql
+   - public/js 內 forum UI
+
+2. 發文 / 留言 / 公告建立流程
+   - 找出 thread created
+   - post created
+   - comment created
+   - announcement published 的確切插入點
+
+3. 現有設定系統
+   - services/settings.py
+   - system_settings table
+   - admin settings UI
+
+4. 現有 audit / security event 寫法
+   - services/audit.py
+   - services/security_events.py
+
+完成盤點後，再開始實作。
+
+二、同步範圍
+
+本階段只支援：
+
+1. 公告區 -> Discord announcement channel
+2. 公開討論區新 thread -> Discord channel
+3. 公開討論區新 comment/reply -> Discord thread 或同 channel message
+
+禁止同步：
+
+- private board
+- hidden board
+- admin-only board
+- moderation/governance proposals
+- 私訊
+- 群組聊天
+- E2EE vault files
+- restricted/suspended 使用者新內容
+
+三、DB Migration
+
+新增表：
+
+discord_links
+
+欄位：
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- local_type TEXT NOT NULL
+  - announcement
+  - forum_board
+  - forum_thread
+  - forum_post
+  - forum_comment
+  - file_attachment
+- local_id TEXT NOT NULL
+- discord_guild_id TEXT
+- discord_channel_id TEXT
+- discord_thread_id TEXT
+- discord_message_id TEXT
+- sync_direction TEXT NOT NULL DEFAULT 'outbound'
+- sync_status TEXT NOT NULL
+  - pending
+  - sent
+  - failed
+  - skipped
+- sync_origin TEXT NOT NULL DEFAULT 'local'
+- created_at TEXT NOT NULL
+- updated_at TEXT
+- UNIQUE(local_type, local_id, sync_direction)
+
+discord_sync_events
+
+欄位：
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- event_type TEXT NOT NULL
+  - send_announcement
+  - send_thread
+  - send_comment
+  - retry
+  - skip
+  - fail
+- local_type TEXT
+- local_id TEXT
+- discord_channel_id TEXT
+- discord_thread_id TEXT
+- discord_message_id TEXT
+- status TEXT NOT NULL
+  - success
+  - failed
+  - skipped
+- error_message TEXT
+- payload_preview TEXT
+- created_at TEXT NOT NULL
+
+discord_board_sync_settings
+
+欄位：
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- board_id INTEGER NOT NULL
+- enabled INTEGER NOT NULL DEFAULT 0
+- discord_channel_id TEXT
+- sync_threads INTEGER NOT NULL DEFAULT 1
+- sync_comments INTEGER NOT NULL DEFAULT 0
+- include_author INTEGER NOT NULL DEFAULT 1
+- include_attachments INTEGER NOT NULL DEFAULT 1
+- created_at TEXT NOT NULL
+- updated_at TEXT
+- UNIQUE(board_id)
+
+system_settings 新增：
+- discord_sync_enabled = false
+- discord_webhook_url = ""
+- discord_bot_token = ""
+- discord_default_channel_id = ""
+- discord_announcement_channel_id = ""
+- discord_sync_use_bot = false
+- discord_signed_link_ttl_minutes = 60
+- discord_sync_private_boards_allowed = false，必須固定 false 或 root-only hidden setting，不得由一般 UI 開啟
+
+注意：
+- token / webhook 不可在 API 回傳明文
+- settings UI 只能顯示 configured: true/false
+- 若要更新 token，採 overwrite，不提供讀取原文
+
+四、新增 service
+
+新增：
+
+services/discord_sync.py
+
+必須包含：
+
+1. DiscordSyncConfig
+- enabled
+- use_bot
+- webhook_url
+- bot_token
+- default_channel_id
+- announcement_channel_id
+- signed_link_ttl_minutes
+
+2. load_discord_config(conn)
+- 從 system_settings 讀取
+- secret 不得寫入 log
+- 若 enabled 但缺 webhook/bot/channel，回傳 disabled_reason
+
+3. should_sync_board(conn, board_id)
+- board 必須是公開
+- board sync setting enabled
+- board 不得是 private/admin/hidden
+- discord channel id 必須存在
+
+4. build_discord_message(...)
+- 將本站內容轉成 Discord 安全訊息
+- 移除 HTML
+- 限制長度
+- 避免 @everyone / @here / role ping
+- 附上本站原文連結
+- 附件只放授權下載 link
+
+5. send_to_discord(...)
+支援兩種模式：
+A. webhook
+B. bot token
+
+MVP 優先實作 webhook。
+bot token 可先留介面與 TODO，但不得假裝完成。
+
+6. record_discord_link(...)
+7. record_discord_event(...)
+8. sync_announcement(...)
+9. sync_forum_thread(...)
+10. sync_forum_comment(...)
+11. retry_failed_discord_sync(...)
+
+五、Discord webhook MVP
+
+使用 webhook POST：
+
+POST <discord_webhook_url>
+
+payload：
+
+{
+  "content": "...",
+  "allowed_mentions": {
+    "parse": []
+  }
+}
+
+要求：
+- timeout <= 5 秒
+- 失敗不可中斷本站發文流程
+- 失敗要寫 discord_sync_events
+- HTTP 429 要記錄 rate limit
+- HTTP 4xx/5xx 要記錄 masked error
+- 不可把 webhook URL 寫入 log
+
+六、訊息格式
+
+公告：
+
+[公告] <title>
+
+<summary up to 1500 chars>
+
+作者：<display_name>
+原文：<site_url>/...
+
+附件：
+- filename：<signed_download_url>
+
+討論串：
+
+[新討論] <board_name> / <thread_title>
+
+<summary up to 1500 chars>
+
+作者：<display_name>
+原文：<site_url>/...
+
+留言：
+
+[新回覆] <thread_title>
+
+<summary up to 1500 chars>
+
+作者：<display_name>
+原文：<site_url>/...
+
+七、安全格式要求
+
+必須實作：
+
+sanitize_discord_text(text)
+
+規則：
+- 移除 HTML tags
+- escape 或破壞 @everyone
+- escape 或破壞 @here
+- 避免 <@role_id> ping
+- 限制 content 長度 <= 1900
+- payload_preview 只能存截斷後內容，不存 token
+- 不同步被刪除、待審核、隱藏、封鎖內容
+
+八、附件處理
+
+只同步本站授權下載連結。
+
+新增或使用既有 signed download token：
+
+需求：
+- token 有效期由 discord_signed_link_ttl_minutes 控制
+- token 綁定 file_id
+- token 綁定 context_type/context_id
+- token 不可授權 E2EE vault
+- token 不可授權 scan_status != clean 的 public/private 檔案
+- 下載時仍需檢查檔案狀態
+- token 使用需寫 file_access_logs
+
+若現有檔案下載系統尚未完成：
+- 先在 Discord 訊息中顯示「附件需回本站登入後下載」
+- 不要直接暴露 storage_path
+
+九、route hook 插入點
+
+在以下成功建立資料後觸發：
+
+1. 公告發布成功後：
+discord_sync.sync_announcement(announcement_id)
+
+2. 討論區 thread 建立成功後：
+discord_sync.sync_forum_thread(thread_id)
+
+3. 討論區 comment 建立成功後：
+若 board setting sync_comments = true：
+discord_sync.sync_forum_comment(comment_id)
+
+注意：
+- 只能在 DB commit 成功後觸發
+- Discord sync 失敗不得 rollback 本站發文
+- sync 失敗只記錄 failed event
+- 不得在未授權 / 審核未通過內容上觸發
+
+十、Admin UI
+
+在 root/admin settings UI 新增 Discord Sync 區塊。
+
+功能：
+- enable / disable discord_sync_enabled
+- 設定 webhook URL
+- 設定 announcement channel webhook 或 default webhook
+- 顯示 webhook configured true/false
+- 設定 signed link TTL
+- board sync settings 列表：
+  - board name
+  - visibility
+  - enable sync
+  - discord channel id 或 webhook
+  - sync threads
+  - sync comments
+  - include author
+  - include attachments
+
+安全：
+- webhook URL 儲存後不可回顯
+- 只顯示 masked，例如 https://discord.com/api/webhooks/***
+- 只有 root 可修改 Discord token/webhook
+- manager 最多只能看 sync status，不可改 secret
+
+十一、API
+
+新增 root-only API：
+
+GET /api/admin/discord-sync/settings
+PUT /api/admin/discord-sync/settings
+GET /api/admin/discord-sync/boards
+PUT /api/admin/discord-sync/boards/<board_id>
+GET /api/admin/discord-sync/events
+POST /api/admin/discord-sync/retry/<event_id>
+POST /api/admin/discord-sync/test
+
+test payload：
+{
+  "target": "announcement" | "default",
+  "message": "test message"
+}
+
+要求：
+- 全部 write API 需要 CSRF
+- root-only 修改設定
+- 回傳不得包含 webhook/token 原文
+
+十二、測試
+
+新增 tests：
+
+tests/test_discord_sync.py
+
+至少覆蓋：
+
+1. sync disabled 時不送出，只記錄 skipped 或完全跳過
+2. private board 不同步
+3. public board enabled 後會建立 discord_sync_events
+4. webhook URL 不會在 API response 出現
+5. @everyone / @here 被 neutralize
+6. Discord 失敗不影響 thread 建立
+7. E2EE 附件不產生 Discord 下載連結
+8. scan_status != clean 不產生直接下載連結
+9. retry failed event 可重新送出
+10. 非 root 不可修改 Discord settings
+
+十三、文件
+
+新增：
+
+docs/integrations/discord_sync.md
+
+內容包含：
+- Phase 1 支援範圍
+- webhook 設定方式
+- 為什麼第一版不做雙向同步
+- 權限限制
+- 附件同步限制
+- E2EE 檔案不會同步
+- troubleshooting
+- rate limit 注意事項
+
+十四、驗收標準
+
+完成後必須證明：
+
+1. root 設定 webhook 後，測試訊息可送到 Discord
+2. 公告發布後 Discord 收到公告 mirror
+3. 指定公開 board 新 thread 後 Discord 收到通知
+4. 私密 board 不會同步
+5. webhook/token 不會被 API、log、報告明文顯示
+6. @everyone 不會造成 Discord ping
+7. Discord 掛掉時，本站發文仍成功
+8. failed sync 有紀錄，可由 root retry
+9. 附件不會直接上傳 Discord
+10. E2EE / unscanned / high-risk 檔案不會產生公開下載連結
+
+十五、禁止事項
+
+- 不要第一版做雙向同步
+- 不要把 Discord 當主資料庫
+- 不要同步 private board
+- 不要同步 DM / group chat
+- 不要把 E2EE 檔案傳到 Discord
+- 不要在 log 印 webhook URL / bot token
+- 不要讓 manager 修改 Discord secret
+- 不要因 Discord 發送失敗而 rollback 本站內容

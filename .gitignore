@@ -26,7 +26,6 @@ key.pem
 attack_test/
 pentest_artifacts/
 reports/*
-!reports/.gitkeep
 !reports/bugs/
 !reports/bugs/.gitkeep
 architecture_scan.md

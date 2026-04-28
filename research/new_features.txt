@@ -1,0 +1,497 @@
+任務：實作 hackme_web 上線前 10 個高價值營運功能
+
+總目標：
+補齊正式發布網站需要的安裝、通知、安全事件、維護、檔案隔離、資料保留、資料匯出/刪除、雙人覆核、設定版本歷史、版本/migration 狀態能力。
+
+原則：
+- 不新增大型社群功能。
+- 不破壞既有 RBAC / audit / Integrity Guard / snapshot。
+- 所有 root/admin 操作必須寫 audit。
+- 所有 secret 不得明文回傳。
+- 危險操作需二次確認。
+- 優先補 DB migration、service、API、UI、tests、docs。
+
+────────────────────────
+1. 首次啟動安裝精靈
+────────────────────────
+
+目標：
+新部署時不要依賴預設密碼或手動改 DB。
+
+新增：
+setup_state
+- id INTEGER PRIMARY KEY CHECK(id=1)
+- setup_completed INTEGER DEFAULT 0
+- completed_at TEXT
+- completed_by INTEGER
+
+system_settings：
+- setup_required = true
+
+API：
+- GET /api/setup/status
+- POST /api/setup/complete
+
+流程：
+1. 若 DB 無 root 或 setup_completed=0，進入 setup mode。
+2. setup 頁面要求：
+   - root username
+   - root email
+   - root password
+   - public_base_url
+   - storage root
+   - log root
+   - snapshot root
+3. 檢查密碼強度。
+4. 建立 root。
+5. 關閉 setup_required。
+6. 寫 audit：SETUP_COMPLETED。
+
+安全：
+- setup complete 後不可再次開放。
+- 若已存在 root，setup API 不得覆蓋 root。
+- production 禁止 demo password。
+
+UI：
+- public/setup.html 或登入頁導向 setup panel。
+
+測試：
+- fresh DB 可完成 setup
+- setup 完成後不能重跑
+- 弱密碼被拒絕
+
+────────────────────────
+2. 站內通知中心
+────────────────────────
+
+目標：
+建立比 email 更可靠的站內通知。
+
+新增表：
+notifications
+- id INTEGER PRIMARY KEY
+- user_id INTEGER
+- role_target TEXT
+- type TEXT
+- severity TEXT
+- title TEXT
+- body TEXT
+- link_url TEXT
+- read_at TEXT
+- created_at TEXT
+
+Service：
+services/notifications.py
+- create_notification(...)
+- notify_user(...)
+- notify_role(...)
+- mark_read(...)
+- list_notifications(...)
+
+API：
+- GET /api/notifications
+- POST /api/notifications/<id>/read
+- POST /api/notifications/read-all
+- GET /api/admin/notifications
+
+觸發：
+- Integrity finding
+- snapshot failed
+- moderation proposal
+- report received
+- email failed
+- Discord sync failed
+- root alert
+
+UI：
+- navbar 顯示未讀數
+- 通知中心列表
+- severity badge
+
+測試：
+- user 只能看自己的通知
+- root 可看系統通知
+- read 狀態正常
+
+────────────────────────
+3. 安全事件儀表板
+────────────────────────
+
+目標：
+集中查看登入失敗、CSRF、IP block、Integrity、snapshot、upload 等事件。
+
+API：
+- GET /api/admin/security-events
+- GET /api/admin/security-events/summary
+- GET /api/admin/security-events/export.csv
+
+功能：
+- filter by type/severity/user/ip/date
+- summary count
+- CSV 匯出
+
+UI：
+Admin -> Security Events：
+- table
+- filters
+- severity color
+- export
+
+安全：
+- root 可看全部
+- manager 只能看非 root-sensitive 事件
+- 不顯示 token / password / secret
+
+測試：
+- 非 admin 403
+- secret masked
+- filter 正確
+
+────────────────────────
+4. 一鍵維護模式頁面
+────────────────────────
+
+目標：
+讓維護模式不是只回錯誤，而是有可讀頁面與 root bypass。
+
+system_settings：
+- maintenance_mode
+- maintenance_reason
+- maintenance_eta
+- maintenance_public_message
+
+API：
+- GET /api/maintenance/status
+- PUT /api/admin/maintenance
+
+UI：
+- public maintenance page
+- admin toggle
+- reason / ETA 編輯
+
+行為：
+- 非 root API 回 maintenance response
+- browser 顯示維護頁
+- root 可登入與 bypass
+- maintenance bypass token 可用
+
+測試：
+- user 被擋
+- root 不被鎖死
+- public message 不含 secret
+
+────────────────────────
+5. 檔案隔離區 Quarantine
+────────────────────────
+
+目標：
+高風險或掃描失敗檔案不直接可下載。
+
+新增表：
+file_quarantine_events
+- id
+- file_id
+- reason
+- risk_level
+- status: quarantined/approved/deleted/blocked
+- reviewed_by
+- reviewed_at
+- created_at
+
+Service：
+services/file_quarantine.py
+- quarantine_file(...)
+- approve_file(...)
+- delete_quarantined_file(...)
+- list_quarantine(...)
+
+觸發：
+- scan_status=infected
+- scan_status=failed
+- risk_level=high
+- archive bomb/path traversal
+- executable upload by restricted level
+
+API：
+- GET /api/admin/files/quarantine
+- POST /api/admin/files/quarantine/<file_id>/approve
+- POST /api/admin/files/quarantine/<file_id>/delete
+- POST /api/admin/files/quarantine/<file_id>/keep-blocked
+
+下載規則：
+- quarantined / infected / blocked 不可下載
+- approved 後才可依權限下載
+
+測試：
+- quarantined 檔不可下載
+- root approve 後可下載
+- user 不可 approve
+
+────────────────────────
+6. 資料保留政策
+────────────────────────
+
+目標：
+避免 logs/snapshots/deleted files 無限增長。
+
+system_settings：
+- retention_logs_days = 90
+- retention_security_events_days = 365
+- retention_deleted_files_days = 30
+- retention_snapshots_days = 30
+- retention_audit_logs_days = 0  # 0 = keep forever
+- retention_auto_cleanup_enabled = false
+
+新增表：
+retention_cleanup_runs
+- id
+- started_at
+- finished_at
+- status
+- deleted_counts_json
+- error_message
+
+Service：
+services/retention.py
+- compute_cleanup_plan()
+- run_cleanup(dry_run=True)
+- delete_expired_soft_deleted_files()
+- prune_old_logs()
+- prune_old_snapshots()
+
+API：
+- GET /api/admin/retention/policy
+- PUT /api/admin/retention/policy
+- POST /api/admin/retention/dry-run
+- POST /api/admin/retention/run
+
+安全：
+- audit logs 預設永久
+- cleanup 前先產生 report
+- 真刪除需 confirm="RUN_RETENTION_CLEANUP"
+
+測試：
+- dry-run 不刪資料
+- confirm 錯誤不執行
+- audit logs 不被誤刪
+
+────────────────────────
+7. 使用者資料匯出 / 刪除請求
+────────────────────────
+
+目標：
+提供基本資料可攜與刪除請求流程。
+
+新增表：
+user_data_requests
+- id
+- user_id
+- request_type: export/delete
+- status: pending/processing/ready/completed/rejected
+- requested_at
+- completed_at
+- reviewed_by
+- reason
+- artifact_path
+
+API：
+User：
+- POST /api/account/data-export
+- GET /api/account/data-export/<id>
+- POST /api/account/delete-request
+
+Admin/root：
+- GET /api/admin/user-data-requests
+- POST /api/admin/user-data-requests/<id>/approve
+- POST /api/admin/user-data-requests/<id>/reject
+
+Export 包含：
+- profile
+- posts/comments
+- uploaded file metadata
+- notifications
+- audit subset relevant to user
+
+Delete：
+- soft delete account
+- anonymize display name
+- preserve audit/security logs
+- optionally delete cloud files after retention period
+
+安全：
+- export artifact 要加密或短期 token
+- user 只能拿自己的 export
+- root/admin 審核 delete
+
+測試：
+- user 不可下載他人 export
+- delete 不刪 audit
+- artifact 過期失效
+
+────────────────────────
+8. Admin 操作二人覆核
+────────────────────────
+
+目標：
+高風險操作不可單人直接執行。
+
+新增表：
+admin_approval_requests
+- id
+- action_type
+- target_type
+- target_id
+- requested_by
+- status: pending/approved/rejected/executed/expired
+- payload_json
+- reason
+- created_at
+- expires_at
+
+admin_approval_votes
+- id
+- request_id
+- voter_id
+- vote: approve/reject
+- reason
+- created_at
+
+需覆核操作：
+- delete user
+- restore snapshot
+- enter superweak
+- keep dirty superweak state
+- approve announcement attachment
+- clear integrity high-risk finding
+- mass role change
+
+Service：
+services/admin_approvals.py
+- create_approval_request(...)
+- vote(...)
+- can_execute(...)
+- execute_if_approved(...)
+
+規則：
+- requester 不能審核自己的請求
+- root override 可設定，但需 high-risk audit
+- 至少 2 approvals 或 root approval
+
+API：
+- GET /api/admin/approvals
+- POST /api/admin/approvals
+- POST /api/admin/approvals/<id>/vote
+- POST /api/admin/approvals/<id>/execute
+
+測試：
+- requester 不能自批
+- 未達票數不能 execute
+- execute 後不可重複執行
+
+────────────────────────
+9. 系統設定版本歷史
+────────────────────────
+
+目標：
+可追蹤誰改了什麼設定，必要時 rollback。
+
+新增表：
+system_setting_versions
+- id
+- setting_key
+- old_value_redacted
+- new_value_redacted
+- changed_by
+- changed_at
+- reason
+- version_no
+
+Service：
+services/settings_history.py
+- record_setting_change(...)
+- list_history(...)
+- rollback_setting(...)
+
+規則：
+- secret 類設定只記 configured true/false
+- rollback secret 不可還原明文，只能清除或要求重設
+- 每次 system_settings update 都記錄
+
+API：
+- GET /api/admin/settings/history
+- POST /api/admin/settings/history/<id>/rollback
+
+測試：
+- secret 不出現在 history
+- rollback 一般設定成功
+- 非 root 不可 rollback
+
+────────────────────────
+10. 發布版本與 migration 狀態頁
+────────────────────────
+
+目標：
+讓 root 能確認目前版本、schema、migration、integrity 狀態。
+
+API：
+- GET /api/admin/release/status
+
+回傳：
+- release_id
+- git_commit 或 build_id
+- schema_version
+- latest_migration
+- migration_pending
+- integrity_status
+- server_mode
+- debug_mode
+- python_version
+- db_path masked
+- storage_root masked
+
+UI：
+Admin -> Release Status：
+- current release
+- schema
+- migration status
+- integrity summary
+- release_check result
+- copy diagnostics
+
+新增：
+scripts/release_status.py
+
+測試：
+- root-only
+- path masked
+- schema mismatch 可被偵測
+
+────────────────────────
+最終驗收
+────────────────────────
+
+必跑：
+python3 scripts/pre_push_checks.py --ci
+python3 scripts/release_check.py --strict
+PYTHONPATH=. python3 -m pytest -q tests
+
+文件：
+新增 docs/operations/final_admin_features.md
+
+內容：
+- setup wizard
+- notifications
+- security dashboard
+- maintenance
+- quarantine
+- retention
+- data export/delete
+- two-person approval
+- settings history
+- release status
+
+禁止：
+- 不要把 secret 寫入 history/log/export
+- 不要讓 manager 執行 root-only 危險操作
+- 不要讓資料刪除破壞 audit chain
+- 不要讓 setup wizard 在完成後可被外部重開

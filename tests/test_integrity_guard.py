@@ -198,6 +198,30 @@ def test_integrity_api_is_root_only_and_reviews_are_audited(tmp_path):
     assert denied.status_code == 403
 
 
+def test_integrity_bulk_review_requires_root_and_confirmation(tmp_path):
+    guard, base, audit_log = _guard(tmp_path)
+    guard.scan(actor="system")
+    (base / "server.py").write_text("print('bulk')\n", encoding="utf-8")
+    (base / "services" / "auth.py").write_text("AUTH = 'bulk'\n", encoding="utf-8")
+    guard.scan(actor="system")
+    ids = [item["id"] for item in guard.list_findings(status="pending")]
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _admin_app(tmp_path, actor_box, guard, audit_log).test_client()
+
+    bad_confirm = client.post("/api/root/integrity/findings/bulk-review", json={"action": "approve", "finding_ids": ids, "confirm": "NO"})
+    assert bad_confirm.status_code == 400
+    rejected = client.post("/api/root/integrity/findings/bulk-review", json={"action": "reject", "finding_ids": ids, "note": "unexpected"})
+    assert rejected.status_code == 200
+    body = rejected.get_json()
+    assert body["reviewed"] == len(ids)
+    assert all(item["ok"] for item in body["results"])
+    assert any("INTEGRITY_FINDING_BULK_REJECT" in args for args, _ in audit_log)
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    denied = client.post("/api/root/integrity/findings/bulk-review", json={"action": "ignore", "finding_ids": ids})
+    assert denied.status_code == 403
+
+
 def test_report_does_not_expose_signing_key(tmp_path):
     guard, _, _ = _guard(tmp_path)
     guard.scan(actor="system")

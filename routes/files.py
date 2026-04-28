@@ -750,23 +750,31 @@ def register_file_routes(app, deps):
         try:
             ensure_cloud_drive_attachment_schema(conn)
             rule = get_member_level_rule(conn, actor.get("effective_level") or actor.get("member_level"))
-            result, msg = store_cloud_upload(
-                conn,
-                actor=actor,
-                member_rule=rule,
-                storage_root=storage_root,
-                file_storage=request.files["file"],
-                privacy_mode=privacy_mode,
-                encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
-                encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
-                wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
-                ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
-                encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
-                encryption_version=(request.form.get("encryption_version") or "").strip() or None,
-                nonce=(request.form.get("nonce") or "").strip() or None,
-                client_scan_report=_form_json_value("client_scan_report"),
-                scan_now=True,
-            )
+            try:
+                result, msg = store_cloud_upload(
+                    conn,
+                    actor=actor,
+                    member_rule=rule,
+                    storage_root=storage_root,
+                    file_storage=request.files["file"],
+                    privacy_mode=privacy_mode,
+                    encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
+                    encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
+                    wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
+                    ciphertext_sha256=(request.form.get("ciphertext_sha256") or "").strip() or None,
+                    encryption_algorithm=(request.form.get("encryption_algorithm") or "").strip() or None,
+                    encryption_version=(request.form.get("encryption_version") or "").strip() or None,
+                    nonce=(request.form.get("nonce") or "").strip() or None,
+                    client_scan_report=_form_json_value("client_scan_report"),
+                    scan_now=True,
+                )
+            except ValueError as exc:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": f"雲端硬碟上傳失敗：{str(exc) or exc.__class__.__name__}", "error_code": exc.__class__.__name__}), 400
+            except Exception as exc:
+                conn.rollback()
+                audit("CLOUD_DRIVE_UPLOAD_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=exc.__class__.__name__)
+                return json_resp({"ok": False, "msg": f"雲端硬碟上傳失敗：{exc.__class__.__name__}", "error_code": exc.__class__.__name__}), 500
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400

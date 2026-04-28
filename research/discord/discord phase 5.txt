@@ -1,0 +1,112 @@
+任務：建立 Discord Sync 營運層（監控、重試、multi-guild）
+
+目標：
+- 可觀測（observability）
+- 可復原（replay / retry）
+- 可擴展（多 Discord server）
+
+一、DB Migration
+
+新增：
+discord_sync_metrics
+- id
+- timestamp
+- outbound_success
+- outbound_fail
+- inbound_success
+- inbound_fail
+- queue_size
+
+discord_dead_letter_queue
+- id
+- event_type
+- payload_json
+- error_message
+- retry_count
+- created_at
+
+discord_guild_settings
+- id
+- guild_id
+- name
+- enabled
+- default_channel_id
+- created_at
+
+二、Service
+
+新增 services/discord_monitoring.py
+
+功能：
+1. collect_metrics()
+2. retry_failed_events()
+3. move_to_dead_letter()
+4. replay_dead_letter()
+
+三、Queue 設計
+
+- outbound queue（已有）
+- inbound queue（已有）
+- dead letter queue
+
+流程：
+
+failed → retry (max N) → dead_letter
+
+四、Token Rotation
+
+system_settings：
+- discord_webhook_last_rotated
+- discord_token_last_rotated
+
+功能：
+- root 可 rotate webhook/token
+- 舊 token 立即失效
+- rotation 記錄 audit
+
+五、Multi Guild
+
+支援：
+- 多 Discord server
+- board -> guild/channel mapping
+
+規則：
+- 每 board 可對應不同 guild
+- 可 broadcast 或單點
+
+六、Dashboard（Admin UI）
+
+新增 Discord Sync Dashboard：
+
+顯示：
+- queue size
+- fail rate
+- last sync time
+- top error
+- dead letter count
+
+操作：
+- retry all failed
+- replay dead letter
+- disable sync
+
+七、安全
+
+- dead letter payload 不含 secret
+- webhook/token 不顯示
+- replay 必須 root-only
+- 防止 replay loop
+
+八、測試
+
+- retry 機制正常
+- dead letter 正確進入
+- replay 成功
+- metrics 正確
+
+九、驗收
+
+- sync failure 可觀測
+- 可手動修復 sync
+- 支援多 guild
+- token rotation 正常

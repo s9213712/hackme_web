@@ -1,0 +1,80 @@
+任務：同步 Discord reaction 與論壇互動（低風險單向/半雙向）
+
+目標：
+- Discord 👍 👎 → 站內 reaction
+- Discord 活躍度影響站內排序（但不影響權限）
+- 不同步 reputation（避免濫用）
+
+一、DB Migration
+
+新增：
+discord_reaction_links
+- id
+- discord_message_id
+- emoji
+- count
+- local_type
+- local_id
+- updated_at
+
+二、Service
+
+新增 services/discord_reactions.py
+
+功能：
+1. handle_reaction_add
+2. handle_reaction_remove
+3. map_emoji_to_local()
+
+mapping：
+👍 → like
+👎 → dislike
+🔥 → hot
+❗ → report (可選)
+
+三、Inbound 處理
+
+在 discord_inbound：
+
+event_type:
+- reaction_add
+- reaction_remove
+
+流程：
+- 找 discord_links
+- 更新 local reaction count
+- 寫 audit（低優先）
+
+四、活躍度整合
+
+新增：
+services/activity_score.py
+
+score =
+- local interactions * weight
+- discord reactions * lower weight
+- discord message count（thread內）
+
+五、安全
+
+- 不影響 reputation
+- 不影響 member level
+- 避免刷 reaction → 加 rate limit
+- ignore bot reaction
+
+六、UI
+
+- 顯示：
+  👍 10 (Discord: 6 / Local: 4)
+
+七、測試
+
+- reaction 正確映射
+- remove 會減少
+- bot reaction 被忽略
+- 不影響權限
+
+八、驗收
+
+- Discord reaction 能反映在論壇
+- 不可用來刷權限

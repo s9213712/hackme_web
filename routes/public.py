@@ -280,6 +280,9 @@ def register_public_routes(app, deps):
                 # Return generic — don't reveal account exists
                 return json_resp({"ok":False,"msg":"註冊失敗，請稍後再試"}), 409
 
+            # Always do timing-delay to normalize response time (Timing Oracle mitigation)
+            timing_delay()
+
             now = datetime.now().isoformat()
             cur = conn.execute(
                 "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
@@ -476,14 +479,20 @@ def register_public_routes(app, deps):
             return json_resp({"ok":False,"msg":"未登入"}), 401
         role = "super_admin" if ctx["username"] == "root" else ctx["role"]
         effective_level = dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal"
-        session_idle_timeout_minutes = 3
-        if get_member_level_rule:
+        # 全局覆寫（system_settings）> member_level 規則 > 預設 10
+        settings = get_system_settings()
+        override = settings.get("session_idle_timeout_minutes")
+        if override is not None:
+            session_idle_timeout_minutes = max(1, int(override))
+        elif get_member_level_rule:
             conn = get_db()
             try:
                 rule = get_member_level_rule(conn, effective_level) or {}
-                session_idle_timeout_minutes = max(1, int(rule.get("session_idle_timeout_minutes") or 3))
+                session_idle_timeout_minutes = max(1, int(rule.get("session_idle_timeout_minutes") or 10))
             finally:
                 conn.close()
+        else:
+            session_idle_timeout_minutes = 10
         return json_resp({
             "ok": True,
             "id": ctx["id"],

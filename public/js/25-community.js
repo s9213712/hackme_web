@@ -44,9 +44,11 @@ function renderCommunityCategories() {
   if (panel) panel.style.display = canManageCommunity() ? "block" : "none";
   if (select) {
     const activeCategories = communityCategories.filter((item) => item.is_active !== false);
-    select.innerHTML = activeCategories.map((item) => (
+    const options = activeCategories.map((item) => (
       `<option value="${item.id}">${sanitize(item.name || "")}</option>`
-    )).join("");
+    ));
+    if (!options.length) options.push('<option value="">一般討論（預設）</option>');
+    select.innerHTML = options.join("");
   }
   if (!list || !canManageCommunity()) return;
   if (!communityCategories.length) {

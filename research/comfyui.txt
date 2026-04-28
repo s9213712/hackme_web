@@ -1,0 +1,716 @@
+# hackme_web 整合 ComfyUI 生圖服務 Agent 指令書 v1.0
+
+## 目標
+
+在 hackme_web 新增「AI 生圖」功能，讓使用者使用積分呼叫外部 ComfyUI 伺服器生成圖片。
+
+使用者流程：
+
+1. 進入 /ai-image
+2. 從下拉選單選擇伺服器現有模型
+3. 輸入 prompt
+4. 可選 negative prompt
+5. 設定 CFG、steps、batch、寬高、seed
+6. 系統先估算消耗積分
+7. 使用者確認
+8. 後端扣除或預扣積分
+9. 後端送任務到 ComfyUI
+10. 網頁顯示排隊 / 生成中 / 完成 / 失敗
+11. 完成後在網頁顯示圖片
+12. 使用者可下載圖片
+
+============================================================
+一、架構原則
+============================================================
+
+禁止前端直接呼叫 ComfyUI。
+
+正確架構：
+
+User Browser
+→ hackme_web frontend
+→ hackme_web backend
+→ ComfyUI server :8192
+
+原因：
+
+1. 避免暴露 ComfyUI 內部 API。
+2. 避免使用者繞過積分扣款。
+3. 避免任意提交 workflow。
+4. 後端可做參數限制、排隊、審計、風控。
+5. 圖片可先存到 hackme_web 控制的 storage。
+
+============================================================
+二、ComfyUI 伺服器設定
+============================================================
+
+設定檔新增：
+
+COMFYUI_BASE_URL=http://127.0.0.1:8192
+COMFYUI_TIMEOUT_SECONDS=600
+COMFYUI_MAX_QUEUE_PER_USER=2
+COMFYUI_MAX_GLOBAL_QUEUE=10
+COMFYUI_OUTPUT_CACHE_DIR=storage/generated_images
+COMFYUI_ALLOWED_WORKFLOW=text2image_basic
+
+若 ComfyUI 在另一台機器：
+
+COMFYUI_BASE_URL=http://192.168.x.x:8192
+
+安全要求：
+
+1. ComfyUI port 不要直接公開到 Internet。
+2. 僅允許 hackme_web server 存取。
+3. 若跨機器，建議用內網、防火牆或反向代理 ACL。
+4. 不允許使用者上傳任意 workflow JSON。
+
+============================================================
+三、模型列表
+============================================================
+
+需求：
+
+使用者模型下拉選單必須以 ComfyUI 伺服器目前可用模型為準。
+
+實作方式：
+
+後端新增：
+
+GET /api/ai-image/models
+
+後端向 ComfyUI 查詢 object_info，例如：
+
+GET {COMFYUI_BASE_URL}/object_info
+
+從 CheckpointLoaderSimple 或相關 loader node 的 input options 解析可用 ckpt_name。
+
+回傳格式：
+
+{
+  "models": [
+    {
+      "id": "dreamshaper_xl.safetensors",
+      "name": "dreamshaper_xl.safetensors",
+      "type": "checkpoint",
+      "enabled": true
+    }
+  ]
+}
+
+要求：
+
+1. 前端不可手寫固定模型清單。
+2. 後端需快取模型列表 30~300 秒。
+3. 找不到模型時顯示「目前沒有可用模型」。
+4. 使用者送出任務時，後端必須再次驗證模型是否允許。
+5. 可加入 admin allowlist，避免某些模型開放給一般用戶。
+
+============================================================
+四、前端頁面
+============================================================
+
+路由：
+
+/ai-image
+
+UI 元件：
+
+1. 模型下拉選單
+2. Prompt 輸入框
+3. Negative prompt 輸入框
+4. CFG 輸入
+5. Steps 輸入
+6. Batch size 輸入
+7. Width / Height 選單
+8. Seed 輸入，可選 random
+9. 預估積分消耗
+10. 生成按鈕
+11. 任務狀態區
+12. 圖片結果區
+13. 下載按鈕
+14. 歷史作品列表
+
+參數限制：
+
+CFG:
+  min: 1
+  max: 20
+  default: 7
+
+Steps:
+  min: 1
+  max: 50
+  default: 20
+
+Batch:
+  min: 1
+  max: 4
+  default: 1
+
+Width / Height:
+  allowed:
+    - 512x512
+    - 768x768
+    - 1024x1024
+    - 768x1024
+    - 1024x768
+
+Prompt:
+  max_length: 2000
+
+Negative prompt:
+  max_length: 2000
+
+Seed:
+  random allowed
+  integer only
+
+============================================================
+五、積分計費
+============================================================
+
+新增 AI 生圖價格規則。
+
+建議公式：
+
+base_cost = 5
+
+cost =
+  base_cost
+  * batch
+  * resolution_multiplier
+  * steps_multiplier
+  * model_multiplier
+
+resolution_multiplier:
+  512x512 = 1.0
+  768x768 = 1.5
+  1024x1024 = 2.5
+  768x1024 = 2.2
+  1024x768 = 2.2
+
+steps_multiplier:
+  steps <= 20: 1.0
+  steps <= 30: 1.3
+  steps <= 40: 1.7
+  steps <= 50: 2.0
+
+model_multiplier:
+  default = 1.0
+  SDXL = 1.5
+  heavy model = 2.0
+
+新增 API：
+
+POST /api/ai-image/quote
+
+輸入：
+
+{
+  "model": "...",
+  "width": 1024,
+  "height": 1024,
+  "steps": 30,
+  "batch": 2,
+  "cfg": 7
+}
+
+回傳：
+
+{
+  "cost": 39,
+  "currency_type": "soft",
+  "details": {
+    "base_cost": 5,
+    "batch": 2,
+    "resolution_multiplier": 2.5,
+    "steps_multiplier": 1.3,
+    "model_multiplier": 1.2
+  }
+}
+
+扣點策略：
+
+MVP 建議使用「預扣 + 失敗退款」。
+
+流程：
+
+1. 使用者送出任務。
+2. 後端計算 cost。
+3. PointsLedgerService.debit() 預扣。
+4. 建立 ai_generation_jobs。
+5. 送出 ComfyUI prompt。
+6. 成功則維持扣款。
+7. ComfyUI 失敗則用 reversal refund。
+8. 使用者取消且尚未開始，可退款。
+9. 已開始生成不可保證退款，由規則決定。
+
+所有扣款都必須走 PointsLedgerService，不得直接改 wallet。
+
+============================================================
+六、資料表
+============================================================
+
+新增 ai_generation_jobs：
+
+CREATE TABLE ai_generation_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  job_uuid UUID NOT NULL UNIQUE,
+
+  user_id BIGINT NOT NULL,
+
+  status VARCHAR(30) NOT NULL DEFAULT 'pending',
+
+  model_name VARCHAR(255) NOT NULL,
+  workflow_type VARCHAR(80) NOT NULL DEFAULT 'text2image_basic',
+
+  prompt TEXT NOT NULL,
+  negative_prompt TEXT,
+
+  cfg NUMERIC(5,2) NOT NULL,
+  steps INT NOT NULL,
+  batch_size INT NOT NULL,
+  width INT NOT NULL,
+  height INT NOT NULL,
+  seed BIGINT,
+
+  cost_points BIGINT NOT NULL,
+  currency_type VARCHAR(20) NOT NULL DEFAULT 'soft',
+
+  debit_ledger_uuid UUID,
+
+  comfy_prompt_id VARCHAR(120),
+  comfy_status VARCHAR(50),
+
+  error_message TEXT,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  submitted_at TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  failed_at TIMESTAMP,
+
+  CHECK (status IN ('pending', 'charged', 'queued', 'running', 'completed', 'failed', 'cancelled', 'refunded')),
+  CHECK (steps >= 1 AND steps <= 50),
+  CHECK (batch_size >= 1 AND batch_size <= 4),
+  CHECK (width IN (512, 768, 1024)),
+  CHECK (height IN (512, 768, 1024))
+);
+
+新增 ai_generated_images：
+
+CREATE TABLE ai_generated_images (
+  id BIGSERIAL PRIMARY KEY,
+  job_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+
+  image_index INT NOT NULL,
+
+  original_filename VARCHAR(255),
+  comfy_subfolder VARCHAR(255),
+  comfy_type VARCHAR(50),
+
+  local_path TEXT NOT NULL,
+  public_url TEXT,
+
+  width INT,
+  height INT,
+  file_sha256 CHAR(64),
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+新增 ai_model_cache：
+
+CREATE TABLE ai_model_cache (
+  id BIGSERIAL PRIMARY KEY,
+  model_name VARCHAR(255) NOT NULL UNIQUE,
+  model_type VARCHAR(80) NOT NULL DEFAULT 'checkpoint',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  cost_multiplier NUMERIC(6,2) NOT NULL DEFAULT 1.0,
+  last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+============================================================
+七、後端 API
+============================================================
+
+User API：
+
+GET /api/ai-image/models
+POST /api/ai-image/quote
+POST /api/ai-image/generate
+GET /api/ai-image/jobs
+GET /api/ai-image/jobs/:job_uuid
+GET /api/ai-image/jobs/:job_uuid/images
+GET /api/ai-image/images/:image_id/download
+POST /api/ai-image/jobs/:job_uuid/cancel
+
+Admin / Root API：
+
+GET /api/admin/ai-image/jobs
+GET /api/admin/ai-image/models
+POST /api/admin/ai-image/models/:model_name/enable
+POST /api/admin/ai-image/models/:model_name/disable
+POST /api/admin/ai-image/models/:model_name/cost-multiplier
+GET /api/root/ai-image/comfyui/status
+POST /api/root/ai-image/comfyui/refresh-models
+
+============================================================
+八、ComfyUI Workflow
+============================================================
+
+不要讓使用者提交任意 workflow。
+
+建立固定 workflow template：
+
+text2image_basic.json
+
+模板包含：
+
+1. CheckpointLoaderSimple
+2. CLIPTextEncode positive
+3. CLIPTextEncode negative
+4. EmptyLatentImage
+5. KSampler
+6. VAEDecode
+7. SaveImage
+
+後端收到使用者參數後，只替換允許欄位：
+
+model_name
+prompt
+negative_prompt
+cfg
+steps
+batch_size
+width
+height
+seed
+
+禁止替換：
+
+任意 node class
+任意 file path
+任意 output path
+任意 custom node
+任意 Python code
+任意外部 URL
+
+============================================================
+九、生成流程
+============================================================
+
+POST /api/ai-image/generate 流程：
+
+1. 驗證登入。
+2. 檢查 AI 生圖 feature 是否 enabled/beta。
+3. 驗證使用者權限。
+4. 驗證參數白名單。
+5. 驗證模型在 ComfyUI 可用且被平台允許。
+6. 計算 cost。
+7. 檢查使用者積分餘額。
+8. 檢查每人佇列上限。
+9. 檢查全站佇列上限。
+10. PointsLedgerService.debit 預扣積分。
+11. 建立 ai_generation_jobs，status=charged。
+12. 從 workflow template 建立 prompt JSON。
+13. POST 到 ComfyUI /prompt。
+14. 保存 comfy_prompt_id。
+15. status=queued。
+16. worker 輪詢 /history/{prompt_id} 或使用 websocket 監聽。
+17. 完成後從 history 解析輸出圖片。
+18. 後端呼叫 ComfyUI /view 下載圖片。
+19. 存入 hackme_web storage。
+20. 寫入 ai_generated_images。
+21. status=completed。
+22. 前端顯示圖片與下載按鈕。
+
+ComfyUI 送 prompt 與查 history 屬於官方 server routes；結果圖片通常從 history 取得 output metadata，再用 /view 讀取。 [oai_citation:1‡ComfyUI 官方文檔](https://docs.comfy.org/development/comfyui-server/comms_routes?utm_source=chatgpt.com)
+
+============================================================
+十、任務狀態
+============================================================
+
+job status：
+
+pending
+charged
+queued
+running
+completed
+failed
+cancelled
+refunded
+
+前端顯示：
+
+pending：準備中
+charged：已扣點
+queued：排隊中
+running：生成中
+completed：完成
+failed：失敗
+cancelled：已取消
+refunded：已退款
+
+============================================================
+十一、背景 Worker
+============================================================
+
+請新增 background worker 或 scheduled task。
+
+功能：
+
+1. 掃描 queued/running jobs。
+2. 查詢 ComfyUI queue / history。
+3. 更新任務狀態。
+4. 下載完成圖片。
+5. 失敗時退款。
+6. timeout 時標記 failed。
+7. 寫 audit log。
+
+若 hackme_web 目前沒有 worker，可先用簡單 polling endpoint 或 cron，但需避免多 worker 重複處理同一 job。
+
+============================================================
+十二、圖片儲存與下載
+============================================================
+
+生成圖片不要只依賴 ComfyUI output 目錄。
+
+完成後：
+
+1. 後端從 ComfyUI /view 取得圖片。
+2. 存到 hackme_web controlled storage。
+3. 路徑格式：
+
+storage/generated_images/{user_id}/{job_uuid}/{index}.png
+
+4. 計算 sha256。
+5. 寫入 ai_generated_images。
+6. 提供下載 API：
+
+GET /api/ai-image/images/:image_id/download
+
+權限：
+
+1. 使用者只能下載自己的圖片。
+2. admin/root 可依權限查看。
+3. 不得直接暴露本機檔案路徑。
+4. 不得允許 path traversal。
+
+============================================================
+十三、安全限制
+============================================================
+
+必須限制：
+
+1. prompt 長度。
+2. batch 上限。
+3. steps 上限。
+4. resolution 白名單。
+5. 每人同時任務數。
+6. 每日生成次數。
+7. 每日消耗點數上限。
+8. 模型 allowlist。
+9. workflow template allowlist。
+10. 下載路徑不可穿越。
+11. ComfyUI 不可對外裸露。
+12. 後端不可接受任意 workflow JSON。
+13. 不允許使用者指定 output filename/path。
+14. 不允許任意 custom node 參數。
+
+============================================================
+十四、內容安全
+============================================================
+
+MVP 至少加入：
+
+1. 禁止空 prompt。
+2. 禁止超長 prompt。
+3. 禁止明顯非法內容關鍵字，先做簡單 blocklist。
+4. 產生圖片需記錄 user_id/job_uuid。
+5. admin 可刪除違規生成圖。
+6. 若未來要開放公開圖庫，需先做審核。
+
+注意：
+
+不要把使用者 private prompt 公開顯示給其他人。
+
+============================================================
+十五、前端互動
+============================================================
+
+/ai-image 頁面行為：
+
+1. 載入模型清單。
+2. 使用者選模型。
+3. 輸入 prompt。
+4. 修改 cfg/steps/batch/尺寸。
+5. 自動呼叫 quote 更新消耗點數。
+6. 點「生成圖片」。
+7. 顯示確認彈窗：
+
+本次將消耗 X soft_points
+生成失敗會自動退款
+是否確認？
+
+8. 確認後送出。
+9. 顯示任務卡：
+
+任務 ID
+狀態
+消耗點數
+模型
+參數摘要
+生成時間
+
+10. 完成後顯示圖片 grid。
+11. 每張圖片有下載按鈕。
+
+============================================================
+十六、錯誤處理
+============================================================
+
+情境：
+
+ComfyUI 連不上：
+- 不扣點，回傳服務暫時不可用。
+
+扣點成功但 ComfyUI submit 失敗：
+- 自動 reversal refund。
+- job status=refunded。
+- 顯示「提交失敗，已退款」。
+
+ComfyUI 生成中失敗：
+- 根據規則退款。
+- MVP 建議全額退款。
+
+圖片下載失敗：
+- job status=failed。
+- refund。
+- 記錄 error。
+
+使用者餘額不足：
+- 不建立任務。
+- 顯示餘額不足。
+
+使用者超過佇列限制：
+- 不扣點。
+- 顯示尚有任務在排隊。
+
+============================================================
+十七、審計與積分記錄
+============================================================
+
+每次生成需留下：
+
+1. ai_generation_jobs
+2. points_ledger debit
+3. 若退款，points_ledger reverse/credit
+4. audit log
+5. image sha256
+6. model/steps/cfg/batch/size
+7. ComfyUI prompt_id
+
+points ledger action_type 建議：
+
+ai_image_generate_debit
+ai_image_generate_refund
+
+reference_type：
+
+ai_generation_job
+
+reference_id：
+
+job_uuid
+
+============================================================
+十八、測試要求
+============================================================
+
+必測：
+
+1. 模型列表能從 ComfyUI 讀取。
+2. 無模型時 UI 顯示 empty state。
+3. quote 計算正確。
+4. 餘額不足不可生成。
+5. 生成前會扣點。
+6. ComfyUI submit 失敗會退款。
+7. 生成完成可顯示圖片。
+8. 使用者可下載自己的圖片。
+9. 使用者不可下載別人的圖片。
+10. batch 超過上限會被擋。
+11. steps 超過上限會被擋。
+12. 非白名單解析度會被擋。
+13. 任意 workflow JSON 會被拒絕。
+14. ComfyUI timeout 會標記 failed/refunded。
+15. 同一使用者超過佇列上限會被擋。
+16. 下載 API 無 path traversal。
+17. admin 可停用模型。
+18. 停用模型不出現在一般用戶下拉選單。
+
+============================================================
+十九、交付項目
+============================================================
+
+請交付：
+
+1. config for COMFYUI_BASE_URL。
+2. text2image_basic workflow template。
+3. ComfyUI client service。
+4. AIImageService。
+5. ai_generation_jobs migration。
+6. ai_generated_images migration。
+7. ai_model_cache migration。
+8. /api/ai-image/models。
+9. /api/ai-image/quote。
+10. /api/ai-image/generate。
+11. /api/ai-image/jobs。
+12. /api/ai-image/images/:id/download。
+13. /ai-image frontend page。
+14. job polling / worker。
+15. 積分扣款與退款整合。
+16. admin model management。
+17. tests。
+18. docs/comfyui_integration.md。
+
+============================================================
+二十、完成後回報格式
+============================================================
+
+# ComfyUI 整合完成摘要
+
+## 已完成
+-
+
+## ComfyUI 連線
+-
+
+## 模型列表
+-
+
+## 生圖流程
+-
+
+## 積分扣款 / 退款
+-
+
+## 圖片儲存 / 下載
+-
+
+## 安全限制
+-
+
+## 測試結果
+-
+
+## 尚未完成
+-
+
+## 需要人工確認
+-
+
+## 建議下一階段
+-

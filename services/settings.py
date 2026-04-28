@@ -27,6 +27,7 @@ DEFAULT_SETTINGS = {
     "max_login_failures": 3,
     "block_duration_minutes": 10,
     "session_ttl_hours": 4,
+    "session_idle_timeout_minutes": 10,
     "site_bg": "#0f0f1a",
     "site_surface": "#1a1a2e",
     "site_accent": "#6c63ff",

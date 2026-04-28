@@ -1,0 +1,352 @@
+任務：研究並設計 hackme_web 與 OpenClaw 整合模組
+
+目標：
+將 OpenClaw 整合為 root-only 輔助系統，用於：
+1. 審計報告分析
+2. 安全事件摘要
+3. Integrity Guard finding 解讀
+4. snapshot / restore 建議
+5. 伺服器健康狀態分析
+6. 危急狀況處置建議
+7. 可選的受控自動化操作
+
+核心原則：
+- 僅 super_admin/root 可使用。
+- OpenClaw 不得直接繞過 RBAC。
+- OpenClaw 不得直接讀取 raw secrets。
+- OpenClaw 不得自動執行高風險操作。
+- 所有 AI 分析與建議需寫入 audit。
+- 所有 tool action 必須有明確 allowlist。
+- 危險操作必須 root 二次確認或二人覆核。
+
+一、先做現況盤點
+
+請檢查：
+- services/audit.py
+- services/security_events.py
+- services/integrity_guard.py
+- services/snapshots.py
+- services/settings.py
+- routes/system_admin.py
+- existing health endpoints
+- server mode / maintenance mode / superweak mode
+- root/admin UI
+
+輸出：
+1. 哪些資料可安全提供給 OpenClaw
+2. 哪些資料必須 redacted
+3. 哪些操作可允許 AI 建議
+4. 哪些操作禁止 AI 執行
+5. 哪些操作需 root approve
+
+二、DB Migration
+
+新增表：
+
+openclaw_sessions
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- created_by INTEGER NOT NULL
+- purpose TEXT NOT NULL
+- status TEXT NOT NULL
+  - active
+  - closed
+  - failed
+- created_at TEXT NOT NULL
+- closed_at TEXT
+
+openclaw_analysis_reports
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- session_id INTEGER
+- report_type TEXT NOT NULL
+  - audit_summary
+  - security_incident
+  - integrity_review
+  - health_diagnosis
+  - snapshot_restore_advice
+  - release_readiness
+- input_summary TEXT
+- output_markdown TEXT
+- risk_level TEXT
+  - low
+  - medium
+  - high
+  - critical
+- created_by INTEGER NOT NULL
+- created_at TEXT NOT NULL
+
+openclaw_action_proposals
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- session_id INTEGER
+- action_type TEXT NOT NULL
+- target_type TEXT
+- target_id TEXT
+- proposed_payload_json TEXT
+- rationale TEXT
+- risk_level TEXT NOT NULL
+- status TEXT NOT NULL
+  - proposed
+  - approved
+  - rejected
+  - executed
+  - failed
+- proposed_at TEXT NOT NULL
+- approved_by INTEGER
+- approved_at TEXT
+- executed_at TEXT
+- error_message TEXT
+
+openclaw_tool_events
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- session_id INTEGER
+- tool_name TEXT NOT NULL
+- action_type TEXT
+- status TEXT NOT NULL
+  - success
+  - failed
+  - denied
+- redacted_input_json TEXT
+- redacted_output_json TEXT
+- created_at TEXT NOT NULL
+
+三、system_settings
+
+新增：
+
+openclaw_enabled = false
+openclaw_gateway_url = "ws://127.0.0.1:18789"
+openclaw_require_root_approval = true
+openclaw_allow_low_risk_auto_actions = false
+openclaw_max_context_events = 500
+openclaw_redact_secrets = true
+openclaw_timeout_seconds = 30
+
+安全：
+- gateway URL 只允許 loopback 預設。
+- 若設成 LAN，release_check 必須警告。
+- 不允許從 UI 顯示 OpenClaw token / pairing secret。
+
+四、資料 Redaction
+
+新增：
+
+services/openclaw_redaction.py
+
+必須 redacted：
+- password
+- session token
+- CSRF token
+- API key
+- SMTP password
+- Discord webhook/token
+- maintenance bypass token
+- private key
+- cookie
+- Authorization header
+- user uploaded private file content
+- E2EE metadata 中不可公開部分
+
+可提供：
+- audit event 類型
+- timestamp
+- actor username / role
+- masked IP
+- action result
+- integrity finding file path/hash
+- snapshot id/status
+- health summary
+- release id/schema version
+
+五、OpenClaw Client
+
+新增：
+
+services/openclaw_client.py
+
+功能：
+- connect_gateway()
+- health_check()
+- run_analysis(prompt, context)
+- request_action_plan(context)
+- close_session()
+
+要求：
+- timeout
+- exception handling
+- OpenClaw unavailable 不得影響網站主流程
+- 所有 input/output 先 redacted 後入 DB
+- 不得讓模型看 raw secret
+
+六、AI 分析功能
+
+新增 root-only API：
+
+POST /api/root/openclaw/analyze/audit
+POST /api/root/openclaw/analyze/security-events
+POST /api/root/openclaw/analyze/integrity
+POST /api/root/openclaw/analyze/health
+POST /api/root/openclaw/analyze/release-readiness
+GET /api/root/openclaw/reports
+GET /api/root/openclaw/reports/<id>
+
+每個 analyze：
+1. 收集 bounded context
+2. redaction
+3. 組成 prompt
+4. 呼叫 OpenClaw
+5. 儲存 report
+6. 寫 audit
+
+七、受控操作提案
+
+OpenClaw 可以提出，但不可直接執行：
+
+- enable maintenance mode
+- create snapshot
+- run health check
+- run integrity rescan
+- recommend reject/approve integrity finding
+- recommend retention dry-run
+- recommend disabling Discord/Mail sync
+- recommend IP block review
+
+高風險操作必須進 openclaw_action_proposals：
+- restore snapshot
+- enter superweak
+- keep dirty superweak state
+- approve high-risk integrity finding
+- delete user
+- mass settings change
+- clear audit/security events
+
+八、禁止 OpenClaw 自動執行
+
+禁止：
+- 讀取 raw secrets
+- 修改 root 密碼
+- 下載使用者私有檔案
+- 解密 E2EE
+- 刪除 audit log
+- 清除 integrity finding
+- restore snapshot
+- enter superweak
+- 修改 RBAC / roles
+- 修改 SMTP / Discord token
+- 執行 shell command
+- push code 到 GitHub
+
+九、低風險可選自動化
+
+若 openclaw_allow_low_risk_auto_actions=true，才可允許：
+
+- create diagnostic report
+- run health check
+- run integrity rescan
+- run retention dry-run
+- create snapshot
+- summarize security events
+
+仍需：
+- audit log
+- tool event log
+- rate limit
+- root session active
+
+十、UI
+
+新增 root-only：
+
+Root Console -> OpenClaw Assistant
+
+分頁：
+1. Gateway Status
+2. Audit Analyzer
+3. Security Incident Analyzer
+4. Integrity Review
+5. Health Diagnosis
+6. Action Proposals
+7. Report History
+
+UI 要求：
+- 顯示 gateway online/offline
+- 顯示 redaction enabled
+- 分析前顯示資料範圍
+- action proposal 需 approve/reject
+- critical proposal 顯示二次確認
+
+十一、Prompt 模板
+
+新增：
+
+services/openclaw_prompts.py
+
+模板：
+- audit_summary_prompt
+- security_incident_prompt
+- integrity_review_prompt
+- health_diagnosis_prompt
+- release_readiness_prompt
+- incident_response_prompt
+
+要求：
+- 明確告訴 OpenClaw：不得要求 raw secret
+- 明確標記資料可能已 redacted
+- 輸出格式：
+  - summary
+  - findings
+  - risk level
+  - recommended actions
+  - actions requiring root approval
+
+十二、測試
+
+新增：
+
+tests/test_openclaw_integration.py
+
+至少測：
+1. 非 root 403
+2. disabled 時不可呼叫 OpenClaw
+3. redaction 移除 SMTP password / Discord token / session token
+4. OpenClaw gateway timeout 不影響主流程
+5. report 會保存
+6. action proposal 不會自動執行
+7. high-risk action 需要 approve
+8. 禁止 shell command action
+9. audit log 有記錄
+
+十三、文件
+
+新增：
+
+docs/integrations/openclaw_root_assistant.md
+
+內容：
+- OpenClaw 用途
+- Gateway 設定
+- root-only 安全邊界
+- redaction 規則
+- 可分析資料
+- 可提案操作
+- 禁止操作
+- 危急處置流程
+- troubleshooting
+
+十四、驗收標準
+
+完成後必須證明：
+
+1. root 可以看到 OpenClaw gateway 狀態。
+2. root 可產生 audit/security/integrity/health 分析報告。
+3. 報告不含 raw secrets。
+4. OpenClaw 不可被 manager/user 使用。
+5. OpenClaw 只能提出高風險操作，不會直接執行。
+6. 所有分析與提案都有 audit。
+7. OpenClaw gateway 掛掉時網站正常運作。
+8. release_check 能檢查 OpenClaw 設定風險。
+
+十五、最重要限制
+
+OpenClaw 是 root 的「分析與建議助手」，不是自動 root shell。
+
+若未來要加入自動執行，也必須走：
+OpenClaw proposal -> root approve -> server-side allowlisted executor -> audit log

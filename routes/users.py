@@ -377,6 +377,11 @@ def register_user_routes(app, deps):
         mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
         if mimetype not in {"image/jpeg", "image/png", "image/gif"}:
             return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
+        # Enforce extension allowlist (L-1: path traversal + extension validation)
+        filename = (getattr(file_storage, "filename", "") or "").lower()
+        allowed_exts = {".jpg", ".jpeg", ".png", ".gif"}
+        if not any(filename.endswith(ext) for ext in allowed_exts):
+            return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF 副檔名"}), 400
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
@@ -434,6 +439,10 @@ def register_user_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
+        # Authorization: only self, admin, or super_admin can view this avatar (L-5)
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if actor["id"] != user_id and actor_role not in {"admin", "super_admin"}:
+            return json_resp({"ok": False, "msg": "權限不足"}), 403
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
@@ -811,13 +820,22 @@ def register_user_routes(app, deps):
     @app.route("/api/admin/users/<int:user_id>/demote", methods=["POST"])
     @require_csrf
     def admin_user_demote(user_id):
-        """超級管理者可將管理者降為一般用戶（再次降級＝刪除，由系統自動判斷）"""
+        """超級管理者可將管理者降為一般用戶；可選目標狀態：restricted / suspended / inactive"""
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
         if actor["username"] != "root":
             return json_resp({"ok":False,"msg":"只有 root 可降級帳號"}), 403
+
+        try:
+            data = request.get_json(force=True) or {}
+        except:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        target_status = str(data.get("target_status", "inactive")).strip()
+        valid_statuses = {"restricted", "suspended", "inactive"}
+        if target_status not in valid_statuses:
+            return json_resp({"ok":False,"msg":f"無效的目標狀態，支援：{', '.join(valid_statuses)}"}), 400
 
         conn = get_db()
         try:
@@ -830,15 +848,16 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"最高管理者帳號不可降級"}), 403
             from_role = target["role"]
             if from_role == "user":
+                # Demote user to selected restricted/suspended/inactive state (Bug: demote)
                 conn.execute(
-                    "UPDATE users SET status='inactive', blocked_until=NULL, updated_at=? WHERE id=?",
-                    (datetime.now().isoformat(), user_id)
+                    f"UPDATE users SET status=?, blocked_until=NULL, updated_at=? WHERE id=?",
+                    (target_status, datetime.now().isoformat(), user_id)
                 )
                 conn.commit()
                 revoke_user_sessions(user_id)
                 audit("USER_DEACTIVATED_BY_ADMIN", get_client_ip(), user=actor["username"],
-                      detail=f"user_id={user_id} deactivated from user demotion")
-                return json_resp({"ok":True,"msg":"帳號已停用"})
+                      detail=f"user_id={user_id} demoted to {target_status}")
+                return json_resp({"ok":True,"msg":f"帳號已降級為 {target_status}"})
             # 管理者 → 一般用戶
             conn.execute("UPDATE users SET role='user', violation_count=0, updated_at=? WHERE id=?",
                          (datetime.now().isoformat(), user_id))

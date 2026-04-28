@@ -653,16 +653,15 @@ def register_moderation_routes(app, deps):
         finally:
             conn.close()
 
-    # ── 審計日誌（manager + super_admin 皆可檢視）────────────────────────────────
+    # ── 審計日誌（僅 root 可檢視）────────────────────────────────
     @app.route("/api/admin/audit", methods=["GET"])
     @require_csrf_safe
     def admin_audit():
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
-        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if role_rank(actor_role) < role_rank("manager"):
-            return json_resp({"ok":False,"msg":"權限不足"}), 403
+        if actor["username"] != "root":
+            return json_resp({"ok":False,"msg":"只有 root 可檢視審計紀錄"}), 403
 
         page = parse_positive_int(request.args.get("page", 0), min_value=0)
         if page is None:

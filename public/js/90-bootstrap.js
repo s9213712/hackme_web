@@ -58,6 +58,9 @@ function bindUiEvents() {
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
   const integrityExport = $("integrity-export-btn");
+  const integrityBulkApprove = $("integrity-bulk-approve-btn");
+  const integrityBulkReject = $("integrity-bulk-reject-btn");
+  const integrityBulkIgnore = $("integrity-bulk-ignore-btn");
   const integrityRepair = $("integrity-repair-btn");
   const restartBtn   = $("restart-server-btn");
   const editSaveBtn = $("user-edit-save");
@@ -264,6 +267,9 @@ function bindUiEvents() {
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);
   if (integrityExport) integrityExport.addEventListener("click", exportIntegrityReport);
+  if (integrityBulkApprove) integrityBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
+  if (integrityBulkReject) integrityBulkReject.addEventListener("click", () => reviewSelectedIntegrityFindings("reject"));
+  if (integrityBulkIgnore) integrityBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
   if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
 }

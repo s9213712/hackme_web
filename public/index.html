@@ -717,6 +717,11 @@
         </div>
         <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
         <div id="server-health-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;margin-bottom:.9rem;"></div>
+        <div class="mini-title" style="margin:.9rem 0 .55rem;">平台流量與統計（root / super_admin）</div>
+        <div class="admin-toolbar" style="margin-bottom:.5rem;">
+          <button class="btn btn-primary" type="button" id="platform-stats-refresh-btn">重新整理</button>
+        </div>
+        <div id="platform-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
       </div>
 
       <div class="form-section" id="sec-server-integrity">
@@ -724,8 +729,18 @@
           <button class="btn btn-primary" type="button" id="integrity-refresh-btn">重新整理</button>
           <button class="btn" type="button" id="integrity-rescan-btn">重新掃描</button>
           <button class="btn" type="button" id="integrity-export-btn">匯出報告</button>
+          <button class="btn btn-primary" type="button" id="integrity-bulk-approve-btn">核准選取</button>
+          <button class="btn" type="button" id="integrity-bulk-reject-btn">拒絕選取</button>
+          <button class="btn" type="button" id="integrity-bulk-ignore-btn">忽略選取</button>
         </div>
         <div id="integrity-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem;">
+          <label style="display:inline-flex;align-items:center;gap:.25rem;cursor:pointer;font-size:.8rem;color:var(--text);">
+            <input type="checkbox" id="integrity-select-all" style="width:1em;height:1em;" />
+            <strong>全選</strong>
+          </label>
+          <span id="integrity-selected-count" style="font-size:.75rem;color:var(--muted);"></span>
+        </div>
         <div id="integrity-warning" style="font-size:.8rem;margin-bottom:.65rem;"></div>
         <div id="integrity-findings" style="max-height:420px;overflow:auto;font-size:.72rem;"></div>
       </div>
@@ -912,6 +927,10 @@
               <label>Session 有效期（小時）</label>
               <input type="number" id="s-session-ttl" min="1" max="72" />
             </div>
+            <div class="field">
+              <label>閒置登出時間（分鐘，0 或空白=停用）</label>
+              <input type="number" id="s-session-idle-timeout" min="0" max="1440" placeholder="10" />
+            </div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">伺服器 Listen 設定（需重啟生效）</div>
             <div class="field">
               <label>Listen IP / Host（空白代表沿用環境變數）</label>
@@ -930,6 +949,24 @@
               <label>每日 snapshot 時間（HH:MM）</label>
               <input type="time" id="s-snapshot-daily-time" />
             </div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Snapshot / Restore / Reset（需 root）</div>
+            <div style="margin-bottom:.5rem;">
+              <button type="button" id="btn-load-snapshots" class="btn-sm" style="background:#37474f;color:#eceff1;border:1px solid #546e7a;padding:.3rem .75rem;border-radius:4px;cursor:pointer;">📋 載入 Snapshot 列表</button>
+              <button type="button" id="btn-create-snapshot" class="btn-sm" style="background:#1b5e20;color:#e8f5e9;border:1px solid #2e7d32;padding:.3rem .75rem;border-radius:4px;cursor:pointer;margin-left:.4rem;">+ 手動建立 Snapshot</button>
+            </div>
+            <div id="snapshot-list" style="font-size:.78rem;color:var(--muted);margin-bottom:.75rem;">點擊「載入 Snapshot 列表」查看現有快照</div>
+            <div id="snapshot-actions" style="margin-bottom:.75rem;"></div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Reset 伺服器（需 root）</div>
+            <div class="field" style="margin-bottom:.4rem;">
+              <label>Reset 原因（選填）</label>
+              <input type="text" id="s-reset-reason" placeholder="描述進行 reset 的原因…" />
+            </div>
+            <div style="color:#ff4f6d;font-size:.78rem;margin-bottom:.5rem;">⚠ Reset 會清除所有 Runtime 狀態並重啟，確認請輸入 <code style="background:rgba(255,0,0,.12);padding:.1rem .3rem;border-radius:3px;">RUN_RESET</code></div>
+            <div class="field" style="margin-bottom:.6rem;">
+              <input type="text" id="s-reset-confirm" placeholder="輸入 RUN_RESET 確認" style="width:100%;padding:.3rem;border-radius:4px;border:1px solid #546e7a;background:#1a1a2e;color:#eceff1;" />
+            </div>
+            <button type="button" id="btn-reset-server" class="btn-sm" style="background:#b71c1c;color:#ffcdd2;border:1px solid #c62828;padding:.35rem .9rem;border-radius:4px;cursor:pointer;">🔄 Reset 伺服器</button>
+            <div id="reset-status" style="font-size:.78rem;margin-top:.5rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">模組開放層級</div>
             <div class="field">
               <label>聊天頁最低可用角色</label>

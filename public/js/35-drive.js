@@ -129,8 +129,9 @@ async function uploadDriveFile() {
     body: form
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    alert(json.msg || "雲端硬碟上傳失敗");
+  if (!res.ok || !json.ok) {
+    const detail = json.error_code ? `${json.msg || "雲端硬碟上傳失敗"}（${json.error_code}）` : (json.msg || `雲端硬碟上傳失敗（HTTP ${res.status}）`);
+    alert(detail);
     return;
   }
   input.value = "";
@@ -369,8 +370,8 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
     body: form
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    alert(json.msg || "附件上傳失敗");
+  if (!res.ok || !json.ok) {
+    alert(json.error_code ? `${json.msg || "附件上傳失敗"}（${json.error_code}）` : (json.msg || `附件上傳失敗（HTTP ${res.status}）`));
     return;
   }
   input.value = "";
@@ -474,8 +475,8 @@ async function uploadAnnouncementAttachmentRequest() {
     body: form
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    alert(json.msg || "公告附件上傳失敗");
+  if (!res.ok || !json.ok) {
+    alert(json.error_code ? `${json.msg || "公告附件上傳失敗"}（${json.error_code}）` : (json.msg || `公告附件上傳失敗（HTTP ${res.status}）`));
     return;
   }
   input.value = "";

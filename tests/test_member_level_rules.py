@@ -31,6 +31,7 @@ def _conn(path):
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
             status TEXT NOT NULL DEFAULT 'active',
             member_level TEXT NOT NULL DEFAULT 'normal',
             created_at TEXT NOT NULL,
@@ -54,6 +55,7 @@ def _insert_user(conn, user_id, username, level, **overrides):
         "id": user_id,
         "username": username,
         "status": "active",
+        "role": "user",
         "member_level": level,
         "base_level": level,
         "effective_level": level,
@@ -68,9 +70,9 @@ def _insert_user(conn, user_id, username, level, **overrides):
     values.update(overrides)
     conn.execute(
         "INSERT INTO users "
-        "(id, username, status, member_level, base_level, effective_level, created_at, trust_score, points, reputation, "
+        "(id, username, role, status, member_level, base_level, effective_level, created_at, trust_score, points, reputation, "
         "violation_score, sanction_status, sanction_until) "
-        "VALUES (:id, :username, :status, :member_level, :base_level, :effective_level, :created_at, :trust_score, "
+        "VALUES (:id, :username, :role, :status, :member_level, :base_level, :effective_level, :created_at, :trust_score, "
         ":points, :reputation, :violation_score, :sanction_status, :sanction_until)",
         values,
     )
@@ -171,6 +173,17 @@ def test_restricted_can_only_read(tmp_path):
         assert can_dm(user, conn=conn) is False
         assert can_upload(user, conn) is False
         assert require_member_action(user, "community_reply", conn=conn) == (False, "會員等級受限，僅可閱讀不可互動", 403)
+    finally:
+        conn.close()
+
+
+def test_manager_role_bypasses_member_interaction_limits(tmp_path):
+    conn = _conn(tmp_path / "levels.db")
+    try:
+        manager = _insert_user(conn, 12, "admin", "restricted", role="manager")
+        root = _insert_user(conn, 13, "root", "suspended", role="super_admin")
+        assert require_member_action(manager, "community_reply", conn=conn) == (True, "", 200)
+        assert require_member_action(root, "community_thread_create", conn=conn) == (True, "", 200)
     finally:
         conn.close()
 

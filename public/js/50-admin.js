@@ -9,7 +9,7 @@ function switchServerTab(tab) {
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
   });
-  if (tab === "health") loadServerHealth();
+  if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
   if (tab === "integrity") loadIntegrityGuard();
   if (tab === "settings") {
     loadSettings();
@@ -795,6 +795,7 @@ async function loadSettings() {
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
+  if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
@@ -998,6 +999,7 @@ async function loadIntegrityGuard() {
   list.innerHTML = findings.map((f) => `
     <div style="border:1px solid ${f.risk_level === "high" ? "rgba(255,79,109,.45)" : "rgba(255,255,255,.1)"};border-radius:9px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
       <div style="display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;">
+        <label style="display:inline-flex;align-items:center;gap:.25rem;color:var(--muted);"><input type="checkbox" class="integrity-finding-check" value="${f.id}" /> 選取</label>
         <strong>#${f.id}</strong>
         <span style="color:${f.risk_level === "high" ? "#ff4f6d" : f.risk_level === "medium" ? "#ffb74d" : "#82b1ff"};">${sanitize(f.risk_level || "")}</span>
         <span style="color:#82b1ff;">${sanitize(f.change_type || "")}</span>
@@ -1015,6 +1017,40 @@ async function loadIntegrityGuard() {
   `).join("");
   list.querySelectorAll("[data-integrity-action]").forEach((btn) => {
     btn.addEventListener("click", () => reviewIntegrityFinding(btn.getAttribute("data-finding-id"), btn.getAttribute("data-integrity-action")));
+  });
+  updateIntegritySelectedCount();
+}
+
+function selectedIntegrityFindingIds() {
+  return Array.from(document.querySelectorAll(".integrity-finding-check:checked"))
+    .map((item) => Number(item.value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function updateIntegritySelectedCount() {
+  const count = selectedIntegrityFindingIds().length;
+  const total = document.querySelectorAll(".integrity-finding-check").length;
+  const el = $("integrity-selected-count");
+  if (el) el.textContent = total > 0 ? `已選取 ${count}/${total} 筆` : "";
+  const selectAll = $("integrity-select-all");
+  if (selectAll) selectAll.checked = count > 0 && count === total;
+  if (selectAll) selectAll.indeterminate = count > 0 && count < total;
+}
+
+function setupIntegritySelectAll() {
+  const selectAll = $("integrity-select-all");
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      const checked = selectAll.checked;
+      document.querySelectorAll(".integrity-finding-check").forEach((cb) => { cb.checked = checked; });
+      updateIntegritySelectedCount();
+    });
+  }
+  // Delegate for dynamically rendered findings
+  document.addEventListener("change", (e) => {
+    if (e.target && e.target.classList.contains("integrity-finding-check")) {
+      updateIntegritySelectedCount();
+    }
   });
 }
 
@@ -1057,6 +1093,37 @@ async function reviewIntegrityFinding(id, action) {
   });
   const json = await res.json().catch(() => ({}));
   alert(json.msg || (json.ok ? "操作完成" : "操作失敗"));
+  await loadIntegrityGuard();
+}
+
+async function reviewSelectedIntegrityFindings(action) {
+  const ids = selectedIntegrityFindingIds();
+  if (!ids.length) {
+    alert("請先勾選要處理的 integrity finding。");
+    return;
+  }
+  let confirmText = "";
+  if (action === "approve") {
+    alert("approve 代表你確認這些檔案變更是合法部署或可信修改，系統將更新 hash manifest。");
+    confirmText = prompt(`將批次 approve ${ids.length} 筆 finding，請輸入 APPROVE INTEGRITY UPDATE 以確認：`) || "";
+    if (confirmText !== "APPROVE INTEGRITY UPDATE") {
+      alert("確認字串不正確，已取消批次 approve。");
+      return;
+    }
+  } else if (!confirm(`確定要 ${action} 選取的 ${ids.length} 筆 integrity finding？`)) {
+    return;
+  }
+  const note = prompt("批次審核備註（可留空）：") || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/integrity/findings/bulk-review", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action, finding_ids: ids, confirm: confirmText, note })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.ok ? `批次操作完成：${json.reviewed}/${json.total}` : (json.msg || `批次操作失敗：${json.reviewed || 0}/${json.total || ids.length}`));
   await loadIntegrityGuard();
 }
 
@@ -1103,6 +1170,7 @@ async function saveSettings() {
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
+    session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0") || null,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
@@ -1211,4 +1279,232 @@ async function restartServer() {
   }
 }
 
-// ── Bind all UI events ───────────────────────────────────────
+// ── Snapshot / Reset Server ───────────────────────────────────
+
+async function loadSnapshots() {
+  const list = $("snapshot-list");
+  const actions = $("snapshot-actions");
+  if (!list || !actions) return;
+  list.innerHTML = "<em>載入中…</em>";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/snapshots", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    list.innerHTML = `<span style="color:#ff4f6d;">${sanitize(json.msg || "載入失敗")}</span>`;
+    actions.innerHTML = "";
+    return;
+  }
+  const snapshots = json.snapshots || [];
+  if (!snapshots.length) {
+    list.innerHTML = "<em>目前沒有 snapshot</em>";
+    actions.innerHTML = "";
+    return;
+  }
+  list.innerHTML = snapshots.map((s) => `
+    <div style="border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:.55rem;margin-bottom:.5rem;background:rgba(0,0,0,.2);">
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+        <strong style="color:#82b1ff;">${sanitize(s.snapshot_id || s.id || "")}</strong>
+        <span style="color:${s.snapshot_type === "manual" ? "#4caf50" : s.snapshot_type === "daily" ? "#ffb74d" : "#9e9e9e"};">${sanitize(s.snapshot_type || "")}</span>
+        <span style="color:var(--muted);font-size:.72rem;">${sanitize(s.created_at || s.ts || "")}</span>
+        <span style="color:var(--muted);font-size:.72rem;">${sanitize(s.actor || "")}</span>
+      </div>
+      <div style="color:var(--muted);font-size:.7rem;margin-top:.2rem;">${sanitize(s.notes || "")}</div>
+      <div style="display:flex;gap:.4rem;margin-top:.45rem;">
+        <button class="btn btn-primary" data-snapshot-restore="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">Restore</button>
+        <button class="btn" data-snapshot-delete="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">刪除</button>
+      </div>
+    </div>
+  `).join("");
+  actions.innerHTML = `
+    <button class="btn btn-primary" id="btn-confirm-restore" disabled style="padding:.3rem .75rem;font-size:.78rem;">Restore 選取的 Snapshot</button>
+    <span id="restore-hint" style="font-size:.72rem;color:var(--muted);margin-left:.4rem;">請先點選要 restore 的 snapshot</span>
+  `;
+  list.querySelectorAll("[data-snapshot-restore]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-snapshot-restore]").forEach((b) => { b.classList.remove("btn-primary"); b.classList.add("btn"); });
+      btn.classList.remove("btn"); btn.classList.add("btn-primary");
+      window._selectedSnapshotId = btn.getAttribute("data-snapshot-restore");
+      const confirmBtn = $("btn-confirm-restore");
+      if (confirmBtn) { confirmBtn.disabled = false; }
+      const hint = $("restore-hint");
+      if (hint) hint.textContent = `已選取：${window._selectedSnapshotId}，確認後將執行 restore`;
+    });
+  });
+  list.querySelectorAll("[data-snapshot-delete]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-snapshot-delete");
+      if (!confirm(`確定刪除 snapshot ${id}？`)) return;
+      await fetchCsrfToken({ force: true });
+      const csrf = getCsrfToken();
+      const r = await fetch(API + `/admin/snapshots/${encodeURIComponent(id)}?reason=admin_delete`, {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" }
+      });
+      const j = await r.json().catch(() => ({}));
+      alert(j.msg || (j.ok ? "已刪除" : "刪除失敗"));
+      if (j.ok) await loadSnapshots();
+    });
+  });
+  const confirmRestoreBtn = $("btn-confirm-restore");
+  if (confirmRestoreBtn) {
+    confirmRestoreBtn.addEventListener("click", () => {
+      const sid = window._selectedSnapshotId;
+      if (!sid) { alert("請先選取要 restore 的 snapshot"); return; }
+      const reason = prompt("請輸入 restore 原因：") || "";
+      const confirmText = prompt(`確定要 restore 到 snapshot ${sid}？\n此操作會重啟服務，請輸入 RESTORE 確認：`) || "";
+      if (confirmText !== "RESTORE") { alert("確認字串不正確，已取消"); return; }
+      performRestore(sid, reason);
+    });
+  }
+}
+
+async function performRestore(snapshotId, reason) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: "RESTORE", reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "Restore 請求已提交，系統將重啟" : "Restore 請求失敗"));
+  if (json.ok) setTimeout(() => location.reload(), 3000);
+}
+
+async function createSnapshot() {
+  const notes = prompt("Snapshot 備註（可留空）：") || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/snapshots", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: "CREATE_SNAPSHOT", notes })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "Snapshot 建立成功" : "建立失敗"));
+  if (json.ok) await loadSnapshots();
+}
+
+async function resetServer() {
+  const reason = $("s-reset-reason")?.value || "";
+  const confirmText = $("s-reset-confirm")?.value || "";
+  const status = $("reset-status");
+  if (confirmText !== "RUN_RESET") {
+    if (status) { status.textContent = "確認字串錯誤，請輸入 RUN_RESET"; status.style.color = "#ff4f6d"; }
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/system-reset", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: "RUN_RESET", reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (status) {
+    status.textContent = json.msg || (json.ok ? "Reset 請求已提交，系統將重啟" : "Reset 失敗");
+    status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) setTimeout(() => location.reload(), 3000);
+}
+
+// ── Integrity Guard quick-button handlers ──────────────────────
+
+async function refreshIntegrityGuard() {
+  await loadIntegrityGuard();
+}
+
+async function rescanIntegrityGuard() {
+  if (!confirm("重新掃描會比對目前檔案與已核准 manifest，異常不會自動核准。")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/integrity/scan", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({})
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "掃描完成" : "掃描失敗"));
+  if (json.ok) await loadIntegrityGuard();
+}
+
+async function exportIntegrityGuard() {
+  await exportIntegrityReport();
+}
+
+// ── Platform Stats (traffic, active users, point balance) ─────
+
+async function loadPlatformStats() {
+  const container = $("platform-stats");
+  if (!container) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/platform-stats", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    container.innerHTML = `<span style="color:#ff4f6d;">${sanitize(json.msg || "讀取失敗")}</span>`;
+    return;
+  }
+  const stats = json.stats || {};
+  const cards = [
+    ["今日瀏覽量", String(stats.page_views_today || 0), "#82b1ff"],
+    ["同時在線", String(stats.active_sessions || 0), "#4caf50"],
+    ["本月新用戶", String(stats.new_users_month || 0), "#ffb74d"],
+    ["總用戶數", String(stats.total_users || 0), "#82b1ff"],
+    ["積分總庫存", String(stats.total_points || 0), "#ce93d8"],
+    ["本月積分收入", String(stats.points_earned_month || 0), "#4caf50"],
+    ["本月積分支出", String(stats.points_spent_month || 0), "#ff4f6d"],
+    ["本月積分淨值", String(stats.points_net_month || 0), (stats.points_net_month || 0) >= 0 ? "#4caf50" : "#ff4f6d"],
+  ];
+  container.innerHTML = cards.map(([label, value, color]) => `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
+      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
+      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-all;">${sanitize(value)}</div>
+    </div>
+  `).join("");
+}
+
+ // ── Bind all UI events ───────────────────────────────────────
+(function setupUIBindings() {
+  // Integrity Guard
+  const igRefresh = document.getElementById("integrity-refresh-btn");
+  if (igRefresh) igRefresh.addEventListener("click", refreshIntegrityGuard);
+  const igRescan = document.getElementById("integrity-rescan-btn");
+  if (igRescan) igRescan.addEventListener("click", rescanIntegrityGuard);
+  const igExport = document.getElementById("integrity-export-btn");
+  if (igExport) igExport.addEventListener("click", exportIntegrityGuard);
+  const igBulkApprove = document.getElementById("integrity-bulk-approve-btn");
+  if (igBulkApprove) igBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
+  const igBulkReject = document.getElementById("integrity-bulk-reject-btn");
+  if (igBulkReject) igBulkReject.addEventListener("click", () => reviewSelectedIntegrityFindings("reject"));
+  const igBulkIgnore = document.getElementById("integrity-bulk-ignore-btn");
+  if (igBulkIgnore) igBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
+
+  // Snapshot / Reset
+  const loadSnapBtn = document.getElementById("btn-load-snapshots");
+  if (loadSnapBtn) loadSnapBtn.addEventListener("click", loadSnapshots);
+  const createSnapBtn = document.getElementById("btn-create-snapshot");
+  if (createSnapBtn) createSnapBtn.addEventListener("click", createSnapshot);
+  const resetBtn = document.getElementById("btn-reset-server");
+  if (resetBtn) resetBtn.addEventListener("click", resetServer);
+
+  // Platform Stats
+  const psRefreshBtn = document.getElementById("platform-stats-refresh-btn");
+  if (psRefreshBtn) psRefreshBtn.addEventListener("click", loadPlatformStats);
+
+  // Init select-all after DOM ready
+  setupIntegritySelectAll();
+})();
+

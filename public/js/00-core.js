@@ -553,8 +553,9 @@ function setAuthState(json, showLoginHero = false) {
   currentUserId = json.id || null;
   currentRole = json.role || "user";
   currentMustChangePassword = !!json.must_change_password;
-  const idleMinutes = Number(json.session_idle_timeout_minutes || 3);
-  inactivityLogoutMs = Math.max(1, idleMinutes) * 60 * 1000;
+  const idleMinutes = Number(json.session_idle_timeout_minutes ?? 10);
+  inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
+  if (inactivityLogoutMs > 0) resetIdleTimer();
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
   $("success-screen").classList.add("show");

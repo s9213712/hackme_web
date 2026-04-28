@@ -356,7 +356,7 @@ def _env_session_samesite():
 TRUSTED_PROXY_IPS = parse_ip_set(os.environ.get("TRUSTED_PROXY_IPS", ""))
 USE_XFF = os.environ.get("USE_XFF", "false").strip().lower() in {"1", "true", "on", "yes"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
-IP_BLOCKING_ENABLED = _env_bool("IP_BLOCKING_ENABLED", default=False)
+IP_BLOCKING_ENABLED = _env_bool("IP_BLOCKING_ENABLED", default=True)
 FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=False)
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=False)
 SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
@@ -809,6 +809,7 @@ configure_bootstrap_service(
     load_json=load_json,
     normalize_text=normalize_text,
     hash_password=hash_password,
+    verify_password=verify_password,
     audit=audit,
     refresh_system_settings=refresh_system_settings,
     init_system_settings_table=init_system_settings_table,
@@ -853,7 +854,7 @@ server_mode_service = ServerModeService(snapshot_service=snapshot_service, get_d
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["SECRET_KEY"] = SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB, per-level quota enforced in upload_security.py
 app.config["SESSION_COOKIE_SECURE"] = SESSION_COOKIE_SECURE
 app.config["SESSION_COOKIE_HTTPONLY"] = SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE

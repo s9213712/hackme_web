@@ -132,6 +132,8 @@ def require_member_action(actor, action, rule=None, conn=None, target=None):
     ok, msg, status = require_active_actor(actor)
     if not ok:
         return ok, msg, status
+    if role_rank(actor_role(actor)) >= role_rank("manager"):
+        return True, "", 200
     effective_level = actor_effective_level(actor)
     if effective_level == "suspended":
         return False, "會員等級已停權，僅可登入、查看通知與申訴", 403

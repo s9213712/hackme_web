@@ -1,0 +1,401 @@
+任務：設計並實作 Discord Phase 2 雙向同步
+
+前提：
+- Phase 1「hackme_web -> Discord 單向同步」已完成。
+- hackme_web 仍是 source of truth。
+- Discord 可以回寫公開討論區，但不能取代本站權限、審核與稽核系統。
+
+目標：
+讓指定 Discord channel / thread 的訊息，可以同步回 hackme_web 公開討論區，形成可控雙向同步。
+
+一、同步範圍
+
+允許：
+- 公開 board
+- 已啟用 Discord sync 的 board
+- Discord thread -> forum thread
+- Discord message -> forum comment
+- Discord message edit -> forum comment edit
+- Discord message delete -> forum comment soft delete
+
+禁止：
+- 私密 board
+- admin-only board
+- governance / moderation proposal
+- 私訊 / 群組聊天
+- E2EE 檔案
+- 未綁定 Discord 身分者直接取得高權限
+- Discord 指令直接執行管理操作
+
+二、核心原則
+
+1. 本站仍是主資料庫。
+2. Discord 回寫必須經過本站 permission check。
+3. Discord 使用者必須先綁定本站帳號。
+4. restricted / suspended / banned 用戶不得回寫。
+5. Discord bot 自己發出的訊息不可再次匯入，避免 echo loop。
+6. 同步失敗不可靜默忽略，必須記錄。
+7. Discord 內容進站後必須走本站審核 / 風險規則。
+
+三、DB migration
+
+新增或擴充：
+
+discord_user_links：
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- user_id INTEGER NOT NULL
+- discord_user_id TEXT NOT NULL
+- discord_username TEXT
+- discord_global_name TEXT
+- verified_at TEXT NOT NULL
+- revoked_at TEXT
+- created_at TEXT NOT NULL
+- updated_at TEXT
+- UNIQUE(discord_user_id)
+- UNIQUE(user_id, discord_user_id)
+
+discord_inbound_queue：
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- discord_guild_id TEXT NOT NULL
+- discord_channel_id TEXT NOT NULL
+- discord_thread_id TEXT
+- discord_message_id TEXT NOT NULL
+- discord_author_id TEXT NOT NULL
+- event_type TEXT NOT NULL
+  - message_create
+  - message_update
+  - message_delete
+- raw_payload_json TEXT NOT NULL
+- status TEXT NOT NULL
+  - queued
+  - processing
+  - processed
+  - skipped
+  - failed
+- local_type TEXT
+- local_id TEXT
+- error_message TEXT
+- created_at TEXT NOT NULL
+- processed_at TEXT
+- UNIQUE(discord_message_id, event_type)
+
+discord_sync_settings 新增：
+- inbound_enabled INTEGER NOT NULL DEFAULT 0
+- require_verified_user INTEGER NOT NULL DEFAULT 1
+- allow_create_threads_from_discord INTEGER NOT NULL DEFAULT 0
+- allow_comments_from_discord INTEGER NOT NULL DEFAULT 1
+- allow_edits_from_discord INTEGER NOT NULL DEFAULT 1
+- allow_deletes_from_discord INTEGER NOT NULL DEFAULT 0
+- inbound_requires_review INTEGER NOT NULL DEFAULT 1
+- max_inbound_message_length INTEGER NOT NULL DEFAULT 4000
+
+discord_links 擴充：
+- discord_author_id TEXT
+- local_author_user_id INTEGER
+- sync_origin TEXT
+  - local
+  - discord
+  - bot
+- source_event_id INTEGER
+- deleted_at TEXT
+
+四、Discord 身分綁定
+
+新增流程：
+
+1. 使用者在本站登入後，到 Account Security -> Discord Link。
+2. 點擊「產生 Discord 綁定碼」。
+3. 系統產生一次性 code，有效 10 分鐘。
+4. 使用者在 Discord 對 bot 輸入：
+   /link <code>
+5. bot 呼叫本站 API：
+   POST /api/integrations/discord/link-code/verify
+6. 驗證成功後建立 discord_user_links。
+
+新增表：
+
+discord_link_codes：
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- user_id INTEGER NOT NULL
+- code_hash TEXT NOT NULL
+- expires_at TEXT NOT NULL
+- used_at TEXT
+- created_at TEXT NOT NULL
+
+安全：
+- code 只存 hash
+- code 一次性
+- 過期不可用
+- Discord username 只作顯示，不作權限依據
+- revoked_at 後不可回寫
+
+五、Inbound Webhook / Bot Gateway
+
+實作方式：
+優先使用 Discord Bot + webhook endpoint。
+
+新增 route：
+
+POST /api/integrations/discord/inbound
+
+要求：
+- 必須驗證 Discord request signature 或 bot shared secret。
+- 未驗證來源直接 401。
+- 不可公開接受任意 JSON。
+- 不在 request log 中印出 bot token。
+- payload 先進 discord_inbound_queue，不直接在 request thread 做重工作。
+
+若採 Discord Interactions：
+- 驗證 X-Signature-Ed25519
+- 驗證 X-Signature-Timestamp
+- 回應 PING
+
+若採自架 bot relay：
+- bot relay 使用 HMAC shared secret
+- header: X-Hackme-Discord-Signature
+- body 使用 HMAC-SHA256 驗證
+
+六、Inbound 處理流程
+
+新增 service：
+
+services/discord_inbound.py
+
+處理順序：
+
+1. validate_event_source(payload)
+2. detect_echo_loop()
+   - bot 自己發的 message 忽略
+   - sync_origin=local 的 discord_message_id 忽略
+3. map_discord_context()
+   - discord_channel_id / thread_id -> board_id / thread_id
+4. resolve_author()
+   - discord_author_id -> user_id
+   - 若未綁定：
+     - 若 require_verified_user=true：skipped
+     - 否則可映射為 shadow user / guest，但 MVP 不做
+5. permission_check()
+   - 使用本站 user role/member_level/sanction_status
+   - 確認可在該 board/thread 發言
+6. sanitize_content()
+   - 移除危險 HTML
+   - neutralize @everyone / @here
+   - 限制長度
+7. create_or_update_local_content()
+   - Discord thread 起始訊息可建立 forum_thread
+   - Discord message 可建立 forum_comment
+   - edit 對應更新 comment
+   - delete 對應 soft delete
+8. record discord_links
+9. record discord_sync_events
+10. 若 inbound_requires_review=true，內容進入待審核狀態
+
+七、Echo loop 防護
+
+必須同時做三層：
+
+1. Bot author ignore：
+   - discord_author_id == configured_bot_user_id 則跳過
+
+2. discord_links 查重：
+   - 若 discord_message_id 已存在且 sync_origin=local，跳過 inbound create
+
+3. source_event_id：
+   - inbound 產生的 local content 若再 outbound sync，必須標記來源
+   - outbound service 發送前檢查 sync_origin=discord，避免原路回送到同一 Discord message
+
+八、內容審核
+
+Discord 回寫內容預設進入 review：
+
+- inbound_requires_review=true 時：
+  - forum_comment.status = pending_review
+  - forum_thread.status = pending_review
+  - manager/root 審核後才公開
+
+可選：
+- trusted/vip 綁定使用者可直接發佈
+- newbie 一律 pending
+- 含連結 / 附件 / mention 過多一律 pending
+
+九、Discord 附件 inbound
+
+MVP 規則：
+- 不自動下載 Discord 附件
+- 只保存 attachment metadata
+- 顯示為外部 Discord 附件連結
+- 若要匯入本站 cloud drive，必須 root/admin 手動批准
+
+禁止：
+- 不得自動把 Discord 附件放進使用者雲端硬碟
+- 不得把 Discord 附件當作已掃毒
+- 不得把 E2EE claim 套用在 Discord 附件
+
+新增可選表：
+
+discord_attachment_refs：
+- id
+- discord_message_id
+- local_type
+- local_id
+- filename
+- content_type
+- size_bytes
+- discord_url
+- risk_level
+- scan_status DEFAULT external_unscanned
+- created_at
+
+十、編輯與刪除同步
+
+message_update：
+- 找 discord_links.discord_message_id
+- 若存在 local comment/thread：
+  - 若 setting allow_edits_from_discord=true
+  - 更新內容
+  - 寫 edit history
+  - 若內容變高風險，轉 pending_review
+
+message_delete：
+- 若 allow_deletes_from_discord=true：
+  - local comment soft delete
+  - 寫 audit
+- 若 false：
+  - 只記錄 discord_sync_events
+  - 不刪本站內容
+
+十一、API
+
+User API：
+- POST /api/account/discord/link-code
+- GET /api/account/discord/link-status
+- DELETE /api/account/discord/unlink
+
+Discord Bot API：
+- POST /api/integrations/discord/inbound
+- POST /api/integrations/discord/link-code/verify
+
+Admin/root API：
+- GET /api/admin/discord-sync/inbound/settings
+- PUT /api/admin/discord-sync/inbound/settings
+- GET /api/admin/discord-sync/inbound/queue
+- POST /api/admin/discord-sync/inbound/reprocess/<queue_id>
+- GET /api/admin/discord-sync/user-links
+- DELETE /api/admin/discord-sync/user-links/<id>
+- GET /api/admin/discord-sync/events
+
+十二、UI
+
+Account Security：
+- Discord link status
+- generate link code
+- unlink Discord
+
+Admin Discord Sync：
+- inbound enable/disable
+- require verified user
+- allow create threads from Discord
+- allow comments
+- allow edits
+- allow deletes
+- inbound requires review
+- queue viewer
+- failed event viewer
+- user link viewer
+
+Forum moderation：
+- 顯示內容來源：
+  - local
+  - discord
+- pending_review 內容可審核
+- 顯示 Discord author mapping
+
+十三、權限規則
+
+Inbound Discord message 必須套用本站規則：
+
+- banned/suspended：不可建立內容
+- restricted：不可建立內容
+- newbie：依 board/member rule，可能 pending_review
+- normal/trusted/vip：依 board 設定
+- manager/root：仍需確認該 board 允許 inbound
+
+不可因 Discord channel 允許發言，就繞過本站權限。
+
+十四、Rate limit / abuse 防護
+
+必須加入：
+
+- 每 Discord user 每分鐘訊息上限
+- 每 Discord channel 每分鐘事件上限
+- message length 限制
+- mention 數量限制
+- link 數量限制
+- failed event cooldown
+- repeated failed auth 觸發 root alert
+
+十五、測試
+
+新增：
+
+tests/test_discord_inbound_sync.py
+
+至少測：
+
+1. 未驗證 inbound signature -> 401
+2. bot 自己訊息不會匯入
+3. 未綁定 Discord user 在 require_verified_user=true 時 skipped
+4. 綁定 user 可建立 forum comment
+5. restricted/suspended user 不可回寫
+6. private board 不可 inbound
+7. @everyone 被 neutralize
+8. message_update 可更新 local comment
+9. message_delete 在 allow_deletes=false 時不刪 local
+10. echo loop 不會重複建立內容
+11. inbound_requires_review=true 時內容 pending_review
+12. Discord attachment 不會自動進 cloud drive
+13. failed queue 可 reprocess
+
+十六、文件
+
+新增或更新：
+
+docs/integrations/discord_sync.md
+
+補上 Phase 2：
+
+- 雙向同步限制
+- Discord user link 流程
+- Bot / inbound webhook 設定
+- 為什麼私密板不支援
+- 為什麼附件不自動匯入
+- Echo loop 防護
+- 審核流程
+- Rate limit
+- Troubleshooting
+
+十七、驗收標準
+
+完成後必須證明：
+
+1. 使用者可完成 Discord 帳號綁定。
+2. Discord 指定 channel 訊息可進入對應公開 board。
+3. 未綁定 Discord user 不可回寫。
+4. suspended/restricted 站內帳號不可透過 Discord 發文。
+5. bot 自己訊息不會造成 echo loop。
+6. Discord 編輯可同步成站內編輯。
+7. Discord 刪除不會預設刪站內內容，除非 root 開啟。
+8. 私密板不會被 Discord inbound 寫入。
+9. 附件不會自動進入雲端硬碟。
+10. 所有 inbound sync 都有 audit / discord_sync_events。
+
+十八、禁止事項
+
+- 不要讓 Discord 成為主資料庫。
+- 不要讓未綁定 Discord user 自動取得站內權限。
+- 不要同步 private board。
+- 不要同步 DM / group chat。
+- 不要自動下載 Discord 附件到 cloud drive。
+- 不要讓 Discord bot 執行 root/admin 操作。
+- 不要跳過站內 member level / sanction 檢查。
+- 不要因 Discord sync 失敗影響站內主流程。

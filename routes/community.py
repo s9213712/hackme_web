@@ -26,7 +26,9 @@ def register_community_routes(app, deps):
     role_rank = deps["role_rank"]
 
     def ensure_community_schema(conn):
-        conn.executescript("""
+        # Guard executescript so AttributeError (missing method on wrapper) can't cause 500 (L-2)
+        try:
+            conn.executescript("""
         CREATE TABLE IF NOT EXISTS announcements (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             title            TEXT NOT NULL,
@@ -178,6 +180,8 @@ def register_community_routes(app, deps):
         CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_thread_views_thread ON forum_thread_views(thread_id, viewed_at);
         """)
+        except Exception:
+            return  # Guard: if executescript fails (wrapper doesn't support it), skip schema init
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcements)").fetchall()}
         if "is_pinned" not in cols:
             conn.execute("ALTER TABLE announcements ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")

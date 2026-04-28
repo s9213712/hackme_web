@@ -139,6 +139,27 @@ def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path)
     assert denied.status_code == 403
 
 
+def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"cipher"), "vault.bin"), "privacy_mode": "e2ee_vault"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 400
+    body = res.get_json()
+    assert body["ok"] is False
+    assert "encrypted_file_key is required" in body["msg"]
+    assert body["error_code"] == "ValueError"
+
+
 def test_storage_upload_creates_logical_file_and_downloads_through_original_record(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

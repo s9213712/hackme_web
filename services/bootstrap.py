@@ -107,6 +107,31 @@ def _mark_default_account_if_unconfirmed(conn, user_id, now):
         _mark_default_account_password(conn, user_id, now)
 
 
+def _mark_default_account_if_password_matches(conn, user_id, raw_password, now):
+    if not raw_password:
+        return
+    row = conn.execute(
+        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return
+    verify_password = _STATE.get("verify_password")
+    matches = False
+    if verify_password:
+        try:
+            matches = bool(verify_password(row["password_hash"], raw_password))
+        except Exception:
+            matches = False
+    if not matches and _STATE.get("hash_password"):
+        try:
+            matches = row["password_hash"] == _STATE["hash_password"](raw_password)
+        except Exception:
+            matches = False
+    if matches:
+        _mark_default_account_password(conn, user_id, now)
+
+
 def _apply_default_account_level(conn, user_id, base_level, now):
     conn.execute(
         """
@@ -645,6 +670,8 @@ def init_db(
         _insert_password_record(conn, root_id, root_password, hash_password, now)
         _mark_default_account_password(conn, root_id, now)
     elif os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip():
+        root_password = os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip()
+        _mark_default_account_if_password_matches(conn, root_id, root_password, now)
         _mark_default_account_if_unconfirmed(conn, root_id, now)
     _apply_default_account_level(conn, root_id, "vip", now)
 
@@ -665,6 +692,7 @@ def init_db(
             _insert_password_record(conn, admin_id, admin_password, hash_password, now)
             _mark_default_account_password(conn, admin_id, now)
         else:
+            _mark_default_account_if_password_matches(conn, admin_id, admin_password, now)
             _mark_default_account_if_unconfirmed(conn, admin_id, now)
         _apply_default_account_level(conn, admin_id, "trusted", now)
 
@@ -685,6 +713,7 @@ def init_db(
             _insert_password_record(conn, test_id, test_password, hash_password, now)
             _mark_default_account_password(conn, test_id, now)
         else:
+            _mark_default_account_if_password_matches(conn, test_id, test_password, now)
             _mark_default_account_if_unconfirmed(conn, test_id, now)
         _apply_default_account_level(conn, test_id, "trusted", now)
 

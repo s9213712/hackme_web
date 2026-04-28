@@ -445,6 +445,58 @@ def register_system_admin_routes(app, deps):
         )
         return json_resp(result), (200 if result.get("ok") else 400)
 
+    @app.route("/api/root/integrity/findings/bulk-review", methods=["POST"])
+    @require_csrf
+    def root_integrity_bulk_review():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if not integrity_guard:
+            return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        action = str(data.get("action") or "").strip().lower()
+        if action not in {"approve", "reject", "ignore"}:
+            return json_resp({"ok":False,"msg":"unsupported integrity action"}), 400
+        raw_ids = data.get("finding_ids") or data.get("ids") or []
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return json_resp({"ok":False,"msg":"finding_ids 不可為空"}), 400
+        try:
+            finding_ids = [int(item) for item in raw_ids]
+        except Exception:
+            return json_resp({"ok":False,"msg":"finding_ids 格式錯誤"}), 400
+        confirm = str(data.get("confirm") or "")
+        if action == "approve" and confirm != CONFIRM_APPROVE:
+            return json_resp({"ok":False,"msg":"approve confirmation mismatch"}), 400
+        note = str(data.get("note") or "")[:1000]
+        results = []
+        ok_count = 0
+        for finding_id in finding_ids:
+            result = integrity_guard.review_finding(
+                finding_id,
+                action=action,
+                actor=actor,
+                note=note,
+                confirm=confirm,
+            )
+            result["finding_id"] = finding_id
+            results.append(result)
+            if result.get("ok"):
+                ok_count += 1
+        audit(
+            f"INTEGRITY_FINDING_BULK_{action.upper()}",
+            get_client_ip(),
+            user=actor["username"],
+            success=ok_count == len(finding_ids),
+            ua=get_ua(),
+            detail=f"ids={finding_ids}, ok={ok_count}/{len(finding_ids)}, note={note}",
+        )
+        return json_resp({"ok": ok_count == len(finding_ids), "action": action, "reviewed": ok_count, "total": len(finding_ids), "results": results}), (200 if ok_count == len(finding_ids) else 400)
+
     @app.route("/api/root/integrity/findings/<int:finding_id>/approve", methods=["POST"])
     @require_csrf
     def root_integrity_approve(finding_id):
@@ -963,6 +1015,76 @@ def register_system_admin_routes(app, deps):
             )
         threading.Thread(target=restart_delayed, daemon=True).start()
         return json_resp({"ok":True,"msg":"服務器正在重啟，請稍後重新整理頁面"})
+
+    @app.route("/api/admin/platform-stats", methods=["GET"])
+    @require_csrf_safe
+    def admin_platform_stats():
+        actor, error = require_super_admin_actor()
+        if error:
+            return error
+
+        conn = get_db()
+        try:
+            now = datetime.utcnow()
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+            today_start = now.strftime("%Y-%m-%d 00:00:00")
+
+            total_users = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+
+            new_users_month = conn.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", (month_start,)
+            ).fetchone()["c"]
+
+            try:
+                active_sessions = conn.execute(
+                    "SELECT COUNT(*) AS c FROM sessions WHERE last_active_at >= datetime('now', '-15 minutes')"
+                ).fetchone()["c"]
+            except Exception:
+                active_sessions = 0
+
+            try:
+                pv_today = conn.execute(
+                    "SELECT COUNT(*) AS c FROM page_views WHERE viewed_at >= ?", (today_start,)
+                ).fetchone()["c"]
+            except Exception:
+                pv_today = 0
+
+            try:
+                total_points = conn.execute("SELECT COALESCE(SUM(points), 0) AS c FROM users").fetchone()["c"]
+            except Exception:
+                total_points = 0
+
+            try:
+                points_earned_month = conn.execute(
+                    "SELECT COALESCE(SUM(delta), 0) AS c FROM point_transactions WHERE delta > 0 AND created_at >= ?",
+                    (month_start,)
+                ).fetchone()["c"]
+            except Exception:
+                points_earned_month = 0
+
+            try:
+                points_spent_month = abs(int(conn.execute(
+                    "SELECT COALESCE(SUM(delta), 0) AS c FROM point_transactions WHERE delta < 0 AND created_at >= ?",
+                    (month_start,)
+                ).fetchone()["c"] or 0))
+            except Exception:
+                points_spent_month = 0
+
+            return json_resp({
+                "ok": True,
+                "stats": {
+                    "total_users": total_users,
+                    "new_users_month": new_users_month,
+                    "active_sessions": active_sessions,
+                    "page_views_today": pv_today,
+                    "total_points": total_points,
+                    "points_earned_month": points_earned_month,
+                    "points_spent_month": points_spent_month,
+                    "points_net_month": points_earned_month - points_spent_month,
+                }
+            })
+        finally:
+            conn.close()
 
     @app.route("/<path:invalid>", methods=["GET","POST","PUT","DELETE","PATCH","OPTIONS"])
     def catch_all(invalid):

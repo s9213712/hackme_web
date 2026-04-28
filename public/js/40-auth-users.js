@@ -584,8 +584,11 @@ async function promoteUser(userId, username) {
 async function updateUserMemberLevel(userId, username) {
   const select = $(`member-level-select-${userId}`);
   const level = select?.value || "";
-  if (!["newbie", "normal", "trusted", "vip"].includes(level)) {
-    alert("請選擇有效的一般會員等級");
+  const allowed = currentRole === "super_admin"
+    ? ["newbie", "normal", "trusted", "vip", "restricted", "suspended"]
+    : ["newbie", "normal", "trusted", "vip"];
+  if (!allowed.includes(level)) {
+    alert("請選擇有效的會員等級");
     return;
   }
   if (!confirm(`確定要將「${username}」的會員等級調整為 ${level}？`)) return;
@@ -595,10 +598,11 @@ async function updateUserMemberLevel(userId, username) {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({
-      base_level: level,
-      level_update_reason: `admin member level change to ${level}`
-    })
+    body: JSON.stringify(
+      ["restricted", "suspended"].includes(level)
+        ? { sanction_status: level, level_update_reason: `root sanction change to ${level}` }
+        : { base_level: level, sanction_status: currentRole === "super_admin" ? "none" : undefined, level_update_reason: `admin member level change to ${level}` }
+    )
   });
   const json = await res.json().catch(() => ({}));
   if (json.ok) {
