@@ -54,6 +54,10 @@ def generate_maintenance_bypass_token():
     return secrets.token_urlsafe(32)
 
 
+def generate_internal_test_token():
+    return secrets.token_urlsafe(32)
+
+
 def maintenance_bypass_expires_at(ttl_minutes=30, now=None):
     try:
         ttl = int(ttl_minutes)
@@ -71,6 +75,13 @@ def hash_maintenance_bypass_token(token):
     if not token:
         return ""
     return hashlib.sha256(f"maintenance-bypass-v1:{token}".encode("utf-8")).hexdigest()
+
+
+def hash_internal_test_token(token):
+    token = str(token or "").strip()
+    if not token:
+        return ""
+    return hashlib.sha256(f"internal-test-login-v1:{token}".encode("utf-8")).hexdigest()
 
 
 def _parse_datetime(value):
@@ -108,6 +119,16 @@ def verify_maintenance_bypass_token(token, stored_hash, expires_at=None, now=Non
     return bool(provided and secrets.compare_digest(provided, expected))
 
 
+def verify_internal_test_token(token, stored_hash, expires_at=None, now=None):
+    expected = str(stored_hash or "").strip()
+    if not expected:
+        return False
+    if expires_at is not None and maintenance_bypass_token_is_expired(expires_at, now=now):
+        return False
+    provided = hash_internal_test_token(token)
+    return bool(provided and secrets.compare_digest(provided, expected))
+
+
 def maintenance_bypass_required_payload(message):
     return {
         "ok": False,
@@ -126,4 +147,7 @@ def access_control_settings_payload(settings):
         "maintenance_bypass_token_configured": bool(settings.get("maintenance_bypass_token_hash")),
         "maintenance_bypass_token_expires_at": settings.get("maintenance_bypass_token_expires_at") or "",
         "maintenance_bypass_token_expired": maintenance_bypass_token_is_expired(settings.get("maintenance_bypass_token_expires_at")) if settings.get("maintenance_bypass_token_hash") else False,
+        "internal_test_token_configured": bool(settings.get("internal_test_login_token_hash")),
+        "internal_test_token_expires_at": settings.get("internal_test_login_token_expires_at") or "",
+        "internal_test_token_expired": maintenance_bypass_token_is_expired(settings.get("internal_test_login_token_expires_at")) if settings.get("internal_test_login_token_hash") else False,
     }

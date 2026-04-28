@@ -2,7 +2,6 @@ import json
 import os
 import platform
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -11,7 +10,9 @@ from flask import request, send_file
 
 from services.access_controls import (
     access_control_settings_payload,
+    generate_internal_test_token,
     generate_maintenance_bypass_token,
+    hash_internal_test_token,
     hash_maintenance_bypass_token,
     maintenance_bypass_expires_at,
 )
@@ -25,6 +26,7 @@ from services.member_levels import (
 )
 from services.server_bind import (
     server_bind_settings_payload,
+    server_ssl_settings_payload,
     validate_listen_host,
     validate_listen_port,
 )
@@ -46,6 +48,8 @@ def register_system_admin_routes(app, deps):
     SERVER_LOG_PATH = deps["SERVER_LOG_PATH"]
     STORAGE_DIR = deps.get("STORAGE_DIR")
     CURRENT_SERVER_BIND_STATE = deps.get("CURRENT_SERVER_BIND_STATE") or {}
+    CERT_FILE = deps.get("CERT_FILE") or os.path.join(BASE_DIR, "cert.pem")
+    KEY_FILE = deps.get("KEY_FILE") or os.path.join(BASE_DIR, "key.pem")
     activate_emergency_lockdown = deps["activate_emergency_lockdown"]
     audit = deps["audit"]
     get_client_ip = deps["get_client_ip"]
@@ -53,6 +57,7 @@ def register_system_admin_routes(app, deps):
     get_db = deps["get_db"]
     get_ua = deps.get("get_ua", lambda: "-")
     get_feature_settings = deps["get_feature_settings"]
+    get_server_output = deps.get("get_server_output", lambda limit=200: {"lines": [], "max_lines": 0})
     get_system_settings = deps["get_system_settings"]
     is_audit_chain_enabled = deps["is_audit_chain_enabled"]
     json_resp = deps["json_resp"]
@@ -67,6 +72,28 @@ def register_system_admin_routes(app, deps):
     snapshot_service = deps.get("snapshot_service")
     integrity_guard = deps.get("integrity_guard")
     verify_audit_integrity = deps["verify_audit_integrity"]
+
+    def default_schedule_server_restart(*, reason, delay_seconds=1.25):
+        if app.testing:
+            return {"mode": "testing", "pid": os.getpid(), "reason": reason}
+
+        script_path = os.path.join(BASE_DIR, "server.py")
+        python_exe = sys.executable or "python3"
+
+        def restart_delayed():
+            time.sleep(delay_seconds)
+            os.chdir(BASE_DIR)
+            os.execv(python_exe, [python_exe, script_path])
+
+        threading.Thread(target=restart_delayed, name="server-restart", daemon=True).start()
+        return {
+            "mode": "execv",
+            "pid": os.getpid(),
+            "delay_seconds": delay_seconds,
+            "reason": reason,
+        }
+
+    schedule_server_restart = deps.get("schedule_server_restart") or default_schedule_server_restart
 
     def require_root_actor():
         actor = get_current_user_ctx()
@@ -101,6 +128,16 @@ def register_system_admin_routes(app, deps):
             "effective_next_root": effective,
             "restart_required": restart_required,
         }
+
+    def ssl_cert_exists():
+        return os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
+
+    def server_ssl_payload(settings):
+        return server_ssl_settings_payload(
+            settings,
+            current_ssl_enabled=CURRENT_SERVER_BIND_STATE.get("ssl_enabled"),
+            cert_exists=ssl_cert_exists(),
+        )
 
     def safe_count(conn, table, where="", params=()):
         try:
@@ -268,6 +305,7 @@ def register_system_admin_routes(app, deps):
 
     SECURITY_SETTING_KEYS = (
         "maintenance_mode",
+        "server_ssl_enabled",
         "audit_chain_enabled",
         "ip_blocking_enabled",
         "login_violation_enabled",
@@ -340,12 +378,50 @@ def register_system_admin_routes(app, deps):
             "audit_integrity": audit_integrity_summary(),
             "audit_entries": recent_secure_audit(50),
             "server_log": tail_file(SERVER_LOG_PATH, log_lines),
+            "server_output": get_server_output(limit=log_lines),
             "settings": {key: settings.get(key) for key in SECURITY_SETTING_KEYS},
             "thresholds": {key: settings.get(key) for key in SECURITY_THRESHOLD_KEYS},
             "features": get_feature_settings(),
             "mode": server_mode_service.get_current_mode() if server_mode_service else None,
             "profiles": server_mode_service.list_profiles() if server_mode_service else [],
         }
+
+    def security_profile_payload(data):
+        settings = data.get("settings") or {}
+        thresholds = data.get("thresholds") or {}
+        if isinstance(settings, str):
+            try:
+                settings = json.loads(settings or "{}")
+            except Exception:
+                return None, "settings JSON 格式錯誤"
+        if isinstance(thresholds, str):
+            try:
+                thresholds = json.loads(thresholds or "{}")
+            except Exception:
+                return None, "thresholds JSON 格式錯誤"
+        if not isinstance(settings, dict):
+            return None, "settings 必須是 JSON object"
+        if not isinstance(thresholds, dict):
+            return None, "thresholds 必須是 JSON object"
+
+        unknown_settings = sorted(str(key) for key in settings if key not in SECURITY_SETTING_KEYS)
+        unknown_thresholds = sorted(str(key) for key in thresholds if key not in SECURITY_THRESHOLD_KEYS)
+        if unknown_settings:
+            return None, f"不支援的 settings key：{', '.join(unknown_settings)}"
+        if unknown_thresholds:
+            return None, f"不支援的 thresholds key：{', '.join(unknown_thresholds)}"
+
+        normalized_thresholds = {}
+        for key, value in thresholds.items():
+            try:
+                number = int(value)
+            except Exception:
+                return None, f"{key} 必須是整數"
+            if number < 0 or number > 100000:
+                return None, f"{key} 必須介於 0-100000"
+            normalized_thresholds[key] = number
+
+        return {"settings": {key: settings[key] for key in settings}, "thresholds": normalized_thresholds}, None
 
     @app.route("/api/admin/health", methods=["GET"])
     @require_csrf_safe
@@ -474,10 +550,19 @@ def register_system_admin_routes(app, deps):
     @app.route("/api/admin/security-center", methods=["GET"])
     @require_csrf_safe
     def admin_security_center():
-        _, error = require_super_admin_actor()
+        _, error = require_root_actor()
         if error:
             return error
         return json_resp({"ok": True, "security_center": security_center_payload()})
+
+    @app.route("/api/admin/server-output", methods=["GET"])
+    @require_csrf_safe
+    def admin_server_output():
+        _, error = require_root_actor()
+        if error:
+            return error
+        limit = request.args.get("limit", 200)
+        return json_resp({"ok": True, "server_output": get_server_output(limit=limit)})
 
     @app.route("/api/admin/security-center/thresholds", methods=["PUT"])
     @require_csrf_safe
@@ -546,24 +631,15 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok": False, "msg": "Invalid request"}), 400
-        settings = data.get("settings") or {}
-        thresholds = data.get("thresholds") or {}
-        if isinstance(settings, str):
-            try:
-                settings = json.loads(settings or "{}")
-            except Exception:
-                return json_resp({"ok": False, "msg": "settings JSON 格式錯誤"}), 400
-        if isinstance(thresholds, str):
-            try:
-                thresholds = json.loads(thresholds or "{}")
-            except Exception:
-                return json_resp({"ok": False, "msg": "thresholds JSON 格式錯誤"}), 400
+        profile_payload, err = security_profile_payload(data)
+        if err:
+            return json_resp({"ok": False, "msg": err}), 400
         result = server_mode_service.save_profile(
             name=data.get("name"),
             label=data.get("label"),
             description=data.get("description") or "",
-            settings=settings,
-            thresholds=thresholds,
+            settings=profile_payload["settings"],
+            thresholds=profile_payload["thresholds"],
             actor=actor,
         )
         if result.get("ok"):
@@ -734,6 +810,7 @@ def register_system_admin_routes(app, deps):
                     current_host=CURRENT_SERVER_BIND_STATE.get("host"),
                     current_port=CURRENT_SERVER_BIND_STATE.get("port"),
                 ),
+                "server_ssl": server_ssl_payload(settings),
                 "cloud_drive_storage": cloud_drive_storage_payload(settings),
             })
 
@@ -754,6 +831,8 @@ def register_system_admin_routes(app, deps):
             if port is None:
                 return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
             data["server_listen_port"] = port
+        if "server_ssl_enabled" in data:
+            data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
         if "comfyui_api_port" in data:
             try:
                 port = int(data.get("comfyui_api_port"))
@@ -811,6 +890,7 @@ def register_system_admin_routes(app, deps):
                 current_host=CURRENT_SERVER_BIND_STATE.get("host"),
                 current_port=CURRENT_SERVER_BIND_STATE.get("port"),
             ),
+            "server_ssl": server_ssl_payload(get_system_settings()),
             "cloud_drive_storage": cloud_drive_storage_payload(get_system_settings()),
         })
 
@@ -886,6 +966,9 @@ def register_system_admin_routes(app, deps):
         if "clear_maintenance_bypass_token" in data and data.get("clear_maintenance_bypass_token"):
             updates["maintenance_bypass_token_hash"] = ""
             updates["maintenance_bypass_token_expires_at"] = ""
+        if "clear_internal_test_token" in data and data.get("clear_internal_test_token"):
+            updates["internal_test_login_token_hash"] = ""
+            updates["internal_test_login_token_expires_at"] = ""
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
         saved = save_settings(updates)
@@ -923,6 +1006,42 @@ def register_system_admin_routes(app, deps):
         return json_resp({
             "ok": True,
             "msg": "maintenance bypass token 已更新，token 只會顯示這一次",
+            "token": token,
+            "expires_at": expires_at,
+            "ttl_minutes": ttl_minutes,
+            "access_controls": access_control_settings_payload(get_system_settings()),
+        })
+
+    @app.route("/api/admin/access-controls/internal-test-token", methods=["POST"])
+    @require_csrf
+    def admin_rotate_internal_test_token():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        if data.get("confirm") != "ROTATE_INTERNAL_TEST_TOKEN":
+            return json_resp({"ok":False,"msg":"confirm 必須等於 ROTATE_INTERNAL_TEST_TOKEN"}), 400
+        ttl_minutes = data.get("ttl_minutes", 24 * 60)
+        try:
+            ttl_minutes = max(5, min(int(ttl_minutes), 30 * 24 * 60))
+        except Exception:
+            ttl_minutes = 24 * 60
+        token = generate_internal_test_token()
+        expires_at = maintenance_bypass_expires_at(ttl_minutes)
+        save_settings({
+            "internal_test_login_token_hash": hash_internal_test_token(token),
+            "internal_test_login_token_expires_at": expires_at,
+        })
+        audit("INTERNAL_TEST_TOKEN_ROTATED", get_client_ip(), user=actor["username"], success=True,
+              detail=f"token_hash_rotated,ttl_minutes={ttl_minutes},expires_at={expires_at}")
+        return json_resp({
+            "ok": True,
+            "msg": "內測登入 token 已更新，token 只會顯示這一次",
             "token": token,
             "expires_at": expires_at,
             "ttl_minutes": ttl_minutes,
@@ -1050,6 +1169,17 @@ def register_system_admin_routes(app, deps):
             confirm=data.get("confirm"),
             reason=data.get("reason") or "",
         )
+        if result.get("ok"):
+            try:
+                restart = schedule_server_restart(reason="system-reset", delay_seconds=1.25)
+            except Exception as exc:
+                result["restart_scheduled"] = False
+                result["restart_error"] = str(exc)
+                result["msg"] = "runtime state reset，但重啟排程失敗"
+                return json_resp(result), 500
+            result["restart_scheduled"] = True
+            result["restart"] = restart
+            result["msg"] = "runtime state reset，服務器正在重啟"
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/snapshots/<snapshot_id>", methods=["GET", "DELETE"])
@@ -1158,7 +1288,7 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         if request.method == "GET":
-            return json_resp({"ok":True,"mode":server_mode_service.get_current_mode()})
+            return json_resp({"ok":True,"mode":server_mode_service.get_current_mode(),"profiles":server_mode_service.list_profiles()})
         try:
             data = request.get_json(force=True)
         except Exception:
@@ -1243,24 +1373,11 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"只有最高管理者可重啟服務器"}), 403
 
         audit("SERVER_RESTART", get_client_ip(), user=actor["username"], detail="initiated by admin")
-        # 非同步重啟，避免來不及回應
-        import threading, subprocess
-        def restart_delayed():
-            time.sleep(1.5)
-            current_port = str(CURRENT_SERVER_BIND_STATE.get("port") or 5000)
-            subprocess.run(["fuser", "-k", f"{current_port}/tcp"],
-                           cwd=BASE_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(0.5)
-            # Start new server
-            subprocess.Popen(
-                ["python3", os.path.join(BASE_DIR, "server.py")],
-                cwd=BASE_DIR,
-                stdout=open(SERVER_LOG_PATH, "a"),
-                stderr=subprocess.STDOUT,
-                start_new_session=True
-            )
-        threading.Thread(target=restart_delayed, daemon=True).start()
-        return json_resp({"ok":True,"msg":"服務器正在重啟，請稍後重新整理頁面"})
+        try:
+            restart = schedule_server_restart(reason="manual-restart", delay_seconds=1.25)
+        except Exception as exc:
+            return json_resp({"ok":False,"msg":"重啟排程失敗","error":str(exc)}), 500
+        return json_resp({"ok":True,"msg":"服務器正在重啟，請稍後重新整理頁面","restart_scheduled":True,"restart":restart})
 
     @app.route("/api/admin/platform-stats", methods=["GET"])
     @require_csrf_safe

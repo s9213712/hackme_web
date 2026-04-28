@@ -154,6 +154,22 @@ def _apply_default_account_level(conn, user_id, base_level, now):
     )
 
 
+def _clear_special_account_level(conn, user_id, now):
+    conn.execute(
+        """
+        UPDATE users
+        SET base_level='normal',
+            effective_level='normal',
+            member_level='normal',
+            level_updated_at=?,
+            level_update_reason='special role bypasses member levels',
+            updated_at=?
+        WHERE id=?
+        """,
+        (now, now, user_id),
+    )
+
+
 def _bootstrap_password(env_name, username, *, required):
     password = os.environ.get(env_name, "").strip()
     if password:
@@ -673,7 +689,7 @@ def init_db(
         root_password = os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip()
         _mark_default_account_if_password_matches(conn, root_id, root_password, now)
         _mark_default_account_if_unconfirmed(conn, root_id, now)
-    _apply_default_account_level(conn, root_id, "vip", now)
+    _clear_special_account_level(conn, root_id, now)
 
     admin_password = _bootstrap_password("HTML_LEARNING_MANAGER_PASSWORD", "admin", required=False)
     if admin_password:
@@ -694,7 +710,21 @@ def init_db(
         else:
             _mark_default_account_if_password_matches(conn, admin_id, admin_password, now)
             _mark_default_account_if_unconfirmed(conn, admin_id, now)
-        _apply_default_account_level(conn, admin_id, "trusted", now)
+        _clear_special_account_level(conn, admin_id, now)
+
+    conn.execute(
+        """
+        UPDATE users
+        SET base_level='normal',
+            effective_level='normal',
+            member_level='normal',
+            level_updated_at=?,
+            level_update_reason='special role bypasses member levels',
+            updated_at=?
+        WHERE username='root' OR role IN ('super_admin', 'manager')
+        """,
+        (now, now),
+    )
 
     test_password = _bootstrap_password("HTML_LEARNING_TEST_PASSWORD", "test", required=False)
     if test_password:

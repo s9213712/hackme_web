@@ -7,6 +7,7 @@ from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
 from services.snapshots import ServerModeService, SnapshotService, ensure_snapshot_schema
+from services.upload_security import ensure_upload_security_schema
 
 
 def _db(path):
@@ -40,7 +41,7 @@ def _init_db(path):
             updated_by TEXT
         );
         INSERT INTO users (id, username, role, status, member_level, base_level, effective_level)
-        VALUES (1, 'root', 'super_admin', 'active', 'vip', 'vip', 'vip');
+        VALUES (1, 'root', 'super_admin', 'active', 'normal', 'normal', 'normal');
         INSERT INTO posts (id, title) VALUES (1, 'P1');
         INSERT INTO system_settings (key, value, value_type, updated_at, updated_by)
         VALUES ('maintenance_mode', 'false', 'bool', '2026-01-01T00:00:00', 'test');
@@ -104,7 +105,7 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
 
     conn = _db(db_path)
     conn.execute("INSERT INTO posts (id, title) VALUES (2, 'P2')")
-    conn.execute("UPDATE users SET base_level='vip', effective_level='restricted', member_level='restricted' WHERE id=1")
+    conn.execute("UPDATE users SET base_level='normal', effective_level='restricted', member_level='restricted' WHERE id=1")
     conn.commit()
     conn.close()
     (uploads / "f2.txt").write_text("two", encoding="utf-8")
@@ -118,7 +119,7 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
     event = conn.execute("SELECT status, pre_restore_snapshot_id FROM snapshot_restore_events ORDER BY started_at DESC LIMIT 1").fetchone()
     conn.close()
     assert posts == ["P1"]
-    assert user["effective_level"] == "vip"
+    assert user["effective_level"] == "normal"
     assert (uploads / "f1.txt").exists()
     assert not (uploads / "f2.txt").exists()
     assert event["status"] == "completed"
@@ -271,6 +272,98 @@ def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
     assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
 
 
+def test_production_mode_requires_confirmation_and_hardens_accounts(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE users ADD COLUMN is_default_password INTEGER NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
+    conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, user_id INTEGER, is_revoked INTEGER NOT NULL DEFAULT 0, revoked_at TEXT)")
+    conn.execute("INSERT INTO users (id, username, role, status, member_level, base_level, effective_level, must_change_password, is_default_password) VALUES (2, 'admin', 'manager', 'active', 'normal', 'normal', 'normal', 0, 0)")
+    conn.execute("INSERT INTO users (id, username, role, status, member_level, base_level, effective_level, must_change_password, is_default_password) VALUES (3, 'test', 'user', 'active', 'trusted', 'trusted', 'trusted', 0, 1)")
+    conn.execute("INSERT INTO sessions (id, user_id, is_revoked) VALUES (1, 3, 0)")
+    ensure_upload_security_schema(conn)
+    conn.commit()
+    conn.close()
+    saved_settings = []
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        save_settings=lambda data: saved_settings.append(dict(data)) or dict(data),
+    )
+    actor = {"id": 1, "username": "root"}
+
+    denied = mode.switch_mode(target_mode="production", actor=actor, confirm="", notes="go live")
+    assert denied["ok"] is False
+    assert "GO_LIVE" in denied["msg"]
+
+    switched = mode.switch_mode(target_mode="production", actor=actor, confirm="GO_LIVE", notes="go live")
+    assert switched["ok"] is True
+    assert switched["mode"]["current_mode"] == "production"
+    assert saved_settings[-1]["audit_chain_enabled"] is True
+    assert saved_settings[-1]["feature_account_security_enabled"] is True
+    assert saved_settings[-1]["captcha_mode"] == "math"
+    assert switched["production"]["accounts"]["default_password_reset_required"] == 3
+    assert switched["production"]["accounts"]["test_accounts_disabled"] == 1
+
+    conn = _db(db_path)
+    rows = {
+        row["username"]: dict(row)
+        for row in conn.execute("SELECT username, status, must_change_password, is_default_password FROM users")
+    }
+    session = conn.execute("SELECT is_revoked FROM sessions WHERE user_id=3").fetchone()
+    policy = conn.execute("SELECT scanner_enabled, scanner_backend, fail_closed_on_scanner_error, yara_enabled FROM cloud_drive_security_policies WHERE scope='default'").fetchone()
+    conn.close()
+    assert rows["root"]["must_change_password"] == 1
+    assert rows["admin"]["must_change_password"] == 1
+    assert rows["test"]["status"] == "inactive"
+    assert rows["test"]["must_change_password"] == 1
+    assert session["is_revoked"] == 1
+    assert policy["scanner_enabled"] == 1
+    assert policy["scanner_backend"] == "clamav"
+    assert policy["fail_closed_on_scanner_error"] == 1
+    assert policy["yara_enabled"] == 1
+
+
+def test_internal_test_mode_disables_open_registration_and_revokes_non_root_sessions(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, user_id INTEGER, is_revoked INTEGER NOT NULL DEFAULT 0, revoked_at TEXT)")
+    conn.execute("INSERT INTO users (id, username, role, status, member_level, base_level, effective_level) VALUES (2, 'alice', 'user', 'active', 'normal', 'normal', 'normal')")
+    conn.execute("INSERT INTO sessions (id, user_id, is_revoked) VALUES (1, 1, 0)")
+    conn.execute("INSERT INTO sessions (id, user_id, is_revoked) VALUES (2, 2, 0)")
+    conn.commit()
+    conn.close()
+    saved_settings = []
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        save_settings=lambda data: saved_settings.append(dict(data)) or dict(data),
+    )
+
+    switched = mode.switch_mode(
+        target_mode="internal_test",
+        actor={"id": 1, "username": "root"},
+        confirm="",
+        notes="invite-only test",
+    )
+
+    assert switched["ok"] is True
+    assert switched["mode"]["current_mode"] == "internal_test"
+    assert saved_settings[-1]["allow_register"] is False
+    assert saved_settings[-1]["feature_account_security_enabled"] is True
+    assert switched["internal_test"]["sessions_revoked"] == 1
+    conn = _db(db_path)
+    sessions = {row["user_id"]: row["is_revoked"] for row in conn.execute("SELECT user_id, is_revoked FROM sessions")}
+    conn.close()
+    assert sessions[1] == 0
+    assert sessions[2] == 1
+
+
 def test_daily_snapshot_runs_once_after_configured_time(tmp_path):
     audit_log = []
     service, _, _ = _service(tmp_path, audit_log)
@@ -395,11 +488,26 @@ class _FakeSnapshotService:
 
 
 class _FakeServerModeService:
+    def __init__(self):
+        self.saved_profiles = []
+
     def get_current_mode(self):
         return {"current_mode": "preprod", "previous_mode": None, "active_snapshot_id": None}
 
     def list_profiles(self):
-        return [{"name": "preprod", "label": "preprod（準上線）", "is_builtin": True}]
+        return [{"name": "preprod", "label": "preprod（準上線）", "is_builtin": True, "settings": {}, "thresholds": {}}] + self.saved_profiles
+
+    def save_profile(self, **kwargs):
+        profile = {
+            "name": kwargs["name"],
+            "label": kwargs["label"],
+            "description": kwargs.get("description") or "",
+            "settings": kwargs.get("settings") or {},
+            "thresholds": kwargs.get("thresholds") or {},
+            "is_builtin": False,
+        }
+        self.saved_profiles.append(profile)
+        return {"ok": True, "profile": profile}
 
     def switch_mode(self, **kwargs):
         return {"ok": True, "mode": {"current_mode": kwargs["target_mode"]}}
@@ -408,9 +516,11 @@ class _FakeServerModeService:
         return {"ok": True, "mode": {"current_mode": "preprod"}}
 
 
-def _build_admin_app(actor_box, snapshot_service):
+def _build_admin_app(actor_box, snapshot_service, restart_calls=None):
     app = Flask(__name__)
     app.testing = True
+    if restart_calls is None:
+        restart_calls = []
     register_system_admin_routes(app, {
         "ANCHOR_DIR": ".",
         "BASE_DIR": ".",
@@ -438,6 +548,7 @@ def _build_admin_app(actor_box, snapshot_service):
         "save_settings": lambda data: data,
         "server_mode_service": _FakeServerModeService(),
         "snapshot_service": snapshot_service,
+        "schedule_server_restart": lambda **kwargs: restart_calls.append(kwargs) or {"mode": "test"},
         "verify_audit_integrity": lambda: (True, None, "ok"),
     })
     return app
@@ -506,7 +617,8 @@ def test_snapshot_api_downloads_and_restores_uploaded_portable_archive(tmp_path)
 def test_daily_snapshot_and_reset_api_are_root_only():
     snapshot_service = _FakeSnapshotService()
     actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
-    client = _build_admin_app(actor_box, snapshot_service).test_client()
+    restart_calls = []
+    client = _build_admin_app(actor_box, snapshot_service, restart_calls).test_client()
 
     daily = client.post("/api/admin/snapshots/daily", json={"confirm": "RUN_DAILY_SNAPSHOT", "force": True})
     assert daily.status_code == 200
@@ -514,8 +626,69 @@ def test_daily_snapshot_and_reset_api_are_root_only():
 
     reset = client.post("/api/admin/system-reset", json={"confirm": "RESET_RUNTIME_STATE", "reason": "test"})
     assert reset.status_code == 200
-    assert reset.get_json()["pre_reset_snapshot_id"] == "snap_20260427_153000_abcdef"
+    reset_data = reset.get_json()
+    assert reset_data["pre_reset_snapshot_id"] == "snap_20260427_153000_abcdef"
+    assert reset_data["restart_scheduled"] is True
+    assert restart_calls == [{"reason": "system-reset", "delay_seconds": 1.25}]
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.post("/api/admin/system-reset", json={"confirm": "RESET_RUNTIME_STATE"})
     assert denied.status_code == 403
+
+
+def test_manual_restart_uses_restart_scheduler():
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    restart_calls = []
+    client = _build_admin_app(actor_box, snapshot_service, restart_calls).test_client()
+
+    res = client.post("/api/admin/restart")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["ok"] is True
+    assert data["restart_scheduled"] is True
+    assert restart_calls == [{"reason": "manual-restart", "delay_seconds": 1.25}]
+
+
+def test_security_profile_api_validates_and_server_mode_lists_profiles():
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_admin_app(actor_box, snapshot_service).test_client()
+
+    mode = client.get("/api/admin/server-mode")
+    assert mode.status_code == 200
+    assert mode.get_json()["profiles"][0]["name"] == "preprod"
+
+    invalid = client.post("/api/admin/security-center/profiles", json={
+        "name": "custom_lock",
+        "label": "Custom Lock",
+        "settings": {"not_a_setting": True},
+        "thresholds": {},
+    })
+    assert invalid.status_code == 400
+    assert "不支援的 settings key" in invalid.get_json()["msg"]
+
+    saved = client.post("/api/admin/security-center/profiles", json={
+        "name": "custom_lock",
+        "label": "Custom Lock",
+        "settings": {"ip_blocking_enabled": True},
+        "thresholds": {"security_pending_chat_reports_threshold": 2},
+    })
+    assert saved.status_code == 200
+    assert saved.get_json()["profile"]["settings"]["ip_blocking_enabled"] is True
+
+
+def test_security_center_and_server_output_are_root_only():
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_admin_app(actor_box, snapshot_service).test_client()
+
+    denied_center = client.get("/api/admin/security-center")
+    denied_output = client.get("/api/admin/server-output")
+    assert denied_center.status_code == 403
+    assert denied_output.status_code == 403
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    output = client.get("/api/admin/server-output?limit=10")
+    assert output.status_code == 200
+    assert output.get_json()["ok"] is True

@@ -179,7 +179,7 @@ function renderUsers() {
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");
     appendTextCell(u.role_label || u.role || "");
-    appendTextCell(`${u.effective_level || u.member_level || "-"}${u.base_level && u.base_level !== u.effective_level ? ` (${u.base_level})` : ""}`);
+    appendTextCell(u.member_level_label || `${u.effective_level || u.member_level || "-"}${u.base_level && u.base_level !== u.effective_level ? ` (${u.base_level})` : ""}`);
     const statusCell = document.createElement("td");
     const statusSpan = document.createElement("span");
     statusSpan.textContent = "正常";

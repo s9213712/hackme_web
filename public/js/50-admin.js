@@ -1,5 +1,6 @@
 function switchServerTab(tab) {
   currentServerTab = tab;
+  if (tab !== "security") stopServerOutputPoll();
   ["security", "audit", "health", "integrity", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
@@ -9,7 +10,10 @@ function switchServerTab(tab) {
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
   });
-  if (tab === "security") loadSecurityCenter();
+  if (tab === "security") {
+    loadSecurityCenter();
+    startServerOutputPoll();
+  }
   if (tab === "audit") loadAudit(0);
   if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
   if (tab === "integrity") loadIntegrityGuard();
@@ -38,7 +42,7 @@ function switchSettingsSection(tab) {
 
 function switchModuleTab(tab) {
   const canAccessAccounts = canAccessModule("accounts");
-  const canAccessServer = currentRole === "super_admin";
+  const canAccessServer = currentUser === "root";
   const canAccessAppeals = currentRole !== "super_admin" && canAccessModule("appeals");
   const canAccessCommunity = !!currentUser && canAccessModule("community");
   const canAccessAnnouncements = canAccessCommunity;
@@ -114,6 +118,7 @@ function switchModuleTab(tab) {
   if (normTab === "dm" && canAccessDm && typeof loadDmThreads === "function") {
     loadDmThreads();
   }
+  if (normTab !== "server") stopServerOutputPoll();
   if (normTab === "server" && canAccessServer) {
     switchServerTab(currentServerTab || "security");
   }
@@ -155,6 +160,7 @@ function switchAdminTab(tab) {
 // ── Audit log ───────────────────────────────────────────────
 let auditPage = 0;
 const AUDIT_PAGE_SIZE = 20;
+let serverOutputPollTimer = null;
 
 async function loadAudit(page) {
   await fetchCsrfToken({ force: true });
@@ -670,15 +676,15 @@ async function loadEditableMemberLevelRules() {
   editableMemberLevelRules = Array.isArray(json.rules) ? json.rules : [];
   const selected = $("settings-member-level-select")?.value || editableMemberLevelRules[0]?.level || "normal";
   container.innerHTML = `
-    <div class="settings-option-grid" style="margin-bottom:.75rem;">
+    <div class="member-level-toolbar">
       <div class="field">
-        <label>選擇要調整的會員等級</label>
+        <label>會員等級</label>
         <select id="settings-member-level-select">
           ${editableMemberLevelRules.map((rule) => `<option value="${sanitize(rule.level || "")}" ${rule.level === selected ? "selected" : ""}>${sanitize(rule.level || "")}</option>`).join("")}
         </select>
       </div>
       <div class="field">
-        <label>&nbsp;</label>
+        <label>操作</label>
         <button class="btn btn-primary" type="button" id="member-level-rule-save-btn">儲存此等級規則</button>
       </div>
     </div>
@@ -700,17 +706,26 @@ function renderSelectedMemberLevelRule(level) {
     return;
   }
   const bools = MEMBER_LEVEL_BOOL_FIELDS.map(([key, label]) => `
-      <label style="font-size:.74rem;color:var(--text);"><input type="checkbox" data-level="${sanitize(level)}" data-rule-bool="${key}" ${rule[key] ? "checked" : ""} /> ${label}</label>
-    `).join("");
-  const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
-      <label style="font-size:.7rem;color:var(--muted);">${label}
-        <input type="number" min="0" data-level="${sanitize(level)}" data-rule-int="${key}" value="${Number(rule[key] || 0)}" style="margin-top:.18rem;" />
+      <label class="member-level-toggle" title="${sanitize(label)}">
+        <input type="checkbox" data-level="${sanitize(level)}" data-rule-bool="${key}" ${rule[key] ? "checked" : ""} />
+        <span>${sanitize(label)}</span>
       </label>
     `).join("");
-  editor.innerHTML = `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:.7rem;background:rgba(0,0,0,.24);">
-      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.55rem;"><strong style="font-size:.95rem;">${sanitize(rule.level || level)}</strong></div>
-      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.35rem;margin-bottom:.55rem;">${bools}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:.45rem;">${ints}</div>
+  const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
+      <label class="member-level-number-field" title="${sanitize(label)}">
+        <span>${sanitize(label)}</span>
+        <input type="number" min="0" data-level="${sanitize(level)}" data-rule-int="${key}" value="${Number(rule[key] || 0)}" />
+      </label>
+    `).join("");
+  editor.innerHTML = `<div class="member-level-editor-card">
+      <div class="member-level-editor-head">
+        <strong>${sanitize(rule.level || level)}</strong>
+        <span>權限開關與限額門檻</span>
+      </div>
+      <div class="member-level-subtitle">權限開關</div>
+      <div class="member-level-toggle-grid">${bools}</div>
+      <div class="member-level-subtitle">限額與升降級門檻</div>
+      <div class="member-level-number-grid">${ints}</div>
     </div>`;
 }
 
@@ -762,19 +777,83 @@ async function loadServerMode() {
     return;
   }
   const mode = json.mode || {};
-  if ($("server-mode-select")) $("server-mode-select").value = mode.current_mode || "preprod";
+  populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "preprod");
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
     const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
     status.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
     status.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
   }
+  await loadInternalTestTokenStatus();
+}
+
+async function loadInternalTestTokenStatus() {
+  if (currentUser !== "root") return;
+  const status = $("internal-test-token-status");
+  if (!status) return;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/admin/access-controls", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "讀取失敗");
+    const access = json.access_controls || {};
+    const configured = !!access.internal_test_token_configured;
+    const expired = !!access.internal_test_token_expired;
+    const expires = access.internal_test_token_expires_at || "-";
+    status.textContent = configured ? `已設定，${expired ? "已過期" : "有效"}，到期：${expires}` : "尚未設定內測 token";
+    status.style.color = configured && !expired ? "#4caf50" : "var(--muted)";
+  } catch (err) {
+    status.textContent = err.message || "內測 token 狀態讀取失敗";
+    status.style.color = "#ff4f6d";
+  }
+}
+
+async function rotateInternalTestToken() {
+  const confirmText = $("internal-test-token-confirm")?.value || "";
+  const msg = $("internal-test-token-msg");
+  if (confirmText !== "ROTATE_INTERNAL_TEST_TOKEN") {
+    if (msg) flash(msg, "確認字串必須等於 ROTATE_INTERNAL_TEST_TOKEN", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const ttl = parseInt($("internal-test-token-ttl")?.value || "1440", 10);
+  const res = await fetch(API + "/admin/access-controls/internal-test-token", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: confirmText, ttl_minutes: ttl })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    if (msg) flash(msg, json.msg || "產生內測 token 失敗", false);
+    return;
+  }
+  const outWrap = $("internal-test-token-output-wrap");
+  const out = $("internal-test-token-output");
+  if (outWrap) outWrap.style.display = "block";
+  if (out) {
+    out.value = json.token || "";
+    out.focus();
+    out.select();
+  }
+  if ($("internal-test-token-confirm")) $("internal-test-token-confirm").value = "";
+  if (msg) flash(msg, `內測 token 已產生，到期：${json.expires_at || "-"}`, true);
+  await loadInternalTestTokenStatus();
 }
 
 async function applyServerMode() {
   const target = $("server-mode-select")?.value || "preprod";
   const confirmText = $("server-mode-confirm")?.value || "";
   const notes = $("server-mode-notes")?.value || "";
+  if (target === "production" && confirmText !== "GO_LIVE") {
+    alert("進入 production 上線模式必須在確認欄輸入 GO_LIVE");
+    return;
+  }
   if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
     alert("進入 superweak 必須在確認欄輸入 ENABLE_SUPERWEAK");
     return;
@@ -796,6 +875,7 @@ async function applyServerMode() {
   if (json.ok) {
     if ($("server-mode-confirm")) $("server-mode-confirm").value = "";
     await loadServerMode();
+    await loadSecurityCenter();
   }
 }
 
@@ -810,6 +890,7 @@ async function loadSettings() {
   if (!json.ok) return;
   const s = json.settings || {};
   const bind = json.server_bind || {};
+  const ssl = json.server_ssl || {};
   if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
   if ($("s-audit-chain-enabled")) $("s-audit-chain-enabled").checked = !!s.audit_chain_enabled;
   if ($("s-ip-blocking-enabled")) $("s-ip-blocking-enabled").checked = !!s.ip_blocking_enabled;
@@ -829,6 +910,7 @@ async function loadSettings() {
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
   if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
+  if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = s.server_ssl_enabled !== false;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
@@ -843,6 +925,16 @@ async function loadSettings() {
     const restartText = bind.restart_required ? "需重啟才會套用新 listen 設定" : "目前執行中的 listen 設定已一致";
     bindStatus.textContent = `目前 ${bind.current_host || bind.host || "0.0.0.0"}:${bind.current_port || bind.port || 5000}，下次啟動 ${bind.host || "0.0.0.0"}:${bind.port || 5000}。${restartText}`;
     bindStatus.style.color = bind.restart_required ? "#ffb74d" : "var(--muted)";
+  }
+  const sslStatus = $("server-ssl-status");
+  if (sslStatus) {
+    let detail = `目前 ${ssl.current_scheme || "http"}，下次啟動 ${ssl.scheme || "http"}。`;
+    if (ssl.cert_required) detail += " 已要求 HTTPS，但缺少 cert.pem 或 key.pem。";
+    else if (!ssl.enabled_by_setting) detail += " root 設定為停用 HTTPS。";
+    else detail += " HTTPS 憑證檢查通過。";
+    if (ssl.restart_required) detail += " 需重啟才會套用。";
+    sslStatus.textContent = detail;
+    sslStatus.style.color = ssl.cert_required || ssl.restart_required ? "#ffb74d" : "var(--muted)";
   }
   const driveStorage = json.cloud_drive_storage || {};
   const driveStorageStatus = $("cloud-drive-storage-status");
@@ -933,9 +1025,54 @@ const SECURITY_THRESHOLD_KEYS = [
   "security_unknown_encrypted_files_threshold",
   "security_log_tail_lines"
 ];
+let securityProfiles = [];
 
 function securityInputId(prefix, key) {
   return prefix + "-" + key.replaceAll("_", "-");
+}
+
+function findSecurityProfile(name) {
+  const profileName = String(name || "");
+  return securityProfiles.find((profile) => profile && profile.name === profileName) || null;
+}
+
+function profileKeysSummary(profile, key) {
+  const data = profile && profile[key] && typeof profile[key] === "object" ? profile[key] : {};
+  const keys = Object.keys(data);
+  return keys.length ? keys.map((item) => `${item}=${JSON.stringify(data[item])}`).join("，") : "未設定";
+}
+
+function renderSecurityProfilePreview(selectId, previewId) {
+  const preview = $(previewId);
+  const select = $(selectId);
+  if (!preview || !select) return;
+  const profile = findSecurityProfile(select.value);
+  if (!profile) {
+    preview.classList.remove("show");
+    preview.innerHTML = "";
+    return;
+  }
+  preview.classList.add("show");
+  preview.innerHTML = `
+    <div><strong>${sanitize(profile.label || profile.name || "")}</strong> ${profile.is_builtin ? "內建" : "自定義"}</div>
+    <div>${sanitize(profile.description || "無描述")}</div>
+    <div>安全開關：${sanitize(profileKeysSummary(profile, "settings"))}</div>
+    <div>閾值：${sanitize(profileKeysSummary(profile, "thresholds"))}</div>
+  `;
+}
+
+function populateProfileSelect(selectId, profiles, selectedMode) {
+  const select = $(selectId);
+  if (!select) return;
+  const rows = Array.isArray(profiles) ? profiles : [];
+  select.innerHTML = rows.map((profile) => `
+    <option value="${sanitize(profile.name || "")}" ${profile.name === selectedMode ? "selected" : ""}>
+      ${sanitize(profile.label || profile.name || "")}${profile.is_builtin ? " · builtin" : " · custom"}
+    </option>
+  `).join("");
+  if (selectedMode && rows.some((profile) => profile.name === selectedMode)) {
+    select.value = selectedMode;
+  }
 }
 
 function renderSecuritySummary(sc) {
@@ -963,19 +1100,58 @@ function renderSecuritySummary(sc) {
   `).join("");
 }
 
+function renderServerOutput(output) {
+  const box = $("security-server-output");
+  if (!box) return;
+  const rows = Array.isArray(output?.lines) ? output.lines : [];
+  if (!rows.length) {
+    box.textContent = "尚無伺服器輸出";
+    return;
+  }
+  box.textContent = rows.map((row) => {
+    const stream = row.stream || "stdout";
+    const ts = row.timestamp || "";
+    const line = row.line || "";
+    return `[${ts}] ${stream}> ${line}`;
+  }).join("\n");
+  box.scrollTop = box.scrollHeight;
+}
+
+async function loadServerOutput() {
+  if (currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/server-output?limit=300", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  renderServerOutput(json.server_output || {});
+}
+
+function startServerOutputPoll() {
+  if (currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "security") return;
+  if (serverOutputPollTimer) return;
+  serverOutputPollTimer = setInterval(loadServerOutput, 2500);
+}
+
+function stopServerOutputPoll() {
+  if (!serverOutputPollTimer) return;
+  clearInterval(serverOutputPollTimer);
+  serverOutputPollTimer = null;
+}
+
 function populateSecurityProfiles(profiles, selectedMode) {
-  const select = $("security-mode-select");
-  if (!select) return;
-  const rows = Array.isArray(profiles) ? profiles : [];
-  select.innerHTML = rows.map((profile) => `
-    <option value="${sanitize(profile.name || "")}" ${profile.name === selectedMode ? "selected" : ""}>
-      ${sanitize(profile.label || profile.name || "")}${profile.is_builtin ? " · builtin" : " · custom"}
-    </option>
-  `).join("");
+  securityProfiles = Array.isArray(profiles) ? profiles : [];
+  populateProfileSelect("security-mode-select", securityProfiles, selectedMode);
+  populateProfileSelect("server-mode-select", securityProfiles, selectedMode);
+  renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview");
+  renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview");
 }
 
 async function loadSecurityCenter() {
-  if (!currentUser || currentRole !== "super_admin") return;
+  if (currentUser !== "root") return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await fetch(API + "/admin/security-center", {
@@ -1029,6 +1205,8 @@ async function loadSecurityCenter() {
     const log = sc.server_log || {};
     logBox.textContent = log.exists ? (log.lines || []).join("\n") : `server log 不存在：${log.path || "-"}`;
   }
+  renderServerOutput(sc.server_output || {});
+  startServerOutputPoll();
 }
 
 async function saveSecurityCenterControls() {
@@ -1082,6 +1260,10 @@ async function applySecurityMode() {
   const target = $("security-mode-select")?.value || "preprod";
   const confirmText = $("security-mode-confirm")?.value || "";
   const notes = $("security-mode-notes")?.value || "";
+  if (target === "production" && confirmText !== "GO_LIVE") {
+    alert("進入 production 上線模式必須輸入 GO_LIVE");
+    return;
+  }
   if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
     alert("進入 superweak 必須輸入 ENABLE_SUPERWEAK");
     return;
@@ -1103,6 +1285,32 @@ async function applySecurityMode() {
   if (json.ok) {
     if ($("security-mode-confirm")) $("security-mode-confirm").value = "";
     await loadSecurityCenter();
+    await loadServerMode();
+  }
+}
+
+function loadCurrentSecurityProfileDraft() {
+  const settings = {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    settings[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  });
+  const thresholds = {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    const number = parseInt(el.value || "0", 10);
+    thresholds[key] = Number.isFinite(number) ? number : 0;
+  });
+  const settingsBox = $("security-profile-settings-json");
+  const thresholdsBox = $("security-profile-thresholds-json");
+  if (settingsBox) settingsBox.value = JSON.stringify(settings, null, 2);
+  if (thresholdsBox) thresholdsBox.value = JSON.stringify(thresholds, null, 2);
+  const msg = $("security-profile-msg");
+  if (msg) {
+    msg.textContent = "已帶入目前安全開關與閾值，請填名稱後儲存。";
+    msg.style.color = "var(--muted)";
   }
 }
 
@@ -1137,7 +1345,17 @@ async function saveSecurityProfile() {
     msg.textContent = json.ok ? "自定義安全設定檔已儲存" : (json.msg || "儲存失敗");
     msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
-  if (json.ok) await loadSecurityCenter();
+  if (json.ok) {
+    const savedName = json.profile?.name || payload.name;
+    await loadSecurityCenter();
+    await loadServerMode();
+    ["security-mode-select", "server-mode-select"].forEach((id) => {
+      const select = $(id);
+      if (select && savedName) select.value = savedName;
+    });
+    renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview");
+    renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview");
+  }
 }
 
 async function loadServerHealth() {
@@ -1250,9 +1468,9 @@ async function loadIntegrityGuard() {
     </div>
   `).join("");
   if ((s.high_risk_pending || 0) > 0) {
-    warning.innerHTML = `<span style="color:#ff4f6d;font-weight:700;">高風險警告：</span>此變更涉及安全核心、root、admin、auth、snapshot、storage 或 Integrity Guard 本身。pending/rejected high risk finding 會阻止進入準上線模式。`;
+    warning.innerHTML = `<span style="color:#ff4f6d;font-weight:700;">高風險警告：</span>此變更涉及安全核心、root、admin、auth、snapshot、storage 或 Integrity Guard 本身。pending finding 會顯示 24 小時，逾期自動 approve；rejected high risk finding 仍會阻止進入準上線模式。`;
   } else if ((s.pending || 0) > 0) {
-    warning.innerHTML = `<span style="color:#ffb74d;font-weight:700;">待處理：</span>存在尚未審核的檔案完整性變更，請確認是否為合法部署。`;
+    warning.innerHTML = `<span style="color:#ffb74d;font-weight:700;">待處理：</span>存在尚未審核的檔案完整性變更，請確認是否為合法部署；pending 超過 24 小時會自動 approve。`;
   } else {
     warning.innerHTML = `<span style="color:#4caf50;font-weight:700;">正常：</span>目前沒有 pending finding。`;
   }
@@ -1436,6 +1654,7 @@ async function saveSettings() {
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
     session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0") || null,
+    server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
@@ -1473,9 +1692,11 @@ async function saveSettings() {
   const el = $("settings-msg");
   if (el) {
     const bind = json.server_bind || {};
+    const ssl = json.server_ssl || {};
     const driveStorage = json.cloud_drive_storage || {};
     const restartParts = [];
     if (bind.restart_required) restartParts.push("listen IP/port");
+    if (ssl.restart_required) restartParts.push("HTTPS 開關");
     if (driveStorage.restart_required) restartParts.push("雲端硬碟儲存位置");
     const restartHint = restartParts.length ? `，${restartParts.join("、")} 需重啟服務器後生效` : "";
     el.textContent = json.ok ? `✅ 設定已儲存${restartHint}` : (json.msg || "儲存失敗");
@@ -1540,7 +1761,8 @@ async function restartServer() {
   });
   const json = await res.json().catch(() => ({}));
   if (json.ok) {
-    setTimeout(() => location.reload(), 3000);
+    alert(json.msg || "服務器正在重啟，請稍後重新整理頁面");
+    setTimeout(() => location.reload(), 4500);
   } else {
     alert(json.msg || "重啟失敗");
   }
@@ -1719,8 +1941,8 @@ async function resetServer() {
   const reason = $("s-reset-reason")?.value || "";
   const confirmText = $("s-reset-confirm")?.value || "";
   const status = $("reset-status");
-  if (confirmText !== "RUN_RESET") {
-    if (status) { status.textContent = "確認字串錯誤，請輸入 RUN_RESET"; status.style.color = "#ff4f6d"; }
+  if (confirmText !== "RESET_RUNTIME_STATE") {
+    if (status) { status.textContent = "確認字串錯誤，請輸入 RESET_RUNTIME_STATE"; status.style.color = "#ff4f6d"; }
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -1729,14 +1951,14 @@ async function resetServer() {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ confirm: "RUN_RESET", reason })
+    body: JSON.stringify({ confirm: "RESET_RUNTIME_STATE", reason })
   });
   const json = await res.json().catch(() => ({}));
   if (status) {
     status.textContent = json.msg || (json.ok ? "Reset 請求已提交，系統將重啟" : "Reset 失敗");
     status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
-  if (json.ok) setTimeout(() => location.reload(), 3000);
+  if (json.ok) setTimeout(() => location.reload(), 4500);
 }
 
 // ── Integrity Guard quick-button handlers ──────────────────────

@@ -294,11 +294,33 @@ def test_storage_trash_restore_and_purge_updates_listing_and_quota(tmp_path):
     assert trash["files"][0]["id"] == storage_file_id
     assert trash["storage"]["used_bytes"] == len(b"trash me")
 
+    restored_all = client.post("/api/storage/trash/restore")
+    assert restored_all.status_code == 200
+    assert restored_all.get_json()["trash"]["restored"] == 1
+    assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 200
+
+    assert client.delete(f"/api/storage/files/{storage_file_id}").status_code == 200
     restored = client.post(f"/api/storage/files/{storage_file_id}/restore")
     assert restored.status_code == 200
     assert restored.get_json()["storage_file"]["is_trashed"] == 0
     assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 200
 
+    assert client.delete(f"/api/storage/files/{storage_file_id}").status_code == 200
+    purged_all = client.delete("/api/storage/trash/purge")
+    assert purged_all.status_code == 200
+    assert purged_all.get_json()["trash"]["purged"] == 1
+    assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 404
+
+    uploaded_again = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"purge me"), "purge.txt"),
+            "virtual_path": "purge.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded_again.status_code == 200
+    storage_file_id = uploaded_again.get_json()["storage_file"]["id"]
     purged = client.delete(f"/api/storage/files/{storage_file_id}/purge")
     assert purged.status_code == 200
     assert purged.get_json()["purged"]["storage"]["used_bytes"] == 0
@@ -343,6 +365,13 @@ def test_storage_folders_and_file_organize_flow(tmp_path):
 
     listing = client.get("/api/storage/files").get_json()["files"]
     assert listing[0]["virtual_path"] == "/archive/final/image.txt"
+
+    deleted_folder = client.delete("/api/storage/folders", json={"path": "/archive"})
+    assert deleted_folder.status_code == 200
+    assert deleted_folder.get_json()["folder_trash"]["trashed_files"] == 1
+    assert client.get("/api/storage/files").get_json()["files"] == []
+    trash = client.get("/api/storage/trash").get_json()["files"]
+    assert trash[0]["virtual_path"] == "/archive/final/image.txt"
 
 
 def test_storage_album_crud_and_file_membership(tmp_path):
@@ -551,6 +580,11 @@ def test_cloud_drive_delete_file_from_ui_api_invalidates_download(tmp_path):
     file_id = uploaded.get_json()["file"]["file_id"]
     deleted = client.delete(f"/api/cloud-drive/files/{file_id}")
     assert deleted.status_code == 200
+    assert deleted.get_json()["msg"] == "檔案已移到垃圾桶"
+    assert client.get("/api/cloud-drive/files").get_json()["files"] == []
+    trash = client.get("/api/storage/trash")
+    assert trash.status_code == 200
+    assert trash.get_json()["files"][0]["file_id"] == file_id
     assert client.get(f"/api/cloud-drive/files/{file_id}/download").status_code == 404
 
 

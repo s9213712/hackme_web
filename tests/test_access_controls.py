@@ -12,7 +12,13 @@ from services.access_controls import (
     parse_ip_whitelist,
     verify_maintenance_bypass_token,
 )
-from services.server_bind import effective_server_bind, validate_listen_host, validate_listen_port
+from services.server_bind import (
+    effective_server_bind,
+    effective_server_ssl,
+    server_ssl_settings_payload,
+    validate_listen_host,
+    validate_listen_port,
+)
 
 
 def _json_resp(payload, status=200):
@@ -23,7 +29,7 @@ def _passthrough(fn):
     return fn
 
 
-def _admin_app(settings_state=None, actor=None):
+def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, current_ssl_enabled=False):
     app = Flask(__name__)
     app.testing = True
     state = settings_state or {
@@ -34,6 +40,7 @@ def _admin_app(settings_state=None, actor=None):
         "maintenance_bypass_token_expires_at": "",
         "server_listen_host": "",
         "server_listen_port": 0,
+        "server_ssl_enabled": True,
         "comfyui_api_port": 8192,
     }
 
@@ -44,9 +51,11 @@ def _admin_app(settings_state=None, actor=None):
     register_system_admin_routes(app, {
         "ANCHOR_DIR": ".",
         "BASE_DIR": ".",
+        "CERT_FILE": str(cert_file or "missing-cert.pem"),
         "CHAT_DIR": ".",
-        "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000},
+        "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000, "ssl_enabled": current_ssl_enabled},
         "DB_PATH": "missing.db",
+        "KEY_FILE": str(key_file or "missing-key.pem"),
         "LOG_DIR": ".",
         "SERVER_LOG_PATH": "server.log",
         "activate_emergency_lockdown": lambda reason: None,
@@ -182,6 +191,47 @@ def test_root_can_configure_server_bind_settings_with_restart_hint():
     assert data["server_bind"]["host"] == "127.0.0.1"
     assert data["server_bind"]["port"] == 8081
     assert data["server_bind"]["restart_required"] is True
+
+
+def test_server_ssl_settings_require_root_setting_and_cert_files():
+    enabled = effective_server_ssl({"server_ssl_enabled": True}, cert_exists=True)
+    disabled_by_setting = effective_server_ssl({"server_ssl_enabled": False}, cert_exists=True)
+    missing_cert = effective_server_ssl({"server_ssl_enabled": True}, cert_exists=False)
+    restart = server_ssl_settings_payload(
+        {"server_ssl_enabled": True},
+        current_ssl_enabled=False,
+        cert_exists=True,
+    )
+
+    assert enabled["enabled"] is True
+    assert enabled["scheme"] == "https"
+    assert disabled_by_setting["enabled"] is False
+    assert disabled_by_setting["scheme"] == "http"
+    assert missing_cert["enabled"] is False
+    assert missing_cert["cert_required"] is True
+    assert restart["restart_required"] is True
+
+
+def test_root_can_configure_server_ssl_setting_with_restart_hint(tmp_path):
+    cert_file = tmp_path / "cert.pem"
+    key_file = tmp_path / "key.pem"
+    cert_file.write_text("cert", encoding="utf-8")
+    key_file.write_text("key", encoding="utf-8")
+    app, state = _admin_app(cert_file=cert_file, key_file=key_file, current_ssl_enabled=False)
+    client = app.test_client()
+
+    initial = client.get("/api/admin/settings").get_json()
+    assert initial["server_ssl"]["enabled"] is True
+    assert initial["server_ssl"]["restart_required"] is True
+
+    res = client.put("/api/admin/settings", json={"server_ssl_enabled": False})
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert state["server_ssl_enabled"] is False
+    assert data["server_ssl"]["enabled"] is False
+    assert data["server_ssl"]["enabled_by_setting"] is False
+    assert data["server_ssl"]["current_enabled"] is False
 
 
 def test_invalid_server_bind_settings_are_rejected():

@@ -3,6 +3,7 @@ import sqlite3
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
+from services.access_controls import hash_internal_test_token, maintenance_bypass_expires_at
 
 
 def _build_app(db_path, settings, ip_box=None, event_log=None):
@@ -156,6 +157,51 @@ def test_account_security_locks_user_after_repeated_bad_passwords(tmp_path):
 
     assert row[0] == 2
     assert row[1]
+
+
+def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_path):
+    db_path = tmp_path / "internal-test.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'internal_test');
+        INSERT INTO users (id, username, status, role) VALUES (2, 'root', 'active', 'super_admin');
+        INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (2, 'rootpass', '2026-01-01T00:00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+    token = "issued-by-root"
+    client = _build_app(
+        str(db_path),
+        {
+            "max_login_failures": 3,
+            "block_duration_minutes": 10,
+            "internal_test_login_token_hash": hash_internal_test_token(token),
+            "internal_test_login_token_expires_at": maintenance_bypass_expires_at(30),
+        },
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
+    bad_token = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": "bad"})
+    allowed = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": token})
+    root_allowed = client.post("/api/login", json={"username": "root", "password": "rootpass"})
+
+    assert denied.status_code == 403
+    assert "內測模式" in denied.get_json()["msg"]
+    assert bad_token.status_code == 403
+    assert allowed.status_code == 200
+    assert root_allowed.status_code == 200
 
 
 def test_successful_login_records_suspicious_new_location(tmp_path):

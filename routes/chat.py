@@ -476,9 +476,9 @@ def register_chat_routes(app, deps):
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
         if not user: return json_resp({"ok":False,"msg":"未授權"}), 401
-        if role_rank(db_get_user_role(user) or "user") < role_rank("manager"):
-            audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-manager attempted audit access")
-            return json_resp({"ok":False,"msg":"需要管理者或最高管理者權限"}), 403
+        if user != "root":
+            audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-root attempted audit access")
+            return json_resp({"ok":False,"msg":"只有 root 可檢視審計紀錄"}), 403
 
         conn = get_db()
         try:

@@ -623,7 +623,8 @@ def register_user_routes(app, deps):
                         return json_resp({"ok":False,"msg":"目前密碼錯誤"}), 403
                 if current_row and verify_password(current_row["password_hash"], pw):
                     return json_resp({"ok":False,"msg":"新密碼不可與目前密碼相同"}), 400
-                if actor_role != "super_admin":
+                must_follow_password_policy = actor_role != "super_admin" or is_self
+                if must_follow_password_policy:
                     ok, msg = validate_password(pw)
                     if not ok:
                         return json_resp({"ok":False,"msg":msg}), 400

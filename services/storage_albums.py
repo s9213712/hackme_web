@@ -33,6 +33,7 @@ def ensure_storage_album_schema(conn):
             is_trashed INTEGER NOT NULL DEFAULT 0,
             trashed_at TEXT,
             restored_at TEXT,
+            trash_source TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             deleted_at TEXT,
@@ -128,6 +129,9 @@ def ensure_storage_album_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at)")
+    storage_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_files)").fetchall()}
+    if "trash_source" not in storage_file_cols:
+        conn.execute("ALTER TABLE storage_files ADD COLUMN trash_source TEXT")
 
 
 def normalize_virtual_path(path, display_name=None):
@@ -168,6 +172,37 @@ def _parent_folders_for_file(path):
     for idx in range(1, len(parts)):
         folders.append("/" + "/".join(parts[:idx]))
     return folders
+
+
+def _storage_path_exists(conn, owner_user_id, path):
+    if conn.execute(
+        "SELECT 1 FROM storage_files WHERE owner_user_id=? AND virtual_path=? LIMIT 1",
+        (int(owner_user_id), path),
+    ).fetchone():
+        return True
+    return bool(conn.execute(
+        "SELECT 1 FROM storage_folders WHERE owner_user_id=? AND virtual_path=? LIMIT 1",
+        (int(owner_user_id), path),
+    ).fetchone())
+
+
+def _unique_storage_path(conn, owner_user_id, desired_path, display_name):
+    base_path = normalize_virtual_path(desired_path, display_name)
+    if not _storage_path_exists(conn, owner_user_id, base_path):
+        return base_path
+    parent = "/" + "/".join(base_path.strip("/").split("/")[:-1])
+    if parent == "/":
+        parent = ""
+    name = _display_name_from_path(base_path)
+    stem, dot, ext = name.rpartition(".")
+    if not stem:
+        stem, dot, ext = name, "", ""
+    for index in range(2, 1000):
+        candidate_name = f"{stem} ({index}){dot}{ext}"
+        candidate = f"{parent}/{candidate_name}" if parent else f"/{candidate_name}"
+        if not _storage_path_exists(conn, owner_user_id, candidate):
+            return candidate
+    raise ValueError("storage path conflict")
 
 
 def get_user_storage_summary(conn, user_id):
@@ -549,6 +584,108 @@ def move_storage_folder(conn, *, actor, old_path, new_path):
     }, None
 
 
+def trash_storage_folder(conn, *, actor, path):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    try:
+        folder_path = _folder_prefix(path)
+    except ValueError:
+        return None, "資料夾路徑不安全或格式錯誤"
+    if folder_path == "/":
+        return None, "不能回收根目錄"
+    file_rows = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=0
+              AND virtual_path LIKE ?
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id, folder_path.rstrip("/") + "/%"),
+    ).fetchall()
+    folder_rows = conn.execute(
+        """
+        SELECT id FROM storage_folders
+        WHERE owner_user_id=? AND deleted_at IS NULL
+              AND (virtual_path=? OR virtual_path LIKE ?)
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id, folder_path, folder_path.rstrip("/") + "/%"),
+    ).fetchall()
+    if not file_rows and not folder_rows:
+        return None, "找不到資料夾或資料夾是空的"
+    now = _now()
+    conn.executemany(
+        """
+        UPDATE storage_files
+        SET is_trashed=1, trashed_at=?, trash_source=NULL, updated_at=?
+        WHERE id=? AND owner_user_id=?
+        """,
+        [(now, now, row["id"], owner_user_id) for row in file_rows],
+    )
+    conn.executemany(
+        "UPDATE storage_folders SET deleted_at=?, updated_at=? WHERE id=? AND owner_user_id=?",
+        [(now, now, row["id"], owner_user_id) for row in folder_rows],
+    )
+    return {
+        "path": folder_path,
+        "trashed_files": len(file_rows),
+        "deleted_folders": len(folder_rows),
+    }, None
+
+
+def trash_cloud_file_to_storage(conn, *, actor, file_id):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    file_row = conn.execute(
+        "SELECT * FROM uploaded_files WHERE id=? AND owner_user_id=? AND deleted_at IS NULL",
+        (str(file_id or ""), owner_user_id),
+    ).fetchone()
+    if not file_row:
+        return None, "找不到檔案或檔案已刪除"
+    now = _now()
+    storage_rows = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND file_id=? AND deleted_at IS NULL
+        """,
+        (owner_user_id, file_row["id"]),
+    ).fetchall()
+    if storage_rows:
+        conn.executemany(
+            """
+            UPDATE storage_files
+            SET is_trashed=1, trashed_at=?, trash_source='cloud_drive_delete', updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            [(now, now, row["id"], owner_user_id) for row in storage_rows],
+        )
+        return {"file_id": file_row["id"], "storage_file_ids": [row["id"] for row in storage_rows]}, None
+
+    display_name = str(file_row["original_filename_plain_for_public"] or "download.bin").strip()[:160]
+    try:
+        virtual_path = _unique_storage_path(conn, owner_user_id, display_name, display_name)
+    except ValueError:
+        return None, "storage path 不安全或格式錯誤"
+    storage_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO storage_files (
+            id, file_id, owner_user_id, parent_id, display_name, virtual_path,
+            is_trashed, trashed_at, trash_source, created_at, updated_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, 1, ?, 'cloud_drive_delete', ?, ?)
+        """,
+        (storage_id, file_row["id"], owner_user_id, display_name, virtual_path, now, now, now),
+    )
+    sync_user_storage_summary(
+        conn,
+        owner_user_id,
+        actor_user_id=owner_user_id,
+        source="cloud_drive_delete",
+        reason="cloud_file_moved_to_trash",
+    )
+    return {"file_id": file_row["id"], "storage_file_ids": [storage_id]}, None
+
+
 def list_storage_trash(conn, *, actor, limit=100, offset=0):
     ensure_storage_album_schema(conn)
     rows = conn.execute(
@@ -578,7 +715,7 @@ def trash_storage_file(conn, *, actor, storage_file_id):
     conn.execute(
         """
         UPDATE storage_files
-        SET is_trashed=1, trashed_at=?, updated_at=?
+        SET is_trashed=1, trashed_at=?, trash_source=NULL, updated_at=?
         WHERE id=? AND owner_user_id=?
         """,
         (now, now, storage_file_id, int(actor["id"])),
@@ -597,11 +734,21 @@ def restore_storage_file(conn, *, actor, storage_file_id):
     conn.execute(
         """
         UPDATE storage_files
-        SET is_trashed=0, restored_at=?, updated_at=?
+        SET is_trashed=0, restored_at=?, trash_source=NULL, updated_at=?
         WHERE id=? AND owner_user_id=?
         """,
         (now, now, storage_file_id, int(actor["id"])),
     )
+    if row.get("trash_source") == "cloud_drive_delete":
+        conn.execute(
+            """
+            UPDATE storage_files
+            SET trash_source=NULL, updated_at=?
+            WHERE owner_user_id=? AND file_id=? AND deleted_at IS NULL
+                  AND trash_source='cloud_drive_delete'
+            """,
+            (now, int(actor["id"]), row["file_id"]),
+        )
     return get_storage_file(conn, actor=actor, storage_file_id=storage_file_id), None
 
 
@@ -619,6 +766,15 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         """,
         (now, now, storage_file_id, int(actor["id"])),
     )
+    if row.get("trash_source") == "cloud_drive_delete":
+        conn.execute(
+            """
+            UPDATE uploaded_files
+            SET deleted_at=?
+            WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
+            """,
+            (now, row["file_id"], int(actor["id"])),
+        )
     summary = sync_user_storage_summary(
         conn,
         actor["id"],
@@ -627,6 +783,67 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         reason="storage_file_purged",
     )
     return {"id": storage_file_id, "storage": summary}, None
+
+
+def restore_storage_trash(conn, *, actor):
+    ensure_storage_album_schema(conn)
+    now = _now()
+    rows = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=1
+        """,
+        (int(actor["id"]),),
+    ).fetchall()
+    if rows:
+        conn.executemany(
+            """
+            UPDATE storage_files
+            SET is_trashed=0, restored_at=?, trash_source=NULL, updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            [(now, now, row["id"], int(actor["id"])) for row in rows],
+        )
+    return {"restored": len(rows)}, None
+
+
+def purge_storage_trash(conn, *, actor):
+    ensure_storage_album_schema(conn)
+    now = _now()
+    rows = conn.execute(
+        """
+        SELECT id, file_id, trash_source FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=1
+        """,
+        (int(actor["id"]),),
+    ).fetchall()
+    if rows:
+        conn.executemany(
+            """
+            UPDATE storage_files
+            SET deleted_at=?, updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            [(now, now, row["id"], int(actor["id"])) for row in rows],
+        )
+        cloud_file_ids = [row["file_id"] for row in rows if row["trash_source"] == "cloud_drive_delete"]
+        if cloud_file_ids:
+            conn.executemany(
+                """
+                UPDATE uploaded_files
+                SET deleted_at=?
+                WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
+                """,
+                [(now, file_id, int(actor["id"])) for file_id in cloud_file_ids],
+            )
+    summary = sync_user_storage_summary(
+        conn,
+        actor["id"],
+        actor_user_id=actor["id"],
+        source="trash",
+        reason="storage_trash_purged",
+    )
+    return {"purged": len(rows), "storage": summary}, None
 
 
 def _normalize_album_visibility(value):

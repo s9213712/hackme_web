@@ -1,6 +1,7 @@
 async function doLogin() {
   const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
+  const internalTestToken = $("li-internal-test-token")?.value || "";
   if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
 
   await fetchCsrfToken({ force: false });
@@ -20,7 +21,7 @@ async function doLogin() {
         "Content-Type": "application/json",
         "X-CSRF-Token": csrf || ""
       },
-      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf })
+      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf, internal_test_token: internalTestToken })
     });
     const json = await res.json();
     if (!json.ok) {

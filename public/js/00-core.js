@@ -37,7 +37,6 @@ let inactivityTimer = null;
 let inactivityCountdownTimer = null;
 let inactivityDeadline = null;
 let inactivityWarned = false;
-let clockTimer = null;
 let siteConfig = {};
 let serverMeta = {};
 let currentSettingsSection = "security";
@@ -128,7 +127,7 @@ const SIDEBAR_MENU_CONFIG = [
   },
   {
     tabId: "tab-module-server",
-    role: "super_admin",
+    role: "root",
     tab: "server",
     icon: "shield",
     label: "安全中心",
@@ -156,6 +155,7 @@ function sidebarItemForTab(tabId) {
 function canShowSidebarItem(item) {
   if (!item || !currentUser) return false;
   if (item.hideForSuperAdmin && currentRole === "super_admin") return false;
+  if (item.role === "root") return currentUser === "root";
   if (item.role === "super_admin") return currentRole === "super_admin";
   return canAccessModule(item.module);
 }
@@ -234,10 +234,16 @@ function updateSidebarIdentity() {
   const role = $("sidebar-current-role");
   const level = $("sidebar-current-level");
   const avatar = $("sidebar-user-avatar");
+  const points = $("sidebar-points");
+  const violations = $("sidebar-violations");
+  const effective = $("sidebar-effective-level");
   if (user) user.textContent = currentUser || "未登入";
   if (role) role.textContent = currentRoleLabel || currentRole || "-";
   if (level) level.textContent = currentUser ? (level.dataset.memberLevel || "-") : "-";
   if (avatar) avatar.textContent = currentUser ? String(currentUser).slice(0, 1).toUpperCase() : "-";
+  if (points) points.textContent = currentUser ? (points.dataset.points || "0") : "0";
+  if (violations) violations.textContent = currentUser ? (violations.dataset.violations || "0") : "0";
+  if (effective) effective.textContent = currentUser ? (effective.dataset.effectiveLevel || "-") : "-";
 }
 
 function updateSidebarActiveState() {
@@ -403,6 +409,8 @@ function renderServerVersion(meta) {
   document.querySelectorAll("[data-server-version-badge]").forEach((el) => {
     el.textContent = text;
   });
+  const sidebarVersion = $("sidebar-server-version");
+  if (sidebarVersion) sidebarVersion.textContent = `發佈號: ${releaseId}`;
 }
 
 async function loadSiteConfig() {
@@ -688,35 +696,6 @@ function setupPwToggle(inputId, btnId) {
   }, { passive: false });
 }
 
-function pad2(v) { return String(v).padStart(2, "0"); }
-function startClock() {
-  const clock = $("clock");
-  if (!clock) return false;
-  const tick = () => {
-    try {
-      const now = new Date();
-      clock.textContent = `⏰ ${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
-    } catch (err) {
-      if (clockTimer) {
-        clearInterval(clockTimer);
-        clockTimer = null;
-      }
-      clock.textContent = "⏰ 時間載入失敗";
-      console.error("clock update failed", err);
-    }
-  };
-  try {
-    tick();
-    if (clockTimer) clearInterval(clockTimer);
-    clockTimer = setInterval(tick, 1000);
-    return true;
-  } catch (err) {
-    clock.textContent = "⏰ 時間載入失敗";
-    console.error("clock init failed", err);
-    return false;
-  }
-}
-
 setupPwToggle("li-pw", "li-pw-toggle");
 setupPwToggle("reg-pw", "reg-pw-toggle");
 setupPwToggle("reg-pw-confirm", "reg-pw-confirm-toggle");
@@ -791,13 +770,34 @@ function setAuthState(json, showLoginHero = false) {
   }
   if ($("me-user")) $("me-user").textContent = sanitize(currentUser || "-");
   if ($("me-role")) $("me-role").textContent = sanitize(json.role_label || currentRole || "-");
+  const levelText = json.member_level_label || json.effective_level || json.member_level || "-";
   const levelEl = $("me-level");
-  if (levelEl) levelEl.textContent = sanitize(json.effective_level || json.member_level || "-");
+  if (levelEl) levelEl.textContent = sanitize(levelText);
   if ($("me-nickname")) $("me-nickname").textContent = sanitize(json.nickname || "-");
   const sidebarLevel = $("sidebar-current-level");
   if (sidebarLevel) {
-    sidebarLevel.dataset.memberLevel = json.effective_level || json.member_level || "-";
+    sidebarLevel.dataset.memberLevel = levelText;
     sidebarLevel.textContent = sidebarLevel.dataset.memberLevel;
+  }
+  const sidebarEffective = $("sidebar-effective-level");
+  if (sidebarEffective) {
+    if (json.special_account) {
+      sidebarEffective.dataset.effectiveLevel = "特殊階級";
+    } else {
+      const base = json.base_level || json.member_level || "-";
+      const effective = json.effective_level || base;
+      sidebarEffective.dataset.effectiveLevel = base && base !== effective ? `${effective} / ${base}` : effective;
+    }
+  }
+  const sidebarPoints = $("sidebar-points");
+  if (sidebarPoints) {
+    const score = Number(json.reputation ?? json.trust_score ?? 0);
+    sidebarPoints.dataset.points = Number.isFinite(score) ? String(score) : "0";
+  }
+  const sidebarViolations = $("sidebar-violations");
+  if (sidebarViolations) {
+    const score = Number(json.violation_score ?? 0);
+    sidebarViolations.dataset.violations = Number.isFinite(score) ? String(score) : "0";
   }
   updateSidebarIdentity();
   const selfEditBtn = $("self-edit-btn");
@@ -841,7 +841,7 @@ function setAuthState(json, showLoginHero = false) {
   const reportsTab = $("tab-reports");
   const governanceTab = $("tab-governance");
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
-  if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
+  if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
   if (tabModuleDm) tabModuleDm.style.display = canAccessModule("dm") ? "" : "none";
   if (tabModuleAnnouncements) tabModuleAnnouncements.style.display = canAccessModule("community") ? "" : "none";
@@ -858,7 +858,7 @@ function setAuthState(json, showLoginHero = false) {
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (governanceTab) governanceTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
   const restartBtn = $("restart-server-btn");
-  if (restartBtn) restartBtn.style.display = currentRole === "super_admin" ? "" : "none";
+  if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
 
   if (currentMustChangePassword) {
     resetInactivityTimer();

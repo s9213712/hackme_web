@@ -20,6 +20,56 @@ let communityThreadCreatorOpen = false;
 let communityToolsOpen = false;
 let communityMode = "boards";
 let canReviewCommunityThreads = false;
+let communityBoardModerators = [];
+
+const COMMUNITY_MODERATOR_PERMISSIONS = [
+  ["can_review_threads", "審核主題"],
+  ["can_pin_posts", "置頂與精華"],
+  ["can_lock_threads", "鎖定主題"],
+  ["can_edit_posts", "編輯留言"],
+  ["can_delete_posts", "刪除主題或留言"],
+  ["can_reward_authors", "獎勵作者"],
+  ["can_penalize_posts", "懲處違規留言"],
+];
+
+const COMMUNITY_MODERATOR_PRESETS = {
+  full: {
+    can_review_threads: true,
+    can_pin_posts: true,
+    can_lock_threads: true,
+    can_edit_posts: true,
+    can_delete_posts: true,
+    can_reward_authors: true,
+    can_penalize_posts: true,
+  },
+  review: {
+    can_review_threads: true,
+    can_pin_posts: false,
+    can_lock_threads: false,
+    can_edit_posts: false,
+    can_delete_posts: false,
+    can_reward_authors: false,
+    can_penalize_posts: false,
+  },
+  content: {
+    can_review_threads: true,
+    can_pin_posts: true,
+    can_lock_threads: true,
+    can_edit_posts: true,
+    can_delete_posts: false,
+    can_reward_authors: true,
+    can_penalize_posts: false,
+  },
+  discipline: {
+    can_review_threads: true,
+    can_pin_posts: false,
+    can_lock_threads: true,
+    can_edit_posts: false,
+    can_delete_posts: true,
+    can_reward_authors: false,
+    can_penalize_posts: true,
+  },
+};
 
 function switchCommunityMode(mode) {
   communityMode = mode || "boards";
@@ -69,9 +119,11 @@ function showCommunityBoardStage() {
   selectedCommunityThreadId = null;
   selectedCommunityThread = null;
   communityThreads = [];
+  communityBoardModerators = [];
   communityThreadCreatorOpen = false;
   renderCommunityBoards();
   renderCommunityThreads(null);
+  renderCommunityModerators();
   renderCommunityThreadDetail(null, []);
   switchCommunityMode("boards");
 }
@@ -105,6 +157,81 @@ function canManageCommunity() {
 function canDeleteCommunityItem(authorUserId, ownerUserId) {
   if (canManageCommunity()) return true;
   return Number(currentUserId) === Number(authorUserId) || Number(currentUserId) === Number(ownerUserId);
+}
+
+function moderatorPermissionInputId(key) {
+  return "community-mod-" + key.replaceAll("_", "-");
+}
+
+function moderatorPermissionPayload() {
+  const payload = {};
+  COMMUNITY_MODERATOR_PERMISSIONS.forEach(([key]) => {
+    payload[key] = !!$(moderatorPermissionInputId(key))?.checked;
+  });
+  return payload;
+}
+
+function applyModeratorPreset(presetName) {
+  const preset = COMMUNITY_MODERATOR_PRESETS[presetName] || COMMUNITY_MODERATOR_PRESETS.full;
+  COMMUNITY_MODERATOR_PERMISSIONS.forEach(([key]) => {
+    const input = $(moderatorPermissionInputId(key));
+    if (input) input.checked = !!preset[key];
+  });
+}
+
+function fillModeratorForm(moderator) {
+  if (!moderator) return;
+  const userId = $("community-moderator-user-id");
+  if (userId) userId.value = moderator.user_id || "";
+  COMMUNITY_MODERATOR_PERMISSIONS.forEach(([key]) => {
+    const input = $(moderatorPermissionInputId(key));
+    if (input) input.checked = !!moderator[key];
+  });
+  const preset = $("community-moderator-preset");
+  if (preset) preset.value = "full";
+}
+
+function renderCommunityModerators() {
+  const panel = $("community-moderator-manager");
+  const list = $("community-moderator-list");
+  if (panel) panel.style.display = selectedCommunityBoardId && canManageCommunity() ? "block" : "none";
+  if (!list || !canManageCommunity()) return;
+  if (!selectedCommunityBoardId) {
+    list.innerHTML = "<p style='color:var(--muted);'>請先選擇討論區</p>";
+    return;
+  }
+  if (!communityBoardModerators.length) {
+    list.innerHTML = "<p style='color:var(--muted);'>尚未設定版主。每個討論區至少需要一位版主。</p>";
+    return;
+  }
+  list.innerHTML = communityBoardModerators.map((moderator) => {
+    const allowed = COMMUNITY_MODERATOR_PERMISSIONS
+      .filter(([key]) => moderator[key])
+      .map(([, label]) => label)
+      .join("、") || "無權限";
+    return `
+      <div class="community-card">
+        <div class="community-card-head">
+          <strong>${sanitize(moderator.username || "")}</strong>
+          <span class="community-badge approved">帳號 ID ${sanitize(String(moderator.user_id || ""))}</span>
+        </div>
+        <div class="community-meta">權限：${sanitize(allowed)}</div>
+        <div class="community-actions">
+          <button class="btn community-mini-btn" type="button" data-edit-board-moderator="${moderator.user_id}">修改權限</button>
+          <button class="btn community-mini-btn" type="button" data-delete-board-moderator="${moderator.user_id}">移除版主</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  list.querySelectorAll("button[data-edit-board-moderator]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const userId = parseInt(btn.getAttribute("data-edit-board-moderator"), 10);
+      fillModeratorForm(communityBoardModerators.find((item) => Number(item.user_id) === Number(userId)));
+    });
+  });
+  list.querySelectorAll("button[data-delete-board-moderator]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteCommunityModerator(parseInt(btn.getAttribute("data-delete-board-moderator"), 10)));
+  });
 }
 
 function renderCommunityCategories() {
@@ -309,6 +436,7 @@ function renderCommunityThreads(board) {
   if (createOpenBtn) createOpenBtn.style.display = canCreateThread && !communityThreadCreatorOpen ? "" : "none";
   if (creator) creator.style.display = canCreateThread && communityThreadCreatorOpen ? "block" : "none";
   if (submitBtn) submitBtn.textContent = (currentRole === "manager" || currentRole === "super_admin") ? "發布主題" : "送審主題";
+  renderCommunityModerators();
   if (!list) return;
   if (!board) {
     list.innerHTML = "<p style='color:var(--muted);'>請先選擇左側討論區</p>";
@@ -547,6 +675,65 @@ async function requestCommunityBoard() {
   }
 }
 
+async function loadCommunityModerators(boardId = selectedCommunityBoardId) {
+  if (!boardId || !canManageCommunity()) {
+    communityBoardModerators = [];
+    renderCommunityModerators();
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/boards/" + boardId + "/moderators", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    communityBoardModerators = [];
+    flash($("community-moderator-msg"), json.msg || "版主清單讀取失敗", false);
+    renderCommunityModerators();
+    return;
+  }
+  communityBoardModerators = Array.isArray(json.moderators) ? json.moderators : [];
+  renderCommunityModerators();
+}
+
+async function saveCommunityModerator() {
+  if (!selectedCommunityBoardId || !canManageCommunity()) return;
+  const userId = parseInt($("community-moderator-user-id")?.value || "", 10);
+  if (!userId) {
+    flash($("community-moderator-msg"), "請輸入要設定的帳號 ID", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ user_id: userId, ...moderatorPermissionPayload() })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-moderator-msg"), json.msg || "版主設定儲存失敗", !!json.ok);
+  if (json.ok) {
+    await Promise.all([loadCommunityModerators(selectedCommunityBoardId), loadCommunityBoards()]);
+  }
+}
+
+async function deleteCommunityModerator(userId) {
+  if (!selectedCommunityBoardId || !userId || !canManageCommunity()) return;
+  if (!confirm("確定要移除此版主？")) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators/" + userId, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-moderator-msg"), json.msg || "版主移除失敗", !!json.ok);
+  if (json.ok) {
+    await Promise.all([loadCommunityModerators(selectedCommunityBoardId), loadCommunityBoards()]);
+  }
+}
+
 async function loadCommunityBoardReviews() {
   if (!(currentRole === "manager" || currentRole === "super_admin")) return;
   await fetchCsrfToken({ force: true });
@@ -635,6 +822,7 @@ async function openCommunityBoard(boardId, preserveThread = false) {
   communityThreads = Array.isArray(json.threads) ? json.threads : [];
   communityThreadTotal = Number(json.total || 0);
   communityThreadPage = Number(json.page || 0);
+  if (canManageCommunity()) await loadCommunityModerators(boardId);
   renderCommunityBoards();
   renderCommunityThreads(board);
   if (!preserveThread) renderCommunityThreadDetail(null, []);

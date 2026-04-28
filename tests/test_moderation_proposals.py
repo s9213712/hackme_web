@@ -63,9 +63,9 @@ def _seed_users(db_path):
             violation_count INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO users (id, username, role, status, member_level) VALUES
-            (1, 'root', 'super_admin', 'active', 'vip'),
-            (2, 'admin1', 'manager', 'active', 'trusted'),
-            (3, 'admin2', 'manager', 'active', 'trusted'),
+            (1, 'root', 'super_admin', 'active', 'normal'),
+            (2, 'admin1', 'manager', 'active', 'normal'),
+            (3, 'admin2', 'manager', 'active', 'normal'),
             (4, 'alice', 'user', 'active', 'normal');
         """
     )

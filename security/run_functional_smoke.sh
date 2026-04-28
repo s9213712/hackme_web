@@ -402,6 +402,12 @@ create_community_flow() {
   request "community thread detail" "GET" "/api/community/threads/${THREAD_ID}" "200"
   request "community thread like" "POST" "/api/community/threads/${THREAD_ID}/reaction" "200" '{"value":1}'
   request "community reward thread author" "POST" "/api/community/threads/${THREAD_ID}/reward" "200" '{"points":1,"reason":"functional smoke reward"}'
+  if [[ -n "${SMOKE_USER_ID:-}" ]]; then
+    request "community set board moderator permissions" "POST" "/api/community/boards/${BOARD_ID}/moderators" "200" "{\"user_id\":$SMOKE_USER_ID,\"can_review_threads\":true,\"can_pin_posts\":true,\"can_lock_threads\":true,\"can_edit_posts\":true,\"can_delete_posts\":true,\"can_reward_authors\":true,\"can_penalize_posts\":true}"
+    request "community list board moderators" "GET" "/api/community/boards/${BOARD_ID}/moderators" "200"
+  else
+    skip "community board moderator permissions" "smoke user id missing"
+  fi
   request "community reply" "POST" "/api/community/threads/${THREAD_ID}/posts" "200" '{"content":"functional smoke reply"}'
   request "community lock thread" "POST" "/api/community/threads/${THREAD_ID}/lock" "200" '{"locked":true}'
   request "community sticky thread" "POST" "/api/community/threads/${THREAD_ID}/sticky" "200" '{"sticky":true}'
@@ -444,10 +450,13 @@ run_checks() {
   request "admin platform stats" "GET" "/api/admin/platform-stats" "200"
   request "admin audit log" "GET" "/api/admin/audit" "200"
   request "security center summary" "GET" "/api/admin/security-center" "200"
+  request "root server live output" "GET" "/api/admin/server-output?limit=50" "200"
   request "security center update thresholds" "PUT" "/api/admin/security-center/thresholds" "200" '{"security_pending_chat_reports_threshold":12,"security_pending_appeals_threshold":12,"security_pending_moderation_proposals_threshold":12,"security_quarantined_files_threshold":0,"security_unknown_encrypted_files_threshold":80,"security_log_tail_lines":120,"max_login_failures":3,"block_duration_minutes":10}'
   request "security center update controls" "PUT" "/api/admin/security-center/controls" "200" '{"ip_blocking_enabled":true,"login_violation_enabled":true,"rate_limit_violation_enabled":true,"integrity_guard_enabled":true,"integrity_guard_strict_mode":false,"browser_only_mode_enabled":false}'
   request "security center create custom profile" "POST" "/api/admin/security-center/profiles" "200" "{\"name\":\"smoke_profile_${RUN_ID,,}\",\"label\":\"Smoke Profile\",\"description\":\"functional smoke custom security profile\",\"settings\":{\"ip_blocking_enabled\":true,\"integrity_guard_strict_mode\":false},\"thresholds\":{\"security_pending_chat_reports_threshold\":7}}"
   request "security center apply custom profile" "POST" "/api/admin/server-mode" "200" "{\"mode\":\"smoke_profile_${RUN_ID,,}\",\"confirm\":\"\",\"notes\":\"functional smoke custom profile\"}"
+  request "integrity guard status" "GET" "/api/root/integrity/status" "200"
+  request "integrity guard pending findings" "GET" "/api/root/integrity/findings?status=pending" "200"
 
   create_smoke_user
 
@@ -614,12 +623,12 @@ $(cat "$RESULTS_TSV")
 - public/API basics: index, site config, version, password strength, captcha challenge
 - authentication: CSRF bootstrap, root login, forced default-password change, session identity
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
-- security center: aggregate security overview, audit data, server log, security controls, threshold update, custom profile creation, custom profile mode switch
+- security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, and server reset verification that removes the baseline post
 - storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete, remote download capability checks
 - ComfyUI integration: model endpoint wiring and optional backend availability check
 - accounts: admin user creation/listing, account sessions when account-security feature is enabled
-- community: announcements, categories, boards, board approval, thread create/detail/reply/reaction/reward/lock/sticky/curate
+- community: announcements, categories, boards, board approval, board moderator permission scope, thread create/detail/reply/reaction/reward/lock/sticky/curate
 - chat and DM: room listing, message send/list, DM thread/message flow
 - reports and moderation: bug reports, reports, notifications, appeals, moderation actions/proposals, violations, message reports, mod notes, reputation endpoints
 - hardening regression: unknown-path OPTIONS does not advertise unsafe methods

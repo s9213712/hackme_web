@@ -120,7 +120,8 @@ from services.member_levels import ensure_member_level_rules_schema, get_member_
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
 from services.release_info import APP_NAME, APP_RELEASE_ID
-from services.server_bind import effective_server_bind
+from services.runtime_output import get_runtime_output, install_runtime_output_capture
+from services.server_bind import effective_server_bind, effective_server_ssl
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
@@ -581,6 +582,7 @@ def user_public_payload(row, *, include_sensitive=False):
     if not row:
         return None
     data = dict(row)
+    is_special_account = data.get("username") == "root" or data.get("role") in {"super_admin", "manager"}
     try:
         avatar_crop = json.loads(data.get("avatar_crop_json") or "{}") if data.get("avatar_crop_json") else {}
     except Exception:
@@ -592,9 +594,11 @@ def user_public_payload(row, *, include_sensitive=False):
         "email": data.get("email"),
         "status": data.get("status"),
         "role": data.get("role"),
-        "member_level": data.get("member_level") or "normal",
-        "base_level": data.get("base_level") or data.get("member_level") or "normal",
-        "effective_level": data.get("effective_level") or data.get("member_level") or "normal",
+        "member_level": None if is_special_account else (data.get("member_level") or "normal"),
+        "base_level": None if is_special_account else (data.get("base_level") or data.get("member_level") or "normal"),
+        "effective_level": None if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal"),
+        "member_level_label": "特殊階級" if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal"),
+        "special_account": is_special_account,
         "trust_score": data.get("trust_score") or 0,
         "points": data.get("points") or 0,
         "reputation": data.get("reputation") or 0,
@@ -1065,6 +1069,7 @@ register_public_routes(app, {
     "get_db": get_db,
     "get_feature_settings": get_feature_settings,
     "get_member_level_rule": get_member_level_rule,
+    "get_server_output": get_runtime_output,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "hash_password": hash_password,
@@ -1176,6 +1181,8 @@ register_operation_routes(app, {
     "REPORTS_DIR": REPORTS_DIR,
     "SERVER_LOG_PATH": SERVER_LOG_PATH,
     "STORAGE_DIR": STORAGE_DIR,
+    "CERT_FILE": os.path.join(BASE_DIR, "cert.pem"),
+    "KEY_FILE": os.path.join(BASE_DIR, "key.pem"),
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,
     "SESSION_COOKIE_SECURE": SESSION_COOKIE_SECURE,
     "VIOLATION_APPEAL_WINDOW_HOURS": VIOLATION_APPEAL_WINDOW_HOURS,
@@ -1189,6 +1196,7 @@ register_operation_routes(app, {
     "get_latest_violation": get_latest_violation,
     "get_feature_settings": get_feature_settings,
     "get_member_level_rule": get_member_level_rule,
+    "get_server_output": get_runtime_output,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "is_audit_chain_enabled": is_audit_chain_enabled,
@@ -1279,6 +1287,7 @@ def start_storage_maintenance_worker():
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    install_runtime_output_capture(SERVER_LOG_PATH)
     init_db(
         ensure_secure_audit_columns=ensure_secure_audit_columns,
         ensure_user_columns=ensure_user_columns,
@@ -1299,16 +1308,24 @@ if __name__ == "__main__":
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")
-    has_ssl = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
+    has_ssl_files = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
+    ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)
+    has_ssl = ssl_state["enabled"]
 
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
-    scheme = "https" if has_ssl else "http"
+    scheme = ssl_state["scheme"]
     bind = effective_server_bind(get_system_settings())
     host = bind["host"]
     port = bind["port"]
-    SERVER_BIND_STATE.update({"host": host, "port": port})
+    SERVER_BIND_STATE.update({"host": host, "port": port, "ssl_enabled": has_ssl})
     print(f"\n🌐  hackme_web server running at {scheme}://{host}:{port}")
-    print(f"    SSL: {'enabled' if has_ssl else 'disabled (add cert.pem + key.pem to enable)'}")
+    if has_ssl:
+        ssl_label = "enabled"
+    elif ssl_state["enabled_by_setting"] and not has_ssl_files:
+        ssl_label = "disabled (cert.pem + key.pem missing)"
+    else:
+        ssl_label = "disabled by root setting"
+    print(f"    SSL: {ssl_label}")
     print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")
 

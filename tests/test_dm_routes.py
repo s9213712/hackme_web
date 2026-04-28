@@ -64,7 +64,7 @@ def _seed_db(db_path):
     conn.executemany(
         "INSERT INTO users (id, username, role, member_level, base_level, effective_level) VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (1, "root", "super_admin", "vip", "vip", "vip"),
+            (1, "root", "super_admin", "normal", "normal", "normal"),
             (2, "alice", "user", "normal", "normal", "normal"),
             (3, "bob", "user", "normal", "normal", "normal"),
             (4, "restricted", "user", "restricted", "restricted", "restricted"),

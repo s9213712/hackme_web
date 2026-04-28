@@ -80,7 +80,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="album-gallery-list"' in index_html
     assert 'id="album-viewer-card"' in index_html
     assert '/js/35-drive.js?v=20260429-torrent-upload' in index_html
-    assert '/styles.css?v=20260429-ui-final' in index_html
+    assert '/styles.css?v=20260429-session-topbar' in index_html
     assert '/js/00-core.js?v=20260429-ui-final' in index_html
     assert '/js/50-admin.js?v=20260429-sidebar' in index_html
     assert "onclick=" not in index_html
@@ -100,9 +100,25 @@ def test_album_viewer_has_dedicated_module():
     assert "sidebar-footer" in index_html
     assert "sidebar-current-user" in index_html
     assert "sidebar-current-level" in index_html
+    assert "sidebar-points" in index_html
+    assert "sidebar-violations" in index_html
+    assert "sidebar-server-version" in index_html
     assert "app-action-bar" in index_html
+    assert 'id="session-countdown-label"' in index_html
+    assert "member_level_label" in core_js
+    assert "特殊階級" in core_js
+    assert "RESET_RUNTIME_STATE" in index_html
+    assert 'id="security-profile-load-current-btn"' in index_html
+    assert 'id="security-mode-profile-preview"' in index_html
+    assert 'id="server-mode-profile-preview"' in index_html
+    assert "loadCurrentSecurityProfileDraft" in admin_js
+    assert "renderSecurityProfilePreview" in admin_js
+    assert "populateProfileSelect(\"server-mode-select\"" in admin_js
+    assert 'confirm: "RESET_RUNTIME_STATE"' in admin_js
+    assert '"RUN_RESET"' not in admin_js
     assert "icon-action-btn" in index_html
     assert "server-connection-light" not in index_html
+    assert "startClock" not in core_js
     assert "SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
     assert "localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY" in core_js
     assert "data-sidebar-action" in core_js

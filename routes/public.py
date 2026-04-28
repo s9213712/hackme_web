@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import argon2
 from flask import make_response, request, send_from_directory
 
+from services.access_controls import verify_internal_test_token
 from services.account_recovery import (
     create_recovery_token,
     ensure_account_recovery_schema,
@@ -87,6 +88,25 @@ def register_public_routes(app, deps):
 
     def generic_recovery_response():
         return json_resp({"ok": True, "msg": "如果資料符合，系統會寄出後續操作通知"})
+
+    def current_server_mode(conn):
+        try:
+            row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+            return str(row["current_mode"] or "preprod") if row else "preprod"
+        except Exception:
+            return "preprod"
+
+    def internal_test_login_allowed(settings, data):
+        token = (
+            str(data.get("internal_test_token") or "").strip()
+            or str(data.get("login_token") or "").strip()
+            or request.headers.get("X-Internal-Test-Token", "").strip()
+        )
+        return verify_internal_test_token(
+            token,
+            settings.get("internal_test_login_token_hash", ""),
+            settings.get("internal_test_login_token_expires_at", ""),
+        )
 
     def find_recovery_user(conn, identifier):
         ident = str(identifier or "").strip()
@@ -454,6 +474,15 @@ def register_public_routes(app, deps):
                 if settings.get("require_email_verification") and not bool(user_row["email_verified"] or 0):
                     audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                if current_server_mode(conn) == "internal_test" and user_row["username"] != "root":
+                    if not internal_test_login_allowed(settings, data):
+                        conn.execute(
+                            "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
+                            (user_row["id"], ip, ua, now),
+                        )
+                        conn.commit()
+                        audit("LOGIN_INTERNAL_TEST_TOKEN_REQUIRED", ip, username, ua=ua, success=False)
+                        return json_resp({"ok":False,"msg":"目前是內測模式，請輸入 root 提供的內測 token"}), 403
 
                 # Log successful attempt
                 conn.execute(
@@ -693,13 +722,14 @@ def register_public_routes(app, deps):
         if not ctx:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         role = "super_admin" if ctx["username"] == "root" else ctx["role"]
-        effective_level = dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal"
+        is_special_account = ctx["username"] == "root" or role in {"super_admin", "manager"}
+        effective_level = None if is_special_account else (dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal")
         # 全局覆寫（system_settings）> member_level 規則 > 預設 10
         settings = get_system_settings()
         override = settings.get("session_idle_timeout_minutes")
         if override is not None:
             session_idle_timeout_minutes = max(1, int(override))
-        elif get_member_level_rule:
+        elif get_member_level_rule and effective_level:
             conn = get_db()
             try:
                 rule = get_member_level_rule(conn, effective_level) or {}
@@ -715,8 +745,11 @@ def register_public_routes(app, deps):
             "role": role,
             "role_label": ROLE_LABEL.get(role, role),
             "status": ctx["status"],
-            "base_level": dict(ctx).get("base_level") or dict(ctx).get("member_level") or "normal",
+            "member_level": None if is_special_account else (dict(ctx).get("member_level") or "normal"),
+            "base_level": None if is_special_account else (dict(ctx).get("base_level") or dict(ctx).get("member_level") or "normal"),
             "effective_level": effective_level,
+            "member_level_label": "特殊階級" if is_special_account else effective_level,
+            "special_account": is_special_account,
             "session_idle_timeout_minutes": session_idle_timeout_minutes,
             "trust_score": dict(ctx).get("trust_score") or 0,
             "reputation": dict(ctx).get("reputation") or 0,

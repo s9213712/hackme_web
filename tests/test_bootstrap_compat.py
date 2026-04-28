@@ -154,7 +154,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
     integrity_manifest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_manifest_versions)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
-    root_user = conn.execute("SELECT username, must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
+    root_user = conn.execute("SELECT username, must_change_password, is_default_password, member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
     conn.close()
 
     assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
@@ -212,6 +212,9 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert root_user["username"] == "root"
     assert root_user["must_change_password"] == 1
     assert root_user["is_default_password"] == 1
+    assert root_user["member_level"] == "normal"
+    assert root_user["base_level"] == "normal"
+    assert root_user["effective_level"] == "normal"
 
 
 def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, monkeypatch):
@@ -222,7 +225,7 @@ def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, m
     conn.executescript(schema_path.read_text(encoding="utf-8"))
     now = "2026-01-01T00:00:00"
     cur = conn.execute(
-        "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)",
+        "INSERT INTO users (username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (?, 'active', 'super_admin', 'vip', 'vip', 'vip', ?, ?)",
         ("root", now, now),
     )
     conn.execute(
@@ -272,8 +275,10 @@ def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, m
 
     conn = sqlite3.connect(db_path)
     count = conn.execute("SELECT COUNT(*) FROM user_passwords").fetchone()[0]
+    root = conn.execute("SELECT member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
     conn.close()
     assert count == 1
+    assert tuple(root) == ("normal", "normal", "normal")
 
 
 def test_init_db_marks_existing_default_account_when_env_password_still_matches(tmp_path, monkeypatch):

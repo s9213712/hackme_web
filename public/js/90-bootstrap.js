@@ -64,6 +64,8 @@ function bindUiEvents() {
   const settingsSave = $("settings-save-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const serverModeApply = $("server-mode-apply-btn");
+  const internalTestTokenRefresh = $("internal-test-token-refresh-btn");
+  const internalTestTokenRotate = $("internal-test-token-rotate-btn");
   const healthRefresh = $("health-refresh-btn");
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
@@ -78,6 +80,9 @@ function bindUiEvents() {
   const securityThresholdsSave = $("security-thresholds-save-btn");
   const securityModeApply = $("security-mode-apply-btn");
   const securityProfileSave = $("security-profile-save-btn");
+  const securityProfileLoadCurrent = $("security-profile-load-current-btn");
+  const securityModeSelect = $("security-mode-select");
+  const serverModeSelect = $("server-mode-select");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
   const avatarUploadBtn = $("edit-user-avatar-upload");
@@ -117,6 +122,9 @@ function bindUiEvents() {
   const communityThreadDeleteBtn = $("community-thread-delete-btn");
   const communityToolsToggleBtn = $("community-tools-toggle-btn");
   const communityReviewTabBtn = $("community-review-tab-btn");
+  const communityModeratorRefreshBtn = $("community-moderator-refresh-btn");
+  const communityModeratorSaveBtn = $("community-moderator-save-btn");
+  const communityModeratorPreset = $("community-moderator-preset");
   const communityBackBoardsBtn = $("community-back-boards-btn");
   const communityBackThreadsBtn = $("community-back-threads-btn");
   const communityBoardSearch = $("community-board-search");
@@ -235,6 +243,9 @@ function bindUiEvents() {
   });
   if (communityThreadLockToggle) communityThreadLockToggle.addEventListener("click", toggleCommunityThreadLock);
   if (communityThreadDeleteBtn) communityThreadDeleteBtn.addEventListener("click", deleteCommunityThread);
+  if (communityModeratorRefreshBtn) communityModeratorRefreshBtn.addEventListener("click", () => loadCommunityModerators());
+  if (communityModeratorSaveBtn) communityModeratorSaveBtn.addEventListener("click", saveCommunityModerator);
+  if (communityModeratorPreset) communityModeratorPreset.addEventListener("change", () => applyModeratorPreset(communityModeratorPreset.value));
   if (communityToolsToggleBtn) communityToolsToggleBtn.addEventListener("click", () => toggleCommunityTools());
   if (communityReviewTabBtn) communityReviewTabBtn.addEventListener("click", () => switchCommunityMode(communityMode === "review" ? "boards" : "review"));
   if (communityBackBoardsBtn) communityBackBoardsBtn.addEventListener("click", showCommunityBoardStage);
@@ -347,6 +358,8 @@ function bindUiEvents() {
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (serverModeApply) serverModeApply.addEventListener("click", applyServerMode);
+  if (internalTestTokenRefresh) internalTestTokenRefresh.addEventListener("click", loadInternalTestTokenStatus);
+  if (internalTestTokenRotate) internalTestTokenRotate.addEventListener("click", rotateInternalTestToken);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);
@@ -361,6 +374,9 @@ function bindUiEvents() {
   if (securityThresholdsSave) securityThresholdsSave.addEventListener("click", saveSecurityThresholds);
   if (securityModeApply) securityModeApply.addEventListener("click", applySecurityMode);
   if (securityProfileSave) securityProfileSave.addEventListener("click", saveSecurityProfile);
+  if (securityProfileLoadCurrent) securityProfileLoadCurrent.addEventListener("click", loadCurrentSecurityProfileDraft);
+  if (securityModeSelect) securityModeSelect.addEventListener("change", () => renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview"));
+  if (serverModeSelect) serverModeSelect.addEventListener("change", () => renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview"));
 }
 
 $("li-pw").addEventListener("keydown", (e) => {
@@ -374,11 +390,6 @@ setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
 
 (async function init() {
   await loadSiteConfig();
-  try {
-    startClock();
-  } catch (err) {
-    console.error("clock bootstrap failed", err);
-  }
   setupInactivityTracking();
   startServerConnectionMonitor();
   _csrfToken = readCookie("csrf_token");

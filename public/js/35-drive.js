@@ -232,7 +232,7 @@ function renderDriveFiles(files) {
           <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.id)}">${sanitize(primary.label)}</button>
           <button class="btn" type="button" data-drive-action="move-cloud-to-storage" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">移動</button>
           <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.id)}" data-warn="${warn ? "1" : "0"}">下載</button>
-          <button class="btn btn-danger" type="button" data-drive-action="delete-cloud" data-file-id="${sanitize(file.id)}">刪除</button>
+          <button class="btn btn-danger" type="button" data-drive-action="delete-cloud" data-file-id="${sanitize(file.id)}">移到垃圾桶</button>
         </div>
       </div>
     `;
@@ -506,12 +506,12 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
 }
 
 async function deleteDriveFile(fileId) {
-  if (!window.confirm("刪除此雲端硬碟檔案？既有附件引用會失效。")) return;
+  if (!window.confirm("將此檔案移到垃圾桶？清空垃圾桶前仍可還原。")) return;
   try {
     await storageAction(`/cloud-drive/files/${encodeURIComponent(fileId)}`, "DELETE");
     await loadDriveDashboard();
   } catch (err) {
-    alert(err.message || "刪除失敗");
+    alert(err.message || "移到垃圾桶失敗");
   }
 }
 
@@ -992,6 +992,7 @@ function renderStorageFolders(folders) {
       <div class="drive-file-actions">
         <button class="btn btn-primary" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">開啟</button>
         <button class="btn" type="button" data-drive-action="select-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">移動</button>
+        <button class="btn btn-danger" type="button" data-drive-action="trash-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">刪除</button>
       </div>
     </div>
   `));
@@ -1166,6 +1167,18 @@ async function moveStorageFolder() {
   } catch (err) { alert(err.message || "移動資料夾失敗"); }
 }
 
+async function trashStorageFolder(path) {
+  const folderPath = normalizeStoragePath(path);
+  if (!window.confirm(`將資料夾「${folderPath}」與其中檔案移到垃圾桶？`)) return;
+  try {
+    await storageAction("/storage/folders", "DELETE", { path: folderPath });
+    if (currentStoragePath === folderPath || currentStoragePath.startsWith(`${folderPath}/`)) {
+      currentStoragePath = storageDirName(folderPath);
+    }
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "刪除資料夾失敗"); }
+}
+
 function openStorageFolder(path) {
   currentStoragePath = normalizeStoragePath(path);
   setStorageSelection("", "");
@@ -1247,11 +1260,26 @@ async function restoreStorageFile(id) {
 }
 
 async function purgeStorageFile(id) {
-  if (!window.confirm("永久移除此 storage entry？原始雲端檔案不會被刪除。")) return;
+  if (!window.confirm("永久移除此垃圾桶項目？由「我的檔案」移入垃圾桶的檔案會永久失效。")) return;
   try {
     await storageAction(`/storage/files/${encodeURIComponent(id)}/purge`, "DELETE");
     await loadDriveDashboard();
   } catch (err) { alert(err.message); }
+}
+
+async function restoreStorageTrash() {
+  try {
+    await storageAction("/storage/trash/restore", "POST");
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "還原垃圾桶失敗"); }
+}
+
+async function purgeStorageTrash() {
+  if (!window.confirm("清空垃圾桶？由「我的檔案」移入垃圾桶的檔案會永久失效。")) return;
+  try {
+    await storageAction("/storage/trash/purge", "DELETE");
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "清空垃圾桶失敗"); }
 }
 
 async function downloadStorageFile(id) {
@@ -1522,6 +1550,9 @@ document.addEventListener("click", (event) => {
     if (action === "trash-storage") return trashStorageFile(storageFileId);
     if (action === "restore-storage") return restoreStorageFile(storageFileId);
     if (action === "purge-storage") return purgeStorageFile(storageFileId);
+    if (action === "trash-storage-folder") return trashStorageFolder(path);
+    if (action === "restore-storage-trash") return restoreStorageTrash();
+    if (action === "purge-storage-trash") return purgeStorageTrash();
     if (action === "select-storage-folder") return selectStorageFolderForMove(path);
     if (action === "open-album") return openAlbum(albumId);
     if (action === "delete-album") return deleteAlbum(albumId);

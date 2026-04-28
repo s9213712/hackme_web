@@ -601,6 +601,54 @@ def test_board_moderator_can_review_only_assigned_board_threads(tmp_path):
     assert _thread_row(db_path, pending_id)["title"] == "待審主題"
 
 
+def test_board_moderator_reward_and_penalty_permissions_are_scoped(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    assigned = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={
+            "user_id": 4,
+            "can_reward_authors": False,
+            "can_penalize_posts": False,
+            "can_pin_posts": True,
+            "can_delete_posts": True,
+        },
+    )
+    assert assigned.status_code == 200
+
+    listed = client.get(f"/api/community/boards/{board_id}/moderators")
+    moderator = next(item for item in listed.get_json()["moderators"] if item["user_id"] == 4)
+    assert moderator["can_reward_authors"] is False
+    assert moderator["can_penalize_posts"] is False
+    assert moderator["can_pin_posts"] is True
+    assert moderator["can_delete_posts"] is True
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    reward_denied = client.post(f"/api/community/threads/{ids['thread']}/reward", json={"points": 1})
+    penalty_denied = client.post(f"/api/community/posts/{ids['post']}/penalty", json={"points": 1})
+    assert reward_denied.status_code == 403
+    assert penalty_denied.status_code == 403
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    updated = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={"user_id": 4, "can_reward_authors": True, "can_penalize_posts": True},
+    )
+    assert updated.status_code == 200
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    reward_ok = client.post(f"/api/community/threads/{ids['thread']}/reward", json={"points": 1})
+    penalty_ok = client.post(f"/api/community/posts/{ids['post']}/penalty", json={"points": 1})
+    assert reward_ok.status_code == 200
+    assert penalty_ok.status_code == 200
+
+
 def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)

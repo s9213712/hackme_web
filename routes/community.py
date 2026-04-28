@@ -137,6 +137,8 @@ def register_community_routes(app, deps):
             can_lock_threads    INTEGER NOT NULL DEFAULT 1,
             can_edit_posts      INTEGER NOT NULL DEFAULT 1,
             can_delete_posts    INTEGER NOT NULL DEFAULT 1,
+            can_reward_authors  INTEGER NOT NULL DEFAULT 1,
+            can_penalize_posts  INTEGER NOT NULL DEFAULT 1,
             created_by          TEXT NOT NULL,
             created_at          TEXT NOT NULL,
             updated_at          TEXT NOT NULL,
@@ -257,6 +259,8 @@ def register_community_routes(app, deps):
             ("can_lock_threads", "INTEGER NOT NULL DEFAULT 1"),
             ("can_edit_posts", "INTEGER NOT NULL DEFAULT 1"),
             ("can_delete_posts", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_reward_authors", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_penalize_posts", "INTEGER NOT NULL DEFAULT 1"),
             ("created_by", "TEXT NOT NULL DEFAULT 'system'"),
             ("created_at", "TEXT"),
             ("updated_at", "TEXT"),
@@ -326,8 +330,8 @@ def register_community_routes(app, deps):
         now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, "
-            "can_lock_threads, can_edit_posts, can_delete_posts, created_by, created_at, updated_at) "
-            "VALUES (?, ?, ?, 1, 1, 1, 1, 1, ?, ?, ?) "
+            "can_lock_threads, can_edit_posts, can_delete_posts, can_reward_authors, can_penalize_posts, created_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, 1, 1, 1, 1, 1, 1, ?, ?, ?) "
             "ON CONFLICT(board_id, user_id) DO UPDATE SET username=excluded.username, updated_at=excluded.updated_at",
             (board_id, user_id, username, created_by, now, now)
         )
@@ -518,6 +522,8 @@ def register_community_routes(app, deps):
             "can_lock_threads": bool(row["can_lock_threads"]),
             "can_edit_posts": bool(row["can_edit_posts"]),
             "can_delete_posts": bool(row["can_delete_posts"]),
+            "can_reward_authors": bool(row["can_reward_authors"]),
+            "can_penalize_posts": bool(row["can_penalize_posts"]),
             "created_by": row["created_by"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1055,15 +1061,18 @@ def register_community_routes(app, deps):
                 "can_lock_threads": 1 if data.get("can_lock_threads", True) else 0,
                 "can_edit_posts": 1 if data.get("can_edit_posts", True) else 0,
                 "can_delete_posts": 1 if data.get("can_delete_posts", True) else 0,
+                "can_reward_authors": 1 if data.get("can_reward_authors", True) else 0,
+                "can_penalize_posts": 1 if data.get("can_penalize_posts", True) else 0,
             }
             conn.execute(
                 "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, "
-                "can_lock_threads, can_edit_posts, can_delete_posts, created_by, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "can_lock_threads, can_edit_posts, can_delete_posts, can_reward_authors, can_penalize_posts, created_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(board_id, user_id) DO UPDATE SET "
                 "username=excluded.username, can_review_threads=excluded.can_review_threads, "
                 "can_pin_posts=excluded.can_pin_posts, can_lock_threads=excluded.can_lock_threads, "
                 "can_edit_posts=excluded.can_edit_posts, can_delete_posts=excluded.can_delete_posts, "
+                "can_reward_authors=excluded.can_reward_authors, can_penalize_posts=excluded.can_penalize_posts, "
                 "updated_at=excluded.updated_at",
                 (
                     board_id,
@@ -1074,6 +1083,8 @@ def register_community_routes(app, deps):
                     values["can_lock_threads"],
                     values["can_edit_posts"],
                     values["can_delete_posts"],
+                    values["can_reward_authors"],
+                    values["can_penalize_posts"],
                     actor["username"],
                     now,
                     now,
@@ -1608,7 +1619,7 @@ def register_community_routes(app, deps):
             ).fetchone()
             if not thread or thread["is_deleted"]:
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
-            if not can_moderate_board(conn, thread["board_id"], actor, "can_pin_posts"):
+            if not can_moderate_board(conn, thread["board_id"], actor, "can_reward_authors"):
                 return json_resp({"ok": False, "msg": "只有管理員或版主可獎勵主題作者"}), 403
             ensure_user_reputation_columns(conn)
             add_reputation_event(
@@ -1851,7 +1862,7 @@ def register_community_routes(app, deps):
             ).fetchone()
             if not post or post["is_deleted"] or post["thread_is_deleted"]:
                 return json_resp({"ok": False, "msg": "找不到留言"}), 404
-            if not can_moderate_board(conn, post["board_id"], actor, "can_delete_posts"):
+            if not can_moderate_board(conn, post["board_id"], actor, "can_penalize_posts"):
                 return json_resp({"ok": False, "msg": "只有管理員或版主可懲處違規留言"}), 403
             if post["author_username"] == "root":
                 return json_resp({"ok": False, "msg": "無法對 root 計點"}), 403

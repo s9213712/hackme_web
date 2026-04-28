@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from services.storage_paths import resolve_storage_path
+from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import (
     create_uploaded_file_record,
     get_cloud_drive_security_policy,
@@ -147,12 +148,22 @@ def _create_file_access_log(conn, *, file_id, actor_user_id, action, result, rea
 
 def list_cloud_files(conn, actor, *, limit=50, offset=0):
     ensure_cloud_drive_attachment_schema(conn)
+    ensure_storage_album_schema(conn)
     rows = conn.execute(
         """
         SELECT f.*, COUNT(r.id) AS ref_count
         FROM uploaded_files f
         LEFT JOIN cloud_file_refs r ON r.file_id=f.id
         WHERE f.owner_user_id=? AND f.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM storage_files sf
+                  WHERE sf.file_id=f.id
+                        AND sf.owner_user_id=f.owner_user_id
+                        AND sf.deleted_at IS NULL
+                        AND sf.is_trashed=1
+                        AND sf.trash_source='cloud_drive_delete'
+              )
         GROUP BY f.id
         ORDER BY f.created_at DESC
         LIMIT ? OFFSET ?
@@ -481,10 +492,22 @@ def _insert_grant(conn, *, file_id, user_id=None, role=None, group_id=None, cont
 
 def can_download_file(conn, *, actor, file_id, action="download"):
     ensure_cloud_drive_attachment_schema(conn)
+    ensure_storage_album_schema(conn)
     row = _file_row(conn, file_id)
     if not row:
         return False, "not_found", None
     if row["deleted_at"]:
+        return False, "deleted", row
+    trashed = conn.execute(
+        """
+        SELECT 1 FROM storage_files
+        WHERE file_id=? AND owner_user_id=? AND deleted_at IS NULL
+              AND is_trashed=1 AND trash_source='cloud_drive_delete'
+        LIMIT 1
+        """,
+        (file_id, int(row["owner_user_id"])),
+    ).fetchone()
+    if trashed:
         return False, "deleted", row
     if int(row["owner_user_id"]) == int(actor["id"]) or is_manager_or_root(actor):
         return _scan_allows_download(conn, row), "owner_or_admin", row

@@ -16,9 +16,44 @@ from services.release_info import APP_RELEASE_ID
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
 RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
-SERVER_MODES = {"preprod", "test", "superweak"}
+SERVER_MODES = {"production", "preprod", "internal_test", "test", "superweak"}
 PORTABLE_SNAPSHOT_FILES = ("metadata.json", "checksums.sha256", "db.sqlite3.backup", "uploads.tar.gz", "config.tar.gz", "manifest.json")
+DEFAULT_ACCOUNT_NAMES = ("root", "admin", "test")
+TEST_ACCOUNT_NAMES = ("test",)
 BUILTIN_SECURITY_PROFILES = {
+    "production": {
+        "label": "production（上線）",
+        "description": "正式上線設定檔：安全機制全開、停用測試帳戶，並要求預設帳戶重新設定強密碼。",
+        "settings": {
+            "maintenance_mode": False,
+            "allow_register": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "browser_only_mode_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "feature_account_security_enabled": True,
+            "feature_advanced_security_enabled": True,
+            "feature_identity_governance_enabled": True,
+            "feature_member_governance_enabled": True,
+            "feature_server_modes_enabled": True,
+            "feature_snapshot_restore_enabled": True,
+            "feature_audit_log_enabled": True,
+            "feature_violation_center_enabled": True,
+            "feature_health_center_enabled": True,
+            "captcha_mode": "math",
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 5,
+            "security_pending_appeals_threshold": 5,
+            "security_pending_moderation_proposals_threshold": 5,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 0,
+        },
+    },
     "preprod": {
         "label": "preprod（準上線）",
         "description": "接近正式部署的安全設定檔，要求完整性檢查通過。",
@@ -35,6 +70,30 @@ BUILTIN_SECURITY_PROFILES = {
             "security_pending_moderation_proposals_threshold": 10,
             "security_quarantined_files_threshold": 0,
             "security_unknown_encrypted_files_threshold": 50,
+        },
+    },
+    "internal_test": {
+        "label": "internal test（內測）",
+        "description": "內測模式：只有 root 可直接登入；其他帳號必須提供 root 發出的內測登入 token。",
+        "settings": {
+            "maintenance_mode": False,
+            "allow_register": False,
+            "audit_chain_enabled": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "feature_account_security_enabled": True,
+            "feature_server_modes_enabled": True,
+            "feature_audit_log_enabled": True,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 10,
+            "security_pending_appeals_threshold": 10,
+            "security_pending_moderation_proposals_threshold": 10,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 25,
         },
     },
     "test": {
@@ -1037,17 +1096,177 @@ class ServerModeService:
         finally:
             conn.close()
 
+    def _apply_production_upload_policy(self, conn):
+        try:
+            from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
+        except Exception:
+            return {"ok": False, "msg": "upload security policy unavailable"}
+        ensure_upload_security_schema(conn)
+        policy, msg = update_cloud_drive_security_policy(conn, {
+            "require_scan_before_download": True,
+            "block_unclean_downloads": True,
+            "warn_high_risk_downloads": True,
+            "allow_inline_preview_for_high_risk": False,
+            "e2ee_server_scan_claim_allowed": False,
+            "revoke_shares_on_suspension": True,
+            "scanner_enabled": True,
+            "scanner_backend": "clamav",
+            "scanner_timeout_seconds": 60,
+            "fail_closed_on_scanner_error": True,
+            "quarantine_on_infected": True,
+            "validate_magic_mime": True,
+            "deep_archive_scan_enabled": True,
+            "max_archive_depth": 2,
+            "office_macro_scan_enabled": True,
+            "image_reencode_enabled": True,
+            "image_reencode_max_pixels": 25_000_000,
+            "yara_enabled": True,
+            "max_archive_files": 200,
+            "max_archive_uncompressed_bytes": 50 * 1024 * 1024,
+            "max_daily_downloads": 500,
+            "notes": "production mode: strict scan, fail-closed download, quarantine and content validation enabled",
+        })
+        if msg:
+            return {"ok": False, "msg": msg}
+        return {"ok": True, "policy": policy}
+
+    def _apply_production_account_policy(self, conn, *, actor):
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "username" not in user_cols or "id" not in user_cols:
+            return {"default_password_reset_required": 0, "test_accounts_disabled": 0, "sessions_revoked": 0}
+        now = datetime.now().isoformat()
+
+        default_where = ["username IN ({})".format(",".join("?" for _ in DEFAULT_ACCOUNT_NAMES))]
+        default_params = list(DEFAULT_ACCOUNT_NAMES)
+        if "is_default_password" in user_cols:
+            default_where.append("COALESCE(is_default_password, 0)=1")
+        default_rows = conn.execute(
+            f"SELECT id FROM users WHERE {' OR '.join(default_where)}",
+            tuple(default_params),
+        ).fetchall()
+        default_ids = [int(row["id"]) for row in default_rows]
+        default_updates = []
+        if "must_change_password" in user_cols:
+            default_updates.append("must_change_password=1")
+        if "is_default_password" in user_cols:
+            default_updates.append("is_default_password=1")
+        if "updated_at" in user_cols:
+            default_updates.append("updated_at=?")
+        if default_ids and default_updates:
+            params = []
+            if "updated_at" in user_cols:
+                params.append(now)
+            placeholders = ",".join("?" for _ in default_ids)
+            conn.execute(
+                f"UPDATE users SET {', '.join(default_updates)} WHERE id IN ({placeholders})",
+                tuple(params + default_ids),
+            )
+
+        test_rows = conn.execute(
+            "SELECT id FROM users WHERE username IN ({})".format(",".join("?" for _ in TEST_ACCOUNT_NAMES)),
+            tuple(TEST_ACCOUNT_NAMES),
+        ).fetchall()
+        test_ids = [int(row["id"]) for row in test_rows]
+        if test_ids and "status" in user_cols:
+            updates = ["status='inactive'"]
+            if "updated_at" in user_cols:
+                updates.append("updated_at=?")
+            params = [now] if "updated_at" in user_cols else []
+            placeholders = ",".join("?" for _ in test_ids)
+            conn.execute(
+                f"UPDATE users SET {', '.join(updates)} WHERE id IN ({placeholders})",
+                tuple(params + test_ids),
+            )
+
+        sessions_revoked = 0
+        session_cols = set()
+        try:
+            session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        except Exception:
+            session_cols = set()
+        if test_ids and {"user_id", "is_revoked"}.issubset(session_cols):
+            placeholders = ",".join("?" for _ in test_ids)
+            updates = ["is_revoked=1"]
+            params = []
+            if "revoked_at" in session_cols:
+                updates.append("revoked_at=?")
+                params.append(now)
+            cur = conn.execute(
+                f"UPDATE sessions SET {', '.join(updates)} WHERE user_id IN ({placeholders}) AND COALESCE(is_revoked, 0)=0",
+                tuple(params + test_ids),
+            )
+            sessions_revoked = int(cur.rowcount or 0)
+
+        return {
+            "default_password_reset_required": len(default_ids),
+            "test_accounts_disabled": len(test_ids),
+            "sessions_revoked": sessions_revoked,
+            "password_policy": "forced reset uses the account password-strength policy",
+            "actor": actor.get("username") if hasattr(actor, "get") else None,
+        }
+
+    def _apply_production_hardening(self, *, actor):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            account_result = self._apply_production_account_policy(conn, actor=actor)
+            upload_policy = self._apply_production_upload_policy(conn)
+            if not upload_policy.get("ok"):
+                conn.rollback()
+                return {"ok": False, "msg": upload_policy.get("msg") or "production upload policy failed"}
+            conn.commit()
+            return {"ok": True, "accounts": account_result, "cloud_drive_policy": upload_policy.get("policy")}
+        finally:
+            conn.close()
+
+    def _apply_internal_test_hardening(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            now = datetime.now().isoformat()
+            session_cols = set()
+            try:
+                session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            except Exception:
+                session_cols = set()
+            revoked = 0
+            if {"user_id", "is_revoked"}.issubset(session_cols):
+                updates = ["is_revoked=1"]
+                params = []
+                if "revoked_at" in session_cols:
+                    updates.append("revoked_at=?")
+                    params.append(now)
+                cur = conn.execute(
+                    f"""
+                    UPDATE sessions
+                    SET {', '.join(updates)}
+                    WHERE COALESCE(is_revoked, 0)=0
+                          AND user_id IN (
+                              SELECT id FROM users
+                              WHERE username<>'root'
+                          )
+                    """,
+                    tuple(params),
+                )
+                revoked = int(cur.rowcount or 0)
+            conn.commit()
+            return {"ok": True, "sessions_revoked": revoked}
+        finally:
+            conn.close()
+
     def switch_mode(self, *, target_mode, actor, confirm, notes=None):
         target_mode = str(target_mode or "").strip().lower()
         profile = self.get_profile(target_mode)
         if not profile:
             return {"ok": False, "msg": "server mode 錯誤"}
-        if target_mode == "preprod" and self.integrity_guard:
+        if target_mode == "production" and confirm != "GO_LIVE":
+            return {"ok": False, "msg": "進入 production 上線模式必須在確認欄輸入 GO_LIVE"}
+        if target_mode in {"preprod", "production"} and self.integrity_guard:
             allowed, high_risk_count = self.integrity_guard.can_enter_preprod()
             if not allowed:
                 return {
                     "ok": False,
-                    "msg": "存在 pending/rejected high risk Integrity Guard finding，不允許進入準上線模式",
+                    "msg": "存在 pending/rejected high risk Integrity Guard finding，不允許進入準上線或上線模式",
                     "high_risk_count": high_risk_count,
                 }
         if target_mode == "superweak":
@@ -1058,6 +1277,14 @@ class ServerModeService:
             updates.update(profile.get("settings") or {})
             updates.update(profile.get("thresholds") or {})
             applied_settings = self.save_settings(updates) if updates else {}
+        production_result = None
+        if target_mode == "production":
+            production_result = self._apply_production_hardening(actor=actor)
+            if not production_result.get("ok"):
+                return production_result
+        internal_test_result = None
+        if target_mode == "internal_test":
+            internal_test_result = self._apply_internal_test_hardening()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -1067,8 +1294,8 @@ class ServerModeService:
                 (current, target_mode, int(actor["id"]), datetime.now().isoformat(), notes or ""),
             )
             conn.commit()
-            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},profile={profile['name']},settings={applied_settings},reason={notes or ''}")
-            return {"ok": True, "mode": self.get_current_mode(), "profile": profile, "applied_settings": applied_settings}
+            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},profile={profile['name']},settings={applied_settings},production={production_result or {}},internal_test={internal_test_result or {}},reason={notes or ''}")
+            return {"ok": True, "mode": self.get_current_mode(), "profile": profile, "applied_settings": applied_settings, "production": production_result, "internal_test": internal_test_result}
         finally:
             conn.close()
 

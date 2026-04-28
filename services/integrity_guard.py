@@ -2,13 +2,14 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
 MANIFEST_VERSION = 1
 MANIFEST_FILENAME = "integrity_manifest.json"
 CONFIRM_APPROVE = "APPROVE INTEGRITY UPDATE"
+AUTO_APPROVE_PENDING_AFTER = timedelta(days=1)
 FINDING_STATUSES = {"pending", "approved", "rejected", "ignored"}
 CHANGE_TYPES = {"modified", "added", "deleted"}
 HIGH_RISK_CATEGORIES = {
@@ -125,6 +126,13 @@ def ensure_integrity_schema(conn):
 
 def _now():
     return datetime.now().isoformat()
+
+
+def _parse_dt(value):
+    try:
+        return datetime.fromisoformat(str(value or ""))
+    except Exception:
+        return None
 
 
 def _canonical_json(data):
@@ -502,6 +510,7 @@ class IntegrityGuard:
             close = True
         try:
             self.ensure_schema(conn)
+            auto_approved = self.auto_approve_expired_findings(conn=conn)
             run = conn.execute("SELECT * FROM integrity_scan_runs ORDER BY id DESC LIMIT 1").fetchone()
             counts = conn.execute(
                 "SELECT status, risk_level, change_type, COUNT(*) AS c FROM integrity_findings GROUP BY status, risk_level, change_type"
@@ -529,6 +538,7 @@ class IntegrityGuard:
                 "last_scan": dict(run) if run else None,
                 "manifest_path": str(self.manifest_path),
                 "preprod_allowed": summary["high_risk_pending"] == 0,
+                "auto_approved_expired": auto_approved,
             }
         finally:
             if close:
@@ -538,6 +548,7 @@ class IntegrityGuard:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            self.auto_approve_expired_findings(conn=conn)
             params = []
             sql = "SELECT * FROM integrity_findings"
             if status:
@@ -580,6 +591,59 @@ class IntegrityGuard:
                 raise ValueError("finding target no longer exists or is outside protected scope")
             entries[file_path] = self.file_record(target)
         return entries
+
+    def auto_approve_expired_findings(self, *, actor="system:auto-approve", max_age=AUTO_APPROVE_PENDING_AFTER, conn=None):
+        close = False
+        if conn is None:
+            conn = self.get_db()
+            close = True
+        approved = 0
+        skipped = 0
+        try:
+            self.ensure_schema(conn)
+            cutoff = datetime.now() - max_age
+            rows = conn.execute(
+                "SELECT * FROM integrity_findings WHERE status='pending' ORDER BY detected_at ASC, id ASC"
+            ).fetchall()
+            for row in rows:
+                finding = dict(row)
+                detected_at = _parse_dt(finding.get("detected_at"))
+                if not detected_at or detected_at > cutoff:
+                    continue
+                try:
+                    entries = self._apply_manifest_update_for_finding(finding)
+                    self.write_manifest(entries, approved_by=actor, note=f"auto approve expired finding #{finding['id']}")
+                    reviewed_at = _now()
+                    conn.execute(
+                        "UPDATE integrity_findings SET status='approved', reviewed_by=?, reviewed_at=?, review_note=? WHERE id=?",
+                        (actor, reviewed_at, "auto-approved after 24 hours", int(finding["id"])),
+                    )
+                    approved += 1
+                    self.audit(
+                        "INTEGRITY_FINDING_AUTO_APPROVED",
+                        "-",
+                        user=actor,
+                        success=True,
+                        detail=(
+                            f"id={finding['id']},file_path={finding['file_path']},"
+                            f"risk_level={finding['risk_level']},change_type={finding['change_type']}"
+                        ),
+                    )
+                except Exception as exc:
+                    skipped += 1
+                    self.audit(
+                        "INTEGRITY_FINDING_AUTO_APPROVE_FAILED",
+                        "-",
+                        user=actor,
+                        success=False,
+                        detail=f"id={finding.get('id')},file_path={finding.get('file_path')},error={exc}",
+                    )
+            if approved:
+                conn.commit()
+            return {"approved": approved, "skipped": skipped}
+        finally:
+            if close:
+                conn.close()
 
     def review_finding(self, finding_id, *, action, actor, note="", confirm=""):
         action = str(action or "").strip()
@@ -625,6 +689,7 @@ class IntegrityGuard:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            self.auto_approve_expired_findings(conn=conn)
             row = conn.execute(
                 "SELECT COUNT(*) AS c FROM integrity_findings WHERE status IN ('pending', 'rejected') AND risk_level='high'"
             ).fetchone()

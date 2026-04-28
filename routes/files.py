@@ -25,7 +25,6 @@ from services.cloud_drive import (
     review_announcement_attachment_request,
     revoke_e2ee_file_share,
     share_e2ee_file,
-    soft_delete_cloud_file,
     store_cloud_upload,
 )
 from services.file_previews import build_preview_metadata, preview_category
@@ -47,13 +46,17 @@ from services.storage_albums import (
     list_storage_trash,
     move_storage_file,
     move_storage_folder,
+    purge_storage_trash,
     purge_storage_file,
     remove_album_file,
     resolve_share_token,
+    restore_storage_trash,
     restore_storage_file,
     revoke_share_link,
     mark_share_link_accessed,
     sync_user_storage_summary,
+    trash_cloud_file_to_storage,
+    trash_storage_folder,
     trash_storage_file,
     update_album,
 )
@@ -626,7 +629,7 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
-    @app.route("/api/storage/folders", methods=["GET", "POST"])
+    @app.route("/api/storage/folders", methods=["GET", "POST", "DELETE"])
     @require_csrf_safe
     def storage_folders():
         actor, err = _actor_or_401()
@@ -641,6 +644,14 @@ def register_file_routes(app, deps):
                 data = request.get_json(force=True)
             except Exception:
                 return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            if request.method == "DELETE":
+                result, msg = trash_storage_folder(conn, actor=actor, path=data.get("path") or "")
+                if msg:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": msg}), 404
+                conn.commit()
+                audit("STORAGE_FOLDER_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"path={result['path']}")
+                return json_resp({"ok": True, "folder_trash": result})
             folder, msg = create_storage_folder(conn, actor=actor, path=data.get("path") or "")
             if msg:
                 conn.rollback()
@@ -711,6 +722,8 @@ def register_file_routes(app, deps):
             if not row:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
+                if reason == "deleted":
+                    return json_resp({"ok": False, "msg": "找不到檔案"}), 404
                 conn.commit()
                 return json_resp({"ok": False, "msg": "沒有下載權限或檔案尚未通過安全檢查", "reason": reason}), 403
             path = resolve_file_storage_path(storage_root, row)
@@ -735,6 +748,42 @@ def register_file_routes(app, deps):
             summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="trash", reason="storage_trash_list")
             conn.commit()
             return json_resp({"ok": True, "files": files, "storage": summary})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/trash/restore", methods=["POST"])
+    @require_csrf
+    def storage_trash_restore():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            result, msg = restore_storage_trash(conn, actor=actor)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_TRASH_RESTORE_ALL", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"restored={result['restored']}")
+            return json_resp({"ok": True, "trash": result})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/trash/purge", methods=["DELETE"])
+    @require_csrf
+    def storage_trash_purge():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            result, msg = purge_storage_trash(conn, actor=actor)
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_TRASH_PURGE_ALL", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"purged={result['purged']}")
+            return json_resp({"ok": True, "trash": result})
         finally:
             conn.close()
 
@@ -1417,6 +1466,8 @@ def register_file_routes(app, deps):
             if row["deleted_at"]:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
+                if reason == "deleted":
+                    return json_resp({"ok": False, "msg": "找不到檔案"}), 404
                 return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
             policy = get_cloud_drive_security_policy(conn)
             ok, msg = _preview_allowed_by_policy(policy, row)
@@ -1447,6 +1498,8 @@ def register_file_routes(app, deps):
             if row["deleted_at"]:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
+                if reason == "deleted":
+                    return json_resp({"ok": False, "msg": "找不到檔案"}), 404
                 return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
             policy = get_cloud_drive_security_policy(conn)
             ok, msg = _preview_allowed_by_policy(policy, row)
@@ -1546,6 +1599,8 @@ def register_file_routes(app, deps):
             if row["deleted_at"]:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
             if not allowed:
+                if reason == "deleted":
+                    return json_resp({"ok": False, "msg": "找不到檔案"}), 404
                 conn.commit()
                 return json_resp({"ok": False, "msg": "沒有下載權限或檔案尚未通過安全檢查", "reason": reason}), 403
             policy = get_cloud_drive_security_policy(conn)
@@ -1639,13 +1694,13 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
-            ok, msg = soft_delete_cloud_file(conn, actor=actor, file_id=file_id)
-            if not ok:
+            result, msg = trash_cloud_file_to_storage(conn, actor=actor, file_id=file_id)
+            if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 404
             conn.commit()
-            audit("CLOUD_DRIVE_FILE_DELETE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}")
-            return json_resp({"ok": True, "msg": "檔案已刪除"})
+            audit("CLOUD_DRIVE_FILE_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={file_id}")
+            return json_resp({"ok": True, "msg": "檔案已移到垃圾桶", "trash": result})
         finally:
             conn.close()
 

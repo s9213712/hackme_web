@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-ui-final" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-session-topbar" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -32,6 +32,10 @@
         <input type="password" id="li-pw" placeholder="請輸入密碼" autocomplete="current-password" />
         <button class="pw-toggle" id="li-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
+    </div>
+    <div class="field">
+      <label>內測 token（內測模式才需要）</label>
+      <input type="password" id="li-internal-test-token" placeholder="root 提供的內測 token" autocomplete="one-time-code" />
     </div>
     <button class="btn btn-primary" id="li-btn">登入</button>
     <div class="spinner" id="li-spinner"></div>
@@ -159,7 +163,13 @@
     <p id="welcome-msg" style="color:var(--muted); margin-top:.5rem">歡迎回來！</p>
   </div>
   <div class="app-action-bar" aria-label="快速操作">
-    <button class="btn icon-action-btn" id="self-edit-btn" type="button" title="修改資料" aria-label="修改資料">✎</button>
+    <span class="session-countdown" id="session-countdown-label">未登入</span>
+    <button class="btn icon-action-btn" id="self-edit-btn" type="button" title="修改資料" aria-label="修改資料">
+      <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 3.5 13.25 6a7 7 0 0 1 1.55.65l2.65-.85 1.75 3.05-2.05 1.85a7 7 0 0 1 0 1.6l2.05 1.85-1.75 3.05-2.65-.85a7 7 0 0 1-1.55.65L12 20.5H8.5L7.25 18a7 7 0 0 1-1.55-.65l-2.65.85-1.75-3.05 2.05-1.85a7 7 0 0 1 0-1.6L1.3 9.85 3.05 6.8l2.65.85A7 7 0 0 1 7.25 7L8.5 3.5z"/>
+        <circle cx="10.25" cy="12" r="2.4"/>
+      </svg>
+    </button>
     <div class="notification-center" id="notification-center">
       <button class="btn icon-action-btn notification-toggle" id="notification-toggle" type="button" title="通知" aria-label="通知">
         🔔 <span id="notification-badge" class="notification-badge" style="display:none;">0</span>
@@ -174,8 +184,24 @@
         </div>
       </div>
     </div>
-    <button class="btn icon-action-btn" id="bug-report-open-btn" type="button" title="回報 Bug" aria-label="回報 Bug">!</button>
-    <button class="btn icon-action-btn" id="logout-btn" type="button" title="登出" aria-label="登出">⏻</button>
+    <button class="btn icon-action-btn" id="bug-report-open-btn" type="button" title="回報 Bug" aria-label="回報 Bug">
+      <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M8 7.5a4 4 0 0 1 8 0"/>
+        <path d="M6.5 11.5a5.5 5.5 0 0 1 11 0v2.8a5.5 5.5 0 0 1-11 0z"/>
+        <path d="M12 8v11"/>
+        <path d="M5 10H3.5M20.5 10H19M5.2 15.2 3.7 16.2M18.8 15.2l1.5 1M7.2 6.7 5.9 5.5M16.8 6.7l1.3-1.2"/>
+        <path d="M9.25 11.25h.01M14.75 11.25h.01"/>
+      </svg>
+    </button>
+    <button class="btn icon-action-btn" id="logout-btn" type="button" title="登出" aria-label="登出">
+      <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 20V4h9v16z"/>
+        <path d="M13 12h7"/>
+        <path d="m17 9 3 3-3 3"/>
+        <circle cx="9" cy="9" r="2"/>
+        <path d="M7 18v-1.2a2.8 2.8 0 0 1 5.6 0V18"/>
+      </svg>
+    </button>
   </div>
   <div class="app-shell" id="app-shell">
     <aside class="app-sidebar" id="app-sidebar" aria-label="主要功能">
@@ -207,11 +233,16 @@
             <span class="sidebar-label sidebar-user-role" id="sidebar-current-level">-</span>
           </span>
         </div>
+        <div class="sidebar-stats-card">
+          <div><span class="sidebar-stat-label">積分</span><span class="sidebar-stat-value" id="sidebar-points">0</span></div>
+          <div><span class="sidebar-stat-label">違規扣點</span><span class="sidebar-stat-value" id="sidebar-violations">0</span></div>
+          <div><span class="sidebar-stat-label">權限等級</span><span class="sidebar-stat-value" id="sidebar-effective-level">-</span></div>
+        </div>
         <div class="sidebar-server-state" id="sidebar-server-state">
           <span class="sidebar-server-dot" id="sidebar-server-dot"></span>
           <span class="sidebar-server-meta">
             <span class="sidebar-label" id="sidebar-server-label">連線檢查中</span>
-            <span class="sidebar-label session-countdown" id="session-countdown-label">未登入</span>
+            <span class="sidebar-label" id="sidebar-server-version">發佈號: loading...</span>
           </span>
         </div>
       </div>
@@ -434,6 +465,41 @@
             <div class="mini-title" id="community-board-heading">請先選擇討論區</div>
             <div id="community-board-meta" style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem;"></div>
             <div id="community-board-rules-view" class="community-rules" style="display:none;"></div>
+            <div id="community-moderator-manager" class="community-panel" style="display:none;margin-bottom:.75rem;">
+              <div class="community-panel-head">
+                <div class="mini-title">版主與權限範圍</div>
+                <button class="btn community-mini-btn" id="community-moderator-refresh-btn" type="button">重新整理</button>
+              </div>
+              <div class="settings-option-grid">
+                <div class="field">
+                  <label>帳號 ID</label>
+                  <input type="number" id="community-moderator-user-id" min="1" placeholder="輸入要設定為版主的帳號 ID" />
+                </div>
+                <div class="field">
+                  <label>常用權限組</label>
+                  <select id="community-moderator-preset">
+                    <option value="full">完整版主</option>
+                    <option value="review">只審核主題</option>
+                    <option value="content">內容整理</option>
+                    <option value="discipline">懲處與刪除</option>
+                  </select>
+                </div>
+              </div>
+              <div class="settings-option-grid community-moderator-permissions">
+                <label><input type="checkbox" id="community-mod-can-review-threads" checked /> 審核主題</label>
+                <label><input type="checkbox" id="community-mod-can-pin-posts" checked /> 置頂與精華</label>
+                <label><input type="checkbox" id="community-mod-can-lock-threads" checked /> 鎖定主題</label>
+                <label><input type="checkbox" id="community-mod-can-edit-posts" checked /> 編輯留言</label>
+                <label><input type="checkbox" id="community-mod-can-delete-posts" checked /> 刪除主題或留言</label>
+                <label><input type="checkbox" id="community-mod-can-reward-authors" checked /> 獎勵作者</label>
+                <label><input type="checkbox" id="community-mod-can-penalize-posts" checked /> 懲處違規留言</label>
+              </div>
+              <div class="community-actions" style="margin-top:.55rem;">
+                <button class="btn btn-primary community-mini-btn" id="community-moderator-save-btn" type="button">新增 / 更新版主</button>
+              </div>
+              <div id="community-moderator-msg" class="msg"></div>
+              <div id="community-moderator-list" class="community-scroll" style="margin-top:.75rem;max-height:220px;"></div>
+            </div>
             <div id="community-thread-creator" style="display:none;">
               <div class="field">
                 <label>新主題標題</label>
@@ -633,7 +699,13 @@
           <div id="storage-file-list" class="drive-file-list" style="margin-top:.75rem;"></div>
         </div>
         <div class="drive-card">
-          <div class="drive-card-title">回收筒</div>
+          <div class="drive-card-heading">
+            <div class="drive-card-title">回收筒</div>
+            <div class="drive-file-actions">
+              <button class="btn" type="button" data-drive-action="restore-storage-trash">全部還原</button>
+              <button class="btn btn-danger" type="button" data-drive-action="purge-storage-trash">清空</button>
+            </div>
+          </div>
           <div id="storage-trash-list" class="drive-file-list"></div>
         </div>
       </div>
@@ -1017,7 +1089,7 @@
               <select id="security-mode-select"></select>
             </div>
             <div class="field">
-              <label>確認字串（superweak 需 ENABLE_SUPERWEAK）</label>
+              <label>確認字串（production 需 GO_LIVE；superweak 需 ENABLE_SUPERWEAK）</label>
               <input type="text" id="security-mode-confirm" placeholder="需要時輸入確認字串" />
             </div>
             <div class="field">
@@ -1030,17 +1102,19 @@
             </div>
           </div>
           <div id="security-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+          <div id="security-mode-profile-preview" class="security-profile-preview"></div>
           <div class="mini-title" style="margin:.9rem 0 .55rem;">新增自定義設定檔</div>
           <div class="settings-option-grid">
             <div class="field"><label>名稱</label><input type="text" id="security-profile-name" placeholder="staging_lockdown" /></div>
             <div class="field"><label>顯示名稱</label><input type="text" id="security-profile-label" placeholder="Staging Lockdown" /></div>
             <div class="field"><label>描述</label><input type="text" id="security-profile-description" placeholder="用途與風險說明" /></div>
-            <div class="field"><label>&nbsp;</label><button class="btn" type="button" id="security-profile-save-btn">儲存自定義設定檔</button></div>
+            <div class="field"><label>&nbsp;</label><button class="btn" type="button" id="security-profile-load-current-btn">帶入目前設定</button></div>
           </div>
           <div class="settings-option-grid">
             <div class="field"><label>settings JSON</label><textarea id="security-profile-settings-json" rows="5" placeholder='{"ip_blocking_enabled":true}'></textarea></div>
             <div class="field"><label>thresholds JSON</label><textarea id="security-profile-thresholds-json" rows="5" placeholder='{"security_pending_chat_reports_threshold":10}'></textarea></div>
           </div>
+          <button class="btn" type="button" id="security-profile-save-btn" style="margin-top:.5rem;">儲存自定義設定檔</button>
           <div id="security-profile-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
         </div>
         <div class="drive-card" style="margin-bottom:.8rem;">
@@ -1065,6 +1139,10 @@
           <div>
             <div class="mini-title" style="margin-bottom:.45rem;">Server log</div>
             <pre id="security-server-log" style="max-height:300px;overflow:auto;font-size:.68rem;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;white-space:pre-wrap;"></pre>
+          </div>
+          <div>
+            <div class="mini-title" style="margin-bottom:.45rem;">伺服器即時輸出</div>
+            <pre id="security-server-output" style="max-height:300px;overflow:auto;font-size:.68rem;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;white-space:pre-wrap;"></pre>
           </div>
         </div>
       </div>
@@ -1111,13 +1189,15 @@
             <div class="field">
               <label>目前 / 目標模式</label>
               <select id="server-mode-select">
+                <option value="production">production（上線）</option>
                 <option value="preprod">preprod（準上線）</option>
+                <option value="internal_test">internal test（內測）</option>
                 <option value="test">test（測試）</option>
                 <option value="superweak">superweak（弱化測試）</option>
               </select>
             </div>
             <div class="field">
-              <label>確認字串（進入 superweak 需 ENABLE_SUPERWEAK）</label>
+              <label>確認字串（production 需 GO_LIVE；superweak 需 ENABLE_SUPERWEAK）</label>
               <input type="text" id="server-mode-confirm" placeholder="需要時輸入確認字串" />
             </div>
             <div class="field">
@@ -1130,6 +1210,35 @@
             </div>
           </div>
           <div id="server-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+          <div id="server-mode-profile-preview" class="security-profile-preview"></div>
+          <div class="drive-card" style="margin-top:.8rem;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">內測登入 token</div>
+                <div class="drive-card-sub" id="internal-test-token-status">尚未讀取</div>
+              </div>
+              <button class="btn" type="button" id="internal-test-token-refresh-btn">更新狀態</button>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>有效分鐘數</label>
+                <input type="number" id="internal-test-token-ttl" min="5" max="43200" value="1440" />
+              </div>
+              <div class="field">
+                <label>確認字串</label>
+                <input type="text" id="internal-test-token-confirm" placeholder="ROTATE_INTERNAL_TEST_TOKEN" />
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" type="button" id="internal-test-token-rotate-btn">產生 token</button>
+              </div>
+            </div>
+            <div class="field" id="internal-test-token-output-wrap" style="display:none;">
+              <label>新 token（只顯示這一次）</label>
+              <input type="text" id="internal-test-token-output" readonly />
+            </div>
+            <div id="internal-test-token-msg" class="msg"></div>
+          </div>
         </div>
         <form id="settings-form" style="margin-top:.6rem;">
           <div class="tabs" style="margin-bottom:.85rem;">
@@ -1293,6 +1402,9 @@
             </div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">伺服器 Listen 設定（需重啟生效）</div>
             <div class="field">
+              <label><input type="checkbox" id="s-server-ssl-enabled" /> 啟用 SSL / HTTPS（需 cert.pem 與 key.pem，重啟生效）</label>
+            </div>
+            <div class="field">
               <label>Listen IP / Host（空白代表沿用環境變數）</label>
               <input type="text" id="s-server-listen-host" placeholder="0.0.0.0 / 127.0.0.1 / localhost / ::" />
             </div>
@@ -1301,6 +1413,7 @@
               <input type="number" id="s-server-listen-port" min="0" max="65535" />
             </div>
             <div id="server-bind-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
+            <div id="server-ssl-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">ComfyUI API</div>
             <div class="field">
               <label>ComfyUI API Port（localhost）</label>
@@ -1332,9 +1445,9 @@
               <label>Reset 原因（選填）</label>
               <input type="text" id="s-reset-reason" placeholder="描述進行 reset 的原因…" />
             </div>
-            <div style="color:#ff4f6d;font-size:.78rem;margin-bottom:.5rem;">⚠ Reset 會清除所有 Runtime 狀態並重啟，確認請輸入 <code style="background:rgba(255,0,0,.12);padding:.1rem .3rem;border-radius:3px;">RUN_RESET</code></div>
+            <div style="color:#ff4f6d;font-size:.78rem;margin-bottom:.5rem;">⚠ Reset 會清除所有 Runtime 狀態並重啟，確認請輸入 <code style="background:rgba(255,0,0,.12);padding:.1rem .3rem;border-radius:3px;">RESET_RUNTIME_STATE</code></div>
             <div class="field" style="margin-bottom:.6rem;">
-              <input type="text" id="s-reset-confirm" placeholder="輸入 RUN_RESET 確認" style="width:100%;padding:.3rem;border-radius:4px;border:1px solid #546e7a;background:#1a1a2e;color:#eceff1;" />
+              <input type="text" id="s-reset-confirm" placeholder="輸入 RESET_RUNTIME_STATE 確認" style="width:100%;padding:.3rem;border-radius:4px;border:1px solid #546e7a;background:#1a1a2e;color:#eceff1;" />
             </div>
             <button type="button" id="btn-reset-server" class="btn-sm" style="background:#b71c1c;color:#ffcdd2;border:1px solid #c62828;padding:.35rem .9rem;border-radius:4px;cursor:pointer;">🔄 Reset 伺服器</button>
             <div id="reset-status" style="font-size:.78rem;margin-top:.5rem;"></div>
