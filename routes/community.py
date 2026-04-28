@@ -298,11 +298,19 @@ def register_community_routes(app, deps):
             "updated_at": row["updated_at"],
         }
 
+    def actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        try:
+            return actor[key]
+        except Exception:
+            return actor.get(key, default) if hasattr(actor, "get") else default
+
     def actor_role(actor):
-        return "super_admin" if actor["username"] == "root" else actor["role"]
+        return "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
 
     def can_manage_community(actor):
-        if actor and actor.get("username") == "root":
+        if actor and actor_value(actor, "username") == "root":
             return True
         return role_rank(actor_role(actor)) >= role_rank("manager")
 
@@ -317,7 +325,7 @@ def register_community_routes(app, deps):
     def can_moderate_board(conn, board_id, actor, permission=None):
         if not actor:
             return False
-        if actor.get("username") == "root":
+        if actor_value(actor, "username") == "root":
             return True
         if can_manage_community(actor):
             return True
@@ -331,7 +339,7 @@ def register_community_routes(app, deps):
     def can_delete_community_content(actor, author_user_id=None, owner_user_id=None):
         if not actor:
             return False
-        if actor.get("username") == "root":
+        if actor_value(actor, "username") == "root":
             return True
         if can_manage_community(actor):
             return True
@@ -442,7 +450,7 @@ def register_community_routes(app, deps):
         return post_type if post_type in THREAD_POST_TYPES else None
 
     def actor_effective_level(actor):
-        return (actor or {}).get("effective_level") or (actor or {}).get("base_level") or (actor or {}).get("member_level") or "normal"
+        return actor_value(actor, "effective_level") or actor_value(actor, "base_level") or actor_value(actor, "member_level") or "normal"
 
     def thread_requires_review(actor, manageable):
         return (not manageable) and actor_effective_level(actor) == "newbie"

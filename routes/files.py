@@ -69,11 +69,19 @@ def register_file_routes(app, deps):
             return None, json_resp({"ok": False, "msg": "請先登入"}, 401)
         return actor, None
 
+    def _actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        try:
+            return actor[key]
+        except Exception:
+            return actor.get(key, default) if hasattr(actor, "get") else default
+
     def _is_root(actor):
-        return actor and actor.get("username") == "root"
+        return actor and _actor_value(actor, "username") == "root"
 
     def _is_manager(actor):
-        role = "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
+        role = "super_admin" if actor and _actor_value(actor, "username") == "root" else _actor_value(actor, "role", "user")
         return role_rank(role) >= role_rank("manager")
 
     def _manager_or_403():
@@ -352,7 +360,7 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": True, "files": files, "storage": summary})
             if "file" not in request.files:
                 return json_resp({"ok": False, "msg": "缺少 file"}), 400
-            rule = get_member_level_rule(conn, actor.get("effective_level") or actor.get("member_level"))
+            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
             upload_result, msg = store_cloud_upload(
                 conn,
                 actor=actor,
@@ -749,7 +757,7 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
-            rule = get_member_level_rule(conn, actor.get("effective_level") or actor.get("member_level"))
+            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
             try:
                 result, msg = store_cloud_upload(
                     conn,

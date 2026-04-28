@@ -78,8 +78,17 @@ def _now():
     return datetime.now().isoformat()
 
 
+def _actor_value(actor, key, default=None):
+    if not actor:
+        return default
+    try:
+        return actor[key]
+    except Exception:
+        return actor.get(key, default) if hasattr(actor, "get") else default
+
+
 def _actor_role(actor):
-    return "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
+    return "super_admin" if actor and _actor_value(actor, "username") == "root" else _actor_value(actor, "role", "user")
 
 
 def _role_rank_value(role):

@@ -19,6 +19,8 @@ RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
 SERVER_MODES = {"preprod", "test", "superweak"}
 RESETTABLE_TABLES = {
     "appeals",
+    "chat_message_reports",
+    "chat_messages",
     "comments",
     "direct_messages",
     "dm_threads",
@@ -27,6 +29,12 @@ RESETTABLE_TABLES = {
     "file_scan_results",
     "cloud_file_refs",
     "file_access_grants",
+    "forum_boards",
+    "forum_categories",
+    "forum_post_reactions",
+    "forum_posts",
+    "forum_threads",
+    "announcements",
     "announcement_attachment_requests",
     "album_files",
     "albums",
@@ -428,7 +436,27 @@ class SnapshotService:
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
         existing = {row["name"] if isinstance(row, sqlite3.Row) else row[0] for row in rows}
-        return sorted(existing & RESETTABLE_TABLES)
+        reset_tables = existing & RESETTABLE_TABLES
+        priority = {
+            "forum_post_reactions": 10,
+            "forum_posts": 11,
+            "forum_threads": 12,
+            "forum_boards": 13,
+            "forum_categories": 14,
+            "album_files": 20,
+            "albums": 21,
+            "storage_share_links": 30,
+            "file_access_grants": 31,
+            "encrypted_file_keys": 32,
+            "cloud_file_refs": 33,
+            "storage_files": 34,
+            "uploaded_files": 35,
+            "direct_messages": 40,
+            "dm_threads": 41,
+            "chat_message_reports": 42,
+            "chat_messages": 43,
+        }
+        return sorted(reset_tables, key=lambda name: (priority.get(name, 100), name))
 
     def daily_snapshot_status(self, *, settings, now=None):
         now = now or datetime.now()

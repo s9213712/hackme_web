@@ -24,6 +24,15 @@ def _clean_text(value, limit):
     return cleaned[:limit]
 
 
+def _actor_value(actor, key, default=None):
+    if not actor:
+        return default
+    try:
+        return actor[key]
+    except Exception:
+        return actor.get(key, default) if hasattr(actor, "get") else default
+
+
 def _bug_report_payload(data, actor, ip, ua):
     now = datetime.now().isoformat()
     report_id = f"bug_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:10]}"
@@ -43,10 +52,10 @@ def _bug_report_payload(data, actor, ip, ua):
         "created_at": now,
         "reward_points": BUG_REPORT_REWARD_POINTS.get(severity, BUG_REPORT_REWARD_POINTS["medium"]),
         "reporter": {
-            "id": actor.get("id"),
-            "username": actor.get("username"),
-            "role": "super_admin" if actor.get("username") == "root" else actor.get("role", "user"),
-            "effective_level": actor.get("effective_level") or actor.get("member_level"),
+            "id": _actor_value(actor, "id"),
+            "username": _actor_value(actor, "username"),
+            "role": "super_admin" if _actor_value(actor, "username") == "root" else _actor_value(actor, "role", "user"),
+            "effective_level": _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"),
         },
         "request": {
             "ip": ip,
@@ -68,10 +77,10 @@ def register_bug_report_routes(app, deps):
     bug_dir = reports_dir / "bugs"
 
     def _is_root(actor):
-        return actor and actor.get("username") == "root"
+        return actor and _actor_value(actor, "username") == "root"
 
     def _award_bug_report_points(actor, payload):
-        if not get_db or not actor.get("id"):
+        if not get_db or not _actor_value(actor, "id"):
             return 0
         reward = int(payload.get("reward_points") or 0)
         if reward <= 0:

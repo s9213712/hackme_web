@@ -724,6 +724,15 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None):
     }
 
 
+def _mapping_value(mapping, key, default=None):
+    if not mapping:
+        return default
+    try:
+        return mapping[key]
+    except Exception:
+        return mapping.get(key, default) if hasattr(mapping, "get") else default
+
+
 def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_bytes=0):
     mode = normalize_privacy_mode(privacy_mode)
     ext = file_extension(filename)
@@ -740,7 +749,7 @@ def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_byte
     if mode.startswith("e2ee") and not policy["e2ee_allowed"]:
         return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for encrypted vault uploads", tuple(warnings))
 
-    effective_level = str((user or {}).get("effective_level") or (user or {}).get("member_level") or "newbie")
+    effective_level = str(_mapping_value(user, "effective_level") or _mapping_value(user, "member_level") or "newbie")
     if effective_level in {"restricted", "suspended"}:
         return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, f"{effective_level} users cannot upload", tuple(warnings))
     if effective_level == "newbie" and category in {"executable", "archive", "office_macro"}:

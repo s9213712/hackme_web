@@ -158,6 +158,27 @@ def _announcement_active(db_path, announcement_id):
     return active
 
 
+def test_community_routes_accept_sqlite_row_actor(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        actor = conn.execute("SELECT id, username, role FROM users WHERE username='root'").fetchone()
+    finally:
+        conn.close()
+    actor_box = {"actor": actor}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    announcements = client.get("/api/community/announcements")
+    categories = client.get("/api/community/categories")
+    boards = client.get("/api/community/boards")
+
+    assert announcements.status_code == 200
+    assert categories.status_code == 200
+    assert boards.status_code == 200
+
+
 def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)

@@ -5,10 +5,19 @@ from flask import request
 from services.permissions import require_member_action
 
 
+def actor_value(actor, key, default=None):
+    if not actor:
+        return default
+    try:
+        return actor[key]
+    except Exception:
+        return actor.get(key, default) if hasattr(actor, "get") else default
+
+
 def actor_role(actor):
     if not actor:
         return "guest"
-    return "super_admin" if actor["username"] == "root" else (actor["role"] if actor.get("role") else "user")
+    return "super_admin" if actor_value(actor, "username") == "root" else (actor_value(actor, "role") or "user")
 
 
 def can_delete_chat_message(actor, message_row, role_rank):

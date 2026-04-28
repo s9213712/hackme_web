@@ -78,8 +78,16 @@ def register_moderation_routes(app, deps):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at)")
         return True
 
+    def actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        try:
+            return actor[key]
+        except Exception:
+            return actor.get(key, default) if hasattr(actor, "get") else default
+
     def actor_role(actor):
-        return "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
+        return "super_admin" if actor and actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
 
     def require_moderation_governance_actor(actor):
         if not actor:
