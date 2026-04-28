@@ -186,7 +186,7 @@ def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
     client = _build_app(str(db_path), actor_box).test_client()
 
     boards = client.get("/api/community/boards").get_json()["boards"]
-    board = next(item for item in boards if item["id"])
+    board = next(item for item in boards if item["title"] == "版面")
 
     assert board["slug"].startswith("board-")
     assert board["visibility"] == "public"
@@ -631,6 +631,70 @@ def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
     assert report["post_id"] == ids["post"]
     assert report["status"] == "pending"
     assert "倒讚過多" in report["reason"]
+
+
+def test_default_forum_boards_have_moderator(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.get("/api/community/boards")
+    assert res.status_code == 200
+    boards = res.get_json()["boards"]
+    by_title = {item["title"]: item for item in boards}
+
+    for title in ("遊戲專區", "二次元專區", "ComfyUI專區", "程式設計區", "AI新知區"):
+        assert title in by_title
+        assert by_title[title]["status"] == "approved"
+        assert by_title[title]["moderator_count"] >= 1
+        assert "root" in by_title[title]["moderators"]
+
+
+def test_thread_reactions_are_available_on_thread_itself(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    liked = client.post(f"/api/community/threads/{ids['thread']}/reaction", json={"value": 1})
+    assert liked.status_code == 200
+    assert liked.get_json()["like_count"] == 1
+
+    detail = client.get(f"/api/community/threads/{ids['thread']}")
+    assert detail.status_code == 200
+    thread = detail.get_json()["thread"]
+    assert thread["like_count"] == 1
+    assert thread["dislike_count"] == 0
+    assert thread["user_reaction"] == 1
+
+
+def test_moderator_can_reward_thread_author_and_penalize_post_author(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    reward = client.post(
+        f"/api/community/threads/{ids['thread']}/reward",
+        json={"points": 3, "reason": "good topic"},
+    )
+    assert reward.status_code == 200
+    penalty = client.post(
+        f"/api/community/posts/{ids['post']}/penalty",
+        json={"points": 2, "reason": "bad reply"},
+    )
+    assert penalty.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    alice = conn.execute("SELECT reputation, violation_count FROM users WHERE id=3").fetchone()
+    actions = conn.execute("SELECT action_type, target_type FROM moderation_actions ORDER BY id ASC").fetchall()
+    conn.close()
+    assert alice["reputation"] == 3
+    assert alice["violation_count"] == 2
+    assert ("reward_thread_author", "forum_thread") in [(row["action_type"], row["target_type"]) for row in actions]
+    assert ("penalize_post_author", "forum_post") in [(row["action_type"], row["target_type"]) for row in actions]
 
 
 def test_dislike_auto_hide_threshold_scales_with_active_users(tmp_path):

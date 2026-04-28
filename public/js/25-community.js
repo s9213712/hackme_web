@@ -13,6 +13,76 @@ let communityThreadQuery = "";
 let communityThreadPage = 0;
 let communityThreadLimit = 10;
 let communityThreadTotal = 0;
+let communityAnnouncementEditorOpen = false;
+let communityBoardRequestOpen = false;
+let communityCategoryManagerOpen = false;
+let communityThreadCreatorOpen = false;
+let communityToolsOpen = false;
+let communityMode = "boards";
+let canReviewCommunityThreads = false;
+
+function switchCommunityMode(mode) {
+  communityMode = mode || "boards";
+  const reviewArea = $("community-review-area");
+  const mainArea = $("community-main-area");
+  const reviewBtn = $("community-review-tab-btn");
+  if (reviewArea) reviewArea.style.display = communityMode === "review" ? "block" : "none";
+  if (mainArea) mainArea.style.display = communityMode === "review" ? "none" : "block";
+  if (reviewBtn) reviewBtn.classList.toggle("active", communityMode === "review");
+  if (reviewBtn) reviewBtn.textContent = communityMode === "review" ? "返回討論區" : "審核";
+  if (communityMode === "review") {
+    renderCommunityBoardReviews();
+    renderCommunityThreadReviews();
+  } else {
+    renderCommunityStage();
+  }
+}
+
+function toggleCommunityTools(forceOpen = null) {
+  communityToolsOpen = forceOpen === null ? !communityToolsOpen : !!forceOpen;
+  const panel = $("community-tools-panel");
+  const btn = $("community-tools-toggle-btn");
+  if (panel) panel.style.display = communityToolsOpen ? "block" : "none";
+  if (btn) btn.classList.toggle("active", communityToolsOpen);
+}
+
+function renderCommunityStage() {
+  const boardStage = $("community-board-stage");
+  const threadStage = $("community-thread-stage");
+  const detailStage = $("community-detail-stage");
+  const breadcrumb = $("community-breadcrumb");
+  const stage = selectedCommunityThreadId ? "detail" : (selectedCommunityBoardId ? "threads" : "boards");
+  if (boardStage) boardStage.style.display = stage === "boards" ? "block" : "none";
+  if (threadStage) threadStage.style.display = stage === "threads" ? "block" : "none";
+  if (detailStage) detailStage.style.display = stage === "detail" ? "block" : "none";
+  if (breadcrumb) {
+    const parts = ["討論區列表"];
+    if (selectedCommunityBoard) parts.push(selectedCommunityBoard.title || "主題列表");
+    if (selectedCommunityThread) parts.push(selectedCommunityThread.title || "主題內容");
+    breadcrumb.textContent = parts.join(" / ");
+  }
+}
+
+function showCommunityBoardStage() {
+  selectedCommunityBoardId = null;
+  selectedCommunityBoard = null;
+  selectedCommunityThreadId = null;
+  selectedCommunityThread = null;
+  communityThreads = [];
+  communityThreadCreatorOpen = false;
+  renderCommunityBoards();
+  renderCommunityThreads(null);
+  renderCommunityThreadDetail(null, []);
+  switchCommunityMode("boards");
+}
+
+function showCommunityThreadStage() {
+  selectedCommunityThreadId = null;
+  selectedCommunityThread = null;
+  renderCommunityThreads(selectedCommunityBoard);
+  renderCommunityThreadDetail(null, []);
+  switchCommunityMode("boards");
+}
 
 function communityStatusLabel(status) {
   if (status === "approved") return "已開放";
@@ -41,7 +111,9 @@ function renderCommunityCategories() {
   const panel = $("community-category-manager-panel");
   const list = $("community-category-list");
   const select = $("community-board-category");
-  if (panel) panel.style.display = canManageCommunity() ? "block" : "none";
+  const openBtn = $("community-category-manager-open-btn");
+  if (openBtn) openBtn.style.display = canManageCommunity() ? "" : "none";
+  if (panel) panel.style.display = canManageCommunity() && communityCategoryManagerOpen ? "block" : "none";
   if (select) {
     const activeCategories = communityCategories.filter((item) => item.is_active !== false);
     const options = activeCategories.map((item) => (
@@ -72,10 +144,18 @@ function communityReactionButton(post, value, label) {
   return `<button class="btn community-mini-btn${active ? " active" : ""}" type="button" data-community-reaction="${post.id}" data-reaction-value="${value}">${label} ${value === 1 ? (post.like_count || 0) : (post.dislike_count || 0)}</button>`;
 }
 
+function communityThreadReactionButton(thread, value, label) {
+  const active = Number(thread?.user_reaction || 0) === Number(value);
+  return `<button class="btn community-mini-btn${active ? " active" : ""}" type="button" data-community-thread-reaction="${thread.id}" data-reaction-value="${value}">${label} ${value === 1 ? (thread.like_count || 0) : (thread.dislike_count || 0)}</button>`;
+}
+
 function renderCommunityAnnouncements() {
   const list = $("community-announcement-list");
   const editor = $("community-announcement-editor");
-  if (editor) editor.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "block" : "none";
+  const openBtn = $("community-announcement-open-btn");
+  const canPublish = currentRole === "manager" || currentRole === "super_admin";
+  if (openBtn) openBtn.style.display = canPublish && !communityAnnouncementEditorOpen ? "" : "none";
+  if (editor) editor.style.display = canPublish && communityAnnouncementEditorOpen ? "block" : "none";
   if (!list) return;
   if (!communityAnnouncements.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有公告</p>";
@@ -99,8 +179,10 @@ function renderCommunityAnnouncements() {
 function renderCommunityBoardReviews() {
   const panel = $("community-board-review-panel");
   const list = $("community-board-review-list");
+  const reviewBtn = $("community-review-tab-btn");
   const canReview = currentRole === "manager" || currentRole === "super_admin";
-  if (panel) panel.style.display = canReview ? "block" : "none";
+  if (reviewBtn) reviewBtn.style.display = (canReview || canReviewCommunityThreads) ? "" : "none";
+  if (panel) panel.style.display = canReview && communityMode === "review" ? "block" : "none";
   if (!list || !canReview) return;
   if (!communityBoardReviews.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有待審核討論區</p>";
@@ -131,8 +213,10 @@ function renderCommunityBoardReviews() {
 function renderCommunityThreadReviews() {
   const panel = $("community-thread-review-panel");
   const list = $("community-thread-review-list");
-  const canReview = currentRole === "manager" || currentRole === "super_admin";
-  if (panel) panel.style.display = canReview ? "block" : "none";
+  const reviewBtn = $("community-review-tab-btn");
+  const canReview = currentRole === "manager" || currentRole === "super_admin" || canReviewCommunityThreads;
+  if (reviewBtn) reviewBtn.style.display = canReview ? "" : "none";
+  if (panel) panel.style.display = canReview && communityMode === "review" ? "block" : "none";
   if (!list || !canReview) return;
   if (!communityThreadReviews.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有待審核主題</p>";
@@ -178,14 +262,18 @@ function renderCommunityBoards() {
         <strong>${sanitize(board.title || "")}</strong>
         <span class="community-badge ${sanitize(board.status || "")}">${communityStatusLabel(board.status)}</span>
       </div>
-      <div class="community-meta">分類：${sanitize(board.category?.name || "未分類")} · 版主：${sanitize(board.owner_username || "")} · ${communityVisibilityLabel(board.visibility)}${board.is_active === false ? " · 停用" : ""}</div>
+      <div class="community-meta">分類：${sanitize(board.category?.name || "未分類")} · 維護：${sanitize((board.moderators || []).join("、") || board.owner_username || "未設定")} · ${communityVisibilityLabel(board.visibility)}${board.is_active === false ? " · 停用" : ""}</div>
       <div class="community-body">${sanitize(board.description || "")}</div>
       <div class="community-meta">主題 ${board.thread_count || 0} · 留言 ${board.post_count || 0}</div>
     </button>
   `).join("");
   list.querySelectorAll("button[data-open-board]").forEach((btn) => {
-    btn.addEventListener("click", () => openCommunityBoard(parseInt(btn.getAttribute("data-open-board"), 10)));
+    btn.addEventListener("click", () => {
+      communityThreadPage = 0;
+      openCommunityBoard(parseInt(btn.getAttribute("data-open-board"), 10));
+    });
   });
+  renderCommunityStage();
 }
 
 function renderCommunityThreads(board) {
@@ -193,6 +281,7 @@ function renderCommunityThreads(board) {
   const meta = $("community-board-meta");
   const list = $("community-thread-list");
   const creator = $("community-thread-creator");
+  const createOpenBtn = $("community-thread-create-open-btn");
   const rulesView = $("community-board-rules-view");
   const pageInfo = $("community-thread-page-info");
   const prevBtn = $("community-thread-prev");
@@ -201,7 +290,7 @@ function renderCommunityThreads(board) {
   if (heading) heading.textContent = board ? board.title : "請先選擇討論區";
   if (meta) {
     meta.textContent = board
-      ? `${board.category?.name || "未分類"} · ${board.owner_username || "-"} · ${communityStatusLabel(board.status)} · ${communityVisibilityLabel(board.visibility)}${board.is_active === false ? " · 停用" : ""}${board.review_note ? ` · ${board.review_note}` : ""}`
+      ? `${board.category?.name || "未分類"} · 維護：${(board.moderators || []).join("、") || board.owner_username || "-"} · ${communityStatusLabel(board.status)} · ${communityVisibilityLabel(board.visibility)}${board.is_active === false ? " · 停用" : ""}${board.review_note ? ` · ${board.review_note}` : ""}`
       : "";
   }
   if (rulesView) {
@@ -216,7 +305,9 @@ function renderCommunityThreads(board) {
   if (pageInfo) pageInfo.textContent = board ? `第 ${communityThreadPage + 1} 頁` : "第 1 頁";
   if (prevBtn) prevBtn.disabled = communityThreadPage <= 0;
   if (nextBtn) nextBtn.disabled = ((communityThreadPage + 1) * communityThreadLimit) >= communityThreadTotal;
-  if (creator) creator.style.display = board && board.status === "approved" ? "block" : "none";
+  const canCreateThread = board && board.status === "approved";
+  if (createOpenBtn) createOpenBtn.style.display = canCreateThread && !communityThreadCreatorOpen ? "" : "none";
+  if (creator) creator.style.display = canCreateThread && communityThreadCreatorOpen ? "block" : "none";
   if (submitBtn) submitBtn.textContent = (currentRole === "manager" || currentRole === "super_admin") ? "發布主題" : "送審主題";
   if (!list) return;
   if (!board) {
@@ -239,6 +330,7 @@ function renderCommunityThreads(board) {
   list.querySelectorAll("button[data-open-thread]").forEach((btn) => {
     btn.addEventListener("click", () => openCommunityThread(parseInt(btn.getAttribute("data-open-thread"), 10)));
   });
+  renderCommunityStage();
 }
 
 function renderCommunityThreadDetail(thread, posts) {
@@ -248,12 +340,13 @@ function renderCommunityThreadDetail(thread, posts) {
   const lockTools = $("community-thread-lock-tools");
   const lockToggle = $("community-thread-lock-toggle");
   const deleteThreadBtn = $("community-thread-delete-btn");
+  const canModerateThread = !!thread?.can_moderate || canManageCommunity();
   if (heading) heading.textContent = thread ? thread.title : "主題內容";
   if (replyBox) replyBox.style.display = thread && thread.board_status === "approved" && thread.status === "approved" && !thread.is_locked ? "block" : "none";
-  if (lockTools) lockTools.style.display = thread && (canManageCommunity() || canDeleteCommunityItem(thread.author_user_id)) ? "flex" : "none";
+  if (lockTools) lockTools.style.display = thread && (canModerateThread || canDeleteCommunityItem(thread.author_user_id)) ? "flex" : "none";
   if (lockToggle && thread) lockToggle.textContent = thread.is_locked ? "解除鎖定" : "鎖定主題";
-  if (lockToggle) lockToggle.style.display = thread && canManageCommunity() ? "" : "none";
-  if (deleteThreadBtn) deleteThreadBtn.style.display = thread && canDeleteCommunityItem(thread.author_user_id) ? "" : "none";
+  if (lockToggle) lockToggle.style.display = thread && canModerateThread ? "" : "none";
+  if (deleteThreadBtn) deleteThreadBtn.style.display = thread && (canModerateThread || canDeleteCommunityItem(thread.author_user_id)) ? "" : "none";
   if (!detail) return;
   if (!thread) {
     detail.innerHTML = "<p style='color:var(--muted);'>請選擇主題以查看內容與留言</p>";
@@ -265,8 +358,9 @@ function renderCommunityThreadDetail(thread, posts) {
           <div class="community-card-head">
             <div class="community-meta">${post.is_pinned ? "置頂 · " : ""}${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}${post.is_hidden ? ` · 已隱藏：${sanitize(post.hidden_reason || "")}` : ""}</div>
             <div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">
-              ${canManageCommunity() ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂"}</button>` : ""}
-              ${canDeleteCommunityItem(post.author_user_id, thread.author_user_id) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
+              ${canModerateThread ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂"}</button>` : ""}
+              ${(canModerateThread || canDeleteCommunityItem(post.author_user_id, thread.author_user_id)) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
+              ${canModerateThread ? `<button class="btn community-mini-btn" type="button" data-penalty-community-post="${post.id}">懲處</button>` : ""}
             </div>
           </div>
           <div class="community-body">${sanitize(post.content || "")}</div>
@@ -282,6 +376,11 @@ function renderCommunityThreadDetail(thread, posts) {
       <div class="community-meta">${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))} · ${sanitize(thread.board_title || "")}${thread.is_locked ? " · 已鎖定" : ""}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       <div class="community-body">${sanitize(thread.content || "")}</div>
+      <div class="community-actions" style="margin-top:.45rem;">
+        ${communityThreadReactionButton(thread, 1, "讚")}
+        ${communityThreadReactionButton(thread, -1, "倒讚")}
+        ${canModerateThread ? `<button class="btn community-mini-btn" type="button" data-reward-community-thread="${thread.id}">獎勵作者</button>` : ""}
+      </div>
     </div>
     <div class="mini-title" style="margin:.8rem 0 .45rem;">留言區</div>
     ${replies}
@@ -295,12 +394,25 @@ function renderCommunityThreadDetail(thread, posts) {
       btn.getAttribute("data-pinned") !== "1"
     ));
   });
+  detail.querySelectorAll("button[data-penalty-community-post]").forEach((btn) => {
+    btn.addEventListener("click", () => penalizeCommunityPost(parseInt(btn.getAttribute("data-penalty-community-post"), 10)));
+  });
   detail.querySelectorAll("button[data-community-reaction]").forEach((btn) => {
     btn.addEventListener("click", () => reactToCommunityPost(
       parseInt(btn.getAttribute("data-community-reaction"), 10),
       parseInt(btn.getAttribute("data-reaction-value"), 10)
     ));
   });
+  detail.querySelectorAll("button[data-community-thread-reaction]").forEach((btn) => {
+    btn.addEventListener("click", () => reactToCommunityThread(
+      parseInt(btn.getAttribute("data-community-thread-reaction"), 10),
+      parseInt(btn.getAttribute("data-reaction-value"), 10)
+    ));
+  });
+  detail.querySelectorAll("button[data-reward-community-thread]").forEach((btn) => {
+    btn.addEventListener("click", () => rewardCommunityThread(parseInt(btn.getAttribute("data-reward-community-thread"), 10)));
+  });
+  renderCommunityStage();
 }
 
 async function loadAnnouncements() {
@@ -333,6 +445,8 @@ async function publishAnnouncement() {
     if ($("community-announcement-title")) $("community-announcement-title").value = "";
     if ($("community-announcement-content")) $("community-announcement-content").value = "";
     if ($("community-announcement-pinned")) $("community-announcement-pinned").checked = false;
+    communityAnnouncementEditorOpen = false;
+    renderCommunityAnnouncements();
     await loadAnnouncements();
   }
 }
@@ -396,7 +510,7 @@ async function loadCommunityBoards() {
   if (!json.ok) return;
   communityBoards = Array.isArray(json.boards) ? json.boards : [];
   const requestPanel = $("community-board-request-panel");
-  if (requestPanel) requestPanel.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "block" : "none";
+  if (requestPanel) requestPanel.style.display = communityBoardRequestOpen ? "block" : "none";
   renderCommunityBoards();
   selectedCommunityBoard = communityBoards.find((item) => Number(item.id) === Number(selectedCommunityBoardId)) || null;
   renderCommunityThreads(selectedCommunityBoard);
@@ -425,6 +539,9 @@ async function requestCommunityBoard() {
     if ($("community-board-rules")) $("community-board-rules").value = "";
     if ($("community-board-visibility")) $("community-board-visibility").value = "public";
     if ($("community-board-sort")) $("community-board-sort").value = "100";
+    communityBoardRequestOpen = false;
+    const requestPanel = $("community-board-request-panel");
+    if (requestPanel) requestPanel.style.display = "none";
     await loadCommunityBoards();
     if (currentRole === "manager" || currentRole === "super_admin") await loadCommunityBoardReviews();
   }
@@ -444,14 +561,19 @@ async function loadCommunityBoardReviews() {
 }
 
 async function loadCommunityThreadReviews() {
-  if (!(currentRole === "manager" || currentRole === "super_admin")) return;
   await fetchCsrfToken({ force: true });
   const res = await fetch(API + "/community/threads/reviews", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) return;
+  if (!json.ok) {
+    canReviewCommunityThreads = false;
+    communityThreadReviews = [];
+    renderCommunityThreadReviews();
+    return;
+  }
+  canReviewCommunityThreads = true;
   communityThreadReviews = Array.isArray(json.items) ? json.items : [];
   renderCommunityThreadReviews();
 }
@@ -489,11 +611,13 @@ async function reviewCommunityThread(threadId, action) {
   }
 }
 
-async function openCommunityBoard(boardId) {
+async function openCommunityBoard(boardId, preserveThread = false) {
   selectedCommunityBoardId = boardId;
-  selectedCommunityThreadId = null;
-  selectedCommunityThread = null;
-  communityThreadPage = 0;
+  if (!preserveThread) {
+    selectedCommunityThreadId = null;
+    selectedCommunityThread = null;
+    communityThreadCreatorOpen = false;
+  }
   await fetchCsrfToken({ force: true });
   const q = encodeURIComponent(communityThreadQuery || "");
   const res = await fetch(API + "/community/boards/" + boardId + "/threads?page=" + communityThreadPage + "&limit=" + communityThreadLimit + "&q=" + q, {
@@ -506,13 +630,14 @@ async function openCommunityBoard(boardId) {
     return;
   }
   const board = json.board || null;
+  if (board) board.can_moderate = !!json.can_moderate;
   selectedCommunityBoard = board;
   communityThreads = Array.isArray(json.threads) ? json.threads : [];
   communityThreadTotal = Number(json.total || 0);
   communityThreadPage = Number(json.page || 0);
   renderCommunityBoards();
   renderCommunityThreads(board);
-  renderCommunityThreadDetail(null, []);
+  if (!preserveThread) renderCommunityThreadDetail(null, []);
 }
 
 async function createCommunityThread() {
@@ -535,6 +660,7 @@ async function createCommunityThread() {
   if (json.ok) {
     if ($("community-thread-title")) $("community-thread-title").value = "";
     if ($("community-thread-content")) $("community-thread-content").value = "";
+    communityThreadCreatorOpen = false;
     await openCommunityBoard(selectedCommunityBoardId);
     if (currentRole !== "manager" && currentRole !== "super_admin") {
       flash($("community-msg"), json.msg || "主題已送審", true);
@@ -579,8 +705,8 @@ async function replyCommunityThread() {
   flash($("community-msg"), json.msg || "留言送出失敗", !!json.ok);
   if (json.ok) {
     if ($("community-reply-content")) $("community-reply-content").value = "";
+    await openCommunityBoard(selectedCommunityBoardId, true);
     await openCommunityThread(selectedCommunityThreadId);
-    await openCommunityBoard(selectedCommunityBoardId);
   }
 }
 
@@ -615,8 +741,8 @@ async function deleteCommunityPost(postId) {
   const json = await res.json().catch(() => ({}));
   flash($("community-msg"), json.msg || "留言刪除失敗", !!json.ok);
   if (json.ok && selectedCommunityThreadId) {
+    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId, true);
     await openCommunityThread(selectedCommunityThreadId);
-    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId);
   }
 }
 
@@ -650,10 +776,63 @@ async function reactToCommunityPost(postId, value) {
     if (json.auto_hidden) {
       flash($("community-msg"), "留言倒讚過多，已自動隱藏並送 root 審核", false);
     }
+    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId, true);
     if (selectedCommunityThreadId) await openCommunityThread(selectedCommunityThreadId);
     return;
   }
   flash($("community-msg"), json.msg || "反應更新失敗", false);
+}
+
+async function reactToCommunityThread(threadId, value) {
+  if (!threadId) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/threads/" + threadId + "/reaction", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ value })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    if (selectedCommunityBoardId) await openCommunityBoard(selectedCommunityBoardId, true);
+    if (selectedCommunityThreadId) await openCommunityThread(selectedCommunityThreadId);
+    return;
+  }
+  flash($("community-msg"), json.msg || "主題反應更新失敗", false);
+}
+
+async function rewardCommunityThread(threadId) {
+  if (!threadId) return;
+  const pointsRaw = prompt("獎勵點數（1-50）", "1");
+  if (pointsRaw === null) return;
+  const reason = prompt("獎勵理由", "優質主題貢獻") || "優質主題貢獻";
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/threads/" + threadId + "/reward", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ points: Number(pointsRaw) || 1, reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "獎勵失敗", !!json.ok);
+  if (json.ok && selectedCommunityThreadId) await openCommunityThread(selectedCommunityThreadId);
+}
+
+async function penalizeCommunityPost(postId) {
+  if (!postId) return;
+  const pointsRaw = prompt("懲處點數（1-10）", "1");
+  if (pointsRaw === null) return;
+  const reason = prompt("懲處原因", "討論區違規留言") || "討論區違規留言";
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/posts/" + postId + "/penalty", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ points: Number(pointsRaw) || 1, reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "懲處失敗", !!json.ok);
+  if (json.ok && selectedCommunityThreadId) await openCommunityThread(selectedCommunityThreadId);
 }
 
 async function toggleCommunityThreadLock() {
@@ -668,17 +847,40 @@ async function toggleCommunityThreadLock() {
   const json = await res.json().catch(() => ({}));
   flash($("community-msg"), json.msg || "主題狀態更新失敗", !!json.ok);
   if (json.ok) {
+    await openCommunityBoard(selectedCommunityBoardId, true);
     await openCommunityThread(selectedCommunityThreadId);
-    await openCommunityBoard(selectedCommunityBoardId);
   }
 }
 
 async function loadCommunityHome() {
+  switchCommunityMode("boards");
   await Promise.all([
     loadCommunityCategories(),
-    loadAnnouncements(),
     loadCommunityBoards(),
     (currentRole === "manager" || currentRole === "super_admin") ? loadCommunityBoardReviews() : Promise.resolve(),
-    (currentRole === "manager" || currentRole === "super_admin") ? loadCommunityThreadReviews() : Promise.resolve(),
+    loadCommunityThreadReviews(),
   ]);
+}
+
+function toggleCommunityAnnouncementEditor(forceOpen = null) {
+  communityAnnouncementEditorOpen = forceOpen === null ? !communityAnnouncementEditorOpen : !!forceOpen;
+  renderCommunityAnnouncements();
+}
+
+function toggleCommunityBoardRequest(forceOpen = null) {
+  communityBoardRequestOpen = forceOpen === null ? !communityBoardRequestOpen : !!forceOpen;
+  if (communityBoardRequestOpen) toggleCommunityTools(true);
+  const panel = $("community-board-request-panel");
+  if (panel) panel.style.display = communityBoardRequestOpen ? "block" : "none";
+}
+
+function toggleCommunityCategoryManager(forceOpen = null) {
+  communityCategoryManagerOpen = forceOpen === null ? !communityCategoryManagerOpen : !!forceOpen;
+  if (communityCategoryManagerOpen) toggleCommunityTools(true);
+  renderCommunityCategories();
+}
+
+function toggleCommunityThreadCreator(forceOpen = null) {
+  communityThreadCreatorOpen = forceOpen === null ? !communityThreadCreatorOpen : !!forceOpen;
+  renderCommunityThreads(selectedCommunityBoard);
 }

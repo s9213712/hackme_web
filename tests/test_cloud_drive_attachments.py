@@ -160,6 +160,57 @@ def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
     assert body["error_code"] == "ValueError"
 
 
+def test_cloud_drive_upload_repairs_legacy_uploaded_files_schema(tmp_path):
+    db_path = tmp_path / "legacy-drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES (1, 'alice', 'user');
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY
+        );
+        """
+    )
+    ensure_member_level_rules_schema(conn)
+    ensure_upload_security_schema(conn)
+    update_cloud_drive_security_policy(conn, {"scanner_enabled": False})
+    ensure_cloud_drive_attachment_schema(conn)
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"legacy schema upload"), "legacy.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert uploaded.status_code == 200
+    body = uploaded.get_json()
+    assert body["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(uploaded_files)").fetchall()}
+        saved = conn.execute("SELECT storage_path, size_bytes, deleted_at FROM uploaded_files").fetchone()
+    finally:
+        conn.close()
+    assert {"owner_user_id", "storage_path", "privacy_mode", "scan_status", "size_bytes", "deleted_at"} <= cols
+    assert saved["storage_path"].endswith("/legacy.txt")
+    assert saved["size_bytes"] == len(b"legacy schema upload")
+    assert saved["deleted_at"] is None
+
+
 def test_storage_upload_creates_logical_file_and_downloads_through_original_record(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -251,6 +302,46 @@ def test_storage_trash_restore_and_purge_updates_listing_and_quota(tmp_path):
     assert purged.status_code == 200
     assert purged.get_json()["purged"]["storage"]["used_bytes"] == 0
     assert client.get(f"/api/storage/files/{storage_file_id}/download").status_code == 404
+
+
+def test_storage_folders_and_file_organize_flow(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    created_folder = client.post("/api/storage/folders", json={"path": "/photos/raw"})
+    assert created_folder.status_code == 200
+    assert created_folder.get_json()["folder"]["virtual_path"] == "/photos/raw"
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"folder move"), "image.txt"),
+            "virtual_path": "/photos/raw/image.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    folders = client.get("/api/storage/folders")
+    assert folders.status_code == 200
+    folder_paths = {folder["virtual_path"] for folder in folders.get_json()["folders"]}
+    assert {"/photos", "/photos/raw"} <= folder_paths
+
+    moved_file = client.put(f"/api/storage/files/{storage_file_id}/organize", json={"virtual_path": "/photos/final/image.txt"})
+    assert moved_file.status_code == 200
+    assert moved_file.get_json()["storage_file"]["virtual_path"] == "/photos/final/image.txt"
+
+    moved_folder = client.put("/api/storage/folders/move", json={"old_path": "/photos/final", "new_path": "/archive/final"})
+    assert moved_folder.status_code == 200
+    assert moved_folder.get_json()["folder_move"]["moved_files"] == 1
+
+    listing = client.get("/api/storage/files").get_json()["files"]
+    assert listing[0]["virtual_path"] == "/archive/final/image.txt"
 
 
 def test_storage_album_crud_and_file_membership(tmp_path):
@@ -487,6 +578,34 @@ def test_cloud_drive_audio_preview_content(tmp_path):
     assert content.mimetype.startswith("audio/")
 
 
+def test_cloud_drive_image_preview_content(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    image_bytes = b"\x89PNG\r\n\x1a\nnot a full image but enough for route bytes"
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(image_bytes), "preview.png")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    metadata = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert metadata.status_code == 200
+    preview = metadata.get_json()["preview"]
+    assert preview["category"] == "image"
+    assert preview["render_mode"] == "media"
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.data == image_bytes
+    assert content.mimetype.startswith("image/")
+
+
 def test_storage_admin_summary_sync_and_root_purge(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -698,3 +817,61 @@ def test_e2ee_share_and_revoke_controls_download_grant(tmp_path):
     actor_box["actor"] = _actor(2, "bob")
     denied = client.get(f"/api/files/{file_id}/download")
     assert denied.status_code == 403
+
+
+def test_remote_download_capabilities_and_rejects_local_paths(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    caps = client.get("/api/cloud-drive/remote-download/capabilities")
+    assert caps.status_code == 200
+    assert caps.get_json()["capabilities"]["direct_link"] is True
+
+    blocked = client.post(
+        "/api/cloud-drive/remote-download",
+        json={"url": "file:///etc/passwd", "privacy_mode": "private_scannable"},
+    )
+    assert blocked.status_code == 400
+    assert "http" in blocked.get_json()["msg"]
+
+
+def test_remote_download_saves_to_cloud_drive_and_storage(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "remote.txt"
+    source.write_text("remote content", encoding="utf-8")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "remote.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        assert url == "https://example.test/remote.txt"
+        assert kwargs["max_bytes"] > 0
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    res = client.post(
+        "/api/cloud-drive/remote-download",
+        json={
+            "url": "https://example.test/remote.txt",
+            "privacy_mode": "private_scannable",
+            "virtual_path": "/Downloads/remote.txt",
+        },
+    )
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["file"]["filename"] == "remote.txt"
+    assert body["storage_file"]["virtual_path"] == "/Downloads/remote.txt"

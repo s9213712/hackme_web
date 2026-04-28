@@ -602,8 +602,11 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
   const tabModuleDm = $("tab-module-dm");
+  const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
+  const tabModuleAlbums = $("tab-module-albums");
+  const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
@@ -612,8 +615,11 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleServer) tabModuleServer.style.display = currentRole === "super_admin" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
   if (tabModuleDm) tabModuleDm.style.display = canAccessModule("dm") ? "" : "none";
+  if (tabModuleAnnouncements) tabModuleAnnouncements.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
+  if (tabModuleAlbums) tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none";
+  if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
@@ -648,7 +654,9 @@ function setAuthState(json, showLoginHero = false) {
           ? "community"
           : canAccessModule("privacy_uploads")
             ? "drive"
-            : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+            : canAccessModule("comfyui")
+              ? "comfyui"
+              : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
   resetInactivityTimer();
 }
@@ -677,11 +685,21 @@ function resetAuthState() {
   $("admin-wrap").className = "admin-wrap";
   const moduleChat = $("module-chat");
   const moduleDm = $("module-dm");
+  const moduleAnnouncements = $("module-announcements");
+  const moduleCommunity = $("module-community");
+  const moduleDrive = $("module-drive");
+  const moduleAlbums = $("module-albums");
+  const moduleComfyui = $("module-comfyui");
   const moduleAccounts = $("module-accounts");
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
   if (moduleChat) moduleChat.classList.remove("active");
   if (moduleDm) moduleDm.classList.remove("active");
+  if (moduleAnnouncements) moduleAnnouncements.classList.remove("active");
+  if (moduleCommunity) moduleCommunity.classList.remove("active");
+  if (moduleDrive) moduleDrive.classList.remove("active");
+  if (moduleAlbums) moduleAlbums.classList.remove("active");
+  if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");

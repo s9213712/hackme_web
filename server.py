@@ -32,6 +32,7 @@ from services.access_controls import (
     maintenance_bypass_required_payload,
     verify_maintenance_bypass_token,
 )
+from services.account_recovery import ensure_account_recovery_schema
 from services.auth import (
     CSRF_TOKEN_TTL,
     SESSION_TTL,
@@ -711,6 +712,7 @@ def ensure_security_support_schema(conn):
     ensure_snapshot_schema(conn)
     ensure_upload_security_schema(conn)
     ensure_integrity_schema(conn)
+    ensure_account_recovery_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "
@@ -873,7 +875,9 @@ talisman = Talisman(app,
         "default-src": "'self'",
         "script-src":  "'self'",
         "style-src":   "'self'",
-        "img-src":     "'self' data:",
+        "img-src":     "'self' data: blob:",
+        "media-src":   "'self' blob:",
+        "frame-src":   "'self' blob:",
         "font-src":    "'self'",
         "connect-src": "'self'",
         "frame-ancestors": "'none'",
@@ -1076,6 +1080,7 @@ register_public_routes(app, {
     "record_login_failure": record_login_failure,
     "record_security_event": record_security_event,
     "require_csrf": require_csrf,
+    "revoke_user_sessions": revoke_user_sessions,
     "score_password_strength": score_password_strength,
     "store_csrf_token": store_csrf_token,
     "timing_delay": timing_delay,

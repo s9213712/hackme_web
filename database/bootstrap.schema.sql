@@ -79,6 +79,28 @@ CREATE TABLE IF NOT EXISTS csrf_tokens (
     expires_at   TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS account_recovery_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose      TEXT    NOT NULL,
+    token_hash   TEXT    NOT NULL UNIQUE,
+    requested_ip TEXT,
+    user_agent   TEXT,
+    created_at   TEXT    NOT NULL,
+    expires_at   TEXT    NOT NULL,
+    used_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mail_outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient  TEXT    NOT NULL,
+    subject    TEXT    NOT NULL,
+    body       TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    status     TEXT    NOT NULL DEFAULT 'queued',
+    created_at TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS captcha_challenges (
     id           TEXT PRIMARY KEY,
     mode         TEXT NOT NULL,
@@ -398,6 +420,17 @@ CREATE TABLE IF NOT EXISTS storage_files (
     UNIQUE(owner_user_id, virtual_path)
 );
 
+CREATE TABLE IF NOT EXISTS storage_folders (
+    id TEXT PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    display_name TEXT NOT NULL,
+    virtual_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    UNIQUE(owner_user_id, virtual_path)
+);
+
 CREATE TABLE IF NOT EXISTS storage_quota_log (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -454,6 +487,7 @@ CREATE TABLE IF NOT EXISTS storage_share_links (
 
 CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_user_id, virtual_path);
 CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id);
+CREATE INDEX IF NOT EXISTS idx_storage_folders_owner_path ON storage_folders(owner_user_id, virtual_path);
 CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at);
@@ -738,6 +772,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_room_members_user ON chat_room_members(user_
 
 CREATE INDEX IF NOT EXISTS idx_csrf_token_hash ON csrf_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_hash ON account_recovery_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_user ON account_recovery_tokens(user_id, purpose, created_at);
+CREATE INDEX IF NOT EXISTS idx_mail_outbox_kind ON mail_outbox(kind, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_ip_blocks_ip ON ip_blocks(ip_address);
 CREATE INDEX IF NOT EXISTS idx_ip_blocks_until ON ip_blocks(blocked_until);

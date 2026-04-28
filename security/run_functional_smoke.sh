@@ -400,6 +400,8 @@ create_community_flow() {
   fi
 
   request "community thread detail" "GET" "/api/community/threads/${THREAD_ID}" "200"
+  request "community thread like" "POST" "/api/community/threads/${THREAD_ID}/reaction" "200" '{"value":1}'
+  request "community reward thread author" "POST" "/api/community/threads/${THREAD_ID}/reward" "200" '{"points":1,"reason":"functional smoke reward"}'
   request "community reply" "POST" "/api/community/threads/${THREAD_ID}/posts" "200" '{"content":"functional smoke reply"}'
   request "community lock thread" "POST" "/api/community/threads/${THREAD_ID}/lock" "200" '{"locked":true}'
   request "community sticky thread" "POST" "/api/community/threads/${THREAD_ID}/sticky" "200" '{"sticky":true}'
@@ -435,6 +437,7 @@ run_checks() {
   request "admin audit chain" "GET" "/api/admin/health/audit-chain" "200"
   request "admin environment" "GET" "/api/admin/environment" "200"
   request "admin settings" "GET" "/api/admin/settings" "200"
+  request "admin settings comfyui api port" "PUT" "/api/admin/settings" "200" '{"comfyui_api_port":8192}'
   request "admin features" "GET" "/api/admin/features" "200"
   request "admin access controls" "GET" "/api/admin/access-controls" "200"
   request "admin member rules" "GET" "/api/admin/member-level-rules" "200"
@@ -476,10 +479,56 @@ run_checks() {
 
   request "files quota" "GET" "/api/files/quota" "200"
   request "files security policy" "GET" "/api/files/security-policy" "200"
+  ROOT_QUOTA_SOURCE="$(json_expr 'data["security"]["usage"]["quota_source"]' "$(latest_raw "files security policy")" || true)"
+  ROOT_QUOTA_TOTAL="$(json_expr 'data["security"]["usage"]["total_bytes"]' "$(latest_raw "files security policy")" || true)"
+  ROOT_QUOTA_WARN="$(json_expr 'data["security"]["usage"]["warning_threshold_percent"]' "$(latest_raw "files security policy")" || true)"
+  if [[ "$ROOT_QUOTA_SOURCE" == "admin_role_disk_available_90_percent" && "${ROOT_QUOTA_TOTAL:-0}" -gt 0 && "$ROOT_QUOTA_WARN" == "80" ]]; then
+    pass "root cloud drive disk quota" "quota_source=$ROOT_QUOTA_SOURCE total_bytes=$ROOT_QUOTA_TOTAL warning=$ROOT_QUOTA_WARN%"
+  else
+    fail "root cloud drive disk quota" "expected disk-backed 90% quota and 80% warning, got source=${ROOT_QUOTA_SOURCE:-missing}, total=${ROOT_QUOTA_TOTAL:-missing}, warning=${ROOT_QUOTA_WARN:-missing}"
+  fi
   request "files privacy modes" "GET" "/api/files/privacy-modes" "200"
+  request "cloud drive remote downloader capabilities" "GET" "/api/cloud-drive/remote-download/capabilities" "200"
+  request "cloud drive remote downloader rejects local file" "POST" "/api/cloud-drive/remote-download" "400" '{"url":"file:///etc/passwd","privacy_mode":"private_scannable"}'
+  request "comfyui models" "GET" "/api/comfyui/models" "200,503"
+  if [[ "$(json_expr 'data.get("ok", False)' "$(latest_raw "comfyui models")" || echo false)" == "true" ]]; then
+    pass "comfyui integration availability" "ComfyUI model endpoint is reachable"
+  else
+    skip "comfyui integration availability" "ComfyUI backend is optional for functional smoke"
+  fi
   request "cloud drive files list" "GET" "/api/cloud-drive/files" "200"
   request "storage files list" "GET" "/api/storage/files" "200"
   request "storage albums list" "GET" "/api/storage/albums" "200"
+
+  printf 'functional smoke storage album file\n' > "$OUT_DIR/storage_album.txt"
+  upload_file "storage file upload" "/api/storage/files" "$OUT_DIR/storage_album.txt" "200"
+  STORAGE_FILE_ID="$(json_expr 'data["storage_file"]["id"]' "$(latest_raw "storage file upload")" || true)"
+  request "storage folder create" "POST" "/api/storage/folders" "200" "{\"path\":\"/smoke/raw-$RUN_ID\"}"
+  request "storage folders list" "GET" "/api/storage/folders" "200"
+  if [[ -n "${STORAGE_FILE_ID:-}" ]]; then
+    request "storage file organize" "PUT" "/api/storage/files/${STORAGE_FILE_ID}/organize" "200" "{\"virtual_path\":\"/smoke/raw-$RUN_ID/storage_album.txt\"}"
+    request "storage folder move" "PUT" "/api/storage/folders/move" "200" "{\"old_path\":\"/smoke/raw-$RUN_ID\",\"new_path\":\"/smoke/archive-$RUN_ID\"}"
+  else
+    skip "storage file organize" "storage file id not found"
+    skip "storage folder move" "storage file id not found"
+  fi
+  request "storage album create" "POST" "/api/storage/albums" "200" "{\"title\":\"Smoke Album $RUN_ID\",\"description\":\"functional smoke album\",\"visibility\":\"unlisted\"}"
+  ALBUM_ID="$(json_expr 'data["album"]["id"]' "$(latest_raw "storage album create")" || true)"
+  if [[ -n "${STORAGE_FILE_ID:-}" && -n "${ALBUM_ID:-}" ]]; then
+    request "storage album add file" "POST" "/api/storage/albums/${ALBUM_ID}/files" "200" "{\"storage_file_id\":\"$STORAGE_FILE_ID\",\"caption\":\"functional smoke\",\"sort_order\":1}"
+    ALBUM_FILE_ID="$(json_expr 'data["album"]["files"][0]["id"]' "$(latest_raw "storage album add file")" || true)"
+    request "storage album detail" "GET" "/api/storage/albums/${ALBUM_ID}" "200"
+    request "storage album update" "PUT" "/api/storage/albums/${ALBUM_ID}" "200" "{\"title\":\"Smoke Album Updated $RUN_ID\",\"description\":\"updated by functional smoke\",\"visibility\":\"public\"}"
+    if [[ -n "${ALBUM_FILE_ID:-}" ]]; then
+      request "storage album remove file" "DELETE" "/api/storage/albums/${ALBUM_ID}/files/${ALBUM_FILE_ID}" "200" "{}"
+    else
+      skip "storage album remove file" "album file id not found"
+    fi
+    request "storage album delete" "DELETE" "/api/storage/albums/${ALBUM_ID}" "200" "{}"
+  else
+    skip "storage album membership flow" "storage_file_id=${STORAGE_FILE_ID:-missing}, album_id=${ALBUM_ID:-missing}"
+  fi
+
   printf 'functional smoke upload\n' > "$OUT_DIR/upload.txt"
   upload_file "cloud drive upload" "/api/cloud-drive/upload" "$OUT_DIR/upload.txt" "200"
   UPLOAD_ID="$(json_expr 'data["file"]["file_id"]' "$(latest_raw "cloud drive upload")" || true)"
@@ -565,9 +614,10 @@ $(cat "$RESULTS_TSV")
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, audit data, server log, security controls, threshold update, custom profile creation, custom profile mode switch
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, and server reset verification that removes the baseline post
-- storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete
+- storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete, remote download capability checks
+- ComfyUI integration: model endpoint wiring and optional backend availability check
 - accounts: admin user creation/listing, account sessions when account-security feature is enabled
-- community: announcements, categories, boards, board approval, thread create/detail/reply/lock/sticky/curate
+- community: announcements, categories, boards, board approval, thread create/detail/reply/reaction/reward/lock/sticky/curate
 - chat and DM: room listing, message send/list, DM thread/message flow
 - reports and moderation: bug reports, reports, notifications, appeals, moderation actions/proposals, violations, message reports, mod notes, reputation endpoints
 - hardening regression: unknown-path OPTIONS does not advertise unsafe methods

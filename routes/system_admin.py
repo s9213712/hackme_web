@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from flask import request
+from flask import request, send_file
 
 from services.access_controls import (
     access_control_settings_payload,
@@ -748,6 +748,14 @@ def register_system_admin_routes(app, deps):
             if port is None:
                 return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
             data["server_listen_port"] = port
+        if "comfyui_api_port" in data:
+            try:
+                port = int(data.get("comfyui_api_port"))
+            except Exception:
+                return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
+            if port < 1 or port > 65535:
+                return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
+            data["comfyui_api_port"] = port
         if "cloud_drive_storage_root" in data:
             raw_root = str(data.get("cloud_drive_storage_root") or "").strip()
             if raw_root:
@@ -1056,6 +1064,52 @@ def register_system_admin_routes(app, deps):
             return json_resp(result)
         except ValueError as exc:
             return json_resp({"ok":False,"msg":str(exc)}), 400
+
+    @app.route("/api/admin/snapshots/<snapshot_id>/download", methods=["GET"])
+    @require_csrf_safe
+    def admin_snapshot_download(snapshot_id):
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            result = snapshot_service.export_snapshot_archive(snapshot_id=snapshot_id, actor=actor)
+        except ValueError as exc:
+            return json_resp({"ok":False,"msg":str(exc)}), 400
+        if not result.get("ok"):
+            return json_resp(result), 400
+        return send_file(
+            result["path"],
+            as_attachment=True,
+            download_name=result["filename"],
+            mimetype="application/gzip",
+        )
+
+    @app.route("/api/admin/snapshots/upload-restore", methods=["POST"])
+    @require_csrf
+    def admin_snapshot_upload_restore():
+        if not snapshot_service:
+            return json_resp({"ok":False,"msg":"snapshot service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if "file" not in request.files:
+            return json_resp({"ok":False,"msg":"缺少 snapshot 檔案"}), 400
+        dry_run = str(request.form.get("dry_run") or "").strip().lower() in {"1", "true", "yes", "on"}
+        confirm = request.form.get("confirm") or ""
+        if dry_run:
+            if confirm != "DRY_RUN":
+                return json_resp({"ok":False,"msg":"dry_run confirm 必須等於 DRY_RUN"}), 400
+        elif confirm != "RESTORE":
+            return json_resp({"ok":False,"msg":"confirm 必須等於 RESTORE"}), 400
+        result = snapshot_service.restore_snapshot_archive(
+            actor=actor,
+            file_storage=request.files["file"],
+            reason=request.form.get("reason") or "",
+            dry_run=dry_run,
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/snapshots/<snapshot_id>/restore", methods=["POST"])
     @require_csrf

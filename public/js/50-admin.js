@@ -1,15 +1,16 @@
 function switchServerTab(tab) {
   currentServerTab = tab;
-  ["security", "health", "integrity", "settings", "env"].forEach((name) => {
+  ["security", "audit", "health", "integrity", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-server-security", "tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
+  ["tab-server-security", "tab-server-audit", "tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
   });
   if (tab === "security") loadSecurityCenter();
+  if (tab === "audit") loadAudit(0);
   if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
   if (tab === "integrity") loadIntegrityGuard();
   if (tab === "settings") {
@@ -39,52 +40,74 @@ function switchModuleTab(tab) {
   const canAccessServer = currentRole === "super_admin";
   const canAccessAppeals = currentRole !== "super_admin" && canAccessModule("appeals");
   const canAccessCommunity = !!currentUser && canAccessModule("community");
+  const canAccessAnnouncements = canAccessCommunity;
   const canAccessChat = !!currentUser && canAccessModule("chat");
   const canAccessDm = !!currentUser && canAccessModule("dm");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
+  const canAccessAlbums = canAccessDrive;
+  const canAccessComfyui = !!currentUser && canAccessModule("comfyui");
 
   let normTab = tab;
-  if (tab === "chat" && !canAccessChat) normTab = canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))));
-  if (tab === "dm" && !canAccessDm) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : "accounts")));
-  if (tab === "community" && !canAccessCommunity) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))));
-  if (tab === "drive" && !canAccessDrive) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessAppeals ? "appeals" : "accounts")));
-  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals")));
-  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : (canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals"))));
-  if (tab === "appeals" && !canAccessAppeals) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "accounts")));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessComfyui ? "comfyui" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))));
+  if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
+  if (tab === "dm" && !canAccessDm) normTab = fallbackModule();
+  if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
+  if (tab === "community" && !canAccessCommunity) normTab = fallbackModule();
+  if (tab === "drive" && !canAccessDrive) normTab = fallbackModule();
+  if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
+  if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
+  if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
+  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
+  if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
 
   currentModuleTab = normTab;
   const modChat = $("module-chat");
   const modDm = $("module-dm");
+  const modAnnouncements = $("module-announcements");
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
+  const modAlbums = $("module-albums");
+  const modComfyui = $("module-comfyui");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
   const mDm = $("tab-module-dm");
+  const mAnnouncements = $("tab-module-announcements");
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
+  const mAlbums = $("tab-module-albums");
+  const mComfyui = $("tab-module-comfyui");
   const mAccounts = $("tab-module-accounts");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
   if (modDm) modDm.classList.toggle("active", normTab === "dm");
+  if (modAnnouncements) modAnnouncements.classList.toggle("active", normTab === "announcements");
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
+  if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
+  if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
   if (mDm) mDm.classList.toggle("active", normTab === "dm");
+  if (mAnnouncements) mAnnouncements.classList.toggle("active", normTab === "announcements");
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
+  if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
+  if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
 
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
+  }
+  if (normTab === "announcements" && canAccessAnnouncements) {
+    loadAnnouncements();
   }
   if (normTab === "dm" && canAccessDm && typeof loadDmThreads === "function") {
     loadDmThreads();
@@ -94,6 +117,12 @@ function switchModuleTab(tab) {
   }
   if (normTab === "drive" && canAccessDrive) {
     loadDriveDashboard();
+  }
+  if (normTab === "albums" && canAccessAlbums) {
+    loadAlbumGallery();
+  }
+  if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
+    loadComfyuiModels();
   }
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
@@ -105,15 +134,14 @@ function switchModuleTab(tab) {
 
 function switchAdminTab(tab) {
   currentAdminTab = tab;
-  ["users","audit","violations","governance","appeals","reports"].forEach(t => {
+  ["users","violations","governance","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-audit","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
+  ["tab-users","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
-  if (tab === "audit") loadAudit(0);
   if (tab === "violations") loadViolations(0);
   if (tab === "governance") loadGovernanceDashboard();
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
@@ -799,6 +827,7 @@ async function loadSettings() {
   if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
@@ -822,6 +851,7 @@ async function loadSettings() {
   if ($("s-module-community-min-role")) $("s-module-community-min-role").value = s.module_community_min_role || "user";
   if ($("s-module-appeals-min-role")) $("s-module-appeals-min-role").value = s.module_appeals_min_role || "user";
   if ($("s-module-accounts-min-role")) $("s-module-accounts-min-role").value = s.module_accounts_min_role || "manager";
+  if ($("s-module-comfyui-min-role")) $("s-module-comfyui-min-role").value = s.module_comfyui_min_role || "user";
   if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
   if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
   if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
@@ -862,7 +892,8 @@ const FEATURE_SETTING_KEYS = [
   "feature_personalization_enabled",
   "feature_social_search_enabled",
   "feature_advanced_security_enabled",
-  "feature_privacy_uploads_enabled"
+  "feature_privacy_uploads_enabled",
+  "feature_comfyui_enabled"
 ];
 
 function featureSettingInputId(key) {
@@ -1171,7 +1202,7 @@ async function repairIntegrityChains() {
   const json = await res.json().catch(() => ({}));
   alert(json.msg || (json.ok ? "鏈異常已處理" : "處理失敗"));
   await loadServerHealth();
-  if (currentAdminTab === "audit") await loadAudit(auditPage);
+  if (currentServerTab === "audit") await loadAudit(auditPage);
   if (currentAdminTab === "violations") await loadViolations(violationsPage, violationTargetUser);
 }
 
@@ -1403,6 +1434,7 @@ async function saveSettings() {
     session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0") || null,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",
@@ -1413,6 +1445,7 @@ async function saveSettings() {
     module_community_min_role: $("s-module-community-min-role")?.value || "user",
     module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
     module_accounts_min_role: $("s-module-accounts-min-role")?.value || "manager",
+    module_comfyui_min_role: $("s-module-comfyui-min-role")?.value || "user",
     site_bg: $("s-site-bg")?.value || "#0f0f1a",
     site_surface: $("s-site-surface")?.value || "#1a1a2e",
     site_accent: $("s-site-accent")?.value || "#6c63ff",
@@ -1545,6 +1578,7 @@ async function loadSnapshots() {
       <div style="color:var(--muted);font-size:.7rem;margin-top:.2rem;">${sanitize(s.notes || "")}</div>
       <div style="display:flex;gap:.4rem;margin-top:.45rem;">
         <button class="btn btn-primary" data-snapshot-restore="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">Restore</button>
+        <button class="btn" data-snapshot-download="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">下載</button>
         <button class="btn" data-snapshot-delete="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">刪除</button>
       </div>
     </div>
@@ -1562,6 +1596,12 @@ async function loadSnapshots() {
       if (confirmBtn) { confirmBtn.disabled = false; }
       const hint = $("restore-hint");
       if (hint) hint.textContent = `已選取：${window._selectedSnapshotId}，確認後將執行 restore`;
+    });
+  });
+  list.querySelectorAll("[data-snapshot-download]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-snapshot-download");
+      downloadSnapshot(id);
     });
   });
   list.querySelectorAll("[data-snapshot-delete]").forEach((btn) => {
@@ -1593,6 +1633,31 @@ async function loadSnapshots() {
   }
 }
 
+async function downloadSnapshot(snapshotId) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/download`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    alert(json.msg || "下載失敗");
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  link.href = url;
+  link.download = match ? match[1] : `${snapshotId}.snapshot.tar.gz`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function performRestore(snapshotId, reason) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -1604,6 +1669,30 @@ async function performRestore(snapshotId, reason) {
   });
   const json = await res.json().catch(() => ({}));
   alert(json.msg || (json.ok ? "Restore 請求已提交，系統將重啟" : "Restore 請求失敗"));
+  if (json.ok) setTimeout(() => location.reload(), 3000);
+}
+
+async function uploadSnapshotRestore() {
+  const input = $("snapshot-upload-file");
+  const file = input?.files?.[0];
+  if (!file) { alert("請先選擇 snapshot 封包"); return; }
+  const reason = prompt("請輸入 restore 原因：") || "";
+  const confirmText = prompt("確定要使用上傳的 snapshot 封包 restore？\n此操作會覆蓋目前 runtime 狀態，請輸入 RESTORE 確認：") || "";
+  if (confirmText !== "RESTORE") { alert("確認字串不正確，已取消"); return; }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("confirm", "RESTORE");
+  form.append("reason", reason);
+  const res = await fetch(API + "/admin/snapshots/upload-restore", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "Upload restore 已完成" : "Upload restore 失敗"));
   if (json.ok) setTimeout(() => location.reload(), 3000);
 }
 
@@ -1727,6 +1816,8 @@ async function loadPlatformStats() {
   if (loadSnapBtn) loadSnapBtn.addEventListener("click", loadSnapshots);
   const createSnapBtn = document.getElementById("btn-create-snapshot");
   if (createSnapBtn) createSnapBtn.addEventListener("click", createSnapshot);
+  const uploadRestoreBtn = document.getElementById("btn-upload-snapshot-restore");
+  if (uploadRestoreBtn) uploadRestoreBtn.addEventListener("click", uploadSnapshotRestore);
   const resetBtn = document.getElementById("btn-reset-server");
   if (resetBtn) resetBtn.addEventListener("click", resetServer);
 

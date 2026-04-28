@@ -1,4 +1,4 @@
-import os
+import io
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -125,6 +125,49 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
     assert event["pre_restore_snapshot_id"]
     assert (service.snapshots_root / event["pre_restore_snapshot_id"]).exists()
     assert any(call[0][0] == "SNAPSHOT_RESTORE_COMPLETED" for call in audit_log)
+
+
+def test_portable_snapshot_archive_restores_on_different_instance(tmp_path):
+    source_root = tmp_path / "source"
+    target_root = tmp_path / "target"
+    source_root.mkdir()
+    target_root.mkdir()
+    source_audit = []
+    source, source_db, source_uploads = _service(source_root, source_audit)
+    (source_uploads / "portable.txt").write_text("portable source", encoding="utf-8")
+    snap = source.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="portable baseline")
+    exported = source.export_snapshot_archive(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"})
+
+    assert exported["ok"] is True
+    archive_path = Path(exported["path"])
+    assert archive_path.exists()
+
+    target_audit = []
+    target, target_db, target_uploads = _service(target_root, target_audit)
+    (target_uploads / "dirty.txt").write_text("dirty target", encoding="utf-8")
+    conn = _db(target_db)
+    conn.execute("INSERT INTO posts (id, title) VALUES (99, 'target dirty')")
+    conn.commit()
+    conn.close()
+
+    restored = target.restore_snapshot_archive(
+        actor={"id": 1, "username": "root"},
+        archive_path=archive_path,
+        reason="portable restore",
+    )
+
+    assert restored["ok"] is True
+    assert restored["imported_snapshot_id"] == snap.snapshot_id
+    conn = _db(target_db)
+    posts = [row["title"] for row in conn.execute("SELECT title FROM posts ORDER BY id").fetchall()]
+    snapshot_row = conn.execute("SELECT storage_path, db_dump_path FROM snapshots WHERE id=?", (snap.snapshot_id,)).fetchone()
+    conn.close()
+    assert posts == ["P1"]
+    assert (target_uploads / "portable.txt").read_text(encoding="utf-8") == "portable source"
+    assert not (target_uploads / "dirty.txt").exists()
+    assert str(target.snapshots_root) in snapshot_row["storage_path"]
+    assert Path(snapshot_row["db_dump_path"]).exists()
+    assert any(call[0][0] == "SNAPSHOT_IMPORTED" for call in target_audit)
 
 
 def test_snapshot_path_traversal_is_rejected(tmp_path):
@@ -303,6 +346,8 @@ def _passthrough(fn):
 class _FakeSnapshotService:
     def __init__(self):
         self.created = []
+        self.download_path = None
+        self.upload_restores = []
 
     def create_snapshot(self, *, snapshot_type, actor, notes=None):
         self.created.append((snapshot_type, actor["username"], notes))
@@ -316,6 +361,21 @@ class _FakeSnapshotService:
 
     def restore_snapshot(self, *, snapshot_id, actor, reason, dry_run=False):
         return {"ok": True, "snapshot_id": snapshot_id, "dry_run": dry_run}
+
+    def export_snapshot_archive(self, *, snapshot_id, actor=None):
+        if not self.download_path:
+            return {"ok": False, "msg": "download path not configured"}
+        return {
+            "ok": True,
+            "snapshot_id": snapshot_id,
+            "path": str(self.download_path),
+            "filename": Path(self.download_path).name,
+            "size_bytes": Path(self.download_path).stat().st_size,
+        }
+
+    def restore_snapshot_archive(self, *, actor, file_storage, reason, dry_run=False):
+        self.upload_restores.append((actor["username"], getattr(file_storage, "filename", ""), reason, dry_run))
+        return {"ok": True, "imported_snapshot_id": "snap_20260427_153000_abcdef", "dry_run": dry_run}
 
     def delete_snapshot(self, *, snapshot_id, actor, reason):
         return {"ok": True}
@@ -402,6 +462,45 @@ def test_snapshot_api_is_root_only_and_supports_dry_run_restore():
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.post("/api/admin/snapshots", json={"type": "manual"})
     assert denied.status_code == 403
+
+
+def test_snapshot_api_downloads_and_restores_uploaded_portable_archive(tmp_path):
+    snapshot_service = _FakeSnapshotService()
+    archive = tmp_path / "snap_20260427_153000_abcdef.snapshot.tar.gz"
+    archive.write_bytes(b"portable snapshot bytes")
+    snapshot_service.download_path = archive
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_admin_app(actor_box, snapshot_service).test_client()
+
+    downloaded = client.get("/api/admin/snapshots/snap_20260427_153000_abcdef/download")
+    assert downloaded.status_code == 200
+    assert downloaded.data == b"portable snapshot bytes"
+    assert "attachment" in downloaded.headers["Content-Disposition"]
+
+    restored = client.post(
+        "/api/admin/snapshots/upload-restore",
+        data={
+            "confirm": "RESTORE",
+            "reason": "api portable restore",
+            "file": (io.BytesIO(b"portable upload"), "portable.snapshot.tar.gz"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert restored.status_code == 200
+    assert restored.get_json()["imported_snapshot_id"] == "snap_20260427_153000_abcdef"
+    assert snapshot_service.upload_restores == [("root", "portable.snapshot.tar.gz", "api portable restore", False)]
+
+    dry_run = client.post(
+        "/api/admin/snapshots/upload-restore",
+        data={
+            "confirm": "DRY_RUN",
+            "dry_run": "true",
+            "file": (io.BytesIO(b"portable upload"), "portable.snapshot.tar.gz"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert dry_run.status_code == 200
+    assert dry_run.get_json()["dry_run"] is True
 
 
 def test_daily_snapshot_and_reset_api_are_root_only():

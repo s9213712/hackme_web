@@ -391,6 +391,59 @@
       color: var(--text);
     }
 
+    .drive-card-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .75rem;
+      margin-bottom: .7rem;
+    }
+
+    .community-panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .75rem;
+      margin-bottom: .65rem;
+    }
+
+    .community-panel-head .mini-title {
+      margin-bottom: 0;
+    }
+
+    .comfyui-layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 0.95fr) minmax(320px, 1.05fr);
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .comfyui-panel textarea {
+      min-height: 96px;
+    }
+
+    .comfyui-preview {
+      min-height: 420px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,.24);
+      overflow: hidden;
+    }
+
+    .comfyui-preview img {
+      width: 100%;
+      height: auto;
+      max-height: 72vh;
+      object-fit: contain;
+      display: block;
+    }
+
+    .drive-card-heading .drive-card-title {
+      margin-bottom: .2rem;
+    }
+
     .drive-usage-main {
       display: flex;
       align-items: baseline;
@@ -477,6 +530,43 @@
       gap: .55rem;
     }
 
+    .drive-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      margin-bottom: .75rem;
+    }
+
+    .drive-breadcrumb {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .35rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      padding: .45rem .55rem;
+      background: rgba(255,255,255,.035);
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    .drive-breadcrumb button {
+      border: 0;
+      background: transparent;
+      color: var(--accent2);
+      cursor: pointer;
+      padding: .1rem .2rem;
+      font: inherit;
+    }
+
+    .drive-breadcrumb span {
+      color: rgba(255,255,255,.35);
+    }
+
+    .compact-field {
+      max-width: 360px;
+    }
+
     .drive-file-row {
       display: flex;
       align-items: center;
@@ -496,9 +586,44 @@
 
     .drive-file-actions {
       display: flex;
-      gap: .45rem;
+      gap: .3rem;
       flex-wrap: wrap;
       justify-content: flex-end;
+      align-items: center;
+      flex: 0 0 auto;
+    }
+
+    .drive-file-actions .btn {
+      width: auto;
+      min-height: 0;
+      padding: .34rem .54rem;
+      border-radius: 7px;
+      font-size: .72rem;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+
+    .drive-album-detail {
+      margin-top: .85rem;
+      border-top: 1px solid rgba(255,255,255,.08);
+      padding-top: .85rem;
+    }
+
+    .drive-gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: .75rem;
+    }
+
+    .drive-gallery-tile {
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      padding: .7rem;
+      background: rgba(255,255,255,.035);
+      min-height: 128px;
+      display: grid;
+      align-content: space-between;
+      gap: .55rem;
     }
 
     .drive-preview-panel {
@@ -510,11 +635,17 @@
 
     .drive-preview-panel video,
     .drive-preview-panel audio,
+    .drive-preview-panel img,
     .drive-preview-panel iframe {
       width: 100%;
       border: 1px solid rgba(255,255,255,.12);
       border-radius: 10px;
       background: rgba(0,0,0,.25);
+    }
+
+    .drive-preview-panel img {
+      max-height: 520px;
+      object-fit: contain;
     }
 
     .drive-preview-panel video,
@@ -571,6 +702,47 @@
     }
 
     .pw-rules span { color: var(--accent2); }
+
+    .auth-recovery {
+      margin-top: 1rem;
+      border-top: 1px solid rgba(255,255,255,.08);
+      padding-top: .85rem;
+    }
+
+    .auth-link-btn {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--accent2);
+      cursor: pointer;
+      font: inherit;
+      font-size: .85rem;
+      font-weight: 700;
+      padding: .25rem;
+    }
+
+    .auth-recovery-panel {
+      display: none;
+      margin-top: .75rem;
+      padding: .85rem;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
+    }
+
+    .auth-recovery-panel.show { display: block; }
+
+    .auth-recovery-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: .5rem;
+      margin-bottom: 1rem;
+    }
+
+    .auth-recovery-panel .btn {
+      font-size: .86rem;
+      padding: .62rem;
+    }
 
     /* ── Button ───────────────────────────────────────────── */
     .btn {
@@ -632,6 +804,35 @@
       margin-top: .8rem;
     }
 
+    .community-main-area,
+    .community-stage,
+    .community-tools-drawer,
+    .community-review-area {
+      margin-top: .8rem;
+    }
+
+    .community-page-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: .75rem;
+      flex-wrap: wrap;
+    }
+
+    .community-breadcrumb {
+      margin-top: .5rem;
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    .community-stage .community-panel {
+      min-height: 520px;
+    }
+
+    .community-review-layout {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .community-column {
       display: flex;
       flex-direction: column;
@@ -642,12 +843,12 @@
     .community-panel {
       background: rgba(0,0,0,.18);
       border: 1px solid rgba(255,255,255,.08);
-      border-radius: 12px;
+      border-radius: 8px;
       padding: .85rem;
     }
 
     .community-scroll {
-      max-height: 420px;
+      max-height: 62vh;
       overflow: auto;
       display: flex;
       flex-direction: column;
@@ -659,7 +860,7 @@
     .community-thread-item {
       background: rgba(255,255,255,.03);
       border: 1px solid rgba(255,255,255,.08);
-      border-radius: 10px;
+      border-radius: 8px;
       padding: .75rem;
       text-align: left;
       color: var(--text);
@@ -760,7 +961,7 @@
       color: var(--muted);
       background: rgba(255,255,255,.03);
       border: 1px solid rgba(255,255,255,.06);
-      border-radius: 10px;
+      border-radius: 8px;
       padding: .65rem .75rem;
       margin-bottom: .65rem;
       white-space: pre-wrap;
@@ -770,6 +971,12 @@
     @media (max-width: 1100px) {
       .community-layout {
         grid-template-columns: 1fr;
+      }
+      .comfyui-layout {
+        grid-template-columns: 1fr;
+      }
+      .comfyui-preview {
+        min-height: 280px;
       }
     }
 

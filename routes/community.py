@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from flask import request
 
+from services.governance_records import add_reputation_event, record_moderation_action
 from services.permissions import require_member_action
 
 
@@ -24,6 +25,7 @@ def register_community_routes(app, deps):
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
+    add_violation = deps.get("add_violation")
 
     def ensure_community_schema(conn):
         # Guard executescript so AttributeError (missing method on wrapper) can't cause 500 (L-2)
@@ -151,6 +153,16 @@ def register_community_routes(app, deps):
             UNIQUE(post_id, user_id)
         );
 
+        CREATE TABLE IF NOT EXISTS forum_thread_reactions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id      INTEGER NOT NULL REFERENCES forum_threads(id) ON DELETE CASCADE,
+            user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            value          INTEGER NOT NULL,
+            created_at     TEXT NOT NULL,
+            updated_at     TEXT NOT NULL,
+            UNIQUE(thread_id, user_id)
+        );
+
         CREATE TABLE IF NOT EXISTS forum_post_reports (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             post_id          INTEGER NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
@@ -177,6 +189,7 @@ def register_community_routes(app, deps):
         CREATE INDEX IF NOT EXISTS idx_forum_posts_visible ON forum_posts(thread_id, is_deleted, is_hidden, is_pinned, created_at);
         CREATE INDEX IF NOT EXISTS idx_board_moderators_user ON board_moderators(user_id, board_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reactions_post ON forum_post_reactions(post_id);
+        CREATE INDEX IF NOT EXISTS idx_forum_thread_reactions_thread ON forum_thread_reactions(thread_id);
         CREATE INDEX IF NOT EXISTS idx_forum_post_reports_status ON forum_post_reports(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_forum_thread_views_thread ON forum_thread_views(thread_id, viewed_at);
         """)
@@ -264,6 +277,7 @@ def register_community_routes(app, deps):
                 "UPDATE forum_boards SET slug=? WHERE id=?",
                 (make_board_slug(row["title"], row["id"]), row["id"])
             )
+        ensure_default_forum_boards(conn, default_category_id)
 
     def ensure_default_forum_category(conn):
         now = datetime.now().isoformat()
@@ -277,6 +291,85 @@ def register_community_routes(app, deps):
             "SELECT id FROM forum_categories WHERE name=?",
             ("一般討論",)
         ).fetchone()["id"]
+
+    def default_forum_moderator(conn):
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        level_expr = "''"
+        if "effective_level" in user_cols:
+            level_expr = "COALESCE(effective_level, base_level, member_level, '')"
+        elif "base_level" in user_cols:
+            level_expr = "COALESCE(base_level, member_level, '')"
+        elif "member_level" in user_cols:
+            level_expr = "COALESCE(member_level, '')"
+        return conn.execute(
+            f"SELECT id, username FROM users "
+            f"WHERE username='root' OR role IN ('super_admin', 'manager') OR {level_expr}='vip' "
+            f"ORDER BY CASE WHEN username='root' THEN 0 WHEN role='super_admin' THEN 1 WHEN role='manager' THEN 2 ELSE 3 END, id ASC "
+            f"LIMIT 1"
+        ).fetchone()
+
+    def ensure_user_reputation_columns(conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "reputation" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN reputation INTEGER NOT NULL DEFAULT 0")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
+
+    def ensure_user_violation_columns(conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "violation_count" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN violation_count INTEGER NOT NULL DEFAULT 0")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
+
+    def ensure_board_moderator(conn, board_id, user_id, username, created_by="system"):
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, "
+            "can_lock_threads, can_edit_posts, can_delete_posts, created_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, 1, 1, 1, 1, ?, ?, ?) "
+            "ON CONFLICT(board_id, user_id) DO UPDATE SET username=excluded.username, updated_at=excluded.updated_at",
+            (board_id, user_id, username, created_by, now, now)
+        )
+
+    def ensure_default_forum_boards(conn, category_id):
+        moderator = default_forum_moderator(conn)
+        if not moderator:
+            return
+        now = datetime.now().isoformat()
+        defaults = (
+            ("遊戲專區", "遊戲討論、攻略、組隊與實測心得。", "禁止外掛、詐騙、洗版與人身攻擊。", 10),
+            ("二次元專區", "動漫、漫畫、角色創作與作品交流。", "尊重創作者與分級規範，禁止盜版與騷擾。", 20),
+            ("ComfyUI專區", "ComfyUI 工作流、模型、節點與生成參數交流。", "分享工作流時請標註來源與使用限制。", 30),
+            ("程式設計區", "程式設計、除錯、架構與工具鏈討論。", "提問請附環境、錯誤訊息與可重現步驟。", 40),
+            ("AI新知區", "AI 研究、產品、模型與產業消息討論。", "請標註消息來源，避免未證實傳言。", 50),
+        )
+        for title, description, rules, sort_order in defaults:
+            row = conn.execute("SELECT id FROM forum_boards WHERE title=?", (title,)).fetchone()
+            if row:
+                ensure_board_moderator(conn, row["id"], moderator["id"], moderator["username"])
+                continue
+            cur = conn.execute(
+                "INSERT INTO forum_boards (category_id, title, description, rules, visibility, sort_order, is_active, "
+                "last_activity_at, owner_user_id, owner_username, status, review_note, reviewed_by, reviewed_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'public', ?, 1, ?, ?, ?, 'approved', ?, 'system', ?, ?, ?)",
+                (
+                    category_id,
+                    title,
+                    description,
+                    rules,
+                    sort_order,
+                    now,
+                    moderator["id"],
+                    moderator["username"],
+                    "系統預設討論版",
+                    now,
+                    now,
+                    now,
+                )
+            )
+            conn.execute("UPDATE forum_boards SET slug=? WHERE id=?", (make_board_slug(title, cur.lastrowid), cur.lastrowid))
+            ensure_board_moderator(conn, cur.lastrowid, moderator["id"], moderator["username"])
 
     def row_value(row, key, default=None):
         return row[key] if key in row.keys() else default
@@ -382,6 +475,8 @@ def register_community_routes(app, deps):
     def board_payload(row):
         category_id = row_value(row, "category_id")
         category_name = row_value(row, "category_name")
+        moderators_raw = row_value(row, "moderators", "") or ""
+        moderators = [name for name in moderators_raw.split(",") if name]
         return {
             "id": row["id"],
             "category_id": category_id,
@@ -402,6 +497,8 @@ def register_community_routes(app, deps):
             "last_activity_at": row_value(row, "last_activity_at"),
             "owner_user_id": row["owner_user_id"],
             "owner_username": row["owner_username"],
+            "moderators": moderators,
+            "moderator_count": int(row_value(row, "moderator_count", len(moderators)) or 0),
             "status": row["status"],
             "review_note": row["review_note"],
             "reviewed_by": row["reviewed_by"],
@@ -504,6 +601,9 @@ def register_community_routes(app, deps):
             "is_locked": bool(row["is_locked"]),
             "is_curated": bool(row_value(row, "is_curated", 0)),
             "view_count": int(row_value(row, "view_count", 0) or 0),
+            "like_count": int(row_value(row, "like_count", 0) or 0),
+            "dislike_count": int(row_value(row, "dislike_count", 0) or 0),
+            "user_reaction": int(row_value(row, "user_reaction", 0) or 0),
             "edited_at": row_value(row, "edited_at"),
             "edited_by": row_value(row, "edited_by"),
             "is_deleted": bool(row_value(row, "is_deleted", 0)),
@@ -713,14 +813,18 @@ def register_community_routes(app, deps):
                 if can_manage_community(actor):
                     rows = conn.execute(
                         "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
+                        "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
+                        "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
                         "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
                         "ORDER BY c.sort_order ASC, b.sort_order ASC, COALESCE(b.last_activity_at, b.created_at) DESC"
                     ).fetchall()
                 else:
                     rows = conn.execute(
                         "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                        "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
+                        "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
+                        "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
                         "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
                         "WHERE b.is_active=1 AND ((b.status='approved' AND b.visibility='public') OR b.owner_user_id=?) ORDER BY "
                         "c.sort_order ASC, b.sort_order ASC, CASE b.status WHEN 'approved' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, "
@@ -777,6 +881,7 @@ def register_community_routes(app, deps):
                 "UPDATE forum_boards SET slug=? WHERE id=?",
                 (make_board_slug(title, cursor.lastrowid), cursor.lastrowid)
             )
+            ensure_board_moderator(conn, cursor.lastrowid, actor["id"], actor["username"])
             conn.commit()
             audit("COMMUNITY_BOARD_REQUEST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=title)
             return json_resp({"ok": True, "msg": "討論區申請已送出，待管理員審核"})
@@ -797,7 +902,9 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             rows = conn.execute(
                 "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
+                "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
+                "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
                 "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id "
                 "WHERE b.status='pending' ORDER BY b.created_at ASC"
             ).fetchall()
@@ -837,6 +944,8 @@ def register_community_routes(app, deps):
                 "UPDATE forum_boards SET status=?, review_note=?, reviewed_by=?, reviewed_at=?, updated_at=? WHERE id=?",
                 (new_status, note or None, actor["username"], now, now, board_id)
             )
+            if new_status == "approved":
+                ensure_board_moderator(conn, board_id, row["owner_user_id"], row["owner_username"], actor["username"])
             conn.commit()
             audit("COMMUNITY_BOARD_REVIEW", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"board_id={board_id}, action={new_status}")
@@ -1015,7 +1124,9 @@ def register_community_routes(app, deps):
             ensure_community_schema(conn)
             board = conn.execute(
                 "SELECT b.*, c.name AS category_name, c.description AS category_description, "
-                "c.sort_order AS category_sort_order, c.is_active AS category_is_active "
+                "c.sort_order AS category_sort_order, c.is_active AS category_is_active, "
+                "(SELECT GROUP_CONCAT(username) FROM board_moderators WHERE board_id=b.id) AS moderators, "
+                "(SELECT COUNT(*) FROM board_moderators WHERE board_id=b.id) AS moderator_count "
                 "FROM forum_boards b LEFT JOIN forum_categories c ON c.id=b.category_id WHERE b.id=?",
                 (board_id,)
             ).fetchone()
@@ -1065,6 +1176,17 @@ def register_community_routes(app, deps):
                         (row["id"],)
                     ).fetchone()["c"]
                     item = thread_payload(row)
+                    reaction_counts = conn.execute(
+                        "SELECT "
+                        "COALESCE(SUM(CASE WHEN value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
+                        "COALESCE(SUM(CASE WHEN value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count, "
+                        "COALESCE(MAX(CASE WHEN user_id=? THEN value ELSE 0 END), 0) AS user_reaction "
+                        "FROM forum_thread_reactions WHERE thread_id=?",
+                        (actor["id"], row["id"])
+                    ).fetchone()
+                    item["like_count"] = reaction_counts["like_count"] or 0
+                    item["dislike_count"] = reaction_counts["dislike_count"] or 0
+                    item["user_reaction"] = reaction_counts["user_reaction"] or 0
                     item["reply_count"] = reply_count or 0
                     threads.append(item)
                 return json_resp({
@@ -1076,6 +1198,7 @@ def register_community_routes(app, deps):
                     "limit": limit,
                     "query": q,
                     "can_post_directly": manageable,
+                    "can_moderate": manageable,
                 })
 
             if not board["is_active"] and not manageable:
@@ -1260,7 +1383,7 @@ def register_community_routes(app, deps):
                     return json_resp({"ok": False, "msg": "已刪除主題不可編輯"}), 409
                 if bool(thread["is_locked"]) and not manageable:
                     return json_resp({"ok": False, "msg": "此主題已鎖定，不可編輯"}), 403
-                if not can_edit_community_content(actor, thread["author_user_id"]):
+                if not can_moderate_board(conn, thread["board_id"], actor, "can_edit_posts") and not can_edit_community_content(actor, thread["author_user_id"]):
                     return json_resp({"ok": False, "msg": "你沒有編輯此主題的權限"}), 403
                 try:
                     data = request.get_json(force=True)
@@ -1289,7 +1412,7 @@ def register_community_routes(app, deps):
             if request.method == "DELETE":
                 if thread["is_deleted"]:
                     return json_resp({"ok": False, "msg": "主題已刪除"}), 409
-                if not can_delete_community_content(actor, thread["author_user_id"], thread["owner_user_id"]):
+                if not can_moderate_board(conn, thread["board_id"], actor, "can_delete_posts") and not can_delete_community_content(actor, thread["author_user_id"], thread["owner_user_id"]):
                     return json_resp({"ok": False, "msg": "你沒有刪除此主題的權限"}), 403
                 now = datetime.now().isoformat()
                 reason = ""
@@ -1330,6 +1453,14 @@ def register_community_routes(app, deps):
                 "ORDER BY p.is_pinned DESC, p.created_at ASC",
                 tuple([actor["id"]] + post_params)
             ).fetchall()
+            thread_reactions = conn.execute(
+                "SELECT "
+                "COALESCE(SUM(CASE WHEN value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
+                "COALESCE(SUM(CASE WHEN value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count, "
+                "COALESCE(MAX(CASE WHEN user_id=? THEN value ELSE 0 END), 0) AS user_reaction "
+                "FROM forum_thread_reactions WHERE thread_id=?",
+                (actor["id"], thread_id)
+            ).fetchone()
             counted_view = record_thread_view(conn, thread_id, actor)
             conn.commit()
             refreshed_view = conn.execute("SELECT view_count FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
@@ -1351,6 +1482,9 @@ def register_community_routes(app, deps):
                     "is_curated": bool(thread["is_curated"]),
                     "view_count": int(refreshed_view["view_count"] or 0),
                     "view_counted": counted_view,
+                    "like_count": thread_reactions["like_count"] or 0,
+                    "dislike_count": thread_reactions["dislike_count"] or 0,
+                    "user_reaction": thread_reactions["user_reaction"] or 0,
                     "edited_at": thread["edited_at"],
                     "edited_by": thread["edited_by"],
                     "is_deleted": bool(thread["is_deleted"]),
@@ -1362,6 +1496,7 @@ def register_community_routes(app, deps):
                     "created_at": thread["created_at"],
                     "updated_at": thread["updated_at"],
                     "board_status": thread["board_status"],
+                    "can_moderate": manageable,
                 },
                 "posts": [{
                     "id": row["id"],
@@ -1379,6 +1514,123 @@ def register_community_routes(app, deps):
                     "updated_at": row["updated_at"],
                 } for row in posts]
             })
+        finally:
+            conn.close()
+
+    @app.route("/api/community/threads/<int:thread_id>/reaction", methods=["POST"])
+    @require_csrf
+    def community_thread_reaction(thread_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        value = data.get("value") if isinstance(data, dict) else None
+        if value not in (-1, 0, 1):
+            return json_resp({"ok": False, "msg": "反應值錯誤"}), 400
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            ok, msg, status_code = require_member_action(actor, "community_reaction", conn=conn)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg}), status_code
+            thread = conn.execute(
+                "SELECT t.id, t.board_id, t.status, t.is_deleted, b.status AS board_status, "
+                "b.owner_user_id, b.visibility AS board_visibility, b.is_active AS board_is_active "
+                "FROM forum_threads t JOIN forum_boards b ON b.id=t.board_id WHERE t.id=?",
+                (thread_id,)
+            ).fetchone()
+            if not thread or thread["is_deleted"]:
+                return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            manageable = can_moderate_board(conn, thread["board_id"], actor)
+            accessible = manageable or (
+                bool(thread["board_is_active"]) and (
+                    (thread["board_status"] == "approved" and thread["board_visibility"] == "public") or
+                    thread["owner_user_id"] == actor["id"]
+                )
+            )
+            if not accessible or (thread["status"] != "approved" and not manageable):
+                return json_resp({"ok": False, "msg": "權限不足"}), 403
+
+            now = datetime.now().isoformat()
+            if value == 0:
+                conn.execute(
+                    "DELETE FROM forum_thread_reactions WHERE thread_id=? AND user_id=?",
+                    (thread_id, actor["id"])
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO forum_thread_reactions (thread_id, user_id, value, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(thread_id, user_id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                    (thread_id, actor["id"], value, now, now)
+                )
+            counts = conn.execute(
+                "SELECT "
+                "COALESCE(SUM(CASE WHEN value=1 THEN 1 ELSE 0 END), 0) AS like_count, "
+                "COALESCE(SUM(CASE WHEN value=-1 THEN 1 ELSE 0 END), 0) AS dislike_count "
+                "FROM forum_thread_reactions WHERE thread_id=?",
+                (thread_id,)
+            ).fetchone()
+            conn.commit()
+            return json_resp({
+                "ok": True,
+                "msg": "已更新主題反應",
+                "like_count": counts["like_count"] or 0,
+                "dislike_count": counts["dislike_count"] or 0,
+                "user_reaction": value,
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/community/threads/<int:thread_id>/reward", methods=["POST"])
+    @require_csrf
+    def community_thread_reward(thread_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        points = parse_positive_int(data.get("points", 1), default=1, min_value=1, max_value=50)
+        reason = normalize_text(data.get("reason"))[:160] or "優質主題貢獻"
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            thread = conn.execute(
+                "SELECT id, board_id, title, author_user_id, author_username, is_deleted FROM forum_threads WHERE id=?",
+                (thread_id,)
+            ).fetchone()
+            if not thread or thread["is_deleted"]:
+                return json_resp({"ok": False, "msg": "找不到主題"}), 404
+            if not can_moderate_board(conn, thread["board_id"], actor, "can_pin_posts"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可獎勵主題作者"}), 403
+            ensure_user_reputation_columns(conn)
+            add_reputation_event(
+                conn,
+                user_id=thread["author_user_id"],
+                delta=points,
+                reason=f"forum_thread_reward:{reason}",
+                source_user_id=actor["id"],
+                source_post_id=thread_id,
+            )
+            record_moderation_action(
+                conn,
+                moderator_id=actor["id"],
+                action_type="reward_thread_author",
+                target_type="forum_thread",
+                target_id=thread_id,
+                reason=reason,
+            )
+            conn.commit()
+            audit("COMMUNITY_THREAD_REWARD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"thread_id={thread_id}, author={thread['author_username']}, points={points}")
+            return json_resp({"ok": True, "msg": "已獎勵主題作者", "points": points})
         finally:
             conn.close()
 
@@ -1569,6 +1821,72 @@ def register_community_routes(app, deps):
             audit("COMMUNITY_POST_PIN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"post_id={post_id}, pinned={pinned}")
             return json_resp({"ok": True, "msg": "留言已置頂" if pinned else "留言已取消置頂"})
+        finally:
+            conn.close()
+
+    @app.route("/api/community/posts/<int:post_id>/penalty", methods=["POST"])
+    @require_csrf
+    def community_post_penalty(post_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        points = parse_positive_int(data.get("points", 1), default=1, min_value=1, max_value=10)
+        reason = normalize_text(data.get("reason"))[:200] or "討論區違規留言"
+
+        conn = get_db()
+        try:
+            ensure_community_schema(conn)
+            post = conn.execute(
+                "SELECT p.id, p.thread_id, p.content, p.author_user_id, p.author_username, p.is_deleted, "
+                "t.board_id, t.is_deleted AS thread_is_deleted, u.role AS author_role "
+                "FROM forum_posts p "
+                "JOIN forum_threads t ON t.id=p.thread_id "
+                "JOIN users u ON u.id=p.author_user_id "
+                "WHERE p.id=?",
+                (post_id,)
+            ).fetchone()
+            if not post or post["is_deleted"] or post["thread_is_deleted"]:
+                return json_resp({"ok": False, "msg": "找不到留言"}), 404
+            if not can_moderate_board(conn, post["board_id"], actor, "can_delete_posts"):
+                return json_resp({"ok": False, "msg": "只有管理員或版主可懲處違規留言"}), 403
+            if post["author_username"] == "root":
+                return json_resp({"ok": False, "msg": "無法對 root 計點"}), 403
+            if actor_role(actor) == "user" and post["author_role"] != "user":
+                return json_resp({"ok": False, "msg": "版主只能懲處一般帳戶"}), 403
+
+            if callable(add_violation):
+                conn.commit()
+                add_violation(
+                    post["author_user_id"],
+                    post["author_username"],
+                    post["author_role"],
+                    points=points,
+                    reason=reason,
+                    triggered_by="forum_moderator",
+                    actor_username=actor["username"],
+                )
+            else:
+                ensure_user_violation_columns(conn)
+                conn.execute(
+                    "UPDATE users SET violation_count=COALESCE(violation_count, 0)+?, updated_at=? WHERE id=?",
+                    (points, datetime.now().isoformat(), post["author_user_id"])
+                )
+            record_moderation_action(
+                conn,
+                moderator_id=actor["id"],
+                action_type="penalize_post_author",
+                target_type="forum_post",
+                target_id=post_id,
+                reason=reason,
+            )
+            conn.commit()
+            audit("COMMUNITY_POST_PENALTY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"post_id={post_id}, author={post['author_username']}, points={points}")
+            return json_resp({"ok": True, "msg": "已對違規留言作者計點", "points": points})
         finally:
             conn.close()
 

@@ -182,6 +182,13 @@ def test_manager_role_bypasses_member_interaction_limits(tmp_path):
     try:
         manager = _insert_user(conn, 12, "admin", "restricted", role="manager")
         root = _insert_user(conn, 13, "root", "suspended", role="super_admin")
+        assert can_post(manager, conn) is True
+        assert can_comment(manager, conn) is True
+        assert can_upload(manager, conn) is True
+        assert can_report(manager, conn) is True
+        assert get_rate_limit(manager, "community_thread_create", conn) is None
+        assert can_post(root, conn) is True
+        assert can_upload(root, conn) is True
         assert require_member_action(manager, "community_reply", conn=conn) == (True, "", 200)
         assert require_member_action(root, "community_thread_create", conn=conn) == (True, "", 200)
     finally:

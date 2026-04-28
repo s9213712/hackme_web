@@ -1,6 +1,7 @@
 from routes.appeals import register_appeal_routes
 from routes.bug_reports import register_bug_report_routes
 from routes.community import register_community_routes
+from routes.comfyui import register_comfyui_routes
 from routes.dm import register_dm_routes
 from routes.files import register_file_routes
 from routes.moderation import register_moderation_routes
@@ -13,6 +14,7 @@ def register_operation_routes(app, deps):
     register_bug_report_routes(app, deps)
     register_dm_routes(app, deps)
     register_file_routes(app, deps)
+    register_comfyui_routes(app, deps)
     register_appeal_routes(app, deps)
     register_reports_notification_routes(app, deps)
     register_moderation_routes(app, deps)

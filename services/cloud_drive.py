@@ -171,8 +171,8 @@ def serialize_file_row(row):
     return data
 
 
-def _check_quota(conn, actor, member_rule, size_bytes):
-    usage = get_user_cloud_drive_usage(conn, actor, member_rule=member_rule)
+def _check_quota(conn, actor, member_rule, size_bytes, storage_root=None):
+    usage = get_user_cloud_drive_usage(conn, actor, member_rule=member_rule, storage_root=storage_root)
     if not usage["can_upload"]:
         return False, "目前會員等級或處分狀態不可上傳"
     max_file = usage.get("max_file_size_bytes")
@@ -224,7 +224,7 @@ def store_cloud_upload(
         size_bytes = len(data)
         from io import BytesIO
         stream = BytesIO(data)
-    ok, msg = _check_quota(conn, actor, member_rule, size_bytes)
+    ok, msg = _check_quota(conn, actor, member_rule, size_bytes, storage_root=storage_root)
     if not ok:
         if position is not None and hasattr(stream, "seek"):
             stream.seek(position)

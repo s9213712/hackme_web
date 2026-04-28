@@ -12,6 +12,8 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
+from services.identity import is_admin_role
+
 
 UPLOAD_PRIVACY_MODES = {
     "public_attachment",
@@ -20,6 +22,8 @@ UPLOAD_PRIVACY_MODES = {
     "e2ee_vault_with_client_scan",
 }
 RISK_LEVELS = {"low", "medium", "high", "blocked", "unknown_encrypted"}
+ADMIN_DISK_QUOTA_RATIO = 0.9
+ADMIN_DISK_WARNING_RATIO = 0.8
 SCAN_STATUSES = {
     "not_required",
     "pending",
@@ -330,6 +334,10 @@ def ensure_upload_security_schema(conn):
         )
         """
     )
+    _ensure_uploaded_files_columns(conn)
+    _ensure_encrypted_file_keys_columns(conn)
+    _ensure_file_scan_results_columns(conn)
+    _ensure_file_access_logs_columns(conn)
     _ensure_cloud_drive_policy_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status)")
@@ -342,6 +350,85 @@ def ensure_upload_security_schema(conn):
 
 def _table_columns(conn, table):
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_uploaded_files_columns(conn):
+    columns = _table_columns(conn, "uploaded_files")
+    definitions = {
+        "owner_user_id": "INTEGER NOT NULL DEFAULT 0",
+        "storage_path": "TEXT NOT NULL DEFAULT ''",
+        "privacy_mode": "TEXT NOT NULL DEFAULT 'public_attachment'",
+        "risk_level": "TEXT NOT NULL DEFAULT 'medium'",
+        "scan_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "original_filename_encrypted": "TEXT",
+        "original_filename_plain_for_public": "TEXT",
+        "mime_type_encrypted": "TEXT",
+        "mime_type_plain_for_public": "TEXT",
+        "size_bytes": "INTEGER NOT NULL DEFAULT 0",
+        "ciphertext_sha256": "TEXT",
+        "plaintext_sha256": "TEXT",
+        "encryption_algorithm": "TEXT",
+        "encryption_version": "TEXT",
+        "nonce": "TEXT",
+        "client_scan_report_json": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+        "updated_at": "TEXT",
+        "deleted_at": "TEXT",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {column} {definition}")
+
+
+def _ensure_encrypted_file_keys_columns(conn):
+    columns = _table_columns(conn, "encrypted_file_keys")
+    definitions = {
+        "file_id": "TEXT NOT NULL DEFAULT ''",
+        "recipient_user_id": "INTEGER NOT NULL DEFAULT 0",
+        "encrypted_file_key": "TEXT NOT NULL DEFAULT ''",
+        "wrapped_by": "TEXT NOT NULL DEFAULT 'user_public_key'",
+        "key_version": "INTEGER NOT NULL DEFAULT 1",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+        "revoked_at": "TEXT",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE encrypted_file_keys ADD COLUMN {column} {definition}")
+
+
+def _ensure_file_scan_results_columns(conn):
+    columns = _table_columns(conn, "file_scan_results")
+    definitions = {
+        "file_id": "TEXT NOT NULL DEFAULT ''",
+        "scanner_name": "TEXT NOT NULL DEFAULT 'unknown'",
+        "scanner_version": "TEXT",
+        "scan_started_at": "TEXT",
+        "scan_completed_at": "TEXT",
+        "result": "TEXT NOT NULL DEFAULT 'unknown'",
+        "malware_name": "TEXT",
+        "details_json": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE file_scan_results ADD COLUMN {column} {definition}")
+
+
+def _ensure_file_access_logs_columns(conn):
+    columns = _table_columns(conn, "file_access_logs")
+    definitions = {
+        "file_id": "TEXT NOT NULL DEFAULT ''",
+        "actor_user_id": "INTEGER",
+        "action": "TEXT NOT NULL DEFAULT 'unknown'",
+        "ip": "TEXT",
+        "user_agent": "TEXT",
+        "result": "TEXT NOT NULL DEFAULT 'unknown'",
+        "reason": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE file_access_logs ADD COLUMN {column} {definition}")
 
 
 def _ensure_cloud_drive_policy_columns(conn):
@@ -652,21 +739,37 @@ def _count_grouped(conn, owner_user_id, field):
     return {row["name"]: {"count": int(row["count"] or 0), "bytes": int(row["bytes"] or 0)} for row in rows}
 
 
-def get_user_cloud_drive_usage(conn, user, member_rule=None):
+def _disk_usage_for_storage_root(storage_root):
+    path = Path(storage_root or ".").expanduser()
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    usage = shutil.disk_usage(str(probe))
+    return {
+        "path": str(path),
+        "probe_path": str(probe),
+        "total_bytes": int(usage.total),
+        "used_bytes": int(usage.used),
+        "free_bytes": int(usage.free),
+    }
+
+
+def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     ensure_upload_security_schema(conn)
     data = dict(user or {})
     user_id = int(data.get("id") or 0)
-    role = data.get("role") or "user"
+    admin_actor = _user_is_admin(data)
     effective_level = data.get("effective_level") or data.get("member_level") or "newbie"
     sanction_status = data.get("sanction_status") or "none"
     rule = member_rule or {}
     quota_mb = int(rule.get("attachment_quota_mb") or 0)
     max_file_size_mb = int(rule.get("max_attachment_size_mb") or 0)
     upload_rate_limit_per_day = int(rule.get("upload_rate_limit_per_day") or 0)
-    can_upload = (role == "super_admin" or bool(rule.get("can_upload_attachment"))) and sanction_status not in {"restricted", "suspended"}
+    can_upload = admin_actor or (bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"})
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
-    total_bytes = None if role == "super_admin" else quota_mb * 1024 * 1024
+    disk = _disk_usage_for_storage_root(storage_root) if admin_actor and storage_root else None
+    total_bytes = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO) if disk else (None if admin_actor else quota_mb * 1024 * 1024)
     remaining_bytes = None if total_bytes is None else max(0, total_bytes - used_bytes)
     percent_used = 0.0
     if total_bytes and total_bytes > 0:
@@ -678,23 +781,27 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None):
         "user_id": user_id,
         "effective_level": effective_level,
         "can_upload": can_upload,
-        "quota_source": "super_admin_unlimited" if role == "super_admin" else "member_level_rules.attachment_quota_mb",
+        "quota_source": "admin_role_disk_available_90_percent" if disk else ("admin_role_unlimited" if admin_actor else "member_level_rules.attachment_quota_mb"),
         "used_bytes": used_bytes,
         "total_bytes": total_bytes,
         "remaining_bytes": remaining_bytes,
         "percent_used": percent_used,
         "file_count": file_count,
-        "max_file_size_bytes": None if role == "super_admin" else max_file_size_mb * 1024 * 1024,
-        "upload_rate_limit_per_day": None if role == "super_admin" else upload_rate_limit_per_day,
+        "max_file_size_bytes": remaining_bytes if disk else (None if admin_actor else max_file_size_mb * 1024 * 1024),
+        "upload_rate_limit_per_day": None if admin_actor else upload_rate_limit_per_day,
+        "disk": disk,
+        "warning_threshold_percent": int(ADMIN_DISK_WARNING_RATIO * 100) if disk else None,
+        "warning_threshold_bytes": int(total_bytes * ADMIN_DISK_WARNING_RATIO) if disk and total_bytes is not None else None,
+        "warning_active": bool(disk and total_bytes is not None and used_bytes >= int(total_bytes * ADMIN_DISK_WARNING_RATIO)),
         "by_privacy_mode": _count_grouped(conn, user_id, "privacy_mode"),
         "by_risk_level": _count_grouped(conn, user_id, "risk_level"),
         "by_scan_status": _count_grouped(conn, user_id, "scan_status"),
     }
 
 
-def get_cloud_drive_safety_summary(conn, user, member_rule=None):
+def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=None):
     policy = get_cloud_drive_security_policy(conn)
-    usage = get_user_cloud_drive_usage(conn, user, member_rule=member_rule)
+    usage = get_user_cloud_drive_usage(conn, user, member_rule=member_rule, storage_root=storage_root)
     effective_level = usage["effective_level"]
     restrictions = []
     if not usage["can_upload"]:
@@ -707,8 +814,10 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None):
         restrictions.append("高風險檔案不提供 inline preview")
     if not policy["e2ee_server_scan_claim_allowed"]:
         restrictions.append("E2EE 檔案不可宣稱已完成伺服器完整掃毒")
-    if effective_level in {"restricted", "suspended"}:
+    if not _user_is_admin(user) and effective_level in {"restricted", "suspended"}:
         restrictions.append("restricted/suspended 不可新增上傳或分享")
+    if usage.get("warning_active"):
+        restrictions.append("root/admin 雲端硬碟使用量已超過磁碟安全警示線 80%，請清理檔案或擴充儲存空間")
 
     modes = {
         "public_attachment": "可掃毒、可預覽、站方可處理明文",
@@ -733,6 +842,17 @@ def _mapping_value(mapping, key, default=None):
         return mapping.get(key, default) if hasattr(mapping, "get") else default
 
 
+def _user_role(user):
+    username = _mapping_value(user, "username")
+    if username == "root":
+        return "super_admin"
+    return _mapping_value(user, "role", "user") or "user"
+
+
+def _user_is_admin(user):
+    return is_admin_role(_user_role(user))
+
+
 def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_bytes=0):
     mode = normalize_privacy_mode(privacy_mode)
     ext = file_extension(filename)
@@ -749,11 +869,12 @@ def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_byte
     if mode.startswith("e2ee") and not policy["e2ee_allowed"]:
         return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for encrypted vault uploads", tuple(warnings))
 
-    effective_level = str(_mapping_value(user, "effective_level") or _mapping_value(user, "member_level") or "newbie")
-    if effective_level in {"restricted", "suspended"}:
-        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, f"{effective_level} users cannot upload", tuple(warnings))
-    if effective_level == "newbie" and category in {"executable", "archive", "office_macro"}:
-        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "newbie users cannot upload this high-risk file type", tuple(warnings))
+    if not _user_is_admin(user):
+        effective_level = str(_mapping_value(user, "effective_level") or _mapping_value(user, "member_level") or "newbie")
+        if effective_level in {"restricted", "suspended"}:
+            return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, f"{effective_level} users cannot upload", tuple(warnings))
+        if effective_level == "newbie" and category in {"executable", "archive", "office_macro"}:
+            return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "newbie users cannot upload this high-risk file type", tuple(warnings))
 
     if mode.startswith("e2ee"):
         risk_level = "unknown_encrypted" if category != "executable" else "high"

@@ -6,6 +6,14 @@ from datetime import datetime, timedelta
 import argon2
 from flask import make_response, request, send_from_directory
 
+from services.account_recovery import (
+    create_recovery_token,
+    ensure_account_recovery_schema,
+    lookup_valid_token,
+    mark_token_used,
+    normalize_email,
+    queue_mail,
+)
 from services.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
 
 
@@ -46,6 +54,7 @@ def register_public_routes(app, deps):
     record_login_failure = deps["record_login_failure"]
     record_security_event = deps["record_security_event"]
     require_csrf = deps["require_csrf"]
+    revoke_user_sessions = deps.get("revoke_user_sessions", lambda user_id: 0)
     score_password_strength = deps["score_password_strength"]
     store_csrf_token = deps["store_csrf_token"]
     timing_delay = deps["timing_delay"]
@@ -75,6 +84,53 @@ def register_public_routes(app, deps):
                 target_user=username,
                 detail=f"new_ip_hash={ip_hash[:12]},ua={ua[:80]}",
             )
+
+    def generic_recovery_response():
+        return json_resp({"ok": True, "msg": "如果資料符合，系統會寄出後續操作通知"})
+
+    def find_recovery_user(conn, identifier):
+        ident = str(identifier or "").strip()
+        if not ident:
+            return None
+        email = normalize_email(ident)
+        if email:
+            return conn.execute(
+                "SELECT id, username, email, status, email_verified FROM users WHERE lower(email)=lower(?) LIMIT 1",
+                (email,),
+            ).fetchone()
+        username = normalize_text(ident)
+        if not username:
+            return None
+        return conn.execute(
+            "SELECT id, username, email, status, email_verified FROM users WHERE username=? LIMIT 1",
+            (username,),
+        ).fetchone()
+
+    def trim_password_history(conn, user_id, limit=5):
+        conn.execute(
+            "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
+            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+            ")",
+            (user_id, user_id, int(limit)),
+        )
+
+    def ensure_public_account_columns(conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        additions = (
+            ("email", "TEXT"),
+            ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
+            ("failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("locked_until", "TEXT"),
+            ("last_login_at", "TEXT"),
+            ("password_strength_score", "INTEGER NOT NULL DEFAULT 0"),
+            ("password_changed_at", "TEXT"),
+            ("must_change_password", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_default_password", "INTEGER NOT NULL DEFAULT 0"),
+            ("updated_at", "TEXT"),
+        )
+        for name, ddl in additions:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
 
     @app.route("/")
     def index():
@@ -239,6 +295,7 @@ def register_public_routes(app, deps):
         id_number = normalize_text(data.get("id_number"))
         birthdate = parse_birthdate(data.get("birthdate"))
         phone = normalize_text(data.get("phone"))
+        email = normalize_email(data.get("email"))
 
         # Username validation
         if not username:        return json_resp({"ok":False,"msg":"帳號不可為空"}), 400
@@ -284,9 +341,9 @@ def register_public_routes(app, deps):
 
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', 'newbie', 'newbie', 'newbie', ?, ?, ?)",
-                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), strength["score"], now, now)
+                "INSERT INTO users (username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'user', 'newbie', 'newbie', 'newbie', ?, ?, ?)",
+                (username, email or None, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), strength["score"], now, now)
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
@@ -338,9 +395,10 @@ def register_public_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_public_account_columns(conn)
             user_row = conn.execute(
                 "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role, "
-                "must_change_password, is_default_password FROM users WHERE username=?",
+                "email, email_verified, must_change_password, is_default_password FROM users WHERE username=?",
                 (username,)
             ).fetchone()
 
@@ -392,6 +450,9 @@ def register_public_routes(app, deps):
                         pass
                 if user_row["status"] != "active":
                     audit("LOGIN_INACTIVE", ip, username, ua=ua, success=False)
+                    return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                if settings.get("require_email_verification") and not bool(user_row["email_verified"] or 0):
+                    audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
 
                 # Log successful attempt
@@ -455,6 +516,161 @@ def register_public_routes(app, deps):
 
                 # Generic message — never distinguish "no user" from "bad pw"
                 return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+        finally:
+            conn.close()
+
+    @app.route("/api/password-reset/request", methods=["POST"])
+    @require_csrf
+    def password_reset_request():
+        ip, ua = get_client_ip(), get_ua()
+        blocked, info = is_rate_limited(f"password-reset:{ip}", max_req=5, window_sec=3600)
+        if blocked:
+            return json_resp({"ok": False, "msg": f"請求太頻繁（每小時最多 {info['limit']} 次）"}), 429
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        identifier = data.get("username_or_email") or data.get("username") or data.get("email") if isinstance(data, dict) else ""
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            ensure_account_recovery_schema(conn)
+            row = find_recovery_user(conn, identifier)
+            if row and row["status"] == "active" and row["email"]:
+                token = create_recovery_token(conn, user_id=row["id"], purpose="password_reset", ip=ip, user_agent=ua, ttl_minutes=60)
+                queue_mail(
+                    conn,
+                    recipient=row["email"],
+                    subject=f"{SERVER_APP_NAME} password reset",
+                    body=f"Password reset token for {row['username']}:\n{token}\nThis token expires in 60 minutes.",
+                    kind="password_reset",
+                )
+                audit("PASSWORD_RESET_REQUESTED", ip, user=row["username"], ua=ua, success=True)
+            else:
+                audit("PASSWORD_RESET_REQUESTED", ip, user="-", ua=ua, success=True, detail="generic_no_delivery")
+            conn.commit()
+            timing_delay()
+            return generic_recovery_response()
+        finally:
+            conn.close()
+
+    @app.route("/api/password-reset/confirm", methods=["POST"])
+    @require_csrf
+    def password_reset_confirm():
+        ip, ua = get_client_ip(), get_ua()
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        token = str(data.get("token") or "").strip()
+        password = data.get("password", "") if isinstance(data.get("password"), str) else ""
+        password_confirm = data.get("password_confirm", "") if isinstance(data.get("password_confirm"), str) else ""
+        if not token:
+            return json_resp({"ok": False, "msg": "token 不可為空"}), 400
+        if password != password_confirm:
+            return json_resp({"ok": False, "msg": "兩次密碼輸入不一致"}), 400
+        ok, msg = validate_password(password)
+        if not ok:
+            return json_resp({"ok": False, "msg": msg}), 400
+        if is_feature_enabled("feature_account_security_enabled"):
+            ok, msg, strength = enforce_password_strength(password, min_score=3)
+            if not ok:
+                return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
+        else:
+            strength = score_password_strength(password)
+
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            token_row = lookup_valid_token(conn, token=token, purpose="password_reset")
+            if not token_row:
+                audit("PASSWORD_RESET_TOKEN_INVALID", ip, ua=ua, success=False)
+                return json_resp({"ok": False, "msg": "token 無效或已過期"}), 400
+            current_row = conn.execute(
+                "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (token_row["user_id"],),
+            ).fetchone()
+            if current_row and verify_password(current_row["password_hash"], password):
+                return json_resp({"ok": False, "msg": "新密碼不可與目前密碼相同"}), 400
+            now = datetime.now().isoformat()
+            conn.execute(
+                "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+                (token_row["user_id"], hash_password(password), now),
+            )
+            conn.execute(
+                "UPDATE users SET password_strength_score=?, password_changed_at=?, must_change_password=0, is_default_password=0, failed_login_count=0, locked_until=NULL, updated_at=? WHERE id=?",
+                (strength["score"], now, now, token_row["user_id"]),
+            )
+            mark_token_used(conn, token_row["id"])
+            trim_password_history(conn, token_row["user_id"])
+            conn.commit()
+            revoke_user_sessions(token_row["user_id"])
+            audit("PASSWORD_RESET_CONFIRMED", ip, user=token_row["username"], ua=ua, success=True)
+            return json_resp({"ok": True, "msg": "密碼已重設，請重新登入"})
+        finally:
+            conn.close()
+
+    @app.route("/api/email-verification/request", methods=["POST"])
+    @require_csrf
+    def email_verification_request():
+        ip, ua = get_client_ip(), get_ua()
+        blocked, info = is_rate_limited(f"email-verify:{ip}", max_req=5, window_sec=3600)
+        if blocked:
+            return json_resp({"ok": False, "msg": f"請求太頻繁（每小時最多 {info['limit']} 次）"}), 429
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        identifier = data.get("username_or_email") or data.get("username") or data.get("email") if isinstance(data, dict) else ""
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            ensure_account_recovery_schema(conn)
+            row = find_recovery_user(conn, identifier)
+            if row and row["email"] and not bool(row["email_verified"] or 0):
+                token = create_recovery_token(conn, user_id=row["id"], purpose="email_verify", ip=ip, user_agent=ua, ttl_minutes=1440)
+                queue_mail(
+                    conn,
+                    recipient=row["email"],
+                    subject=f"{SERVER_APP_NAME} email verification",
+                    body=f"Email verification token for {row['username']}:\n{token}\nThis token expires in 24 hours.",
+                    kind="email_verify",
+                )
+                audit("EMAIL_VERIFICATION_REQUESTED", ip, user=row["username"], ua=ua, success=True)
+            else:
+                audit("EMAIL_VERIFICATION_REQUESTED", ip, user="-", ua=ua, success=True, detail="generic_no_delivery")
+            conn.commit()
+            timing_delay()
+            return generic_recovery_response()
+        finally:
+            conn.close()
+
+    @app.route("/api/email-verification/confirm", methods=["POST"])
+    @require_csrf
+    def email_verification_confirm():
+        ip, ua = get_client_ip(), get_ua()
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        token = str(data.get("token") or "").strip() if isinstance(data, dict) else ""
+        if not token:
+            return json_resp({"ok": False, "msg": "token 不可為空"}), 400
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            token_row = lookup_valid_token(conn, token=token, purpose="email_verify")
+            if not token_row:
+                audit("EMAIL_VERIFICATION_TOKEN_INVALID", ip, ua=ua, success=False)
+                return json_resp({"ok": False, "msg": "token 無效或已過期"}), 400
+            now = datetime.now().isoformat()
+            conn.execute("UPDATE users SET email_verified=1, updated_at=? WHERE id=?", (now, token_row["user_id"]))
+            mark_token_used(conn, token_row["id"])
+            conn.commit()
+            audit("EMAIL_VERIFIED", ip, user=token_row["username"], ua=ua, success=True)
+            return json_resp({"ok": True, "msg": "Email 已完成驗證"})
         finally:
             conn.close()
 

@@ -23,10 +23,12 @@ from services.cloud_drive import (
     store_cloud_upload,
 )
 from services.file_previews import build_preview_metadata, preview_category
+from services.remote_downloads import RemoteDownloadError, download_remote_url, remote_download_capabilities
 from services.storage_albums import (
     add_album_file,
     create_album,
     create_share_link,
+    create_storage_folder,
     create_storage_file_entry,
     delete_album,
     ensure_storage_album_schema,
@@ -34,8 +36,11 @@ from services.storage_albums import (
     get_storage_file,
     list_albums,
     list_share_links,
+    list_storage_folders,
     list_storage_files,
     list_storage_trash,
+    move_storage_file,
+    move_storage_folder,
     purge_storage_file,
     remove_album_file,
     resolve_share_token,
@@ -119,6 +124,19 @@ def register_file_routes(app, deps):
             except Exception:
                 pass
         return out
+
+    class _DownloadedFileStorage:
+        def __init__(self, downloaded):
+            self._downloaded = downloaded
+            self.filename = downloaded.filename
+            self.mimetype = downloaded.mimetype
+            self.stream = open(downloaded.path, "rb")
+
+        def close(self):
+            try:
+                self.stream.close()
+            except Exception:
+                pass
 
     @app.route("/api/admin/storage/summary", methods=["GET"])
     @require_csrf_safe
@@ -313,7 +331,7 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
-            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule)
+            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
             return json_resp({"ok": True, "quota": usage})
         finally:
             conn.close()
@@ -428,6 +446,75 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": msg}), 400
             conn.commit()
             audit("STORAGE_FILE_ATTACH_EXISTING", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file['id']}")
+            return json_resp({"ok": True, "storage_file": storage_file})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/folders", methods=["GET", "POST"])
+    @require_csrf_safe
+    def storage_folders():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            if request.method == "GET":
+                return json_resp({"ok": True, "folders": list_storage_folders(conn, actor=actor)})
+            try:
+                data = request.get_json(force=True)
+            except Exception:
+                return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+            folder, msg = create_storage_folder(conn, actor=actor, path=data.get("path") or "")
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_FOLDER_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"path={folder['virtual_path']}")
+            return json_resp({"ok": True, "folder": folder})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/folders/move", methods=["PUT"])
+    @require_csrf
+    def storage_folder_move():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            result, msg = move_storage_folder(conn, actor=actor, old_path=data.get("old_path") or "", new_path=data.get("new_path") or "")
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_FOLDER_MOVE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"{result['old_path']} -> {result['new_path']}")
+            return json_resp({"ok": True, "folder_move": result})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/files/<storage_file_id>/organize", methods=["PUT"])
+    @require_csrf
+    def storage_file_organize(storage_file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            storage_file, msg = move_storage_file(conn, actor=actor, storage_file_id=storage_file_id, new_virtual_path=data.get("virtual_path") or "")
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("STORAGE_FILE_ORGANIZE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}, path={storage_file['virtual_path']}")
             return json_resp({"ok": True, "storage_file": storage_file})
         finally:
             conn.close()
@@ -807,6 +894,92 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/cloud-drive/remote-download/capabilities", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_remote_download_capabilities():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        return json_resp({"ok": True, "capabilities": remote_download_capabilities()})
+
+    @app.route("/api/cloud-drive/remote-download", methods=["POST"])
+    @require_csrf
+    def cloud_drive_remote_download():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        url = str(data.get("url") or "").strip()
+        privacy_mode = str(data.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
+        virtual_path = str(data.get("virtual_path") or "").strip()
+        timeout_seconds = 300 if url.startswith("magnet:?") else 120
+
+        conn = get_db()
+        downloaded = None
+        file_storage = None
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            ensure_storage_album_schema(conn)
+            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
+            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
+            remaining = usage.get("remaining_bytes")
+            max_file = usage.get("max_file_size_bytes")
+            max_bytes = None
+            if remaining is not None:
+                max_bytes = int(remaining)
+            if max_file is not None:
+                max_bytes = min(max_bytes, int(max_file)) if max_bytes is not None else int(max_file)
+
+            downloaded = download_remote_url(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
+            file_storage = _DownloadedFileStorage(downloaded)
+            upload_result, msg = store_cloud_upload(
+                conn,
+                actor=actor,
+                member_rule=rule,
+                storage_root=storage_root,
+                file_storage=file_storage,
+                privacy_mode=privacy_mode,
+                scan_now=True,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+
+            storage_file = None
+            if virtual_path:
+                file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
+                storage_file, msg = create_storage_file_entry(
+                    conn,
+                    actor=actor,
+                    file_row=file_row,
+                    virtual_path=virtual_path,
+                    display_name=downloaded.filename,
+                    source="remote_download",
+                )
+                if msg:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit("CLOUD_DRIVE_REMOTE_DOWNLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={upload_result['file_id']}")
+            payload = {"ok": True, "msg": "遠端下載已保存到雲端硬碟", "file": {**upload_result, "filename": downloaded.filename}}
+            if storage_file:
+                payload["storage_file"] = storage_file
+            return json_resp(payload)
+        except RemoteDownloadError as exc:
+            conn.rollback()
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        finally:
+            if file_storage:
+                file_storage.close()
+            if downloaded and downloaded.cleanup_dir:
+                import shutil
+                shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
+            conn.close()
+
     @app.route("/api/cloud-drive/attach-existing", methods=["POST"])
     @require_csrf
     def cloud_drive_attach_existing():
@@ -942,7 +1115,7 @@ def register_file_routes(app, deps):
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             category, mime_type = preview_category(row)
-            if category not in {"audio", "video", "pdf"}:
+            if category not in {"audio", "video", "image", "pdf"}:
                 return json_resp({"ok": False, "msg": "此檔案類型不支援 inline content preview"}), 415
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_content", result="allowed", reason=category, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
@@ -1211,7 +1384,7 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
-            summary = get_cloud_drive_safety_summary(conn, actor, member_rule=rule)
+            summary = get_cloud_drive_safety_summary(conn, actor, member_rule=rule, storage_root=storage_root)
             return json_resp({"ok": True, "security": summary})
         finally:
             conn.close()

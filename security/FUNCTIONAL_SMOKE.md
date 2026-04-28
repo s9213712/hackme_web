@@ -1,0 +1,174 @@
+# Functional Smoke Script Usage
+
+`security/run_functional_smoke.sh` 是本專案的功能回歸測試腳本。它和
+`security/run_pentest.sh` 不同：pentest 腳本偏向外部安全掃描，functional
+smoke 腳本會啟動一個隔離 runtime server，登入 root，實際操作主要功能，最後產生
+Markdown 報告與原始回應紀錄。
+
+這個腳本預設只打本機臨時 server，會把 database、log、chat、anchor、storage、
+reports 全部導向 `/tmp` 底下的隔離資料夾，避免污染 repo 內的 runtime 資料。
+
+## Quick Start
+
+從 repo 根目錄執行：
+
+```bash
+security/run_functional_smoke.sh
+```
+
+指定 port：
+
+```bash
+security/run_functional_smoke.sh --port 50740
+```
+
+指定 runtime 目錄與報告目錄：
+
+```bash
+security/run_functional_smoke.sh \
+  --runtime /tmp/hackme_web_functional_manual \
+  --out security/reports
+```
+
+保留 runtime 目錄供人工檢查：
+
+```bash
+security/run_functional_smoke.sh --keep-runtime
+```
+
+`--keep-runtime` 不會保留測試產生的髒資料。腳本會在啟動 server 前建立
+`pre_start_runtime_snapshot.tar.gz`，結束時把 runtime 還原到啟動前狀態。
+
+## Options
+
+| Option | Purpose |
+|---|---|
+| `--port N` | 臨時 server port。預設 `50734`。 |
+| `--runtime DIR` | 隔離 runtime 根目錄。預設 `/tmp/hackme_web_functional_<RUN_ID>`。 |
+| `--out DIR` | 報告根目錄。預設 `security/reports`。 |
+| `--keep-runtime` | 測試後保留 runtime，但會還原到 pre-start snapshot。 |
+| `-h`, `--help` | 顯示腳本內建說明。 |
+
+## Environment Overrides
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `HOST` | `127.0.0.1` | 臨時 server bind host。 |
+| `PORT` | `50734` | 臨時 server port。 |
+| `REPORT_ROOT` | `security/reports` | 報告根目錄。 |
+| `RUNTIME_ROOT` | `/tmp/hackme_web_functional_<RUN_ID>` | 隔離 runtime 根目錄。 |
+| `ROOT_PASSWORD` | `RootSmoke123!` | 測試 root 初始密碼。 |
+| `ROOT_CHANGED_PASSWORD` | `RootSmokeChanged123!` | 若 root 被要求改預設密碼，改成此密碼。 |
+| `MANAGER_PASSWORD` | `ManagerSmoke123!` | bootstrap manager 密碼。 |
+| `TEST_PASSWORD` | `TestSmoke123!` | bootstrap test user 密碼。 |
+| `START_TIMEOUT` | `45` | 等待 server ready 的秒數。 |
+
+## Runtime Isolation
+
+腳本會使用環境變數把 server runtime 路徑全部改到隔離目錄：
+
+| Runtime Data | Redirected Env |
+|---|---|
+| SQLite database | `HTML_LEARNING_DB_DIR` |
+| server log | `HTML_LEARNING_LOG_DIR` |
+| chat sidecar | `HTML_LEARNING_CHAT_DIR` |
+| audit anchors | `HTML_LEARNING_ANCHOR_DIR` |
+| cloud drive/storage files | `HTML_LEARNING_STORAGE_DIR` |
+| runtime reports | `HTML_LEARNING_REPORTS_DIR` |
+
+這代表測試不應修改 repo 內的 `database/`、`logs/`、`chats/`、`anchors/`、
+`storage/` 或 runtime report 檔案。
+
+## Functional Coverage
+
+目前腳本會覆蓋：
+
+| Area | Checked Behaviors |
+|---|---|
+| runtime safety | 啟動前 filesystem snapshot、隔離 runtime、結束清理或還原 runtime。 |
+| public API | index、site config、version、password strength、captcha challenge。 |
+| auth | CSRF token、root login、預設密碼強制修改、session identity。 |
+| admin | health、readiness、anomaly、DB integrity、audit chain、environment、settings、feature flags、access controls、member rules、platform stats、audit log。 |
+| security center | summary、server log、security controls、threshold update、自定義 profile、server mode switch。 |
+| snapshot/restore/reset | 建立 snapshot、restore 後只保留 baseline 發文、reset 後 baseline 發文也消失。 |
+| accounts | 建立 smoke user、列出 users、account sessions。 |
+| community/forum | announcement、category、board、board approval、thread、reply、lock、sticky、curate。 |
+| chat/DM | chat room、chat message、DM thread、DM message。 |
+| storage/cloud drive | quota/list、cloud-drive upload、status、preview、download、delete。 |
+| reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
+| hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法。 |
+
+## Snapshot / Restore / Reset Verification
+
+腳本的 snapshot 測試流程是刻意設計成可檢查狀態是否真的回復：
+
+1. root 登入成功後先建立 baseline forum post。
+2. 建立 app snapshot checkpoint。
+3. 執行後續功能測試，產生 residual category/thread 等測試資料。
+4. Restore 到 checkpoint。
+5. 驗證 baseline post 還存在。
+6. 驗證 residual 測試資料已消失。
+7. 執行 reset server。
+8. 驗證 baseline post 也消失。
+
+如果 restore 後看到一堆測試殘留文章，代表 restore 失敗或測試腳本找到真正的功能
+bug。若 reset 後 baseline post 仍存在，代表 reset server 的 runtime 清理不完整。
+
+## Report Output
+
+每次執行會建立：
+
+```text
+security/reports/functional_<RUN_ID>/
+├── 00_FUNCTIONAL_SMOKE.md
+├── results.tsv
+├── server.out
+├── pre_start_runtime_snapshot.tar.gz
+├── upload.txt
+└── raw/
+```
+
+重要檔案：
+
+| File | Purpose |
+|---|---|
+| `00_FUNCTIONAL_SMOKE.md` | 人類可讀的總結報告，包含通過、失敗、跳過與覆蓋範圍。 |
+| `results.tsv` | 每個檢查項目的機器可讀結果。 |
+| `server.out` | 臨時 server stdout/stderr。 |
+| `pre_start_runtime_snapshot.tar.gz` | 啟動 server 前的 runtime filesystem snapshot。 |
+| `raw/` | 每個 API request 的原始 JSON/body 回應。 |
+
+`security/reports/` 預設不追蹤，測試報告應留在本機；只有需要提交的修復報告才應另行
+整理成可追蹤文件。
+
+## Exit Codes
+
+| Code | Meaning |
+|---:|---|
+| `0` | 所有必要檢查通過；可能仍有 skip。 |
+| `1` | 至少一項檢查失敗。 |
+| `2` | CLI 參數錯誤。 |
+
+## Requirements
+
+腳本需要：
+
+- Bash
+- `curl`
+- `tar`
+- `python3`
+- 專案 Python dependencies，依 `requirements.txt` 安裝
+
+外部 pentest 工具如 `nmap`、`nuclei`、`sqlmap` 不需要安裝；那些只屬於
+`security/run_pentest.sh`。
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| `server startup` fail | 查看該次報告目錄的 `server.out`。通常是 port 被占用、Python dependency 缺失，或 server 啟動例外。 |
+| `auth login root` fail | 確認 `ROOT_PASSWORD` 與 bootstrap root 密碼一致；隔離 runtime 首次啟動通常會使用腳本預設密碼。 |
+| CSRF 相關失敗 | 查看 `raw/00_csrf_token.json`、login 後 cookie jar 與 `server.out`。 |
+| cloud drive upload 失敗 | 查看 `raw/cloud_drive_upload.json` 與 `server.out`，再確認 scanner/security policy 是否阻擋。 |
+| restore/reset 驗證失敗 | 優先視為功能 bug，檢查 `raw/restore_*`、`raw/reset_*`、`server.out`，不要先假設是腳本誤判。 |
+

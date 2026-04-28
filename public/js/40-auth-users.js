@@ -107,6 +107,7 @@ async function doRegister() {
   const pw   = $("reg-pw").value;
   const pwConfirm = $("reg-pw-confirm").value;
   const nickname = $("reg-nickname").value.trim();
+  const email = $("reg-email")?.value.trim() || "";
   const realName = $("reg-realname").value.trim();
   const idNo = $("reg-idno").value.trim();
   const birth = $("reg-birthdate").value;
@@ -148,6 +149,7 @@ async function doRegister() {
         password: pw,
         password_confirm: pwConfirm,
         nickname,
+        email,
         real_name: realName,
         id_number: idNo,
         birthdate: birth,
@@ -179,6 +181,118 @@ async function doRegister() {
     loadCaptchaChallenge();
   } finally {
     setLoading("reg-btn", "reg-spinner", false);
+  }
+}
+
+function setRecoveryMsg(text, ok) {
+  flash($("recovery-msg"), text, ok);
+}
+
+function toggleRecoveryPanel() {
+  const panel = $("recovery-panel");
+  if (!panel) return;
+  panel.classList.toggle("show");
+  const source = $("li-user");
+  const target = $("recovery-identifier");
+  if (panel.classList.contains("show") && source && target && !target.value.trim()) {
+    target.value = source.value.trim();
+  }
+}
+
+async function postRecoveryAction(path, payload) {
+  await fetchCsrfToken({ force: false });
+  const csrf = getCsrfToken();
+  if (!csrf) {
+    setRecoveryMsg("無法取得 CSRF token，請重新整理頁面", false);
+    return null;
+  }
+  const res = await fetch(API + path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ ...payload, csrf_token: csrf })
+  });
+  _csrfToken = null;
+  return res.json().catch(() => ({ ok: false, msg: "回應格式錯誤" }));
+}
+
+async function requestPasswordReset() {
+  const identifier = $("recovery-identifier")?.value.trim() || "";
+  if (!identifier) {
+    setRecoveryMsg("請填寫帳號或 Email", false);
+    return;
+  }
+  try {
+    const json = await postRecoveryAction("/password-reset/request", { username_or_email: identifier });
+    if (!json) return;
+    setRecoveryMsg(json.msg || "如果資料符合，系統會寄出後續操作通知", Boolean(json.ok));
+  } catch (_) {
+    setRecoveryMsg("網路錯誤，請稍後再試", false);
+  }
+}
+
+async function confirmPasswordReset() {
+  const token = $("reset-token")?.value.trim() || "";
+  const password = $("reset-new-pw")?.value || "";
+  const passwordConfirm = $("reset-new-pw-confirm")?.value || "";
+  if (!token) {
+    setRecoveryMsg("請填寫重設密碼 token", false);
+    return;
+  }
+  if (!password || !passwordConfirm) {
+    setRecoveryMsg("請填寫新密碼與確認密碼", false);
+    return;
+  }
+  if (password !== passwordConfirm) {
+    setRecoveryMsg("兩次密碼輸入不一致", false);
+    return;
+  }
+  try {
+    const json = await postRecoveryAction("/password-reset/confirm", {
+      token,
+      password,
+      password_confirm: passwordConfirm
+    });
+    if (!json) return;
+    setRecoveryMsg(json.msg || (json.ok ? "密碼已重設" : "重設失敗"), Boolean(json.ok));
+    if (json.ok) {
+      $("reset-token").value = "";
+      $("reset-new-pw").value = "";
+      $("reset-new-pw-confirm").value = "";
+    }
+  } catch (_) {
+    setRecoveryMsg("網路錯誤，請稍後再試", false);
+  }
+}
+
+async function requestEmailVerification() {
+  const identifier = $("recovery-identifier")?.value.trim() || "";
+  if (!identifier) {
+    setRecoveryMsg("請填寫帳號或 Email", false);
+    return;
+  }
+  try {
+    const json = await postRecoveryAction("/email-verification/request", { username_or_email: identifier });
+    if (!json) return;
+    setRecoveryMsg(json.msg || "如果資料符合，系統會寄出後續操作通知", Boolean(json.ok));
+  } catch (_) {
+    setRecoveryMsg("網路錯誤，請稍後再試", false);
+  }
+}
+
+async function confirmEmailVerification() {
+  const token = $("verify-token")?.value.trim() || "";
+  if (!token) {
+    setRecoveryMsg("請填寫 Email 驗證 token", false);
+    return;
+  }
+  try {
+    const json = await postRecoveryAction("/email-verification/confirm", { token });
+    if (!json) return;
+    setRecoveryMsg(json.msg || (json.ok ? "Email 已完成驗證" : "驗證失敗"), Boolean(json.ok));
+    if (json.ok) $("verify-token").value = "";
+  } catch (_) {
+    setRecoveryMsg("網路錯誤，請稍後再試", false);
   }
 }
 

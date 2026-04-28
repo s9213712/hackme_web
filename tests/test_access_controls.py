@@ -34,6 +34,7 @@ def _admin_app(settings_state=None, actor=None):
         "maintenance_bypass_token_expires_at": "",
         "server_listen_host": "",
         "server_listen_port": 0,
+        "comfyui_api_port": 8192,
     }
 
     def save_settings(data):
@@ -194,6 +195,27 @@ def test_invalid_server_bind_settings_are_rejected():
     assert bad_port.status_code == 400
     assert state["server_listen_host"] == ""
     assert state["server_listen_port"] == 0
+
+
+def test_root_can_configure_comfyui_api_port_without_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_api_port": 8193})
+
+    assert res.status_code == 200
+    assert state["comfyui_api_port"] == 8193
+    assert res.get_json()["settings"]["comfyui_api_port"] == 8193
+
+
+def test_invalid_comfyui_api_port_is_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_api_port": 70000})
+
+    assert res.status_code == 400
+    assert state["comfyui_api_port"] == 8192
 
 
 def test_effective_server_bind_falls_back_to_environment():

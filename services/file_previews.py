@@ -9,6 +9,7 @@ TEXT_EXTENSIONS = {
 }
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"}
 VIDEO_EXTENSIONS = {".m4v", ".mov", ".mp4", ".ogv", ".webm"}
+IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"}
 
@@ -48,6 +49,8 @@ def preview_category(row):
         return "audio", _display_mime(mime, filename)
     if mime.startswith("video/") or ext in VIDEO_EXTENSIONS:
         return "video", _display_mime(mime, filename)
+    if mime.startswith("image/") or ext in IMAGE_EXTENSIONS:
+        return "image", _display_mime(mime, filename)
     if mime == "application/pdf" or ext in PDF_EXTENSIONS:
         return "pdf", "application/pdf"
     if mime.startswith("text/") or ext in TEXT_EXTENSIONS:
@@ -70,9 +73,9 @@ def build_preview_metadata(row, path, *, max_text_bytes=65536, max_archive_entri
         "category": category,
         "mime_type": mime,
         "render_mode": "metadata",
-        "previewable": category in {"audio", "video", "pdf", "text", "archive"},
+        "previewable": category in {"audio", "video", "image", "pdf", "text", "archive"},
     }
-    if category in {"audio", "video", "pdf"}:
+    if category in {"audio", "video", "image", "pdf"}:
         payload["render_mode"] = "media"
         return payload
     if category == "text":

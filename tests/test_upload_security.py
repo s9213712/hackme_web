@@ -219,6 +219,55 @@ def test_cloud_drive_safety_summary_restricted_user_cannot_upload():
         conn.close()
 
 
+def test_admin_role_uses_disk_backed_quota(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 20_000
+        used = 10_000
+        free = 10_000
+
+    monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        admin = {"id": 1, "username": "admin", "role": "manager", "effective_level": "suspended", "sanction_status": "suspended"}
+        usage = get_user_cloud_drive_usage(
+            conn,
+            admin,
+            member_rule={"can_upload_attachment": False, "attachment_quota_mb": 0, "max_attachment_size_mb": 0, "upload_rate_limit_per_day": 0},
+            storage_root=tmp_path,
+        )
+        assert usage["can_upload"] is True
+        assert usage["total_bytes"] == 9_000
+        assert usage["max_file_size_bytes"] == 9_000
+        assert usage["upload_rate_limit_per_day"] is None
+        assert usage["quota_source"] == "admin_role_disk_available_90_percent"
+        assert usage["warning_threshold_percent"] == 80
+        assert usage["warning_active"] is False
+
+        create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/admin/large.txt",
+            privacy_mode="public_attachment",
+            size_bytes=7_300,
+            original_filename="large.txt",
+            user=admin,
+        )
+        summary = get_cloud_drive_safety_summary(conn, admin, member_rule={"can_upload_attachment": False}, storage_root=tmp_path)
+        assert not any("restricted/suspended" in item for item in summary["restrictions"])
+        assert summary["usage"]["warning_active"] is True
+        assert any("80%" in item for item in summary["restrictions"])
+
+        decision = evaluate_upload_policy(
+            conn,
+            filename="backup.zip",
+            privacy_mode="public_attachment",
+            user={"id": 1, "username": "admin", "role": "manager", "effective_level": "newbie"},
+        )
+        assert decision.allowed is True
+    finally:
+        conn.close()
+
+
 def test_e2ee_upload_requires_encrypted_file_key():
     conn = _conn()
     try:

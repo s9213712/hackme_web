@@ -17,6 +17,7 @@ SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
 RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
 SERVER_MODES = {"preprod", "test", "superweak"}
+PORTABLE_SNAPSHOT_FILES = ("metadata.json", "checksums.sha256", "db.sqlite3.backup", "uploads.tar.gz", "config.tar.gz", "manifest.json")
 BUILTIN_SECURITY_PROFILES = {
     "preprod": {
         "label": "preprod（準上線）",
@@ -88,6 +89,7 @@ RESETTABLE_TABLES = {
     "forum_boards",
     "forum_categories",
     "forum_post_reactions",
+    "forum_thread_reactions",
     "forum_posts",
     "forum_threads",
     "announcements",
@@ -100,6 +102,7 @@ RESETTABLE_TABLES = {
     "notifications",
     "posts",
     "reports",
+    "storage_folders",
     "storage_files",
     "storage_quota_log",
     "storage_share_links",
@@ -234,6 +237,8 @@ def _safe_relative_tarinfo(tarinfo):
     name = tarinfo.name
     if not name or name.startswith("/") or ".." in Path(name).parts:
         return False
+    if tarinfo.issym() or tarinfo.islnk() or tarinfo.isdev():
+        return False
     return True
 
 
@@ -268,6 +273,7 @@ class SnapshotService:
         self.base_dir = Path(base_dir)
         self.storage_root = Path(storage_root)
         self.snapshots_root = self.storage_root / "snapshots"
+        self.imports_root = self.snapshots_root / ".imports"
         self.audit = audit
         self.file_roots = [Path(p) for p in (file_roots or []) if p]
         self.config_files = [Path(p) for p in (config_files or []) if p]
@@ -286,6 +292,69 @@ class SnapshotService:
         if root not in path.parents:
             raise ValueError("snapshot path traversal blocked")
         return path
+
+    def _portable_archive_path(self, snapshot_id):
+        return self._snapshot_dir(snapshot_id) / f"{snapshot_id}.snapshot.tar.gz"
+
+    def _local_snapshot_record(self, snapshot_id, *, actor_id=0, notes=None):
+        snapshot_dir = self._snapshot_dir(snapshot_id)
+        metadata_path = snapshot_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+        size_bytes = sum(p.stat().st_size for p in snapshot_dir.rglob("*") if p.is_file())
+        snapshot_type = metadata.get("type") if metadata.get("type") in SNAPSHOT_TYPES else "manual"
+        includes = metadata.get("includes") if isinstance(metadata.get("includes"), dict) else {"database": True, "uploads": True, "config": True}
+        now = datetime.now().isoformat()
+        return {
+            "id": snapshot_id,
+            "type": snapshot_type,
+            "status": "ready",
+            "created_by": int(actor_id or 0),
+            "created_at": metadata.get("created_at") or now,
+            "completed_at": now,
+            "app_version": metadata.get("app_version") or "",
+            "schema_version": str(metadata.get("schema_version") or ""),
+            "source_mode": metadata.get("source_mode") or "imported",
+            "includes_json": json.dumps(includes, ensure_ascii=False, sort_keys=True),
+            "storage_path": str(snapshot_dir),
+            "db_dump_path": str(snapshot_dir / "db.sqlite3.backup"),
+            "files_archive_path": str(snapshot_dir / "uploads.tar.gz"),
+            "config_archive_path": str(snapshot_dir / "config.tar.gz"),
+            "checksum": metadata.get("checksum") or "",
+            "size_bytes": size_bytes,
+            "notes": notes if notes is not None else metadata.get("notes", ""),
+        }
+
+    def _upsert_local_snapshot_record(self, conn, snapshot_id, *, actor_id=0, notes=None):
+        self.ensure_schema(conn)
+        record = self._local_snapshot_record(snapshot_id, actor_id=actor_id, notes=notes)
+        current = conn.execute("SELECT id FROM snapshots WHERE id=?", (snapshot_id,)).fetchone()
+        if current:
+            conn.execute(
+                "UPDATE snapshots SET status=?, storage_path=?, db_dump_path=?, files_archive_path=?, "
+                "config_archive_path=?, checksum=?, size_bytes=?, completed_at=? WHERE id=?",
+                (
+                    record["status"],
+                    record["storage_path"],
+                    record["db_dump_path"],
+                    record["files_archive_path"],
+                    record["config_archive_path"],
+                    record["checksum"],
+                    record["size_bytes"],
+                    record["completed_at"],
+                    snapshot_id,
+                ),
+            )
+            return record
+        conn.execute(
+            "INSERT INTO snapshots "
+            "(id, type, status, created_by, created_at, completed_at, app_version, schema_version, source_mode, "
+            "includes_json, storage_path, db_dump_path, files_archive_path, config_archive_path, checksum, size_bytes, notes) "
+            "VALUES (:id, :type, :status, :created_by, :created_at, :completed_at, :app_version, :schema_version, "
+            ":source_mode, :includes_json, :storage_path, :db_dump_path, :files_archive_path, :config_archive_path, "
+            ":checksum, :size_bytes, :notes)",
+            record,
+        )
+        return record
 
     def _current_mode(self, conn):
         self.ensure_schema(conn)
@@ -316,7 +385,7 @@ class SnapshotService:
             if snapshot_root == root_resolved or snapshot_root in root_resolved.parents:
                 continue
             for path in root_resolved.rglob("*"):
-                if path.is_file() and "__pycache__" not in path.parts:
+                if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts:
                     rel = path.relative_to(self.base_dir.resolve()) if self.base_dir.resolve() in path.resolve().parents else Path(root.name) / path.relative_to(root_resolved)
                     yield path, rel
 
@@ -466,11 +535,11 @@ class SnapshotService:
         finally:
             conn.close()
 
-    def verify_snapshot(self, *, snapshot_id):
-        path = self._snapshot_dir(snapshot_id)
+    def _verify_snapshot_dir(self, path):
+        path = Path(path)
         metadata_path = path / "metadata.json"
         checksums_path = path / "checksums.sha256"
-        required = [metadata_path, checksums_path, path / "db.sqlite3.backup", path / "uploads.tar.gz", path / "config.tar.gz", path / "manifest.json"]
+        required = [path / name for name in PORTABLE_SNAPSHOT_FILES]
         missing = [p.name for p in required if not p.exists()]
         if missing:
             return {"ok": False, "msg": "snapshot 檔案缺失", "missing": missing}
@@ -499,6 +568,124 @@ class SnapshotService:
                     if not _safe_relative_tarinfo(member):
                         return {"ok": False, "msg": "unsafe tar member", "file": member.name}
         return {"ok": True, "msg": "snapshot verified", "metadata": metadata}
+
+    def verify_snapshot(self, *, snapshot_id):
+        return self._verify_snapshot_dir(self._snapshot_dir(snapshot_id))
+
+    def export_snapshot_archive(self, *, snapshot_id, actor=None):
+        actor_name = self._actor_name(actor)
+        snapshot = self.get_snapshot(snapshot_id=snapshot_id, actor=actor)
+        if not snapshot:
+            return {"ok": False, "msg": "找不到 snapshot"}
+        if snapshot.get("status") != "ready":
+            return {"ok": False, "msg": "snapshot 尚未 ready"}
+        verification = self.verify_snapshot(snapshot_id=snapshot_id)
+        if not verification["ok"]:
+            self.audit("SNAPSHOT_EXPORT_VERIFY_FAILED", "-", user=actor_name, success=False, detail=f"snapshot_id={snapshot_id},reason={verification}")
+            return {"ok": False, "msg": verification["msg"], "verification": verification}
+
+        snapshot_dir = self._snapshot_dir(snapshot_id)
+        archive_path = self._portable_archive_path(snapshot_id)
+        tmp_path = archive_path.with_suffix(archive_path.suffix + ".tmp")
+        with tarfile.open(tmp_path, "w:gz") as tar:
+            for name in PORTABLE_SNAPSHOT_FILES:
+                tar.add(snapshot_dir / name, arcname=f"{snapshot_id}/{name}")
+        os.replace(tmp_path, archive_path)
+        size_bytes = archive_path.stat().st_size
+        self.audit("SNAPSHOT_EXPORTED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},size={size_bytes}")
+        return {
+            "ok": True,
+            "snapshot_id": snapshot_id,
+            "path": str(archive_path),
+            "filename": archive_path.name,
+            "size_bytes": size_bytes,
+            "verification": verification,
+        }
+
+    def _copy_archive_input(self, *, archive_path=None, file_storage=None, dest=None):
+        if archive_path:
+            shutil.copyfile(archive_path, dest)
+            return
+        stream = getattr(file_storage, "stream", file_storage)
+        if hasattr(stream, "seek"):
+            stream.seek(0)
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(stream, out)
+
+    def _locate_imported_snapshot_dir(self, import_dir):
+        direct = [import_dir / name for name in PORTABLE_SNAPSHOT_FILES]
+        if all(path.exists() for path in direct):
+            return import_dir
+        children = [path for path in import_dir.iterdir() if path.is_dir()]
+        matches = [path for path in children if all((path / name).exists() for name in PORTABLE_SNAPSHOT_FILES)]
+        if len(matches) != 1:
+            raise ValueError("snapshot 封包格式錯誤")
+        return matches[0]
+
+    def import_snapshot_archive(self, *, actor, archive_path=None, file_storage=None, notes=None):
+        if not archive_path and file_storage is None:
+            return {"ok": False, "msg": "缺少 snapshot 檔案"}
+        actor_id = self._actor_id(actor)
+        actor_name = self._actor_name(actor)
+        self.imports_root.mkdir(parents=True, exist_ok=True)
+        import_id = f"import_{secrets.token_hex(8)}"
+        import_dir = self.imports_root / import_id
+        package_path = self.imports_root / f"{import_id}.tar.gz"
+        try:
+            import_dir.mkdir(parents=True, exist_ok=False)
+            self._copy_archive_input(archive_path=archive_path, file_storage=file_storage, dest=package_path)
+            if not package_path.exists() or package_path.stat().st_size <= 0:
+                raise ValueError("snapshot 檔案為空")
+            _safe_extract_tar(package_path, import_dir)
+            imported_dir = self._locate_imported_snapshot_dir(import_dir)
+            verification = self._verify_snapshot_dir(imported_dir)
+            if not verification["ok"]:
+                return {"ok": False, "msg": verification["msg"], "verification": verification}
+            metadata = verification.get("metadata") or {}
+            snapshot_id = metadata.get("snapshot_id")
+            if not _safe_snapshot_id(snapshot_id):
+                return {"ok": False, "msg": "snapshot metadata id 格式錯誤"}
+            target_dir = self._snapshot_dir(snapshot_id)
+            if target_dir.exists():
+                return {"ok": False, "msg": "本機已存在相同 snapshot_id", "snapshot_id": snapshot_id}
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(imported_dir), str(target_dir))
+            conn = self.get_db()
+            try:
+                record = self._upsert_local_snapshot_record(
+                    conn,
+                    snapshot_id,
+                    actor_id=actor_id,
+                    notes=f"imported portable snapshot; {notes or ''}".strip(),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self.audit("SNAPSHOT_IMPORTED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},size={record['size_bytes']}")
+            return {"ok": True, "snapshot_id": snapshot_id, "snapshot": self.get_snapshot(snapshot_id=snapshot_id, actor=actor), "verification": verification}
+        except Exception as exc:
+            self.audit("SNAPSHOT_IMPORT_FAILED", "-", user=actor_name, success=False, detail=f"error={exc}")
+            return {"ok": False, "msg": "snapshot 匯入失敗", "error": str(exc)}
+        finally:
+            try:
+                if import_dir.exists():
+                    shutil.rmtree(import_dir)
+                if package_path.exists():
+                    package_path.unlink()
+            except Exception:
+                pass
+
+    def restore_snapshot_archive(self, *, actor, archive_path=None, file_storage=None, reason="", dry_run=False):
+        imported = self.import_snapshot_archive(actor=actor, archive_path=archive_path, file_storage=file_storage, notes=reason)
+        if not imported.get("ok"):
+            return imported
+        result = self.restore_snapshot(
+            snapshot_id=imported["snapshot_id"],
+            actor=actor,
+            reason=reason or "restore from uploaded portable snapshot",
+            dry_run=dry_run,
+        )
+        return {**result, "imported_snapshot_id": imported["snapshot_id"], "import": imported}
 
     def _restore_db(self, snapshot_dir):
         src = sqlite3.connect(str(snapshot_dir / "db.sqlite3.backup"))
@@ -529,10 +716,11 @@ class SnapshotService:
         reset_tables = existing & RESETTABLE_TABLES
         priority = {
             "forum_post_reactions": 10,
-            "forum_posts": 11,
-            "forum_threads": 12,
-            "forum_boards": 13,
-            "forum_categories": 14,
+            "forum_thread_reactions": 11,
+            "forum_posts": 12,
+            "forum_threads": 13,
+            "forum_boards": 14,
+            "forum_categories": 15,
             "album_files": 20,
             "albums": 21,
             "storage_share_links": 30,
@@ -540,7 +728,8 @@ class SnapshotService:
             "encrypted_file_keys": 32,
             "cloud_file_refs": 33,
             "storage_files": 34,
-            "uploaded_files": 35,
+            "storage_folders": 35,
+            "uploaded_files": 36,
             "direct_messages": 40,
             "dm_threads": 41,
             "chat_message_reports": 42,
@@ -704,6 +893,7 @@ class SnapshotService:
             conn = self.get_db()
             try:
                 self.ensure_schema(conn)
+                self._upsert_local_snapshot_record(conn, snapshot_id, actor_id=actor_id)
                 conn.execute(
                     "INSERT OR REPLACE INTO snapshot_restore_events "
                     "(id, snapshot_id, restored_by, started_at, completed_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run) "
