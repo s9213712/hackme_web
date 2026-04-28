@@ -25,8 +25,13 @@ cert.pem
 key.pem
 attack_test/
 pentest_artifacts/
+research/
 reports/*
+!reports/attacks/
+reports/attacks/*
+!reports/attacks/.gitkeep
 !reports/bugs/
+reports/bugs/*
 !reports/bugs/.gitkeep
 architecture_scan.md
 notes/
