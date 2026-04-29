@@ -134,6 +134,8 @@ def test_frontend_checks_environment_before_opening_session():
     assert "window.Terminal" in web_terminal_js
     assert "image_available" in web_terminal_js
     assert "runtime_available" in web_terminal_js
+    assert "先修 Docker 權限並重開 server" in web_terminal_js
+    assert "不要只用 sudo check" in web_terminal_js
     assert "websocket_available" in web_terminal_js
     assert "web_terminal" in core_js
 
@@ -147,6 +149,7 @@ def test_web_terminal_installer_and_docs_are_self_service():
 
     assert "--doctor" in installer
     assert "sudo docker info" in installer
+    assert "WARNING: this check is running as root" in installer
     assert "docker image $IMAGE_NAME: ok" in installer
     assert "python3-venv" in installer
     assert "./install_web_terminal_dependencies.sh --all --venv .venv" in readme
@@ -156,3 +159,43 @@ def test_web_terminal_installer_and_docs_are_self_service():
     assert "activate_or_create_venv" in run_prod
     assert "ensure_python_dependencies" in run_prod
     assert "scripts/run_prod.sh" in readme
+
+
+def test_status_payload_reports_docker_daemon_access_separately(tmp_path):
+    from services import web_terminal as web_terminal_service
+
+    class FakeStat:
+        st_uid = 1000
+        st_gid = 1000
+        st_mode = 0o660
+
+    def fake_run(command, **kwargs):
+        class Result:
+            returncode = 1
+            stderr = "permission denied while trying to connect to the docker API"
+        return Result()
+
+    manager = web_terminal_service.WebTerminalManager(
+        get_db=lambda: sqlite3.connect(":memory:"),
+        storage_root=tmp_path,
+        audit=lambda *args, **kwargs: None,
+    )
+
+    original_which = web_terminal_service.shutil.which
+    original_run = web_terminal_service.subprocess.run
+    original_stat = web_terminal_service.os.stat
+    try:
+        web_terminal_service.shutil.which = lambda name: "/usr/bin/docker" if name == "docker" else None
+        web_terminal_service.subprocess.run = fake_run
+        web_terminal_service.os.stat = lambda path: FakeStat()
+        payload = manager.status_payload({"id": 1, "username": "root"}, feature_enabled=True)
+    finally:
+        web_terminal_service.shutil.which = original_which
+        web_terminal_service.subprocess.run = original_run
+        web_terminal_service.os.stat = original_stat
+
+    assert payload["runtime_binary_available"] is True
+    assert payload["runtime_available"] is False
+    assert "permission denied" in payload["runtime_error"]
+    assert payload["image_available"] is False
+    assert payload["process"]["docker_sock"]["exists"] is True

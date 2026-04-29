@@ -55,6 +55,12 @@ function setWebTerminalMessage(text, ok) {
 
 function webTerminalCheckItems(payload) {
   const term = payload && payload.terminal ? payload.terminal : {};
+  const runtimeHint = term.runtime_error
+    ? `${term.runtime_error}；Web 後端目前無法連 Docker daemon。請用啟動 server 的同一個使用者執行 docker info，修好權限後重開 server。`
+    : "找不到 Docker 或目前帳號無法使用 Docker，請執行 ./install_web_terminal_dependencies.sh --doctor --venv .venv 後依照修復指令處理。";
+  const imageHint = term.runtime_available
+    ? `${term.image_error ? term.image_error + "；" : ""}找不到 ${term.image || "hackme-web-terminal:base"}，請執行 ./install_web_terminal_dependencies.sh --image。`
+    : "Docker daemon 權限尚未通過，暫時無法確認 image。先修 Docker 權限並重開 server，不要只用 sudo check。";
   return [
     {
       key: "enabled",
@@ -72,13 +78,13 @@ function webTerminalCheckItems(payload) {
       key: "runtime",
       label: "Docker runtime",
       ok: !!term.runtime_available,
-      hint: "找不到 Docker 或目前帳號無法使用 Docker，請執行 ./install_web_terminal_dependencies.sh --system 後重新登入。",
+      hint: runtimeHint,
     },
     {
       key: "image",
       label: "Terminal container image",
       ok: !!term.image_available,
-      hint: `${term.image_error ? term.image_error + "；" : ""}找不到 ${term.image || "hackme-web-terminal:base"}，請執行 ./install_web_terminal_dependencies.sh --image。`,
+      hint: imageHint,
     },
     {
       key: "xterm",

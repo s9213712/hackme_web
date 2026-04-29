@@ -6,6 +6,8 @@ import subprocess
 import threading
 import time
 import uuid
+import grp
+import pwd
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -328,20 +330,27 @@ class WebTerminalManager:
             websocket_available = False
             websocket_error = str(exc)
         runtime = _find_runtime_binary()
-        runtime_available = bool(runtime)
+        runtime_accessible = False
+        runtime_error = ""
         image_available = False
         image_error = ""
-        if runtime_available:
-            image_available, image_error = _docker_image_available(runtime, self.policy.image)
+        process_info = _process_docker_context()
+        if runtime:
+            runtime_accessible, runtime_error = _docker_daemon_accessible(runtime)
+            if runtime_accessible:
+                image_available, image_error = _docker_image_available(runtime, self.policy.image)
         return {
             "enabled": bool(feature_enabled and actor and actor.get("username") == "root"),
             "websocket_available": websocket_available,
             "websocket_error": websocket_error,
-            "runtime_available": runtime_available,
+            "runtime_binary_available": bool(runtime),
+            "runtime_available": bool(runtime and runtime_accessible),
+            "runtime_error": runtime_error,
             "runtime": runtime or "docker",
             "image_available": image_available,
             "image_error": image_error,
             "image": self.policy.image,
+            "process": process_info,
             "limits": {
                 "cpu": self.policy.cpu_limit,
                 "memory": self.policy.memory_limit,
@@ -376,3 +385,49 @@ def _docker_image_available(runtime, image):
     if result.returncode == 0:
         return True, ""
     return False, (result.stderr or "").strip()
+
+
+def _docker_daemon_accessible(runtime):
+    try:
+        result = subprocess.run(
+            [runtime, "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if result.returncode == 0:
+        return True, ""
+    return False, (result.stderr or "").strip()
+
+
+def _process_docker_context():
+    groups = []
+    try:
+        groups = [grp.getgrgid(gid).gr_name for gid in os.getgroups()]
+    except Exception:
+        groups = [str(gid) for gid in os.getgroups()]
+    socket = {"path": "/var/run/docker.sock", "exists": False}
+    try:
+        stat = os.stat("/var/run/docker.sock")
+        socket = {
+            "path": "/var/run/docker.sock",
+            "exists": True,
+            "uid": int(stat.st_uid),
+            "gid": int(stat.st_gid),
+            "user": pwd.getpwuid(stat.st_uid).pw_name,
+            "group": grp.getgrgid(stat.st_gid).gr_name,
+            "mode": oct(stat.st_mode & 0o777),
+        }
+    except Exception as exc:
+        socket["error"] = str(exc)
+    return {
+        "uid": os.getuid(),
+        "gid": os.getgid(),
+        "user": pwd.getpwuid(os.getuid()).pw_name,
+        "groups": groups,
+        "docker_sock": socket,
+    }

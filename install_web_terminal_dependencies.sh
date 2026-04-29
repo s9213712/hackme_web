@@ -187,6 +187,11 @@ build_terminal_image() {
 check_status() {
   local doctor="${1:-0}"
   local python_cmd="python3"
+  if [[ "${EUID:-$(id -u)}" == "0" ]]; then
+    log "WARNING: this check is running as root."
+    log "Web Terminal sessions are started by the Hackme Web server process, not by sudo."
+    log "Also run this check as the same user that starts scripts/run_prod.sh, then restart the server."
+  fi
   if [[ -n "${VENV_PATH:-}" && -x "$VENV_PATH/bin/python3" ]]; then
     python_cmd="$VENV_PATH/bin/python3"
   elif [[ -x "$ROOT_DIR/.venv/bin/python3" ]]; then
