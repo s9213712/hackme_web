@@ -70,6 +70,13 @@ Web Terminal 網路模式可由 root 在伺服器設定切換：
 - `bridge`：標準 Docker 全網路模式，目前預設
 - `host`：共用主機網路 namespace，風險最高，只建議除錯時短暫使用
 
+Web Terminal Ubuntu 發行版也可由 root 在伺服器設定切換：
+
+- `ubuntu-24.04`：目前預設
+- `ubuntu-22.04`
+
+執行 `./install_web_terminal_dependencies.sh --image` 會建立兩個版本的 image。
+
 ## 本機檢查
 
 push 前：

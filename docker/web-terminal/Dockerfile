@@ -1,8 +1,10 @@
-FROM ubuntu:24.04
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION}
+ARG UBUNTU_VERSION
 
 LABEL org.opencontainers.image.title="Hackme Web Terminal Ubuntu"
 LABEL org.opencontainers.image.description="Official Ubuntu LTS userspace for isolated Hackme Web Terminal sessions"
-LABEL org.opencontainers.image.version="24.04"
+LABEL org.opencontainers.image.version="${UBUNTU_VERSION}"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8

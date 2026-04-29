@@ -83,6 +83,7 @@ DEFAULT_SETTINGS = {
     "feature_economy_enabled": True,
     "feature_games_enabled": True,
     "feature_web_terminal_enabled": False,
+    "web_terminal_distribution": "ubuntu-24.04",
     "web_terminal_network_mode": "bridge",
     "integrity_guard_enabled": True,
     "integrity_guard_strict_mode": False,

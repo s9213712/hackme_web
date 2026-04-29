@@ -204,6 +204,11 @@ Web Terminal network mode is stored in `web_terminal_network_mode`:
 - `bridge`: Docker `--network bridge`, current default
 - `host`: Docker `--network host`, high-risk host network namespace
 
+Web Terminal distribution is stored in `web_terminal_distribution`:
+
+- `ubuntu-24.04`: `hackme-web-terminal:ubuntu-24.04`, current default
+- `ubuntu-22.04`: `hackme-web-terminal:ubuntu-22.04`
+
 ### Storage and Albums
 
 - `GET /api/storage/files`
@@ -345,6 +350,7 @@ Other defaults:
 | `storage_maintenance_auto_enabled` | `false` |
 | `storage_maintenance_daily_time` | `04:00` |
 | `storage_trash_retention_days` | `30` |
+| `web_terminal_distribution` | `ubuntu-24.04` |
 | `web_terminal_network_mode` | `bridge` |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |

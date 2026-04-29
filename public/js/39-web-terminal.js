@@ -115,9 +115,10 @@ function renderWebTerminalStatus(payload) {
   const failures = items.filter((item) => !item.ok);
   if (status) {
     const networkMode = term.limits && term.limits.network ? term.limits.network : "bridge";
+    const distribution = term.distribution || "ubuntu-24.04";
     status.textContent = failures.length
       ? `環境檢查未通過：${failures.map((item) => item.label).join("、")}`
-      : `環境正常，掛載 root Cloud Drive。Image: ${term.image || "-"}，網路模式：${networkMode}`;
+      : `環境正常，掛載 root Cloud Drive。發行版：${distribution}，Image: ${term.image || "-"}，網路模式：${networkMode}`;
   }
   if (checks) {
     checks.innerHTML = items.map((item) => `

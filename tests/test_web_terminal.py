@@ -4,7 +4,14 @@ from pathlib import Path
 from flask import Flask, jsonify, make_response
 
 from routes.web_terminal import register_web_terminal_routes
-from services.web_terminal import WebTerminalPolicy, build_container_command, normalize_web_terminal_network_mode, root_terminal_mount_path
+from services.web_terminal import (
+    WebTerminalPolicy,
+    build_container_command,
+    normalize_web_terminal_distribution,
+    normalize_web_terminal_network_mode,
+    root_terminal_mount_path,
+    web_terminal_image_for_distribution,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +32,8 @@ class FakeTerminalManager:
             "websocket_available": False,
             "runtime_available": False,
             "image_available": False,
-            "image": "hackme-web-terminal:base",
+            "image": "hackme-web-terminal:ubuntu-24.04",
+            "distribution": "ubuntu-24.04",
             "limits": {"network": "bridge"},
         }
 
@@ -55,6 +63,7 @@ def _build_app(db_path, storage_root, *, feature_enabled=True, actor=None):
 
 def test_container_command_keeps_terminal_sandboxed(tmp_path):
     mount_path = tmp_path / "storage" / "users" / "1"
+    mount_path.mkdir(parents=True)
     command = build_container_command(
         session_id="abc123",
         mount_path=mount_path,
@@ -63,6 +72,8 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     joined = " ".join(command)
 
     assert command[:3] == ["docker", "run", "--rm"]
+    assert "--user" in command
+    assert f"{mount_path.stat().st_uid}:{mount_path.stat().st_gid}" in command
     assert "--network bridge" in joined
     assert "--cap-drop ALL" in joined
     assert "--security-opt no-new-privileges" in joined
@@ -71,6 +82,7 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     assert "/var/tmp:rw,nosuid,nodev,noexec,size=64m" in command
     assert "--pids-limit 128" in joined
     assert f"{mount_path}:/home/root:rw" in command
+    assert "HOME=/home/root" in command
     assert "/var/run/docker.sock" not in joined
     assert f"{ROOT}:" not in joined
     assert " /:/home/root" not in joined
@@ -83,6 +95,14 @@ def test_web_terminal_network_modes_are_normalized():
     assert normalize_web_terminal_network_mode("bridge") == "bridge"
     assert normalize_web_terminal_network_mode("host") == "host"
     assert normalize_web_terminal_network_mode("bad") == "bridge"
+
+
+def test_web_terminal_distribution_selects_image():
+    assert normalize_web_terminal_distribution("ubuntu-24.04") == "ubuntu-24.04"
+    assert normalize_web_terminal_distribution("ubuntu-22.04") == "ubuntu-22.04"
+    assert normalize_web_terminal_distribution("bad") == "ubuntu-24.04"
+    assert web_terminal_image_for_distribution("ubuntu-24.04") == "hackme-web-terminal:ubuntu-24.04"
+    assert web_terminal_image_for_distribution("ubuntu-22.04") == "hackme-web-terminal:ubuntu-22.04"
 
 
 def test_root_mount_path_stays_inside_cloud_drive_storage(tmp_path):
@@ -153,6 +173,7 @@ def test_frontend_checks_environment_before_opening_session():
     assert "Web Terminal session 未成功建立就關閉" in web_terminal_js
     assert "websocket_available" in web_terminal_js
     assert "網路模式" in web_terminal_js
+    assert "發行版" in web_terminal_js
     assert "web_terminal" in core_js
     assert "JetBrains Mono" in web_terminal_js
     assert "scrollback: 4000" in web_terminal_js
@@ -161,7 +182,8 @@ def test_frontend_checks_environment_before_opening_session():
 def test_web_terminal_image_uses_ubuntu_base_with_apt_tools():
     dockerfile = (ROOT / "docker" / "web-terminal" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "FROM ubuntu:24.04" in dockerfile
+    assert "ARG UBUNTU_VERSION=24.04" in dockerfile
+    assert "FROM ubuntu:${UBUNTU_VERSION}" in dockerfile
     assert "apt-get update" in dockerfile
     assert "apt-get install" in dockerfile
     assert "ubuntu-standard" in dockerfile
@@ -186,17 +208,22 @@ def test_web_terminal_installer_and_docs_are_self_service():
     assert "current_process_in_group" in installer
     assert "Account groups from user database" in installer
     assert "sg docker -c 'scripts/run_prod.sh'" in installer
-    assert "docker image $IMAGE_NAME: ok" in installer
+    assert "TERMINAL_IMAGE_VARIANTS" in installer
+    assert "hackme-web-terminal:ubuntu-24.04" in installer
+    assert "hackme-web-terminal:ubuntu-22.04" in installer
     assert "python3-venv" in installer
     assert "./install_web_terminal_dependencies.sh --all --venv .venv" in readme
     assert "docker info` must work without" in readme
     assert "./install_web_terminal_dependencies.sh --doctor --venv .venv" in guide
     assert "id -nG \"$USER\"" in guide
     assert "Network Modes" in guide
+    assert "Ubuntu Versions" in guide
     assert "`bridge`" in guide
     assert "`host`" in guide
+    assert "`ubuntu-24.04`" in guide
+    assert "`ubuntu-22.04`" in guide
     assert "flask-sock" in requirements
-    assert "official Ubuntu 24.04 LTS" in guide
+    assert "official Ubuntu LTS" in guide
     assert "simple-websocket" in requirements
     assert "activate_or_create_venv" in run_prod
     assert "ensure_python_dependencies" in run_prod

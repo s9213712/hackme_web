@@ -116,6 +116,11 @@ Root can switch the terminal network mode in server settings:
 - `bridge`: full standard Docker internet access, current default
 - `host`: host network namespace, highest risk
 
+Root can also switch the terminal Ubuntu distribution in server settings:
+
+- `ubuntu-24.04`: `hackme-web-terminal:ubuntu-24.04`, current default
+- `ubuntu-22.04`: `hackme-web-terminal:ubuntu-22.04`
+
 ### Appeals
 
 Users can view violation history and submit appeals. Root/manager review is

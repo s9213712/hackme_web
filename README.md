@@ -72,6 +72,11 @@ modes are `none` for offline sessions, `bridge` for full standard Docker
 internet access, and `host` for high-risk host-network debugging. The current
 default is `bridge`.
 
+Root can also choose the terminal Ubuntu distribution from the same settings UI:
+`ubuntu-24.04` or `ubuntu-22.04`. Run
+`./install_web_terminal_dependencies.sh --image` after updates to build both
+images.
+
 If Docker group membership changes during installation, restart the login shell
 or the service process before using Web Terminal. `docker info` must work without
 `sudo` from the same user/session that launches Hackme Web. If the account is in

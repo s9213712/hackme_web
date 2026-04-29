@@ -3,8 +3,13 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR_DIR="$ROOT_DIR/public/vendor/xterm"
-IMAGE_NAME="${WEB_TERMINAL_IMAGE:-hackme-web-terminal:base}"
+IMAGE_NAME="${WEB_TERMINAL_IMAGE:-hackme-web-terminal:ubuntu-24.04}"
+IMAGE_ALIAS="${WEB_TERMINAL_IMAGE_ALIAS:-hackme-web-terminal:base}"
 DOCKERFILE_PATH="$ROOT_DIR/docker/web-terminal/Dockerfile"
+TERMINAL_IMAGE_VARIANTS=(
+  "ubuntu-24.04:24.04:hackme-web-terminal:ubuntu-24.04"
+  "ubuntu-22.04:22.04:hackme-web-terminal:ubuntu-22.04"
+)
 
 usage() {
   cat <<'EOF'
@@ -15,7 +20,7 @@ Options:
   --system        Install system packages with sudo apt: docker.io nodejs npm
   --python        Install Python websocket packages: flask-sock simple-websocket
   --xterm         Install local xterm.js assets into public/vendor/xterm
-  --image         Build terminal container image if docker/web-terminal/Dockerfile exists
+  --image         Build terminal container images if docker/web-terminal/Dockerfile exists
   --all           Run --system --python --xterm --image
   --venv PATH     Install Python packages into the given virtualenv path
   --check         Print current dependency status only
@@ -33,6 +38,8 @@ Notes:
   - The script will use sudo for apt and Docker image build when needed.
   - Docker group changes still require opening a new login shell before a
     long-running Flask/Gunicorn server can use Docker without sudo.
+  - --image builds Ubuntu 24.04 LTS and Ubuntu 22.04 LTS variants. Ubuntu 24.04
+    is also tagged as hackme-web-terminal:base for old configurations.
   - xterm.js is copied locally; the Web Terminal must not use CDN assets.
   - The terminal container must never mount /, /etc, /var, /run, the project root,
     or /var/run/docker.sock.
@@ -195,10 +202,35 @@ build_terminal_image() {
     log "Skipping image build. Create the Dockerfile during Web Terminal implementation."
     return 0
   fi
-  log "Building terminal container image: $IMAGE_NAME"
-  "${DOCKER_CMD[@]}" build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$ROOT_DIR"
-  "${DOCKER_CMD[@]}" image inspect "$IMAGE_NAME" >/dev/null
-  log "docker image $IMAGE_NAME: ok"
+  if [[ -n "${WEB_TERMINAL_IMAGE:-}" ]]; then
+    log "Building terminal container image: $IMAGE_NAME"
+    "${DOCKER_CMD[@]}" build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$ROOT_DIR"
+    "${DOCKER_CMD[@]}" image inspect "$IMAGE_NAME" >/dev/null
+    log "docker image $IMAGE_NAME: ok"
+    return
+  fi
+  for item in "${TERMINAL_IMAGE_VARIANTS[@]}"; do
+    IFS=: read -r distro version repo tag <<<"$item"
+    local image="$repo:$tag"
+    log "Building terminal container image: $image ($distro)"
+    "${DOCKER_CMD[@]}" build --build-arg "UBUNTU_VERSION=$version" -t "$image" -f "$DOCKERFILE_PATH" "$ROOT_DIR"
+    "${DOCKER_CMD[@]}" image inspect "$image" >/dev/null
+    log "docker image $image: ok"
+    if [[ "$distro" == "ubuntu-24.04" && -n "$IMAGE_ALIAS" ]]; then
+      "${DOCKER_CMD[@]}" tag "$image" "$IMAGE_ALIAS"
+      log "docker image $IMAGE_ALIAS: ok"
+    fi
+  done
+}
+
+check_terminal_image() {
+  local docker_prefix="$1"
+  local image="$2"
+  if [[ "$docker_prefix" == "sudo" ]]; then
+    sudo -n docker image inspect "$image" >/dev/null 2>&1
+  else
+    docker image inspect "$image" >/dev/null 2>&1
+  fi
 }
 
 check_status() {
@@ -267,23 +299,31 @@ PY
     fi
   done
   if [[ "$docker_daemon_ok" == "1" ]]; then
-    if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-      log "docker image $IMAGE_NAME: ok"
-    else
-      log "docker image $IMAGE_NAME: missing"
-      if [[ "$doctor" == "1" ]]; then
-        log "Suggested repair: ./install_web_terminal_dependencies.sh --image"
+    for item in "${TERMINAL_IMAGE_VARIANTS[@]}"; do
+      IFS=: read -r distro version repo tag <<<"$item"
+      image="$repo:$tag"
+      if check_terminal_image "" "$image"; then
+        log "docker image $image: ok"
+      else
+        log "docker image $image: missing"
+        if [[ "$doctor" == "1" ]]; then
+          log "Suggested repair: ./install_web_terminal_dependencies.sh --image"
+        fi
       fi
-    fi
+    done
   elif [[ "$docker_with_sudo_ok" == "1" ]]; then
-    if sudo -n docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-      log "docker image $IMAGE_NAME: ok"
-    else
-      log "docker image $IMAGE_NAME: missing"
-      if [[ "$doctor" == "1" ]]; then
-        log "Suggested repair: sudo ./install_web_terminal_dependencies.sh --image"
+    for item in "${TERMINAL_IMAGE_VARIANTS[@]}"; do
+      IFS=: read -r distro version repo tag <<<"$item"
+      image="$repo:$tag"
+      if check_terminal_image "sudo" "$image"; then
+        log "docker image $image: ok"
+      else
+        log "docker image $image: missing"
+        if [[ "$doctor" == "1" ]]; then
+          log "Suggested repair: sudo ./install_web_terminal_dependencies.sh --image"
+        fi
       fi
-    fi
+    done
   fi
 }
 

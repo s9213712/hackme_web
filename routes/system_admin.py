@@ -1199,6 +1199,11 @@ def register_system_admin_routes(app, deps):
             data["server_listen_port"] = port
         if "server_ssl_enabled" in data:
             data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
+        if "web_terminal_distribution" in data:
+            distribution = str(data.get("web_terminal_distribution") or "").strip().lower()
+            if distribution not in {"ubuntu-24.04", "ubuntu-22.04"}:
+                return json_resp({"ok":False,"msg":"web_terminal_distribution 必須是 ubuntu-24.04 或 ubuntu-22.04"}), 400
+            data["web_terminal_distribution"] = distribution
         if "web_terminal_network_mode" in data:
             mode = str(data.get("web_terminal_network_mode") or "").strip().lower()
             if mode not in {"none", "bridge", "host"}:

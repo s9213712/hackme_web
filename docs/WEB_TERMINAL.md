@@ -22,12 +22,25 @@ The script handles the common setup path:
 - installs local xterm.js assets into `public/vendor/xterm`
 - builds the required Docker image: `hackme-web-terminal:base`
 
-The image is based on the official Ubuntu 24.04 LTS container distribution and
-preinstalls the standard terminal userspace (`ubuntu-standard`, bash, apt tools,
+The images are based on official Ubuntu LTS container distributions and
+preinstall the standard terminal userspace (`ubuntu-standard`, bash, apt tools,
 man pages, tmux, git, curl, rsync, ssh client, and common diagnostic commands).
 Sessions still run with `read-only` rootfs, dropped Linux capabilities, and only
 the root user's Cloud Drive mounted at `/home/root`.
 Use the Dockerfile and rebuild the image to add more tools.
+
+## Ubuntu Versions
+
+Root can change the Web Terminal distribution from the root server settings UI.
+The setting affects newly opened sessions immediately.
+
+| Distribution setting | Docker image |
+|---|---|
+| `ubuntu-24.04` | `hackme-web-terminal:ubuntu-24.04` |
+| `ubuntu-22.04` | `hackme-web-terminal:ubuntu-22.04` |
+
+`./install_web_terminal_dependencies.sh --image` builds both variants. Ubuntu
+24.04 is also tagged as `hackme-web-terminal:base` for old configurations.
 
 ## Network Modes
 

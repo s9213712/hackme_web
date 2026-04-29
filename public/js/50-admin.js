@@ -1148,6 +1148,7 @@ async function loadSettings() {
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = s.server_ssl_enabled !== false;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-web-terminal-distribution")) $("s-web-terminal-distribution").value = s.web_terminal_distribution || "ubuntu-24.04";
   if ($("s-web-terminal-network-mode")) $("s-web-terminal-network-mode").value = s.web_terminal_network_mode || "bridge";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
@@ -2105,6 +2106,7 @@ async function saveSettings() {
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    web_terminal_distribution: $("s-web-terminal-distribution")?.value || "ubuntu-24.04",
     web_terminal_network_mode: $("s-web-terminal-network-mode")?.value || "bridge",
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),

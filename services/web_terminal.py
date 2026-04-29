@@ -10,11 +10,25 @@ import grp
 import pwd
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from services.storage_paths import resolve_storage_path
 
 
-DEFAULT_TERMINAL_IMAGE = "hackme-web-terminal:base"
+WEB_TERMINAL_DISTRIBUTIONS = {
+    "ubuntu-24.04": {
+        "label": "Ubuntu 24.04 LTS",
+        "image": "hackme-web-terminal:ubuntu-24.04",
+        "base_image": "ubuntu:24.04",
+    },
+    "ubuntu-22.04": {
+        "label": "Ubuntu 22.04 LTS",
+        "image": "hackme-web-terminal:ubuntu-22.04",
+        "base_image": "ubuntu:22.04",
+    },
+}
+DEFAULT_TERMINAL_DISTRIBUTION = "ubuntu-24.04"
+DEFAULT_TERMINAL_IMAGE = WEB_TERMINAL_DISTRIBUTIONS[DEFAULT_TERMINAL_DISTRIBUTION]["image"]
 DEFAULT_IDLE_TIMEOUT_SECONDS = 900
 DEFAULT_CPU_LIMIT = "0.5"
 DEFAULT_MEMORY_LIMIT = "256m"
@@ -26,6 +40,28 @@ ALLOWED_NETWORK_MODES = {"none", "bridge", "host"}
 def normalize_web_terminal_network_mode(value):
     mode = str(value or DEFAULT_NETWORK_MODE).strip().lower()
     return mode if mode in ALLOWED_NETWORK_MODES else DEFAULT_NETWORK_MODE
+
+
+def normalize_web_terminal_distribution(value):
+    distro = str(value or DEFAULT_TERMINAL_DISTRIBUTION).strip().lower()
+    return distro if distro in WEB_TERMINAL_DISTRIBUTIONS else DEFAULT_TERMINAL_DISTRIBUTION
+
+
+def web_terminal_image_for_distribution(value):
+    distro = normalize_web_terminal_distribution(value)
+    return WEB_TERMINAL_DISTRIBUTIONS[distro]["image"]
+
+
+def web_terminal_distribution_options():
+    return [
+        {
+            "key": key,
+            "label": item["label"],
+            "image": item["image"],
+            "base_image": item["base_image"],
+        }
+        for key, item in WEB_TERMINAL_DISTRIBUTIONS.items()
+    ]
 
 
 def ensure_web_terminal_schema(conn):
@@ -68,11 +104,17 @@ def root_terminal_mount_path(storage_root, root_user_id):
 @dataclass(frozen=True)
 class WebTerminalPolicy:
     image: str = DEFAULT_TERMINAL_IMAGE
+    distribution: str = DEFAULT_TERMINAL_DISTRIBUTION
     cpu_limit: str = DEFAULT_CPU_LIMIT
     memory_limit: str = DEFAULT_MEMORY_LIMIT
     pids_limit: str = DEFAULT_PIDS_LIMIT
     idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_SECONDS
     network_mode: str = DEFAULT_NETWORK_MODE
+
+
+def _mount_owner_user(mount_path):
+    stat_result = Path(mount_path).stat()
+    return f"{int(stat_result.st_uid)}:{int(stat_result.st_gid)}"
 
 
 def build_container_command(*, session_id, mount_path, policy=None):
@@ -86,6 +128,8 @@ def build_container_command(*, session_id, mount_path, policy=None):
         "-t",
         "--name",
         container_name,
+        "--user",
+        _mount_owner_user(mount_path),
         "--network",
         policy.network_mode,
         "--cpus",
@@ -105,6 +149,8 @@ def build_container_command(*, session_id, mount_path, policy=None):
         "/run:rw,nosuid,nodev,noexec,size=16m",
         "--tmpfs",
         "/var/tmp:rw,nosuid,nodev,noexec,size=64m",
+        "-e",
+        "HOME=/home/root",
         "-e",
         "TERM=xterm-256color",
         "-v",
@@ -373,6 +419,8 @@ class WebTerminalManager:
             "image_available": image_available,
             "image_error": image_error,
             "image": policy.image,
+            "distribution": policy.distribution,
+            "distributions": web_terminal_distribution_options(),
             "process": process_info,
             "limits": {
                 "cpu": policy.cpu_limit,
