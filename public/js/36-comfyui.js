@@ -450,6 +450,18 @@ function comfyuiShareGenerationPayload() {
   return payload;
 }
 
+function confirmComfyuiBilling(payload) {
+  if (!comfyuiBillingQuote?.unit_price) return { confirmed: true, required: false };
+  const unitPrice = Number(comfyuiBillingQuote.unit_price || 0);
+  const batchSize = Math.max(1, Math.min(comfyuiMaxBatchSize, Number(payload?.batch_size || 1)));
+  const totalPrice = unitPrice * batchSize;
+  const confirmed = window.confirm(
+    `本次成功產圖將扣 ${totalPrice} 點（${unitPrice} 點 x ${batchSize} 張）。\n` +
+    "產圖失敗不扣點；丟棄預覽不退款。\n\n是否確認送出？"
+  );
+  return { confirmed, required: true, totalPrice, unitPrice, batchSize };
+}
+
 async function generateComfyuiImage() {
   if (comfyuiServerAvailable === false) {
     setComfyuiMessage("ComfyUI 伺服器未連線，無法產圖。", false);
@@ -459,6 +471,12 @@ async function generateComfyuiImage() {
     await loadComfyuiModels();
   }
   if (!comfyuiModelsLoaded) return;
+  const payload = comfyuiPayload();
+  const billingConfirmation = confirmComfyuiBilling(payload);
+  if (!billingConfirmation.confirmed) {
+    setComfyuiMessage("已取消產圖扣點確認", false);
+    return;
+  }
   const preview = $("comfyui-preview");
   const meta = $("comfyui-result-meta");
   if (preview) preview.innerHTML = `<div class="drive-empty">產生圖片中...</div>`;
@@ -483,7 +501,11 @@ async function generateComfyuiImage() {
         "Content-Type": "application/json",
         "X-CSRF-Token": getCsrfToken() || ""
       },
-      body: JSON.stringify({ ...comfyuiPayload(), timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS })
+      body: JSON.stringify({
+        ...payload,
+        confirm_billing: billingConfirmation.required,
+        timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS
+      })
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `產圖失敗（HTTP ${res.status}）`);
