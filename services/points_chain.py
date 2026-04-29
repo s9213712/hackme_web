@@ -24,8 +24,9 @@ ADMIN_INITIAL_POINTS = 1000
 ADMIN_WEEKLY_SALARY_POINTS = 100
 POINTS_CHAIN_SCHEMA_VERSION = 1
 DEFAULT_BACKUP_INTERVAL_MINUTES = 60
-DEFAULT_BACKUP_KEEP_DAILY = 30
-DEFAULT_BACKUP_KEEP_WEEKLY = 12
+DEFAULT_BACKUP_KEEP_RECENT = 5
+DEFAULT_BACKUP_KEEP_DAILY = 7
+DEFAULT_BACKUP_KEEP_WEEKLY = 4
 
 DEFAULT_RULES = (
     ("daily_login", "daily_login", "credit", "soft", 5, 5, 5, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "每日登入"}),
@@ -850,9 +851,9 @@ class PointsLedgerService:
             week = f"{parsed.isocalendar().year}-W{parsed.isocalendar().week:02d}"
             daily.setdefault(day, row["backup_id"])
             weekly.setdefault(week, row["backup_id"])
+        keep.update(row["backup_id"] for row in rows[:DEFAULT_BACKUP_KEEP_RECENT])
         keep.update(list(daily.values())[:DEFAULT_BACKUP_KEEP_DAILY])
         keep.update(list(weekly.values())[:DEFAULT_BACKUP_KEEP_WEEKLY])
-        keep.update(row["backup_id"] for row in rows[:5])
         for row in rows:
             if row["backup_id"] in keep:
                 continue
