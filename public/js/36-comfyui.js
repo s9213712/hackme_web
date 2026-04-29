@@ -606,6 +606,9 @@ async function discardComfyuiImage() {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || !json.ok) throw new Error(json.msg || `刪除 ComfyUI 原始檔失敗（HTTP ${res.status}）`);
+        if (json.warning === "source_file_not_deleted") {
+          setComfyuiMessage(json.msg || "已丟棄預覽；ComfyUI 原始檔未刪除。", false);
+        }
       }
     } catch (err) {
       if (discardBtn) {
@@ -628,7 +631,9 @@ async function discardComfyuiImage() {
   updateComfyuiResultButtons(false);
   const discardBtn = $("comfyui-discard-btn");
   if (discardBtn) discardBtn.textContent = "丟棄預覽";
-  setComfyuiMessage("已丟棄預覽，ComfyUI 原始檔也已刪除。", true);
+  if (!$("comfyui-msg")?.textContent) {
+    setComfyuiMessage("已丟棄預覽，ComfyUI 原始檔也已刪除。", true);
+  }
 }
 
 async function shareComfyuiToCommunity() {
