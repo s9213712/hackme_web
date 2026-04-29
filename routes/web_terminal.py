@@ -2,7 +2,7 @@ import threading
 
 from flask import request
 
-from services.web_terminal import WebTerminalManager, ensure_web_terminal_schema
+from services.web_terminal import WebTerminalManager, WebTerminalPolicy, ensure_web_terminal_schema, normalize_web_terminal_network_mode
 
 
 def register_web_terminal_routes(app, deps):
@@ -12,10 +12,14 @@ def register_web_terminal_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     verify_csrf_token = deps.get("verify_csrf_token")
     is_feature_enabled = deps.get("is_feature_enabled", lambda _key: True)
+    get_system_settings = deps.get("get_system_settings", lambda: {})
     manager = deps.get("web_terminal_manager") or WebTerminalManager(
         get_db=get_db,
         storage_root=deps["STORAGE_DIR"],
         audit=deps["audit"],
+        policy_provider=lambda: WebTerminalPolicy(
+            network_mode=normalize_web_terminal_network_mode(get_system_settings().get("web_terminal_network_mode", "bridge")),
+        ),
     )
 
     def normalize_actor(actor):

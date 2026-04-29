@@ -64,6 +64,12 @@ Web Terminal 是 root-only 選用功能。若要啟用，先執行：
 `hackme-web-terminal:base` container image。若 Docker 權限需要重新登入或重開
 服務，腳本會列出具體修復指令。
 
+Web Terminal 網路模式可由 root 在伺服器設定切換：
+
+- `none`：離線容器，最安全
+- `bridge`：標準 Docker 全網路模式，目前預設
+- `host`：共用主機網路 namespace，風險最高，只建議除錯時短暫使用
+
 ## 本機檢查
 
 push 前：

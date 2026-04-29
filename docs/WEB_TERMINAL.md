@@ -25,10 +25,23 @@ The script handles the common setup path:
 The image is based on the official Ubuntu 24.04 LTS container distribution and
 preinstalls the standard terminal userspace (`ubuntu-standard`, bash, apt tools,
 man pages, tmux, git, curl, rsync, ssh client, and common diagnostic commands).
-Sessions still run with `network none`, `read-only` rootfs, dropped Linux
-capabilities, and only the root user's Cloud Drive mounted at `/home/root`.
-Use the Dockerfile and rebuild the image to add more tools; browser sessions are
-not intended to install packages live.
+Sessions still run with `read-only` rootfs, dropped Linux capabilities, and only
+the root user's Cloud Drive mounted at `/home/root`.
+Use the Dockerfile and rebuild the image to add more tools.
+
+## Network Modes
+
+Root can change the Web Terminal network mode from the root server settings UI.
+The setting affects newly opened sessions immediately.
+
+| Mode | Docker setting | Use case | Risk |
+|---|---|---|---|
+| Offline | `none` | Local file work only; no outbound traffic | Lowest |
+| Full Internet | `bridge` | Standard Docker networking; can reach the internet and Ubuntu mirrors | Medium |
+| Host Network | `host` | Debugging host-local services with the container sharing the host network namespace | Highest |
+
+The default for this branch is `bridge`, so Web Terminal sessions can reach the
+network. Switch back to `none` when you want the original offline behavior.
 
 Then verify:
 

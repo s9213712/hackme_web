@@ -1865,6 +1865,16 @@
             </div>
             <div id="server-bind-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
             <div id="server-ssl-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Web Terminal</div>
+            <div class="field">
+              <label>Terminal 網路模式</label>
+              <select id="s-web-terminal-network-mode">
+                <option value="none">離線 none（最安全）</option>
+                <option value="bridge">全開 bridge（可連外，預設）</option>
+                <option value="host">主機 host（最高風險）</option>
+              </select>
+            </div>
+            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">儲存後新開的 terminal session 立即使用新模式；已開啟的 session 不會被強制切換。</div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">ComfyUI API</div>
             <div class="field">
               <label>ComfyUI API Port（localhost）</label>

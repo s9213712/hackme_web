@@ -4,7 +4,7 @@ from pathlib import Path
 from flask import Flask, jsonify, make_response
 
 from routes.web_terminal import register_web_terminal_routes
-from services.web_terminal import WebTerminalPolicy, build_container_command, root_terminal_mount_path
+from services.web_terminal import WebTerminalPolicy, build_container_command, normalize_web_terminal_network_mode, root_terminal_mount_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +26,7 @@ class FakeTerminalManager:
             "runtime_available": False,
             "image_available": False,
             "image": "hackme-web-terminal:base",
-            "limits": {"network": "none"},
+            "limits": {"network": "bridge"},
         }
 
 
@@ -63,7 +63,7 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     joined = " ".join(command)
 
     assert command[:3] == ["docker", "run", "--rm"]
-    assert "--network none" in joined
+    assert "--network bridge" in joined
     assert "--cap-drop ALL" in joined
     assert "--security-opt no-new-privileges" in joined
     assert "--read-only" in command
@@ -76,6 +76,13 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     assert " /:/home/root" not in joined
     assert " /etc:" not in joined
     assert command[-2:] == ["/bin/bash", "-l"]
+
+
+def test_web_terminal_network_modes_are_normalized():
+    assert normalize_web_terminal_network_mode("none") == "none"
+    assert normalize_web_terminal_network_mode("bridge") == "bridge"
+    assert normalize_web_terminal_network_mode("host") == "host"
+    assert normalize_web_terminal_network_mode("bad") == "bridge"
 
 
 def test_root_mount_path_stays_inside_cloud_drive_storage(tmp_path):
@@ -145,6 +152,7 @@ def test_frontend_checks_environment_before_opening_session():
     assert "webTerminalCloseRequested" in web_terminal_js
     assert "Web Terminal session 未成功建立就關閉" in web_terminal_js
     assert "websocket_available" in web_terminal_js
+    assert "網路模式" in web_terminal_js
     assert "web_terminal" in core_js
     assert "JetBrains Mono" in web_terminal_js
     assert "scrollback: 4000" in web_terminal_js
@@ -184,6 +192,9 @@ def test_web_terminal_installer_and_docs_are_self_service():
     assert "docker info` must work without" in readme
     assert "./install_web_terminal_dependencies.sh --doctor --venv .venv" in guide
     assert "id -nG \"$USER\"" in guide
+    assert "Network Modes" in guide
+    assert "`bridge`" in guide
+    assert "`host`" in guide
     assert "flask-sock" in requirements
     assert "official Ubuntu 24.04 LTS" in guide
     assert "simple-websocket" in requirements

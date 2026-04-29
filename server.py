@@ -1238,6 +1238,7 @@ register_web_terminal_routes(app, {
     "audit": audit,
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,
+    "get_system_settings": get_system_settings,
     "is_feature_enabled": is_feature_enabled,
     "json_resp": json_resp,
     "require_csrf_safe": require_csrf_safe,

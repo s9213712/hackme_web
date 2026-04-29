@@ -114,9 +114,10 @@ function renderWebTerminalStatus(payload) {
   const items = webTerminalCheckItems(payload);
   const failures = items.filter((item) => !item.ok);
   if (status) {
+    const networkMode = term.limits && term.limits.network ? term.limits.network : "bridge";
     status.textContent = failures.length
       ? `環境檢查未通過：${failures.map((item) => item.label).join("、")}`
-      : `環境正常，掛載路徑會指向 root 的 Cloud Drive。Image: ${term.image || "-"}`;
+      : `環境正常，掛載 root Cloud Drive。Image: ${term.image || "-"}，網路模式：${networkMode}`;
   }
   if (checks) {
     checks.innerHTML = items.map((item) => `

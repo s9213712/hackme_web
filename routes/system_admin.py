@@ -1199,6 +1199,11 @@ def register_system_admin_routes(app, deps):
             data["server_listen_port"] = port
         if "server_ssl_enabled" in data:
             data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
+        if "web_terminal_network_mode" in data:
+            mode = str(data.get("web_terminal_network_mode") or "").strip().lower()
+            if mode not in {"none", "bridge", "host"}:
+                return json_resp({"ok":False,"msg":"web_terminal_network_mode 必須是 none、bridge 或 host"}), 400
+            data["web_terminal_network_mode"] = mode
         if "comfyui_api_port" in data:
             try:
                 port = int(data.get("comfyui_api_port"))

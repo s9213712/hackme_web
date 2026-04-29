@@ -198,6 +198,12 @@ Use `./install_web_terminal_dependencies.sh --doctor --venv .venv` after install
 prints concrete repair commands for missing Docker access, missing xterm assets,
 or a missing container image.
 
+Web Terminal network mode is stored in `web_terminal_network_mode`:
+
+- `none`: Docker `--network none`
+- `bridge`: Docker `--network bridge`, current default
+- `host`: Docker `--network host`, high-risk host network namespace
+
 ### Storage and Albums
 
 - `GET /api/storage/files`
@@ -339,6 +345,7 @@ Other defaults:
 | `storage_maintenance_auto_enabled` | `false` |
 | `storage_maintenance_daily_time` | `04:00` |
 | `storage_trash_retention_days` | `30` |
+| `web_terminal_network_mode` | `bridge` |
 | `snapshot_daily_auto_enabled` | `false` |
 | `snapshot_daily_time` | `03:00` |
 | `snapshot_daily_last_date` | empty |

@@ -67,6 +67,11 @@ Terminal page, the frontend runs an environment check first and reports missing
 Docker, xterm.js assets, Python WebSocket packages, or the terminal container
 image before allowing a session to start.
 
+Web Terminal network mode is configurable in root server settings. The available
+modes are `none` for offline sessions, `bridge` for full standard Docker
+internet access, and `host` for high-risk host-network debugging. The current
+default is `bridge`.
+
 If Docker group membership changes during installation, restart the login shell
 or the service process before using Web Terminal. `docker info` must work without
 `sudo` from the same user/session that launches Hackme Web. If the account is in

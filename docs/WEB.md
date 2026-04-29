@@ -110,6 +110,12 @@ The installer builds the required `hackme-web-terminal:base` Docker image and
 prints concrete repair commands when Docker permissions require a new login
 shell or service restart.
 
+Root can switch the terminal network mode in server settings:
+
+- `none`: offline container
+- `bridge`: full standard Docker internet access, current default
+- `host`: host network namespace, highest risk
+
 ### Appeals
 
 Users can view violation history and submit appeals. Root/manager review is

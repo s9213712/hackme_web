@@ -19,6 +19,13 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 900
 DEFAULT_CPU_LIMIT = "0.5"
 DEFAULT_MEMORY_LIMIT = "256m"
 DEFAULT_PIDS_LIMIT = "128"
+DEFAULT_NETWORK_MODE = "bridge"
+ALLOWED_NETWORK_MODES = {"none", "bridge", "host"}
+
+
+def normalize_web_terminal_network_mode(value):
+    mode = str(value or DEFAULT_NETWORK_MODE).strip().lower()
+    return mode if mode in ALLOWED_NETWORK_MODES else DEFAULT_NETWORK_MODE
 
 
 def ensure_web_terminal_schema(conn):
@@ -65,7 +72,7 @@ class WebTerminalPolicy:
     memory_limit: str = DEFAULT_MEMORY_LIMIT
     pids_limit: str = DEFAULT_PIDS_LIMIT
     idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_SECONDS
-    network_mode: str = "none"
+    network_mode: str = DEFAULT_NETWORK_MODE
 
 
 def build_container_command(*, session_id, mount_path, policy=None):
@@ -190,18 +197,28 @@ class WebTerminalSession:
 
 
 class WebTerminalManager:
-    def __init__(self, *, get_db, storage_root, audit, policy=None):
+    def __init__(self, *, get_db, storage_root, audit, policy=None, policy_provider=None):
         self.get_db = get_db
         self.storage_root = storage_root
         self.audit = audit
         self.policy = policy or WebTerminalPolicy()
+        self.policy_provider = policy_provider
+
+    def _policy(self):
+        if not self.policy_provider:
+            return self.policy
+        policy = self.policy_provider()
+        if isinstance(policy, WebTerminalPolicy):
+            return policy
+        return self.policy
 
     def create_session(self, actor):
         if not actor or actor.get("username") != "root":
             raise PermissionError("only root can open web terminal")
+        policy = self._policy()
         session_id = uuid.uuid4().hex
         mount_path = root_terminal_mount_path(self.storage_root, actor["id"])
-        command = build_container_command(session_id=session_id, mount_path=mount_path, policy=self.policy)
+        command = build_container_command(session_id=session_id, mount_path=mount_path, policy=policy)
         container_name = f"hackme_web_terminal_{session_id}"
         created_at = datetime.now().isoformat()
 
@@ -221,12 +238,12 @@ class WebTerminalManager:
                     int(actor["id"]),
                     actor["username"],
                     container_name,
-                    self.policy.image,
+                    policy.image,
                     str(mount_path),
-                    self.policy.cpu_limit,
-                    self.policy.memory_limit,
-                    self.policy.pids_limit,
-                    self.policy.network_mode,
+                    policy.cpu_limit,
+                    policy.memory_limit,
+                    policy.pids_limit,
+                    policy.network_mode,
                     created_at,
                     created_at,
                 ),
@@ -241,8 +258,8 @@ class WebTerminalManager:
             user=actor.get("username"),
             success=True,
             detail=(
-                f"session_id={session_id}, image={self.policy.image}, cpu={self.policy.cpu_limit}, "
-                f"memory={self.policy.memory_limit}, pids={self.policy.pids_limit}, network={self.policy.network_mode}, "
+                f"session_id={session_id}, image={policy.image}, cpu={policy.cpu_limit}, "
+                f"memory={policy.memory_limit}, pids={policy.pids_limit}, network={policy.network_mode}, "
                 f"no_new_privileges=1, cap_drop=ALL"
             ),
         )
@@ -302,7 +319,7 @@ class WebTerminalManager:
             master_fd=master_fd,
             audit=self.audit,
             conn_factory=self.get_db,
-            idle_timeout_seconds=self.policy.idle_timeout_seconds,
+            idle_timeout_seconds=policy.idle_timeout_seconds,
         )
 
     def _mark_failed(self, session_id, actor, mount_path, exc):
@@ -326,6 +343,7 @@ class WebTerminalManager:
         )
 
     def status_payload(self, actor, *, feature_enabled=True):
+        policy = self._policy()
         websocket_available = False
         websocket_error = ""
         try:
@@ -343,7 +361,7 @@ class WebTerminalManager:
         if runtime:
             runtime_accessible, runtime_error = _docker_daemon_accessible(runtime)
             if runtime_accessible:
-                image_available, image_error = _docker_image_available(runtime, self.policy.image)
+                image_available, image_error = _docker_image_available(runtime, policy.image)
         return {
             "enabled": bool(feature_enabled and actor and actor.get("username") == "root"),
             "websocket_available": websocket_available,
@@ -354,16 +372,16 @@ class WebTerminalManager:
             "runtime": runtime or "docker",
             "image_available": image_available,
             "image_error": image_error,
-            "image": self.policy.image,
+            "image": policy.image,
             "process": process_info,
             "limits": {
-                "cpu": self.policy.cpu_limit,
-                "memory": self.policy.memory_limit,
-                "pids": self.policy.pids_limit,
-                "network": self.policy.network_mode,
+                "cpu": policy.cpu_limit,
+                "memory": policy.memory_limit,
+                "pids": policy.pids_limit,
+                "network": policy.network_mode,
                 "no_new_privileges": True,
                 "cap_drop": "ALL",
-                "idle_timeout_seconds": self.policy.idle_timeout_seconds,
+                "idle_timeout_seconds": policy.idle_timeout_seconds,
             },
         }
 
