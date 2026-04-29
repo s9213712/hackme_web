@@ -1,6 +1,7 @@
 import hashlib
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
 import uuid
@@ -69,8 +70,9 @@ from services.storage_quota_overrides import (
 )
 from services.storage_quota_purchases import (
     active_storage_quota_purchases,
+    default_storage_upgrade_catalog,
     ensure_storage_upgrade_price_catalog,
-    enrich_storage_upgrade_catalog,
+    list_storage_upgrade_price_catalog,
     record_storage_quota_purchase,
     storage_upgrade_product,
 )
@@ -182,17 +184,22 @@ def register_file_routes(app, deps):
             status = 409
         return json_resp({"ok": False, "msg": msg}), status
 
-    def _storage_upgrade_catalog():
-        catalog = enrich_storage_upgrade_catalog(points_service.list_catalog())
-        if catalog:
-            return catalog
-        conn = get_db()
+    def _storage_upgrade_catalog(conn):
         try:
+            if hasattr(points_service, "ensure_schema"):
+                points_service.ensure_schema(conn)
             ensure_storage_upgrade_price_catalog(conn)
             conn.commit()
-        finally:
-            conn.close()
-        return enrich_storage_upgrade_catalog(points_service.list_catalog())
+            catalog = list_storage_upgrade_price_catalog(conn)
+            return catalog or default_storage_upgrade_catalog()
+        except sqlite3.OperationalError as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if "locked" in str(exc).lower():
+                return default_storage_upgrade_catalog()
+            raise
 
     def _storage_usage_for_user_row(conn, row):
         data = dict(row)
@@ -774,7 +781,7 @@ def register_file_routes(app, deps):
             level = _actor_value(actor, "effective_level") or _actor_value(actor, "member_level") or "newbie"
             rule = get_member_level_rule(conn, level)
             usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
-            catalog = _storage_upgrade_catalog()
+            catalog = _storage_upgrade_catalog(conn)
             return json_resp({
                 "ok": True,
                 "can_purchase": not _is_root(actor),
@@ -809,7 +816,7 @@ def register_file_routes(app, deps):
             return json_resp({"ok": False, "msg": "購買數量必須是整數"}), 400
         if quantity < 1 or quantity > 20:
             return json_resp({"ok": False, "msg": "單次購買數量需介於 1 到 20"}), 400
-        catalog = _storage_upgrade_catalog()
+        catalog = _storage_upgrade_catalog(conn)
         if not any(item.get("item_key") == item_key for item in catalog):
             return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
         try:
