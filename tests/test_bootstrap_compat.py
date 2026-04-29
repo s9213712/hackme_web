@@ -224,7 +224,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"user_id", "soft_balance", "hard_balance", "soft_frozen", "hard_frozen", "wallet_status"} <= points_wallet_cols
     assert {"ledger_uuid", "public_account_id", "currency_type", "direction", "amount", "ledger_hash", "previous_ledger_hash"} <= points_ledger_cols
     assert {"block_number", "previous_block_hash", "merkle_root", "block_hash", "first_ledger_id", "last_ledger_id"} <= points_block_cols
-    assert {"game_key", "mode", "white_user_id", "black_user_id", "current_turn", "board_json", "winner_user_id"} <= game_match_cols
+    assert {"game_key", "mode", "white_user_id", "black_user_id", "current_turn", "board_json", "winner_user_id", "white_deleted_at", "black_deleted_at"} <= game_match_cols
     assert {"game_key", "inviter_user_id", "opponent_user_id", "status", "match_id"} <= game_invite_cols
     assert {"game_key", "week_key", "user_id", "rank", "score", "reward_points", "ledger_uuid"} <= game_reward_cols
     assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]

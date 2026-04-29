@@ -120,12 +120,18 @@ function renderGameMatches(matches) {
     renderChessBoard(null);
     return;
   }
-  wrap.innerHTML = rows.map((match) => `
-    <button class="game-match-row ${match.id === gameSelectedMatchId ? "active" : ""}" type="button" data-game-match-id="${match.id}">
-      <span><strong>${sanitize(gameMatchLabel(match))}</strong><small>${sanitize(match.status)} · ${sanitize(match.current_turn === "white" ? "白方走" : "黑方走")}</small></span>
-      <span>${match.mode === "computer" ? "練習" : "對戰"}</span>
-    </button>
-  `).join("");
+  wrap.innerHTML = rows.map((match) => {
+    const canDelete = match.status !== "active";
+    return `
+      <div class="game-match-item ${match.id === gameSelectedMatchId ? "active" : ""}">
+        <button class="game-match-row ${match.id === gameSelectedMatchId ? "active" : ""}" type="button" data-game-match-id="${match.id}">
+          <span><strong>${sanitize(gameMatchLabel(match))}</strong><small>${sanitize(match.status)} · ${sanitize(match.current_turn === "white" ? "白方走" : "黑方走")}</small></span>
+          <span>${match.mode === "computer" ? "練習" : "對戰"}</span>
+        </button>
+        ${canDelete ? `<button class="btn btn-danger game-mini-btn" type="button" data-game-delete-match="${match.id}" title="刪除已結束棋局">刪除</button>` : ""}
+      </div>
+    `;
+  }).join("");
   const selected = rows.find((match) => match.id === gameSelectedMatchId) || rows[0];
   if (selected) {
     gameSelectedMatchId = selected.id;
@@ -318,6 +324,26 @@ async function resignGame() {
   }
 }
 
+async function deleteFinishedGame(matchId) {
+  const match = (gameState.matches || []).find((item) => String(item.id) === String(matchId));
+  if (!match) return;
+  if (match.status === "active") {
+    setGameMsg("進行中的棋局不能刪除，請先完成棋局或認輸。", false);
+    return;
+  }
+  if (!confirm("確定要從列表刪除這局已結束賽局？排行榜紀錄不會被移除。")) return;
+  try {
+    await gameRequest(`/games/chess/matches/${encodeURIComponent(matchId)}`, { method: "DELETE", body: {} });
+    if (String(gameSelectedMatchId) === String(matchId)) {
+      gameSelectedMatchId = null;
+      gameSelectedSquare = null;
+    }
+    await refreshGameZoneAfterMutation("已刪除已結束棋局");
+  } catch (err) {
+    setGameMsg(err.message || "刪除棋局失敗", false);
+  }
+}
+
 async function awardGameRewards() {
   try {
     const json = await gameRequest("/root/games/chess/weekly-rewards/award", { method: "POST", body: {} });
@@ -329,6 +355,11 @@ async function awardGameRewards() {
 }
 
 document.addEventListener("click", (event) => {
+  const deleteMatchBtn = event.target?.closest?.("[data-game-delete-match]");
+  if (deleteMatchBtn) {
+    deleteFinishedGame(deleteMatchBtn.dataset.gameDeleteMatch);
+    return;
+  }
   const inviteBtn = event.target?.closest?.("[data-game-invite]");
   if (inviteBtn) {
     reviewGameInvite(inviteBtn.dataset.gameInvite, inviteBtn.dataset.gameInviteAction || "accept");

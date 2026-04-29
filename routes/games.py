@@ -112,6 +112,11 @@ def game_schema_sql():
 
 def ensure_game_schema(conn):
     conn.executescript(game_schema_sql())
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
+    if "white_deleted_at" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN white_deleted_at TEXT")
+    if "black_deleted_at" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN black_deleted_at TEXT")
 
 
 def serialize_match(row, actor_id=None):
@@ -490,7 +495,17 @@ def register_games_routes(app, deps):
         try:
             ensure_game_schema(conn)
             rows = conn.execute(
-                match_select_sql("m.game_key=? AND (m.white_user_id=? OR m.black_user_id=?) ORDER BY CASE WHEN m.status='active' THEN 0 ELSE 1 END, m.id DESC LIMIT 80"),
+                match_select_sql(
+                    """
+                    m.game_key=?
+                    AND (
+                        (m.white_user_id=? AND m.white_deleted_at IS NULL)
+                        OR (m.black_user_id=? AND m.black_deleted_at IS NULL)
+                    )
+                    ORDER BY CASE WHEN m.status='active' THEN 0 ELSE 1 END, m.id DESC
+                    LIMIT 80
+                    """
+                ),
                 (GAME_KEY, int(actor["id"]), int(actor["id"])),
             ).fetchall()
             return json_resp({"ok": True, "matches": [serialize_match(row, actor["id"]) for row in rows]})
@@ -512,6 +527,39 @@ def register_games_routes(app, deps):
             if not actor_can_play(actor, row):
                 return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
             return json_resp({"ok": True, "match": serialize_match(row, actor["id"])})
+        finally:
+            conn.close()
+
+    @app.route("/api/games/chess/matches/<int:match_id>", methods=["DELETE"])
+    @require_csrf
+    def chess_match_delete(match_id):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            row = match_row(conn, match_id)
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到棋局"}), 404
+            side = actor_color(actor, row)
+            if not side:
+                return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
+            if row["status"] == "active":
+                return json_resp({"ok": False, "msg": "進行中的棋局不能刪除，請先認輸或完成棋局"}), 409
+            now = utc_now()
+            column = "white_deleted_at" if side == "white" else "black_deleted_at"
+            conn.execute(f"UPDATE game_matches SET {column}=?, updated_at=? WHERE id=?", (now, now, match_id))
+            conn.commit()
+            audit(
+                "GAME_MATCH_DELETED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"match_id={match_id}, side={side}, status={row['status']}",
+            )
+            return json_resp({"ok": True, "msg": "棋局已從你的列表移除"})
         finally:
             conn.close()
 
