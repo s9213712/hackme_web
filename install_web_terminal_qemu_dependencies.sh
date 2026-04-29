@@ -56,6 +56,8 @@ Options:
                      Repair common libvirt NAT host networking issues
   --doctor-host-network
                      Print host NAT/forwarding diagnostics for libvirt guests
+  --doctor-session VM_NAME HOST_PORT
+                     Diagnose a created WebTerminal VM that cannot SSH/connect
   --print-server-command
                      Print a libvirt-aware local development server command
   --help             Show this help
@@ -63,7 +65,7 @@ Options:
 Environment:
   WEB_TERMINAL_QEMU_STORAGE_DIR=/var/lib/hackme-vms
   WEB_TERMINAL_QEMU_DISTRO=ubuntu-22.04|ubuntu-24.04
-  WEB_TERMINAL_QEMU_NETWORK_MODE=none|nat|restricted
+  WEB_TERMINAL_QEMU_NETWORK_MODE=user|none|nat|restricted
   HTML_LEARNING_PORT=5000
 
 If environment variables are not set, the script reads this repo's
@@ -276,6 +278,101 @@ doctor_host_network() {
   log "To test counters: run a ping from the VM, then rerun --doctor-host-network and compare packet counters."
 }
 
+doctor_session() {
+  local vm_name="${1:-}"
+  local host_port="${2:-}"
+  local failed=0
+  if [[ ! "$vm_name" =~ ^hackme-term-u[0-9]+-[a-f0-9]{10}$ ]]; then
+    log "failed: VM name is missing or not a WebTerminal VM name"
+    log "usage: ./install_web_terminal_qemu_dependencies.sh --doctor-session hackme-term-u1-abcdef1234 45601"
+    return 2
+  fi
+  if [[ ! "$host_port" =~ ^[0-9]+$ ]] || (( host_port < 1 || host_port > 65535 )); then
+    log "failed: host port is missing or invalid"
+    log "usage: ./install_web_terminal_qemu_dependencies.sh --doctor-session hackme-term-u1-abcdef1234 45601"
+    return 2
+  fi
+
+  log "Diagnosing WebTerminal session VM $vm_name with host SSH port $host_port."
+  if ! virsh -c qemu:///system dominfo "$vm_name" >/tmp/hackme-webterminal-dominfo.$$ 2>/tmp/hackme-webterminal-dominfo.err.$$; then
+    log "failed: libvirt cannot find or read domain $vm_name"
+    sed 's/^/[web-terminal-qemu] virsh: /' /tmp/hackme-webterminal-dominfo.err.$$ || true
+    rm -f /tmp/hackme-webterminal-dominfo.$$ /tmp/hackme-webterminal-dominfo.err.$$
+    return 1
+  fi
+  sed 's/^/[web-terminal-qemu] dominfo: /' /tmp/hackme-webterminal-dominfo.$$ || true
+  rm -f /tmp/hackme-webterminal-dominfo.$$ /tmp/hackme-webterminal-dominfo.err.$$
+
+  log "Domain network XML."
+  virsh -c qemu:///system dumpxml "$vm_name" | sed -n '/<interface/,/<\/interface>/p' | sed 's/^/[web-terminal-qemu] xml: /' || true
+
+  log "QEMU process hostfwd arguments."
+  local qemu_line
+  qemu_line="$(ps -ef | grep qemu-system | grep "$vm_name" | grep -v grep || true)"
+  if [[ -n "$qemu_line" ]]; then
+    if grep -q 'hostfwd' <<<"$qemu_line"; then
+      grep -o 'hostfwd[^ ]*' <<<"$qemu_line" | sed 's/^/[web-terminal-qemu] qemu: /'
+    else
+      log "qemu: no hostfwd argument in process line. This is expected when hostfwd was added later via QEMU monitor."
+    fi
+  else
+    log "failed: QEMU process for $vm_name is not running"
+    failed=1
+  fi
+
+  log "QEMU monitor user networking state."
+  if virsh -c qemu:///system qemu-monitor-command "$vm_name" --hmp "info usernet" >/tmp/hackme-webterminal-usernet.$$ 2>/tmp/hackme-webterminal-usernet.err.$$; then
+    sed 's/^/[web-terminal-qemu] usernet: /' /tmp/hackme-webterminal-usernet.$$ || true
+    if ! grep -qE "127\.0\.0\.1[: ].*${host_port}|${host_port}.*22" /tmp/hackme-webterminal-usernet.$$; then
+      log "warn: QEMU monitor output does not clearly show $host_port -> 22 forwarding"
+    fi
+  else
+    log "warn: cannot query QEMU monitor usernet info"
+    sed 's/^/[web-terminal-qemu] monitor: /' /tmp/hackme-webterminal-usernet.err.$$ || true
+  fi
+  rm -f /tmp/hackme-webterminal-usernet.$$ /tmp/hackme-webterminal-usernet.err.$$
+
+  log "Host listen check for 127.0.0.1:$host_port."
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${host_port}$"; then
+    log "ok: host port $host_port is listening"
+  else
+    log "failed: host port $host_port is not listening"
+    log "repair hint: the backend should call virsh qemu-monitor-command $vm_name --hmp 'hostfwd_add tcp:127.0.0.1:$host_port-:22'"
+    failed=1
+  fi
+
+  log "SSH banner check."
+  if python3 - "$host_port" <<'PY' >/tmp/hackme-webterminal-ssh.$$ 2>/tmp/hackme-webterminal-ssh.err.$$
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+    sock.settimeout(5)
+    banner = sock.recv(128)
+    if not banner.startswith(b"SSH-"):
+        raise SystemExit(f"unexpected banner: {banner!r}")
+    print(banner.decode("utf-8", errors="replace").strip())
+PY
+  then
+    log "ok: SSH service answered on 127.0.0.1:$host_port"
+    sed 's/^/[web-terminal-qemu] ssh: /' /tmp/hackme-webterminal-ssh.$$ || true
+  else
+    log "failed: SSH service did not answer on 127.0.0.1:$host_port"
+    sed 's/^/[web-terminal-qemu] ssh: /' /tmp/hackme-webterminal-ssh.err.$$ || true
+    log "if the port is listening, wait for cloud-init/sshd or inspect the VM console; if it is not listening, check hostfwd."
+    failed=1
+  fi
+  rm -f /tmp/hackme-webterminal-ssh.$$ /tmp/hackme-webterminal-ssh.err.$$
+
+  if [[ "$failed" -eq 0 ]]; then
+    log "session doctor result: ok"
+  else
+    log "session doctor result: failed"
+  fi
+  return "$failed"
+}
+
 fix_host_network() {
   log "Repairing common libvirt NAT host networking issues."
   log "This may ask for sudo because it changes host firewall alternatives and sysctl settings."
@@ -477,6 +574,12 @@ while [[ "$#" -gt 0 ]]; do
     --doctor) doctor ;;
     --fix-host-network) fix_host_network ;;
     --doctor-host-network) doctor_host_network ;;
+    --doctor-session)
+      session_vm="${2:-}"
+      session_port="${3:-}"
+      doctor_session "$session_vm" "$session_port"
+      shift 2
+      ;;
     --doctor-server)
       doctor_status=0
       server_status=0

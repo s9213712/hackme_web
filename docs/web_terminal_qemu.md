@@ -64,6 +64,10 @@ The first implementation only accepts `qemu:///system` as the libvirt URI.
 6. The backend creates an overlay qcow2 disk and cloud-init seed ISO.
 7. `virt-install` imports the VM.
 8. For `user` mode, QEMU exposes guest SSH on a temporary `127.0.0.1` host port.
+   The backend first creates the VM through libvirt, then uses QEMU monitor
+   `hostfwd_add` to add `127.0.0.1:<host_port> -> guest:22`. This is intentional:
+   some libvirt builds accept user-network port-forward XML in `--print-xml` but
+   silently drop it when the domain is actually defined.
    For libvirt NAT modes, the server waits for a guest IP and then bridges SSH to
    WebSocket.
 9. Closing the session destroys and undefines the VM.
@@ -81,6 +85,40 @@ The backend writes audit events for:
 
 Audit detail includes VM name, distro, network mode, resource limits, and the
 fact that host mounts are not used.
+
+## Debug Workflow
+
+Use the build tutorial for the long form. The short operational order is:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor
+./install_web_terminal_qemu_dependencies.sh --doctor-server
+```
+
+If a session is created but fails with `120 秒內無法透過 127.0.0.1:<port> SSH
+連線`, inspect that exact VM and port before closing it:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor-session hackme-term-u1-abcdef1234 45601
+```
+
+That command checks:
+
+- whether libvirt still sees the temporary VM
+- the VM network XML
+- QEMU monitor `info usernet`
+- whether the host is listening on `127.0.0.1:<port>`
+- whether the SSH service answers with a banner
+
+Interpretation:
+
+- port not listening: user-mode `hostfwd_add` did not apply
+- port listening but SSH banner missing: wait for cloud-init/sshd, then inspect
+  VM console or cloud-init logs
+- VM missing: provisioning failed before `virt-install` completed, usually storage
+  permissions or base image path
+- `qemu-img` cannot open backing image: the overlay must be created with unsafe
+  backing reference (`-u`); the final VM read is performed by `libvirt-qemu`
 
 ## Security Notes
 

@@ -153,6 +153,16 @@ After the web server is running, also check the actual server process:
 ./install_web_terminal_qemu_dependencies.sh --doctor-server
 ```
 
+If a VM session has already been created and the UI reports a specific VM name
+and SSH host port, inspect that live session:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor-session hackme-term-u1-abcdef1234 45601
+```
+
+Run this before closing the failed session. Once the session is closed, libvirt
+destroys/undefines the temporary VM and the evidence is gone.
+
 This catches the common case where your shell has `libvirt` permission but the
 already-running `hackme_web` process was started before group membership took
 effect. If `--doctor-server` says the server PID does not have the `libvirt`
@@ -332,6 +342,46 @@ The directory is owned by `root:libvirt` and mode `0770`.
 
 ## 10. Troubleshooting
 
+### Fast Debug Order
+
+Use this order before changing code:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor
+./install_web_terminal_qemu_dependencies.sh --doctor-server
+```
+
+If the Web UI reports a failed session, keep the failed session open and run:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor-session <vm_name> <host_ssh_port>
+```
+
+Read the result like this:
+
+- `libvirt cannot find domain`: VM creation failed or the session was already
+  cleaned up
+- `host port is not listening`: QEMU user-mode host forwarding was not applied
+- `port is listening but SSH banner fails`: cloud-init or `sshd` inside the guest
+  is not ready
+- `qemu-img` permission errors happen before VM creation and point to storage or
+  backing image permissions
+- `dominfo` works but `info usernet` fails: libvirt can see the VM, but QEMU
+  monitor access is blocked or the VM is not in a normal running state
+
+Useful raw commands when the script output is not enough:
+
+```bash
+virsh -c qemu:///system list --all
+virsh -c qemu:///system dumpxml <vm_name> | sed -n '/<interface/,/<\/interface>/p'
+virsh -c qemu:///system qemu-monitor-command <vm_name> --hmp 'info usernet'
+ss -ltnp | grep <host_ssh_port>
+tail -n 120 /tmp/hackme_web_5000.out
+```
+
+Do not debug this by opening a host shell in the browser. The WebTerminal design
+must stay VM-backed.
+
 ### Permission denied for libvirt
 
 Symptom:
@@ -383,6 +433,73 @@ where bridge forwarding works. Offline mode is reserved for the later
 serial-console bridge and is intentionally blocked by health checks until that
 bridge exists.
 
+If the status says:
+
+```text
+VM 已建立但 120 秒內無法透過 127.0.0.1:<port> SSH 連線
+```
+
+Run:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor-session <vm_name> <port>
+```
+
+For QEMU user-mode NAT, the expected result is:
+
+```text
+ok: host port <port> is listening
+ok: SSH service answered on 127.0.0.1:<port>
+```
+
+If the port is not listening, the backend failed before or during QEMU monitor
+`hostfwd_add`. Check the server log and audit event for `WEB_TERMINAL_QEMU_SESSION_FAILED`.
+The backend should execute:
+
+```bash
+virsh -c qemu:///system qemu-monitor-command <vm_name> --hmp 'hostfwd_add tcp:127.0.0.1:<port>-:22'
+```
+
+If the port listens but the SSH banner check still fails, wait another minute and
+retry. If it still fails, cloud-init probably has not finished or `sshd` did not
+start inside the guest. Inspect the VM console with libvirt tools and check
+cloud-init/ssh logs inside the VM.
+
+Important: `virt-install --print-xml` may show a `<portForward>` XML block, but
+some libvirt versions drop it when defining the actual VM. This branch therefore
+adds host forwarding after VM creation through QEMU monitor. When debugging,
+trust `ss` and `info usernet`, not `--print-xml`.
+
+### Environment check request failed or HTTP 500/503
+
+Open the server log first:
+
+```bash
+tail -n 160 /tmp/hackme_web_5000.out
+```
+
+Then verify the running server process:
+
+```bash
+./install_web_terminal_qemu_dependencies.sh --doctor-server
+```
+
+Common causes:
+
+- the server was started before the user joined the `libvirt` group
+- `flask-sock` was not installed in the Python environment used by `server.py`
+- the selected Ubuntu image exists but the server/libvirt process cannot use it
+- root enabled WebTerminal in settings but the server was not restarted after
+  dependency installation
+
+If the frontend only says "request failed", also verify the API endpoint is
+reachable from the same browser session and that you are logged in as root. The
+endpoint is root-only by design:
+
+```text
+/api/root/web-terminal/qemu/health
+```
+
 ### VM creation says qcow2 permission denied
 
 Symptom:
@@ -404,6 +521,17 @@ Fix:
 
 This applies ACLs for `libvirt-qemu` without making the VM storage world
 readable.
+
+Another possible symptom:
+
+```text
+qemu-img: ... Could not open backing image ... Permission denied
+```
+
+The app creates overlays with `qemu-img create -u` so the web server does not
+need to open the root-owned base image directly. If this error appears again,
+check that the running code includes the `-u` overlay creation path and that the
+server was restarted after updating the branch.
 
 ### NAT mode says default network is inactive
 
