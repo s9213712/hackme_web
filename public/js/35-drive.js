@@ -21,6 +21,8 @@ const DRIVE_PRIVACY_MODE_DESCRIPTIONS = {
   e2ee_vault_with_client_scan: "站方無法讀取，附本機掃描回報",
 };
 
+const DRIVE_E2EE_VAULT_KEY_STORAGE = "hackme_drive_e2ee_vault_key_v1";
+
 let driveTransferRows = [];
 
 function drivePrivacyModeLabel(mode) {
@@ -29,6 +31,106 @@ function drivePrivacyModeLabel(mode) {
 
 function drivePrivacyModeDescription(mode) {
   return DRIVE_PRIVACY_MODE_DESCRIPTIONS[mode] || "";
+}
+
+function isDriveE2eeMode(mode) {
+  return String(mode || "").startsWith("e2ee");
+}
+
+function driveBytesToBase64(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  let binary = "";
+  for (let i = 0; i < view.length; i += 1) binary += String.fromCharCode(view[i]);
+  return btoa(binary);
+}
+
+function driveBufferToHex(buffer) {
+  return Array.from(new Uint8Array(buffer || [])).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function driveRandomNonce(length = 12) {
+  const nonce = new Uint8Array(length);
+  window.crypto.getRandomValues(nonce);
+  return nonce;
+}
+
+async function getDriveE2eeVaultKey() {
+  if (!window.crypto?.subtle) {
+    throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
+  }
+  const existing = localStorage.getItem(DRIVE_E2EE_VAULT_KEY_STORAGE);
+  if (existing) {
+    try {
+      return await window.crypto.subtle.importKey("jwk", JSON.parse(existing), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+    } catch (err) {
+      localStorage.removeItem(DRIVE_E2EE_VAULT_KEY_STORAGE);
+    }
+  }
+  const key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const jwk = await window.crypto.subtle.exportKey("jwk", key);
+  localStorage.setItem(DRIVE_E2EE_VAULT_KEY_STORAGE, JSON.stringify(jwk));
+  return key;
+}
+
+async function encryptDriveJsonMetadata(fileKey, payload) {
+  const nonce = driveRandomNonce();
+  const encoded = new TextEncoder().encode(JSON.stringify(payload || {}));
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, fileKey, encoded);
+  return JSON.stringify({
+    alg: "AES-GCM",
+    v: 1,
+    nonce: driveBytesToBase64(nonce),
+    ciphertext: driveBytesToBase64(ciphertext),
+  });
+}
+
+async function wrapDriveFileKey(fileKey) {
+  const vaultKey = await getDriveE2eeVaultKey();
+  const rawKey = await window.crypto.subtle.exportKey("raw", fileKey);
+  const nonce = driveRandomNonce();
+  const wrapped = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, vaultKey, rawKey);
+  return JSON.stringify({
+    alg: "AES-GCM",
+    v: 1,
+    wrapped_by: "browser_local_vault_key",
+    nonce: driveBytesToBase64(nonce),
+    ciphertext: driveBytesToBase64(wrapped),
+  });
+}
+
+async function prepareDriveE2eeUpload(file, mode) {
+  if (!window.crypto?.subtle) {
+    throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
+  }
+  const plaintext = await file.arrayBuffer();
+  const fileKey = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const nonce = driveRandomNonce();
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, fileKey, plaintext);
+  const encryptedBlob = new Blob([ciphertext], { type: "application/octet-stream" });
+  const encryptedMetadata = await encryptDriveJsonMetadata(fileKey, {
+    filename: file.name,
+    mime_type: file.type || "application/octet-stream",
+    size_bytes: file.size,
+    encrypted_at: new Date().toISOString(),
+  });
+  const encryptedFileKey = await wrapDriveFileKey(fileKey);
+  const ciphertextHash = await window.crypto.subtle.digest("SHA-256", ciphertext);
+  return {
+    blob: encryptedBlob,
+    filename: "vault.bin",
+    encrypted_metadata: encryptedMetadata,
+    encrypted_file_key: encryptedFileKey,
+    wrapped_by: "browser_local_vault_key",
+    ciphertext_sha256: driveBufferToHex(ciphertextHash),
+    encryption_algorithm: "AES-GCM",
+    encryption_version: "browser-local-v1",
+    nonce: driveBytesToBase64(nonce),
+    client_scan_report: mode === "e2ee_vault_with_client_scan" ? {
+      ok: false,
+      mode: "browser_e2ee_upload",
+      note: "檔案已在瀏覽器端加密；伺服器無法驗證本機掃描結果。",
+    } : null,
+  };
 }
 
 const ALBUM_VISIBILITY_LABELS = {
@@ -280,10 +382,25 @@ async function uploadDriveFile() {
   });
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+  const privacyMode = $("drive-upload-privacy-mode")?.value || "private_scannable";
   const form = new FormData();
-  form.append("file", file);
-  form.append("privacy_mode", $("drive-upload-privacy-mode")?.value || "private_scannable");
   try {
+    if (isDriveE2eeMode(privacyMode)) {
+      updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
+      const encrypted = await prepareDriveE2eeUpload(file, privacyMode);
+      form.append("file", encrypted.blob, encrypted.filename);
+      form.append("encrypted_metadata", encrypted.encrypted_metadata);
+      form.append("encrypted_file_key", encrypted.encrypted_file_key);
+      form.append("wrapped_by", encrypted.wrapped_by);
+      form.append("ciphertext_sha256", encrypted.ciphertext_sha256);
+      form.append("encryption_algorithm", encrypted.encryption_algorithm);
+      form.append("encryption_version", encrypted.encryption_version);
+      form.append("nonce", encrypted.nonce);
+      if (encrypted.client_scan_report) form.append("client_scan_report", JSON.stringify(encrypted.client_scan_report));
+    } else {
+      form.append("file", file);
+    }
+    form.append("privacy_mode", privacyMode);
     const { status, json } = await xhrUploadWithProgress(API + "/cloud-drive/upload", form, csrf, (event) => {
       if (event.lengthComputable) {
         updateDriveTransferRow(transferId, {
@@ -1081,6 +1198,11 @@ function joinStoragePath(folder, name) {
   return base === "/" ? `/${cleanName}` : `${base}/${cleanName}`;
 }
 
+function storageUploadRelativePath(file) {
+  const relative = String(file?.webkitRelativePath || file?.relativePath || file?.name || "").replace(/\\/g, "/");
+  return relative.split("/").filter(Boolean).join("/");
+}
+
 function storageDepth(path) {
   return normalizeStoragePath(path).split("/").filter(Boolean).length;
 }
@@ -1400,6 +1522,11 @@ function openStorageUploadPicker() {
   if (input) input.click();
 }
 
+function openStorageFolderUploadPicker() {
+  const input = $("storage-upload-folder");
+  if (input) input.click();
+}
+
 async function uploadStorageFile() {
   const input = $("storage-upload-file");
   const pathInput = $("storage-upload-path");
@@ -1426,6 +1553,74 @@ async function uploadStorageFile() {
   input.value = "";
   if (pathInput) pathInput.value = "";
   await loadDriveDashboard();
+}
+
+async function uploadStorageFolder() {
+  const input = $("storage-upload-folder");
+  const files = Array.from(input?.files || []).filter((file) => file && file.name);
+  if (!input || !files.length) {
+    alert("請先選擇資料夾");
+    return;
+  }
+  const totalBytes = files.reduce((sum, file) => sum + Number(file.size || 0), 0);
+  const transferId = addDriveTransferRow({
+    kind: "upload",
+    name: `${storageBaseName(storageUploadRelativePath(files[0]).split("/")[0] || "資料夾")}（${files.length} 個檔案）`,
+    loaded_bytes: 0,
+    total_bytes: totalBytes,
+    progress_percent: 0,
+    msg: "資料夾上傳準備中",
+  });
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  let uploadedBytes = 0;
+  let okCount = 0;
+  const failures = [];
+  for (const file of files) {
+    const relativePath = storageUploadRelativePath(file);
+    const virtualPath = joinStoragePath(currentStoragePath, relativePath || file.name);
+    updateDriveTransferRow(transferId, {
+      loaded_bytes: uploadedBytes,
+      total_bytes: totalBytes,
+      progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+      msg: `上傳中：${relativePath || file.name}`,
+    });
+    const form = new FormData();
+    form.append("file", file);
+    form.append("virtual_path", virtualPath);
+    try {
+      const res = await fetch(API + "/storage/files", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" },
+        body: form
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        failures.push(`${relativePath || file.name}: ${json.msg || `HTTP ${res.status}`}`);
+      } else {
+        okCount += 1;
+      }
+    } catch (err) {
+      failures.push(`${relativePath || file.name}: ${err.message || "上傳失敗"}`);
+    }
+    uploadedBytes += Number(file.size || 0);
+  }
+  updateDriveTransferRow(transferId, {
+    status: failures.length ? "failed" : "completed",
+    phase: failures.length ? "failed" : "completed",
+    loaded_bytes: uploadedBytes,
+    total_bytes: totalBytes,
+    progress_percent: 100,
+    msg: failures.length ? `完成 ${okCount}/${files.length}，失敗 ${failures.length}` : `已上傳 ${okCount} 個檔案`,
+  });
+  input.value = "";
+  await loadDriveDashboard();
+  if (failures.length) {
+    alert(`資料夾上傳完成，但有 ${failures.length} 個檔案失敗：\n${failures.slice(0, 5).join("\n")}${failures.length > 5 ? "\n..." : ""}`);
+  } else {
+    setTimeout(() => removeDriveTransferRow(transferId), 1200);
+  }
 }
 
 async function storageAction(path, method = "POST", body = null) {

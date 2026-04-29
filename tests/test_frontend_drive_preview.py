@@ -36,6 +36,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert 'id="storage-upload-file"' in index_html
+    assert 'id="storage-folder-upload-btn"' in index_html
+    assert 'id="storage-upload-folder"' in index_html
+    assert "webkitdirectory" in index_html
     assert 'id="storage-folder-path"' in index_html
     assert 'id="storage-folder-list"' in index_html
     assert 'id="storage-organize-path"' in index_html
@@ -49,6 +52,11 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="album-file-list"' in index_html
     assert "不列出，持連結可看" in index_html
     assert "async function uploadStorageFile()" in drive_js
+    assert "async function uploadStorageFolder()" in drive_js
+    assert "function openStorageFolderUploadPicker()" in drive_js
+    assert "function storageUploadRelativePath(file)" in drive_js
+    assert "file?.webkitRelativePath" in drive_js
+    assert 'form.append("virtual_path", virtualPath)' in drive_js
     assert "async function createStorageFolder()" in drive_js
     assert "async function organizeSelectedStorageFile()" in drive_js
     assert "async function moveStorageFileFromRow(id, currentPath)" in drive_js
@@ -73,7 +81,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="storage-organize-btn"' not in index_html
     assert "loadStorageFiles(csrf)" in drive_js
     assert 'storageUploadBtn.addEventListener("click", openStorageUploadPicker)' in bootstrap_js
+    assert 'storageFolderUploadBtn.addEventListener("click", openStorageFolderUploadPicker)' in bootstrap_js
     assert 'storageUploadFile.addEventListener("change", uploadStorageFile)' in bootstrap_js
+    assert 'storageUploadFolder.addEventListener("change", uploadStorageFolder)' in bootstrap_js
     assert 'storageFolderCreateBtn.addEventListener("click", createStorageFolder)' in bootstrap_js
     assert 'storageFolderMoveBtn.addEventListener("click", moveStorageFolder)' in bootstrap_js
     assert 'albumCreateBtn.addEventListener("click", createAlbum)' in bootstrap_js
@@ -94,7 +104,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="album-viewer-card"' in index_html
     assert 'id="album-thumb-size"' in index_html
     assert 'id="album-full-preview-overlay"' in index_html
-    assert '/js/35-drive.js?v=20260429-drive-preview-side' in index_html
+    assert '/js/35-drive.js?v=20260429-folder-upload' in index_html
     assert '/styles.css?v=20260429-comfyui-batch' in index_html
     assert '/js/00-core.js?v=20260429-chat-attachments' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
@@ -183,3 +193,20 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "drivePrivacyModeLabel(file.privacy_mode)" in drive_js
     assert "root/admin 上限：儲存磁碟可用空間 90%" in drive_js
     assert "warning_active" in drive_js
+
+
+def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+
+    assert "async function prepareDriveE2eeUpload(file, mode)" in drive_js
+    assert "window.crypto.subtle.generateKey" in drive_js
+    assert "encrypted_file_key" in drive_js
+    assert 'form.append("encrypted_file_key", encrypted.encrypted_file_key)' in drive_js
+    assert 'form.append("encrypted_metadata", encrypted.encrypted_metadata)' in drive_js
+    assert 'form.append("ciphertext_sha256", encrypted.ciphertext_sha256)' in drive_js
+    assert 'form.append("encryption_algorithm", encrypted.encryption_algorithm)' in drive_js
+    assert 'form.append("encryption_version", encrypted.encryption_version)' in drive_js
+    assert 'form.append("nonce", encrypted.nonce)' in drive_js
+    assert 'form.append("file", encrypted.blob, encrypted.filename)' in drive_js
+    assert "browser_local_vault_key" in drive_js
+    assert "此瀏覽器不支援端到端加密上傳" in drive_js

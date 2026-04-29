@@ -142,8 +142,10 @@ function bindUiEvents() {
   const driveRemoteCapabilityBtn = $("drive-remote-capability-btn");
   const driveRemoteDownloadBtn = $("drive-remote-download-btn");
   const storageUploadBtn = $("storage-upload-btn");
+  const storageFolderUploadBtn = $("storage-folder-upload-btn");
   const storageRefreshBtn = $("storage-refresh-btn");
   const storageUploadFile = $("storage-upload-file");
+  const storageUploadFolder = $("storage-upload-folder");
   const storageFolderCreateBtn = $("storage-folder-create-btn");
   const storageOrganizeBtn = $("storage-organize-btn");
   const storageFolderMoveBtn = $("storage-folder-move-btn");
@@ -295,7 +297,9 @@ function bindUiEvents() {
   if (driveRemoteCapabilityBtn) driveRemoteCapabilityBtn.addEventListener("click", loadRemoteDownloadCapabilities);
   if (driveRemoteDownloadBtn) driveRemoteDownloadBtn.addEventListener("click", startRemoteDriveDownload);
   if (storageUploadBtn) storageUploadBtn.addEventListener("click", openStorageUploadPicker);
+  if (storageFolderUploadBtn) storageFolderUploadBtn.addEventListener("click", openStorageFolderUploadPicker);
   if (storageUploadFile) storageUploadFile.addEventListener("change", uploadStorageFile);
+  if (storageUploadFolder) storageUploadFolder.addEventListener("change", uploadStorageFolder);
   if (storageRefreshBtn) storageRefreshBtn.addEventListener("click", loadDriveDashboard);
   if (storageFolderCreateBtn) storageFolderCreateBtn.addEventListener("click", createStorageFolder);
   if (storageOrganizeBtn) storageOrganizeBtn.addEventListener("click", organizeSelectedStorageFile);

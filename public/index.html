@@ -708,9 +708,11 @@
           </div>
           <div class="drive-toolbar">
             <button class="btn btn-primary" id="storage-upload-btn" type="button">上傳</button>
+            <button class="btn" id="storage-folder-upload-btn" type="button">上傳資料夾</button>
             <button class="btn" id="storage-folder-create-btn" type="button">新增資料夾</button>
           </div>
           <input type="file" id="storage-upload-file" hidden />
+          <input type="file" id="storage-upload-folder" hidden webkitdirectory directory multiple />
           <input type="text" id="storage-upload-path" hidden />
           <input type="text" id="storage-folder-path" hidden />
           <input type="text" id="storage-organize-path" hidden />
@@ -2187,7 +2189,7 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/33-dm.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260429-drive-preview-side" defer></script>
+<script src="/js/35-drive.js?v=20260429-folder-upload" defer></script>
 <script src="/js/36-comfyui.js?v=20260429-comfyui-draft" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
