@@ -183,7 +183,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
         "downgrade_violation_threshold", "session_idle_timeout_minutes", "require_admin_approval",
     } <= member_rule_cols
     assert {"actor", "target_user", "old_base_level", "new_effective_level", "reason", "source"} <= member_audit_cols
-    assert {"target_user_id", "action_type", "status", "required_votes", "approve_count"} <= proposal_cols
+    assert {
+        "target_user_id", "action_type", "status", "required_votes", "approve_count",
+        "risk_level", "required_root_approval", "required_manager_approvals",
+    } <= proposal_cols
     assert {"proposal_id", "voter_user_id", "vote"} <= vote_cols
     assert {"moderator_id", "action_type", "target_type", "target_id"} <= moderation_action_cols
     assert {"moderator_id", "user_id", "note"} <= mod_note_cols

@@ -50,8 +50,8 @@ Example:
 Also update visible documentation references:
 
 - `README.md`
-- `README.zh-TW.md`
-- `For_developer.md`
+- `docs/README.zh-TW.md`
+- `docs/For_developer.md`
 
 Bug fixes that only repair a broken implementation may keep the same release ID
 until the next production-facing feature release, unless the fix itself is being

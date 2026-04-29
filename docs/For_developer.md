@@ -5,11 +5,11 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.04.29-020`
+- Release ID: `2026.04.29-022`
 - Schema version: `26`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
-- Branch and release policy: [docs/BRANCHING_AND_RELEASE.md](docs/BRANCHING_AND_RELEASE.md)
+- Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
 
 ## Fast Local Setup
 

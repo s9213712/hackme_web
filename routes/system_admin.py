@@ -679,44 +679,40 @@ def register_system_admin_routes(app, deps):
         else:
             audit_ok, audit_broken, audit_details = None, None, "audit chain disabled"
 
-        conn = get_db()
-        try:
-            users_total = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
-            active_users = conn.execute("SELECT COUNT(*) AS c FROM users WHERE status='active'").fetchone()["c"]
-            sessions_total = conn.execute("SELECT COUNT(*) AS c FROM sessions WHERE expires_at>?", (datetime.now().isoformat(),)).fetchone()["c"]
-            messages_total = conn.execute("SELECT COUNT(*) AS c FROM chat_messages").fetchone()["c"]
-            reports_pending = conn.execute("SELECT COUNT(*) AS c FROM chat_message_reports WHERE status='pending'").fetchone()["c"]
-            appeals_pending = conn.execute("SELECT COUNT(*) AS c FROM violation_appeals WHERE status='pending'").fetchone()["c"]
-            violations_total = conn.execute("SELECT COUNT(*) AS c FROM secure_violations").fetchone()["c"]
-            audit_total = conn.execute("SELECT COUNT(*) AS c FROM secure_audit").fetchone()["c"]
-        finally:
-            conn.close()
+        counts, count_errors = health_counts()
+        counts["pending_reports"] = counts.get("pending_chat_reports", 0)
 
         db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
-        chat_files = [name for name in os.listdir(CHAT_DIR) if name.endswith(".jsonl")] if os.path.isdir(CHAT_DIR) else []
-        chat_size = sum(os.path.getsize(os.path.join(CHAT_DIR, name)) for name in chat_files)
-        status = "critical" if ((audit_enabled and audit_ok is False) or settings.get("maintenance_mode", False)) else "ok"
+        chat_stats = dir_stats(CHAT_DIR, ".jsonl")
+        log_stats = dir_stats(LOG_DIR)
+        anchor_stats = dir_stats(ANCHOR_DIR)
+        storage_stats = dir_stats(STORAGE_DIR)
+        readiness = readiness_summary()
+        anomaly = anomaly_summary()
+        status = "critical" if ((audit_enabled and audit_ok is False) or settings.get("maintenance_mode", False) or readiness["status"] == "critical") else "ok"
+        if status == "ok" and (readiness["status"] == "degraded" or anomaly["status"] in {"warning", "critical"} or count_errors):
+            status = "degraded"
         return json_resp({
             "ok": True,
             "status": status,
             "maintenance_mode": settings.get("maintenance_mode", False),
             "audit_integrity": {"enabled": audit_enabled, "ok": audit_ok, "broken_at": audit_broken, "details": audit_details},
-            "counts": {
-                "users_total": users_total,
-                "active_users": active_users,
-                "active_sessions": sessions_total,
-                "chat_messages": messages_total,
-                "pending_reports": reports_pending,
-                "pending_appeals": appeals_pending,
-                "violations_total": violations_total,
-                "audit_entries": audit_total,
-            },
+            "counts": counts,
+            "count_errors": count_errors,
             "storage": {
                 "database_bytes": db_size,
-                "chat_files": len(chat_files),
-                "chat_bytes": chat_size,
+                "chat_files": chat_stats["files"],
+                "chat_bytes": chat_stats["bytes"],
                 "chat_dir": "chats/",
-            }
+                "log_files": log_stats["files"],
+                "log_bytes": log_stats["bytes"],
+                "anchor_files": anchor_stats["files"],
+                "anchor_bytes": anchor_stats["bytes"],
+                "storage_files": storage_stats["files"],
+                "storage_bytes": storage_stats["bytes"],
+            },
+            "readiness": readiness,
+            "anomaly": anomaly,
         })
 
     @app.route("/api/admin/environment", methods=["GET"])

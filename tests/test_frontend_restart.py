@@ -9,6 +9,11 @@ def test_restart_button_waits_for_offline_then_online():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
 
     assert 'id="restart-server-status"' in index_html
+    assert 'id="restart-server-btn"' in index_html
+    assert 'type="button" id="restart-server-btn"' in index_html
+    assert 'async function restartServer(event)' in admin_js
+    assert 'event.preventDefault' in admin_js
+    assert "安全驗證狀態失效" in admin_js
     assert "waitForRestartOffline(25000)" in admin_js
     assert "waitForRestartOnline(previousStartedAt, 180000)" in admin_js
     assert "25 秒內沒有偵測到伺服器離線" in admin_js

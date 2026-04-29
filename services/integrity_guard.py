@@ -53,9 +53,6 @@ EXCLUDED_NAMES = {
 ROOT_PROTECTED_FILES = {
     ".env.production.example",
     "README.md",
-    "README.zh-TW.md",
-    "SECURITY.md",
-    "implementation_workflow.md",
     "package.json",
     "package-lock.json",
     "pyproject.toml",

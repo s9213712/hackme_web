@@ -380,6 +380,7 @@ const GOVERNANCE_ACTION_VALUE_HELP = {
   force_password_reset: "可留空。通過後對象下次登入必須重新設定密碼。",
   delete: "可留空。通過後帳號會被標記為 deleted，屬高風險操作。",
 };
+const GOVERNANCE_HIGH_RISK_ACTIONS = new Set(["suspend", "delete", "downgrade_level"]);
 
 async function loadGovernanceDashboard() {
   await Promise.allSettled([loadUsers(), loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
@@ -398,7 +399,8 @@ function renderGovernanceTargetOptions(selectedValue = null) {
     select.innerHTML = `<option value="">無法讀取會員清單</option>`;
     return;
   }
-  select.innerHTML = `<option value="">請選擇治理目標</option>` + rows.map((user) => {
+  const targetRows = rows.filter((user) => user.username !== "root");
+  select.innerHTML = `<option value="">請選擇治理目標</option>` + targetRows.map((user) => {
     const id = String(user.id || "");
     const role = user.username === "root" ? "root" : (user.role || "user");
     const status = user.status || "-";
@@ -406,18 +408,33 @@ function renderGovernanceTargetOptions(selectedValue = null) {
     const label = `${user.username || "unknown"} (#${id}) · ${role} · ${status}${level ? " · " + level : ""}`;
     return `<option value="${sanitize(id)}">${sanitize(label)}</option>`;
   }).join("");
-  if (previous && rows.some((user) => String(user.id || "") === previous)) {
+  if (previous && targetRows.some((user) => String(user.id || "") === previous)) {
     select.value = previous;
     governancePendingTargetUserId = "";
   }
+}
+
+function selectedGovernanceTarget() {
+  const targetId = String($("governance-target-user-id")?.value || "");
+  return (Array.isArray(users) ? users : []).find((user) => String(user.id || "") === targetId) || null;
+}
+
+function governancePolicySummary(action, target) {
+  const targetRole = target?.role || "user";
+  const highRisk = GOVERNANCE_HIGH_RISK_ACTIONS.has(action) || targetRole === "manager" || targetRole === "super_admin";
+  return highRisk
+    ? "高風險：需要 root 同意，且另外需要 2 位 admin/manager 同意。通過後必須由 root 執行。"
+    : "一般：需要 1 位 admin/manager 或 root 同意。";
 }
 
 function updateGovernanceActionValueHelp() {
   const action = $("governance-action-type")?.value || "warn";
   const input = $("governance-action-value");
   const help = $("governance-action-value-help");
+  const policy = $("governance-vote-policy");
   const text = GOVERNANCE_ACTION_VALUE_HELP[action] || "依處理方式填寫；不需要額外參數時可留空。";
   if (help) help.textContent = text;
+  if (policy) policy.textContent = governancePolicySummary(action, selectedGovernanceTarget());
   if (input) {
     input.placeholder = action === "downgrade_level"
       ? "newbie / normal / restricted / suspended"
@@ -487,24 +504,32 @@ async function loadGovernanceProposals() {
     const target = p.target?.username || `#${p.target_user_id}`;
     const proposer = p.proposed_by?.username || `#${p.proposed_by_user_id}`;
     const votes = (p.votes || []).map(v => `${sanitize(v.voter_username || "")}:${sanitize(v.vote || "")}`).join(" · ") || "尚無投票";
+    const policyText = p.policy_summary || (
+      p.required_root_approval
+        ? "高風險：需要 root 同意，且另外需要 2 位 admin/manager 同意。"
+        : "一般：需要 1 位 admin/manager 或 root 同意。"
+    );
+    const progressText = p.required_root_approval
+      ? `root ${p.root_requirement_met ? "已同意" : "未同意"} · admin/manager ${p.manager_approve_count || 0}/${p.required_manager_approvals || 2} · reject ${p.reject_count || 0}`
+      : `${p.approve_count || 0}/${p.required_votes || 1} approve · ${p.reject_count || 0} reject`;
     const canVote = p.status === "pending";
     const canExecute = p.status === "approved";
-    const canOverride = currentUser === "root" && p.status !== "executed";
     return `<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
       <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
         <strong>#${p.id}</strong>
         <span style="color:#82b1ff;">${sanitize(p.action_type || "")}</span>
         <span>target=${sanitize(target)}</span>
+        <span style="color:${p.risk_level === "high" ? "#ffb74d" : "#82b1ff"};">${p.risk_level === "high" ? "高風險" : "一般"}</span>
         <span style="color:${p.status === "approved" ? "#4caf50" : p.status === "rejected" ? "#ff4f6d" : "#ffb74d"};">${sanitize(p.status || "")}</span>
-        <span style="margin-left:auto;color:var(--muted);">${p.approve_count || 0}/${p.required_votes || 0} approve · ${p.reject_count || 0} reject</span>
+        <span style="margin-left:auto;color:var(--muted);">${sanitize(progressText)}</span>
       </div>
       <div style="color:var(--muted);margin-top:.25rem;">proposer=${sanitize(proposer)} · expires=${sanitize(p.expires_at || "")}</div>
+      <div style="color:#82b1ff;margin-top:.25rem;">${sanitize(policyText)}</div>
       <div style="margin-top:.35rem;white-space:pre-wrap;">${sanitize(p.reason || "")}</div>
       <div style="color:var(--muted);margin-top:.35rem;">votes: ${votes}</div>
       <div class="admin-toolbar" style="display:flex;gap:.45rem;margin-top:.5rem;">
         ${canVote ? `<button class="btn btn-primary" data-governance-vote="approve" data-proposal-id="${p.id}">同意</button><button class="btn" data-governance-vote="reject" data-proposal-id="${p.id}">否決</button>` : ""}
         ${canExecute ? `<button class="btn btn-primary" data-governance-execute="${p.id}">執行</button>` : ""}
-        ${canOverride ? `<button class="btn" style="color:#ffb74d;" data-governance-override="${p.id}">root override</button>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -513,9 +538,6 @@ async function loadGovernanceProposals() {
   });
   list.querySelectorAll("button[data-governance-execute]").forEach((btn) => {
     btn.addEventListener("click", () => executeGovernanceProposal(btn.getAttribute("data-governance-execute")));
-  });
-  list.querySelectorAll("button[data-governance-override]").forEach((btn) => {
-    btn.addEventListener("click", () => overrideGovernanceProposal(btn.getAttribute("data-governance-override")));
   });
 }
 
@@ -532,7 +554,6 @@ async function createGovernanceProposal() {
     target_user_id: targetId,
     action_type: $("governance-action-type")?.value || "warn",
     action_value: ($("governance-action-value")?.value || "").trim() || null,
-    required_votes: parseInt($("governance-required-votes")?.value || "2", 10),
     ttl_hours: parseInt($("governance-ttl-hours")?.value || "72", 10),
     reason
   };
@@ -576,20 +597,6 @@ async function executeGovernanceProposal(proposalId) {
   });
   const json = await res.json().catch(() => ({}));
   alert(json.msg || (json.ok ? "治理提案已執行" : "執行失敗"));
-  await Promise.all([loadGovernanceProposals(), loadUsers()]);
-}
-
-async function overrideGovernanceProposal(proposalId) {
-  if (currentUser !== "root" || !confirm("確定 root override 並立即執行此提案？")) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await fetch(API + `/root/moderation/proposals/${proposalId}/override`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  alert(json.msg || (json.ok ? "root override 已執行" : "override 失敗"));
   await Promise.all([loadGovernanceProposals(), loadUsers()]);
 }
 
@@ -1691,6 +1698,34 @@ async function saveSecurityProfile() {
   }
 }
 
+function healthStatusColor(status) {
+  if (status === "critical") return "#ff4f6d";
+  if (status === "degraded" || status === "warning") return "#ffb74d";
+  return "#4caf50";
+}
+
+function renderHealthMetric(label, value, color = "#82b1ff") {
+  return `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;min-width:0;">
+      <div style="font-size:.68rem;color:var(--muted);">${sanitize(label)}</div>
+      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-word;">${sanitize(value)}</div>
+    </div>
+  `;
+}
+
+function renderHealthRows(rows) {
+  if (!rows.length) return "<p style='color:var(--muted);padding:.65rem;text-align:center;'>目前沒有需要顯示的項目</p>";
+  return rows.map((row) => `
+    <div class="drive-file-row" style="grid-template-columns:minmax(0,1fr) auto;align-items:center;">
+      <div>
+        <strong>${sanitize(row.label)}</strong>
+        ${row.detail ? `<small>${sanitize(row.detail)}</small>` : ""}
+      </div>
+      <span style="color:${row.color || "#82b1ff"};font-weight:700;white-space:nowrap;">${sanitize(row.value)}</span>
+    </div>
+  `).join("");
+}
+
 async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -1702,42 +1737,92 @@ async function loadServerHealth() {
   const json = await res.json().catch(() => ({}));
   const summary = $("server-health-summary");
   const details = $("server-health-details");
-  if (!summary || !details) return;
+  const workqueue = $("server-health-workqueue");
+  const countsBox = $("server-health-counts");
+  const storageBox = $("server-health-storage");
+  const auditBox = $("server-health-audit");
+  if (!summary || !details || !workqueue || !countsBox || !storageBox || !auditBox) return;
   if (!json.ok) {
     summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "健康度讀取失敗")}</div>`;
     details.textContent = "";
+    workqueue.innerHTML = "";
+    countsBox.innerHTML = "";
+    storageBox.innerHTML = "";
+    auditBox.innerHTML = "";
     return;
   }
   const c = json.counts || {};
   const s = json.storage || {};
   const auditOk = json.audit_integrity && json.audit_integrity.ok;
   const auditEnabled = !(json.audit_integrity && json.audit_integrity.enabled === false);
+  const readiness = json.readiness || {};
+  const anomaly = json.anomaly || {};
+  const readinessChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
+  const failedChecks = readinessChecks.filter((item) => !item.ok);
+  const anomalySignals = Array.isArray(anomaly.signals) ? anomaly.signals : [];
+  const statusLabel = json.status === "critical" ? "Critical" : json.status === "degraded" ? "Degraded" : "OK";
   const cards = [
-    ["整體狀態", json.status === "ok" ? "正常" : "異常", json.status === "ok" ? "#4caf50" : "#ff4f6d"],
+    ["整體狀態", statusLabel, healthStatusColor(json.status)],
     ["維護模式", json.maintenance_mode ? "啟用" : "關閉", json.maintenance_mode ? "#ff4f6d" : "#4caf50"],
     ["審計鏈", auditEnabled ? (auditOk ? "完整" : "異常") : "停用", auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e"],
-    ["待審檢舉", String(c.pending_reports || 0), (c.pending_reports || 0) ? "#ffb74d" : "#4caf50"],
-    ["待審申覆", String(c.pending_appeals || 0), (c.pending_appeals || 0) ? "#ffb74d" : "#4caf50"],
+    ["Readiness", readiness.status || "unknown", healthStatusColor(readiness.status)],
+    ["Anomaly", anomaly.status || "ok", healthStatusColor(anomaly.status)],
     ["活躍 Session", String(c.active_sessions || 0), "#82b1ff"],
-    ["聊天訊息", String(c.chat_messages || 0), "#82b1ff"],
-    ["資料庫大小", formatBytes(s.database_bytes), "#82b1ff"],
   ];
-  summary.innerHTML = cards.map(([label, value, color]) => `
-    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
-      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
-      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;">${sanitize(value)}</div>
-    </div>
-  `).join("");
-  details.innerHTML = `
-    使用者：${c.active_users || 0}/${c.users_total || 0} active ·
-    違規紀錄：${c.violations_total || 0} ·
-    審計紀錄：${c.audit_entries || 0} ·
-    聊天檔案：${s.chat_files || 0} 個 / ${formatBytes(s.chat_bytes)} ·
-    ${json.audit_integrity && json.audit_integrity.details ? sanitize(json.audit_integrity.details) : ""}
-  `;
+  summary.innerHTML = cards.map(([label, value, color]) => renderHealthMetric(label, value, color)).join("");
+  details.textContent = `最後讀取：${new Date().toLocaleString()} · DB schema ${readiness.database?.schema_version ?? "-"} / ${readiness.database?.expected_schema_version ?? "-"}`;
+  const queueRows = [
+    ["待審檢舉", c.pending_reports ?? c.pending_chat_reports ?? 0],
+    ["待審申覆", c.pending_appeals || 0],
+    ["治理提案", c.pending_moderation_proposals || 0],
+    ["看板審核", c.pending_board_reviews || 0],
+    ["主題審核", c.pending_thread_reviews || 0],
+    ["隔離檔案", c.quarantined_files || 0],
+    ["未知加密檔", c.unknown_encrypted_files || 0],
+  ].map(([label, value]) => ({
+    label,
+    value: String(value),
+    color: Number(value) > 0 ? "#ffb74d" : "#4caf50",
+  }));
+  workqueue.innerHTML = renderHealthRows(queueRows);
+  countsBox.innerHTML = renderHealthRows([
+    { label: "使用者", value: `${c.active_users || 0}/${c.users_total || 0}`, detail: "active / total", color: "#82b1ff" },
+    { label: "聊天訊息", value: String(c.chat_messages || 0), color: "#82b1ff" },
+    { label: "上傳檔案", value: String(c.uploaded_files || 0), color: "#82b1ff" },
+    { label: "違規紀錄", value: String(c.violations_total || 0), color: "#82b1ff" },
+    { label: "審計紀錄", value: String(c.audit_entries || 0), color: "#82b1ff" },
+  ]);
+  storageBox.innerHTML = renderHealthRows([
+    { label: "SQLite DB", value: formatBytes(s.database_bytes), color: "#82b1ff" },
+    { label: "聊天檔案", value: `${s.chat_files || 0} / ${formatBytes(s.chat_bytes)}`, detail: s.chat_dir || "chats/", color: "#82b1ff" },
+    { label: "Server logs", value: `${s.log_files || 0} / ${formatBytes(s.log_bytes)}`, color: "#82b1ff" },
+    { label: "Anchor files", value: `${s.anchor_files || 0} / ${formatBytes(s.anchor_bytes)}`, color: "#82b1ff" },
+    { label: "Storage root", value: `${s.storage_files || 0} / ${formatBytes(s.storage_bytes)}`, color: "#82b1ff" },
+  ]);
+  const auditRows = [
+    {
+      label: "Audit chain",
+      value: auditEnabled ? (auditOk ? "完整" : "異常") : "停用",
+      detail: json.audit_integrity?.details || "",
+      color: auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e",
+    },
+    ...failedChecks.map((item) => ({
+      label: `Readiness: ${item.name || "-"}`,
+      value: item.severity || "failed",
+      detail: item.detail || "",
+      color: item.severity === "critical" ? "#ff4f6d" : "#ffb74d",
+    })),
+    ...anomalySignals.map((item) => ({
+      label: `Anomaly: ${item.name || "-"}`,
+      value: item.level || "-",
+      detail: item.detail || `value=${item.value}, threshold=${item.threshold}`,
+      color: item.level === "critical" ? "#ff4f6d" : item.level === "warning" ? "#ffb74d" : "#82b1ff",
+    })),
+  ];
+  auditBox.innerHTML = renderHealthRows(auditRows);
   const repairBtn = $("integrity-repair-btn");
   if (repairBtn) {
-    repairBtn.disabled = currentUser !== "root";
+    repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;
   }
 }
 
@@ -2089,7 +2174,8 @@ async function loadServerEnv() {
   details.innerHTML = `BASE_DIR：${sanitize(env.base_dir || "-")}<br>DB：${sanitize(env.database_path || "-")}<br>聊天檔數：${sanitize(String(env.chat_files || 0))}`;
 }
 
-async function restartServer() {
+async function restartServer(event) {
+  if (event && typeof event.preventDefault === "function") event.preventDefault();
   if (!confirm("⚠️ 確定要重啟伺服器？所有連線將中斷。")) return;
   const status = $("restart-server-status");
   const button = $("restart-server-btn");
@@ -2099,9 +2185,11 @@ async function restartServer() {
     status.textContent = "已送出重啟指令，等待伺服器離線...";
     status.className = "msg show";
   }
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
   try {
+    if (status) status.textContent = "正在驗證操作權限...";
+    const csrf = await fetchCsrfToken({ force: true });
+    if (!csrf) throw new Error("安全驗證狀態失效，請重新整理頁面後再試。");
+    if (status) status.textContent = "已送出重啟指令，等待伺服器離線...";
     const res = await fetch(API + "/admin/restart", {
       method: "POST",
       credentials: "same-origin",
@@ -2390,6 +2478,73 @@ async function exportIntegrityGuard() {
 
 // ── Platform Stats (traffic, active users, point balance) ─────
 
+function platformStatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function renderPlatformBarChart(title, rows, options = {}) {
+  const maxValue = Math.max(1, ...rows.map((row) => Math.abs(platformStatNumber(row.value))));
+  return `
+    <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
+        <strong style="color:#e0e0f0;">${sanitize(title)}</strong>
+        ${options.caption ? `<small style="color:var(--muted);margin-left:auto;">${sanitize(options.caption)}</small>` : ""}
+      </div>
+      <div style="display:grid;gap:.48rem;">
+        ${rows.map((row) => {
+          const value = platformStatNumber(row.value);
+          const percent = Math.max(3, Math.min(100, Math.round((Math.abs(value) / maxValue) * 100)));
+          const color = row.color || "#82b1ff";
+          return `
+            <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(5.5rem,.72fr) minmax(8rem,1.6fr) minmax(3.2rem,.35fr);gap:.55rem;align-items:center;">
+              <span style="color:var(--muted);font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sanitize(row.label)}</span>
+              <div style="height:.72rem;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;">
+                <div style="height:100%;width:${percent}%;background:${color};border-radius:999px;"></div>
+              </div>
+              <strong style="color:${color};font-size:.78rem;text-align:right;white-space:nowrap;">${sanitize(String(value))}</strong>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlatformNetChart(stats) {
+  const earned = platformStatNumber(stats.points_earned_month);
+  const spent = platformStatNumber(stats.points_spent_month);
+  const net = platformStatNumber(stats.points_net_month);
+  const maxValue = Math.max(1, earned, spent, Math.abs(net));
+  const positiveWidth = net >= 0 ? Math.min(50, Math.round((net / maxValue) * 50)) : 0;
+  const negativeWidth = net < 0 ? Math.min(50, Math.round((Math.abs(net) / maxValue) * 50)) : 0;
+  const netColor = net >= 0 ? "#4caf50" : "#ff4f6d";
+  return `
+    <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
+        <strong style="color:#e0e0f0;">本月積分淨值</strong>
+        <small style="color:var(--muted);margin-left:auto;">收入 - 支出</small>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:center;margin:.9rem 0 .6rem;">
+        <div style="height:1.05rem;background:rgba(255,255,255,.08);border-radius:999px 0 0 999px;display:flex;justify-content:flex-end;overflow:hidden;">
+          <div style="height:100%;width:${negativeWidth}%;background:#ff4f6d;"></div>
+        </div>
+        <div style="height:1.05rem;background:rgba(255,255,255,.08);border-radius:0 999px 999px 0;overflow:hidden;">
+          <div style="height:100%;width:${positiveWidth}%;background:#4caf50;"></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:.75rem;font-size:.75rem;color:var(--muted);">
+        <span>支出 ${spent}</span>
+        <strong style="color:${netColor};">淨值 ${net}</strong>
+        <span>收入 ${earned}</span>
+      </div>
+      <div style="margin-top:.75rem;border-top:1px solid rgba(255,255,255,.08);padding-top:.65rem;color:#ce93d8;font-weight:700;">
+        積分總庫存 ${sanitize(String(platformStatNumber(stats.total_points)))}
+      </div>
+    </div>
+  `;
+}
+
 async function loadPlatformStats() {
   const container = $("platform-stats");
   if (!container) return;
@@ -2405,22 +2560,20 @@ async function loadPlatformStats() {
     return;
   }
   const stats = json.stats || {};
-  const cards = [
-    ["今日瀏覽量", String(stats.page_views_today || 0), "#82b1ff"],
-    ["同時在線", String(stats.active_sessions || 0), "#4caf50"],
-    ["本月新用戶", String(stats.new_users_month || 0), "#ffb74d"],
-    ["總用戶數", String(stats.total_users || 0), "#82b1ff"],
-    ["積分總庫存", String(stats.total_points || 0), "#ce93d8"],
-    ["本月積分收入", String(stats.points_earned_month || 0), "#4caf50"],
-    ["本月積分支出", String(stats.points_spent_month || 0), "#ff4f6d"],
-    ["本月積分淨值", String(stats.points_net_month || 0), (stats.points_net_month || 0) >= 0 ? "#4caf50" : "#ff4f6d"],
-  ];
-  container.innerHTML = cards.map(([label, value, color]) => `
-    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
-      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
-      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-all;">${sanitize(value)}</div>
-    </div>
-  `).join("");
+  container.innerHTML = `
+    ${renderPlatformBarChart("流量與使用者", [
+      { label: "今日瀏覽量", value: stats.page_views_today, color: "#82b1ff" },
+      { label: "同時在線", value: stats.active_sessions, color: "#4caf50" },
+      { label: "本月新用戶", value: stats.new_users_month, color: "#ffb74d" },
+      { label: "總用戶數", value: stats.total_users, color: "#82b1ff" },
+    ], { caption: "人次 / 帳號" })}
+    ${renderPlatformBarChart("本月積分收支", [
+      { label: "收入", value: stats.points_earned_month, color: "#4caf50" },
+      { label: "支出", value: stats.points_spent_month, color: "#ff4f6d" },
+      { label: "淨值", value: stats.points_net_month, color: platformStatNumber(stats.points_net_month) >= 0 ? "#4caf50" : "#ff4f6d" },
+    ], { caption: "points" })}
+    ${renderPlatformNetChart(stats)}
+  `;
 }
 
  // ── Bind all UI events ───────────────────────────────────────

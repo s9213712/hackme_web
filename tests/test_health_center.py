@@ -112,6 +112,22 @@ def test_health_readiness_and_db_integrity_endpoints(tmp_path):
     assert db.get_json()["database"]["ok"] is True
 
 
+def test_admin_health_summary_includes_grouped_dashboard_data(tmp_path):
+    app = _make_app(tmp_path)
+    res = app.test_client().get("/api/admin/health")
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert data["ok"] is True
+    assert data["status"] in {"ok", "degraded", "critical"}
+    assert data["counts"]["pending_chat_reports"] == 1
+    assert data["counts"]["pending_reports"] == 1
+    assert "pending_moderation_proposals" in data["counts"]
+    assert {"log_files", "anchor_files", "storage_files"} <= set(data["storage"])
+    assert data["readiness"]["database"]["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert "signals" in data["anomaly"]
+
+
 def test_health_anomaly_reports_quarantined_files(tmp_path):
     app = _make_app(tmp_path)
     res = app.test_client().get("/api/admin/health/anomaly")

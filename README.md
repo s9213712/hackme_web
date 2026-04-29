@@ -1,13 +1,13 @@
 # hackme_web
 
-[繁體中文 README](README.zh-TW.md)
+[繁體中文 README](docs/README.zh-TW.md)
 
 ![status](https://img.shields.io/badge/status-active-2ea043)
 ![backend](https://img.shields.io/badge/backend-Flask-000000)
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.04.29-020`**
+**Current Release ID: `2026.04.29-022`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
@@ -18,13 +18,9 @@ details have been moved out of README.
 
 ## Documents
 
-- [WEB.md](WEB.md): user-facing web UI and feature guide
-- [For_developer.md](For_developer.md): API, server defaults, deployment, and developer notes
-- [SECURITY.md](SECURITY.md): security policy
-- [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md): production pre-release checklist
-- [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md): functional smoke runner
-- [security/PENTEST.md](security/PENTEST.md): pentest runner
-- [docs/BRANCHING_AND_RELEASE.md](docs/BRANCHING_AND_RELEASE.md): branch numbering and release ID policy
+All guides live under [docs/](docs/README.md). Start there for the web UI guide,
+developer/API notes, security policy, testing scripts, release policy, and
+project status.
 
 ## Fast Start
 
@@ -57,7 +53,7 @@ For a clean deployment:
    setup wizard.
 
 Runtime files and operational defaults are documented in
-[For_developer.md](For_developer.md).
+[docs/For_developer.md](docs/For_developer.md).
 
 ## Local Checks
 

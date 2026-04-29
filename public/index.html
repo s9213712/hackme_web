@@ -1274,9 +1274,9 @@
               <div class="field-hint" id="governance-action-value-help">警告、禁言、要求重設密碼、刪除帳號通常可留空。</div>
             </div>
             <div class="field">
-              <label>需要同意票數</label>
-              <input type="number" id="governance-required-votes" min="1" max="10" value="2" />
-              <div class="field-hint">達到這個同意票數後，提案才算通過。建議一般提案 2 票以上。</div>
+              <label>投票規則</label>
+              <div id="governance-vote-policy" class="field-hint" style="padding:.55rem;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(0,0,0,.22);">一般：需要 1 位 admin/manager 或 root 同意。</div>
+              <div class="field-hint">票數由系統依處理方式與目標身分自動判定，不可手動降低。</div>
             </div>
             <div class="field">
               <label>投票期限（小時）</label>
@@ -1523,13 +1523,43 @@
           <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
           <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
         </div>
-        <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
-        <div id="server-health-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;margin-bottom:.9rem;"></div>
-        <div class="mini-title" style="margin:.9rem 0 .55rem;">平台流量與統計（root / super_admin）</div>
-        <div class="admin-toolbar" style="margin-bottom:.5rem;">
-          <button class="btn btn-primary" type="button" id="platform-stats-refresh-btn">重新整理</button>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">服務狀態</div>
+              <div class="drive-card-sub" id="server-health-details">讀取健康度中...</div>
+            </div>
+          </div>
+          <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;"></div>
         </div>
-        <div id="platform-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.8rem;margin-bottom:.8rem;">
+          <div class="drive-card">
+            <div class="drive-card-title">待處理事項</div>
+            <div id="server-health-workqueue" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </div>
+          <div class="drive-card">
+            <div class="drive-card-title">資料量</div>
+            <div id="server-health-counts" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </div>
+          <div class="drive-card">
+            <div class="drive-card-title">儲存空間</div>
+            <div id="server-health-storage" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">審計與檢查</div>
+          <div id="server-health-audit" class="drive-file-list" style="margin-top:.55rem;"></div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">平台流量與積分統計</div>
+              <div class="drive-card-sub">root / super_admin 可查看。</div>
+            </div>
+            <button class="btn btn-primary" type="button" id="platform-stats-refresh-btn">重新整理</button>
+          </div>
+          <div id="platform-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-top:.65rem;"></div>
+        </div>
       </div>
 
       <div class="form-section" id="sec-server-integrity">
@@ -2016,7 +2046,7 @@
         </form>
         <div class="mini-title" style="margin-top:1.2rem;color:#ff4f6d;">危險區</div>
         <div class="admin-toolbar" style="margin-top:.5rem;">
-          <button class="btn" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
+          <button class="btn" type="button" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
             重啟服務器
           </button>
         </div>
@@ -2297,7 +2327,7 @@
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260429-root-storage-override" defer></script>
+<script src="/js/50-admin.js?v=20260429-restart-button" defer></script>
 <script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
 <script src="/js/90-bootstrap.js?v=20260429-root-storage-override" defer></script>
 </body>

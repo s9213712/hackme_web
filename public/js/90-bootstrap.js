@@ -406,6 +406,7 @@ function bindUiEvents() {
   if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
   if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
   if ($("governance-action-type")) $("governance-action-type").addEventListener("change", updateGovernanceActionValueHelp);
+  if ($("governance-target-user-id")) $("governance-target-user-id").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);
 
   // Settings

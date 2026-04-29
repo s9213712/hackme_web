@@ -50,8 +50,8 @@ def assert_release_docs_synced():
     release_id = read_release_id()
     required = [
         ROOT / "README.md",
-        ROOT / "README.zh-TW.md",
-        ROOT / "For_developer.md",
+        ROOT / "docs" / "README.zh-TW.md",
+        ROOT / "docs" / "For_developer.md",
     ]
     missing = [str(path.relative_to(ROOT)) for path in required if release_id not in path.read_text(encoding="utf-8")]
     if missing:

@@ -15,7 +15,9 @@ from services.moderation_proposals import (
     cast_action_value,
     create_moderation_proposal,
     ensure_moderation_proposals_schema,
+    governance_policy_for_action,
     proposal_row_to_dict,
+    proposal_vote_state,
     refresh_proposal_vote_counts,
 )
 
@@ -122,6 +124,7 @@ def register_moderation_routes(app, deps):
             (proposal["id"],),
         ).fetchall()
         proposal["votes"] = [dict(vote) for vote in votes]
+        proposal.update(proposal_vote_state(conn, proposal))
         return proposal
 
     def execute_proposal_action(conn, proposal, actor):
@@ -370,11 +373,12 @@ def register_moderation_routes(app, deps):
             target_user_id = data.get("target_user_id")
             action_type = normalize_text(data.get("action_type"))
             action_value = cast_action_value(data.get("action_value"))
-            target = conn.execute("SELECT id, username FROM users WHERE id=?", (target_user_id,)).fetchone()
+            target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (target_user_id,)).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到目標帳號"}), 404
             if target["username"] == "root":
                 return json_resp({"ok":False,"msg":"不可對 root 建立治理提案"}), 403
+            policy = governance_policy_for_action(action_type, target["role"])
             proposal, err = create_moderation_proposal(
                 conn,
                 target_user_id=target["id"],
@@ -382,14 +386,23 @@ def register_moderation_routes(app, deps):
                 action_value=action_value,
                 proposed_by_user_id=actor["id"],
                 reason=normalize_text(data.get("reason")),
-                required_votes=data.get("required_votes", 2),
+                required_votes=policy["required_votes"],
+                risk_level=policy["risk_level"],
+                required_root_approval=policy["required_root_approval"],
+                required_manager_approvals=policy["required_manager_approvals"],
                 ttl_hours=data.get("ttl_hours", 72),
             )
             if err:
                 return json_resp({"ok":False,"msg":err}), 400
+            if actor["username"] == "root" and proposal.get("required_root_approval"):
+                conn.execute(
+                    "INSERT INTO moderation_votes (proposal_id, voter_user_id, vote, comment, created_at) VALUES (?, ?, 'approve', ?, ?)",
+                    (proposal["id"], actor["id"], "root 建立高風險提案時自動附上 root 同意", datetime.now().isoformat()),
+                )
+                proposal = refresh_proposal_vote_counts(conn, proposal["id"])
             conn.commit()
             audit("MODERATION_PROPOSAL_CREATED", get_client_ip(), user=actor["username"], success=True,
-                  detail=f"proposal_id={proposal['id']},target={target['username']},action={action_type}")
+                  detail=f"proposal_id={proposal['id']},target={target['username']},action={action_type},risk={proposal.get('risk_level')}")
             return json_resp({"ok":True,"msg":"治理提案已建立","proposal":proposal_payload(conn, conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal["id"],)).fetchone())})
         finally:
             conn.close()
@@ -469,6 +482,9 @@ def register_moderation_routes(app, deps):
             if proposal["status"] != "approved":
                 conn.commit()
                 return json_resp({"ok":False,"msg":"提案通過後才可執行","status":proposal["status"]}), 409
+            if proposal.get("risk_level") == "high" and actor["username"] != "root":
+                conn.commit()
+                return json_resp({"ok":False,"msg":"高風險治理提案通過後仍必須由 root 執行"}), 403
             target, err, revoke_target_sessions = execute_proposal_action(conn, proposal, actor)
             if err:
                 return json_resp({"ok":False,"msg":err}), 400
@@ -505,17 +521,10 @@ def register_moderation_routes(app, deps):
             proposal = proposal_row_to_dict(proposal)
             if proposal["status"] == "executed":
                 return json_resp({"ok":False,"msg":"提案已執行"}), 409
-            target, err, revoke_target_sessions = execute_proposal_action(conn, proposal, actor)
-            if err:
-                return json_resp({"ok":False,"msg":err}), 400
-            now = datetime.now().isoformat()
-            conn.execute("UPDATE moderation_proposals SET status='executed', executed_at=?, updated_at=? WHERE id=?", (now, now, proposal_id))
             conn.commit()
-            if revoke_target_sessions:
-                revoke_user_sessions(target["id"])
-            audit("MODERATION_PROPOSAL_ROOT_OVERRIDE", get_client_ip(), user=actor["username"], success=True,
-                  detail=f"proposal_id={proposal_id},target={target['username']},action={proposal['action_type']}")
-            return json_resp({"ok":True,"msg":"root override 已執行","proposal_id":proposal_id})
+            audit("MODERATION_PROPOSAL_ROOT_OVERRIDE_BLOCKED", get_client_ip(), user=actor["username"], success=False,
+                  detail=f"proposal_id={proposal_id},action={proposal['action_type']}")
+            return json_resp({"ok":False,"msg":"root 不可跳過治理投票；請在提案中投同意票，並等待必要管理者同意"}), 403
         finally:
             conn.close()
 
