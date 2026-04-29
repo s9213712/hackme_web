@@ -517,7 +517,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
     assert "/js/36-comfyui.js?v=20260429-comfyui-batch-limit" in index_html
-    assert "/styles.css?v=20260429-chess-square-fixed" in index_html
+    assert "/styles.css?v=20260429-ui-polish" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html

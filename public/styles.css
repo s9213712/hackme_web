@@ -2964,4 +2964,426 @@
       .game-layout,
       .game-action-grid { grid-template-columns: 1fr; }
     }
+
+    /* ── UI polish pass ─────────────────────────────────── */
+    :root {
+      --bg: #0b0f14;
+      --surface: #151a22;
+      --surface-soft: #111720;
+      --surface-raised: #1b222d;
+      --line: rgba(214, 226, 240, .1);
+      --line-strong: rgba(214, 226, 240, .16);
+      --accent: #4d7dff;
+      --accent2: #22c79a;
+      --warning: #f5b84b;
+      --radius: 8px;
+      --shadow: 0 10px 30px rgba(0,0,0,.28);
+    }
+
+    body.app-authenticated {
+      background:
+        linear-gradient(180deg, rgba(77,125,255,.08), rgba(34,199,154,.025) 34%, transparent 70%),
+        var(--bg);
+    }
+
+    .app-sidebar {
+      background: rgba(11, 15, 20, .98);
+      border-right: 1px solid var(--line);
+      box-shadow: none;
+    }
+
+    .sidebar-nav .tab {
+      min-height: 2.35rem;
+    }
+
+    .sidebar-nav .tab.active {
+      background: rgba(34,199,154,.12);
+      box-shadow: inset 3px 0 0 var(--accent2);
+    }
+
+    .app-main {
+      padding: 3.25rem clamp(.75rem, 1.4vw, 1.35rem) 1.25rem;
+      background: transparent;
+    }
+
+    .admin-tools {
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      border-radius: 0;
+      padding: 0;
+      margin-top: 0;
+      overflow-x: auto;
+    }
+
+    .module-section > .admin-tools > .mini-title:first-child,
+    .admin-wrap > .tabs + .form-section .admin-tools > .mini-title:first-child,
+    #module-server > .admin-tools > .mini-title:first-child {
+      color: var(--text);
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      margin: 0 0 .85rem;
+    }
+
+    .drive-card,
+    .community-panel,
+    .game-panel,
+    .game-board-panel,
+    .member-level-editor-card,
+    .drive-collapsible-panel,
+    .chat-room-list-wrap,
+    .chat-room-main {
+      background: rgba(21, 26, 34, .86);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: none;
+    }
+
+    .drive-card,
+    .community-panel,
+    .game-panel,
+    .game-board-panel {
+      padding: .85rem;
+      min-height: auto;
+    }
+
+    .drive-card-heading,
+    .community-panel-head,
+    .game-board-panel .drive-card-heading {
+      align-items: center;
+      padding-bottom: .55rem;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: .75rem;
+    }
+
+    .drive-card-title,
+    .mini-title {
+      color: #edf3fb;
+      font-size: .9rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      margin-bottom: .5rem;
+    }
+
+    .drive-card-sub,
+    .field-hint,
+    .community-meta,
+    .sidebar-user-role,
+    .sidebar-server-meta {
+      color: #9aa8b9;
+    }
+
+    .tabs:not(.sidebar-nav) {
+      background: rgba(21, 26, 34, .74);
+      border: 1px solid var(--line);
+      padding: .25rem;
+      gap: .25rem;
+      margin-bottom: .8rem;
+      border-radius: 8px;
+    }
+
+    .tabs:not(.sidebar-nav) .tab {
+      min-height: 2rem;
+      padding: .42rem .62rem;
+      flex: 0 1 auto;
+      min-width: 7rem;
+      background: transparent;
+    }
+
+    .tabs:not(.sidebar-nav) .tab.active {
+      background: rgba(77,125,255,.22);
+      color: #fff;
+      box-shadow: inset 0 -2px 0 var(--accent);
+    }
+
+    .admin-toolbar,
+    .community-actions,
+    .drive-toolbar,
+    .drive-file-actions,
+    .chat-composer-actions {
+      gap: .4rem;
+    }
+
+    .admin-toolbar {
+      padding: .55rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(17, 23, 32, .72);
+    }
+
+    .btn {
+      min-height: 2rem;
+      padding: .42rem .68rem;
+      border-radius: 7px;
+      font-size: .79rem;
+      line-height: 1.15;
+      border: 1px solid rgba(255,255,255,.1);
+      background: rgba(255,255,255,.065);
+      color: var(--text);
+    }
+
+    .btn:hover {
+      background: rgba(255,255,255,.11);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      border-color: rgba(77,125,255,.45);
+      background: linear-gradient(135deg, #4d7dff, #22a7c7);
+    }
+
+    .btn-danger {
+      border-color: rgba(255,79,109,.48);
+      background: rgba(255,79,109,.9);
+    }
+
+    .drive-file-actions .btn,
+    .action .btn,
+    .community-mini-btn,
+    .game-mini-btn,
+    .markdown-toolbar .btn,
+    .chat-report-btn,
+    .chat-delete-btn {
+      min-height: 1.8rem;
+      padding: .28rem .48rem;
+      font-size: .7rem;
+      border-radius: 6px;
+    }
+
+    input,
+    select,
+    textarea,
+    .readonly-field {
+      background: rgba(8, 12, 18, .72);
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      font-size: .88rem;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: rgba(77,125,255,.78);
+      box-shadow: 0 0 0 3px rgba(77,125,255,.14);
+    }
+
+    .settings-option-grid {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: .62rem .75rem;
+      align-items: end;
+    }
+
+    .settings-option-grid .field {
+      min-width: 0;
+    }
+
+    .field label {
+      color: #a8b6c7;
+      font-size: .76rem;
+      font-weight: 700;
+    }
+
+    .user-table {
+      min-width: 900px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(21, 26, 34, .76);
+    }
+
+    .user-table th {
+      background: rgba(255,255,255,.045);
+      color: #9fe6d1;
+    }
+
+    .user-table td {
+      color: #dce5ef;
+    }
+
+    .drive-file-row,
+    .community-card,
+    .community-board-item,
+    .community-thread-item,
+    .game-catalog-item,
+    .game-match-row,
+    .chat-room-item,
+    .chat-message-attachment,
+    .chat-pending-attachment {
+      border-radius: 8px;
+      border-color: var(--line);
+      background: rgba(255,255,255,.035);
+    }
+
+    .drive-file-row {
+      padding: .58rem .65rem;
+    }
+
+    .drive-file-row strong,
+    .community-card-head,
+    .community-body,
+    .chat-message-attachment span,
+    .chat-pending-attachment span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .drive-file-list,
+    .community-scroll,
+    .game-catalog-list,
+    #chat-room-list,
+    .chat-friend-list {
+      gap: .45rem;
+    }
+
+    .drive-dashboard-grid {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: .75rem;
+    }
+
+    .drive-file-preview-layout {
+      grid-template-columns: minmax(420px, 1.25fr) minmax(340px, .75fr);
+      gap: .85rem;
+    }
+
+    .drive-preview-card {
+      top: .75rem;
+    }
+
+    .chat-toolbar {
+      grid-template-columns: minmax(0, 1.6fr) minmax(260px, .85fr) auto;
+      gap: .55rem;
+    }
+
+    .chat-room-create,
+    .chat-room-join {
+      min-width: 0;
+    }
+
+    .chat-layout {
+      grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+      gap: .85rem;
+    }
+
+    .chat-room-messages {
+      height: clamp(360px, 58vh, 760px);
+      background: rgba(8, 12, 18, .56);
+    }
+
+    .chat-msg {
+      max-width: min(760px, 88%);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .community-stage .community-panel {
+      min-height: clamp(520px, 68vh, 820px);
+    }
+
+    .comfyui-layout,
+    .game-layout {
+      gap: .85rem;
+    }
+
+    .game-layout {
+      grid-template-columns: minmax(250px, .85fr) minmax(420px, 1.35fr) minmax(240px, .75fr);
+    }
+
+    .security-log-grid {
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: .75rem;
+    }
+
+    .security-log-box {
+      height: clamp(220px, 32vh, 360px);
+      background: rgba(8, 12, 18, .7);
+    }
+
+    #platform-stats {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+    }
+
+    .platform-stats-chart {
+      background: rgba(21, 26, 34, .82) !important;
+      border-color: var(--line) !important;
+      border-radius: 8px !important;
+    }
+
+    .msg {
+      text-align: left;
+      border-radius: 8px;
+    }
+
+    .danger-note {
+      margin: .55rem 0;
+      padding: .6rem .7rem;
+      border: 1px solid rgba(255,79,109,.28);
+      border-radius: 8px;
+      background: rgba(255,79,109,.1);
+      color: #ffbcc7;
+      font-size: .78rem;
+      line-height: 1.45;
+    }
+
+    .danger-note code {
+      padding: .1rem .32rem;
+      border-radius: 5px;
+      background: rgba(255,79,109,.18);
+      color: #fff;
+    }
+
+    @media (max-width: 1100px) {
+      .chat-toolbar,
+      .chat-layout,
+      .drive-file-preview-layout,
+      .game-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .drive-preview-card {
+        position: static;
+        max-height: none;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .app-main {
+        padding: 3rem .65rem .8rem;
+      }
+
+      .admin-toolbar,
+      .drive-card-heading,
+      .community-panel-head,
+      .chat-room-header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .admin-toolbar .btn,
+      .drive-card-heading .btn,
+      .community-actions .btn,
+      .drive-toolbar .btn {
+        width: 100%;
+      }
+
+      .tabs:not(.sidebar-nav) .tab {
+        flex: 1 1 44%;
+        min-width: 0;
+      }
+
+      .chat-room-create,
+      .chat-room-join,
+      .chat-composer,
+      .chat-friend-add {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .chat-msg {
+        max-width: 100%;
+      }
+
+      .platform-chart-row {
+        grid-template-columns: 1fr !important;
+      }
+    }
   

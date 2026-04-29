@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-chess-square-fixed" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-ui-polish" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1836,9 +1836,9 @@
               <input type="time" id="s-snapshot-daily-time" />
             </div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">Snapshot / Restore / Reset（需 root）</div>
-            <div style="margin-bottom:.5rem;">
-              <button type="button" id="btn-load-snapshots" class="btn-sm" style="background:#37474f;color:#eceff1;border:1px solid #546e7a;padding:.3rem .75rem;border-radius:4px;cursor:pointer;">📋 載入 Snapshot 列表</button>
-              <button type="button" id="btn-create-snapshot" class="btn-sm" style="background:#1b5e20;color:#e8f5e9;border:1px solid #2e7d32;padding:.3rem .75rem;border-radius:4px;cursor:pointer;margin-left:.4rem;">+ 手動建立 Snapshot</button>
+            <div class="admin-toolbar">
+              <button type="button" id="btn-load-snapshots" class="btn btn-sm">載入 Snapshot 列表</button>
+              <button type="button" id="btn-create-snapshot" class="btn btn-primary btn-sm">手動建立 Snapshot</button>
             </div>
             <div id="snapshot-list" style="font-size:.78rem;color:var(--muted);margin-bottom:.75rem;">點擊「載入 Snapshot 列表」查看現有快照</div>
             <div id="snapshot-actions" style="margin-bottom:.75rem;"></div>
@@ -1846,17 +1846,17 @@
               <label>上傳 Snapshot 封包 Restore</label>
               <input type="file" id="snapshot-upload-file" accept=".gz,.tgz,.tar.gz,application/gzip" />
             </div>
-            <button type="button" id="btn-upload-snapshot-restore" class="btn-sm" style="background:#263238;color:#e0f7fa;border:1px solid #4dd0e1;padding:.35rem .9rem;border-radius:4px;cursor:pointer;">上傳並 Restore</button>
+            <button type="button" id="btn-upload-snapshot-restore" class="btn btn-sm">上傳並 Restore</button>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">Reset 伺服器（需 root）</div>
             <div class="field" style="margin-bottom:.4rem;">
               <label>Reset 原因（選填）</label>
               <input type="text" id="s-reset-reason" placeholder="描述進行 reset 的原因…" />
             </div>
-            <div style="color:#ff4f6d;font-size:.78rem;margin-bottom:.5rem;">⚠ Reset 會清除所有 Runtime 狀態並重啟，確認請輸入 <code style="background:rgba(255,0,0,.12);padding:.1rem .3rem;border-radius:3px;">RESET_RUNTIME_STATE</code></div>
+            <div class="danger-note">Reset 會清除所有 Runtime 狀態並重啟，確認請輸入 <code>RESET_RUNTIME_STATE</code></div>
             <div class="field" style="margin-bottom:.6rem;">
-              <input type="text" id="s-reset-confirm" placeholder="輸入 RESET_RUNTIME_STATE 確認" style="width:100%;padding:.3rem;border-radius:4px;border:1px solid #546e7a;background:#1a1a2e;color:#eceff1;" />
+              <input type="text" id="s-reset-confirm" placeholder="輸入 RESET_RUNTIME_STATE 確認" />
             </div>
-            <button type="button" id="btn-reset-server" class="btn-sm" style="background:#b71c1c;color:#ffcdd2;border:1px solid #c62828;padding:.35rem .9rem;border-radius:4px;cursor:pointer;">🔄 Reset 伺服器</button>
+            <button type="button" id="btn-reset-server" class="btn btn-danger btn-sm">Reset 伺服器</button>
             <div id="reset-status" style="font-size:.78rem;margin-top:.5rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">模組開放層級</div>
             <div class="field">
@@ -2046,7 +2046,7 @@
         </form>
         <div class="mini-title" style="margin-top:1.2rem;color:#ff4f6d;">危險區</div>
         <div class="admin-toolbar" style="margin-top:.5rem;">
-          <button class="btn" type="button" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
+          <button class="btn btn-danger" type="button" id="restart-server-btn">
             重啟服務器
           </button>
         </div>
