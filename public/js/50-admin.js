@@ -1753,6 +1753,7 @@ async function loadServerHealth() {
   }
   const c = json.counts || {};
   const s = json.storage || {};
+  const capacity = s.capacity_audit || {};
   const auditOk = json.audit_integrity && json.audit_integrity.ok;
   const auditEnabled = !(json.audit_integrity && json.audit_integrity.enabled === false);
   const readiness = json.readiness || {};
@@ -1798,6 +1799,18 @@ async function loadServerHealth() {
     { label: "Server logs", value: `${s.log_files || 0} / ${formatBytes(s.log_bytes)}`, color: "#82b1ff" },
     { label: "Anchor files", value: `${s.anchor_files || 0} / ${formatBytes(s.anchor_bytes)}`, color: "#82b1ff" },
     { label: "Storage root", value: `${s.storage_files || 0} / ${formatBytes(s.storage_bytes)}`, color: "#82b1ff" },
+    {
+      label: "會員雲端容量審計",
+      value: capacity.status === "critical" ? "超額" : capacity.status === "warning" ? "接近上限" : "正常",
+      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / Host 可承諾 ${formatBytes(capacity.allocatable_cloud_capacity_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
+      color: capacity.status === "critical" ? "#ff4f6d" : capacity.status === "warning" ? "#ffb74d" : "#4caf50",
+    },
+    {
+      label: "Host 實際可用",
+      value: formatBytes(capacity.disk?.free_bytes),
+      detail: `storage root: ${capacity.disk?.path || "-"}`,
+      color: "#82b1ff",
+    },
   ]);
   const auditRows = [
     {
@@ -1812,6 +1825,12 @@ async function loadServerHealth() {
       detail: item.detail || "",
       color: item.severity === "critical" ? "#ff4f6d" : "#ffb74d",
     })),
+    ...(capacity.status && capacity.status !== "ok" ? [{
+      label: "Storage capacity audit",
+      value: capacity.status,
+      detail: (capacity.reasons || []).join(", ") || "會員容量承諾已超過 Host 安全容量",
+      color: capacity.status === "critical" ? "#ff4f6d" : "#ffb74d",
+    }] : []),
     ...anomalySignals.map((item) => ({
       label: `Anomaly: ${item.name || "-"}`,
       value: item.level || "-",
