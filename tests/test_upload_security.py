@@ -25,6 +25,7 @@ from services.storage_quota_purchases import (
     enrich_storage_upgrade_catalog,
     record_storage_quota_purchase,
 )
+from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 
 
 def _conn():
@@ -398,6 +399,53 @@ def test_root_storage_override_takes_priority_over_role_quota(tmp_path):
         assert usage["upload_rate_limit_per_day"] == 3
         assert usage["can_upload"] is False
         assert usage["root_override"]["reason"] == "root direct quota test"
+    finally:
+        conn.close()
+
+
+def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 1_000
+        used = 500
+        free = 500
+
+    monkeypatch.setattr("services.storage_capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        set_storage_quota_override(conn, 1, quota_bytes=0, reason="baseline", actor_user_id=2)
+        set_storage_quota_override(conn, 2, quota_bytes=0, reason="baseline", actor_user_id=2)
+        audit = audit_storage_capacity(conn, tmp_path)
+        assert audit["status"] == "ok"
+        assert audit["allocatable_cloud_capacity_bytes"] == 450
+
+        set_storage_quota_override(
+            conn,
+            1,
+            quota_bytes=800,
+            reason="overcommit test",
+            actor_user_id=2,
+        )
+        audit = audit_storage_capacity(conn, tmp_path)
+        assert audit["status"] == "critical"
+        assert audit["total_overcommitted_by_bytes"] > 0
+        assert "host_storage_overcommitted" in audit["reasons"]
+    finally:
+        conn.close()
+
+
+def test_storage_capacity_guard_blocks_new_quota_when_host_is_full(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 1_000
+        used = 900
+        free = 100
+
+    monkeypatch.setattr("services.storage_capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        ok, msg, projected = can_allocate_storage_bytes(conn, tmp_path, 200)
+        assert ok is False
+        assert "Host" in msg
+        assert projected["projected_total_overcommitted_by_bytes"] > 0
     finally:
         conn.close()
 

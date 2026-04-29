@@ -34,6 +34,7 @@ from services.server_bind import (
 )
 from services.captcha import normalize_captcha_mode
 from services.storage_paths import validate_storage_root
+from services.storage_capacity_audit import audit_storage_capacity
 from services.upload_security import (
     ensure_upload_security_schema,
     get_cloud_drive_security_policy,
@@ -687,10 +688,19 @@ def register_system_admin_routes(app, deps):
         log_stats = dir_stats(LOG_DIR)
         anchor_stats = dir_stats(ANCHOR_DIR)
         storage_stats = dir_stats(STORAGE_DIR)
+        capacity_conn = get_db()
+        try:
+            storage_capacity = audit_storage_capacity(capacity_conn, STORAGE_DIR)
+        finally:
+            capacity_conn.close()
         readiness = readiness_summary()
         anomaly = anomaly_summary()
         status = "critical" if ((audit_enabled and audit_ok is False) or settings.get("maintenance_mode", False) or readiness["status"] == "critical") else "ok"
+        if storage_capacity["status"] == "critical":
+            status = "critical"
         if status == "ok" and (readiness["status"] == "degraded" or anomaly["status"] in {"warning", "critical"} or count_errors):
+            status = "degraded"
+        if status == "ok" and storage_capacity["status"] == "warning":
             status = "degraded"
         return json_resp({
             "ok": True,
@@ -710,6 +720,7 @@ def register_system_admin_routes(app, deps):
                 "anchor_bytes": anchor_stats["bytes"],
                 "storage_files": storage_stats["files"],
                 "storage_bytes": storage_stats["bytes"],
+                "capacity_audit": storage_capacity,
             },
             "readiness": readiness,
             "anomaly": anomaly,

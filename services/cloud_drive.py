@@ -12,6 +12,7 @@ from services.upload_security import (
     get_user_cloud_drive_usage,
     safe_public_filename,
     scan_uploaded_file,
+    storage_root_can_accept_bytes,
 )
 
 
@@ -192,6 +193,9 @@ def _check_quota(conn, actor, member_rule, size_bytes, storage_root=None):
     remaining = usage.get("remaining_bytes")
     if remaining is not None and int(size_bytes) > int(remaining):
         return False, "雲端硬碟容量不足"
+    disk_ok, _disk = storage_root_can_accept_bytes(storage_root, size_bytes)
+    if not disk_ok:
+        return False, "Host 磁碟可用空間不足，請先清理檔案或擴充儲存空間"
     daily_limit = usage.get("upload_rate_limit_per_day")
     if daily_limit is not None and int(daily_limit) >= 0:
         today = datetime.now().date().isoformat()

@@ -834,6 +834,24 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     return apply_storage_quota_override(usage, get_storage_quota_override(conn, user_id))
 
 
+def storage_root_can_accept_bytes(storage_root, size_bytes):
+    if not storage_root:
+        return True, None
+    disk = _disk_usage_for_storage_root(storage_root)
+    safe_free = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO)
+    if int(size_bytes or 0) > safe_free:
+        return False, {
+            **disk,
+            "safe_free_bytes": safe_free,
+            "safety_ratio": ADMIN_DISK_QUOTA_RATIO,
+        }
+    return True, {
+        **disk,
+        "safe_free_bytes": safe_free,
+        "safety_ratio": ADMIN_DISK_QUOTA_RATIO,
+    }
+
+
 def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=None):
     policy = get_cloud_drive_security_policy(conn)
     usage = get_user_cloud_drive_usage(conn, user, member_rule=member_rule, storage_root=storage_root)

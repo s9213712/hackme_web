@@ -76,6 +76,7 @@ from services.storage_quota_purchases import (
     record_storage_quota_purchase,
     storage_upgrade_product,
 )
+from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 from flask import request, send_file
 
 
@@ -601,6 +602,18 @@ def register_file_routes(app, deps):
             target = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
             if not target:
                 return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
+            if quota_bytes is not None and target["username"] != "root":
+                current_usage = _storage_usage_for_user_row(conn, target)
+                current_total = int(current_usage.get("total_bytes") or 0)
+                additional_bytes = max(0, int(quota_bytes) - current_total)
+                if additional_bytes:
+                    capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
+                    if not capacity_ok:
+                        return json_resp({
+                            "ok": False,
+                            "msg": capacity_msg,
+                            "storage_capacity": capacity_audit,
+                        }), 409
             override = set_storage_quota_override(
                 conn,
                 user_id,
@@ -782,13 +795,26 @@ def register_file_routes(app, deps):
             rule = get_member_level_rule(conn, level)
             usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
             catalog = _storage_upgrade_catalog(conn)
+            can_purchase = not _is_root(actor)
+            message = "root 依實際磁碟容量控管，不需要用積分購買容量" if _is_root(actor) else ""
+            capacity_audit = audit_storage_capacity(conn, storage_root)
+            if can_purchase:
+                headroom = min(
+                    max(0, int(capacity_audit["allocatable_cloud_capacity_bytes"]) - int(capacity_audit["committed_total_bytes"])),
+                    max(0, int(capacity_audit["disk"]["safe_free_bytes"]) - int(capacity_audit["committed_remaining_bytes"])),
+                )
+                catalog = [item for item in catalog if int(item.get("storage_bytes") or 0) <= headroom]
+                if not catalog:
+                    can_purchase = False
+                    message = "Host 磁碟可承諾容量不足，目前不能購買更多雲端容量"
             return json_resp({
                 "ok": True,
-                "can_purchase": not _is_root(actor),
-                "message": "root 依實際磁碟容量控管，不需要用積分購買容量" if _is_root(actor) else "",
+                "can_purchase": can_purchase,
+                "message": message,
                 "catalog": catalog,
                 "active_purchases": active_storage_quota_purchases(conn, _actor_value(actor, "id")),
                 "usage": usage,
+                "storage_capacity": capacity_audit,
             })
         finally:
             conn.close()
@@ -821,6 +847,14 @@ def register_file_routes(app, deps):
             catalog = _storage_upgrade_catalog(conn)
             if not any(item.get("item_key") == item_key for item in catalog):
                 return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
+            additional_bytes = int(product["storage_bytes"]) * quantity
+            capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
+            if not capacity_ok:
+                return json_resp({
+                    "ok": False,
+                    "msg": capacity_msg,
+                    "storage_capacity": capacity_audit,
+                }), 409
         finally:
             conn.close()
         try:
