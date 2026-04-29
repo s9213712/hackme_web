@@ -1,9 +1,16 @@
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
-from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.points_chain import (
+    DEFAULT_BACKUP_KEEP_DAILY,
+    DEFAULT_BACKUP_KEEP_RECENT,
+    DEFAULT_BACKUP_KEEP_WEEKLY,
+    PointsLedgerService,
+    ensure_points_economy_schema,
+)
 
 
 def _db(tmp_path):
@@ -523,3 +530,56 @@ def test_high_risk_admin_adjust_forces_block(tmp_path):
     assert result["forced_block"]["sealed"] is True
     assert result["forced_block"]["reason"] == "admin_adjust"
     assert service.verify_chain()["counts"]["unsealed_entries"] == 0
+
+
+def test_points_chain_backup_pruning_uses_small_site_retention(tmp_path):
+    assert DEFAULT_BACKUP_KEEP_RECENT == 5
+    assert DEFAULT_BACKUP_KEEP_DAILY == 7
+    assert DEFAULT_BACKUP_KEEP_WEEKLY == 4
+
+    service = _service(tmp_path)
+    conn = service.get_db()
+    backup_root = tmp_path / "points_chain_backups" / "backups"
+    try:
+        service.ensure_schema(conn)
+        for day in range(21):
+            backup_id = f"backup-{day:02d}"
+            created_at = f"2026-04-{29 - day:02d}T00:00:00Z"
+            backup_path = backup_root / backup_id
+            backup_path.mkdir(parents=True)
+            (backup_path / "manifest.json").write_text("{}", encoding="utf-8")
+            (backup_path / "data.json").write_text("{}", encoding="utf-8")
+            conn.execute(
+                """
+                INSERT INTO points_chain_backup_catalog (
+                    backup_id, kind, created_at, chain_height, latest_block_hash,
+                    ledger_row_count, wallet_count, schema_version, backup_path,
+                    manifest_path, files_hash, signature, verified, verification_json, reason
+                ) VALUES (?, 'scheduled', ?, ?, ?, 0, 0, 1, ?, ?, 'hash', 'sig', 1, '{}', 'test')
+                """,
+                (
+                    backup_id,
+                    created_at,
+                    day,
+                    f"hash-{day}",
+                    str(backup_path),
+                    str(backup_path / "manifest.json"),
+                ),
+            )
+        conn.commit()
+
+        service._prune_ledger_backups(conn)
+        conn.commit()
+
+        kept = [
+            row["backup_id"]
+            for row in conn.execute("SELECT backup_id FROM points_chain_backup_catalog ORDER BY created_at DESC").fetchall()
+        ]
+        kept_paths = sorted(path.name for path in Path(backup_root).iterdir())
+    finally:
+        conn.close()
+
+    assert len(kept) <= DEFAULT_BACKUP_KEEP_RECENT + DEFAULT_BACKUP_KEEP_DAILY + DEFAULT_BACKUP_KEEP_WEEKLY
+    assert kept[:DEFAULT_BACKUP_KEEP_RECENT] == [f"backup-{idx:02d}" for idx in range(DEFAULT_BACKUP_KEEP_RECENT)]
+    assert "backup-20" not in kept
+    assert sorted(kept) == kept_paths
