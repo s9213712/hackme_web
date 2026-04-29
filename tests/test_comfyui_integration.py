@@ -116,7 +116,7 @@ def _init_db(db_path):
     conn.close()
 
 
-def _build_app(db_path, storage_root, settings=None):
+def _build_app(db_path, storage_root, settings=None, comfyui_client=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -142,7 +142,7 @@ def _build_app(db_path, storage_root, settings=None):
         "json_resp": _json_resp,
         "require_csrf": _passthrough,
         "require_csrf_safe": _passthrough,
-        "comfyui_client": FakeComfyUIClient(),
+        "comfyui_client": comfyui_client or FakeComfyUIClient(),
     })
     return app
 
@@ -354,6 +354,38 @@ def test_comfyui_discard_tolerates_plain_text_history_response(tmp_path, monkeyp
     assert calls == ["http://fake-comfyui/history"]
 
 
+def test_comfyui_discard_without_file_delete_endpoint_clears_preview_with_warning(tmp_path):
+    class UnsupportedDeleteClient:
+        def discard_image(self, image_ref, *, prompt_id=None):
+            return {
+                "file_deleted": False,
+                "file_missing": False,
+                "file_delete_supported": False,
+                "history_deleted": bool(prompt_id),
+            }
+
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, comfyui_client=UnsupportedDeleteClient()).test_client()
+
+    discarded = client.post(
+        "/api/comfyui/discard",
+        json={
+            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "prompt_id": "prompt-1",
+        },
+    )
+
+    assert discarded.status_code == 200
+    body = discarded.get_json()
+    assert body["ok"] is True
+    assert body["warning"] == "source_file_not_deleted"
+    assert body["discard"]["history_deleted"] is True
+    assert "原始檔可能仍留在 ComfyUI output" in body["msg"]
+
+
 def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
     FakeComfyUIClient.interrupted = 0
     db_path = tmp_path / "comfyui.db"
@@ -530,6 +562,7 @@ def test_comfyui_frontend_is_wired():
     assert 'fetch(API + "/comfyui/interrupt"' in comfyui_js
     assert 'fetch(API + "/comfyui/save"' in comfyui_js
     assert 'fetch(API + "/comfyui/discard"' in comfyui_js
+    assert 'source_file_not_deleted' in comfyui_js
     assert 'fetch(API + "/comfyui/share"' in comfyui_js
     assert 'fetch(API + "/comfyui/status"' in comfyui_js
     assert 'let comfyuiMaxBatchSize = 1;' in comfyui_js

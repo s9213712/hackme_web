@@ -554,9 +554,9 @@ def register_comfyui_routes(app, deps):
             audit("COMFYUI_DISCARD_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)
         if not (result.get("file_deleted") or result.get("file_missing")):
-            msg = "ComfyUI 未提供刪除 output 檔案端點；請設定 COMFYUI_OUTPUT_DIR 或 COMFYUI_BASE_DIR 後再丟棄預覽。"
-            audit("COMFYUI_DISCARD_UNSUPPORTED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(result)[:180])
-            return json_resp({"ok": False, "msg": msg, "discard": result}), 501
+            msg = "已丟棄前端預覽；ComfyUI 未提供刪除 output 檔案端點，原始檔可能仍留在 ComfyUI output。若要同步刪原檔，請設定 COMFYUI_OUTPUT_DIR 或 COMFYUI_BASE_DIR。"
+            audit("COMFYUI_DISCARD_UNSUPPORTED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=str(result)[:180])
+            return json_resp({"ok": True, "msg": msg, "discard": result, "warning": "source_file_not_deleted"})
         audit("COMFYUI_DISCARD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file={image_ref.get('filename')}, result={result}")
         return json_resp({"ok": True, "msg": "已丟棄預覽並刪除 ComfyUI 原始檔", "discard": result})
 

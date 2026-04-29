@@ -31,6 +31,7 @@ const ATTACHMENT_FILE_SELECT_IDS = [
 let driveTransferRows = [];
 let driveAttachmentFileOptions = [];
 let driveAttachmentFileOptionsLoadedAt = 0;
+let driveStorageUpgradeCatalog = [];
 
 function drivePrivacyModeLabel(mode) {
   return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
@@ -276,6 +277,46 @@ function renderDriveGroupedStats(targetId, grouped, emptyText, labelFn) {
   `).join("");
 }
 
+function storageUpgradeLabel(item) {
+  const price = Number(item.base_price || 0);
+  const bytes = formatDriveBytes(item.storage_bytes || 0);
+  const days = Number(item.duration_days || 0);
+  return `${item.label || item.item_name || item.item_key} · ${bytes} / ${days} 天 · ${price} 點`;
+}
+
+function renderStorageUpgrade(payload) {
+  const card = $("drive-storage-upgrade-card");
+  const select = $("drive-storage-upgrade-select");
+  const summary = $("drive-storage-upgrade-summary");
+  const list = $("drive-storage-upgrade-active-list");
+  const button = document.querySelector("[data-drive-action='purchase-storage-upgrade']");
+  if (!card || !select || !summary || !list) return;
+
+  const canPurchase = Boolean(payload?.can_purchase);
+  driveStorageUpgradeCatalog = Array.isArray(payload?.catalog) ? payload.catalog : [];
+  select.innerHTML = driveStorageUpgradeCatalog.length
+    ? driveStorageUpgradeCatalog.map((item) => `<option value="${sanitize(item.item_key)}">${sanitize(storageUpgradeLabel(item))}</option>`).join("")
+    : `<option value="">目前沒有可用的容量方案</option>`;
+  select.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+  if (button) button.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+
+  const usage = payload?.usage || {};
+  const purchased = Number(usage.purchased_extra_bytes || 0);
+  summary.textContent = canPurchase
+    ? `已加購容量：${formatDriveBytes(purchased)}`
+    : (payload?.message || "此帳號不需要加購容量");
+
+  const active = Array.isArray(payload?.active_purchases) ? payload.active_purchases : [];
+  list.innerHTML = active.length
+    ? active.map((row) => `
+      <div class="drive-pill">
+        <strong>${sanitize(row.item_key)}</strong>
+        <span>${formatDriveBytes(row.purchased_bytes || 0)} · 到期 ${sanitize(row.expires_at || "-")}</span>
+      </div>
+    `).join("")
+    : `<div class="drive-empty">目前沒有有效的加購容量</div>`;
+}
+
 function renderDriveDashboard(payload) {
   const security = payload && payload.security ? payload.security : {};
   const quota = security.usage || (payload && payload.quota) || {};
@@ -298,10 +339,11 @@ function renderDriveDashboard(payload) {
     const daily = quota.upload_rate_limit_per_day === null || quota.upload_rate_limit_per_day === undefined ? "無上限" : `${quota.upload_rate_limit_per_day} 次`;
     const diskNote = quota.quota_source === "root_disk_available_90_percent"
       ? ` · root 上限：儲存磁碟可用空間 90%，${quota.warning_threshold_percent || 80}% 起警示`
-      : quota.quota_source === "manager_role_fixed_1gb"
+      : String(quota.quota_source || "").startsWith("manager_role_fixed_1gb")
         ? " · manager 上限：1 GB"
       : "";
-    limitLabel.textContent = `單檔限制：${maxFile} · 每日上傳：${daily} · 檔案數：${Number(quota.file_count || 0)}${diskNote}`;
+    const purchaseNote = Number(quota.purchased_extra_bytes || 0) > 0 ? ` · 加購：${formatDriveBytes(quota.purchased_extra_bytes)}` : "";
+    limitLabel.textContent = `單檔限制：${maxFile} · 每日上傳：${daily} · 檔案數：${Number(quota.file_count || 0)}${diskNote}${purchaseNote}`;
     limitLabel.style.color = quota.warning_active ? "#ffb74d" : "var(--muted)";
   }
   if (barFill) {
@@ -2243,12 +2285,67 @@ async function loadDriveDashboard() {
       return;
     }
     renderDriveDashboard(json);
+    await loadStorageUpgradeOptions();
     await loadRemoteDownloadCapabilities();
     await loadDriveFiles(csrf);
     await loadStorageFiles(csrf);
     if (msg) msg.className = "msg";
   } catch (err) {
     if (msg) flash(msg, "雲端硬碟狀態讀取失敗", false);
+  }
+}
+
+async function loadStorageUpgradeOptions() {
+  const card = $("drive-storage-upgrade-card");
+  if (!card) return;
+  const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/cloud-drive/storage-upgrades", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    renderStorageUpgrade({
+      ok: false,
+      can_purchase: false,
+      message: json.msg || `容量方案讀取失敗（HTTP ${res.status}）`,
+      catalog: [],
+      active_purchases: [],
+    });
+    return;
+  }
+  renderStorageUpgrade(json);
+}
+
+async function purchaseStorageUpgrade() {
+  const msg = $("drive-msg");
+  const itemKey = $("drive-storage-upgrade-select")?.value || "";
+  const quantity = Number($("drive-storage-upgrade-quantity")?.value || 1);
+  if (!itemKey) {
+    if (msg) flash(msg, "請先選擇容量方案", false);
+    return;
+  }
+  if (!Number.isFinite(quantity) || quantity < 1 || quantity > 20) {
+    if (msg) flash(msg, "購買數量需介於 1 到 20", false);
+    return;
+  }
+  const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/cloud-drive/storage-upgrades/purchase", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ item_key: itemKey, quantity }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    if (msg) flash(msg, json.msg || `容量購買失敗（HTTP ${res.status}）`, false);
+    return;
+  }
+  if (msg) flash(msg, "容量已加購，積分已扣除", true);
+  renderDriveDashboard({ quota: json.usage });
+  await loadStorageUpgradeOptions();
+  if (typeof loadEconomyDashboard === "function") {
+    loadEconomyDashboard().catch(() => {});
   }
 }
 
@@ -2292,6 +2389,7 @@ document.addEventListener("click", (event) => {
     if (action === "album-full-preview") return previewAlbumFileFullscreen(fileId, name, albumSequence === "viewer" ? { files: albumPreviewSequence } : {});
     if (action === "album-preview-prev") return stepAlbumPreview(-1);
     if (action === "album-preview-next") return stepAlbumPreview(1);
+    if (action === "purchase-storage-upgrade") return purchaseStorageUpgrade();
     if (action === "edit-text") return editDriveTextFile(fileId);
     if (action === "save-text") return saveDriveTextFile(fileId);
     if (action === "download") return downloadDriveFile(fileId, warn);
