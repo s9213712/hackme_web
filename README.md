@@ -68,8 +68,10 @@ Docker, xterm.js assets, Python WebSocket packages, or the terminal container
 image before allowing a session to start.
 
 If Docker group membership changes during installation, restart the login shell
-or the service process before using Web Terminal. The installer prints the exact
-repair command when this is required.
+or the service process before using Web Terminal. `docker info` must work without
+`sudo` from the same user/session that launches Hackme Web. If the account is in
+the docker group but the current shell is stale, start from a fresh login shell
+or run `sg docker -c 'scripts/run_prod.sh'` from the repository root.
 
 ## Local Checks
 

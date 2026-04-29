@@ -136,6 +136,8 @@ def test_frontend_checks_environment_before_opening_session():
     assert "runtime_available" in web_terminal_js
     assert "先修 Docker 權限並重開 server" in web_terminal_js
     assert "不要只用 sudo check" in web_terminal_js
+    assert "Docker socket 屬於" in web_terminal_js
+    assert "sg ${sock.group} -c 'scripts/run_prod.sh'" in web_terminal_js
     assert "websocket_available" in web_terminal_js
     assert "web_terminal" in core_js
 
@@ -150,10 +152,15 @@ def test_web_terminal_installer_and_docs_are_self_service():
     assert "--doctor" in installer
     assert "sudo docker info" in installer
     assert "WARNING: this check is running as root" in installer
+    assert "current_process_in_group" in installer
+    assert "Account groups from user database" in installer
+    assert "sg docker -c 'scripts/run_prod.sh'" in installer
     assert "docker image $IMAGE_NAME: ok" in installer
     assert "python3-venv" in installer
     assert "./install_web_terminal_dependencies.sh --all --venv .venv" in readme
+    assert "docker info` must work without" in readme
     assert "./install_web_terminal_dependencies.sh --doctor --venv .venv" in guide
+    assert "id -nG \"$USER\"" in guide
     assert "flask-sock" in requirements
     assert "simple-websocket" in requirements
     assert "activate_or_create_venv" in run_prod

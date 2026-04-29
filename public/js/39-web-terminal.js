@@ -55,8 +55,15 @@ function setWebTerminalMessage(text, ok) {
 
 function webTerminalCheckItems(payload) {
   const term = payload && payload.terminal ? payload.terminal : {};
+  const proc = term.process || {};
+  const sock = proc.docker_sock || {};
+  const processGroups = Array.isArray(proc.groups) ? proc.groups : [];
+  const socketGroupMissing = sock.group && processGroups.length && !processGroups.includes(sock.group);
+  const groupHint = socketGroupMissing
+    ? `Docker socket 屬於 ${sock.group} 群組，但目前 server process（${proc.user || "-"}）的有效群組沒有 ${sock.group}。請重新登入後重開 server，或用 sg ${sock.group} -c 'scripts/run_prod.sh' 啟動。`
+    : "";
   const runtimeHint = term.runtime_error
-    ? `${term.runtime_error}；Web 後端目前無法連 Docker daemon。請用啟動 server 的同一個使用者執行 docker info，修好權限後重開 server。`
+    ? `${term.runtime_error}；${groupHint || "Web 後端目前無法連 Docker daemon。請用啟動 server 的同一個使用者執行 docker info，修好權限後重開 server。"}`
     : "找不到 Docker 或目前帳號無法使用 Docker，請執行 ./install_web_terminal_dependencies.sh --doctor --venv .venv 後依照修復指令處理。";
   const imageHint = term.runtime_available
     ? `${term.image_error ? term.image_error + "；" : ""}找不到 ${term.image || "hackme-web-terminal:base"}，請執行 ./install_web_terminal_dependencies.sh --image。`

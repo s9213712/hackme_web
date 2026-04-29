@@ -71,15 +71,32 @@ current_user_in_group() {
   id -nG "${USER:-$(id -un)}" 2>/dev/null | tr ' ' '\n' | grep -Fxq "$group"
 }
 
+current_process_in_group() {
+  local group="$1"
+  [[ -n "$group" ]] || return 1
+  id -nG 2>/dev/null | tr ' ' '\n' | grep -Fxq "$group"
+}
+
 print_docker_repair_hint() {
   local sock_group
   sock_group="$(docker_sock_group)"
   log "Docker daemon is not reachable by the current shell."
   if [[ -n "$sock_group" && "$sock_group" != "UNKNOWN" ]]; then
     log "Docker socket group: $sock_group"
-    if [[ "$sock_group" == "docker" ]] && ! current_user_in_group "$sock_group"; then
-      log "Suggested repair:"
-      log "  sudo usermod -aG $sock_group ${USER:-$(id -un)}"
+    if [[ "$sock_group" == "docker" ]]; then
+      if current_user_in_group "$sock_group" && ! current_process_in_group "$sock_group"; then
+        log "Your account is in the docker group, but this shell/session has not loaded that group yet."
+        log "Suggested repair:"
+        log "  log out and back in, then restart Hackme Web"
+        log "Temporary repair for the current terminal:"
+        log "  newgrp docker"
+        log "  scripts/run_prod.sh"
+        log "Or start this project directly inside the docker group:"
+        log "  sg docker -c 'scripts/run_prod.sh'"
+      elif ! current_user_in_group "$sock_group"; then
+        log "Suggested repair:"
+        log "  sudo usermod -aG $sock_group ${USER:-$(id -un)}"
+      fi
     elif [[ "$sock_group" != "docker" ]]; then
       log "The Docker socket is not owned by the usual 'docker' group on this host."
       log "If Docker was installed by a package manager, restart Docker and check:"
@@ -211,6 +228,10 @@ check_status() {
       log "docker daemon: permission denied or not running"
       log "docker image $IMAGE_NAME: cannot verify until Docker daemon access works"
       if [[ "$doctor" == "1" ]]; then
+        if [[ -S /var/run/docker.sock ]]; then
+          log "Current effective groups: $(id -nG 2>/dev/null || true)"
+          log "Account groups from user database: $(id -nG "${USER:-$(id -un)}" 2>/dev/null || true)"
+        fi
         print_docker_repair_hint
       fi
     fi

@@ -44,8 +44,25 @@ After that, log out and back in, or restart the systemd/service/shell process
 that launches Hackme Web. Confirm Docker access without sudo:
 
 ```bash
+id -nG
 docker info
 docker image inspect hackme-web-terminal:base
+```
+
+If `id -nG "$USER"` shows `docker` but plain `id -nG` does not, the account
+database has been updated but the current session has not loaded the new group
+membership. Start a fresh login shell, or use this temporary launch path from
+the repository root:
+
+```bash
+newgrp docker
+scripts/run_prod.sh
+```
+
+For a one-shot launch without changing the current shell:
+
+```bash
+sg docker -c 'scripts/run_prod.sh'
 ```
 
 If only the image build is blocked by Docker permission and you are in an
