@@ -13,7 +13,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260429-game-refresh-csrf" in index_html
+    assert "/js/38-games.js?v=20260429-game-delete-finished" in index_html
     assert 'module: "games"' in core_js
     assert 'switchModuleTab("games")' in bootstrap_js
     assert "/games/chess/practice" in games_js
@@ -25,6 +25,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert "refreshGameZoneAfterMutation" in games_js
     assert 'cache: "no-store"' in games_js
     assert "data-chess-square" in games_js
+    assert "data-game-delete-match" in games_js
+    assert "async function deleteFinishedGame" in games_js
+    assert "method: \"DELETE\"" in games_js
     assert "grid-template-rows: repeat(8, minmax(0, 1fr))" in styles_css
     assert "padding: 0" in styles_css
     assert ".chess-square span" in styles_css
+    assert ".game-match-item" in styles_css

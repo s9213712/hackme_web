@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS game_matches (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     finished_at TEXT,
+    white_deleted_at TEXT,
+    black_deleted_at TEXT,
     CHECK (game_key IN ('chess')),
     CHECK (mode IN ('pvp', 'computer')),
     CHECK (status IN ('active', 'finished', 'cancelled')),

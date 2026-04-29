@@ -2901,6 +2901,13 @@
       gap: .5rem;
       margin: .6rem 0 .75rem;
     }
+    .game-match-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: .45rem;
+      margin-bottom: .5rem;
+    }
     .game-catalog-item,
     .game-match-row {
       width: 100%;
@@ -2914,6 +2921,12 @@
       border-radius: 8px;
       padding: .55rem .65rem;
       text-align: left;
+    }
+    .game-match-item .game-mini-btn {
+      align-self: center;
+      min-width: 0;
+      padding-inline: .65rem;
+      white-space: nowrap;
     }
     .game-catalog-item small,
     .game-match-row small,

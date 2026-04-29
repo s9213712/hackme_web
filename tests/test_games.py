@@ -239,3 +239,62 @@ def test_chess_invite_accept_creates_pvp_match_and_leaderboard(tmp_path):
     assert rows[0]["score"] == 3
     assert rows[1]["username"] == "bob"
     assert rows[1]["score"] == 0
+
+
+def test_finished_match_can_be_deleted_from_own_list_without_removing_leaderboard(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    invite = client.post("/api/games/chess/invites", json={"opponent_username": "bob"})
+    invite_id = invite.get_json()["invite_id"]
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    accepted = client.post(f"/api/games/chess/invites/{invite_id}/accept", json={})
+    match_id = accepted.get_json()["match_id"]
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        UPDATE game_matches
+        SET status='finished', winner_user_id=2, leaderboard_week='2026-W18',
+            result_reason='checkmate', finished_at='2026-04-29T00:00:00+00:00'
+        WHERE id=?
+        """,
+        (match_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box["actor"] = {"id": 2, "username": "alice", "role": "user"}
+    deleted = client.delete(f"/api/games/chess/matches/{match_id}")
+    assert deleted.status_code == 200
+    assert deleted.get_json()["ok"] is True
+
+    alice_matches = client.get("/api/games/chess/matches")
+    assert alice_matches.status_code == 200
+    assert alice_matches.get_json()["matches"] == []
+
+    leaderboard = client.get("/api/games/chess/leaderboard?week=2026-W18")
+    assert leaderboard.status_code == 200
+    assert leaderboard.get_json()["leaderboard"][0]["username"] == "alice"
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    bob_matches = client.get("/api/games/chess/matches")
+    assert [row["id"] for row in bob_matches.get_json()["matches"]] == [match_id]
+
+
+def test_active_match_cannot_be_deleted(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    created = client.post("/api/games/chess/practice", json={})
+    match_id = created.get_json()["match_id"]
+
+    deleted = client.delete(f"/api/games/chess/matches/{match_id}")
+    assert deleted.status_code == 409
+    assert "進行中" in deleted.get_json()["msg"]
