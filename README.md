@@ -55,6 +55,10 @@ For a clean deployment:
 Runtime files and operational defaults are documented in
 [docs/For_developer.md](docs/For_developer.md).
 
+Optional root WebTerminal support is documented in
+[docs/web_terminal_qemu.md](docs/web_terminal_qemu.md). It is disabled by
+default and requires `./install_web_terminal_qemu_dependencies.sh` before use.
+
 ## Local Checks
 
 Before pushing:

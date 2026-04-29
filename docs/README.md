@@ -13,6 +13,8 @@ short [README](../README.md).
   phase notes
 - [Implementation Workflow](implementation_workflow.md): development workflow
   and implementation notes
+- [WebTerminal QEMU/libvirt](web_terminal_qemu.md): optional root VM terminal
+  setup, health checks, and security model
 
 ## Security And Release
 

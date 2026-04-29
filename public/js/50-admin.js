@@ -57,6 +57,7 @@ function switchModuleTab(tab) {
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
+  const canAccessWebTerminal = currentUser === "root";
 
   let normTab = tab;
   const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
@@ -69,6 +70,7 @@ function switchModuleTab(tab) {
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
+  if (tab === "web-terminal" && !canAccessWebTerminal) normTab = fallbackModule();
   if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
   if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
   if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
@@ -83,6 +85,7 @@ function switchModuleTab(tab) {
   const modGames = $("module-games");
   const modComfyui = $("module-comfyui");
   const modEconomy = $("module-economy");
+  const modWebTerminal = $("module-web-terminal");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
@@ -95,6 +98,7 @@ function switchModuleTab(tab) {
   const mGames = $("tab-module-games");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
+  const mWebTerminal = $("tab-module-web-terminal");
   const mAccounts = $("tab-module-accounts");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
@@ -108,6 +112,7 @@ function switchModuleTab(tab) {
   if (modGames) modGames.classList.toggle("active", normTab === "games");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
+  if (modWebTerminal) modWebTerminal.classList.toggle("active", normTab === "web-terminal");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
@@ -120,6 +125,7 @@ function switchModuleTab(tab) {
   if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
+  if (mWebTerminal) mWebTerminal.classList.toggle("active", normTab === "web-terminal");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
@@ -151,6 +157,9 @@ function switchModuleTab(tab) {
   }
   if (normTab === "economy" && canAccessEconomy && typeof loadEconomyDashboard === "function") {
     loadEconomyDashboard();
+  }
+  if (normTab === "web-terminal" && canAccessWebTerminal && typeof loadWebTerminalQemu === "function") {
+    loadWebTerminalQemu();
   }
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
@@ -1141,6 +1150,15 @@ async function loadSettings() {
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
+  if ($("s-web-terminal-enabled")) $("s-web-terminal-enabled").checked = !!s.web_terminal_enabled;
+  if ($("s-web-terminal-qemu-distro")) $("s-web-terminal-qemu-distro").value = s.web_terminal_qemu_distro || "ubuntu-22.04";
+  if ($("s-web-terminal-qemu-network-mode")) $("s-web-terminal-qemu-network-mode").value = s.web_terminal_qemu_network_mode || "none";
+  if ($("s-web-terminal-qemu-storage-dir")) $("s-web-terminal-qemu-storage-dir").value = s.web_terminal_qemu_storage_dir || "/var/lib/hackme-vms";
+  if ($("s-web-terminal-qemu-base-image-path")) $("s-web-terminal-qemu-base-image-path").value = s.web_terminal_qemu_base_image_path || "";
+  if ($("s-web-terminal-qemu-vcpus")) $("s-web-terminal-qemu-vcpus").value = s.web_terminal_qemu_vcpus || 1;
+  if ($("s-web-terminal-qemu-memory-mb")) $("s-web-terminal-qemu-memory-mb").value = s.web_terminal_qemu_memory_mb || 1024;
+  if ($("s-web-terminal-qemu-disk-gb")) $("s-web-terminal-qemu-disk-gb").value = s.web_terminal_qemu_disk_gb || 10;
+  if ($("s-web-terminal-qemu-idle-timeout-seconds")) $("s-web-terminal-qemu-idle-timeout-seconds").value = s.web_terminal_qemu_idle_timeout_seconds || 900;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
@@ -2096,6 +2114,15 @@ async function saveSettings() {
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
+    web_terminal_enabled: !!$("s-web-terminal-enabled")?.checked,
+    web_terminal_qemu_distro: $("s-web-terminal-qemu-distro")?.value || "ubuntu-22.04",
+    web_terminal_qemu_network_mode: $("s-web-terminal-qemu-network-mode")?.value || "none",
+    web_terminal_qemu_storage_dir: ($("s-web-terminal-qemu-storage-dir")?.value || "/var/lib/hackme-vms").trim(),
+    web_terminal_qemu_base_image_path: ($("s-web-terminal-qemu-base-image-path")?.value || "").trim(),
+    web_terminal_qemu_vcpus: parseInt($("s-web-terminal-qemu-vcpus")?.value || "1"),
+    web_terminal_qemu_memory_mb: parseInt($("s-web-terminal-qemu-memory-mb")?.value || "1024"),
+    web_terminal_qemu_disk_gb: parseInt($("s-web-terminal-qemu-disk-gb")?.value || "10"),
+    web_terminal_qemu_idle_timeout_seconds: parseInt($("s-web-terminal-qemu-idle-timeout-seconds")?.value || "900"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",

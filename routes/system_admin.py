@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from flask import request, send_file
 
 from services.access_controls import (
@@ -39,6 +40,11 @@ from services.upload_security import (
     ensure_upload_security_schema,
     get_cloud_drive_security_policy,
     update_cloud_drive_security_policy,
+)
+from services.web_terminal_qemu import (
+    QemuWebTerminalManager,
+    bridge_ssh_to_websocket,
+    public_config,
 )
 
 
@@ -116,6 +122,18 @@ def register_system_admin_routes(app, deps):
     snapshot_service = deps.get("snapshot_service")
     integrity_guard = deps.get("integrity_guard")
     verify_audit_integrity = deps["verify_audit_integrity"]
+    web_terminal_manager = deps.get("web_terminal_manager") or QemuWebTerminalManager(
+        base_dir=BASE_DIR,
+        storage_dir=STORAGE_DIR,
+        get_settings=get_system_settings,
+        audit=audit,
+    )
+
+    try:
+        from flask_sock import Sock
+        sock = Sock(app)
+    except Exception:
+        sock = None
 
     def default_schedule_server_restart(*, reason, delay_seconds=1.25):
         if app.testing:
@@ -1156,6 +1174,98 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"integrity guard unavailable"}), 503
         return json_resp({"ok":True,"report":integrity_guard.export_report(),"approve_confirm":CONFIRM_APPROVE})
 
+    # ── Root Web Terminal: libvirt/KVM edition ────────────────────────────────
+    @app.route("/api/root/web-terminal/qemu/config", methods=["GET"])
+    @require_csrf_safe
+    def root_web_terminal_qemu_config():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        config = public_config(web_terminal_manager.config())
+        return json_resp({
+            "ok": True,
+            "config": config,
+            "websocket_available": sock is not None,
+            "provider": "libvirt-qemu",
+        })
+
+    @app.route("/api/root/web-terminal/qemu/health", methods=["GET", "POST"])
+    @require_csrf_safe
+    def root_web_terminal_qemu_health():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        result = web_terminal_manager.health()
+        audit(
+            "WEB_TERMINAL_QEMU_HEALTH_CHECK",
+            get_client_ip(),
+            user=actor["username"],
+            success=bool(result.get("ok")),
+            ua=get_ua(),
+            detail=json.dumps({"ok": result.get("ok"), "failed": [r["name"] for r in result.get("checks", []) if not r.get("ok")]}, ensure_ascii=False),
+        )
+        status = 200 if result.get("ok") else 503
+        return json_resp({"ok": bool(result.get("ok")), "health": result, "websocket_available": sock is not None}), status
+
+    @app.route("/api/root/web-terminal/qemu/sessions", methods=["GET", "POST"])
+    @require_csrf_safe
+    def root_web_terminal_qemu_sessions():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        if request.method == "GET":
+            return json_resp({"ok": True, "sessions": web_terminal_manager.list_sessions()})
+        if sock is None:
+            audit("WEB_TERMINAL_QEMU_SESSION_CREATE_BLOCKED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail="flask-sock unavailable")
+            return json_resp({"ok": False, "msg": "WebSocket 支援尚未安裝，請執行 ./install_web_terminal_qemu_dependencies.sh --python"}), 503
+        session, err = web_terminal_manager.create_session(actor=dict(actor), ip=get_client_ip(), ua=get_ua())
+        if err:
+            return json_resp({"ok": False, "msg": err, "health": web_terminal_manager.health()}), 503
+        return json_resp({"ok": True, "session": session}), 202
+
+    @app.route("/api/root/web-terminal/qemu/sessions/<session_id>", methods=["GET", "DELETE"])
+    @require_csrf_safe
+    def root_web_terminal_qemu_session_detail(session_id):
+        actor, error = require_root_actor()
+        if error:
+            return error
+        session = web_terminal_manager.get_session(session_id)
+        if not session:
+            return json_resp({"ok": False, "msg": "找不到 terminal session"}), 404
+        if request.method == "GET":
+            return json_resp({"ok": True, "session": session.payload()})
+        ok, msg = web_terminal_manager.close_session(session_id, actor=dict(actor), ip=get_client_ip(), reason="root_delete")
+        if not ok:
+            return json_resp({"ok": False, "msg": msg}), 500
+        return json_resp({"ok": True, "msg": "terminal session 已關閉"})
+
+    if sock is not None:
+        @sock.route("/api/root/web-terminal/qemu/sessions/<session_id>/ws")
+        def root_web_terminal_qemu_ws(ws, session_id):
+            actor, error = require_root_actor()
+            if error:
+                try:
+                    ws.send("未授權或非 root，連線關閉。\r\n")
+                finally:
+                    ws.close()
+                return
+            session = web_terminal_manager.get_session(session_id)
+            if not session:
+                ws.send("找不到 terminal session。\r\n")
+                ws.close()
+                return
+            try:
+                command = web_terminal_manager.websocket_ssh_command(session_id)
+                audit("WEB_TERMINAL_QEMU_WS_OPEN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=json.dumps({"session_id": session_id, "vm_name": session.vm_name}, ensure_ascii=False))
+                bridge_ssh_to_websocket(command, ws, idle_timeout_seconds=web_terminal_manager.config()["idle_timeout_seconds"])
+                audit("WEB_TERMINAL_QEMU_WS_CLOSE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=json.dumps({"session_id": session_id, "vm_name": session.vm_name}, ensure_ascii=False))
+            except Exception as exc:
+                audit("WEB_TERMINAL_QEMU_WS_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=json.dumps({"session_id": session_id, "error": str(exc)}, ensure_ascii=False))
+                try:
+                    ws.send(f"Web Terminal session 已關閉：{exc}\r\n")
+                finally:
+                    ws.close()
+
     # ── 系統參數（超級管理者 only）───────────────────────────────────────────────
     @app.route("/api/admin/settings", methods=["GET","PUT"])
     @require_csrf_safe
@@ -1224,6 +1334,51 @@ def register_system_admin_routes(app, deps):
                     return json_resp({"ok":False,"msg":f"cloud_drive_storage_root 不安全或格式錯誤：{exc}"}), 400
             else:
                 data["cloud_drive_storage_root"] = ""
+        if "web_terminal_enabled" in data:
+            data["web_terminal_enabled"] = bool(data.get("web_terminal_enabled"))
+        if "web_terminal_qemu_distro" in data:
+            distro = str(data.get("web_terminal_qemu_distro") or "").strip()
+            if distro not in {"ubuntu-22.04", "ubuntu-24.04"}:
+                return json_resp({"ok":False,"msg":"web_terminal_qemu_distro 必須是 ubuntu-22.04 或 ubuntu-24.04"}), 400
+            data["web_terminal_qemu_distro"] = distro
+        if "web_terminal_qemu_network_mode" in data:
+            mode = str(data.get("web_terminal_qemu_network_mode") or "").strip()
+            if mode not in {"none", "nat", "restricted"}:
+                return json_resp({"ok":False,"msg":"web_terminal_qemu_network_mode 必須是 none、nat 或 restricted"}), 400
+            data["web_terminal_qemu_network_mode"] = mode
+        if "web_terminal_qemu_libvirt_uri" in data:
+            uri = str(data.get("web_terminal_qemu_libvirt_uri") or "").strip()
+            if uri != "qemu:///system":
+                return json_resp({"ok":False,"msg":"第一版只允許 qemu:///system"}), 400
+            data["web_terminal_qemu_libvirt_uri"] = uri
+        if "web_terminal_qemu_storage_dir" in data:
+            raw_dir = str(data.get("web_terminal_qemu_storage_dir") or "").strip()
+            try:
+                # This validates an absolute non-project host path without creating it.
+                web_terminal_manager.config()  # keep manager initialized for tests
+                from services.web_terminal_qemu import validate_vm_root
+                data["web_terminal_qemu_storage_dir"] = str(validate_vm_root(raw_dir, project_base_dir=BASE_DIR))
+            except Exception as exc:
+                return json_resp({"ok":False,"msg":f"web_terminal_qemu_storage_dir 不安全或格式錯誤：{exc}"}), 400
+        if "web_terminal_qemu_base_image_path" in data:
+            raw_image = str(data.get("web_terminal_qemu_base_image_path") or "").strip()
+            if raw_image and (not os.path.isabs(raw_image) or ".." in Path(raw_image).parts):
+                return json_resp({"ok":False,"msg":"web_terminal_qemu_base_image_path 必須是安全的絕對路徑"}), 400
+            data["web_terminal_qemu_base_image_path"] = raw_image
+        for key, lo, hi in (
+            ("web_terminal_qemu_vcpus", 1, 4),
+            ("web_terminal_qemu_memory_mb", 512, 8192),
+            ("web_terminal_qemu_disk_gb", 5, 100),
+            ("web_terminal_qemu_idle_timeout_seconds", 60, 86400),
+        ):
+            if key in data:
+                try:
+                    value = int(data.get(key))
+                except Exception:
+                    return json_resp({"ok":False,"msg":f"{key} 必須是 {lo}-{hi} 的整數"}), 400
+                if value < lo or value > hi:
+                    return json_resp({"ok":False,"msg":f"{key} 必須是 {lo}-{hi} 的整數"}), 400
+                data[key] = value
         if "captcha_mode" in data:
             raw_mode = str(data.get("captcha_mode") or "").strip().lower()
             if raw_mode and normalize_captcha_mode(raw_mode) != raw_mode:

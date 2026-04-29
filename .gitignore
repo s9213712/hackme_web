@@ -18,6 +18,7 @@ SECURITY.md
 chats/*.jsonl
 !chats/.gitkeep
 storage/
+public/vendor/
 anchors/*.json
 anchors/*.jsonl
 !anchors/.gitkeep

@@ -11,6 +11,7 @@ function bindUiEvents() {
   const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
+  const tabModuleWebTerminal = $("tab-module-web-terminal");
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
@@ -64,6 +65,9 @@ function bindUiEvents() {
   const adminReportsBulkApproveBtn = $("admin-reports-bulk-approve");
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
+  const webTerminalHealth = $("web-terminal-health-btn");
+  const webTerminalStart = $("web-terminal-start-btn");
+  const webTerminalClose = $("web-terminal-close-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const rootStorageRefresh = $("root-storage-refresh-btn");
   const rootStorageSave = $("root-storage-save-btn");
@@ -190,6 +194,7 @@ function bindUiEvents() {
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
+  if (tabModuleWebTerminal) tabModuleWebTerminal.addEventListener("click", () => switchModuleTab("web-terminal"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
@@ -411,6 +416,9 @@ function bindUiEvents() {
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  if (webTerminalHealth) webTerminalHealth.addEventListener("click", loadWebTerminalQemu);
+  if (webTerminalStart) webTerminalStart.addEventListener("click", startWebTerminalQemu);
+  if (webTerminalClose) webTerminalClose.addEventListener("click", closeWebTerminalQemu);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (rootStorageRefresh) rootStorageRefresh.addEventListener("click", loadRootStorageUsers);
   if (rootStorageSave) rootStorageSave.addEventListener("click", saveRootStorageOverride);
@@ -462,6 +470,7 @@ setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
   _csrfToken = readCookie("csrf_token");
   bindUiEvents();
   if (typeof loadCaptchaChallenge === "function") loadCaptchaChallenge();
+  if (typeof setupWebTerminalInput === "function") setupWebTerminalInput();
   // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死
   async function safeFetch(url, opts = {}) {
     const ctrl = new AbortController();

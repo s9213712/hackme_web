@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
+    <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
     <link rel="stylesheet" href="/styles.css?v=20260429-ui-polish" />
 </head>
 <body>
@@ -222,6 +223,7 @@
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
+        <button class="tab" id="tab-module-web-terminal" style="display:none;">WebTerminal</button>
         <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
@@ -1195,6 +1197,41 @@
     </div>
   </div>
 
+  <div class="module-section" id="module-web-terminal">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="drive-card-heading">
+        <div>
+          <div class="mini-title">WebTerminal</div>
+          <div class="drive-card-sub">libvirt/KVM VM console。僅 root 可用，持久資料來源仍是雲端硬碟。</div>
+        </div>
+        <button class="btn" type="button" id="web-terminal-health-btn">環境檢查</button>
+      </div>
+      <div class="settings-option-grid" style="margin-top:.75rem;">
+        <div class="field">
+          <label>狀態</label>
+          <div id="web-terminal-status" class="drive-card-sub">尚未檢查</div>
+        </div>
+        <div class="field">
+          <label>Session</label>
+          <select id="web-terminal-session-select"><option value="">尚無 session</option></select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn btn-primary" type="button" id="web-terminal-start-btn">開啟 Terminal</button>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn" type="button" id="web-terminal-close-btn">關閉 Session</button>
+        </div>
+      </div>
+      <div id="web-terminal-health" class="drive-file-list" style="margin-top:.75rem;"></div>
+      <div id="web-terminal-box" style="margin-top:.75rem;min-height:420px;background:#06070a;border:1px solid rgba(255,255,255,.12);border-radius:8px;overflow:hidden;">
+        <pre id="web-terminal-output" style="margin:0;padding:1rem;color:#d6f5d6;font-size:.82rem;line-height:1.45;white-space:pre-wrap;">Terminal 尚未連線。</pre>
+      </div>
+      <div id="web-terminal-msg" class="msg"></div>
+    </div>
+  </div>
+
   <div class="module-section" id="module-accounts">
     <div class="admin-wrap" id="admin-wrap">
       <!-- Tabs -->
@@ -1846,6 +1883,19 @@
               <input type="number" id="s-comfyui-max-batch-size" min="1" max="8" value="1" />
             </div>
             <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前固定連線到 <code>http://127.0.0.1:&lt;port&gt;</code>。張數上限預設 1；root 可調高，儲存後立即生效，不需重啟。</div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">WebTerminal（選用，libvirt/KVM）</div>
+            <div class="settings-option-grid">
+              <div class="field"><label><input type="checkbox" id="s-web-terminal-enabled" /> 啟用 root WebTerminal</label></div>
+              <div class="field"><label>Ubuntu 發行版</label><select id="s-web-terminal-qemu-distro"><option value="ubuntu-22.04">Ubuntu 22.04</option><option value="ubuntu-24.04">Ubuntu 24.04</option></select></div>
+              <div class="field"><label>網路模式</label><select id="s-web-terminal-qemu-network-mode"><option value="none">離線</option><option value="nat">NAT 出網</option><option value="restricted">受限 NAT</option></select></div>
+              <div class="field"><label>VM 儲存根目錄</label><input type="text" id="s-web-terminal-qemu-storage-dir" placeholder="/var/lib/hackme-vms" /></div>
+              <div class="field"><label>Base image 路徑</label><input type="text" id="s-web-terminal-qemu-base-image-path" placeholder="留空使用預設 cloud image 路徑" /></div>
+              <div class="field"><label>vCPU</label><input type="number" id="s-web-terminal-qemu-vcpus" min="1" max="4" /></div>
+              <div class="field"><label>記憶體 MB</label><input type="number" id="s-web-terminal-qemu-memory-mb" min="512" max="8192" /></div>
+              <div class="field"><label>磁碟 GB</label><input type="number" id="s-web-terminal-qemu-disk-gb" min="5" max="100" /></div>
+              <div class="field"><label>閒置逾時秒數</label><input type="number" id="s-web-terminal-qemu-idle-timeout-seconds" min="60" max="86400" /></div>
+            </div>
+            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">啟用前請先在 repo 根目錄執行 <code>./install_web_terminal_qemu_dependencies.sh --all</code>。Cloud Drive 第一版採 staged sync 設計，不把主系統目錄直接掛進 VM。</div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">自動 Snapshot</div>
             <div class="field">
               <label><input type="checkbox" id="s-snapshot-daily-auto-enabled" /> 每日自動建立 snapshot</label>
@@ -2333,6 +2383,7 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
+<script src="/vendor/xterm/xterm.js" defer></script>
 <script src="/js/00-core.js?v=20260429-chat-attachment-delete" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
@@ -2345,6 +2396,7 @@
 <script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
+<script src="/js/39-web-terminal-qemu.js?v=20260429-qemu-terminal" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260429-storage-capacity-audit" defer></script>
 <script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
