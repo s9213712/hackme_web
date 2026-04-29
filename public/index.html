@@ -1031,6 +1031,7 @@
           </div>
           <div class="drive-file-actions">
             <button class="btn" id="economy-root-report-btn" type="button">更新報告</button>
+            <button class="btn" id="economy-backup-btn" type="button">建立帳本備份</button>
             <button class="btn" id="economy-seal-btn" type="button">封存未封帳本</button>
             <button class="btn" id="economy-verify-btn" type="button">驗證全鏈</button>
           </div>
@@ -1042,6 +1043,22 @@
         </div>
         <div class="drive-card-sub" id="economy-chain-countdown" style="margin-top:.6rem;">封塊倒數：-</div>
         <div class="drive-card-sub" id="economy-chain-loaded-at" style="margin-top:.25rem;">最後更新 -</div>
+        <div class="drive-card" id="economy-recovery-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">帳本備份與半自動恢復</div>
+              <div class="drive-card-sub">異常時會進入 safe mode，只產生 forensic bundle 與恢復方案；root 確認後才會套用備份並由 ledger 重建 wallet。</div>
+            </div>
+            <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+          </div>
+          <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
+          <div class="settings-option-grid" style="margin-top:.65rem;">
+            <div class="field"><label>恢復備份</label><select id="economy-recovery-backup-id"><option value="">尚無可用備份</option></select></div>
+            <div class="field"><label>確認字串</label><input type="text" id="economy-recovery-confirm" placeholder="RESTORE POINTSCHAIN" /></div>
+          </div>
+          <div id="economy-restore-plan-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <div id="economy-backup-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
         <div class="drive-card" id="economy-account-query-card" style="margin-top:.75rem;">
           <div class="drive-card-heading">
             <div>
@@ -2281,7 +2298,7 @@
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260429-root-storage-override" defer></script>
-<script src="/js/55-economy.js?v=20260429-wallet-guard" defer></script>
+<script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
 <script src="/js/90-bootstrap.js?v=20260429-root-storage-override" defer></script>
 </body>
 </html>

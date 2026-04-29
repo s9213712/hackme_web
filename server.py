@@ -976,7 +976,7 @@ def restrict_cors():
         return None
     if not request.path.startswith("/api"):
         return None
-    if request.path in ("/api/csrf-token", "/api/logout", "/api/me", "/api/captcha/challenge"):
+    if request.path in ("/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/captcha/challenge"):
         return None
     if request.path == "/api/login":
         data = request.get_json(silent=True) if request.is_json else {}
@@ -1013,7 +1013,7 @@ def enforce_feature_flags():
         return None
     # The settings endpoints must stay reachable, otherwise root can lock the
     # site into a disabled state with no way back through the UI/API.
-    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/captcha/challenge", "/api/me", "/api/login", "/api/logout"):
+    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/captcha/challenge", "/api/me", "/api/login", "/api/logout", "/api/session/idle-timeout"):
         return None
     feature_key = feature_gate_for_path(request.path)
     if not feature_key or is_feature_enabled(feature_key):
@@ -1036,7 +1036,7 @@ def enforce_feature_flags():
 def enforce_required_password_change():
     if request.method == "OPTIONS" or not request.path.startswith("/api"):
         return None
-    allowed = {"/api/csrf-token", "/api/logout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength", "/api/captcha/challenge"}
+    allowed = {"/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength", "/api/captcha/challenge"}
     if request.path in allowed:
         return None
     actor = get_current_user_ctx()
@@ -1316,6 +1316,9 @@ def start_points_chain_block_worker():
         actor = {"username": "system", "role": "system"}
         while True:
             try:
+                backup_result = points_service.create_scheduled_backup_if_due()
+                if backup_result.get("created"):
+                    audit("POINTS_SCHEDULED_BACKUP_CREATED", "0.0.0.0", user="system", success=bool(backup_result.get("ok")), detail=backup_result.get("backup_id"))
                 result = points_service.seal_due_block(actor=actor, ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds, limit=500)
                 if result.get("sealed"):
                     block = result.get("block") or {}

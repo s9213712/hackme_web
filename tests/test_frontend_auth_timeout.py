@@ -9,13 +9,29 @@ def test_inactivity_timeout_message_uses_configured_duration():
     auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
 
     assert "const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;" in core
+    assert 'const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";' in core
     assert "formatInactivityTimeoutLabel" in core
     assert "已閒置 ${formatInactivityTimeoutLabel()}，系統將自動登出。" in core
-    assert "await doLogout({ immediate: true });" in core
+    assert "await forceIdleTimeoutLogout();" in core
     assert "function showLoginScreen()" in core
+    assert "function markIdleTimeoutLogoutPending()" in core
+    assert "function hasIdleTimeoutLogoutPending()" in core
+    assert "async function forceIdleTimeoutLogout()" in auth
+    assert 'API + "/session/idle-timeout"' in auth
+    assert '"X-Idle-Timeout-Logout": "1"' in auth
+    assert "markIdleTimeoutLogoutPending();" in auth
+    assert "clearIdleTimeoutLogoutPending();" in auth
     assert "showLoginScreen();" in auth
     assert "if (!res.ok && !immediate)" in auth
     assert "已超過 3 分鐘未操作" not in core
+
+
+def test_pending_idle_timeout_blocks_auto_session_restore_on_refresh():
+    bootstrap = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+
+    assert "hasIdleTimeoutLogoutPending()" in bootstrap
+    assert "await forceIdleTimeoutLogout();" in bootstrap
+    assert "return;" in bootstrap
 
 
 def test_internal_test_login_token_is_hidden_outside_internal_test_mode():

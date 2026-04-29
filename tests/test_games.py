@@ -111,6 +111,42 @@ def test_chess_checkmate_and_missing_king_finish_game():
     assert game_status(missing_white_king, "white") == {"status": "finished", "winner_color": "black", "reason": "king_missing"}
 
 
+def test_chess_engine_supports_castling_en_passant_and_promotion():
+    board = initial_board()
+    for color, from_square, to_square in (
+        ("white", "e2", "e4"),
+        ("black", "e7", "e5"),
+        ("white", "g1", "f3"),
+        ("black", "b8", "c6"),
+        ("white", "f1", "c4"),
+        ("black", "g8", "f6"),
+    ):
+        board = validate_move(board, color, from_square, to_square)["board"]
+    castle = validate_move(board, "white", "e1", "g1")
+    assert castle["castle"] is True
+    assert castle["board"]["g1"] == "K"
+    assert castle["board"]["f1"] == "R"
+
+    board = initial_board()
+    for color, from_square, to_square in (
+        ("white", "e2", "e4"),
+        ("black", "h7", "h5"),
+        ("white", "e4", "e5"),
+        ("black", "d7", "d5"),
+    ):
+        board = validate_move(board, color, from_square, to_square)["board"]
+    en_passant = validate_move(board, "white", "e5", "d6")
+    assert en_passant["en_passant"] is True
+    assert en_passant["captured"] == "p"
+    assert "d5" not in en_passant["board"]
+    assert en_passant["board"]["d6"] == "P"
+
+    promotion_board = {"e1": "K", "a8": "k", "e7": "P"}
+    promoted = validate_move(promotion_board, "white", "e7", "e8")
+    assert promoted["promotion"] == "q"
+    assert promoted["board"]["e8"] == "Q"
+
+
 def test_chess_practice_match_accepts_player_move_and_computer_reply(tmp_path):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
@@ -130,6 +166,41 @@ def test_chess_practice_match_accepts_player_move_and_computer_reply(tmp_path):
     assert data["match"]["current_turn"] == "white"
     assert len(data["match"]["move_history"]) == 2
     assert data["match"]["move_history"][1]["computer"] is True
+
+
+def test_chess_pvp_checkmate_finishes_match(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    invite = client.post("/api/games/chess/invites", json={"opponent_username": "bob"})
+    assert invite.status_code == 200
+    invite_id = invite.get_json()["invite_id"]
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    accepted = client.post(f"/api/games/chess/invites/{invite_id}/accept", json={})
+    assert accepted.status_code == 200
+    match_id = accepted.get_json()["match_id"]
+
+    moves = [
+        ({"id": 2, "username": "alice", "role": "user"}, "f2", "f3"),
+        ({"id": 3, "username": "bob", "role": "user"}, "e7", "e5"),
+        ({"id": 2, "username": "alice", "role": "user"}, "g2", "g4"),
+        ({"id": 3, "username": "bob", "role": "user"}, "d8", "h4"),
+    ]
+    final = None
+    for actor, from_square, to_square in moves:
+        actor_box["actor"] = actor
+        final = client.post(f"/api/games/chess/matches/{match_id}/move", json={"from": from_square, "to": to_square})
+        assert final.status_code == 200
+
+    match = final.get_json()["match"]
+    assert match["status"] == "finished"
+    assert match["result_reason"] == "checkmate"
+    assert match["winner_username"] == "bob"
+    assert match["legal_moves"] == []
 
 
 def test_chess_invite_accept_creates_pvp_match_and_leaderboard(tmp_path):

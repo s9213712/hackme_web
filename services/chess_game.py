@@ -1,7 +1,10 @@
-import copy
+import chess
+
 
 FILES = "abcdefgh"
 RANKS = "12345678"
+FEN_KEY = "__fen__"
+START_FEN = chess.STARTING_FEN
 START_BOARD = {
     "a1": "R", "b1": "N", "c1": "B", "d1": "Q", "e1": "K", "f1": "B", "g1": "N", "h1": "R",
     "a2": "P", "b2": "P", "c2": "P", "d2": "P", "e2": "P", "f2": "P", "g2": "P", "h2": "P",
@@ -15,7 +18,7 @@ PIECE_LABELS = {
 
 
 def initial_board():
-    return dict(START_BOARD)
+    return _board_to_state(chess.Board())
 
 
 def color_of(piece):
@@ -32,14 +35,6 @@ def is_square(square):
     return isinstance(square, str) and len(square) == 2 and square[0] in FILES and square[1] in RANKS
 
 
-def offset(square, df, dr):
-    file_i = FILES.index(square[0]) + df
-    rank_i = RANKS.index(square[1]) + dr
-    if file_i < 0 or file_i >= 8 or rank_i < 0 or rank_i >= 8:
-        return None
-    return FILES[file_i] + RANKS[rank_i]
-
-
 def normalize_board(board):
     if not isinstance(board, dict):
         return initial_board()
@@ -47,97 +42,51 @@ def normalize_board(board):
     for square, piece in board.items():
         if is_square(square) and piece in PIECE_LABELS:
             clean[square] = piece
+    if board.get(FEN_KEY):
+        clean[FEN_KEY] = board.get(FEN_KEY)
+    if clean == START_BOARD:
+        clean[FEN_KEY] = START_FEN
     return clean
 
 
-def _slide_moves(board, square, color, directions):
-    moves = []
-    for df, dr in directions:
-        cur = square
-        while True:
-            cur = offset(cur, df, dr)
-            if not cur:
-                break
-            target = board.get(cur)
-            if not target:
-                moves.append(cur)
-                continue
-            if color_of(target) != color:
-                moves.append(cur)
-            break
-    return moves
+def _side_to_bool(color):
+    return chess.WHITE if color == "white" else chess.BLACK
 
 
-def pseudo_targets(board, square):
-    piece = board.get(square)
-    if not piece:
-        return []
-    color = color_of(piece)
-    lower = piece.lower()
-    if lower == "p":
-        direction = 1 if color == "white" else -1
-        start_rank = "2" if color == "white" else "7"
-        moves = []
-        one = offset(square, 0, direction)
-        if one and not board.get(one):
-            moves.append(one)
-            two = offset(square, 0, direction * 2)
-            if square[1] == start_rank and two and not board.get(two):
-                moves.append(two)
-        for df in (-1, 1):
-            cap = offset(square, df, direction)
-            if cap and board.get(cap) and color_of(board[cap]) != color:
-                moves.append(cap)
-        return moves
-    if lower == "n":
-        moves = []
-        for df, dr in ((1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)):
-            target = offset(square, df, dr)
-            if target and color_of(board.get(target)) != color:
-                moves.append(target)
-        return moves
-    if lower == "b":
-        return _slide_moves(board, square, color, ((1, 1), (1, -1), (-1, 1), (-1, -1)))
-    if lower == "r":
-        return _slide_moves(board, square, color, ((1, 0), (-1, 0), (0, 1), (0, -1)))
-    if lower == "q":
-        return _slide_moves(board, square, color, ((1, 1), (1, -1), (-1, 1), (-1, -1), (1, 0), (-1, 0), (0, 1), (0, -1)))
-    if lower == "k":
-        moves = []
-        for df in (-1, 0, 1):
-            for dr in (-1, 0, 1):
-                if df == 0 and dr == 0:
-                    continue
-                target = offset(square, df, dr)
-                if target and color_of(board.get(target)) != color:
-                    moves.append(target)
-        return moves
-    return []
+def _square_name(square):
+    return chess.square_name(square)
 
 
-def attacked_squares(board, by_color):
-    attacked = set()
-    for square, piece in board.items():
-        if color_of(piece) != by_color:
-            continue
-        lower = piece.lower()
-        if lower == "p":
-            direction = 1 if by_color == "white" else -1
-            for df in (-1, 1):
-                target = offset(square, df, direction)
-                if target:
-                    attacked.add(target)
-        elif lower == "k":
-            for df in (-1, 0, 1):
-                for dr in (-1, 0, 1):
-                    if df == 0 and dr == 0:
-                        continue
-                    target = offset(square, df, dr)
-                    if target:
-                        attacked.add(target)
-        else:
-            attacked.update(pseudo_targets(board, square))
-    return attacked
+def _board_to_state(board):
+    state = {
+        _square_name(square): piece.symbol()
+        for square, piece in board.piece_map().items()
+    }
+    state[FEN_KEY] = board.fen()
+    return state
+
+
+def _board_from_state(state, turn=None):
+    state = normalize_board(state)
+    if state.get(FEN_KEY):
+        try:
+            board = chess.Board(state[FEN_KEY])
+            if turn is not None:
+                board.turn = _side_to_bool(turn)
+            return board
+        except Exception:
+            pass
+    board = chess.Board(None)
+    for square, piece in state.items():
+        if is_square(square) and piece in PIECE_LABELS:
+            board.set_piece_at(chess.parse_square(square), chess.Piece.from_symbol(piece))
+    if state == START_BOARD:
+        board.castling_rights = chess.BB_A1 | chess.BB_H1 | chess.BB_A8 | chess.BB_H8
+    else:
+        board.castling_rights = 0
+    board.turn = _side_to_bool(turn or "white")
+    board.clear_stack()
+    return board
 
 
 def king_piece(color):
@@ -145,91 +94,107 @@ def king_piece(color):
 
 
 def king_square(board, color):
-    want = king_piece(color)
-    for square, piece in board.items():
-        if piece == want:
-            return square
-    return None
+    board_obj = _board_from_state(board, color)
+    square = board_obj.king(_side_to_bool(color))
+    return _square_name(square) if square is not None else None
 
 
 def in_check(board, color):
-    king = king_square(board, color)
-    if not king:
+    board_obj = _board_from_state(board, color)
+    if board_obj.king(_side_to_bool(color)) is None:
         return True
-    return king in attacked_squares(board, opponent(color))
+    return board_obj.is_check()
 
 
-def apply_move_to_board(board, from_square, to_square, promotion=None):
-    next_board = copy.deepcopy(board)
-    piece = next_board.pop(from_square)
-    captured = next_board.get(to_square)
-    if piece.lower() == "p" and to_square[1] in {"1", "8"}:
-        promoted = (promotion or "q").lower()
-        if promoted not in {"q", "r", "b", "n"}:
-            promoted = "q"
-        piece = promoted.upper() if color_of(piece) == "white" else promoted
-    next_board[to_square] = piece
-    return next_board, captured
+def _move_to_dict(board, move):
+    piece = board.piece_at(move.from_square)
+    captured = board.piece_at(move.to_square)
+    if board.is_en_passant(move):
+        capture_square = chess.square(chess.square_file(move.to_square), chess.square_rank(move.from_square))
+        captured = board.piece_at(capture_square)
+    return {
+        "from": _square_name(move.from_square),
+        "to": _square_name(move.to_square),
+        "piece": piece.symbol() if piece else "",
+        "captured": captured.symbol() if captured else None,
+        "promotion": chess.piece_symbol(move.promotion) if move.promotion else None,
+        "castle": bool(board.is_castling(move)),
+        "en_passant": bool(board.is_en_passant(move)),
+    }
 
 
 def legal_moves(board, color):
-    board = normalize_board(board)
-    if not king_square(board, color) or not king_square(board, opponent(color)):
+    board_obj = _board_from_state(board, color)
+    if board_obj.king(_side_to_bool(color)) is None or board_obj.king(_side_to_bool(opponent(color))) is None:
         return []
     moves = []
-    for from_square, piece in sorted(board.items()):
-        if color_of(piece) != color:
+    for move in board_obj.legal_moves:
+        target = board_obj.piece_at(move.to_square)
+        if target and target.piece_type == chess.KING:
             continue
-        for to_square in pseudo_targets(board, from_square):
-            if board.get(to_square) and color_of(board[to_square]) == color:
-                continue
-            if board.get(to_square) == king_piece(opponent(color)):
-                continue
-            next_board, captured = apply_move_to_board(board, from_square, to_square)
-            if not in_check(next_board, color):
-                moves.append({
-                    "from": from_square,
-                    "to": to_square,
-                    "piece": piece,
-                    "captured": captured,
-                    "promotion": "q" if piece.lower() == "p" and to_square[1] in {"1", "8"} else None,
-                })
+        moves.append(_move_to_dict(board_obj, move))
     return moves
+
+
+def _uci_for_request(board, from_square, to_square, promotion=None):
+    piece = board.piece_at(chess.parse_square(from_square))
+    suffix = ""
+    if piece and piece.piece_type == chess.PAWN and to_square[1] in {"1", "8"}:
+        promoted = str(promotion or "q").lower()
+        suffix = promoted if promoted in {"q", "r", "b", "n"} else "q"
+    return f"{from_square}{to_square}{suffix}"
+
+
+def apply_move_to_board(board, from_square, to_square, promotion=None, color=None):
+    board_obj = _board_from_state(board, color)
+    move = chess.Move.from_uci(_uci_for_request(board_obj, from_square, to_square, promotion))
+    if move not in board_obj.legal_moves:
+        raise ValueError("不合法的走法")
+    info = _move_to_dict(board_obj, move)
+    board_obj.push(move)
+    return _board_to_state(board_obj), info["captured"]
 
 
 def validate_move(board, color, from_square, to_square, promotion=None):
     if not is_square(from_square) or not is_square(to_square):
         raise ValueError("棋格格式錯誤")
-    board = normalize_board(board)
-    piece = board.get(from_square)
+    board_obj = _board_from_state(board, color)
+    piece = board_obj.piece_at(chess.parse_square(from_square))
     if not piece:
         raise ValueError("起點沒有棋子")
-    if color_of(piece) != color:
+    if color_of(piece.symbol()) != color:
         raise ValueError("現在不是這個棋子的回合")
-    if board.get(to_square) == king_piece(opponent(color)):
+    target_piece = board_obj.piece_at(chess.parse_square(to_square))
+    if target_piece and target_piece.piece_type == chess.KING:
         raise ValueError("不合法的走法：王不能被吃，必須以將死結束")
-    for move in legal_moves(board, color):
-        if move["from"] == from_square and move["to"] == to_square:
-            next_board, captured = apply_move_to_board(board, from_square, to_square, promotion)
-            move.update({"board": next_board, "captured": captured})
-            return move
-    raise ValueError("不合法的走法")
+    move = chess.Move.from_uci(_uci_for_request(board_obj, from_square, to_square, promotion))
+    if move not in board_obj.legal_moves:
+        raise ValueError("不合法的走法")
+    info = _move_to_dict(board_obj, move)
+    board_obj.push(move)
+    info["board"] = _board_to_state(board_obj)
+    return info
 
 
 def game_status(board, turn):
-    board = normalize_board(board)
-    if not king_square(board, turn):
+    board_obj = _board_from_state(board, turn)
+    if board_obj.king(_side_to_bool(turn)) is None:
         return {"status": "finished", "winner_color": opponent(turn), "reason": "king_missing"}
-    if not king_square(board, opponent(turn)):
+    if board_obj.king(_side_to_bool(opponent(turn))) is None:
         return {"status": "finished", "winner_color": turn, "reason": "king_missing"}
-    moves = legal_moves(board, turn)
-    if moves:
-        return {"status": "active", "winner_color": None, "reason": "check" if in_check(board, turn) else ""}
-    if in_check(board, turn):
+    if board_obj.is_checkmate():
         return {"status": "finished", "winner_color": opponent(turn), "reason": "checkmate"}
-    return {"status": "finished", "winner_color": None, "reason": "stalemate"}
+    if board_obj.is_stalemate():
+        return {"status": "finished", "winner_color": None, "reason": "stalemate"}
+    if board_obj.is_insufficient_material():
+        return {"status": "finished", "winner_color": None, "reason": "insufficient_material"}
+    if board_obj.is_seventyfive_moves():
+        return {"status": "finished", "winner_color": None, "reason": "seventyfive_moves"}
+    if board_obj.is_fivefold_repetition():
+        return {"status": "finished", "winner_color": None, "reason": "fivefold_repetition"}
+    return {"status": "active", "winner_color": None, "reason": "check" if board_obj.is_check() else ""}
 
 
 def board_rows(board):
-    board = normalize_board(board)
-    return [[board.get(file + rank, "") for file in FILES] for rank in reversed(RANKS)]
+    state = normalize_board(board)
+    return [[state.get(file + rank, "") for file in FILES] for rank in reversed(RANKS)]

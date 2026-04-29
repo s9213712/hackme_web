@@ -32,6 +32,7 @@ let dmThreads = [];
 let selectedDmThreadId = null;
 const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
+const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
 let inactivityCountdownTimer = null;
@@ -356,7 +357,8 @@ function resetInactivityTimer() {
   inactivityCountdownTimer = setInterval(updateInactivityCountdown, 1000);
   inactivityTimer = setTimeout(async () => {
     alert(`已閒置 ${formatInactivityTimeoutLabel()}，系統將自動登出。`);
-    await doLogout({ immediate: true });
+    if (typeof forceIdleTimeoutLogout === "function") await forceIdleTimeoutLogout();
+    else await doLogout({ immediate: true });
   }, inactivityLogoutMs);
 }
 
@@ -553,6 +555,18 @@ function startServerConnectionMonitor() {
 function getCsrfToken() { return _csrfToken; }
 
 let _csrfTokenRequest = null;
+
+function markIdleTimeoutLogoutPending() {
+  try { localStorage.setItem(IDLE_TIMEOUT_LOGOUT_STORAGE_KEY, String(Date.now())); } catch (_) {}
+}
+
+function clearIdleTimeoutLogoutPending() {
+  try { localStorage.removeItem(IDLE_TIMEOUT_LOGOUT_STORAGE_KEY); } catch (_) {}
+}
+
+function hasIdleTimeoutLogoutPending() {
+  try { return Boolean(localStorage.getItem(IDLE_TIMEOUT_LOGOUT_STORAGE_KEY)); } catch (_) { return false; }
+}
 
 async function fetchCsrfToken({ force = false } = {}) {
   const cookieToken = readCookie("csrf_token");

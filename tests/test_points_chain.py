@@ -32,7 +32,7 @@ def _db(tmp_path):
 
 
 def _service(tmp_path):
-    return PointsLedgerService(get_db=_db(tmp_path), chain_secret="test-secret")
+    return PointsLedgerService(get_db=_db(tmp_path), chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
 
 
 def test_points_transaction_updates_wallet_and_hash_chain(tmp_path):
@@ -185,6 +185,10 @@ def test_points_chain_seal_verify_and_proof(tmp_path):
     assert proof["ledger_hash"] == tx["ledger"]["ledger_hash"]
     assert verification["ok"] is True
     assert verification["counts"]["unsealed_entries"] == 0
+    backups = service.list_ledger_backups()
+    assert backups[0]["kind"] == "block_sealed"
+    assert backups[0]["verified"] == 1
+    assert backups[0]["ledger_row_count"] == 1
 
 
 def test_points_chain_verify_identifies_tampered_ledger(tmp_path):
@@ -216,6 +220,52 @@ def test_points_chain_verify_identifies_tampered_ledger(tmp_path):
     flagged = next(row for row in report["high_risk_ledger"] if row["ledger_uuid"] == tx["ledger"]["ledger_uuid"])
     assert flagged["verification_status"] == "tampered"
     assert flagged["verification_errors"][0]["type"] == "ledger_hash"
+    recovery = service.safe_mode_status()
+    assert recovery["safe_mode"] is True
+    assert recovery["forensic_bundle_id"]
+    assert recovery["restore_plan"]["auto_apply"] is False
+
+
+def test_points_chain_safe_mode_blocks_writes_and_root_restore_rebuilds_wallets(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    tx = service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=30,
+        action_type="test_credit",
+    )
+    sealed = service.seal_block(actor=actor, limit=100)
+    backup_id = sealed["backup"]["backup_id"]
+
+    conn = service.get_db()
+    try:
+        conn.execute("DROP TRIGGER trg_points_ledger_core_immutable")
+        conn.execute("UPDATE points_ledger SET amount=99 WHERE ledger_uuid=?", (tx["ledger"]["ledger_uuid"],))
+        conn.execute("UPDATE points_wallets SET soft_balance=999 WHERE user_id=1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    verification = service.verify_chain()
+    assert verification["ok"] is False
+    assert service.safe_mode_status()["safe_mode"] is True
+
+    with pytest.raises(ValueError, match="safe mode"):
+        service.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1, action_type="blocked")
+    with pytest.raises(ValueError, match="safe mode"):
+        service.seal_block(actor=actor, limit=100)
+
+    with pytest.raises(ValueError, match="confirm"):
+        service.restore_from_backup(actor=actor, backup_id=backup_id, confirm="wrong")
+
+    restored = service.restore_from_backup(actor=actor, backup_id=backup_id, confirm="RESTORE POINTSCHAIN")
+    assert restored["ok"] is True
+    assert restored["verification"]["ok"] is True
+    assert service.safe_mode_status()["safe_mode"] is False
+    assert service.get_wallet(1)["points_balance"] == 30
+    assert service.verify_chain()["ok"] is True
 
 
 def test_tampered_ledger_cannot_be_rolled_back_from_dirty_row(tmp_path):
@@ -267,7 +317,7 @@ def test_points_chain_seal_adds_local_signature_and_root_report(tmp_path):
     assert sealed["sealed"] is True
     assert report["verification"]["ok"] is True
     assert report["blocks"][0]["signature_algorithm"] == "hmac-sha256"
-    assert report["audit_logs"][0]["event_type"] in {"POINTS_BLOCK_SEALED", "LEDGER_APPEND"}
+    assert report["audit_logs"][0]["event_type"] in {"POINTS_LEDGER_BACKUP_CREATED", "POINTS_BLOCK_SEALED", "LEDGER_APPEND"}
     assert report["block_schedule"]["mode"] == "hybrid"
     assert report["block_schedule"]["ledger_threshold"] == 30
     assert report["block_schedule"]["max_interval_minutes"] == 24 * 60

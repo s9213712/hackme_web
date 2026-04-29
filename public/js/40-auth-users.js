@@ -31,6 +31,7 @@ async function doLogin() {
       flash($("li-msg"), json.msg || "登入失敗", false);
       return;
     }
+    clearIdleTimeoutLogoutPending();
     _csrfToken = null;
     const meRes = await fetch(API + "/me", { credentials: "same-origin" });
     const me = await meRes.json();
@@ -313,6 +314,22 @@ async function doLogout(options = {}) {
     if (!res.ok && !immediate) {
       flash($("li-msg"), "登出失敗，請稍後再試", false);
     }
+  } catch (_) {}
+  _csrfToken = null;
+  resetAuthState();
+}
+
+async function forceIdleTimeoutLogout() {
+  markIdleTimeoutLogoutPending();
+  showLoginScreen();
+  try {
+    const res = await fetch(API + "/session/idle-timeout", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "X-Idle-Timeout-Logout": "1" }
+    });
+    if (res.ok) clearIdleTimeoutLogoutPending();
   } catch (_) {}
   _csrfToken = null;
   resetAuthState();

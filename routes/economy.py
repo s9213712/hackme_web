@@ -320,6 +320,51 @@ def register_economy_routes(app, deps):
         result = points_service.verify_chain()
         return json_resp({"ok": result["ok"], "verification": result})
 
+    @app.route("/api/root/points/chain/recovery", methods=["GET"])
+    @require_csrf_safe
+    def root_points_chain_recovery():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return json_resp({
+            "ok": True,
+            "recovery": points_service.safe_mode_status(),
+            "backups": points_service.list_ledger_backups(limit=100),
+        })
+
+    @app.route("/api/root/points/chain/backups", methods=["POST"])
+    @require_csrf
+    def root_points_chain_backup():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = points_service.create_ledger_backup(reason="root_manual", kind="manual")
+            audit("POINTS_CHAIN_BACKUP", get_client_ip(), user=actor["username"], success=bool(result.get("ok")), ua=get_ua(), detail=result.get("backup_id"))
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/points/chain/recovery/approve", methods=["POST"])
+    @require_csrf
+    def root_points_chain_recovery_approve():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.restore_from_backup(
+                actor=actor,
+                backup_id=str(data.get("backup_id") or ""),
+                confirm=str(data.get("confirm") or ""),
+            )
+            audit("POINTS_CHAIN_RECOVERY_APPLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"backup_id={data.get('backup_id')}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/root/points/report", methods=["GET"])
     @require_csrf_safe
     def root_points_report():

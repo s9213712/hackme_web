@@ -1,9 +1,12 @@
 import hashlib
 import hmac
 import json
+import os
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 DISPLAY_CURRENCY = "points"
@@ -19,6 +22,10 @@ DEFAULT_BLOCK_MAX_INTERVAL_SECONDS = 24 * 60 * 60
 SIGNUP_BONUS_POINTS = 100
 ADMIN_INITIAL_POINTS = 1000
 ADMIN_WEEKLY_SALARY_POINTS = 100
+POINTS_CHAIN_SCHEMA_VERSION = 1
+DEFAULT_BACKUP_INTERVAL_MINUTES = 60
+DEFAULT_BACKUP_KEEP_DAILY = 30
+DEFAULT_BACKUP_KEEP_WEEKLY = 12
 
 DEFAULT_RULES = (
     ("daily_login", "daily_login", "credit", "soft", 5, 5, 5, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "每日登入"}),
@@ -446,6 +453,42 @@ def ensure_points_economy_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS points_chain_recovery_state (
+            id INTEGER PRIMARY KEY CHECK (id=1),
+            safe_mode INTEGER NOT NULL DEFAULT 0,
+            reason TEXT,
+            verification_json TEXT,
+            forensic_bundle_id TEXT,
+            restore_plan_json TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            restored_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS points_chain_backup_catalog (
+            backup_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            chain_height INTEGER NOT NULL DEFAULT 0,
+            latest_block_hash TEXT,
+            ledger_row_count INTEGER NOT NULL DEFAULT 0,
+            wallet_count INTEGER NOT NULL DEFAULT 0,
+            schema_version INTEGER NOT NULL,
+            backup_path TEXT NOT NULL,
+            manifest_path TEXT NOT NULL,
+            files_hash TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0,
+            verification_json TEXT,
+            reason TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS points_economy_daily_stats (
             stat_date TEXT PRIMARY KEY,
             soft_issued INTEGER NOT NULL DEFAULT 0,
@@ -468,6 +511,7 @@ def ensure_points_economy_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_ledger_block ON points_ledger(chain_block_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_pending_status ON points_pending_rewards(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_blocks_number ON points_chain_blocks(block_number)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_points_chain_backup_created ON points_chain_backup_catalog(created_at)")
     conn.execute(
         """
         CREATE TRIGGER IF NOT EXISTS trg_points_ledger_no_delete
@@ -525,10 +569,11 @@ def ensure_points_economy_schema(conn):
 
 
 class PointsLedgerService:
-    def __init__(self, *, get_db, chain_secret, audit=None):
+    def __init__(self, *, get_db, chain_secret, audit=None, backup_dir=None):
         self.get_db = get_db
         self.chain_secret = chain_secret
         self.audit = audit or (lambda *args, **kwargs: None)
+        self.backup_dir = Path(backup_dir or os.environ.get("POINTS_CHAIN_BACKUP_DIR") or "./secure_backups/points_chain")
 
     def ensure_schema(self, conn):
         ensure_points_economy_schema(conn)
@@ -540,8 +585,544 @@ class PointsLedgerService:
         return sha256_text(f"pointschain-node:{self.chain_secret}")
 
     def _sign_block(self, block):
-        secret = str(self.chain_secret or "").encode("utf-8")
-        return hmac.new(secret, block_signature_payload(block).encode("utf-8"), hashlib.sha256).hexdigest()
+        hmac_key = str(self.chain_secret or "").encode("utf-8")
+        return hmac.new(hmac_key, block_signature_payload(block).encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _sign_backup_manifest(self, manifest_without_signature):
+        hmac_key = f"points-chain-backup:{self.chain_secret or ''}".encode("utf-8")
+        return hmac.new(hmac_key, canonical_json(manifest_without_signature).encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _backup_root(self):
+        root = self.backup_dir.expanduser()
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(root, 0o700)
+        except Exception:
+            pass
+        for name in ("backups", "forensics"):
+            path = root / name
+            path.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(path, 0o700)
+            except Exception:
+                pass
+        return root
+
+    def _safe_mode_row(self, conn):
+        return conn.execute("SELECT * FROM points_chain_recovery_state WHERE id=1").fetchone()
+
+    def _safe_mode_status(self, conn):
+        row = self._safe_mode_row(conn)
+        if not row:
+            return {"safe_mode": False}
+        plan = _json_loads(row["restore_plan_json"], {})
+        return {
+            "safe_mode": bool(row["safe_mode"]),
+            "reason": row["reason"] or "",
+            "forensic_bundle_id": row["forensic_bundle_id"],
+            "restore_plan": plan,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "restored_at": row["restored_at"],
+            "verification": _json_loads(row["verification_json"], {}),
+        }
+
+    def safe_mode_status(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._safe_mode_status(conn)
+        finally:
+            conn.close()
+
+    def _assert_chain_writable(self, conn, action):
+        row = self._safe_mode_row(conn)
+        if row and int(row["safe_mode"] or 0):
+            raise ValueError(f"PointsChain safe mode active; {action} is paused until root restores a healthy ledger backup")
+
+    def _backup_payload(self, conn):
+        def rows(sql):
+            return [dict(row) for row in conn.execute(sql).fetchall()]
+
+        return {
+            "schema_version": POINTS_CHAIN_SCHEMA_VERSION,
+            "points_ledger": rows("SELECT * FROM points_ledger ORDER BY id ASC"),
+            "points_chain_blocks": rows("SELECT * FROM points_chain_blocks ORDER BY block_number ASC"),
+            "points_chain_block_signatures": rows("SELECT * FROM points_chain_block_signatures ORDER BY block_id ASC, node_id ASC"),
+            "points_chain_audit_logs": rows("SELECT * FROM points_chain_audit_logs ORDER BY id ASC"),
+            "points_wallets_snapshot": rows("SELECT * FROM points_wallets ORDER BY user_id ASC"),
+        }
+
+    def _chain_head_summary(self, conn):
+        latest = conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number DESC LIMIT 1").fetchone()
+        ledger_count = conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()["c"]
+        wallet_count = conn.execute("SELECT COUNT(*) AS c FROM points_wallets").fetchone()["c"]
+        return {
+            "chain_height": int(latest["block_number"]) if latest else 0,
+            "latest_block_hash": latest["block_hash"] if latest else None,
+            "ledger_row_count": int(ledger_count or 0),
+            "wallet_count": int(wallet_count or 0),
+        }
+
+    def _verify_backup_payload(self, payload, manifest):
+        errors = []
+        ledgers = payload.get("points_ledger") or []
+        blocks = payload.get("points_chain_blocks") or []
+        signatures = payload.get("points_chain_block_signatures") or []
+        files_hash = sha256_text(canonical_json(payload))
+        if files_hash != manifest.get("files_hash"):
+            errors.append({"type": "backup_files_hash", "message": "backup data hash mismatch"})
+        signature = manifest.get("signature")
+        core = {key: value for key, value in manifest.items() if key != "signature"}
+        if signature != self._sign_backup_manifest(core):
+            errors.append({"type": "backup_signature", "message": "backup manifest HMAC mismatch"})
+
+        previous = None
+        for row in ledgers:
+            if row.get("previous_ledger_hash") != previous:
+                errors.append({"type": "ledger_previous_hash", "ledger_id": row.get("id")})
+            expected = compute_ledger_hash(row)
+            if row.get("ledger_hash") != expected:
+                errors.append({"type": "ledger_hash", "ledger_id": row.get("id"), "expected": expected, "actual": row.get("ledger_hash")})
+            previous = row.get("ledger_hash")
+
+        sig_by_block = {(int(row.get("block_id") or 0), row.get("node_id")): row for row in signatures}
+        ledger_by_id = {int(row.get("id") or 0): row for row in ledgers}
+        previous_block = None
+        for block in blocks:
+            if block.get("previous_block_hash") != previous_block:
+                errors.append({"type": "block_previous_hash", "block_number": block.get("block_number")})
+            selected = [
+                ledger_by_id[idx]
+                for idx in range(int(block.get("first_ledger_id") or 0), int(block.get("last_ledger_id") or 0) + 1)
+                if idx in ledger_by_id
+            ]
+            hashes = [row["ledger_hash"] for row in selected]
+            if len(hashes) != int(block.get("ledger_count") or 0):
+                errors.append({"type": "block_ledger_count", "block_number": block.get("block_number")})
+            expected_merkle = merkle_root(hashes)
+            if expected_merkle != block.get("merkle_root"):
+                errors.append({"type": "block_merkle_root", "block_number": block.get("block_number")})
+            expected_block_hash = compute_block_hash(block)
+            if expected_block_hash != block.get("block_hash"):
+                errors.append({"type": "block_hash", "block_number": block.get("block_number")})
+            sig = sig_by_block.get((int(block.get("id") or 0), "single-node"))
+            if not sig:
+                errors.append({"type": "block_signature_missing", "block_number": block.get("block_number")})
+            elif sig.get("signature") != self._sign_block(block):
+                errors.append({"type": "block_signature_invalid", "block_number": block.get("block_number")})
+            previous_block = block.get("block_hash")
+        return {"ok": not errors, "errors": errors[:100], "error_count": len(errors)}
+
+    def _write_json_private(self, path, payload):
+        path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+
+    def create_ledger_backup(self, *, reason="manual", kind="manual"):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            result = self._create_ledger_backup(conn, reason=reason, kind=kind)
+            conn.commit()
+            return result
+        finally:
+            conn.close()
+
+    def _create_ledger_backup(self, conn, *, reason="manual", kind="manual"):
+        root = self._backup_root()
+        created_at = utc_now()
+        summary = self._chain_head_summary(conn)
+        backup_id = f"pcb-{created_at.replace(':', '').replace('-', '').replace('Z', '')}-{uuid.uuid4().hex[:8]}"
+        backup_path = root / "backups" / backup_id
+        backup_path.mkdir(parents=True, exist_ok=False)
+        try:
+            os.chmod(backup_path, 0o700)
+        except Exception:
+            pass
+        payload = self._backup_payload(conn)
+        files_hash = sha256_text(canonical_json(payload))
+        manifest_core = {
+            "backup_id": backup_id,
+            "kind": kind,
+            "created_at": created_at,
+            "chain_height": summary["chain_height"],
+            "latest_block_hash": summary["latest_block_hash"],
+            "ledger_row_count": summary["ledger_row_count"],
+            "wallet_count": summary["wallet_count"],
+            "schema_version": POINTS_CHAIN_SCHEMA_VERSION,
+            "files_hash": files_hash,
+            "reason": reason,
+        }
+        manifest = {**manifest_core, "signature": self._sign_backup_manifest(manifest_core)}
+        self._write_json_private(backup_path / "data.json", payload)
+        self._write_json_private(backup_path / "manifest.json", manifest)
+        verification = self._verify_backup_payload(payload, manifest)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO points_chain_backup_catalog (
+                backup_id, kind, created_at, chain_height, latest_block_hash,
+                ledger_row_count, wallet_count, schema_version, backup_path,
+                manifest_path, files_hash, signature, verified, verification_json, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                backup_id,
+                kind,
+                created_at,
+                summary["chain_height"],
+                summary["latest_block_hash"],
+                summary["ledger_row_count"],
+                summary["wallet_count"],
+                POINTS_CHAIN_SCHEMA_VERSION,
+                str(backup_path),
+                str(backup_path / "manifest.json"),
+                files_hash,
+                manifest["signature"],
+                1 if verification["ok"] else 0,
+                _json_dumps(verification),
+                reason,
+            ),
+        )
+        self._audit_log(
+            conn,
+            "POINTS_LEDGER_BACKUP_CREATED",
+            "info" if verification["ok"] else "critical",
+            f"ledger backup {backup_id} created",
+            metadata={"backup_id": backup_id, "kind": kind, "verification": verification},
+        )
+        self._prune_ledger_backups(conn)
+        return {"ok": verification["ok"], "backup_id": backup_id, "manifest": manifest, "verification": verification}
+
+    def _load_backup_from_catalog(self, conn, backup_id):
+        row = conn.execute("SELECT * FROM points_chain_backup_catalog WHERE backup_id=?", (str(backup_id or ""),)).fetchone()
+        if not row:
+            return None, None, None
+        backup_path = Path(row["backup_path"])
+        manifest = json.loads((backup_path / "manifest.json").read_text(encoding="utf-8"))
+        payload = json.loads((backup_path / "data.json").read_text(encoding="utf-8"))
+        return row, payload, manifest
+
+    def _healthy_backups(self, conn, *, limit=50):
+        rows = conn.execute(
+            """
+            SELECT * FROM points_chain_backup_catalog
+            WHERE verified=1
+            ORDER BY chain_height DESC, created_at DESC LIMIT ?
+            """,
+            (min(200, max(1, int(limit or 50))),),
+        ).fetchall()
+        healthy = []
+        for row in rows:
+            try:
+                _catalog, payload, manifest = self._load_backup_from_catalog(conn, row["backup_id"])
+                verification = self._verify_backup_payload(payload, manifest)
+                if verification["ok"]:
+                    healthy.append(dict(row))
+            except Exception:
+                continue
+        return healthy
+
+    def list_ledger_backups(self, *, limit=100):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT * FROM points_chain_backup_catalog ORDER BY created_at DESC LIMIT ?",
+                (min(200, max(1, int(limit or 100))),),
+            ).fetchall()
+            return [{**dict(row), "verification": _json_loads(row["verification_json"], {})} for row in rows]
+        finally:
+            conn.close()
+
+    def _prune_ledger_backups(self, conn):
+        rows = [dict(row) for row in conn.execute("SELECT * FROM points_chain_backup_catalog ORDER BY created_at DESC").fetchall()]
+        keep = set()
+        daily = {}
+        weekly = {}
+        for row in rows:
+            parsed = parse_utc_timestamp(row["created_at"])
+            if not parsed:
+                continue
+            day = parsed.date().isoformat()
+            week = f"{parsed.isocalendar().year}-W{parsed.isocalendar().week:02d}"
+            daily.setdefault(day, row["backup_id"])
+            weekly.setdefault(week, row["backup_id"])
+        keep.update(list(daily.values())[:DEFAULT_BACKUP_KEEP_DAILY])
+        keep.update(list(weekly.values())[:DEFAULT_BACKUP_KEEP_WEEKLY])
+        keep.update(row["backup_id"] for row in rows[:5])
+        for row in rows:
+            if row["backup_id"] in keep:
+                continue
+            try:
+                shutil.rmtree(row["backup_path"])
+            except Exception:
+                pass
+            conn.execute("DELETE FROM points_chain_backup_catalog WHERE backup_id=?", (row["backup_id"],))
+
+    def _scheduled_backup_due(self, conn, interval_minutes=DEFAULT_BACKUP_INTERVAL_MINUTES):
+        last = conn.execute(
+            "SELECT created_at FROM points_chain_backup_catalog ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not last:
+            return True
+        parsed = parse_utc_timestamp(last["created_at"])
+        if not parsed:
+            return True
+        return (datetime.now(timezone.utc) - parsed).total_seconds() >= int(interval_minutes or DEFAULT_BACKUP_INTERVAL_MINUTES) * 60
+
+    def create_scheduled_backup_if_due(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            if not self._scheduled_backup_due(conn):
+                return {"ok": True, "created": False, "msg": "backup interval not due"}
+            result = self._create_ledger_backup(conn, reason="scheduled_interval", kind="scheduled")
+            conn.commit()
+            result["created"] = True
+            return result
+        finally:
+            conn.close()
+
+    def _create_forensic_bundle(self, conn, verification, reason):
+        root = self._backup_root()
+        created_at = utc_now()
+        bundle_id = f"pcf-{created_at.replace(':', '').replace('-', '').replace('Z', '')}-{uuid.uuid4().hex[:8]}"
+        bundle_path = root / "forensics" / bundle_id
+        bundle_path.mkdir(parents=True, exist_ok=False)
+        try:
+            os.chmod(bundle_path, 0o700)
+        except Exception:
+            pass
+        payload = {
+            "bundle_id": bundle_id,
+            "created_at": created_at,
+            "reason": reason,
+            "verification": verification,
+            "current_ledger": [dict(row) for row in conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()],
+            "recent_blocks": [dict(row) for row in conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number DESC LIMIT 20").fetchall()],
+            "recent_ledger": [dict(row) for row in conn.execute("SELECT * FROM points_ledger ORDER BY id DESC LIMIT 100").fetchall()],
+            "audit_logs": [dict(row) for row in conn.execute("SELECT * FROM points_chain_audit_logs ORDER BY id DESC LIMIT 100").fetchall()],
+            "available_backups": [dict(row) for row in conn.execute("SELECT * FROM points_chain_backup_catalog ORDER BY created_at DESC LIMIT 50").fetchall()],
+        }
+        self._write_json_private(bundle_path / "bundle.json", payload)
+        return {"bundle_id": bundle_id, "path": str(bundle_path / "bundle.json"), "created_at": created_at}
+
+    def _build_restore_plan(self, conn, verification, backup):
+        current = self._chain_head_summary(conn)
+        backup_height = int(backup.get("chain_height") or 0) if backup else 0
+        backup_latest_hash = backup.get("latest_block_hash") if backup else None
+        lost = []
+        if backup:
+            backup_row_count = int(backup.get("ledger_row_count") or 0)
+            rows = conn.execute(
+                "SELECT id, ledger_uuid, user_id, direction, amount, action_type, created_at FROM points_ledger WHERE id>? ORDER BY id ASC",
+                (backup_row_count,),
+            ).fetchall()
+            lost = [dict(row) for row in rows]
+        return {
+            "mode": "root_confirmed_restore",
+            "auto_apply": False,
+            "recommended_backup_id": backup.get("backup_id") if backup else None,
+            "current_chain_height": current["chain_height"],
+            "current_latest_block_hash": current["latest_block_hash"],
+            "backup_chain_height": backup_height,
+            "backup_latest_block_hash": backup_latest_hash,
+            "lost_ledger_range": {
+                "from_id": lost[0]["id"] if lost else None,
+                "to_id": lost[-1]["id"] if lost else None,
+                "count": len(lost),
+            },
+            "lost_transactions": lost[:100],
+            "wallet_rebuild_source": "points_ledger",
+            "verification_errors": verification.get("errors", [])[:50],
+        }
+
+    def _enter_safe_mode(self, conn, verification, reason):
+        row = self._safe_mode_row(conn)
+        if row and int(row["safe_mode"] or 0):
+            return self._safe_mode_status(conn)
+        bundle = self._create_forensic_bundle(conn, verification, reason)
+        healthy = self._healthy_backups(conn, limit=50)
+        plan = self._build_restore_plan(conn, verification, healthy[0] if healthy else None)
+        now = utc_now()
+        conn.execute(
+            """
+            INSERT INTO points_chain_recovery_state (
+                id, safe_mode, reason, verification_json, forensic_bundle_id,
+                restore_plan_json, created_at, updated_at
+            ) VALUES (1, 1, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                safe_mode=1,
+                reason=excluded.reason,
+                verification_json=excluded.verification_json,
+                forensic_bundle_id=excluded.forensic_bundle_id,
+                restore_plan_json=excluded.restore_plan_json,
+                updated_at=excluded.updated_at
+            """,
+            (reason, _json_dumps(verification), bundle["bundle_id"], _json_dumps(plan), now, now),
+        )
+        self._audit_log(
+            conn,
+            "POINTS_CHAIN_SAFE_MODE_ENTERED",
+            "critical",
+            "PointsChain tamper detected; writers paused and restore plan prepared",
+            metadata={"reason": reason, "forensic_bundle": bundle, "restore_plan": plan},
+        )
+        return self._safe_mode_status(conn)
+
+    def _wallet_totals_from_ledger(self, rows):
+        totals = {}
+        for row in rows:
+            user_id = int(row["user_id"])
+            item = totals.setdefault(user_id, {
+                "balance": 0,
+                "frozen": 0,
+                "earned": 0,
+                "spent": 0,
+            })
+            amount = int(row["amount"])
+            direction = row["direction"]
+            if direction in {"credit", "transfer_in"}:
+                item["balance"] += amount
+                item["earned"] += amount
+            elif direction in {"debit", "transfer_out", "reverse"}:
+                item["balance"] -= amount
+                item["spent"] += amount
+            elif direction == "freeze":
+                item["balance"] -= amount
+                item["frozen"] += amount
+            elif direction == "unfreeze":
+                item["balance"] += amount
+                item["frozen"] -= amount
+            if item["balance"] < 0 or item["frozen"] < 0:
+                raise ValueError(f"ledger replay would create negative wallet for user {user_id}")
+        return totals
+
+    def _rebuild_wallets_from_ledger(self, conn):
+        rows = conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()
+        totals = self._wallet_totals_from_ledger(rows)
+        now = utc_now()
+        existing = {
+            int(row["user_id"]): dict(row)
+            for row in conn.execute("SELECT * FROM points_wallets").fetchall()
+        }
+        conn.execute("DELETE FROM points_wallets")
+        user_ids = {int(row["id"]) for row in conn.execute("SELECT id FROM users").fetchall()}
+        user_ids.update(totals.keys())
+        for user_id in sorted(user_ids):
+            old = existing.get(user_id, {})
+            total = totals.get(user_id, {"balance": 0, "frozen": 0, "earned": 0, "spent": 0})
+            conn.execute(
+                """
+                INSERT INTO points_wallets (
+                    user_id, soft_balance, hard_balance, soft_frozen, hard_frozen,
+                    total_soft_earned, total_hard_earned, total_soft_spent, total_hard_spent,
+                    wallet_status, risk_level, created_at, updated_at
+                ) VALUES (?, ?, 0, ?, 0, ?, 0, ?, 0, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    int(total["balance"]),
+                    int(total["frozen"]),
+                    int(total["earned"]),
+                    int(total["spent"]),
+                    old.get("wallet_status") or "active",
+                    old.get("risk_level") or "normal",
+                    old.get("created_at") or now,
+                    now,
+                ),
+            )
+        return {"wallets_rebuilt": len(user_ids), "source_ledger_rows": len(rows)}
+
+    def restore_from_backup(self, *, actor, backup_id, confirm):
+        if str(confirm or "") != "RESTORE POINTSCHAIN":
+            raise ValueError("confirm must be RESTORE POINTSCHAIN")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            state = self._safe_mode_status(conn)
+            if not state.get("safe_mode"):
+                raise ValueError("PointsChain is not in safe mode")
+            catalog, payload, manifest = self._load_backup_from_catalog(conn, backup_id)
+            if not catalog:
+                raise ValueError("backup not found")
+            verification = self._verify_backup_payload(payload, manifest)
+            if not verification["ok"]:
+                raise ValueError("backup verification failed")
+            abnormal = self._create_ledger_backup(conn, reason="pre_restore_abnormal_state", kind="pre_restore_abnormal")
+
+            conn.execute("DROP TRIGGER IF EXISTS trg_points_ledger_no_delete")
+            conn.execute("DROP TRIGGER IF EXISTS trg_points_ledger_core_immutable")
+            conn.execute("DELETE FROM points_chain_block_signatures")
+            conn.execute("DELETE FROM points_chain_blocks")
+            conn.execute("DELETE FROM points_ledger")
+
+            ledger_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_ledger)").fetchall()]
+            block_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_chain_blocks)").fetchall()]
+            sig_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_chain_block_signatures)").fetchall()]
+
+            def insert_rows(table, cols, rows):
+                if not rows:
+                    return
+                placeholders = ",".join("?" for _ in cols)
+                col_sql = ",".join(cols)
+                for row in rows:
+                    conn.execute(
+                        f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders})",
+                        tuple(row.get(col) for col in cols),
+                    )
+
+            insert_rows("points_chain_blocks", block_cols, payload.get("points_chain_blocks") or [])
+            insert_rows("points_ledger", ledger_cols, payload.get("points_ledger") or [])
+            insert_rows("points_chain_block_signatures", sig_cols, payload.get("points_chain_block_signatures") or [])
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_points_ledger_no_delete
+                BEFORE DELETE ON points_ledger
+                BEGIN
+                    SELECT RAISE(ABORT, 'points ledger is append-only');
+                END
+                """
+            )
+            create_points_ledger_immutable_trigger(conn)
+            rebuild = self._rebuild_wallets_from_ledger(conn)
+            post = self._verify_chain_on_conn(conn, mark_safe_mode=False)
+            if not post["ok"]:
+                raise ValueError("restored chain verification failed")
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE points_chain_recovery_state
+                SET safe_mode=0, restored_at=?, updated_at=?, restore_plan_json=?
+                WHERE id=1
+                """,
+                (now, now, _json_dumps({**state.get("restore_plan", {}), "restored_backup_id": backup_id, "pre_restore_backup_id": abnormal.get("backup_id")})),
+            )
+            self._audit_log(
+                conn,
+                "POINTS_CHAIN_RECOVERY_APPLIED",
+                "critical",
+                f"PointsChain restored from backup {backup_id}",
+                actor=actor,
+                metadata={
+                    "backup_id": backup_id,
+                    "pre_restore_backup_id": abnormal.get("backup_id"),
+                    "wallet_rebuild": rebuild,
+                    "verification": post,
+                },
+            )
+            conn.commit()
+            return {"ok": True, "backup_id": backup_id, "pre_restore_backup_id": abnormal.get("backup_id"), "wallet_rebuild": rebuild, "verification": post}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _ensure_local_node(self, conn):
         now = utc_now()
@@ -846,6 +1427,7 @@ class PointsLedgerService:
         risk_flag="none",
         risk_score=0,
     ):
+        self._assert_chain_writable(conn, "ledger transaction")
         currency_type = normalize_currency_type(currency_type)
         if direction not in LEDGER_DIRECTIONS:
             raise ValueError("unsupported ledger direction")
@@ -1018,6 +1600,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "wallet sanction")
             target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (int(user_id),)).fetchone()
             if target and (target["username"] == "root" or target["role"] == "super_admin"):
                 raise ValueError("root wallet cannot be sanctioned")
@@ -1107,6 +1690,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "earn points")
             rule = self._rule_for_key(conn, rule_key)
             if not rule:
                 raise ValueError("points rule not found or disabled")
@@ -1189,6 +1773,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "spend points")
             item = conn.execute("SELECT * FROM economy_price_catalog WHERE item_key=? AND enabled=1", (item_key,)).fetchone()
             if not item:
                 raise ValueError("price catalog item not found or disabled")
@@ -1257,6 +1842,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "pending reward creation")
             row = self._create_pending_reward(
                 conn,
                 user_id=user_id,
@@ -1283,6 +1869,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "pending reward review")
             row = conn.execute("SELECT * FROM points_pending_rewards WHERE id=?", (int(pending_reward_id),)).fetchone()
             if not row:
                 raise ValueError("pending reward not found")
@@ -1335,6 +1922,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "ledger rollback")
             original = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
             if not original:
                 raise ValueError("ledger not found")
@@ -1484,6 +2072,7 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_chain_writable(conn, "block seal")
             rows = conn.execute(
                 """
                 SELECT * FROM points_ledger
@@ -1549,8 +2138,9 @@ class PointsLedgerService:
                 """,
                 (block_id, self._node_fingerprint(), self._sign_block(block), sealed_at),
             )
+            backup = self._create_ledger_backup(conn, reason="block_sealed", kind="block_sealed")
             conn.commit()
-            return {"ok": True, "sealed": True, "block": dict(block)}
+            return {"ok": True, "sealed": True, "block": dict(block), "backup": backup}
         except Exception:
             conn.rollback()
             raise
@@ -1576,16 +2166,13 @@ class PointsLedgerService:
         result["reason"] = str(reason or "")
         return result
 
-    def verify_chain(self):
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            self._backfill_missing_block_signatures(conn)
-            conn.commit()
-            errors = []
-            previous = None
-            previous_ledger = None
-            for row in conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall():
+    def _verify_chain_on_conn(self, conn, *, mark_safe_mode=True):
+        self.ensure_schema(conn)
+        self._backfill_missing_block_signatures(conn)
+        errors = []
+        previous = None
+        previous_ledger = None
+        for row in conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall():
                 if row["previous_ledger_hash"] != previous:
                     errors.append({
                         "type": "ledger_previous_hash",
@@ -1613,8 +2200,8 @@ class PointsLedgerService:
                     })
                 previous = row["ledger_hash"]
                 previous_ledger = row
-            previous_block = None
-            for block in conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number ASC").fetchall():
+        previous_block = None
+        for block in conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number ASC").fetchall():
                 if block["previous_block_hash"] != previous_block:
                     errors.append({
                         "type": "block_previous_hash",
@@ -1694,13 +2281,24 @@ class PointsLedgerService:
                         "expected_public_key_fingerprint": self._node_fingerprint(),
                     })
                 previous_block = block["block_hash"]
-            counts = {
-                "ledger_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()["c"],
-                "sealed_blocks": conn.execute("SELECT COUNT(*) AS c FROM points_chain_blocks").fetchone()["c"],
-                "unsealed_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger WHERE chain_block_id IS NULL").fetchone()["c"],
-                "audit_events": conn.execute("SELECT COUNT(*) AS c FROM points_chain_audit_logs").fetchone()["c"],
-            }
-            return {"ok": not errors, "errors": errors[:100], "error_count": len(errors), "counts": counts}
+        counts = {
+            "ledger_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()["c"],
+            "sealed_blocks": conn.execute("SELECT COUNT(*) AS c FROM points_chain_blocks").fetchone()["c"],
+            "unsealed_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger WHERE chain_block_id IS NULL").fetchone()["c"],
+            "audit_events": conn.execute("SELECT COUNT(*) AS c FROM points_chain_audit_logs").fetchone()["c"],
+        }
+        result = {"ok": not errors, "errors": errors[:100], "error_count": len(errors), "counts": counts}
+        if mark_safe_mode and errors:
+            result["safe_mode"] = self._enter_safe_mode(conn, result, "chain_verification_failed")
+        return result
+
+    def verify_chain(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            result = self._verify_chain_on_conn(conn)
+            conn.commit()
+            return result
         finally:
             conn.close()
 
@@ -1804,10 +2402,15 @@ class PointsLedgerService:
 
     def root_report(self):
         verification = self.verify_chain()
+        scheduled_backup = None
+        if verification.get("ok"):
+            scheduled_backup = self.create_scheduled_backup_if_due()
         stats = self.economy_stats()
         audit_logs = self.list_chain_audit_logs(limit=50)
         adjustments = self.list_admin_adjustments(limit=100)
         block_schedule = self.block_schedule()
+        backups = self.list_ledger_backups(limit=30)
+        recovery = self.safe_mode_status()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -1859,6 +2462,9 @@ class PointsLedgerService:
                 "audit_logs": audit_logs,
                 "adjustments": adjustments,
                 "block_schedule": block_schedule,
+                "ledger_backups": backups,
+                "recovery": recovery,
+                "scheduled_backup": scheduled_backup,
             }
         finally:
             conn.close()

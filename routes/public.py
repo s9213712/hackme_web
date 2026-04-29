@@ -741,6 +741,20 @@ def register_public_routes(app, deps):
         resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
         return resp
 
+    @app.route("/api/session/idle-timeout", methods=["POST"])
+    def idle_timeout_logout():
+        if request.headers.get("X-Idle-Timeout-Logout") != "1":
+            return json_resp({"ok": False, "msg": "缺少閒置登出確認"}), 400
+        ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
+        user = db_get_user_from_token(tok) if tok else None
+        if tok:
+            db_delete_session(tok)
+        audit("IDLE_TIMEOUT_LOGOUT", ip, user=user or "-", ua=ua, success=bool(tok))
+        resp = json_resp({"ok": True, "msg": "閒置逾時，已登出"})
+        resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        return resp
+
     @app.route("/api/me", methods=["GET"])
     def me():
         ctx = get_current_user_ctx()

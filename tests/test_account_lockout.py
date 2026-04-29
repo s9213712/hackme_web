@@ -6,7 +6,14 @@ from routes.public import register_public_routes
 from services.access_controls import hash_internal_test_token, maintenance_bypass_expires_at
 
 
-def _build_app(db_path, settings, ip_box=None, event_log=None):
+def _build_app(
+    db_path,
+    settings,
+    ip_box=None,
+    event_log=None,
+    db_delete_session=None,
+    db_get_user_from_token=None,
+):
     app = Flask(__name__)
     app.testing = True
 
@@ -30,8 +37,8 @@ def _build_app(db_path, settings, ip_box=None, event_log=None):
         "SESSION_COOKIE_SECURE": False,
         "SESSION_TTL": 3600,
         "audit": lambda *args, **kwargs: None,
-        "db_delete_session": lambda *args, **kwargs: None,
-        "db_get_user_from_token": lambda *args, **kwargs: None,
+        "db_delete_session": db_delete_session or (lambda *args, **kwargs: None),
+        "db_get_user_from_token": db_get_user_from_token or (lambda *args, **kwargs: None),
         "db_save_session": lambda *args, **kwargs: None,
         "decrypt_field": lambda value: value,
         "encrypt_field": lambda value: value,
@@ -66,6 +73,47 @@ def _build_app(db_path, settings, ip_box=None, event_log=None):
         "verify_password": lambda stored, provided: stored == provided,
     })
     return app
+
+
+def test_idle_timeout_logout_revokes_session_without_csrf(tmp_path):
+    deleted_tokens = []
+    client = _build_app(
+        tmp_path / "timeout.db",
+        {},
+        db_delete_session=lambda token: deleted_tokens.append(token),
+        db_get_user_from_token=lambda token: "alice" if token == "session-1" else None,
+    ).test_client()
+    client.set_cookie("session_token", "session-1")
+    client.set_cookie("csrf_token", "stale-csrf")
+
+    response = client.post(
+        "/api/session/idle-timeout",
+        headers={"X-Idle-Timeout-Logout": "1"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert deleted_tokens == ["session-1"]
+    set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
+    assert "session_token=;" in set_cookie
+    assert "csrf_token=;" in set_cookie
+
+
+def test_idle_timeout_logout_requires_idle_confirmation_header(tmp_path):
+    deleted_tokens = []
+    client = _build_app(
+        tmp_path / "timeout.db",
+        {},
+        db_delete_session=lambda token: deleted_tokens.append(token),
+        db_get_user_from_token=lambda token: "alice",
+    ).test_client()
+    client.set_cookie("session_token", "session-1")
+
+    response = client.post("/api/session/idle-timeout")
+
+    assert response.status_code == 400
+    assert response.get_json()["ok"] is False
+    assert deleted_tokens == []
 
 
 def test_public_version_endpoints_expose_release_id(tmp_path):

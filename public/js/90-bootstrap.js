@@ -475,6 +475,10 @@ setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
     }
   }
   try {
+    if (typeof hasIdleTimeoutLogoutPending === "function" && hasIdleTimeoutLogoutPending()) {
+      if (typeof forceIdleTimeoutLogout === "function") await forceIdleTimeoutLogout();
+      return;
+    }
     const res = await safeFetch(API + "/me", { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
     if (json.ok) setAuthState(json);

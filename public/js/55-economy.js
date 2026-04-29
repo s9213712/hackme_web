@@ -188,6 +188,7 @@ function renderEconomyRootReport(report) {
   if ($("economy-chain-unsealed")) $("economy-chain-unsealed").textContent = `未封 ${Number(counts.unsealed_entries || 0)}`;
   if ($("economy-chain-audit-count")) $("economy-chain-audit-count").textContent = String(counts.audit_events || 0);
   startEconomyBlockCountdown(safeReport.block_schedule || null);
+  renderEconomyRecovery(safeReport.recovery || {}, safeReport.ledger_backups || []);
   renderEconomyRootList(safeReport.blocks, "economy-block-list", "尚無封塊", (block) => `
     <div class="drive-file-row">
       <div>
@@ -253,6 +254,47 @@ function renderEconomyRootReport(report) {
   const loadedAt = new Date().toLocaleTimeString("zh-TW", { hour12: false });
   if ($("economy-chain-loaded-at")) $("economy-chain-loaded-at").textContent = `最後更新 ${loadedAt}`;
   setEconomyChainStatus(formatEconomyVerificationSummary(verification), verification.ok !== false);
+}
+
+function renderEconomyRecovery(recovery, backups) {
+  const safe = recovery && typeof recovery === "object" ? recovery : {};
+  const plan = safe.restore_plan && typeof safe.restore_plan === "object" ? safe.restore_plan : {};
+  const rows = Array.isArray(backups) ? backups : [];
+  const status = $("economy-recovery-status");
+  if (status) {
+    status.textContent = safe.safe_mode
+      ? `safe mode：啟用 · ${safe.reason || "-"} · forensic=${safe.forensic_bundle_id || "-"}`
+      : "safe mode：未啟用";
+    status.style.color = safe.safe_mode ? "#ffb74d" : "var(--muted)";
+  }
+  const select = $("economy-recovery-backup-id");
+  if (select) {
+    const recommended = plan.recommended_backup_id || "";
+    select.innerHTML = rows.length
+      ? rows.map((backup) => {
+          const label = `${backup.backup_id} · height ${backup.chain_height || 0} · ${backup.created_at || ""}`;
+          return `<option value="${sanitize(backup.backup_id || "")}" ${backup.backup_id === recommended ? "selected" : ""}>${sanitize(label)}</option>`;
+        }).join("")
+      : `<option value="">尚無可用備份</option>`;
+  }
+  renderEconomyRootList([plan], "economy-restore-plan-list", "目前沒有恢復方案", (item) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>建議備份：${sanitize(item.recommended_backup_id || "無")}</strong>
+        <div class="drive-card-sub">目前 height ${Number(item.current_chain_height || 0)} → 備份 height ${Number(item.backup_chain_height || 0)}；wallet 來源：${sanitize(item.wallet_rebuild_source || "-")}</div>
+        <div class="drive-card-sub">可能遺失交易：${Number((item.lost_ledger_range || {}).count || 0)} 筆（${sanitize((item.lost_ledger_range || {}).from_id || "-")} - ${sanitize((item.lost_ledger_range || {}).to_id || "-")}）</div>
+      </div>
+    </div>
+  `);
+  renderEconomyRootList(rows.slice(0, 12), "economy-backup-list", "尚無 ledger backup", (backup) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(backup.kind || "backup")} · height ${Number(backup.chain_height || 0)} · ${backup.verified ? "已驗證" : "驗證失敗"}</strong>
+        <div class="drive-card-sub">${sanitize(backup.created_at || "")} · ledger ${Number(backup.ledger_row_count || 0)} · wallet snapshot ${Number(backup.wallet_count || 0)}</div>
+        <div class="economy-ledger-hash">${sanitize(backup.latest_block_hash || backup.backup_id || "")}</div>
+      </div>
+    </div>
+  `);
 }
 
 function renderEconomyAccountLookup(wallet, ledger) {
@@ -594,6 +636,42 @@ async function verifyPointsChain() {
   }
 }
 
+async function createPointsChainBackup() {
+  if (currentUser !== "root") return;
+  try {
+    const json = await fetchEconomyJson("/root/points/chain/backups", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    economySetMsg(json.ok ? `已建立 ledger backup：${json.backup_id || ""}` : "建立備份失敗", !!json.ok);
+    await loadEconomyRootReport();
+  } catch (err) {
+    economySetMsg(err.message || "建立備份失敗", false);
+  }
+}
+
+async function approvePointsChainRecovery() {
+  if (currentUser !== "root") return;
+  const backupId = $("economy-recovery-backup-id")?.value || "";
+  const confirmText = $("economy-recovery-confirm")?.value || "";
+  if (!backupId || confirmText !== "RESTORE POINTSCHAIN") {
+    economySetMsg("請選擇備份，並輸入確認字串 RESTORE POINTSCHAIN", false);
+    return;
+  }
+  if (!confirm("確認要用選定 ledger backup 恢復 PointsChain？wallet 會由 ledger 重建。")) return;
+  try {
+    const json = await fetchEconomyJson("/root/points/chain/recovery/approve", {
+      method: "POST",
+      body: JSON.stringify({ backup_id: backupId, confirm: confirmText }),
+    });
+    economySetMsg(json.ok ? "PointsChain 已從健康備份恢復" : "恢復失敗", !!json.ok);
+    if ($("economy-recovery-confirm")) $("economy-recovery-confirm").value = "";
+    await loadEconomyDashboard();
+  } catch (err) {
+    economySetMsg(err.message || "恢復失敗", false);
+  }
+}
+
 async function rollbackEconomyLedger() {
   if (currentUser !== "root") return;
   const ledgerUuid = $("economy-rollback-ledger-uuid")?.value?.trim() || "";
@@ -627,6 +705,8 @@ function bindEconomyInlineEvents() {
     ["economy-account-query-btn", loadEconomyAccountLookup],
     ["economy-wallet-sanction-btn", sanctionEconomyWallet],
     ["economy-root-report-btn", loadEconomyRootReport],
+    ["economy-backup-btn", createPointsChainBackup],
+    ["economy-recovery-approve-btn", approvePointsChainRecovery],
     ["economy-rollback-btn", rollbackEconomyLedger],
     ["economy-seal-btn", sealPointsChainBlock],
     ["economy-verify-btn", verifyPointsChain],
