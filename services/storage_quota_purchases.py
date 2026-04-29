@@ -1,4 +1,5 @@
 import uuid
+import json
 from datetime import datetime, timedelta, timezone
 
 
@@ -91,6 +92,37 @@ def enrich_storage_upgrade_catalog(items):
             "label": product["label"],
         })
     return catalog
+
+
+def default_storage_upgrade_catalog():
+    rows = []
+    for item_key, item in STORAGE_UPGRADE_PRICE_DEFAULTS.items():
+        rows.append({
+            "item_key": item_key,
+            **item,
+            "metadata": {},
+        })
+    return enrich_storage_upgrade_catalog(rows)
+
+
+def list_storage_upgrade_price_catalog(conn):
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM economy_price_catalog
+        WHERE item_key LIKE 'cloud_storage_%' AND enabled=1
+        ORDER BY base_price, item_key
+        """
+    ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.get("metadata_json") or "{}")
+        except Exception:
+            item["metadata"] = {}
+        items.append(item)
+    return enrich_storage_upgrade_catalog(items)
 
 
 def ensure_storage_upgrade_price_catalog(conn):

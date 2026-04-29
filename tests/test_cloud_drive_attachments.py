@@ -20,7 +20,7 @@ def _passthrough(fn):
     return fn
 
 
-def _build_app(db_path, storage_root, actor_box):
+def _build_app(db_path, storage_root, actor_box, points_service=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -47,6 +47,7 @@ def _build_app(db_path, storage_root, actor_box):
         "require_csrf": _passthrough,
         "require_csrf_safe": _passthrough,
         "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+        "points_service": points_service,
     })
     return app
 
@@ -100,6 +101,32 @@ def _actor(user_id, username, role="user"):
         "effective_level": "trusted",
         "sanction_status": "none",
     }
+
+
+def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_path):
+    class LockedPointsService:
+        def ensure_schema(self, conn):
+            raise sqlite3.OperationalError("database is locked")
+
+        def list_catalog(self):
+            raise AssertionError("storage upgrade catalog should not open a second connection")
+
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box, points_service=LockedPointsService()).test_client()
+
+    res = client.get("/api/cloud-drive/storage-upgrades")
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["ok"] is True
+    assert [item["item_key"] for item in body["catalog"]] == [
+        "cloud_storage_1gb_30d",
+        "cloud_storage_10gb_30d",
+    ]
 
 
 def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path):
