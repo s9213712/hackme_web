@@ -20,6 +20,7 @@ class FakeComfyUIClient:
     last_timeout_seconds = None
     discarded = []
     interrupted = 0
+    generated_count = 0
 
     def health_check(self, *, timeout=3):
         return {"ok": True, "system": {"os": "test"}}
@@ -31,6 +32,7 @@ class FakeComfyUIClient:
         return {"samplers": ["euler", "dpmpp_2m"], "schedulers": ["normal", "karras"]}
 
     def generate_image(self, params, *, timeout_seconds=180):
+        FakeComfyUIClient.generated_count += 1
         FakeComfyUIClient.last_timeout_seconds = timeout_seconds
         batch_size = int(params.get("batch_size") or 1)
         images = []
@@ -231,6 +233,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
             "scheduler": "normal",
             "seed": 123,
             "batch_size": 3,
+            "confirm_billing": True,
         },
     )
     assert generated.status_code == 200
@@ -259,6 +262,7 @@ def test_comfyui_batch_limit_is_root_configurable(tmp_path):
             "prompt": "a quiet test image",
             "seed": 123,
             "batch_size": 3,
+            "confirm_billing": True,
         },
     )
     assert generated.status_code == 200
@@ -294,7 +298,7 @@ def test_comfyui_generation_failure_does_not_charge_points(tmp_path):
 
     generated = client.post(
         "/api/comfyui/generate",
-        json={"model": "dream.safetensors", "prompt": "this will fail", "seed": 123},
+        json={"model": "dream.safetensors", "prompt": "this will fail", "seed": 123, "confirm_billing": True},
     )
 
     assert generated.status_code == 503
@@ -318,6 +322,30 @@ def test_comfyui_generation_rejects_when_points_are_insufficient_before_work(tmp
     assert generated.status_code == 409
     assert "積分不足" in generated.get_json()["msg"]
     assert points.spends == []
+
+
+def test_comfyui_generation_requires_billing_confirmation_for_non_root(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    points = FakePointsService(balance=100)
+    FakeComfyUIClient.generated_count = 0
+    client = _build_app(db_path, storage_root, points_service=points).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={"model": "dream.safetensors", "prompt": "needs confirmation", "seed": 123},
+    )
+
+    body = generated.get_json()
+    assert generated.status_code == 409
+    assert body["ok"] is False
+    assert "請先確認扣點" in body["msg"]
+    assert body["billing"]["confirmation_required"] is True
+    assert points.spends == []
+    assert points.balance == 100
+    assert FakeComfyUIClient.generated_count == 0
 
 
 def test_comfyui_generation_does_not_charge_root(tmp_path):
@@ -703,6 +731,9 @@ def test_comfyui_frontend_is_wired():
     assert 'let comfyuiBillingQuote = null;' in comfyui_js
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
     assert "非 root 帳號成功產圖後每張扣" in comfyui_js
+    assert "function confirmComfyuiBilling(payload)" in comfyui_js
+    assert "window.confirm" in comfyui_js
+    assert "confirm_billing: billingConfirmation.required" in comfyui_js
     assert "json.billing?.charged" in comfyui_js
     assert 'batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1)))' in comfyui_js
     assert "comfyuiGeneratedImages" in comfyui_js

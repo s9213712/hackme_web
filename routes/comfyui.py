@@ -510,6 +510,15 @@ def register_comfyui_routes(app, deps):
             msg = _ensure_comfyui_balance(actor, quote)
             if msg:
                 return json_resp({"ok": False, "msg": msg}), 409
+            if data.get("confirm_billing") is not True:
+                return json_resp({
+                    "ok": False,
+                    "msg": (
+                        f"請先確認扣點：本次成功產圖將扣 {quote['total_price']} 點；"
+                        "產圖失敗不扣點，丟棄預覽不退款。"
+                    ),
+                    "billing": {**quote, "confirmation_required": True},
+                }), 409
         active_client = _client()
         try:
             result = active_client.generate_image(
