@@ -2197,10 +2197,16 @@ async function restartServer(event) {
     });
     const json = await res.json().catch(() => ({}));
     if (!json.ok) throw new Error(json.msg || "重啟失敗");
-    const wentOffline = await waitForRestartOffline(25000);
-    if (!wentOffline) throw new Error("25 秒內沒有偵測到伺服器離線，重啟流程可能沒有真正執行。");
-    if (status) status.textContent = "已偵測到離線，等待伺服器恢復...";
-    const onlineMeta = await waitForRestartOnline(previousStartedAt, 180000);
+    const transition = await waitForRestartTransition(previousStartedAt, 25000);
+    if (!transition.wentOffline && !transition.meta) {
+      throw new Error("25 秒內沒有偵測到伺服器離線或啟動時間更新，重啟流程可能沒有真正執行。");
+    }
+    if (status) {
+      status.textContent = transition.wentOffline
+        ? "已偵測到離線，等待伺服器恢復..."
+        : "伺服器已快速重啟，正在確認狀態...";
+    }
+    const onlineMeta = transition.meta || await waitForRestartOnline(previousStartedAt, 180000);
     if (!onlineMeta) throw new Error("3 分鐘內未重新連線，請檢查 server log。");
     renderServerVersion(onlineMeta);
     if (status) {
@@ -2246,6 +2252,19 @@ async function waitForRestartOffline(timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, 650));
   }
   return false;
+}
+
+async function waitForRestartTransition(previousStartedAt, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const meta = await probeRestartVersion(1200);
+    if (!meta) return { wentOffline: true, meta: null };
+    if (previousStartedAt && meta.started_at && meta.started_at !== previousStartedAt) {
+      return { wentOffline: false, meta };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 650));
+  }
+  return { wentOffline: false, meta: null };
 }
 
 async function waitForRestartOnline(previousStartedAt, timeoutMs) {

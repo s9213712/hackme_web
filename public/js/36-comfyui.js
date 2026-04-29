@@ -228,6 +228,17 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
   });
 }
 
+function loadLastComfyuiSettings() {
+  const draft = readComfyuiDraft();
+  const hasDraft = COMFYUI_DRAFT_FIELD_IDS.some((id) => Object.prototype.hasOwnProperty.call(draft, id));
+  if (!hasDraft) {
+    setComfyuiMessage("目前沒有可載入的上次設定。", false);
+    return;
+  }
+  restoreComfyuiDraft();
+  setComfyuiMessage("已載入上次設定。若模型或相簿清單尚未完成讀取，會在清單載入後自動套用。", true);
+}
+
 function bindComfyuiDraftPersistence() {
   restoreComfyuiDraft({ includeDynamicSelects: false });
   COMFYUI_DRAFT_FIELD_IDS.forEach((id) => {

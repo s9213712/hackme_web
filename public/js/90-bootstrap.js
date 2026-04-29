@@ -162,6 +162,7 @@ function bindUiEvents() {
   const gameResignBtn = $("game-resign-btn");
   const gameAwardBtn = $("game-award-btn");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
+  const comfyuiLoadLastBtn = $("comfyui-load-last-btn");
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
   const comfyuiInterruptBtn = $("comfyui-interrupt-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
@@ -319,6 +320,7 @@ function bindUiEvents() {
   if (gamePracticeBtn) gamePracticeBtn.addEventListener("click", createPracticeGame);
   if (gameResignBtn) gameResignBtn.addEventListener("click", resignGame);
   if (gameAwardBtn) gameAwardBtn.addEventListener("click", awardGameRewards);
+  if (comfyuiLoadLastBtn) comfyuiLoadLastBtn.addEventListener("click", loadLastComfyuiSettings);
   if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
   if (comfyuiInterruptBtn) comfyuiInterruptBtn.addEventListener("click", interruptComfyuiGeneration);

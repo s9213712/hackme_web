@@ -510,13 +510,14 @@ def test_comfyui_frontend_is_wired():
     assert 'id="module-comfyui"' in index_html
     assert 'id="comfyui-model-select"' in index_html
     assert 'id="comfyui-generate-btn"' in index_html
+    assert 'id="comfyui-load-last-btn"' in index_html
     assert 'id="comfyui-interrupt-btn"' in index_html
     assert 'id="comfyui-batch-size"' in index_html
     assert 'id="comfyui-save-btn"' in index_html
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
-    assert "/js/36-comfyui.js?v=20260429-comfyui-batch-limit" in index_html
+    assert "/js/36-comfyui.js?v=20260429-comfyui-load-last" in index_html
     assert "/styles.css?v=20260429-ui-polish" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
@@ -539,6 +540,7 @@ def test_comfyui_frontend_is_wired():
     assert "COMFYUI_DRAFT_FIELD_IDS" in comfyui_js
     assert "hackme_web:comfyui:draft" in comfyui_js
     assert "bindComfyuiDraftPersistence" in comfyui_js
+    assert "function loadLastComfyuiSettings()" in comfyui_js
     assert "restoreComfyuiDraft()" in comfyui_js
     assert 'album_id: selectedComfyuiAlbumId()' in comfyui_js
     assert "startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS)" in comfyui_js
@@ -547,6 +549,7 @@ def test_comfyui_frontend_is_wired():
     assert "comfyuiShareGenerationPayload" in comfyui_js
     assert "payload.seed = comfyuiCurrentImage.seed" in comfyui_js
     assert "interruptComfyuiGeneration" in bootstrap_js
+    assert 'comfyuiLoadLastBtn.addEventListener("click", loadLastComfyuiSettings)' in bootstrap_js
     assert "bindComfyuiDraftPersistence" in bootstrap_js
     assert 'shareComfyuiToCommunity' in bootstrap_js
     assert "comfyui-image:" in community_js
