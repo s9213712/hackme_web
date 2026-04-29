@@ -315,6 +315,19 @@ def test_official_chat_room_cannot_be_deleted(tmp_path):
     assert _room_active(db_path, 1) == 1
 
 
+def test_chat_rooms_marks_official_room_for_frontend(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.get("/api/chat/rooms")
+    official = next(room for room in res.get_json()["rooms"] if room["id"] == 1)
+
+    assert res.status_code == 200
+    assert official["is_official"] is True
+
+
 def test_member_cannot_delete_someone_else_chat_room(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)
