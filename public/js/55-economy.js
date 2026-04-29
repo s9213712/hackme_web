@@ -286,9 +286,12 @@ async function loadEconomyDashboard() {
   if (!currentUser) return;
   try {
     const rootMode = currentUser === "root";
+    const canManagePoints = canManageEconomyPoints();
+    const adminCard = $("economy-admin-card");
     if ($("economy-page-title")) $("economy-page-title").textContent = rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包";
     if ($("economy-user-summary-grid")) $("economy-user-summary-grid").style.display = rootMode ? "none" : "";
     if ($("economy-user-ledger-card")) $("economy-user-ledger-card").style.display = rootMode ? "none" : "";
+    if (adminCard) adminCard.style.display = canManagePoints ? "" : "none";
     if (rootMode) {
       if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取中";
       if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊進度：讀取中...";
@@ -308,10 +311,11 @@ async function loadEconomyDashboard() {
       renderEconomyLedger(ledger.ledger || []);
       renderEconomyCatalog(catalog.catalog || []);
     }
-    if (canManageEconomyPoints()) {
-      const card = $("economy-admin-card");
-      if (card) card.style.display = "";
+    if (canManagePoints) {
       loadEconomyAdmin();
+    } else {
+      if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";
+      if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";
     }
     const rootCard = $("economy-root-card");
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";

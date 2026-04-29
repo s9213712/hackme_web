@@ -20,3 +20,14 @@ def test_security_center_logs_have_non_overlapping_layout():
     assert "overflow-wrap: anywhere;" in css
     assert ".security-log-row" in css
     assert "grid-template-columns: auto auto minmax(0, .9fr) minmax(0, .7fr) minmax(0, 1.6fr);" in css
+
+
+def test_saving_settings_preserves_current_admin_surface():
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    save_body = admin_js.split("async function saveSettings()", 1)[1].split("async function loadServerEnv()", 1)[0]
+
+    assert "setAuthState({" not in save_body
+    assert "const activeModule = currentModuleTab;" in save_body
+    assert "const activeServerTab = currentServerTab;" in save_body
+    assert "const activeSettingsSection = currentSettingsSection;" in save_body
+    assert "switchModuleTab(activeModule);" in save_body

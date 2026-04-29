@@ -558,7 +558,7 @@ run_checks() {
   ROOT_QUOTA_SOURCE="$(json_expr 'data["security"]["usage"]["quota_source"]' "$(latest_raw "files security policy")" || true)"
   ROOT_QUOTA_TOTAL="$(json_expr 'data["security"]["usage"]["total_bytes"]' "$(latest_raw "files security policy")" || true)"
   ROOT_QUOTA_WARN="$(json_expr 'data["security"]["usage"]["warning_threshold_percent"]' "$(latest_raw "files security policy")" || true)"
-  if [[ "$ROOT_QUOTA_SOURCE" == "admin_role_disk_available_90_percent" && "${ROOT_QUOTA_TOTAL:-0}" -gt 0 && "$ROOT_QUOTA_WARN" == "80" ]]; then
+  if [[ "$ROOT_QUOTA_SOURCE" == "root_disk_available_90_percent" && "${ROOT_QUOTA_TOTAL:-0}" -gt 0 && "$ROOT_QUOTA_WARN" == "80" ]]; then
     pass "root cloud drive disk quota" "quota_source=$ROOT_QUOTA_SOURCE total_bytes=$ROOT_QUOTA_TOTAL warning=$ROOT_QUOTA_WARN%"
   else
     fail "root cloud drive disk quota" "expected disk-backed 90% quota and 80% warning, got source=${ROOT_QUOTA_SOURCE:-missing}, total=${ROOT_QUOTA_TOTAL:-missing}, warning=${ROOT_QUOTA_WARN:-missing}"

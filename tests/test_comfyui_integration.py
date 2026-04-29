@@ -116,7 +116,7 @@ def _init_db(db_path):
     conn.close()
 
 
-def _build_app(db_path, storage_root):
+def _build_app(db_path, storage_root, settings=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -131,7 +131,7 @@ def _build_app(db_path, storage_root):
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": _actor,
         "get_db": get_db,
-        "get_system_settings": lambda: {"feature_comfyui_enabled": True},
+        "get_system_settings": lambda: {"feature_comfyui_enabled": True, **(settings or {})},
         "get_member_level_rule": lambda conn, level: {
             "can_upload_attachment": True,
             "attachment_quota_mb": 10,
@@ -157,10 +157,12 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     models = client.get("/api/comfyui/models")
     assert models.status_code == 200
     assert models.get_json()["models"] == ["dream.safetensors", "photo.ckpt"]
+    assert models.get_json()["max_batch_size"] == 1
 
     status = client.get("/api/comfyui/status")
     assert status.status_code == 200
     assert status.get_json()["available"] is True
+    assert status.get_json()["max_batch_size"] == 1
 
     generated = client.post(
         "/api/comfyui/generate",
@@ -182,10 +184,33 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert body["image"]["prompt_id"] == "prompt-1"
     assert body["image"]["data_url"].startswith("data:image/png;base64,")
     assert body["image"]["seed"] == 123
+    assert body["image"]["batch_size"] == 1
+    assert len(body["images"]) == 1
+    assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
+    assert FakeComfyUIClient.last_timeout_seconds == 600
+
+
+def test_comfyui_batch_limit_is_root_configurable(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, settings={"comfyui_max_batch_size": 3}).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "a quiet test image",
+            "seed": 123,
+            "batch_size": 3,
+        },
+    )
+    assert generated.status_code == 200
+    body = generated.get_json()
     assert body["image"]["batch_size"] == 3
     assert len(body["images"]) == 3
     assert body["images"][2]["image_ref"]["filename"] == "hackme_web_00003_.png"
-    assert FakeComfyUIClient.last_timeout_seconds == 600
 
 
 def test_comfyui_workflow_uses_requested_batch_size():
@@ -477,6 +502,7 @@ def test_comfyui_frontend_is_wired():
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     community_js = (ROOT / "public" / "js" / "25-community.js").read_text(encoding="utf-8")
     comfyui_js = (ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8")
+    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     settings_py = (ROOT / "services" / "settings.py").read_text(encoding="utf-8")
     smoke = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")
 
@@ -490,9 +516,12 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
-    assert "/js/36-comfyui.js?v=20260429-comfyui-draft" in index_html
-    assert "/styles.css?v=20260429-comfyui-batch" in index_html
+    assert "/js/36-comfyui.js?v=20260429-comfyui-batch-limit" in index_html
+    assert "/styles.css?v=20260429-comfyui-post-thumb" in index_html
+    assert "width: min(420px, 100%);" in css
+    assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
+    assert 'id="s-comfyui-max-batch-size"' in index_html
     assert 'tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none"' in core_js
     assert 'switchModuleTab("comfyui")' in bootstrap_js
     assert 'normTab === "comfyui"' in admin_js
@@ -502,7 +531,9 @@ def test_comfyui_frontend_is_wired():
     assert 'fetch(API + "/comfyui/discard"' in comfyui_js
     assert 'fetch(API + "/comfyui/share"' in comfyui_js
     assert 'fetch(API + "/comfyui/status"' in comfyui_js
-    assert 'batch_size: comfyuiNumberValue("comfyui-batch-size", 1)' in comfyui_js
+    assert 'let comfyuiMaxBatchSize = 1;' in comfyui_js
+    assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
+    assert 'batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1)))' in comfyui_js
     assert "comfyuiGeneratedImages" in comfyui_js
     assert "renderComfyuiGeneratedImages" in comfyui_js
     assert "COMFYUI_DRAFT_FIELD_IDS" in comfyui_js
@@ -522,8 +553,9 @@ def test_comfyui_frontend_is_wired():
     assert "communityPreviewContentUrl" in community_js
     assert "csrf_token=${encodeURIComponent(token)}" in community_js
     assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in community_js
-    assert "/js/25-community.js?v=20260429-moderator-toggle" in index_html
+    assert "/js/25-community.js?v=20260429-moderator-user-select" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": True' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py
+    assert '"comfyui_max_batch_size": 1' in settings_py
     assert "/api/comfyui/models" in smoke

@@ -94,7 +94,7 @@ const SIDEBAR_MENU_CONFIG = [
     group: "社群",
     submenu: [
       { label: "看板清單", action: "module:community" },
-      { label: "主題審核", action: "community:review" },
+      { label: "主題審核", action: "community:review", requiresCommunityReview: true },
     ],
   },
   {
@@ -164,6 +164,15 @@ function canShowSidebarItem(item) {
   return canAccessModule(item.module);
 }
 
+function canShowSidebarSubitem(sub) {
+  if (!sub) return false;
+  if (sub.requiresCommunityReview) {
+    if (typeof canOpenCommunityReviewMode === "function") return canOpenCommunityReviewMode();
+    return currentRole === "manager" || currentRole === "super_admin";
+  }
+  return true;
+}
+
 function decorateSidebarMenu() {
   SIDEBAR_MENU_CONFIG.forEach((item) => {
     const button = $(item.tabId);
@@ -223,6 +232,12 @@ function syncSidebarMenuVisibility() {
     const visible = canShowSidebarItem(item);
     if (button) button.style.display = visible ? "" : "none";
     if (submenu) submenu.style.display = visible ? "" : "none";
+    if (submenu && item.submenu) {
+      submenu.querySelectorAll("[data-sidebar-action]").forEach((subButton) => {
+        const sub = item.submenu.find((candidate) => candidate.action === subButton.dataset.sidebarAction);
+        subButton.style.display = visible && canShowSidebarSubitem(sub) ? "" : "none";
+      });
+    }
     if (visible && item.group) visibleGroups.add(item.group);
   });
   document.querySelectorAll("[data-sidebar-group]").forEach((group) => {
@@ -306,6 +321,10 @@ function runSidebarAction(action) {
     return;
   }
   if (action === "community:review" && typeof switchModuleTab === "function") {
+    if (typeof canOpenCommunityReviewMode === "function" && !canOpenCommunityReviewMode()) {
+      switchModuleTab("community");
+      return;
+    }
     switchModuleTab("community");
     if (typeof switchCommunityMode === "function") switchCommunityMode("review");
   }
@@ -677,15 +696,20 @@ function renderChatMessages(messages) {
           const name = file.original_filename_plain_for_public || file.file_id || "附件";
           const size = typeof formatDriveBytes === "function" ? formatDriveBytes(file.size_bytes || 0) : `${Number(file.size_bytes || 0)} bytes`;
           const warn = typeof driveFileNeedsWarning === "function" ? driveFileNeedsWarning(file) : false;
+          const imagePreview = typeof driveFileIsImage === "function" && typeof drivePreviewContentUrl === "function" && driveFileIsImage(file)
+            ? `<button class="chat-message-image-preview" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id || "")}" data-name="${sanitize(name)}"><img src="${sanitize(drivePreviewContentUrl(file.file_id || ""))}" alt="${sanitize(name)}" loading="lazy" /></button>`
+            : "";
           return `
             <div class="chat-message-attachment">
               <span>
                 <strong>${sanitize(name)}</strong>
                 <small>${sanitize(size)} · scan=${sanitize(file.scan_status || "-")} · risk=${sanitize(file.risk_level || "-")}</small>
+                ${imagePreview}
               </span>
               <span class="chat-message-attachment-actions">
                 <button class="btn chat-sticker-btn" type="button" data-drive-action="preview" data-file-id="${sanitize(file.file_id || "")}">預覽</button>
                 <button class="btn chat-sticker-btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id || "")}" data-warn="${warn ? "1" : "0"}">下載</button>
+                <button class="btn btn-danger chat-sticker-btn" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(file.ref_id || file.id || "")}" data-context-type="chat_message" data-context-id="${sanitize(m.id || file.context_id || "")}" data-target-id="chat-messages">移除附件</button>
               </span>
             </div>
           `;

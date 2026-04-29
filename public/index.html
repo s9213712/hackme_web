@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-comfyui-batch" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-comfyui-post-thumb" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -311,7 +311,7 @@
             <div class="drive-card-title">聊天室附件</div>
             <div class="settings-option-grid">
               <div class="field"><label>上傳新附件</label><input type="file" id="chat-attachment-file" /></div>
-              <div class="field"><label>既有雲端 file_id</label><input type="text" id="chat-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>選擇雲端檔案</label><select id="chat-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="chat-attachment-upload-btn" type="button">上傳附件</button></div>
               <div class="field"><label>&nbsp;</label><button class="btn" id="chat-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
             </div>
@@ -352,7 +352,7 @@
             <div class="settings-option-grid">
               <div class="field"><label>公告 ID</label><input type="number" id="announcement-attachment-announcement-id" min="1" placeholder="公告 #ID" /></div>
               <div class="field"><label>上傳新附件</label><input type="file" id="announcement-attachment-file" /></div>
-              <div class="field"><label>既有雲端 file_id</label><input type="text" id="announcement-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>選擇雲端檔案</label><select id="announcement-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
               <div class="field"><label>理由</label><input type="text" id="announcement-attachment-reason" placeholder="附件用途" /></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="announcement-attachment-upload-btn" type="button">上傳並送審</button></div>
               <div class="field"><label>&nbsp;</label><button class="btn" id="announcement-attachment-existing-btn" type="button">既有檔送審</button></div>
@@ -493,8 +493,10 @@
               </div>
               <div class="settings-option-grid">
                 <div class="field">
-                  <label>帳號 ID</label>
-                  <input type="number" id="community-moderator-user-id" min="1" placeholder="輸入要設定為版主的帳號 ID" />
+                  <label>選擇版主帳號</label>
+                  <select id="community-moderator-user-id">
+                    <option value="">讀取會員中...</option>
+                  </select>
                 </div>
                 <div class="field">
                   <label>常用權限組</label>
@@ -802,7 +804,6 @@
               <button class="btn btn-primary" type="button" data-drive-action="save-album-detail">儲存</button>
             </div>
           </div>
-          <div id="album-file-list" class="drive-file-list"></div>
         </div>
       </div>
       <div class="drive-card-heading">
@@ -923,7 +924,7 @@
             <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="512" /></div>
             <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
             <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
-            <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="8" value="1" /></div>
+            <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在安全中心調整" /></div>
             <div class="field"><label>Seed（空白=隨機）</label><input type="number" id="comfyui-seed" min="0" placeholder="random" /></div>
             <div class="field"><label>Sampler</label><select id="comfyui-sampler"><option value="euler">euler</option></select></div>
             <div class="field"><label>Scheduler</label><select id="comfyui-scheduler"><option value="normal">normal</option></select></div>
@@ -1139,7 +1140,7 @@
             <div class="drive-card-title">站內信附件</div>
             <div class="settings-option-grid">
               <div class="field"><label>上傳新附件</label><input type="file" id="dm-attachment-file" /></div>
-              <div class="field"><label>既有雲端 file_id</label><input type="text" id="dm-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>選擇雲端檔案</label><select id="dm-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="dm-attachment-upload-btn" type="button">上傳附件</button></div>
               <div class="field"><label>&nbsp;</label><button class="btn" id="dm-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
             </div>
@@ -1222,7 +1223,9 @@
         <div class="admin-tools" style="margin-bottom:.8rem;">
           <div class="mini-title">建立治理提案</div>
           <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;">
-            <input type="number" id="governance-target-user-id" min="1" placeholder="目標 user id" />
+            <select id="governance-target-user-id">
+              <option value="">讀取會員中...</option>
+            </select>
             <select id="governance-action-type">
               <option value="warn">warn</option>
               <option value="mute">mute</option>
@@ -1737,7 +1740,11 @@
               <label>ComfyUI API Port（localhost）</label>
               <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8192" />
             </div>
-            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前固定連線到 <code>http://127.0.0.1:&lt;port&gt;</code>，儲存後立即生效，不需重啟。</div>
+            <div class="field">
+              <label>單次產圖張數上限</label>
+              <input type="number" id="s-comfyui-max-batch-size" min="1" max="8" value="1" />
+            </div>
+            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">目前固定連線到 <code>http://127.0.0.1:&lt;port&gt;</code>。張數上限預設 1；root 可調高，儲存後立即生效，不需重啟。</div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">自動 Snapshot</div>
             <div class="field">
               <label><input type="checkbox" id="s-snapshot-daily-auto-enabled" /> 每日自動建立 snapshot</label>
@@ -2181,21 +2188,21 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260429-chat-attachments" defer></script>
+<script src="/js/00-core.js?v=20260429-chat-attachment-delete" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
-<script src="/js/20-chat.js?v=20260429-chat-attachments" defer></script>
-<script src="/js/25-community.js?v=20260429-moderator-toggle" defer></script>
+<script src="/js/20-chat.js?v=20260429-chat-attachment-delete" defer></script>
+<script src="/js/25-community.js?v=20260429-moderator-user-select" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
-<script src="/js/33-dm.js?v=20260428-forum-pages" defer></script>
+<script src="/js/33-dm.js?v=20260429-pm-image-preview" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260429-folder-upload" defer></script>
-<script src="/js/36-comfyui.js?v=20260429-comfyui-draft" defer></script>
+<script src="/js/35-drive.js?v=20260429-context-attachment-delete" defer></script>
+<script src="/js/36-comfyui.js?v=20260429-comfyui-batch-limit" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260429-security-log-layout" defer></script>
-<script src="/js/55-economy.js?v=20260429-wallet-sanctions" defer></script>
+<script src="/js/50-admin.js?v=20260429-governance-target-select" defer></script>
+<script src="/js/55-economy.js?v=20260429-wallet-guard" defer></script>
 <script src="/js/90-bootstrap.js?v=20260429-comfyui-draft" defer></script>
 </body>
 </html>

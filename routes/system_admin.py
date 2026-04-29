@@ -1200,6 +1200,14 @@ def register_system_admin_routes(app, deps):
             if port < 1 or port > 65535:
                 return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
             data["comfyui_api_port"] = port
+        if "comfyui_max_batch_size" in data:
+            try:
+                batch_size = int(data.get("comfyui_max_batch_size"))
+            except Exception:
+                return json_resp({"ok":False,"msg":"comfyui_max_batch_size 必須是 1-8"}), 400
+            if batch_size < 1 or batch_size > 8:
+                return json_resp({"ok":False,"msg":"comfyui_max_batch_size 必須是 1-8"}), 400
+            data["comfyui_max_batch_size"] = batch_size
         if "cloud_drive_storage_root" in data:
             raw_root = str(data.get("cloud_drive_storage_root") or "").strip()
             if raw_root:

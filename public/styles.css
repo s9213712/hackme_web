@@ -1916,7 +1916,8 @@
     }
 
     .community-share-image {
-      margin: .45rem 0 .75rem;
+      width: min(420px, 100%);
+      margin: .45rem auto .75rem;
       border: 1px solid rgba(255,255,255,.08);
       border-radius: 8px;
       overflow: hidden;
@@ -1925,7 +1926,7 @@
 
     .community-share-image img {
       width: 100%;
-      max-height: 64vh;
+      max-height: 320px;
       object-fit: contain;
       display: block;
     }
@@ -2203,6 +2204,27 @@
       margin-top: .08rem;
       color: var(--muted);
       font-size: .68rem;
+    }
+
+    .chat-message-image-preview {
+      display: block;
+      width: min(220px, 100%);
+      max-height: 160px;
+      margin-top: .38rem;
+      padding: 0;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.04);
+      overflow: hidden;
+      cursor: zoom-in;
+    }
+
+    .chat-message-image-preview img {
+      display: block;
+      width: 100%;
+      max-height: 160px;
+      object-fit: contain;
+      background: rgba(0,0,0,.22);
     }
 
     .chat-message-attachment-actions {

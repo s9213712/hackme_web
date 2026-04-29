@@ -21,7 +21,7 @@ def _parse_positive_int(value, default=None, min_value=None, max_value=None):
     return parsed
 
 
-def _build_app(db_path, actor_box):
+def _build_app(db_path, actor_box, detect_chat_violation=None, add_violation=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -39,6 +39,7 @@ def _build_app(db_path, actor_box):
     register_community_routes(app, {
         "audit": lambda *args, **kwargs: None,
         "check_user_rate_limit": lambda *args, **kwargs: (False, {"limit": 10}),
+        "detect_chat_violation": detect_chat_violation or (lambda *args, **kwargs: (False, "")),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": get_db,
@@ -49,6 +50,7 @@ def _build_app(db_path, actor_box):
         "require_csrf": passthrough,
         "require_csrf_safe": passthrough,
         "role_rank": _role_rank,
+        "add_violation": add_violation,
     })
     return app
 
@@ -460,6 +462,80 @@ def test_restricted_member_cannot_create_thread_or_reply(tmp_path):
     assert create.get_json()["ok"] is False
     assert reply.status_code == 403
     assert reply.get_json()["ok"] is False
+
+
+def test_community_sensitive_filter_exempts_only_comfyui_threads(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    violation_calls = []
+
+    def detect_sensitive(text):
+        return ("badword" in (text or "").lower(), "測試敏感詞")
+
+    def add_violation(*args, **kwargs):
+        violation_calls.append({"args": args, "kwargs": kwargs})
+        return "counted", "違規計點 +1", len(violation_calls)
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box, detect_sensitive, add_violation).test_client()
+    boards = client.get("/api/community/boards")
+    assert boards.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    normal_board_id = conn.execute("SELECT id FROM forum_boards WHERE title='遊戲專區'").fetchone()["id"]
+    comfyui_board_id = conn.execute("SELECT id FROM forum_boards WHERE title='ComfyUI專區'").fetchone()["id"]
+    conn.close()
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}
+    blocked_thread = client.post(
+        f"/api/community/boards/{normal_board_id}/threads",
+        json={"title": "normal badword", "content": "clean body"},
+    )
+    assert blocked_thread.status_code == 403
+    assert blocked_thread.get_json()["ok"] is False
+    assert "敏感詞" in blocked_thread.get_json()["msg"]
+
+    comfyui_thread = client.post(
+        f"/api/community/boards/{comfyui_board_id}/threads",
+        json={"title": "ComfyUI badword prompt", "content": "badword workflow parameters"},
+    )
+    assert comfyui_thread.status_code == 200
+    assert comfyui_thread.get_json()["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    thread_id = conn.execute(
+        "SELECT id FROM forum_threads WHERE board_id=? ORDER BY id DESC LIMIT 1",
+        (comfyui_board_id,),
+    ).fetchone()["id"]
+    conn.close()
+
+    blocked_reply = client.post(
+        f"/api/community/threads/{thread_id}/posts",
+        json={"content": "badword reply is not exempt"},
+    )
+    assert blocked_reply.status_code == 403
+    assert blocked_reply.get_json()["ok"] is False
+    assert "敏感詞" in blocked_reply.get_json()["msg"]
+
+    clean_reply = client.post(
+        f"/api/community/threads/{thread_id}/posts",
+        json={"content": "clean reply"},
+    )
+    assert clean_reply.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    post_id = conn.execute("SELECT id FROM forum_posts WHERE thread_id=? LIMIT 1", (thread_id,)).fetchone()["id"]
+    conn.close()
+    blocked_edit = client.put(
+        f"/api/community/posts/{post_id}",
+        json={"content": "edited badword reply"},
+    )
+    assert blocked_edit.status_code == 403
+    assert blocked_edit.get_json()["ok"] is False
+    assert len(violation_calls) == 3
 
 
 def test_manager_can_pin_post(tmp_path):

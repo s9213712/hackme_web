@@ -44,6 +44,7 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "server_listen_port": 0,
         "server_ssl_enabled": True,
         "comfyui_api_port": 8192,
+        "comfyui_max_batch_size": 1,
     }
 
     def save_settings(data):
@@ -275,6 +276,27 @@ def test_invalid_comfyui_api_port_is_rejected():
 
     assert res.status_code == 400
     assert state["comfyui_api_port"] == 8192
+
+
+def test_root_can_configure_comfyui_batch_limit_without_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_max_batch_size": 4})
+
+    assert res.status_code == 200
+    assert state["comfyui_max_batch_size"] == 4
+    assert res.get_json()["settings"]["comfyui_max_batch_size"] == 4
+
+
+def test_invalid_comfyui_batch_limit_is_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_max_batch_size": 9})
+
+    assert res.status_code == 400
+    assert state["comfyui_max_batch_size"] == 1
 
 
 def test_admin_environment_exposes_paths_and_pid():

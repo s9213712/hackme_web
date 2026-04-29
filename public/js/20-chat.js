@@ -26,16 +26,24 @@ function renderPendingChatAttachments() {
   list.innerHTML = pendingChatAttachments.map((item) => `
     <div class="chat-pending-attachment">
       <span>${sanitize(chatAttachmentName(item))}</span>
-      <button class="btn chat-sticker-btn" type="button" data-remove-chat-pending-attachment="${sanitize(item.file_id || "")}">移除</button>
+      <button class="btn btn-danger chat-sticker-btn" type="button" data-remove-chat-pending-attachment="${sanitize(item.file_id || "")}">刪除</button>
     </div>
   `).join("");
-  list.querySelectorAll("[data-remove-chat-pending-attachment]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const fileId = btn.dataset.removeChatPendingAttachment || "";
-      pendingChatAttachments = pendingChatAttachments.filter((item) => item.file_id !== fileId);
-      renderPendingChatAttachments();
-    });
-  });
+}
+
+function removePendingChatAttachment(fileId) {
+  const target = String(fileId || "");
+  if (!target) return;
+  pendingChatAttachments = pendingChatAttachments.filter((item) => String(item.file_id || "") !== target);
+  renderPendingChatAttachments();
+}
+
+function handlePendingChatAttachmentClick(event) {
+  const btn = event.target?.closest?.("[data-remove-chat-pending-attachment]");
+  if (!btn) return;
+  event.preventDefault();
+  event.stopPropagation();
+  removePendingChatAttachment(btn.getAttribute("data-remove-chat-pending-attachment") || "");
 }
 
 function addPendingChatAttachment(file) {
@@ -48,6 +56,11 @@ function addPendingChatAttachment(file) {
   pendingChatAttachments.push({ ...file, file_id: fileId });
   renderPendingChatAttachments();
 }
+
+document.addEventListener("click", (event) => {
+  const list = $("chat-pending-attachment-list");
+  if (list?.contains(event.target)) handlePendingChatAttachmentClick(event);
+});
 
 async function loadChatRooms() {
   await fetchCsrfToken({ force: true });

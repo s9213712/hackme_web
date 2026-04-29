@@ -46,6 +46,7 @@ DEFAULT_SETTINGS = {
     "module_comfyui_min_role": "user",
     "module_games_min_role": "user",
     "comfyui_api_port": 8192,
+    "comfyui_max_batch_size": 1,
     "chat_filter_rules_json": "",
     "feature_chat_enabled": True,
     "feature_community_enabled": True,

@@ -42,9 +42,13 @@ def test_root_points_page_is_chain_operations_console():
     assert "加減分明細" in index_html
     assert "手動加減分與待審核" in index_html
     assert "積分系統" in index_html
-    assert "/js/55-economy.js?v=20260429-wallet-sanctions" in index_html
+    assert "/js/55-economy.js?v=20260429-wallet-guard" in index_html
     assert "/js/90-bootstrap.js?v=20260429-comfyui-draft" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
+    assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
+    assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js
+    assert 'if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";' in economy_js
+    assert 'if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";' in economy_js
     assert 'rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包"' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
     assert "startEconomyBlockCountdown" in economy_js

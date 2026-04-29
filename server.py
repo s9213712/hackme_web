@@ -1198,6 +1198,7 @@ register_operation_routes(app, {
     "add_violation": add_violation,
     "audit": audit,
     "check_user_rate_limit": check_user_rate_limit,
+    "detect_chat_violation": detect_chat_violation,
     "get_client_ip": get_client_ip,
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,

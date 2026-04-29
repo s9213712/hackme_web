@@ -150,7 +150,7 @@ def chat_message_attachment_map(conn, actor, message_ids):
     placeholders = ",".join("?" for _ in ids)
     rows = conn.execute(
         f"""
-        SELECT r.context_id AS message_id, r.file_id, r.context_type, r.context_id,
+        SELECT r.id AS ref_id, r.context_id AS message_id, r.file_id, r.context_type, r.context_id,
                f.original_filename_plain_for_public, f.mime_type_plain_for_public,
                f.size_bytes, f.scan_status, f.risk_level, f.privacy_mode, f.deleted_at
         FROM cloud_file_refs r

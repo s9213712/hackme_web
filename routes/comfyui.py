@@ -68,6 +68,10 @@ def register_comfyui_routes(app, deps):
         port = min(65535, max(1, port))
         return f"http://127.0.0.1:{port}"
 
+    def _configured_max_batch_size():
+        settings = get_system_settings() or {}
+        return _int_range(settings.get("comfyui_max_batch_size"), 1, 1, 8)
+
     def _client():
         return injected_client or ComfyUIClient(_configured_comfyui_url())
 
@@ -135,7 +139,7 @@ def register_comfyui_routes(app, deps):
             "sampler_name": str(data.get("sampler_name") or SAFE_SAMPLER_FALLBACK).strip() or SAFE_SAMPLER_FALLBACK,
             "scheduler": str(data.get("scheduler") or SAFE_SCHEDULER_FALLBACK).strip() or SAFE_SCHEDULER_FALLBACK,
             "seed": seed,
-            "batch_size": _int_range(data.get("batch_size"), 1, 1, 8),
+            "batch_size": _int_range(data.get("batch_size"), 1, 1, _configured_max_batch_size()),
             "filename_prefix": _clean_filename(data.get("filename_prefix") or "hackme_web", fallback="hackme_web").rsplit(".", 1)[0],
         }
         return params, None
@@ -395,6 +399,7 @@ def register_comfyui_routes(app, deps):
             "ok": True,
             "available": True,
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+            "max_batch_size": _configured_max_batch_size(),
             "system": status.get("system") if isinstance(status, dict) else {},
         })
 
@@ -416,6 +421,7 @@ def register_comfyui_routes(app, deps):
             "samplers": options.get("samplers") or [SAFE_SAMPLER_FALLBACK],
             "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+            "max_batch_size": _configured_max_batch_size(),
         })
 
     @app.route("/api/comfyui/generate", methods=["POST"])

@@ -26,6 +26,7 @@ def register_community_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
     add_violation = deps.get("add_violation")
+    detect_chat_violation = deps.get("detect_chat_violation")
     points_service = deps.get("points_service")
 
     def actor_value(actor, key, default=None):
@@ -58,6 +59,57 @@ def register_community_routes(app, deps):
                 ua=get_ua(),
                 detail=f"rule={rule_key},user_id={user_id},reference={reference_type}:{reference_id},error={exc}",
             )
+
+    def is_comfyui_board(board):
+        if not board:
+            return False
+        title = row_value(board, "title", "") if hasattr(board, "keys") else board.get("title", "")
+        if not title:
+            title = row_value(board, "board_title", "") if hasattr(board, "keys") else board.get("board_title", "")
+        slug = row_value(board, "slug", "") if hasattr(board, "keys") else board.get("slug", "")
+        return "comfyui" in str(title or "").lower() or "comfyui" in str(slug or "").lower()
+
+    def reject_sensitive_community_content(actor, text, *, content_type, reference=""):
+        if not callable(detect_chat_violation):
+            return None
+        is_bad, reason = detect_chat_violation(text or "")
+        if not is_bad:
+            return None
+        if actor_value(actor, "username") != "root" and callable(add_violation):
+            try:
+                role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
+                add_violation(
+                    actor_value(actor, "id"),
+                    actor_value(actor, "username"),
+                    role,
+                    points=1,
+                    reason=f"討論區敏感詞：{reason}",
+                    triggered_by=content_type,
+                    actor_username=actor_value(actor, "username"),
+                )
+            except Exception as exc:
+                audit(
+                    "COMMUNITY_SENSITIVE_VIOLATION_FAILED",
+                    get_client_ip(),
+                    user=actor_value(actor, "username", "system"),
+                    success=False,
+                    ua=get_ua(),
+                    detail=f"type={content_type},reference={reference},reason={reason},error={exc}",
+                )
+        audit(
+            "COMMUNITY_SENSITIVE_BLOCKED",
+            get_client_ip(),
+            user=actor_value(actor, "username", "system"),
+            success=False,
+            ua=get_ua(),
+            detail=f"type={content_type},reference={reference},reason={reason}",
+        )
+        return json_resp({
+            "ok": False,
+            "warned": True,
+            "reason": reason,
+            "msg": f"內容含敏感詞，請修改後再送出（{reason}）",
+        }), 403
 
     def ensure_community_schema(conn):
         # Guard executescript so AttributeError (missing method on wrapper) can't cause 500 (L-2)
@@ -1295,6 +1347,15 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "只有管理員或版主可建立公告型主題"}), 403
             if not title or not content:
                 return json_resp({"ok": False, "msg": "主題標題與內容不可為空"}), 400
+            if not is_comfyui_board(board):
+                sensitive_response = reject_sensitive_community_content(
+                    actor,
+                    f"{title}\n{content}",
+                    content_type="community_thread",
+                    reference=f"board_id={board_id}",
+                )
+                if sensitive_response:
+                    return sensitive_response
             blocked, info = check_user_rate_limit(actor["id"], "community_thread_create", max_req=5, window_sec=300)
             if blocked:
                 return json_resp({"ok": False, "msg": f"發文太頻繁（{info['limit']} 次 / 5 分鐘）"}), 429
@@ -1470,6 +1531,15 @@ def register_community_routes(app, deps):
                 content = normalize_text(data.get("content"))[:4000]
                 if not title or not content:
                     return json_resp({"ok": False, "msg": "主題標題與內容不可為空"}), 400
+                if not is_comfyui_board(thread):
+                    sensitive_response = reject_sensitive_community_content(
+                        actor,
+                        f"{title}\n{content}",
+                        content_type="community_thread_edit",
+                        reference=f"thread_id={thread_id}",
+                    )
+                    if sensitive_response:
+                        return sensitive_response
                 now = datetime.now().isoformat()
                 conn.execute(
                     "UPDATE forum_threads SET title=?, content=?, edited_at=?, edited_by=?, updated_at=? WHERE id=?",
@@ -1757,6 +1827,14 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "此主題尚未公開留言"}), 403
             if bool(thread["is_locked"]):
                 return json_resp({"ok": False, "msg": "此主題已鎖定，暫停留言"}), 403
+            sensitive_response = reject_sensitive_community_content(
+                actor,
+                content,
+                content_type="community_reply",
+                reference=f"thread_id={thread_id}",
+            )
+            if sensitive_response:
+                return sensitive_response
             now = datetime.now().isoformat()
             cur = conn.execute(
                 "INSERT INTO forum_posts (thread_id, content, author_user_id, author_username, created_at, updated_at) "
@@ -2033,6 +2111,14 @@ def register_community_routes(app, deps):
                 content = normalize_text(data.get("content"))[:3000]
                 if not content:
                     return json_resp({"ok": False, "msg": "留言內容不可為空"}), 400
+                sensitive_response = reject_sensitive_community_content(
+                    actor,
+                    content,
+                    content_type="community_reply_edit",
+                    reference=f"post_id={post_id}",
+                )
+                if sensitive_response:
+                    return sensitive_response
                 now = datetime.now().isoformat()
                 conn.execute(
                     "UPDATE forum_posts SET content=?, edited_at=?, edited_by=?, updated_at=? WHERE id=?",

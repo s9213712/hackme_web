@@ -11,6 +11,46 @@ function currentDmThread() {
   return dmThreads.find((thread) => Number(thread.id) === Number(selectedDmThreadId)) || null;
 }
 
+function dmAttachmentPreviewUrl(fileId) {
+  if (typeof drivePreviewContentUrl === "function") return drivePreviewContentUrl(fileId);
+  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
+  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+}
+
+function dmFileIsImage(file) {
+  if (typeof driveFileIsImage === "function") return driveFileIsImage(file);
+  const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
+  const name = String(file?.original_filename_plain_for_public || file?.display_name || file?.filename || "").toLowerCase();
+  return mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name);
+}
+
+function renderDmMessageAttachments(attachments) {
+  if (!Array.isArray(attachments) || !attachments.length) return "";
+  return `<div class="chat-message-attachments">${attachments.map((file) => {
+    const fileId = file.file_id || file.id || "";
+    const name = file.original_filename_plain_for_public || file.display_name || fileId || "附件";
+    const size = typeof formatDriveBytes === "function" ? formatDriveBytes(file.size_bytes || 0) : `${Number(file.size_bytes || 0)} bytes`;
+    const warn = typeof driveFileNeedsWarning === "function" ? driveFileNeedsWarning(file) : false;
+    const imagePreview = fileId && dmFileIsImage(file)
+      ? `<button class="chat-message-image-preview" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(fileId)}" data-name="${sanitize(name)}"><img src="${sanitize(dmAttachmentPreviewUrl(fileId))}" alt="${sanitize(name)}" loading="lazy" /></button>`
+      : "";
+    return `
+      <div class="chat-message-attachment">
+        <span>
+          <strong>${sanitize(name)}</strong>
+          <small>${sanitize(size)} · scan=${sanitize(file.scan_status || "-")} · risk=${sanitize(file.risk_level || "-")}</small>
+          ${imagePreview}
+        </span>
+        <span class="chat-message-attachment-actions">
+          <button class="btn chat-sticker-btn" type="button" data-drive-action="preview" data-file-id="${sanitize(fileId)}">預覽</button>
+          <button class="btn chat-sticker-btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(fileId)}" data-warn="${warn ? "1" : "0"}">下載</button>
+        </span>
+      </div>
+    `;
+  }).join("")}</div>`;
+}
+
 function renderDmThreads() {
   const wrap = $("dm-thread-list");
   if (!wrap) return;
@@ -49,6 +89,7 @@ function renderDmMessages(messages) {
       <div class="${cls}">
         <span class="meta">${sanitize(formatChatTime(m.created_at || ""))} · ${m.is_self ? "我" : sanitize(current?.other_username || "對方")}</span>
         ${sanitize(m.body || "")}
+        ${renderDmMessageAttachments(m.attachments)}
         <button class="chat-delete-btn" type="button" data-dm-delete="${m.id}">刪除</button>
       </div>
     `;

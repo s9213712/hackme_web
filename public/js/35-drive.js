@@ -22,8 +22,15 @@ const DRIVE_PRIVACY_MODE_DESCRIPTIONS = {
 };
 
 const DRIVE_E2EE_VAULT_KEY_STORAGE = "hackme_drive_e2ee_vault_key_v1";
+const ATTACHMENT_FILE_SELECT_IDS = [
+  "chat-attachment-existing-file-id",
+  "dm-attachment-existing-file-id",
+  "announcement-attachment-existing-file-id",
+];
 
 let driveTransferRows = [];
+let driveAttachmentFileOptions = [];
+let driveAttachmentFileOptionsLoadedAt = 0;
 
 function drivePrivacyModeLabel(mode) {
   return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
@@ -31,6 +38,70 @@ function drivePrivacyModeLabel(mode) {
 
 function drivePrivacyModeDescription(mode) {
   return DRIVE_PRIVACY_MODE_DESCRIPTIONS[mode] || "";
+}
+
+function attachmentFileDisplayName(file) {
+  return file?.original_filename_plain_for_public || file?.display_name || file?.filename || file?.id || file?.file_id || "雲端檔案";
+}
+
+function attachmentFileOptionLabel(file) {
+  const id = file?.id || file?.file_id || "";
+  const name = attachmentFileDisplayName(file);
+  const size = typeof formatDriveBytes === "function" ? formatDriveBytes(file?.size_bytes || 0) : `${Number(file?.size_bytes || 0)} bytes`;
+  const scan = file?.scan_status || "-";
+  const risk = file?.risk_level || "-";
+  return `${name} · ${size} · scan=${scan} · risk=${risk} · #${id}`;
+}
+
+function renderAttachmentFileSelects(files = driveAttachmentFileOptions) {
+  const rows = Array.isArray(files) ? files : [];
+  ATTACHMENT_FILE_SELECT_IDS.forEach((id) => {
+    const select = $(id);
+    if (!select) return;
+    const previous = select.value || "";
+    if (!rows.length) {
+      select.innerHTML = `<option value="">目前沒有可選擇的雲端檔案</option>`;
+      return;
+    }
+    select.innerHTML = `<option value="">請選擇雲端檔案</option>` + rows.map((file) => {
+      const fileId = file.id || file.file_id || "";
+      return `<option value="${sanitize(fileId)}">${sanitize(attachmentFileOptionLabel(file))}</option>`;
+    }).join("");
+    if (previous && rows.some((file) => String(file.id || file.file_id || "") === previous)) {
+      select.value = previous;
+    }
+  });
+}
+
+async function ensureAttachmentFileOptionsLoaded({ force = false } = {}) {
+  if (!currentUser || !canAccessModule("privacy_uploads")) return [];
+  const fresh = driveAttachmentFileOptionsLoadedAt && Date.now() - driveAttachmentFileOptionsLoadedAt < 30000;
+  if (!force && fresh) {
+    renderAttachmentFileSelects();
+    return driveAttachmentFileOptions;
+  }
+  ATTACHMENT_FILE_SELECT_IDS.forEach((id) => {
+    const select = $(id);
+    if (select && !select.value) select.innerHTML = `<option value="">讀取雲端檔案中...</option>`;
+  });
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/cloud-drive/files", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    ATTACHMENT_FILE_SELECT_IDS.forEach((id) => {
+      const select = $(id);
+      if (select) select.innerHTML = `<option value="">雲端檔案讀取失敗</option>`;
+    });
+    return [];
+  }
+  driveAttachmentFileOptions = Array.isArray(json.files) ? json.files : [];
+  driveAttachmentFileOptionsLoadedAt = Date.now();
+  renderAttachmentFileSelects();
+  return driveAttachmentFileOptions;
 }
 
 function isDriveE2eeMode(mode) {
@@ -42,6 +113,13 @@ function driveBytesToBase64(bytes) {
   let binary = "";
   for (let i = 0; i < view.length; i += 1) binary += String.fromCharCode(view[i]);
   return btoa(binary);
+}
+
+function driveBase64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 function driveBufferToHex(buffer) {
@@ -96,6 +174,45 @@ async function wrapDriveFileKey(fileKey) {
     nonce: driveBytesToBase64(nonce),
     ciphertext: driveBytesToBase64(wrapped),
   });
+}
+
+async function unwrapDriveFileKey(encryptedFileKey) {
+  const envelope = JSON.parse(encryptedFileKey || "{}");
+  if (envelope.wrapped_by !== "browser_local_vault_key") {
+    throw new Error("此檔案使用不同金鑰包裝方式，這個瀏覽器目前無法解密。");
+  }
+  const vaultKey = await getDriveE2eeVaultKey();
+  const rawKey = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: driveBase64ToBytes(envelope.nonce) },
+    vaultKey,
+    driveBase64ToBytes(envelope.ciphertext)
+  );
+  return window.crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+}
+
+async function decryptDriveJsonMetadata(fileKey, encryptedMetadata) {
+  if (!encryptedMetadata) return {};
+  const envelope = JSON.parse(encryptedMetadata || "{}");
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: driveBase64ToBytes(envelope.nonce) },
+    fileKey,
+    driveBase64ToBytes(envelope.ciphertext)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+async function decryptDriveE2eeBlob(blob, e2ee) {
+  const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key);
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: driveBase64ToBytes(e2ee.nonce) },
+    fileKey,
+    await blob.arrayBuffer()
+  );
+  const metadata = await decryptDriveJsonMetadata(fileKey, e2ee.encrypted_metadata);
+  return {
+    blob: new Blob([plaintext], { type: metadata.mime_type || "application/octet-stream" }),
+    filename: metadata.filename || "download",
+  };
 }
 
 async function prepareDriveE2eeUpload(file, mode) {
@@ -179,8 +296,10 @@ function renderDriveDashboard(payload) {
   if (limitLabel) {
     const maxFile = formatDriveBytes(quota.max_file_size_bytes);
     const daily = quota.upload_rate_limit_per_day === null || quota.upload_rate_limit_per_day === undefined ? "無上限" : `${quota.upload_rate_limit_per_day} 次`;
-    const diskNote = quota.quota_source === "admin_role_disk_available_90_percent"
-      ? ` · root/admin 上限：儲存磁碟可用空間 90%，${quota.warning_threshold_percent || 80}% 起警示`
+    const diskNote = quota.quota_source === "root_disk_available_90_percent"
+      ? ` · root 上限：儲存磁碟可用空間 90%，${quota.warning_threshold_percent || 80}% 起警示`
+      : quota.quota_source === "manager_role_fixed_1gb"
+        ? " · manager 上限：1 GB"
       : "";
     limitLabel.textContent = `單檔限制：${maxFile} · 每日上傳：${daily} · 檔案數：${Number(quota.file_count || 0)}${diskNote}`;
     limitLabel.style.color = quota.warning_active ? "#ffb74d" : "var(--muted)";
@@ -362,7 +481,11 @@ async function loadDriveFiles(csrf) {
     list.innerHTML = `<div class="drive-empty">${sanitize(json.msg || "檔案列表讀取失敗")}</div>`;
     return;
   }
-  renderDriveFiles(json.files || []);
+  const files = json.files || [];
+  renderDriveFiles(files);
+  driveAttachmentFileOptions = Array.isArray(files) ? files : [];
+  driveAttachmentFileOptionsLoadedAt = Date.now();
+  renderAttachmentFileSelects(files);
 }
 
 async function uploadDriveFile() {
@@ -619,8 +742,26 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") || "";
   const match = disposition.match(/filename="?([^"]+)"?/i);
-  const name = match ? match[1] : "download.bin";
-  const url = URL.createObjectURL(blob);
+  let name = match ? match[1] : "download.bin";
+  let outputBlob = blob;
+  const keyRes = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/e2ee-key`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (keyRes.ok) {
+    const keyJson = await keyRes.json().catch(() => ({}));
+    if (keyJson.ok && keyJson.e2ee) {
+      try {
+        const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee);
+        outputBlob = decrypted.blob;
+        name = decrypted.filename || name;
+      } catch (err) {
+        alert(`${err.message || "端到端加密檔案解密失敗"}\n\n如果這是在其他瀏覽器或清除過瀏覽器資料後下載，原本的本地 vault key 已不存在，無法解密。`);
+        return;
+      }
+    }
+  }
+  const url = URL.createObjectURL(outputBlob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
@@ -703,6 +844,18 @@ function clearDrivePreviewUrl() {
     URL.revokeObjectURL(currentDrivePreviewUrl);
     currentDrivePreviewUrl = "";
   }
+}
+
+function driveFileIsImage(file) {
+  const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
+  const name = String(file?.original_filename_plain_for_public || file?.display_name || file?.filename || "").toLowerCase();
+  return mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name);
+}
+
+function drivePreviewContentUrl(fileId) {
+  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
+  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
 }
 
 function clearAlbumFullPreviewUrl() {
@@ -939,19 +1092,39 @@ function renderContextAttachmentRefs(targetId, refs) {
   list.innerHTML = refs.map((ref) => {
     const name = ref.original_filename_plain_for_public || ref.file_id || "download.bin";
     const warn = driveFileNeedsWarning(ref);
+    const imagePreview = driveFileIsImage(ref)
+      ? `<button class="chat-message-image-preview" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(ref.file_id)}" data-name="${sanitize(name)}"><img src="${sanitize(drivePreviewContentUrl(ref.file_id))}" alt="${sanitize(name)}" loading="lazy" /></button>`
+      : "";
     return `
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(name)}</strong>
           <div class="drive-card-sub">${formatDriveBytes(ref.size_bytes || 0)} · ${sanitize(ref.context_type || "-")}#${sanitize(ref.context_id || "-")} · risk=${sanitize(ref.risk_level || "-")} · scan=${sanitize(ref.scan_status || "-")}</div>
+          ${imagePreview}
         </div>
         <div class="drive-file-actions">
           <button class="btn" type="button" data-drive-action="preview" data-file-id="${sanitize(ref.file_id)}">預覽</button>
           <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(ref.file_id)}" data-warn="${warn ? "1" : "0"}">下載</button>
+          <button class="btn btn-danger" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(ref.id)}" data-context-type="${sanitize(ref.context_type || "")}" data-context-id="${sanitize(ref.context_id || "")}" data-target-id="${sanitize(targetId)}">移除附件</button>
         </div>
       </div>
     `;
   }).join("");
+}
+
+async function deleteContextAttachment(refId, contextType, contextId, targetId) {
+  if (!refId) {
+    alert("附件編號讀取失敗，請重新整理後再試。");
+    return;
+  }
+  if (!window.confirm("將此附件從目前項目移除？原雲端檔案不會被刪除。")) return;
+  await storageAction(`/cloud-drive/refs/${encodeURIComponent(refId)}`, "DELETE");
+  if (contextType === "chat_message" && typeof loadChatMessages === "function" && selectedChatRoomId) {
+    await loadChatMessages(selectedChatRoomId, false);
+  } else if (contextType && contextId && targetId) {
+    await loadContextAttachments(contextType, contextId, targetId);
+  }
+  await ensureAttachmentFileOptionsLoaded({ force: true });
 }
 
 async function loadContextAttachments(contextType, contextId, targetId) {
@@ -1007,7 +1180,7 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
 
 async function attachExistingContextAttachment({ fileId, contextType, contextId, grantUserIds = [], grantRole = null, refresh }) {
   if (!fileId) {
-    alert("請輸入既有雲端 file_id");
+    alert("請先從下拉選單選擇雲端檔案");
     return;
   }
   if (!contextId) {
@@ -1052,6 +1225,7 @@ async function uploadPendingChatAttachment() {
     return;
   }
   input.value = "";
+  await ensureAttachmentFileOptionsLoaded({ force: true });
   if (typeof addPendingChatAttachment === "function") {
     addPendingChatAttachment(json.file || {});
   }
@@ -1060,7 +1234,8 @@ async function uploadPendingChatAttachment() {
 
 async function addExistingChatFileToPending(fileId) {
   if (!fileId) {
-    alert("請輸入既有雲端 file_id");
+    await ensureAttachmentFileOptionsLoaded();
+    alert("請先從下拉選單選擇雲端檔案");
     return;
   }
   if (!selectedChatRoomId) {
@@ -1091,6 +1266,7 @@ async function uploadChatAttachment() {
 }
 
 async function attachExistingChatFile() {
+  await ensureAttachmentFileOptionsLoaded();
   await addExistingChatFileToPending($("chat-attachment-existing-file-id")?.value.trim() || "");
 }
 
@@ -1107,9 +1283,11 @@ async function uploadDmAttachment() {
     grantUserIds: currentDmGrantUserIds(),
     refresh: () => loadContextAttachments("dm", selectedDmThreadId, "dm-attachment-list")
   });
+  await ensureAttachmentFileOptionsLoaded({ force: true });
 }
 
 async function attachExistingDmFile() {
+  await ensureAttachmentFileOptionsLoaded();
   await attachExistingContextAttachment({
     fileId: $("dm-attachment-existing-file-id")?.value.trim() || "",
     contextType: "dm",
@@ -1157,17 +1335,19 @@ async function uploadAnnouncementAttachmentRequest() {
   }
   input.value = "";
   await createAnnouncementAttachmentRequest(json.file?.file_id, announcementId, $("announcement-attachment-reason")?.value || "");
+  await ensureAttachmentFileOptionsLoaded({ force: true });
 }
 
 async function attachExistingAnnouncementFile() {
   const announcementId = Number($("announcement-attachment-announcement-id")?.value || 0);
+  await ensureAttachmentFileOptionsLoaded();
   const fileId = $("announcement-attachment-existing-file-id")?.value.trim() || "";
   if (!announcementId) {
     alert("請輸入公告 ID");
     return;
   }
   if (!fileId) {
-    alert("請輸入既有雲端 file_id");
+    alert("請先從下拉選單選擇雲端檔案");
     return;
   }
   await createAnnouncementAttachmentRequest(fileId, announcementId, $("announcement-attachment-reason")?.value || "");
@@ -1357,7 +1537,7 @@ function renderAlbums(albums) {
         <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}</div>
       </div>
       <div class="drive-file-actions">
-        <button class="btn btn-primary" type="button" data-drive-action="open-album" data-album-id="${sanitize(album.id)}">開啟</button>
+        <button class="btn btn-primary" type="button" data-drive-action="open-album" data-album-id="${sanitize(album.id)}">預覽</button>
         <button class="btn btn-danger" type="button" data-drive-action="delete-album" data-album-id="${sanitize(album.id)}">刪除</button>
       </div>
     </div>
@@ -1815,29 +1995,6 @@ function albumFileDisplayName(file) {
   return file.display_name || file.original_filename_plain_for_public || file.virtual_path || file.file_id || "image";
 }
 
-function renderAlbumFiles(album) {
-  const list = $("album-file-list");
-  if (!list) return;
-  const files = Array.isArray(album.files) ? album.files : [];
-  if (!files.length) {
-    list.innerHTML = `<div class="drive-empty">這本相簿還沒有檔案。到雲端硬碟的圖片檔旁按「加入相簿」。</div>`;
-    return;
-  }
-  list.innerHTML = files.map((file) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(albumFileDisplayName(file))}</strong>
-        <div class="drive-card-sub">${sanitize(file.virtual_path || "-")} · ${formatDriveBytes(file.size_bytes || 0)} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}${file.caption ? ` · ${sanitize(file.caption)}` : ""}</div>
-      </div>
-      <div class="drive-file-actions">
-        <button class="btn" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(albumFileDisplayName(file))}">預覽</button>
-        ${file.storage_file_id ? `<button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.storage_file_id)}">下載</button>` : `<button class="btn" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id)}" data-warn="0">下載</button>`}
-        <button class="btn btn-danger" type="button" data-drive-action="remove-album-file" data-album-id="${sanitize(album.id)}" data-album-file-id="${sanitize(file.id)}">移出</button>
-      </div>
-    </div>
-  `).join("");
-}
-
 function renderAlbumDetail(album) {
   const card = $("album-detail-card");
   if (!card) return;
@@ -1850,14 +2007,12 @@ function renderAlbumDetail(album) {
   if ($("album-edit-title")) $("album-edit-title").value = album.title || "";
   if ($("album-edit-description")) $("album-edit-description").value = album.description || "";
   if ($("album-edit-visibility")) $("album-edit-visibility").value = album.visibility || "private";
-  renderAlbumFiles(album);
 }
 
 async function openAlbum(id, options = {}) {
   if (!id) return;
   try {
-    const json = await storageAction(`/storage/albums/${encodeURIComponent(id)}`, "GET");
-    renderAlbumDetail(json.album || {});
+    await openAlbumViewer(id, options);
   } catch (err) {
     if (!options.quiet) alert(err.message || "相簿讀取失敗");
   }
@@ -2068,6 +2223,10 @@ document.addEventListener("click", (event) => {
   const storageFileId = button.dataset.storageFileId || "";
   const albumId = button.dataset.albumId || "";
   const albumFileId = button.dataset.albumFileId || "";
+  const refId = button.dataset.refId || "";
+  const contextType = button.dataset.contextType || "";
+  const contextId = button.dataset.contextId || "";
+  const targetId = button.dataset.targetId || "";
   const path = button.dataset.path || "";
   const name = button.dataset.name || "";
   const warn = button.dataset.warn === "1";
@@ -2080,6 +2239,7 @@ document.addEventListener("click", (event) => {
     if (action === "move-cloud-to-storage") return moveCloudFileToStorage(fileId, name);
     if (action === "add-cloud-to-album") return addCloudFileToAlbum(fileId, name);
     if (action === "delete-cloud") return deleteDriveFile(fileId);
+    if (action === "delete-context-attachment") return deleteContextAttachment(refId, contextType, contextId, targetId);
     if (action === "close-preview") return closeDrivePreview();
     if (action === "close-album-full-preview") return closeAlbumFullPreview();
     if (action === "download-storage") return downloadStorageFile(storageFileId);
@@ -2104,6 +2264,12 @@ document.addEventListener("click", (event) => {
     if (action === "close-album-viewer") return closeAlbumViewer();
     if (action === "refresh-albums") return loadAlbumGallery();
   })().catch((err) => alert(err.message || "操作失敗"));
+});
+
+document.addEventListener("focusin", (event) => {
+  if (event.target?.matches?.(ATTACHMENT_FILE_SELECT_IDS.map((id) => `#${id}`).join(","))) {
+    ensureAttachmentFileOptionsLoaded().catch(() => {});
+  }
 });
 
 document.addEventListener("keydown", (event) => {

@@ -367,8 +367,36 @@ async function resetViolations(userId) {
 }
 
 // ── Governance UI ───────────────────────────────────────────
+let governancePendingTargetUserId = "";
+
 async function loadGovernanceDashboard() {
-  await Promise.allSettled([loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
+  await Promise.allSettled([loadUsers(), loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
+  renderGovernanceTargetOptions();
+}
+
+function renderGovernanceTargetOptions(selectedValue = null) {
+  const select = $("governance-target-user-id");
+  if (!select) return;
+  const previous = selectedValue === null
+    ? String(select.value || governancePendingTargetUserId || "")
+    : String(selectedValue || "");
+  const rows = Array.isArray(users) ? users : [];
+  if (!rows.length) {
+    select.innerHTML = `<option value="">無法讀取會員清單</option>`;
+    return;
+  }
+  select.innerHTML = `<option value="">請選擇治理目標</option>` + rows.map((user) => {
+    const id = String(user.id || "");
+    const role = user.username === "root" ? "root" : (user.role || "user");
+    const status = user.status || "-";
+    const level = user.effective_level || user.member_level || "";
+    const label = `${user.username || "unknown"} (#${id}) · ${role} · ${status}${level ? " · " + level : ""}`;
+    return `<option value="${sanitize(id)}">${sanitize(label)}</option>`;
+  }).join("");
+  if (previous && rows.some((user) => String(user.id || "") === previous)) {
+    select.value = previous;
+    governancePendingTargetUserId = "";
+  }
 }
 
 async function loadMemberLevelRulesSummary() {
@@ -467,7 +495,7 @@ async function createGovernanceProposal() {
   const targetId = parseInt($("governance-target-user-id")?.value || "0", 10);
   const reason = ($("governance-reason")?.value || "").trim();
   if (!targetId || !reason) {
-    alert("請填目標 user id 與提案原因");
+    alert("請選擇治理目標並填寫提案原因");
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -539,6 +567,8 @@ async function overrideGovernanceProposal(proposalId) {
 
 function openGovernanceProposalForUser(userId, username) {
   switchAdminTab("governance");
+  governancePendingTargetUserId = String(userId || "");
+  renderGovernanceTargetOptions(userId);
   if ($("governance-target-user-id")) $("governance-target-user-id").value = userId;
   if ($("governance-reason")) $("governance-reason").value = `針對 ${username || "user #" + userId} 建立治理提案：`;
 }
@@ -932,6 +962,7 @@ async function loadSettings() {
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
+  if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
@@ -1789,6 +1820,7 @@ async function saveSettings() {
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
+    comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",
@@ -1835,15 +1867,19 @@ async function saveSettings() {
     el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {
+    const activeModule = currentModuleTab;
+    const activeServerTab = currentServerTab;
+    const activeSettingsSection = currentSettingsSection;
     applySiteConfig(payload);
-    if (currentUser) setAuthState({
-      username: currentUser,
-      id: currentUserId,
-      role: currentRole,
-      role_label: $("me-role")?.textContent || currentRole,
-      nickname: $("me-nickname")?.textContent || "",
-      birthdate: null
-    });
+    const idleMinutes = Number(payload.session_idle_timeout_minutes ?? 10);
+    inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
+    if (inactivityLogoutMs > 0) resetInactivityTimer();
+    if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
+    if (activeModule && typeof switchModuleTab === "function") {
+      currentServerTab = activeServerTab;
+      currentSettingsSection = activeSettingsSection;
+      switchModuleTab(activeModule);
+    }
   }
 }
 

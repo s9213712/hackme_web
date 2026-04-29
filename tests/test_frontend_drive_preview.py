@@ -49,7 +49,7 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="album-picker-select"' in index_html
     assert 'id="album-list"' in index_html
     assert 'id="album-detail-card"' in index_html
-    assert 'id="album-file-list"' in index_html
+    assert 'id="album-file-list"' not in index_html
     assert "不列出，持連結可看" in index_html
     assert "async function uploadStorageFile()" in drive_js
     assert "async function uploadStorageFolder()" in drive_js
@@ -64,6 +64,7 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function moveStorageFolder()" in drive_js
     assert "async function createAlbum()" in drive_js
     assert "async function openAlbum(id" in drive_js
+    assert "await openAlbumViewer(id, options);" in drive_js
     assert "async function saveAlbumDetail()" in drive_js
     assert "async function removeAlbumFile(albumId, albumFileId)" in drive_js
     assert "請輸入相簿 id" not in drive_js
@@ -104,14 +105,29 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="album-viewer-card"' in index_html
     assert 'id="album-thumb-size"' in index_html
     assert 'id="album-full-preview-overlay"' in index_html
-    assert '/js/35-drive.js?v=20260429-folder-upload' in index_html
-    assert '/styles.css?v=20260429-comfyui-batch' in index_html
-    assert '/js/00-core.js?v=20260429-chat-attachments' in index_html
+    assert '/js/35-drive.js?v=20260429-context-attachment-delete' in index_html
+    assert '/styles.css?v=20260429-comfyui-post-thumb' in index_html
+    assert '/js/00-core.js?v=20260429-chat-attachment-delete' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
-    assert '/js/50-admin.js?v=20260429-security-log-layout' in index_html
+    assert '/js/50-admin.js?v=20260429-governance-target-select' in index_html
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js
     assert "data-drive-action" in drive_js
+    assert "function drivePreviewContentUrl(fileId)" in drive_js
+    assert "function driveFileIsImage(file)" in drive_js
+    assert "function renderAttachmentFileSelects" in drive_js
+    assert "async function ensureAttachmentFileOptionsLoaded" in drive_js
+    assert "請先從下拉選單選擇雲端檔案" in drive_js
+    assert 'data-drive-action="delete-context-attachment"' in drive_js
+    assert "async function deleteContextAttachment" in drive_js
+    assert "/cloud-drive/refs/${encodeURIComponent(refId)}" in drive_js
+    assert "附件編號讀取失敗" in drive_js
+    assert "loadChatMessages(selectedChatRoomId" in drive_js
+    assert '<select id="chat-attachment-existing-file-id">' in index_html
+    assert '<select id="dm-attachment-existing-file-id">' in index_html
+    assert '<select id="announcement-attachment-existing-file-id">' in index_html
+    assert 'placeholder="file_id"' not in index_html
+    assert "chat-message-image-preview" in drive_js
     assert "driveTransferRows" in drive_js
     assert "xhrUploadWithProgress" in drive_js
     assert "/cloud-drive/remote-download/tasks" in drive_js
@@ -191,7 +207,8 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert 'value="e2ee_vault">端到端加密（站方無法讀取）' in index_html
     assert 'value="e2ee_vault_with_client_scan">端到端加密（附本機掃描回報）' in index_html
     assert "drivePrivacyModeLabel(file.privacy_mode)" in drive_js
-    assert "root/admin 上限：儲存磁碟可用空間 90%" in drive_js
+    assert "root 上限：儲存磁碟可用空間 90%" in drive_js
+    assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js
 
 
@@ -210,3 +227,15 @@ def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     assert 'form.append("file", encrypted.blob, encrypted.filename)' in drive_js
     assert "browser_local_vault_key" in drive_js
     assert "此瀏覽器不支援端到端加密上傳" in drive_js
+
+
+def test_cloud_drive_e2ee_download_decrypts_in_browser():
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+
+    assert "async function unwrapDriveFileKey(encryptedFileKey)" in drive_js
+    assert "async function decryptDriveE2eeBlob(blob, e2ee)" in drive_js
+    assert "/e2ee-key" in drive_js
+    assert "const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee);" in drive_js
+    assert "outputBlob = decrypted.blob" in drive_js
+    assert "name = decrypted.filename || name" in drive_js
+    assert "原本的本地 vault key 已不存在" in drive_js

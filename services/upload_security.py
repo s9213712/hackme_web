@@ -24,6 +24,7 @@ UPLOAD_PRIVACY_MODES = {
 RISK_LEVELS = {"low", "medium", "high", "blocked", "unknown_encrypted"}
 ADMIN_DISK_QUOTA_RATIO = 0.9
 ADMIN_DISK_WARNING_RATIO = 0.8
+MANAGER_CLOUD_DRIVE_QUOTA_BYTES = 1024 * 1024 * 1024
 SCAN_STATUSES = {
     "not_required",
     "pending",
@@ -759,6 +760,8 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     data = dict(user or {})
     user_id = int(data.get("id") or 0)
     admin_actor = _user_is_admin(data)
+    root_actor = _user_is_root(data)
+    manager_quota_actor = admin_actor and not root_actor
     effective_level = data.get("effective_level") or data.get("member_level") or "newbie"
     sanction_status = data.get("sanction_status") or "none"
     rule = member_rule or {}
@@ -768,8 +771,19 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     can_upload = admin_actor or (bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"})
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
-    disk = _disk_usage_for_storage_root(storage_root) if admin_actor and storage_root else None
-    total_bytes = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO) if disk else (None if admin_actor else quota_mb * 1024 * 1024)
+    disk = _disk_usage_for_storage_root(storage_root) if root_actor and storage_root else None
+    if disk:
+        total_bytes = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO)
+        quota_source = "root_disk_available_90_percent"
+    elif manager_quota_actor:
+        total_bytes = MANAGER_CLOUD_DRIVE_QUOTA_BYTES
+        quota_source = "manager_role_fixed_1gb"
+    elif root_actor:
+        total_bytes = None
+        quota_source = "root_role_unlimited_no_storage_root"
+    else:
+        total_bytes = quota_mb * 1024 * 1024
+        quota_source = "member_level_rules.attachment_quota_mb"
     remaining_bytes = None if total_bytes is None else max(0, total_bytes - used_bytes)
     percent_used = 0.0
     if total_bytes and total_bytes > 0:
@@ -781,13 +795,13 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "user_id": user_id,
         "effective_level": effective_level,
         "can_upload": can_upload,
-        "quota_source": "admin_role_disk_available_90_percent" if disk else ("admin_role_unlimited" if admin_actor else "member_level_rules.attachment_quota_mb"),
+        "quota_source": quota_source,
         "used_bytes": used_bytes,
         "total_bytes": total_bytes,
         "remaining_bytes": remaining_bytes,
         "percent_used": percent_used,
         "file_count": file_count,
-        "max_file_size_bytes": remaining_bytes if disk else (None if admin_actor else max_file_size_mb * 1024 * 1024),
+        "max_file_size_bytes": remaining_bytes if (disk or manager_quota_actor) else (None if root_actor else max_file_size_mb * 1024 * 1024),
         "upload_rate_limit_per_day": None if admin_actor else upload_rate_limit_per_day,
         "disk": disk,
         "warning_threshold_percent": int(ADMIN_DISK_WARNING_RATIO * 100) if disk else None,
@@ -817,7 +831,7 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=No
     if not _user_is_admin(user) and effective_level in {"restricted", "suspended"}:
         restrictions.append("restricted/suspended 不可新增上傳或分享")
     if usage.get("warning_active"):
-        restrictions.append("root/admin 雲端硬碟使用量已超過磁碟安全警示線 80%，請清理檔案或擴充儲存空間")
+        restrictions.append("root 雲端硬碟使用量已超過磁碟安全警示線 80%，請清理檔案或擴充儲存空間")
 
     modes = {
         "public_attachment": "可掃毒、可預覽、站方可處理明文",
@@ -847,6 +861,10 @@ def _user_role(user):
     if username == "root":
         return "super_admin"
     return _mapping_value(user, "role", "user") or "user"
+
+
+def _user_is_root(user):
+    return _mapping_value(user, "username") == "root"
 
 
 def _user_is_admin(user):

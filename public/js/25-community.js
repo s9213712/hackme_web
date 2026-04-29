@@ -22,6 +22,8 @@ let communityMode = "boards";
 let canReviewCommunityThreads = false;
 let communityBoardModerators = [];
 let communityModeratorManagerOpen = false;
+let communityModeratorCandidates = [];
+let communityModeratorCandidatesLoadedAt = 0;
 
 const COMMUNITY_MODERATOR_PERMISSIONS = [
   ["can_review_threads", "審核主題"],
@@ -77,8 +79,32 @@ const COMMUNITY_MODERATOR_PRESETS = {
   },
 };
 
+function canOpenCommunityReviewMode() {
+  return currentRole === "manager" || currentRole === "super_admin" || canReviewCommunityThreads;
+}
+
+function resetCommunityReviewState() {
+  communityBoardReviews = [];
+  communityThreadReviews = [];
+  canReviewCommunityThreads = false;
+  const reviewBtn = $("community-review-tab-btn");
+  const reviewArea = $("community-review-area");
+  const boardPanel = $("community-board-review-panel");
+  const threadPanel = $("community-thread-review-panel");
+  if (reviewBtn) {
+    reviewBtn.style.display = "none";
+    reviewBtn.classList.remove("active");
+    reviewBtn.textContent = "審核";
+  }
+  if (reviewArea) reviewArea.style.display = "none";
+  if (boardPanel) boardPanel.style.display = "none";
+  if (threadPanel) threadPanel.style.display = "none";
+  if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
+}
+
 function switchCommunityMode(mode) {
-  communityMode = mode || "boards";
+  const nextMode = mode || "boards";
+  communityMode = nextMode === "review" && !canOpenCommunityReviewMode() ? "boards" : nextMode;
   const reviewArea = $("community-review-area");
   const mainArea = $("community-main-area");
   const reviewBtn = $("community-review-tab-btn");
@@ -179,6 +205,65 @@ function moderatorPermissionPayload() {
   return payload;
 }
 
+function communityModeratorCandidateLabel(user) {
+  const id = user?.id || "";
+  const username = user?.username || "unknown";
+  const role = username === "root" ? "root" : (user?.role || "user");
+  const status = user?.status || "-";
+  const level = user?.effective_level || user?.member_level || "";
+  return `${username} (#${id}) · ${role} · ${status}${level ? " · " + level : ""}`;
+}
+
+function renderCommunityModeratorUserOptions(selectedValue = "") {
+  const select = $("community-moderator-user-id");
+  if (!select) return;
+  const previous = String(selectedValue || select.value || "");
+  const rows = communityModeratorCandidates.length
+    ? communityModeratorCandidates
+    : (Array.isArray(users) ? users : []);
+  if (!rows.length) {
+    select.innerHTML = `<option value="">沒有可選擇的會員</option>`;
+    return;
+  }
+  select.innerHTML = `<option value="">請選擇版主帳號</option>` + rows.map((user) => `
+    <option value="${sanitize(String(user.id || ""))}">${sanitize(communityModeratorCandidateLabel(user))}</option>
+  `).join("");
+  if (previous && rows.some((user) => String(user.id || "") === previous)) {
+    select.value = previous;
+  }
+}
+
+async function loadCommunityModeratorCandidates({ force = false } = {}) {
+  if (!currentUser || !canManageCommunity()) return [];
+  const fresh = communityModeratorCandidatesLoadedAt && Date.now() - communityModeratorCandidatesLoadedAt < 30000;
+  if (!force && fresh) {
+    renderCommunityModeratorUserOptions();
+    return communityModeratorCandidates;
+  }
+  if (Array.isArray(users) && users.length && !force) {
+    communityModeratorCandidates = users;
+    communityModeratorCandidatesLoadedAt = Date.now();
+    renderCommunityModeratorUserOptions();
+    return communityModeratorCandidates;
+  }
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/admin/users", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    const select = $("community-moderator-user-id");
+    if (select) select.innerHTML = `<option value="">會員清單讀取失敗</option>`;
+    return [];
+  }
+  communityModeratorCandidates = Array.isArray(json.users) ? json.users : [];
+  communityModeratorCandidatesLoadedAt = Date.now();
+  if (Array.isArray(json.users)) users = json.users;
+  renderCommunityModeratorUserOptions();
+  return communityModeratorCandidates;
+}
+
 function applyModeratorPreset(presetName) {
   const preset = COMMUNITY_MODERATOR_PRESETS[presetName] || COMMUNITY_MODERATOR_PRESETS.full;
   COMMUNITY_MODERATOR_PERMISSIONS.forEach(([key]) => {
@@ -192,6 +277,7 @@ function fillModeratorForm(moderator) {
   communityModeratorManagerOpen = true;
   renderCommunityModerators();
   const userId = $("community-moderator-user-id");
+  renderCommunityModeratorUserOptions(moderator.user_id || "");
   if (userId) userId.value = moderator.user_id || "";
   COMMUNITY_MODERATOR_PERMISSIONS.forEach(([key]) => {
     const input = $(moderatorPermissionInputId(key));
@@ -217,6 +303,9 @@ function renderCommunityModerators() {
     openBtn.textContent = communityModeratorManagerOpen ? "隱藏版主設定" : "版主設定";
   }
   if (panel) panel.style.display = canShow && communityModeratorManagerOpen ? "block" : "none";
+  if (canShow && communityModeratorManagerOpen) {
+    loadCommunityModeratorCandidates().catch(() => {});
+  }
   if (!list || !canManageCommunity()) return;
   if (!selectedCommunityBoardId) {
     list.innerHTML = "<p style='color:var(--muted);'>請先選擇討論區</p>";
@@ -235,7 +324,7 @@ function renderCommunityModerators() {
       <div class="community-card">
         <div class="community-card-head">
           <strong>${sanitize(moderator.username || "")}</strong>
-          <span class="community-badge approved">帳號 ID ${sanitize(String(moderator.user_id || ""))}</span>
+          <span class="community-badge approved">會員 #${sanitize(String(moderator.user_id || ""))}</span>
         </div>
         <div class="community-meta">權限：${sanitize(allowed)}</div>
         <div class="community-actions">
@@ -351,6 +440,7 @@ function renderCommunityBoardReviews() {
   const reviewBtn = $("community-review-tab-btn");
   const canReview = currentRole === "manager" || currentRole === "super_admin";
   if (reviewBtn) reviewBtn.style.display = (canReview || canReviewCommunityThreads) ? "" : "none";
+  if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
   if (panel) panel.style.display = canReview && communityMode === "review" ? "block" : "none";
   if (!list || !canReview) return;
   if (!communityBoardReviews.length) {
@@ -385,6 +475,7 @@ function renderCommunityThreadReviews() {
   const reviewBtn = $("community-review-tab-btn");
   const canReview = currentRole === "manager" || currentRole === "super_admin" || canReviewCommunityThreads;
   if (reviewBtn) reviewBtn.style.display = canReview ? "" : "none";
+  if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
   if (panel) panel.style.display = canReview && communityMode === "review" ? "block" : "none";
   if (!list || !canReview) return;
   if (!communityThreadReviews.length) {
@@ -750,9 +841,10 @@ async function loadCommunityModerators(boardId = selectedCommunityBoardId) {
 
 async function saveCommunityModerator() {
   if (!selectedCommunityBoardId || !canManageCommunity()) return;
+  await loadCommunityModeratorCandidates();
   const userId = parseInt($("community-moderator-user-id")?.value || "", 10);
   if (!userId) {
-    flash($("community-moderator-msg"), "請輸入要設定的帳號 ID", false);
+    flash($("community-moderator-msg"), "請先從下拉選單選擇版主帳號", false);
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -1113,6 +1205,7 @@ async function toggleCommunityThreadSticky() {
 }
 
 async function loadCommunityHome() {
+  resetCommunityReviewState();
   switchCommunityMode("boards");
   await Promise.all([
     loadCommunityCategories(),

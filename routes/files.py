@@ -1514,6 +1514,59 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/cloud-drive/refs", methods=["DELETE"])
+    @app.route("/api/cloud-drive/refs/", methods=["DELETE"])
+    @app.route("/api/cloud-drive/refs/<ref_id>", methods=["DELETE"])
+    @require_csrf
+    def cloud_drive_delete_ref(ref_id=None):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        ref_id = (ref_id or "").strip()
+        if not ref_id:
+            try:
+                data = request.get_json(silent=True) or {}
+            except Exception:
+                data = {}
+            ref_id = (data.get("ref_id") or request.args.get("ref_id") or "").strip()
+        if not ref_id:
+            return json_resp({"ok": False, "msg": "attachment ref required"}), 400
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            row = conn.execute("SELECT * FROM cloud_file_refs WHERE id=?", (ref_id,)).fetchone()
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到附件"}), 404
+            allowed = (
+                int(row["attached_by"]) == int(_actor_value(actor, "id"))
+                or int(row["owner_user_id"]) == int(_actor_value(actor, "id"))
+                or _is_manager(actor)
+            )
+            if not allowed:
+                return json_resp({"ok": False, "msg": "沒有移除此附件的權限"}), 403
+            now = datetime.now().isoformat()
+            conn.execute("DELETE FROM cloud_file_refs WHERE id=?", (ref_id,))
+            conn.execute(
+                """
+                UPDATE file_access_grants
+                SET revoked_at=?
+                WHERE file_id=? AND context_type=? AND context_id=? AND revoked_at IS NULL
+                """,
+                (now, row["file_id"], row["context_type"], row["context_id"]),
+            )
+            conn.commit()
+            audit(
+                "CLOUD_DRIVE_ATTACHMENT_REMOVE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"ref_id={ref_id},file_id={row['file_id']},context={row['context_type']}#{row['context_id']}",
+            )
+            return json_resp({"ok": True, "msg": "附件已移除", "ref_id": ref_id})
+        finally:
+            conn.close()
+
     @app.route("/api/cloud-drive/files/<file_id>/preview", methods=["GET"])
     @require_csrf_safe
     def cloud_drive_preview(file_id):
@@ -1687,6 +1740,52 @@ def register_file_routes(app, deps):
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return send_file(path, as_attachment=True, download_name=row["original_filename_plain_for_public"] or "download.bin")
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/files/<file_id>/e2ee-key", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_e2ee_key(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+            if not row or row["deleted_at"]:
+                return json_resp({"ok": False, "msg": "找不到檔案"}), 404
+            if not str(row["privacy_mode"] or "").startswith("e2ee"):
+                return json_resp({"ok": False, "msg": "此檔案不是端到端加密檔案"}), 400
+            key = conn.execute(
+                """
+                SELECT encrypted_file_key, wrapped_by, key_version
+                FROM encrypted_file_keys
+                WHERE file_id=? AND recipient_user_id=? AND revoked_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (file_id, int(actor["id"])),
+            ).fetchone()
+            if not key:
+                return json_resp({"ok": False, "msg": "此帳號沒有可用的解密金鑰"}), 403
+            log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="e2ee_key", result="allowed", reason=key["wrapped_by"], ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            return json_resp({
+                "ok": True,
+                "e2ee": {
+                    "file_id": row["id"],
+                    "privacy_mode": row["privacy_mode"],
+                    "encrypted_metadata": row["original_filename_encrypted"],
+                    "encrypted_file_key": key["encrypted_file_key"],
+                    "wrapped_by": key["wrapped_by"],
+                    "key_version": key["key_version"],
+                    "encryption_algorithm": row["encryption_algorithm"],
+                    "encryption_version": row["encryption_version"],
+                    "nonce": row["nonce"],
+                    "ciphertext_sha256": row["ciphertext_sha256"],
+                },
+            })
         finally:
             conn.close()
 

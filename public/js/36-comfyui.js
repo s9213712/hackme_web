@@ -10,6 +10,7 @@ let comfyuiAlbumsLoaded = false;
 let comfyuiProgressTimer = null;
 let comfyuiProgressStartedAt = 0;
 let comfyuiGenerateAbortController = null;
+let comfyuiMaxBatchSize = 1;
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 900;
 const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-select",
@@ -71,6 +72,21 @@ function setComfyuiBusy(busy) {
   }
   if (interrupt) interrupt.disabled = !busy;
   if (refresh) refresh.disabled = !!busy;
+}
+
+function applyComfyuiRuntimeLimits(payload = {}) {
+  const parsed = Number(payload.max_batch_size || 1);
+  comfyuiMaxBatchSize = Math.max(1, Math.min(8, Number.isFinite(parsed) ? parsed : 1));
+  const input = $("comfyui-batch-size");
+  if (!input) return;
+  input.min = "1";
+  input.max = String(comfyuiMaxBatchSize);
+  if (!input.value || Number(input.value) > comfyuiMaxBatchSize) input.value = String(comfyuiMaxBatchSize);
+  if (comfyuiMaxBatchSize === 1) input.value = "1";
+  input.disabled = comfyuiMaxBatchSize <= 1;
+  input.title = comfyuiMaxBatchSize <= 1
+    ? "目前系統限制單次只能產生 1 張，root 可在安全中心調整"
+    : `目前單次最多 ${comfyuiMaxBatchSize} 張`;
 }
 
 function fillComfyuiSelect(id, values, fallback) {
@@ -338,6 +354,7 @@ async function loadComfyuiModels() {
     fillComfyuiSelect("comfyui-sampler", json.samplers || [], "euler");
     fillComfyuiSelect("comfyui-scheduler", json.schedulers || [], "normal");
     restoreComfyuiDraft();
+    applyComfyuiRuntimeLimits(json);
     comfyuiModelsLoaded = true;
     loadComfyuiAlbums({ force: true }).catch(() => {});
     setComfyuiTabAvailability(true);
@@ -366,6 +383,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 狀態檢測失敗（HTTP ${res.status}）`);
     const available = !!json.available;
+    applyComfyuiRuntimeLimits(json);
     const detail = available
       ? `已偵測 ${json.comfyui_url || "ComfyUI"}`
       : (json.msg || `找不到 ${json.comfyui_url || "ComfyUI"} 伺服器`);
@@ -407,7 +425,7 @@ function comfyuiPayload() {
     height: comfyuiNumberValue("comfyui-height", 512),
     steps: comfyuiNumberValue("comfyui-steps", 20),
     cfg: comfyuiNumberValue("comfyui-cfg", 7),
-    batch_size: comfyuiNumberValue("comfyui-batch-size", 1),
+    batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1))),
     seed: $("comfyui-seed")?.value ? comfyuiNumberValue("comfyui-seed", 0) : undefined,
     sampler_name: $("comfyui-sampler")?.value || "euler",
     scheduler: $("comfyui-scheduler")?.value || "normal",

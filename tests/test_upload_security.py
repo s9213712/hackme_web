@@ -219,7 +219,7 @@ def test_cloud_drive_safety_summary_restricted_user_cannot_upload():
         conn.close()
 
 
-def test_admin_role_uses_disk_backed_quota(tmp_path, monkeypatch):
+def test_root_role_uses_disk_backed_quota(tmp_path, monkeypatch):
     class FakeDiskUsage:
         total = 20_000
         used = 10_000
@@ -228,7 +228,7 @@ def test_admin_role_uses_disk_backed_quota(tmp_path, monkeypatch):
     monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
     conn = _conn()
     try:
-        admin = {"id": 1, "username": "admin", "role": "manager", "effective_level": "suspended", "sanction_status": "suspended"}
+        admin = {"id": 1, "username": "root", "role": "super_admin", "effective_level": "suspended", "sanction_status": "suspended"}
         usage = get_user_cloud_drive_usage(
             conn,
             admin,
@@ -239,7 +239,7 @@ def test_admin_role_uses_disk_backed_quota(tmp_path, monkeypatch):
         assert usage["total_bytes"] == 9_000
         assert usage["max_file_size_bytes"] == 9_000
         assert usage["upload_rate_limit_per_day"] is None
-        assert usage["quota_source"] == "admin_role_disk_available_90_percent"
+        assert usage["quota_source"] == "root_disk_available_90_percent"
         assert usage["warning_threshold_percent"] == 80
         assert usage["warning_active"] is False
 
@@ -264,6 +264,33 @@ def test_admin_role_uses_disk_backed_quota(tmp_path, monkeypatch):
             user={"id": 1, "username": "admin", "role": "manager", "effective_level": "newbie"},
         )
         assert decision.allowed is True
+    finally:
+        conn.close()
+
+
+def test_manager_role_uses_fixed_1gb_cloud_drive_quota(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 20_000
+        used = 10_000
+        free = 10_000
+
+    monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        manager = {"id": 1, "username": "admin", "role": "manager", "effective_level": "suspended", "sanction_status": "suspended"}
+        usage = get_user_cloud_drive_usage(
+            conn,
+            manager,
+            member_rule={"can_upload_attachment": False, "attachment_quota_mb": 0, "max_attachment_size_mb": 0, "upload_rate_limit_per_day": 0},
+            storage_root=tmp_path,
+        )
+        assert usage["can_upload"] is True
+        assert usage["total_bytes"] == 1024 * 1024 * 1024
+        assert usage["max_file_size_bytes"] == 1024 * 1024 * 1024
+        assert usage["upload_rate_limit_per_day"] is None
+        assert usage["quota_source"] == "manager_role_fixed_1gb"
+        assert usage["disk"] is None
+        assert usage["warning_threshold_percent"] is None
     finally:
         conn.close()
 

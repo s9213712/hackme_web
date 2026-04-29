@@ -846,6 +846,7 @@ def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_referenc
         json={"file_id": file_id, "context_type": "forum_post", "context_id": "101", "grant_role": "user"},
     )
     assert attached.status_code == 200
+    ref_id = attached.get_json()["attachment"]["ref_id"]
 
     conn = sqlite3.connect(db_path)
     file_count = conn.execute("SELECT COUNT(*) FROM uploaded_files").fetchone()[0]
@@ -853,6 +854,29 @@ def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_referenc
     conn.close()
     assert file_count == 1
     assert ref_count == 1
+
+    actor_box["actor"] = _actor(2, "bob")
+    assert client.get(f"/api/cloud-drive/files/{file_id}/download").status_code == 200
+
+    actor_box["actor"] = _actor(1, "alice")
+    removed_ref = client.delete(f"/api/cloud-drive/refs/{ref_id}")
+    assert removed_ref.status_code == 200
+    assert removed_ref.get_json()["msg"] == "附件已移除"
+    refs_after_remove = client.get("/api/cloud-drive/refs?context_type=forum_post&context_id=101")
+    assert refs_after_remove.status_code == 200
+    assert refs_after_remove.get_json()["refs"] == []
+    actor_box["actor"] = _actor(2, "bob")
+    assert client.get(f"/api/cloud-drive/files/{file_id}/download").status_code == 403
+
+    actor_box["actor"] = _actor(1, "alice")
+    attached_again = client.post(
+        "/api/cloud-drive/attach-existing",
+        json={"file_id": file_id, "context_type": "forum_post", "context_id": "101", "grant_role": "user"},
+    )
+    assert attached_again.status_code == 200
+    ref_id = attached_again.get_json()["attachment"]["ref_id"]
+    removed_ref_compat = client.delete("/api/cloud-drive/refs/", json={"ref_id": ref_id})
+    assert removed_ref_compat.status_code == 200
 
     deleted = client.delete(f"/api/cloud-drive/files/{file_id}")
     assert deleted.status_code == 200
@@ -983,6 +1007,46 @@ def test_e2ee_share_and_revoke_controls_download_grant(tmp_path):
     actor_box["actor"] = _actor(2, "bob")
     denied = client.get(f"/api/files/{file_id}/download")
     assert denied.status_code == 403
+
+
+def test_e2ee_key_endpoint_returns_only_recipient_key(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(b"cipher"), "vault.bin"),
+            "privacy_mode": "e2ee_vault",
+            "encrypted_metadata": "sealed:metadata",
+            "encrypted_file_key": "sealed:owner-key",
+            "wrapped_by": "browser_local_vault_key",
+            "ciphertext_sha256": "a" * 64,
+            "encryption_algorithm": "AES-GCM",
+            "encryption_version": "browser-local-v1",
+            "nonce": "nonce",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    owner_key = client.get(f"/api/cloud-drive/files/{file_id}/e2ee-key")
+    assert owner_key.status_code == 200
+    body = owner_key.get_json()
+    assert body["ok"] is True
+    assert body["e2ee"]["encrypted_file_key"] == "sealed:owner-key"
+    assert body["e2ee"]["encrypted_metadata"] == "sealed:metadata"
+    assert body["e2ee"]["wrapped_by"] == "browser_local_vault_key"
+
+    actor_box["actor"] = _actor(3, "mallory")
+    denied = client.get(f"/api/cloud-drive/files/{file_id}/e2ee-key")
+    assert denied.status_code == 403
+    assert "沒有可用的解密金鑰" in denied.get_json()["msg"]
 
 
 def test_remote_download_capabilities_and_rejects_local_paths(tmp_path):
