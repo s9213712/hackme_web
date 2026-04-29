@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.04.29-017`**
+**Current Release ID: `2026.04.29-020`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational

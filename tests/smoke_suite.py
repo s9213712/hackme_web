@@ -53,6 +53,35 @@ class Client:
                 "json": _safe_json(raw),
             }
 
+    def multipart_request(self, method, path, *, fields=None, files=None, headers=None):
+        boundary = "----hackmeWebSmokeBoundary"
+        chunks = []
+        for key, value in (fields or {}).items():
+            chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+            chunks.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            chunks.append(str(value).encode("utf-8"))
+            chunks.append(b"\r\n")
+        for field, filename, content, mime in (files or []):
+            chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+            chunks.append(
+                f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+                f"Content-Type: {mime or 'application/octet-stream'}\r\n\r\n"
+                .encode("utf-8")
+            )
+            chunks.append(content if isinstance(content, bytes) else bytes(content))
+            chunks.append(b"\r\n")
+        chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+        req_headers = dict(headers or {})
+        req_headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        req = urllib.request.Request(self.base_url + path, data=b"".join(chunks), headers=req_headers, method=method)
+        try:
+            with self.opener.open(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                return {"status": resp.status, "headers": dict(resp.headers.items()), "text": raw, "json": _safe_json(raw)}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            return {"status": exc.code, "headers": dict(exc.headers.items()), "text": raw, "json": _safe_json(raw)}
+
     def fetch_csrf(self):
         res = self.request("GET", "/api/csrf-token")
         if res["status"] != 200 or not res["json"].get("csrf_token"):
@@ -198,6 +227,150 @@ def run_functional_suite(base_url):
     )
     assert_status("test send chat message", res, 200)
     assert_json_ok("test send chat message", res)
+
+    csrf = user.fetch_csrf()
+    upload = user.multipart_request(
+        "POST",
+        "/api/cloud-drive/upload",
+        fields={"privacy_mode": "private_scannable"},
+        files=[("file", "chat-smoke.txt", b"chat attachment smoke", "text/plain")],
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("test upload chat attachment candidate", upload, 200)
+    assert_json_ok("test upload chat attachment candidate", upload)
+    chat_file_id = upload["json"]["file"]["file_id"]
+
+    csrf = user.fetch_csrf()
+    res = user.request(
+        "POST",
+        f"/api/chat/rooms/{room_id}/messages",
+        body={"content": "smoke attachment message", "attachment_file_ids": [chat_file_id]},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("test send chat message with attachment", res, 200)
+    assert_json_ok("test send chat message with attachment", res)
+    attachment_message_id = res["json"]["message_id"]
+
+    csrf = user.fetch_csrf()
+    res = user.request("GET", f"/api/chat/rooms/{room_id}/messages", headers={"X-CSRF-Token": csrf})
+    assert_status("test read chat messages before recall", res, 200)
+    assert_json_ok("test read chat messages before recall", res)
+    sent_messages = [m for m in res["json"].get("messages", []) if m.get("sender") == "test" and m.get("content") == "smoke secret message"]
+    if not sent_messages:
+        raise SmokeFailure("new chat message was not returned before recall")
+    message_id = sent_messages[-1]["id"]
+    attachment_messages = [m for m in res["json"].get("messages", []) if m.get("id") == attachment_message_id]
+    if not attachment_messages or not attachment_messages[0].get("attachments"):
+        raise SmokeFailure("chat attachment message did not return attachment metadata")
+
+    csrf = user.fetch_csrf()
+    res = user.request("DELETE", f"/api/chat/messages/{message_id}", headers={"X-CSRF-Token": csrf})
+    assert_status("test recall chat message", res, 200)
+    assert_json_ok("test recall chat message", res)
+
+    csrf = user.fetch_csrf()
+    res = user.request(
+        "POST",
+        f"/api/chat/rooms/{room_id}/messages",
+        body={"message_type": "sticker", "sticker_key": "smile"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("test send chat sticker", res, 200)
+    assert_json_ok("test send chat sticker", res)
+
+    csrf = user.fetch_csrf()
+    res = user.request(
+        "POST",
+        "/api/chat/friends/requests",
+        body={"username": "admin"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("test send friend request", res, 200)
+    assert_json_ok("test send friend request", res)
+
+    csrf = admin.fetch_csrf()
+    res = admin.request("GET", "/api/chat/friends", headers={"X-CSRF-Token": csrf})
+    assert_status("admin read friend requests", res, 200)
+    assert_json_ok("admin read friend requests", res)
+    incoming = res["json"].get("incoming", [])
+    if incoming:
+        request_id = incoming[0]["id"]
+        csrf = admin.fetch_csrf()
+        res = admin.request("POST", f"/api/chat/friends/requests/{request_id}/accept", headers={"X-CSRF-Token": csrf})
+        assert_status("admin accept friend request", res, 200)
+        assert_json_ok("admin accept friend request", res)
+
+    csrf = user.fetch_csrf()
+    res = user.request("GET", "/api/games/catalog", headers={"X-CSRF-Token": csrf})
+    assert_status("test /api/games/catalog", res, 200)
+    assert_json_ok("test /api/games/catalog", res)
+
+    csrf = user.fetch_csrf()
+    res = user.request("POST", "/api/games/chess/practice", body={}, headers={"X-CSRF-Token": csrf})
+    assert_status("test create chess practice", res, 200)
+    assert_json_ok("test create chess practice", res)
+    chess_match_id = res["json"]["match_id"]
+
+    csrf = user.fetch_csrf()
+    res = user.request(
+        "POST",
+        f"/api/games/chess/matches/{chess_match_id}/move",
+        body={"from": "e2", "to": "e4"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("test chess legal move", res, 200)
+    assert_json_ok("test chess legal move", res)
+    if res["json"].get("match", {}).get("board", {}).get("e4") != "P":
+        raise SmokeFailure("chess practice move did not update the board")
+
+    csrf = user.fetch_csrf()
+    res = user.request("GET", "/api/games/chess/leaderboard", headers={"X-CSRF-Token": csrf})
+    assert_status("test chess leaderboard", res, 200)
+    assert_json_ok("test chess leaderboard", res)
+
+    csrf = admin.fetch_csrf()
+    res = admin.request("GET", "/api/community/boards", headers={"X-CSRF-Token": csrf})
+    assert_status("admin read community boards", res, 200)
+    assert_json_ok("admin read community boards", res)
+    boards = res["json"].get("boards", [])
+    if boards:
+        board_id = boards[0]["id"]
+        csrf = admin.fetch_csrf()
+        res = admin.request(
+            "POST",
+            f"/api/community/boards/{board_id}/threads",
+            body={"title": "smoke pinned topic", "content": "smoke topic body"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("admin create smoke community thread", res, 200)
+        assert_json_ok("admin create smoke community thread", res)
+        csrf = admin.fetch_csrf()
+        res = admin.request(
+            "GET",
+            f"/api/community/boards/{board_id}/threads?q=smoke%20pinned%20topic",
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("admin find smoke community thread", res, 200)
+        assert_json_ok("admin find smoke community thread", res)
+        threads = res["json"].get("threads", [])
+        if not threads:
+            raise SmokeFailure("created community smoke thread was not listed")
+        thread_id = threads[0]["id"]
+        csrf = admin.fetch_csrf()
+        res = admin.request(
+            "POST",
+            f"/api/community/threads/{thread_id}/sticky",
+            body={"sticky": True},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("admin sticky smoke community thread", res, 200)
+        assert_json_ok("admin sticky smoke community thread", res)
+        csrf = admin.fetch_csrf()
+        res = admin.request("GET", f"/api/community/threads/{thread_id}", headers={"X-CSRF-Token": csrf})
+        assert_status("admin read sticky smoke community thread", res, 200)
+        assert_json_ok("admin read sticky smoke community thread", res)
+        if not res["json"].get("thread", {}).get("is_sticky"):
+            raise SmokeFailure("community thread sticky flag was not persisted")
 
     csrf = user.fetch_csrf()
     res = user.request("GET", "/api/appeals", headers={"X-CSRF-Token": csrf})

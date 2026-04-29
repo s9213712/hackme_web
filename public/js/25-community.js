@@ -21,10 +21,12 @@ let communityToolsOpen = false;
 let communityMode = "boards";
 let canReviewCommunityThreads = false;
 let communityBoardModerators = [];
+let communityModeratorManagerOpen = false;
 
 const COMMUNITY_MODERATOR_PERMISSIONS = [
   ["can_review_threads", "審核主題"],
-  ["can_pin_posts", "置頂與精華"],
+  ["can_pin_threads", "置頂主題"],
+  ["can_pin_posts", "置頂留言"],
   ["can_lock_threads", "鎖定主題"],
   ["can_edit_posts", "編輯留言"],
   ["can_delete_posts", "刪除主題或留言"],
@@ -35,6 +37,7 @@ const COMMUNITY_MODERATOR_PERMISSIONS = [
 const COMMUNITY_MODERATOR_PRESETS = {
   full: {
     can_review_threads: true,
+    can_pin_threads: true,
     can_pin_posts: true,
     can_lock_threads: true,
     can_edit_posts: true,
@@ -44,6 +47,7 @@ const COMMUNITY_MODERATOR_PRESETS = {
   },
   review: {
     can_review_threads: true,
+    can_pin_threads: false,
     can_pin_posts: false,
     can_lock_threads: false,
     can_edit_posts: false,
@@ -53,6 +57,7 @@ const COMMUNITY_MODERATOR_PRESETS = {
   },
   content: {
     can_review_threads: true,
+    can_pin_threads: true,
     can_pin_posts: true,
     can_lock_threads: true,
     can_edit_posts: true,
@@ -62,6 +67,7 @@ const COMMUNITY_MODERATOR_PRESETS = {
   },
   discipline: {
     can_review_threads: true,
+    can_pin_threads: false,
     can_pin_posts: false,
     can_lock_threads: true,
     can_edit_posts: false,
@@ -121,6 +127,7 @@ function showCommunityBoardStage() {
   communityThreads = [];
   communityBoardModerators = [];
   communityThreadCreatorOpen = false;
+  communityModeratorManagerOpen = false;
   renderCommunityBoards();
   renderCommunityThreads(null);
   renderCommunityModerators();
@@ -131,6 +138,7 @@ function showCommunityBoardStage() {
 function showCommunityThreadStage() {
   selectedCommunityThreadId = null;
   selectedCommunityThread = null;
+  communityModeratorManagerOpen = false;
   renderCommunityThreads(selectedCommunityBoard);
   renderCommunityThreadDetail(null, []);
   switchCommunityMode("boards");
@@ -181,6 +189,8 @@ function applyModeratorPreset(presetName) {
 
 function fillModeratorForm(moderator) {
   if (!moderator) return;
+  communityModeratorManagerOpen = true;
+  renderCommunityModerators();
   const userId = $("community-moderator-user-id");
   if (userId) userId.value = moderator.user_id || "";
   COMMUNITY_MODERATOR_PERMISSIONS.forEach(([key]) => {
@@ -191,10 +201,22 @@ function fillModeratorForm(moderator) {
   if (preset) preset.value = "full";
 }
 
+function toggleCommunityModeratorManager(forceOpen = null) {
+  communityModeratorManagerOpen = forceOpen === null ? !communityModeratorManagerOpen : !!forceOpen;
+  renderCommunityModerators();
+}
+
 function renderCommunityModerators() {
   const panel = $("community-moderator-manager");
   const list = $("community-moderator-list");
-  if (panel) panel.style.display = selectedCommunityBoardId && canManageCommunity() ? "block" : "none";
+  const openBtn = $("community-moderator-open-btn");
+  const canShow = selectedCommunityBoardId && canManageCommunity();
+  if (openBtn) {
+    openBtn.style.display = canShow ? "" : "none";
+    openBtn.classList.toggle("active", canShow && communityModeratorManagerOpen);
+    openBtn.textContent = communityModeratorManagerOpen ? "隱藏版主設定" : "版主設定";
+  }
+  if (panel) panel.style.display = canShow && communityModeratorManagerOpen ? "block" : "none";
   if (!list || !canManageCommunity()) return;
   if (!selectedCommunityBoardId) {
     list.innerHTML = "<p style='color:var(--muted);'>請先選擇討論區</p>";
@@ -274,6 +296,26 @@ function communityReactionButton(post, value, label) {
 function communityThreadReactionButton(thread, value, label) {
   const active = Number(thread?.user_reaction || 0) === Number(value);
   return `<button class="btn community-mini-btn${active ? " active" : ""}" type="button" data-community-thread-reaction="${thread.id}" data-reaction-value="${value}">${label} ${value === 1 ? (thread.like_count || 0) : (thread.dislike_count || 0)}</button>`;
+}
+
+function communityPlainContent(content) {
+  return String(content || "").replace(/\n?\[\[comfyui-image:[A-Za-z0-9_-]+\]\]\n?/g, "\n").trim();
+}
+
+function communityPreviewContentUrl(fileId) {
+  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
+  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+}
+
+function renderCommunityBody(content) {
+  const raw = String(content || "");
+  const match = raw.match(/\[\[comfyui-image:([A-Za-z0-9_-]+)\]\]/);
+  const cleaned = communityPlainContent(raw);
+  const image = match
+    ? `<div class="community-share-image"><img src="${sanitize(communityPreviewContentUrl(match[1]))}" alt="ComfyUI shared image" loading="lazy" /></div>`
+    : "";
+  return `${image}<div class="community-body">${sanitize(cleaned)}</div>`;
 }
 
 function renderCommunityAnnouncements() {
@@ -448,10 +490,10 @@ function renderCommunityThreads(board) {
   }
   list.innerHTML = communityThreads.map((thread) => `
     <button class="community-thread-item${Number(selectedCommunityThreadId) === Number(thread.id) ? " active" : ""}" type="button" data-open-thread="${thread.id}">
-      <strong>${sanitize(thread.title || "")}</strong>
+      <strong>${thread.is_sticky ? "置頂 · " : ""}${sanitize(thread.title || "")}</strong>
       <div class="community-meta">${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
-      <div class="community-body">${sanitize((thread.content || "").slice(0, 140))}${(thread.content || "").length > 140 ? "..." : ""}</div>
+      <div class="community-body">${sanitize(communityPlainContent(thread.content || "").slice(0, 140))}${communityPlainContent(thread.content || "").length > 140 ? "..." : ""}</div>
       <div class="community-meta">回覆 ${thread.reply_count || 0}</div>
     </button>
   `).join("");
@@ -467,13 +509,22 @@ function renderCommunityThreadDetail(thread, posts) {
   const replyBox = $("community-reply-box");
   const lockTools = $("community-thread-lock-tools");
   const lockToggle = $("community-thread-lock-toggle");
+  const stickyToggle = $("community-thread-sticky-toggle");
   const deleteThreadBtn = $("community-thread-delete-btn");
   const canModerateThread = !!thread?.can_moderate || canManageCommunity();
+  const modPerms = thread?.moderator_permissions || {};
+  const canPinThread = canManageCommunity() || !!modPerms.can_pin_threads;
+  const canLockThread = canManageCommunity() || !!modPerms.can_lock_threads;
+  const canPinPost = canManageCommunity() || !!modPerms.can_pin_posts;
+  const canRewardThread = canManageCommunity() || !!modPerms.can_reward_authors;
+  const canPenalizePost = canManageCommunity() || !!modPerms.can_penalize_posts;
   if (heading) heading.textContent = thread ? thread.title : "主題內容";
   if (replyBox) replyBox.style.display = thread && thread.board_status === "approved" && thread.status === "approved" && !thread.is_locked ? "block" : "none";
   if (lockTools) lockTools.style.display = thread && (canModerateThread || canDeleteCommunityItem(thread.author_user_id)) ? "flex" : "none";
   if (lockToggle && thread) lockToggle.textContent = thread.is_locked ? "解除鎖定" : "鎖定主題";
-  if (lockToggle) lockToggle.style.display = thread && canModerateThread ? "" : "none";
+  if (stickyToggle && thread) stickyToggle.textContent = thread.is_sticky ? "取消置頂" : "置頂主題";
+  if (lockToggle) lockToggle.style.display = thread && canModerateThread && canLockThread ? "" : "none";
+  if (stickyToggle) stickyToggle.style.display = thread && canModerateThread && canPinThread ? "" : "none";
   if (deleteThreadBtn) deleteThreadBtn.style.display = thread && (canModerateThread || canDeleteCommunityItem(thread.author_user_id)) ? "" : "none";
   if (!detail) return;
   if (!thread) {
@@ -484,14 +535,14 @@ function renderCommunityThreadDetail(thread, posts) {
     ? posts.map((post) => `
         <div class="community-card${post.is_hidden ? " community-hidden-post" : ""}">
           <div class="community-card-head">
-            <div class="community-meta">${post.is_pinned ? "置頂 · " : ""}${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}${post.is_hidden ? ` · 已隱藏：${sanitize(post.hidden_reason || "")}` : ""}</div>
+            <div class="community-meta">${post.is_pinned ? "置頂留言 · " : ""}${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}${post.is_hidden ? ` · 已隱藏：${sanitize(post.hidden_reason || "")}` : ""}</div>
             <div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">
-              ${canModerateThread ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂"}</button>` : ""}
+              ${canModerateThread && canPinPost ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂留言"}</button>` : ""}
               ${(canModerateThread || canDeleteCommunityItem(post.author_user_id, thread.author_user_id)) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
-              ${canModerateThread ? `<button class="btn community-mini-btn" type="button" data-penalty-community-post="${post.id}">懲處</button>` : ""}
+              ${canModerateThread && canPenalizePost ? `<button class="btn community-mini-btn" type="button" data-penalty-community-post="${post.id}">懲處</button>` : ""}
             </div>
           </div>
-          <div class="community-body">${sanitize(post.content || "")}</div>
+          ${renderCommunityBody(post.content || "")}
           <div class="community-actions" style="margin-top:.45rem;">
             ${communityReactionButton(post, 1, "讚")}
             ${communityReactionButton(post, -1, "倒讚")}
@@ -501,13 +552,13 @@ function renderCommunityThreadDetail(thread, posts) {
     : "<p style='color:var(--muted);'>尚無留言</p>";
   detail.innerHTML = `
     <div class="community-card">
-      <div class="community-meta">${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))} · ${sanitize(thread.board_title || "")}${thread.is_locked ? " · 已鎖定" : ""}</div>
+      <div class="community-meta">${thread.is_sticky ? "置頂主題 · " : ""}${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))} · ${sanitize(thread.board_title || "")}${thread.is_locked ? " · 已鎖定" : ""}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
-      <div class="community-body">${sanitize(thread.content || "")}</div>
+      ${renderCommunityBody(thread.content || "")}
       <div class="community-actions" style="margin-top:.45rem;">
         ${communityThreadReactionButton(thread, 1, "讚")}
         ${communityThreadReactionButton(thread, -1, "倒讚")}
-        ${canModerateThread ? `<button class="btn community-mini-btn" type="button" data-reward-community-thread="${thread.id}">獎勵作者</button>` : ""}
+        ${canModerateThread && canRewardThread ? `<button class="btn community-mini-btn" type="button" data-reward-community-thread="${thread.id}">獎勵作者</button>` : ""}
       </div>
     </div>
     <div class="mini-title" style="margin:.8rem 0 .45rem;">留言區</div>
@@ -799,7 +850,11 @@ async function reviewCommunityThread(threadId, action) {
 }
 
 async function openCommunityBoard(boardId, preserveThread = false) {
+  const previousBoardId = selectedCommunityBoardId;
   selectedCommunityBoardId = boardId;
+  if (Number(previousBoardId) !== Number(boardId)) {
+    communityModeratorManagerOpen = false;
+  }
   if (!preserveThread) {
     selectedCommunityThreadId = null;
     selectedCommunityThread = null;
@@ -1034,6 +1089,23 @@ async function toggleCommunityThreadLock() {
   });
   const json = await res.json().catch(() => ({}));
   flash($("community-msg"), json.msg || "主題狀態更新失敗", !!json.ok);
+  if (json.ok) {
+    await openCommunityBoard(selectedCommunityBoardId, true);
+    await openCommunityThread(selectedCommunityThreadId);
+  }
+}
+
+async function toggleCommunityThreadSticky() {
+  if (!selectedCommunityThreadId || !selectedCommunityThread) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/sticky", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ sticky: !selectedCommunityThread.is_sticky })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-msg"), json.msg || "主題置頂更新失敗", !!json.ok);
   if (json.ok) {
     await openCommunityBoard(selectedCommunityBoardId, true);
     await openCommunityThread(selectedCommunityThreadId);

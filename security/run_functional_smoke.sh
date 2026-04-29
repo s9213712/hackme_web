@@ -574,6 +574,8 @@ run_checks() {
   else
     skip "comfyui integration availability" "ComfyUI backend is optional for functional smoke"
   fi
+  request "comfyui discard requires image ref" "POST" "/api/comfyui/discard" "400" '{"prompt_id":"smoke"}'
+  request "comfyui share requires generated image" "POST" "/api/comfyui/share" "400" '{"title":"smoke comfyui share"}'
   request "cloud drive files list" "GET" "/api/cloud-drive/files" "200"
   request "storage files list" "GET" "/api/storage/files" "200"
   request "storage albums list" "GET" "/api/storage/albums" "200"
@@ -585,6 +587,7 @@ run_checks() {
   request "storage folders list" "GET" "/api/storage/folders" "200"
   if [[ -n "${STORAGE_FILE_ID:-}" ]]; then
     request "storage file organize" "PUT" "/api/storage/files/${STORAGE_FILE_ID}/organize" "200" "{\"virtual_path\":\"/smoke/raw-$RUN_ID/storage_album.txt\"}"
+    request "storage folder album rejects non media folder" "POST" "/api/storage/folders/album" "400" "{\"path\":\"/smoke/raw-$RUN_ID\",\"title\":\"Smoke Folder Album $RUN_ID\"}"
     request "storage folder move" "PUT" "/api/storage/folders/move" "200" "{\"old_path\":\"/smoke/raw-$RUN_ID\",\"new_path\":\"/smoke/archive-$RUN_ID\"}"
   else
     skip "storage file organize" "storage file id not found"

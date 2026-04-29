@@ -18,10 +18,79 @@ CREATE TABLE IF NOT EXISTS chat_messages (
             room_id        INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
             sender_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
             content        TEXT    NOT NULL,
+            message_type   TEXT    NOT NULL DEFAULT 'text',
+            sticker_key    TEXT,
             is_blocked     INTEGER NOT NULL DEFAULT 0,
+            is_revoked     INTEGER NOT NULL DEFAULT 0,
+            revoked_at     TEXT,
+            revoked_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
             blocked_reason TEXT,
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
+
+CREATE TABLE IF NOT EXISTS user_friends (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status         TEXT    NOT NULL DEFAULT 'pending',
+            requested_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, friend_user_id),
+            CHECK (user_id <> friend_user_id),
+            CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        );
+
+CREATE TABLE IF NOT EXISTS game_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_key TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'pvp',
+    status TEXT NOT NULL DEFAULT 'active',
+    white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    current_turn TEXT NOT NULL DEFAULT 'white',
+    board_json TEXT NOT NULL,
+    move_history_json TEXT NOT NULL DEFAULT '[]',
+    winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    result_reason TEXT,
+    leaderboard_week TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    CHECK (game_key IN ('chess')),
+    CHECK (mode IN ('pvp', 'computer')),
+    CHECK (status IN ('active', 'finished', 'cancelled')),
+    CHECK (current_turn IN ('white', 'black'))
+);
+
+CREATE TABLE IF NOT EXISTS game_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_key TEXT NOT NULL,
+    inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    opponent_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    match_id INTEGER REFERENCES game_matches(id) ON DELETE SET NULL,
+    message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    CHECK (game_key IN ('chess')),
+    CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'expired'))
+);
+
+CREATE TABLE IF NOT EXISTS game_leaderboard_rewards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_key TEXT NOT NULL,
+    week_key TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rank INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    reward_points INTEGER NOT NULL,
+    ledger_uuid TEXT,
+    awarded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(game_key, week_key, user_id)
+);
 
 CREATE TABLE IF NOT EXISTS chat_room_members (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -755,6 +824,12 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id,
 CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
+CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
+CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
 
 CREATE INDEX IF NOT EXISTS idx_chat_reports_message ON chat_message_reports(message_id);
 

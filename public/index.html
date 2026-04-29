@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-session-topbar" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-comfyui-batch" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -219,8 +219,9 @@
         <button class="tab" id="tab-module-community">討論區</button>
         <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
+        <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
-        <button class="tab" id="tab-module-economy" style="display:none;">積分錢包</button>
+        <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
         <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
@@ -271,6 +272,13 @@
       <div class="chat-layout">
         <div class="chat-room-list-wrap">
           <div class="mini-title">我的聊天室</div>
+          <div class="chat-friend-panel">
+            <div class="chat-friend-add">
+              <input type="text" id="chat-friend-username" placeholder="好友帳號" maxlength="32" />
+              <button class="btn" id="chat-friend-add-btn" type="button">加好友</button>
+            </div>
+            <div id="chat-friend-list" class="chat-friend-list"></div>
+          </div>
           <div id="chat-room-list"></div>
         </div>
 
@@ -284,6 +292,17 @@
           <div class="chat-composer">
             <textarea id="chat-message-input" rows="2" maxlength="500" placeholder="輸入訊息，最多 500 字"></textarea>
             <button class="btn btn-primary" id="chat-send-btn" type="button">送出</button>
+          </div>
+          <div id="chat-pending-attachment-list" class="chat-pending-attachment-list">
+            <div class="drive-empty">尚未選擇要隨訊息送出的附件</div>
+          </div>
+          <div class="chat-sticker-bar" id="chat-sticker-bar">
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="smile">微笑</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="thanks">感謝</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="ok">了解</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="wow">驚訝</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="cheer">加油</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="sad">難過</button>
           </div>
           <div class="chat-composer-actions">
             <button class="btn" id="chat-refresh-msg-btn" type="button">重新整理訊息</button>
@@ -462,6 +481,7 @@
             <div class="community-panel-head">
               <button class="btn community-mini-btn" id="community-back-boards-btn" type="button">返回討論區</button>
               <button class="btn community-mini-btn" id="community-thread-create-open-btn" type="button" style="display:none;">撰寫新主題</button>
+              <button class="btn community-mini-btn" id="community-moderator-open-btn" type="button" style="display:none;">版主設定</button>
             </div>
             <div class="mini-title" id="community-board-heading">請先選擇討論區</div>
             <div id="community-board-meta" style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem;"></div>
@@ -488,7 +508,8 @@
               </div>
               <div class="settings-option-grid community-moderator-permissions">
                 <label><input type="checkbox" id="community-mod-can-review-threads" checked /> 審核主題</label>
-                <label><input type="checkbox" id="community-mod-can-pin-posts" checked /> 置頂與精華</label>
+                <label><input type="checkbox" id="community-mod-can-pin-threads" checked /> 置頂主題</label>
+                <label><input type="checkbox" id="community-mod-can-pin-posts" checked /> 置頂留言</label>
                 <label><input type="checkbox" id="community-mod-can-lock-threads" checked /> 鎖定主題</label>
                 <label><input type="checkbox" id="community-mod-can-edit-posts" checked /> 編輯留言</label>
                 <label><input type="checkbox" id="community-mod-can-delete-posts" checked /> 刪除主題或留言</label>
@@ -532,6 +553,7 @@
               <div class="mini-title" id="community-thread-heading">主題內容</div>
             </div>
             <div class="community-list-tools" id="community-thread-lock-tools" style="display:none;">
+              <button class="btn community-mini-btn" id="community-thread-sticky-toggle" type="button">置頂主題</button>
               <button class="btn community-mini-btn" id="community-thread-lock-toggle" type="button">鎖定主題</button>
               <button class="btn community-mini-btn" id="community-thread-delete-btn" type="button">刪除主題</button>
             </div>
@@ -656,17 +678,24 @@
         </div>
         <div class="drive-card-sub">貼網址或選 .torrent 擇一下載。遠端下載會套用你的雲端硬碟配額與掃描政策；網址不接受 localhost、內網或本機檔案路徑。</div>
       </div>
-      <div class="drive-card" style="margin-top:1rem;">
-        <div class="drive-card-title">我的檔案</div>
-        <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。圖片、影片、音樂、PDF、文字與 ZIP/TAR 可在通過安全政策後預覽。</div>
-        <div id="drive-file-list" class="drive-file-list"></div>
-      </div>
-      <div class="drive-card" id="drive-preview-card" style="margin-top:1rem;display:none;">
-        <div class="drive-card-heading">
-          <div class="drive-card-title">檔案預覽</div>
-          <button class="btn" type="button" data-drive-action="close-preview">關閉</button>
+      <div class="drive-file-preview-layout">
+        <div class="drive-card">
+          <div class="drive-card-title">我的檔案</div>
+          <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。圖片、影片、音樂、PDF、文字與 ZIP/TAR 可在通過安全政策後預覽。</div>
+          <div id="drive-file-list" class="drive-file-list"></div>
         </div>
-        <div id="drive-preview-panel" class="drive-preview-panel"></div>
+        <div class="drive-card drive-preview-card" id="drive-preview-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">檔案預覽</div>
+              <div class="drive-card-sub">點一次在這裡預覽；連點同一檔案兩次開全頁預覽。</div>
+            </div>
+            <button class="btn" type="button" data-drive-action="close-preview">關閉</button>
+          </div>
+          <div id="drive-preview-panel" class="drive-preview-panel">
+            <div class="drive-empty">請從左側檔案清單選擇要預覽的檔案</div>
+          </div>
+        </div>
       </div>
       <div class="drive-dashboard-grid" style="margin-top:1rem;">
         <div class="drive-card">
@@ -803,6 +832,64 @@
     </div>
   </div>
 
+  <div class="module-section" id="module-games">
+    <div class="admin-tools game-zone">
+      <div class="drive-card-heading">
+        <div>
+          <div class="mini-title">遊戲區</div>
+          <div class="drive-card-sub">目前開放西洋棋；邀請其他玩家對戰，或先與電腦練習。週排行榜只計入玩家對戰。</div>
+        </div>
+        <button class="btn" id="game-refresh-btn" type="button">刷新</button>
+      </div>
+      <div class="game-layout">
+        <section class="game-panel">
+          <div class="drive-card-title">遊戲大廳</div>
+          <div id="game-catalog-list" class="game-catalog-list"></div>
+          <div class="settings-option-grid game-action-grid">
+            <div class="field">
+              <label>邀請玩家</label>
+              <select id="game-invite-user"><option value="">載入玩家中...</option></select>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="game-invite-btn" type="button">送出邀請</button>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn" id="game-practice-btn" type="button">和電腦練習</button>
+            </div>
+          </div>
+          <div class="drive-card-sub">對戰邀請</div>
+          <div id="game-invite-list" class="drive-file-list compact-list"></div>
+          <div class="drive-card-sub">我的棋局</div>
+          <div id="game-match-list" class="drive-file-list compact-list"></div>
+        </section>
+        <section class="game-board-panel">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title" id="game-current-title">尚未選擇棋局</div>
+              <div class="drive-card-sub" id="game-current-status">選擇棋局後即可走棋</div>
+            </div>
+            <button class="btn btn-danger" id="game-resign-btn" type="button" style="display:none;">認輸</button>
+          </div>
+          <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
+          <div id="game-move-history" class="game-move-history"></div>
+        </section>
+        <section class="game-panel">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">週排行榜</div>
+              <div class="drive-card-sub">週末前三名發放 300 / 200 / 100 積分</div>
+            </div>
+            <button class="btn" id="game-award-btn" type="button" style="display:none;">發放週獎勵</button>
+          </div>
+          <div id="game-leaderboard-list" class="drive-file-list compact-list"></div>
+        </section>
+      </div>
+      <div id="game-msg" class="msg"></div>
+    </div>
+  </div>
+
   <div class="module-section" id="module-comfyui">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
       <div class="mini-title">AI 產圖</div>
@@ -834,14 +921,22 @@
             <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="512" /></div>
             <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
             <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
+            <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="8" value="1" /></div>
             <div class="field"><label>Seed（空白=隨機）</label><input type="number" id="comfyui-seed" min="0" placeholder="random" /></div>
             <div class="field"><label>Sampler</label><select id="comfyui-sampler"><option value="euler">euler</option></select></div>
             <div class="field"><label>Scheduler</label><select id="comfyui-scheduler"><option value="normal">normal</option></select></div>
             <div class="field"><label>儲存到資料夾</label><input type="text" id="comfyui-save-path" placeholder="/ComfyUI/圖片.png" /></div>
+            <div class="field"><label>加入相簿</label><select id="comfyui-album-select"><option value="">不加入相簿</option></select></div>
+          </div>
+          <div class="comfyui-share-panel">
+            <div class="field"><label>分享標題</label><input type="text" id="comfyui-share-title" maxlength="120" placeholder="ComfyUI 產圖分享" /></div>
+            <div class="field"><label>心得留言</label><textarea id="comfyui-share-note" rows="3" maxlength="900" placeholder="這次想分享的心得、用途或調參想法"></textarea></div>
           </div>
           <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
             <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
+            <button class="btn btn-danger" id="comfyui-interrupt-btn" type="button" disabled>中斷產圖</button>
             <button class="btn" id="comfyui-save-btn" type="button" disabled>存到雲端硬碟</button>
+            <button class="btn" id="comfyui-share-btn" type="button" disabled>分享到 ComfyUI 專區</button>
             <button class="btn" id="comfyui-discard-btn" type="button" disabled>丟棄預覽</button>
           </div>
           <div id="comfyui-msg" class="msg"></div>
@@ -851,6 +946,16 @@
           <div id="comfyui-preview" class="comfyui-preview">
             <div class="drive-empty">尚未產生圖片</div>
           </div>
+          <div id="comfyui-progress-panel" class="comfyui-progress-panel" style="display:none;">
+            <div class="comfyui-progress-head">
+              <span id="comfyui-progress-label">準備中</span>
+              <span id="comfyui-progress-percent">0%</span>
+            </div>
+            <div class="comfyui-progress-track">
+              <div id="comfyui-progress-bar" class="comfyui-progress-bar"></div>
+            </div>
+            <div id="comfyui-progress-detail" class="drive-card-sub">等待 ComfyUI 回應</div>
+          </div>
           <div id="comfyui-result-meta" class="drive-card-sub"></div>
         </div>
       </div>
@@ -858,14 +963,14 @@
   </div>
 
   <div class="module-section" id="module-economy">
-    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
-      <div class="mini-title">PointsChain 積分錢包</div>
-      <div class="drive-dashboard-grid">
+      <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+        <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
+      <div class="drive-dashboard-grid" id="economy-user-summary-grid">
         <div class="drive-card">
           <div class="drive-card-title">我的餘額</div>
           <div class="settings-option-grid economy-wallet-grid">
-            <div><span class="drive-card-sub">soft points</span><strong id="economy-soft-balance">0</strong><small id="economy-soft-frozen">凍結 0</small></div>
-            <div><span class="drive-card-sub">hard points</span><strong id="economy-hard-balance">0</strong><small id="economy-hard-frozen">凍結 0</small></div>
+            <div><span class="drive-card-sub">全站積分</span><strong id="economy-points-balance">0</strong><small id="economy-points-frozen">凍結 0</small></div>
+            <div><span class="drive-card-sub">累計收支</span><strong id="economy-points-earned">收入 0</strong><small id="economy-points-spent">支出 0</small></div>
             <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-wallet-status">-</strong><small id="economy-public-account">-</small></div>
           </div>
         </div>
@@ -880,7 +985,7 @@
           <div id="economy-catalog-list" class="drive-file-list"></div>
         </div>
       </div>
-      <div class="drive-card" style="margin-top:.75rem;">
+      <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">我的帳本</div>
@@ -898,8 +1003,7 @@
           <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
         </div>
         <div class="settings-option-grid">
-          <div class="field"><label>使用者 ID</label><input type="number" id="economy-adjust-user-id" min="1" /></div>
-          <div class="field"><label>幣種</label><select id="economy-adjust-currency"><option value="soft">soft</option><option value="hard">hard</option></select></div>
+          <div class="field"><label>調整對象</label><select id="economy-adjust-user-id"><option value="">讀取會員中...</option></select></div>
           <div class="field"><label>方向</label><select id="economy-adjust-direction"><option value="credit">加點</option><option value="debit">扣點</option></select></div>
           <div class="field"><label>數量</label><input type="number" id="economy-adjust-amount" min="1" value="1" /></div>
           <div class="field"><label>原因</label><input type="text" id="economy-adjust-reason" maxlength="160" placeholder="必填，會進入 audit log" /></div>
@@ -911,15 +1015,67 @@
       <div class="drive-card" id="economy-root-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
-            <div class="drive-card-title">root 鏈管理</div>
-            <div class="drive-card-sub">單節點私有鏈封塊、驗證與稽核狀態</div>
+            <div class="drive-card-title">root 私有鏈運維</div>
+            <div class="drive-card-sub">root 不受個人積分限制；此頁顯示 PointsChain 狀態、審計與緊急處置</div>
           </div>
           <div class="drive-file-actions">
+            <button class="btn" id="economy-root-report-btn" type="button">更新報告</button>
             <button class="btn" id="economy-seal-btn" type="button">封存未封帳本</button>
             <button class="btn" id="economy-verify-btn" type="button">驗證全鏈</button>
           </div>
         </div>
-        <pre id="economy-chain-status" style="max-height:240px;overflow:auto;font-size:.72rem;background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;"></pre>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">鏈狀態</span><strong id="economy-chain-ok">-</strong><small id="economy-chain-counts">-</small></div>
+          <div><span class="drive-card-sub">封塊</span><strong id="economy-chain-blocks">0</strong><small id="economy-chain-unsealed">未封 0</small></div>
+          <div><span class="drive-card-sub">審計事件</span><strong id="economy-chain-audit-count">0</strong><small>PointsChain audit</small></div>
+        </div>
+        <div class="drive-card-sub" id="economy-chain-countdown" style="margin-top:.6rem;">封塊倒數：-</div>
+        <div class="drive-card-sub" id="economy-chain-loaded-at" style="margin-top:.25rem;">最後更新 -</div>
+        <div class="drive-card" id="economy-account-query-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">查詢帳戶積分</div>
+              <div class="drive-card-sub">root 可選擇指定帳戶，查看目前積分、凍結點數、錢包狀態與最近帳本</div>
+            </div>
+            <button class="btn" id="economy-account-query-btn" type="button">查詢</button>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field"><label>查詢帳戶</label><select id="economy-query-user-id"><option value="">讀取會員中...</option></select></div>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">目前積分</span><strong id="economy-query-points-balance">-</strong><small id="economy-query-points-frozen">凍結 -</small></div>
+            <div><span class="drive-card-sub">累計收支</span><strong id="economy-query-points-earned">收入 -</strong><small id="economy-query-points-spent">支出 -</small></div>
+            <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-query-wallet-status">-</strong><small id="economy-query-public-account">-</small></div>
+          </div>
+          <div id="economy-query-ledger-list" class="drive-file-list" style="margin-top:.75rem;">
+            <div class="drive-empty">請先選擇帳戶並查詢</div>
+          </div>
+        </div>
+        <div class="settings-option-grid" style="margin-top:.75rem;">
+          <div class="field"><label>Rollback ledger UUID</label><input type="text" id="economy-rollback-ledger-uuid" placeholder="ledger_uuid" /></div>
+          <div class="field"><label>Rollback 原因</label><input type="text" id="economy-rollback-reason" maxlength="180" placeholder="必填，會寫入審計" /></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-rollback-btn" type="button">Rollback 交易</button></div>
+        </div>
+        <div class="drive-dashboard-grid" style="margin-top:.75rem;">
+          <div class="drive-card">
+            <div class="drive-card-title">最近封塊</div>
+            <div id="economy-block-list" class="drive-file-list"></div>
+          </div>
+          <div class="drive-card">
+            <div class="drive-card-title">審計報告</div>
+            <div id="economy-audit-list" class="drive-file-list"></div>
+          </div>
+        </div>
+        <div class="drive-card" style="margin-top:.75rem;">
+          <div class="drive-card-title">異常 / 已 rollback 帳本</div>
+          <div id="economy-risk-ledger-list" class="drive-file-list"></div>
+        </div>
+        <div class="drive-card" style="margin-top:.75rem;">
+          <div class="drive-card-title">加減分明細</div>
+          <div class="drive-card-sub">包含執行者、目標帳戶、加減分、原因與 ledger UUID</div>
+          <div id="economy-adjustment-list" class="drive-file-list"></div>
+        </div>
+        <div id="economy-chain-status" class="drive-card-sub economy-chain-status" style="margin-top:.75rem;">全鏈狀態尚未讀取</div>
       </div>
       <div id="economy-msg" class="msg"></div>
     </div>
@@ -1261,18 +1417,18 @@
           </div>
           <div id="security-thresholds-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
         </div>
-        <div class="settings-option-grid">
-          <div>
-            <div class="mini-title" style="margin-bottom:.45rem;">近期審計資料</div>
-            <div id="security-audit-entries" style="max-height:300px;overflow:auto;font-size:.72rem;font-family:monospace;"></div>
+        <div class="security-log-grid">
+          <div class="security-log-card">
+            <div class="mini-title">近期審計資料</div>
+            <div id="security-audit-entries" class="security-log-box"></div>
           </div>
-          <div>
-            <div class="mini-title" style="margin-bottom:.45rem;">Server log</div>
-            <pre id="security-server-log" style="max-height:300px;overflow:auto;font-size:.68rem;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;white-space:pre-wrap;"></pre>
+          <div class="security-log-card">
+            <div class="mini-title">Server log</div>
+            <pre id="security-server-log" class="security-log-box security-log-pre"></pre>
           </div>
-          <div>
-            <div class="mini-title" style="margin-bottom:.45rem;">伺服器即時輸出</div>
-            <pre id="security-server-output" style="max-height:300px;overflow:auto;font-size:.68rem;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;white-space:pre-wrap;"></pre>
+          <div class="security-log-card">
+            <div class="mini-title">伺服器即時輸出</div>
+            <pre id="security-server-output" class="security-log-box security-log-pre"></pre>
           </div>
         </div>
       </div>
@@ -1467,8 +1623,9 @@
             <div class="field"><label><input type="checkbox" id="s-feature-dm-enabled" /> 站內信</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-attachments-enabled" /> 附件 / 頭像 / CAPTCHA</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-storage-albums-enabled" /> Storage / 相簿</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分錢包</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-personalization-enabled" /> 個人化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
@@ -1622,6 +1779,14 @@
                 <option value="super_admin">最高管理者</option>
               </select>
             </div>
+            <div class="field">
+              <label>遊戲區最低可用角色</label>
+              <select id="s-module-games-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
           </div>
           <div class="form-section" id="sec-settings-drive">
             <div class="mini-title" style="margin-bottom:.8rem;">雲端硬碟儲存位置（需重啟生效）</div>
@@ -1728,6 +1893,7 @@
             重啟服務器
           </button>
         </div>
+        <div id="restart-server-status" class="msg" style="margin-top:.5rem;"></div>
       </div>
 
       <div class="form-section" id="sec-server-env">
@@ -1878,6 +2044,17 @@
   </div>
 </div>
 
+<div id="album-full-preview-overlay" class="album-full-preview-overlay" aria-hidden="true">
+  <div class="album-full-preview-topbar">
+    <div>
+      <strong id="album-full-preview-title">圖片預覽</strong>
+      <div id="album-full-preview-meta" class="drive-card-sub"></div>
+    </div>
+    <button type="button" class="btn" data-drive-action="close-album-full-preview">關閉</button>
+  </div>
+  <div id="album-full-preview-body" class="album-full-preview-body"></div>
+</div>
+
 <div id="admin-add-overlay" class="user-edit-overlay">
   <div class="user-edit-modal">
     <div class="mini-title">新增帳號</div>
@@ -1974,20 +2151,21 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260429-timeout-login" defer></script>
+<script src="/js/00-core.js?v=20260429-chat-attachments" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
-<script src="/js/20-chat.js?v=20260428-forum-pages" defer></script>
-<script src="/js/25-community.js?v=20260428-forum-pages" defer></script>
+<script src="/js/20-chat.js?v=20260429-chat-attachments" defer></script>
+<script src="/js/25-community.js?v=20260429-moderator-toggle" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/33-dm.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260429-torrent-upload" defer></script>
-<script src="/js/36-comfyui.js?v=20260428-comfyui-status" defer></script>
+<script src="/js/35-drive.js?v=20260429-drive-preview-side" defer></script>
+<script src="/js/36-comfyui.js?v=20260429-comfyui-draft" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
+<script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260429-sidebar" defer></script>
-<script src="/js/55-economy.js?v=20260429-pointschain" defer></script>
-<script src="/js/90-bootstrap.js?v=20260428-forum-pages" defer></script>
+<script src="/js/50-admin.js?v=20260429-security-log-layout" defer></script>
+<script src="/js/55-economy.js?v=20260429-pointschain-status-text" defer></script>
+<script src="/js/90-bootstrap.js?v=20260429-comfyui-draft" defer></script>
 </body>
 </html>

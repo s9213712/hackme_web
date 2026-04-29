@@ -366,12 +366,87 @@ def test_storage_folders_and_file_organize_flow(tmp_path):
     listing = client.get("/api/storage/files").get_json()["files"]
     assert listing[0]["virtual_path"] == "/archive/final/image.txt"
 
-    deleted_folder = client.delete("/api/storage/folders", json={"path": "/archive"})
+    deleted_folder = client.post("/api/storage/folders/trash", json={"path": "/archive"})
     assert deleted_folder.status_code == 200
     assert deleted_folder.get_json()["folder_trash"]["trashed_files"] == 1
     assert client.get("/api/storage/files").get_json()["files"] == []
     trash = client.get("/api/storage/trash").get_json()["files"]
     assert trash[0]["virtual_path"] == "/archive/final/image.txt"
+
+
+def test_storage_folder_trash_endpoint_handles_empty_explicit_folder(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    created_folder = client.post("/api/storage/folders", json={"path": "/empty"})
+    assert created_folder.status_code == 200
+
+    deleted_folder = client.post("/api/storage/folders/trash", json={"path": "/empty"})
+
+    assert deleted_folder.status_code == 200
+    body = deleted_folder.get_json()
+    assert body["folder_trash"]["path"] == "/empty"
+    assert body["folder_trash"]["trashed_files"] == 0
+    assert body["folder_trash"]["deleted_folders"] == 1
+
+
+def test_storage_folder_can_be_converted_to_album_when_all_files_are_media(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    for filename, payload, virtual_path in (
+        ("cover.png", b"\x89PNG\r\n\x1a\n", "/gallery/cover.png"),
+        ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "/gallery/nested/clip.mp4"),
+    ):
+        uploaded = client.post(
+            "/api/storage/files",
+            data={"file": (io.BytesIO(payload), filename), "virtual_path": virtual_path},
+            content_type="multipart/form-data",
+        )
+        assert uploaded.status_code == 200
+
+    created = client.post("/api/storage/folders/album", json={"path": "/gallery", "title": "Gallery"})
+
+    assert created.status_code == 200
+    album = created.get_json()["album"]
+    assert album["title"] == "Gallery"
+    assert album["source_folder"] == "/gallery"
+    assert album["added_count"] == 2
+    assert [item["display_name"] for item in album["files"]] == ["cover.png", "clip.mp4"]
+
+
+def test_storage_folder_album_rejects_non_media_files(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    for filename, virtual_path in (
+        ("cover.png", "/mixed/cover.png"),
+        ("note.txt", "/mixed/note.txt"),
+    ):
+        uploaded = client.post(
+            "/api/storage/files",
+            data={"file": (io.BytesIO(b"file body"), filename), "virtual_path": virtual_path},
+            content_type="multipart/form-data",
+        )
+        assert uploaded.status_code == 200
+
+    created = client.post("/api/storage/folders/album", json={"path": "/mixed", "title": "Mixed"})
+
+    assert created.status_code == 400
+    assert "非圖片/影片" in created.get_json()["msg"]
+    assert client.get("/api/storage/albums").get_json()["albums"] == []
 
 
 def test_storage_album_crud_and_file_membership(tmp_path):
@@ -467,6 +542,7 @@ def test_album_preview_uses_storage_display_name_when_uploaded_metadata_missing(
     album_file = added.get_json()["album"]["files"][0]
     assert album_file["display_name"] == "real-photo.png"
     assert album_file["original_filename_plain_for_public"] is None
+    assert album_file["storage_path"]
 
     preview = client.get(f"/api/cloud-drive/files/{file_id}/preview")
     assert preview.status_code == 200

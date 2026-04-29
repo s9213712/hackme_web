@@ -32,6 +32,7 @@ from services.remote_downloads import RemoteDownloadError, download_remote_url, 
 from services.storage_albums import (
     add_album_file,
     create_album,
+    create_album_from_storage_folder,
     create_share_link,
     create_storage_folder,
     create_storage_file_entry,
@@ -653,6 +654,7 @@ def register_file_routes(app, deps):
             conn.close()
 
     @app.route("/api/storage/folders", methods=["GET", "POST", "DELETE"])
+    @app.route("/api/storage/folders/trash", methods=["POST"])
     @require_csrf_safe
     def storage_folders():
         actor, err = _actor_or_401()
@@ -667,11 +669,12 @@ def register_file_routes(app, deps):
                 data = request.get_json(force=True)
             except Exception:
                 return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-            if request.method == "DELETE":
+            data = data if isinstance(data, dict) else {}
+            if request.method == "DELETE" or request.path.endswith("/trash"):
                 result, msg = trash_storage_folder(conn, actor=actor, path=data.get("path") or "")
                 if msg:
                     conn.rollback()
-                    return json_resp({"ok": False, "msg": msg}), 404
+                    return json_resp({"ok": False, "msg": msg}), 400
                 conn.commit()
                 audit("STORAGE_FOLDER_TRASH", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"path={result['path']}")
                 return json_resp({"ok": True, "folder_trash": result})
@@ -704,6 +707,43 @@ def register_file_routes(app, deps):
             conn.commit()
             audit("STORAGE_FOLDER_MOVE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"{result['old_path']} -> {result['new_path']}")
             return json_resp({"ok": True, "folder_move": result})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/folders/album", methods=["POST"])
+    @require_csrf
+    def storage_folder_album():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        conn = get_db()
+        try:
+            album, msg = create_album_from_storage_folder(
+                conn,
+                actor=actor,
+                path=data.get("path") or "",
+                title=data.get("title") or None,
+                description=data.get("description") or "",
+                visibility=data.get("visibility") or "private",
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit(
+                "STORAGE_FOLDER_TO_ALBUM",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"path={album.get('source_folder')}, album_id={album['id']}, files={album.get('added_count')}",
+            )
+            return json_resp({"ok": True, "album": album})
         finally:
             conn.close()
 

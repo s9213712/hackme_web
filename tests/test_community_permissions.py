@@ -564,6 +564,37 @@ def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):
     assert _post_row(db_path, ids["post"])["is_deleted"] == 1
 
 
+def test_board_moderator_can_pin_thread_without_pin_post_permission(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    assigned = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={"user_id": 4, "can_pin_threads": True, "can_pin_posts": False},
+    )
+    assert assigned.status_code == 200
+    moderator = next(
+        item for item in client.get(f"/api/community/boards/{board_id}/moderators").get_json()["moderators"]
+        if item["user_id"] == 4
+    )
+    assert moderator["can_pin_threads"] is True
+    assert moderator["can_pin_posts"] is False
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    sticky = client.post(f"/api/community/threads/{ids['thread']}/sticky", json={"sticky": True})
+    post_pin = client.post(f"/api/community/posts/{ids['post']}/pin", json={"pinned": True})
+
+    assert sticky.status_code == 200
+    assert post_pin.status_code == 403
+    assert _thread_row(db_path, ids["thread"])["is_sticky"] == 1
+    assert _post_row(db_path, ids["post"])["is_pinned"] == 0
+
+
 def test_board_moderator_can_review_only_assigned_board_threads(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
@@ -616,6 +647,7 @@ def test_board_moderator_reward_and_penalty_permissions_are_scoped(tmp_path):
             "user_id": 4,
             "can_reward_authors": False,
             "can_penalize_posts": False,
+            "can_pin_threads": False,
             "can_pin_posts": True,
             "can_delete_posts": True,
         },
@@ -626,6 +658,7 @@ def test_board_moderator_reward_and_penalty_permissions_are_scoped(tmp_path):
     moderator = next(item for item in listed.get_json()["moderators"] if item["user_id"] == 4)
     assert moderator["can_reward_authors"] is False
     assert moderator["can_penalize_posts"] is False
+    assert moderator["can_pin_threads"] is False
     assert moderator["can_pin_posts"] is True
     assert moderator["can_delete_posts"] is True
 

@@ -1,0 +1,64 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_root_points_page_is_chain_operations_console():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+
+    assert 'id="economy-user-summary-grid"' in index_html
+    assert 'id="economy-user-ledger-card"' in index_html
+    assert "root 私有鏈運維" in index_html
+    assert 'id="economy-root-report-btn"' in index_html
+    assert 'id="economy-rollback-ledger-uuid"' in index_html
+    assert 'id="economy-rollback-btn"' in index_html
+    assert 'id="economy-audit-list"' in index_html
+    assert 'id="economy-risk-ledger-list"' in index_html
+    assert 'id="economy-chain-countdown"' in index_html
+    assert 'id="economy-chain-loaded-at"' in index_html
+    assert 'id="economy-chain-status"' in index_html
+    assert "<pre id=\"economy-chain-status\"" not in index_html
+    assert 'id="economy-account-query-card"' in index_html
+    assert 'id="economy-query-user-id"' in index_html
+    assert 'id="economy-account-query-btn"' in index_html
+    assert 'id="economy-query-points-balance"' in index_html
+    assert 'id="economy-query-ledger-list"' in index_html
+    assert 'id="economy-adjustment-list"' in index_html
+    assert '<select id="economy-adjust-user-id">' in index_html
+    assert '<input type="number" id="economy-adjust-user-id"' not in index_html
+    assert 'id="economy-adjust-currency"' not in index_html
+    assert "全站積分" in index_html
+    assert "加減分明細" in index_html
+    assert "積分系統" in index_html
+    assert "/js/55-economy.js?v=20260429-pointschain-status-text" in index_html
+    assert "/js/90-bootstrap.js?v=20260429-comfyui-draft" in index_html
+    assert 'const rootMode = currentUser === "root";' in economy_js
+    assert 'rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包"' in economy_js
+    assert 'fetchEconomyJson("/root/points/report")' in economy_js
+    assert "startEconomyBlockCountdown" in economy_js
+    assert "function canManageEconomyPoints()" in economy_js
+    assert 'currentUser === "root" || currentRole === "manager" || currentRole === "super_admin"' in economy_js
+    assert "最後更新" in economy_js
+    assert "bindEconomyInlineEvents" in economy_js
+    assert "economy-adjustment-list" in economy_js
+    assert 'fetchEconomyJson("/admin/users")' in economy_js
+    assert "function renderEconomyAdjustUserOptions" in economy_js
+    assert "async function loadEconomyAccountLookup()" in economy_js
+    assert "renderEconomyAccountLookup" in economy_js
+    assert "formatEconomyVerificationSummary" in economy_js
+    assert "setEconomyChainStatus" in economy_js
+    assert "JSON.stringify(json.report?.verification" not in economy_js
+    assert "JSON.stringify(json.verification" not in economy_js
+    assert '/admin/points/wallets/${encodeURIComponent(userId)}' in economy_js
+    assert "economy-account-query-btn" in economy_js
+    assert "會員讀取失敗" in economy_js
+    assert "請先選擇要查詢的會員" in economy_js
+    assert "請先選擇要調整的會員" in economy_js
+    assert "economy-adjust-currency" not in economy_js
+    assert 'return "點";' in economy_js
+    assert 'async function rollbackEconomyLedger()' in economy_js
+    assert "/rollback" in economy_js
+    assert "bindEconomyInlineEvents" in bootstrap_js

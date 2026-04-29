@@ -74,6 +74,7 @@ const SIDEBAR_ICON_PATHS = {
   forum: '<path d="M5 5h14v9H8l-3 3z"/><path d="M8 8h8M8 11h5"/>',
   drive: '<path d="M4 8h16l-2 10H6z"/><path d="m7 8 2-3h6l2 3"/>',
   image: '<path d="M5 5h14v14H5z"/><path d="m7 16 4-4 3 3 2-2 2 3"/><path d="M8.5 8.5h.01"/>',
+  game: '<path d="M8 4h8v4h-3v3h3v3h-3v6h-2v-6H8v-3h3V8H8z"/><path d="M5 20h14"/>',
   spark: '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/>',
   wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H19v14H6.5A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 11h4v4h-4z"/><path d="M7 5V3.8L17 5"/>',
   appeal: '<path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
@@ -109,8 +110,9 @@ const SIDEBAR_MENU_CONFIG = [
     ],
   },
   { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },
+  { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
-  { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
+  { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分系統", group: "工具" },
   { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
   {
     tabId: "tab-module-accounts",
@@ -624,6 +626,8 @@ function renderChatRooms() {
   const prevId = selectedChatRoomId;
   wrap.innerHTML = "";
   chatRooms.forEach((r) => {
+    const row = document.createElement("div");
+    row.className = "chat-room-row";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "chat-room-item" + (Number(prevId) === Number(r.id) ? " active" : "");
@@ -631,7 +635,20 @@ function renderChatRooms() {
     btn.textContent = `${lock}#${r.id} ${r.name}`;
     btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}`);
     btn.addEventListener("click", () => openChatRoom(r.id, true));
-    wrap.appendChild(btn);
+    row.appendChild(btn);
+    if (canDeleteChatRoom(r)) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "chat-room-delete-btn";
+      del.textContent = "刪除";
+      del.setAttribute("title", "刪除此聊天室");
+      del.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteChatRoom(r.id);
+      });
+      row.appendChild(del);
+    }
+    wrap.appendChild(row);
   });
 }
 
@@ -648,11 +665,37 @@ function renderChatMessages(messages) {
     const actions = [];
     if (isSelf) cls.push("self");
     if (!isSelf && m.id) actions.push(`<button class="chat-report-btn" type="button" data-report-message="${m.id}">檢舉</button>`);
-    if (canDeleteChatMessage(m)) actions.push(`<button class="chat-delete-btn" type="button" data-delete-message="${m.id}">刪除</button>`);
+    if (m.can_recall) actions.push(`<button class="chat-delete-btn" type="button" data-delete-message="${m.id}" data-recall-message="1">收回</button>`);
+    else if (canDeleteChatMessage(m)) actions.push(`<button class="chat-delete-btn" type="button" data-delete-message="${m.id}">刪除</button>`);
+    const body = m.is_revoked
+      ? `<div class="chat-revoked">訊息已收回</div>`
+      : (m.message_type === "sticker"
+        ? `<div class="chat-sticker">${sanitize(chatStickerLabel(m.sticker_key, m.sticker))}</div>`
+        : sanitize(m.content || ""));
+    const attachments = Array.isArray(m.attachments) && m.attachments.length
+      ? `<div class="chat-message-attachments">${m.attachments.map((file) => {
+          const name = file.original_filename_plain_for_public || file.file_id || "附件";
+          const size = typeof formatDriveBytes === "function" ? formatDriveBytes(file.size_bytes || 0) : `${Number(file.size_bytes || 0)} bytes`;
+          const warn = typeof driveFileNeedsWarning === "function" ? driveFileNeedsWarning(file) : false;
+          return `
+            <div class="chat-message-attachment">
+              <span>
+                <strong>${sanitize(name)}</strong>
+                <small>${sanitize(size)} · scan=${sanitize(file.scan_status || "-")} · risk=${sanitize(file.risk_level || "-")}</small>
+              </span>
+              <span class="chat-message-attachment-actions">
+                <button class="btn chat-sticker-btn" type="button" data-drive-action="preview" data-file-id="${sanitize(file.file_id || "")}">預覽</button>
+                <button class="btn chat-sticker-btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id || "")}" data-warn="${warn ? "1" : "0"}">下載</button>
+              </span>
+            </div>
+          `;
+        }).join("")}</div>`
+      : "";
     return `
       <div class="${cls.join(" ")}">
         <span class="meta">${sanitize(formatChatTime(m.created_at))} · ${sanitize(m.sender || "系統")}</span>
-        ${sanitize(m.content || "")}
+        ${body}
+        ${attachments}
         ${actions.join("")}
       </div>
     `;
@@ -661,7 +704,7 @@ function renderChatMessages(messages) {
     btn.addEventListener("click", () => reportChatMessage(parseInt(btn.getAttribute("data-report-message"), 10)));
   });
   list.querySelectorAll("button[data-delete-message]").forEach((btn) => {
-    btn.addEventListener("click", () => deleteChatMessage(parseInt(btn.getAttribute("data-delete-message"), 10)));
+    btn.addEventListener("click", () => deleteChatMessage(parseInt(btn.getAttribute("data-delete-message"), 10), btn.getAttribute("data-recall-message") === "1"));
   });
   list.scrollTop = list.scrollHeight;
 }
@@ -878,6 +921,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAlbums = $("tab-module-albums");
+  const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleAppeals = $("tab-module-appeals");
@@ -892,6 +936,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleAlbums) tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none";
+  if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
@@ -937,9 +982,11 @@ function setAuthState(json, showLoginHero = false) {
             ? "drive"
             : canAccessModule("comfyui")
               ? "comfyui"
-              : canAccessModule("economy")
-                ? "economy"
-                : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+              : canAccessModule("games")
+                ? "games"
+                : canAccessModule("economy")
+                  ? "economy"
+                  : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
@@ -977,6 +1024,7 @@ function resetAuthState() {
   const moduleCommunity = $("module-community");
   const moduleDrive = $("module-drive");
   const moduleAlbums = $("module-albums");
+  const moduleGames = $("module-games");
   const moduleComfyui = $("module-comfyui");
   const moduleEconomy = $("module-economy");
   const moduleAccounts = $("module-accounts");
@@ -988,6 +1036,7 @@ function resetAuthState() {
   if (moduleCommunity) moduleCommunity.classList.remove("active");
   if (moduleDrive) moduleDrive.classList.remove("active");
   if (moduleAlbums) moduleAlbums.classList.remove("active");
+  if (moduleGames) moduleGames.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleEconomy) moduleEconomy.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");

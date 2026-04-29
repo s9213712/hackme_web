@@ -11,11 +11,19 @@ def test_cloud_drive_preview_ui_is_wired():
 
     assert 'id="drive-preview-card"' in index_html
     assert 'id="drive-preview-panel"' in index_html
-    assert "async function previewDriveFile(fileId)" in drive_js
+    assert 'class="drive-file-preview-layout"' in index_html
+    assert "async function previewDriveFile(fileId, options = {})" in drive_js
+    assert "function shouldOpenDriveFullscreen(fileId" in drive_js
+    assert "DRIVE_FULLSCREEN_PREVIEW_MS" in drive_js
     assert "/preview/content" in drive_js
     assert "drive-preview-archive" in drive_js
     assert "drive-preview-text" in drive_js
     assert "closeDrivePreview()" in drive_js
+    assert 'data-drive-action="preview" data-file-id="${sanitize(file.id)}"' in drive_js
+    assert 'data-drive-action="preview" data-file-id="${sanitize(file.file_id)}"' in drive_js
+    assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
+    assert 'preview.category === "video"' in drive_js
+    assert 'preview.category === "pdf"' in drive_js
     assert 'preview.category === "image"' in drive_js
     assert '"img-src":     "\'self\' data: blob:"' in server_py
     assert '"media-src":   "\'self\' blob:"' in server_py
@@ -56,6 +64,11 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'data-drive-action="open-storage-folder"' in drive_js
     assert 'data-drive-action="move-storage-file"' in drive_js
     assert 'data-drive-action="move-cloud-to-storage"' in drive_js
+    assert 'data-drive-action="folder-to-album"' in drive_js
+    assert "async function createAlbumFromFolder(path, name = \"\")" in drive_js
+    assert 'storageAction("/storage/folders/album", "POST"' in drive_js
+    assert 'storageAction("/storage/folders/trash", "POST"' in drive_js
+    assert "操作失敗（HTTP ${res.status}）" in drive_js
     assert 'data-drive-action="edit-text" data-file-id="${sanitize(file.id)}">編輯文字</button>' not in drive_js
     assert 'id="storage-organize-btn"' not in index_html
     assert "loadStorageFiles(csrf)" in drive_js
@@ -80,11 +93,12 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="album-gallery-list"' in index_html
     assert 'id="album-viewer-card"' in index_html
     assert 'id="album-thumb-size"' in index_html
-    assert '/js/35-drive.js?v=20260429-torrent-upload' in index_html
-    assert '/styles.css?v=20260429-session-topbar' in index_html
-    assert '/js/00-core.js?v=20260429-timeout-login' in index_html
+    assert 'id="album-full-preview-overlay"' in index_html
+    assert '/js/35-drive.js?v=20260429-drive-preview-side' in index_html
+    assert '/styles.css?v=20260429-comfyui-batch' in index_html
+    assert '/js/00-core.js?v=20260429-chat-attachments' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
-    assert '/js/50-admin.js?v=20260429-sidebar' in index_html
+    assert '/js/50-admin.js?v=20260429-security-log-layout' in index_html
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js
     assert "data-drive-action" in drive_js
@@ -97,6 +111,9 @@ def test_album_viewer_has_dedicated_module():
     assert "async function loadAlbumGallery()" in drive_js
     assert "async function openAlbumViewer(id" in drive_js
     assert "async function fetchDrivePreviewBlob(fileId, csrf)" in drive_js
+    assert "async function previewAlbumFileFullscreen(fileId" in drive_js
+    assert 'data-drive-action="album-full-preview"' in drive_js
+    assert "closeAlbumFullPreview" in drive_js
     assert "hydrateAlbumViewerThumbnails" in drive_js
     assert "const blob = await fetchDrivePreviewBlob(file.file_id, csrf);" in drive_js
     assert "const blob = await fetchDrivePreviewContent(file.file_id, csrf);" not in drive_js
@@ -132,6 +149,15 @@ def test_album_viewer_has_dedicated_module():
     assert 'switchModuleTab("albums")' in bootstrap_js
     assert "sidebarToggle.addEventListener" in bootstrap_js
     assert 'normTab === "albums"' in admin_js
+
+
+def test_album_preview_category_uses_storage_name_before_uploaded_metadata():
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+
+    assert 'const name = file?.display_name || file?.virtual_path || file?.original_filename_plain_for_public || file?.storage_path || "";' in drive_js
+    assert 'const canTryPreview = category === "image" || category === "metadata";' in drive_js
+    assert '["image", "metadata"].includes(driveFileCategory(file))' in drive_js
+    assert 'startsWith("image/")' in drive_js
 
 
 def test_album_gallery_layout_wraps_long_filenames():

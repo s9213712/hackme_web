@@ -45,6 +45,42 @@ SECURITY_TEST_JOBS = {}
 SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
+def restart_launcher_code():
+    return r"""
+import os
+import socket
+import subprocess
+import sys
+import time
+
+python_exe, script_path, base_dir, parent_pid, host, port = sys.argv[1:7]
+parent_pid = int(parent_pid)
+port = int(port)
+
+def parent_alive():
+    try:
+        os.kill(parent_pid, 0)
+        return True
+    except OSError:
+        return False
+
+def port_is_free():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.25)
+            return sock.connect_ex((host, port)) != 0
+    except Exception:
+        return True
+
+deadline = time.time() + 30
+while time.time() < deadline and (parent_alive() or not port_is_free()):
+    time.sleep(0.25)
+
+os.chdir(base_dir)
+subprocess.Popen([python_exe, script_path], cwd=base_dir, close_fds=True, start_new_session=True)
+"""
+
+
 def register_system_admin_routes(app, deps):
     ANCHOR_DIR = deps["ANCHOR_DIR"]
     BASE_DIR = deps["BASE_DIR"]
@@ -85,17 +121,28 @@ def register_system_admin_routes(app, deps):
 
         script_path = os.path.join(BASE_DIR, "server.py")
         python_exe = sys.executable or "python3"
+        host = CURRENT_SERVER_BIND_STATE.get("host") or "127.0.0.1"
+        if host in {"0.0.0.0", "::", ""}:
+            host = "127.0.0.1"
+        port = int(CURRENT_SERVER_BIND_STATE.get("port") or 5000)
 
         def restart_delayed():
             time.sleep(delay_seconds)
-            os.chdir(BASE_DIR)
-            os.execv(python_exe, [python_exe, script_path])
+            subprocess.Popen(
+                [python_exe, "-c", restart_launcher_code(), python_exe, script_path, BASE_DIR, str(os.getpid()), host, str(port)],
+                cwd=BASE_DIR,
+                close_fds=True,
+                start_new_session=True,
+            )
+            os._exit(0)
 
         threading.Thread(target=restart_delayed, name="server-restart", daemon=True).start()
         return {
-            "mode": "execv",
+            "mode": "detached-restart",
             "pid": os.getpid(),
             "delay_seconds": delay_seconds,
+            "host": host,
+            "port": port,
             "reason": reason,
         }
 

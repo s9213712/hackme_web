@@ -268,6 +268,8 @@ def require_csrf_safe(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         csrf_tok = request.headers.get("X-CSRF-Token", "") or ""
+        if not csrf_tok:
+            csrf_tok = request.args.get("csrf_token", "") or ""
         if not isinstance(csrf_tok, str):
             csrf_tok = ""
         tok = request.cookies.get("session_token")

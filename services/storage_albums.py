@@ -851,6 +851,16 @@ def _normalize_album_visibility(value):
     return visibility if visibility in {"private", "unlisted", "public"} else "private"
 
 
+def _is_album_media_storage_row(row):
+    mime = str((row["mime_type_plain_for_public"] if "mime_type_plain_for_public" in row.keys() else "") or "").lower()
+    name = str((row["display_name"] if "display_name" in row.keys() else "") or "").lower()
+    if mime.startswith("image/") or mime.startswith("video/"):
+        return True
+    image_exts = (".avif", ".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", ".svg", ".webp")
+    video_exts = (".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm", ".wmv")
+    return name.endswith(image_exts + video_exts)
+
+
 def _album_row(conn, album_id):
     return conn.execute("SELECT * FROM albums WHERE id=?", (album_id,)).fetchone()
 
@@ -879,6 +889,70 @@ def create_album(conn, *, actor, title, description="", visibility="private"):
         ),
     )
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
+
+
+def create_album_from_storage_folder(conn, *, actor, path, title=None, description="", visibility="private"):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    try:
+        folder_path = _folder_prefix(path)
+    except ValueError:
+        return None, "資料夾路徑不安全或格式錯誤"
+    if folder_path == "/":
+        return None, "不能直接把根目錄設為相簿"
+    rows = conn.execute(
+        """
+        SELECT sf.id AS storage_file_id, sf.file_id, sf.display_name, sf.virtual_path,
+               f.mime_type_plain_for_public, f.original_filename_plain_for_public
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND sf.is_trashed=0
+              AND f.deleted_at IS NULL AND sf.virtual_path LIKE ?
+        ORDER BY sf.virtual_path ASC
+        """,
+        (owner_user_id, folder_path.rstrip("/") + "/%"),
+    ).fetchall()
+    if not rows:
+        return None, "資料夾內沒有可加入相簿的圖片或影片"
+    invalid = [row for row in rows if not _is_album_media_storage_row(row)]
+    if invalid:
+        names = "、".join(str(row["display_name"] or row["original_filename_plain_for_public"] or row["virtual_path"]) for row in invalid[:3])
+        suffix = " 等" if len(invalid) > 3 else ""
+        return None, f"資料夾內含非圖片/影片檔案：{names}{suffix}"
+    album, msg = create_album(
+        conn,
+        actor=actor,
+        title=title or _display_name_from_path(folder_path),
+        description=description or f"由資料夾 {folder_path} 建立",
+        visibility=visibility,
+    )
+    if msg:
+        return None, msg
+    album_id = album["id"]
+    now = _now()
+    for index, row in enumerate(rows, start=1):
+        conn.execute(
+            """
+            INSERT INTO album_files (
+                id, album_id, storage_file_id, file_id, sort_order, caption, added_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                album_id,
+                row["storage_file_id"],
+                row["file_id"],
+                index,
+                folder_path,
+                int(actor["id"]),
+                now,
+            ),
+        )
+    conn.execute("UPDATE albums SET cover_file_id=?, updated_at=? WHERE id=?", (rows[0]["file_id"], now, album_id))
+    album = get_album(conn, actor=actor, album_id=album_id, include_files=True)
+    album["source_folder"] = folder_path
+    album["added_count"] = len(rows)
+    return album, None
 
 
 def list_albums(conn, *, actor, include_deleted=False, limit=100, offset=0):
@@ -932,7 +1006,7 @@ def get_album(conn, *, actor, album_id, include_files=False):
                        ORDER BY sf2.updated_at DESC, sf2.created_at DESC
                        LIMIT 1
                    )) AS virtual_path,
-                   f.original_filename_plain_for_public, f.mime_type_plain_for_public,
+                   f.original_filename_plain_for_public, f.mime_type_plain_for_public, f.storage_path,
                    f.size_bytes, f.scan_status, f.risk_level
             FROM album_files af
             JOIN uploaded_files f ON f.id=af.file_id

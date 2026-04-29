@@ -1088,6 +1088,7 @@ register_public_routes(app, {
     "make_token": make_token,
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
+    "points_service": points_service,
     "record_login_failure": record_login_failure,
     "record_security_event": record_security_event,
     "require_csrf": require_csrf,
@@ -1159,6 +1160,7 @@ register_user_routes(app, {
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
     "parse_positive_int": parse_positive_int,
+    "points_service": points_service,
     "revoke_user_sessions": revoke_user_sessions,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
@@ -1305,6 +1307,19 @@ if __name__ == "__main__":
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
+    try:
+        system_actor = {"username": "system", "role": "system"}
+        genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
+        salary = points_service.award_admin_weekly_salaries(actor=system_actor)
+        if genesis.get("created_count") or salary.get("created_count"):
+            audit(
+                "POINTS_BOOTSTRAP_GRANTS",
+                "0.0.0.0",
+                success=True,
+                detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}",
+            )
+    except Exception as exc:
+        audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
     if get_system_settings().get("integrity_guard_enabled", True):
         integrity_status = integrity_guard.scan(actor="system-startup", create_initial_manifest=True)
         if get_system_settings().get("integrity_guard_strict_mode", False):

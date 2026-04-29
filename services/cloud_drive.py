@@ -15,7 +15,7 @@ from services.upload_security import (
 )
 
 
-CONTEXT_TYPES = {"dm", "group_chat", "forum_post", "forum_comment", "announcement"}
+CONTEXT_TYPES = {"dm", "group_chat", "chat_message", "forum_thread", "forum_post", "forum_comment", "announcement"}
 ANNOUNCEMENT_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 
 

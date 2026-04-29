@@ -3,13 +3,14 @@ import mimetypes
 import os
 import re
 import secrets
+from datetime import datetime
 from io import BytesIO
 
 from flask import request
 
-from services.cloud_drive import ensure_cloud_drive_attachment_schema, store_cloud_upload
+from services.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
 from services.comfyui_client import ComfyUIClient, ComfyUIError
-from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
+from services.storage_albums import add_album_file, create_storage_file_entry, ensure_storage_album_schema
 
 
 DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://127.0.0.1:8192")
@@ -134,9 +135,246 @@ def register_comfyui_routes(app, deps):
             "sampler_name": str(data.get("sampler_name") or SAFE_SAMPLER_FALLBACK).strip() or SAFE_SAMPLER_FALLBACK,
             "scheduler": str(data.get("scheduler") or SAFE_SCHEDULER_FALLBACK).strip() or SAFE_SCHEDULER_FALLBACK,
             "seed": seed,
+            "batch_size": _int_range(data.get("batch_size"), 1, 1, 8),
             "filename_prefix": _clean_filename(data.get("filename_prefix") or "hackme_web", fallback="hackme_web").rsplit(".", 1)[0],
         }
         return params, None
+
+    def _safe_text(value, limit):
+        text = str(value or "").strip()
+        text = re.sub(r"\r\n?", "\n", text)
+        return text[:limit]
+
+    def _ensure_comfyui_share_schema(conn):
+        now = None
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS forum_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 100,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS forum_boards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER REFERENCES forum_categories(id) ON DELETE SET NULL,
+                slug TEXT UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                rules TEXT,
+                visibility TEXT NOT NULL DEFAULT 'public',
+                sort_order INTEGER NOT NULL DEFAULT 100,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                last_activity_at TEXT,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                owner_username TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'approved',
+                review_note TEXT,
+                reviewed_by TEXT,
+                reviewed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS forum_threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                board_id INTEGER NOT NULL REFERENCES forum_boards(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'approved',
+                review_note TEXT,
+                reviewed_by TEXT,
+                reviewed_at TEXT,
+                post_type TEXT NOT NULL DEFAULT 'normal',
+                is_sticky INTEGER NOT NULL DEFAULT 0,
+                is_locked INTEGER NOT NULL DEFAULT 0,
+                is_curated INTEGER NOT NULL DEFAULT 0,
+                view_count INTEGER NOT NULL DEFAULT 0,
+                edited_at TEXT,
+                edited_by TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                deleted_by TEXT,
+                delete_reason TEXT,
+                author_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                author_username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        return now
+
+    def _find_or_create_comfyui_board(conn, actor):
+        _ensure_comfyui_share_schema(conn)
+        row = conn.execute(
+            """
+            SELECT id, title FROM forum_boards
+            WHERE is_active=1 AND status='approved' AND (title='ComfyUI專區' OR title LIKE '%ComfyUI%')
+            ORDER BY CASE WHEN title='ComfyUI專區' THEN 0 ELSE 1 END, sort_order ASC, id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row:
+            return dict(row)
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT OR IGNORE INTO forum_categories (name, description, sort_order, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+            ("交流討論", "預設討論分類", 10, now, now),
+        )
+        category = conn.execute("SELECT id FROM forum_categories WHERE name=?", ("交流討論",)).fetchone()
+        cur = conn.execute(
+            """
+            INSERT INTO forum_boards (
+                category_id, slug, title, description, rules, visibility, sort_order, is_active,
+                last_activity_at, owner_user_id, owner_username, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'public', 30, 1, ?, ?, ?, 'approved', ?, ?)
+            """,
+            (
+                category["id"] if category else None,
+                "comfyui",
+                "ComfyUI專區",
+                "ComfyUI 工作流、模型、節點與生成參數交流。",
+                "分享工作流時請標註來源與使用限制。",
+                now,
+                int(_actor_value(actor, "id")),
+                _actor_value(actor, "username", "system"),
+                now,
+                now,
+            ),
+        )
+        return {"id": cur.lastrowid, "title": "ComfyUI專區"}
+
+    def _maybe_add_to_album(conn, *, actor, album_id, storage_file_id, file_id, caption=""):
+        normalized_album_id = str(album_id or "").strip()
+        if not normalized_album_id:
+            return None, None
+        album, msg = add_album_file(
+            conn,
+            actor=actor,
+            album_id=normalized_album_id,
+            storage_file_id=storage_file_id,
+            file_id=file_id,
+            caption=caption,
+        )
+        if msg and msg != "檔案已在相簿內":
+            return None, msg
+        if album is None:
+            album = {"id": normalized_album_id, "already_exists": True}
+        return album, None
+
+    def _save_fetched_image(conn, *, actor, data, image):
+        filename = _clean_filename(data.get("display_name") or image.filename)
+        guessed_mime = mimetypes.guess_type(filename)[0] or image.mime_type or "image/png"
+        memory_file = _MemoryFile(image.data, filename, guessed_mime)
+        ensure_cloud_drive_attachment_schema(conn)
+        ensure_storage_album_schema(conn)
+        rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
+        upload_result, msg = store_cloud_upload(
+            conn,
+            actor=actor,
+            member_rule=rule,
+            storage_root=storage_root,
+            file_storage=memory_file,
+            privacy_mode="private_scannable",
+            scan_now=True,
+        )
+        if msg:
+            return None, None, None, msg
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
+        virtual_path = str(data.get("virtual_path") or "").strip()
+        if not virtual_path:
+            virtual_path = f"/ComfyUI/{filename}"
+        storage_file, msg = create_storage_file_entry(
+            conn,
+            actor=actor,
+            file_row=file_row,
+            virtual_path=virtual_path,
+            display_name=filename,
+            source="comfyui",
+        )
+        if msg:
+            return None, None, None, msg
+        album, msg = _maybe_add_to_album(
+            conn,
+            actor=actor,
+            album_id=data.get("album_id"),
+            storage_file_id=storage_file["id"],
+            file_id=upload_result["file_id"],
+            caption="ComfyUI 產圖",
+        )
+        if msg:
+            return None, None, None, msg
+        return upload_result, storage_file, album, None
+
+    def _existing_saved_image(conn, *, actor, data):
+        file_id = str(data.get("file_id") or data.get("saved_file_id") or "").strip()
+        if not file_id:
+            return None
+        ensure_cloud_drive_attachment_schema(conn)
+        ensure_storage_album_schema(conn)
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL", (file_id,)).fetchone()
+        if not file_row or int(file_row["owner_user_id"]) != int(_actor_value(actor, "id")):
+            return None
+        storage_file_id = str(data.get("storage_file_id") or "").strip()
+        params = [file_id, int(_actor_value(actor, "id"))]
+        where = "file_id=? AND owner_user_id=? AND deleted_at IS NULL AND COALESCE(is_trashed, 0)=0"
+        if storage_file_id:
+            where += " AND id=?"
+            params.append(storage_file_id)
+        storage_row = conn.execute(
+            f"SELECT * FROM storage_files WHERE {where} ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        upload_result = {"file_id": file_id}
+        storage_file = dict(storage_row) if storage_row else None
+        album, msg = _maybe_add_to_album(
+            conn,
+            actor=actor,
+            album_id=data.get("album_id"),
+            storage_file_id=storage_file["id"] if storage_file else None,
+            file_id=file_id,
+            caption="ComfyUI 產圖",
+        )
+        if msg:
+            return upload_result, storage_file, album, msg
+        return upload_result, storage_file, album, None
+
+    def _compose_comfyui_share_content(data, *, file_id, storage_file):
+        params = data.get("generation") if isinstance(data.get("generation"), dict) else {}
+        note = _safe_text(data.get("note"), 900)
+        prompt = _safe_text(params.get("prompt") or data.get("prompt"), 1400)
+        negative = _safe_text(params.get("negative_prompt") or data.get("negative_prompt"), 700)
+        model = _safe_text(params.get("model"), 180)
+        sampler = _safe_text(params.get("sampler_name"), 80)
+        scheduler = _safe_text(params.get("scheduler"), 80)
+        size = f"{params.get('width') or '-'} x {params.get('height') or '-'}"
+        lines = []
+        if note:
+            lines.extend(["心得", note, ""])
+        lines.extend([
+            f"[[comfyui-image:{file_id}]]",
+            f"圖片檔案：{_safe_text((storage_file or {}).get('display_name') or (storage_file or {}).get('virtual_path') or file_id, 160)}",
+            "",
+            "提示詞",
+            prompt or "-",
+            "",
+            "負面提示詞",
+            negative or "-",
+            "",
+            "產圖參數",
+            f"模型：{model or '-'}",
+            f"尺寸：{size}",
+            f"步數：{params.get('steps') or '-'}",
+            f"CFG：{params.get('cfg') or '-'}",
+            f"張數：{params.get('batch_size') or 1}",
+            f"Seed：{params.get('seed') if params.get('seed') is not None else '-'}",
+            f"Sampler：{sampler or '-'}",
+            f"Scheduler：{scheduler or '-'}",
+        ])
+        return "\n".join(lines)[:3900]
 
     @app.route("/api/comfyui/status", methods=["GET"])
     @require_csrf_safe
@@ -207,21 +445,54 @@ def register_comfyui_routes(app, deps):
         except ComfyUIError as exc:
             audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)
-        data_url = f"data:{result['mime_type']};base64,{base64.b64encode(result['data']).decode('ascii')}"
-        image_ref = result["image_ref"]
-        audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}")
-        return json_resp({
-            "ok": True,
-            "image": {
-                "prompt_id": result["prompt_id"],
-                "image_ref": image_ref,
+        result_images = result.get("images") if isinstance(result.get("images"), list) else []
+        if not result_images:
+            result_images = [{
+                "image_ref": result["image_ref"],
                 "mime_type": result["mime_type"],
-                "size_bytes": len(result["data"]),
-                "data_url": data_url,
+                "data": result["data"],
+            }]
+        images = []
+        for index, item in enumerate(result_images):
+            raw_data = item.get("data") or b""
+            mime_type = item.get("mime_type") or result.get("mime_type") or "image/png"
+            image_ref_item = item.get("image_ref") if isinstance(item.get("image_ref"), dict) else result["image_ref"]
+            images.append({
+                "prompt_id": result["prompt_id"],
+                "image_ref": image_ref_item,
+                "mime_type": mime_type,
+                "size_bytes": len(raw_data),
+                "data_url": f"data:{mime_type};base64,{base64.b64encode(raw_data).decode('ascii')}",
                 "seed": params["seed"],
                 "model": params["model"],
-            },
+                "batch_size": params["batch_size"],
+                "batch_index": index,
+            })
+        image = images[0]
+        image_ref = result["image_ref"]
+        audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}, batch={len(images)}")
+        return json_resp({
+            "ok": True,
+            "image": image,
+            "images": images,
         })
+
+    @app.route("/api/comfyui/interrupt", methods=["POST"])
+    @require_csrf
+    def comfyui_interrupt():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        active_client = _client()
+        try:
+            if not hasattr(active_client, "interrupt"):
+                return json_resp({"ok": False, "msg": "ComfyUI 中斷產圖不支援"}), 501
+            result = active_client.interrupt()
+        except ComfyUIError as exc:
+            audit("COMFYUI_INTERRUPT_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
+            return _json_error_from_comfy(exc, active_client)
+        audit("COMFYUI_INTERRUPT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail="interrupt requested")
+        return json_resp({"ok": True, "msg": "已送出中斷產圖請求", "interrupt": result if isinstance(result, dict) else {}})
 
     @app.route("/api/comfyui/save", methods=["POST"])
     @require_csrf
@@ -242,43 +513,133 @@ def register_comfyui_routes(app, deps):
             image = active_client.fetch_image(image_ref)
         except ComfyUIError as exc:
             return _json_error_from_comfy(exc, active_client)
-        filename = _clean_filename(data.get("display_name") or image.filename)
-        guessed_mime = mimetypes.guess_type(filename)[0] or image.mime_type or "image/png"
-        memory_file = _MemoryFile(image.data, filename, guessed_mime)
         conn = get_db()
         try:
-            ensure_cloud_drive_attachment_schema(conn)
-            ensure_storage_album_schema(conn)
-            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
-            upload_result, msg = store_cloud_upload(
-                conn,
-                actor=actor,
-                member_rule=rule,
-                storage_root=storage_root,
-                file_storage=memory_file,
-                privacy_mode="private_scannable",
-                scan_now=True,
-            )
-            if msg:
-                conn.rollback()
-                return json_resp({"ok": False, "msg": msg}), 400
-            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
-            virtual_path = str(data.get("virtual_path") or "").strip()
-            if not virtual_path:
-                virtual_path = f"/ComfyUI/{filename}"
-            storage_file, msg = create_storage_file_entry(
-                conn,
-                actor=actor,
-                file_row=file_row,
-                virtual_path=virtual_path,
-                display_name=filename,
-                source="comfyui",
-            )
+            upload_result, storage_file, album, msg = _save_fetched_image(conn, actor=actor, data=data, image=image)
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
             conn.commit()
             audit("COMFYUI_SAVE_TO_DRIVE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={upload_result['file_id']}, storage_file_id={storage_file['id']}")
-            return json_resp({"ok": True, "file": upload_result, "storage_file": storage_file})
+            return json_resp({"ok": True, "file": upload_result, "storage_file": storage_file, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/comfyui/discard", methods=["POST"])
+    @require_csrf
+    def comfyui_discard():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        image_ref = data.get("image_ref")
+        if not isinstance(image_ref, dict):
+            return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
+        active_client = _client()
+        try:
+            if not hasattr(active_client, "discard_image"):
+                return json_resp({"ok": False, "msg": "ComfyUI 原始檔刪除不支援"}), 501
+            result = active_client.discard_image(image_ref, prompt_id=data.get("prompt_id"))
+        except ComfyUIError as exc:
+            audit("COMFYUI_DISCARD_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
+            return _json_error_from_comfy(exc, active_client)
+        if not (result.get("file_deleted") or result.get("file_missing")):
+            msg = "ComfyUI 未提供刪除 output 檔案端點；請設定 COMFYUI_OUTPUT_DIR 或 COMFYUI_BASE_DIR 後再丟棄預覽。"
+            audit("COMFYUI_DISCARD_UNSUPPORTED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(result)[:180])
+            return json_resp({"ok": False, "msg": msg, "discard": result}), 501
+        audit("COMFYUI_DISCARD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file={image_ref.get('filename')}, result={result}")
+        return json_resp({"ok": True, "msg": "已丟棄預覽並刪除 ComfyUI 原始檔", "discard": result})
+
+    @app.route("/api/comfyui/share", methods=["POST"])
+    @require_csrf
+    def comfyui_share():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        image_ref = data.get("image_ref")
+        conn = get_db()
+        try:
+            existing = _existing_saved_image(conn, actor=actor, data=data)
+            if existing:
+                upload_result, storage_file, album, msg = existing
+                if msg:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": msg}), 400
+            else:
+                if not isinstance(image_ref, dict):
+                    return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
+                active_client = _client()
+                try:
+                    image = active_client.fetch_image(image_ref)
+                except ComfyUIError as exc:
+                    return _json_error_from_comfy(exc, active_client)
+                upload_result, storage_file, album, msg = _save_fetched_image(conn, actor=actor, data=data, image=image)
+                if msg:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": msg}), 400
+            board = _find_or_create_comfyui_board(conn, actor)
+            title = _safe_text(data.get("title"), 120) or "ComfyUI 產圖分享"
+            content = _compose_comfyui_share_content(
+                data,
+                file_id=upload_result["file_id"],
+                storage_file=storage_file or {},
+            )
+            if not content.strip():
+                conn.rollback()
+                return json_resp({"ok": False, "msg": "分享內容不可為空"}), 400
+            level = _actor_value(actor, "effective_level") or _actor_value(actor, "base_level") or _actor_value(actor, "member_level") or "normal"
+            role = _actor_value(actor, "role", "user")
+            status = "pending" if role == "user" and level == "newbie" else "approved"
+            now = datetime.now().isoformat()
+            cur = conn.execute(
+                """
+                INSERT INTO forum_threads (
+                    board_id, title, content, status, post_type, author_user_id,
+                    author_username, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'normal', ?, ?, ?, ?)
+                """,
+                (board["id"], title, content, status, int(_actor_value(actor, "id")), _actor_value(actor, "username"), now, now),
+            )
+            thread_id = cur.lastrowid
+            conn.execute("UPDATE forum_boards SET last_activity_at=?, updated_at=? WHERE id=?", (now, now, board["id"]))
+            attached, msg = attach_existing_file(
+                conn,
+                actor=actor,
+                file_id=upload_result["file_id"],
+                context_type="forum_thread",
+                context_id=thread_id,
+                grant_role="user",
+                can_preview=True,
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit(
+                "COMFYUI_SHARE_TO_COMMUNITY",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"thread_id={thread_id}, file_id={upload_result['file_id']}, board_id={board['id']}",
+            )
+            return json_resp({
+                "ok": True,
+                "msg": "已分享到 ComfyUI 專區" if status == "approved" else "已送出分享，待審核後公開",
+                "thread": {"id": thread_id, "board_id": board["id"], "title": title, "status": status},
+                "file": upload_result,
+                "storage_file": storage_file,
+                "album": album,
+                "attachment": attached,
+            })
         finally:
             conn.close()

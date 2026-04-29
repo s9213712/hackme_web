@@ -1,14 +1,22 @@
 import hashlib
 import hmac
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
 
-CURRENCIES = {"soft", "hard"}
+DISPLAY_CURRENCY = "points"
+INTERNAL_CURRENCY = "soft"
+CURRENCIES = {DISPLAY_CURRENCY, "soft", "hard"}
+LEGACY_CURRENCY_RE = re.compile(r"\b(?:soft|hard)\b", re.IGNORECASE)
 LEDGER_DIRECTIONS = {"credit", "debit", "freeze", "unfreeze", "reverse", "transfer_in", "transfer_out"}
 LEDGER_STATUSES = {"pending", "confirmed", "reversed", "disputed", "frozen"}
 WALLET_STATUSES = {"active", "frozen", "limited", "closed"}
+DEFAULT_BLOCK_INTERVAL_SECONDS = 5 * 60
+SIGNUP_BONUS_POINTS = 100
+ADMIN_INITIAL_POINTS = 1000
+ADMIN_WEEKLY_SALARY_POINTS = 100
 
 DEFAULT_RULES = (
     ("daily_login", "daily_login", "credit", "soft", 5, 5, 5, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "每日登入"}),
@@ -17,31 +25,71 @@ DEFAULT_RULES = (
     ("receive_like", "content_like_reward", "credit", "soft", 1, 1, 25, 0, 0, 0, 0, 1, 0, {"label": "被按讚獎勵"}),
     ("quality_post_bonus", "quality_post_bonus", "credit", "soft", 20, 20, 100, 0, 1, 1, 0, 1, 1, {"label": "優質文章獎勵"}),
     ("valid_bug_report_low", "bug_bounty_low", "credit", "soft", 50, 50, 150, 0, 0, 1, 0, 1, 1, {"label": "低風險有效 bug"}),
-    ("valid_bug_report_medium", "bug_bounty_medium", "credit", "hard", 50, 50, 150, 0, 0, 1, 0, 1, 1, {"label": "中風險有效 bug"}),
-    ("valid_bug_report_high", "bug_bounty_high", "credit", "hard", 200, 200, 400, 0, 0, 1, 0, 1, 1, {"label": "高風險有效 bug"}),
+    ("valid_bug_report_medium", "bug_bounty_medium", "credit", INTERNAL_CURRENCY, 50, 50, 150, 0, 0, 1, 0, 1, 1, {"label": "中風險有效 bug"}),
+    ("valid_bug_report_high", "bug_bounty_high", "credit", INTERNAL_CURRENCY, 200, 200, 400, 0, 0, 1, 0, 1, 1, {"label": "高風險有效 bug"}),
     ("game_daily_quest", "game_daily_quest", "credit", "soft", 10, 10, 10, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "遊戲每日任務"}),
-    ("marketplace_sale_income", "marketplace_sale_income", "credit", "hard", 0, 0, None, 0, 0, 1, 0, 1, 1, {"label": "商城收入"}),
+    ("marketplace_sale_income", "marketplace_sale_income", "credit", INTERNAL_CURRENCY, 0, 0, None, 0, 0, 1, 0, 1, 1, {"label": "商城收入"}),
+    ("new_user_signup_bonus", "new_user_signup_bonus", "credit", INTERNAL_CURRENCY, SIGNUP_BONUS_POINTS, SIGNUP_BONUS_POINTS, SIGNUP_BONUS_POINTS, 0, 0, 0, 0, 1, 1, {"label": "新註冊禮"}),
+    ("admin_initial_grant", "admin_initial_grant", "credit", INTERNAL_CURRENCY, ADMIN_INITIAL_POINTS, ADMIN_INITIAL_POINTS, ADMIN_INITIAL_POINTS, 0, 0, 0, 0, 1, 1, {"label": "管理帳號創始補助"}),
+    ("admin_weekly_salary", "admin_weekly_salary", "credit", INTERNAL_CURRENCY, ADMIN_WEEKLY_SALARY_POINTS, ADMIN_WEEKLY_SALARY_POINTS, ADMIN_WEEKLY_SALARY_POINTS, 0, 0, 0, 0, 1, 1, {"label": "管理帳號週薪"}),
 )
 
 DEFAULT_PRICE_CATALOG = (
     ("post_cost_standard", "一般發文成本", "forum", "soft", 1, 0, 1, 10, 1, {"description": "防止洗版的基本回收"}),
     ("post_pin_24h", "文章置頂 24 小時", "forum", "soft", 100, 0, 50, 300, 1, {}),
     ("cloud_storage_1gb_30d", "雲端容量 1GB / 30 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {}),
-    ("cloud_storage_10gb_30d", "雲端容量 10GB / 30 天", "cloud_drive", "hard", 30, 0, 10, 100, 1, {}),
+    ("cloud_storage_10gb_30d", "雲端容量 10GB / 30 天", "cloud_drive", INTERNAL_CURRENCY, 30, 0, 10, 100, 1, {}),
     ("comfyui_txt2img_basic", "基礎生圖一次", "comfyui", "soft", 5, 1, 1, 25, 1, {}),
-    ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", "hard", 2, 1, 1, 20, 1, {}),
-    ("comfyui_batch_10", "批次生圖 10 張", "comfyui", "hard", 15, 1, 5, 80, 1, {}),
-    ("server_rental_cpu_1h", "CPU Server 1 小時", "server_rental", "hard", 5, 1, 2, 30, 1, {}),
-    ("server_rental_gpu_1h", "GPU Server 1 小時", "server_rental", "hard", 50, 1, 20, 200, 1, {}),
+    ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", INTERNAL_CURRENCY, 2, 1, 1, 20, 1, {}),
+    ("comfyui_batch_10", "批次生圖 10 張", "comfyui", INTERNAL_CURRENCY, 15, 1, 5, 80, 1, {}),
+    ("server_rental_cpu_1h", "CPU Server 1 小時", "server_rental", INTERNAL_CURRENCY, 5, 1, 2, 30, 1, {}),
+    ("server_rental_gpu_1h", "GPU Server 1 小時", "server_rental", INTERNAL_CURRENCY, 50, 1, 20, 200, 1, {}),
     ("game_virtual_item_common", "普通虛寶", "game", "soft", 20, 0, 5, 100, 1, {}),
-    ("game_virtual_item_premium", "高級虛寶", "game", "hard", 5, 0, 1, 50, 1, {}),
+    ("game_virtual_item_premium", "高級虛寶", "game", INTERNAL_CURRENCY, 5, 0, 1, 50, 1, {}),
     ("username_change", "改名", "account", "soft", 200, 0, 100, 1000, 1, {}),
     ("profile_decoration", "個人頁裝飾", "account", "soft", 50, 0, 10, 250, 1, {}),
 )
 
 
+def normalize_currency_type(currency_type=None):
+    currency = str(currency_type or DISPLAY_CURRENCY).strip().lower()
+    if currency not in CURRENCIES:
+        raise ValueError("currency_type must be points")
+    return INTERNAL_CURRENCY
+
+
+def display_currency_type(currency_type=None):
+    return DISPLAY_CURRENCY
+
+
+def public_currency_text(value):
+    if not isinstance(value, str):
+        return value
+    return LEGACY_CURRENCY_RE.sub(DISPLAY_CURRENCY, value)
+
+
+def public_currency_payload(value):
+    if isinstance(value, dict):
+        return {key: public_currency_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [public_currency_payload(item) for item in value]
+    return public_currency_text(value)
+
+
 def utc_now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc_timestamp(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def canonical_json(value):
@@ -64,6 +112,21 @@ def _json_loads(raw, fallback=None):
 
 def _json_dumps(value):
     return canonical_json(value if value is not None else {})
+
+
+def actor_value(actor, key, default=None):
+    if not actor:
+        return default
+    if hasattr(actor, "keys"):
+        return actor[key] if key in actor.keys() else default
+    return actor.get(key, default) if hasattr(actor, "get") else default
+
+
+def table_columns(conn, table):
+    try:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
 
 
 def public_account_id(chain_secret, user_id):
@@ -145,6 +208,15 @@ def compute_block_hash(block):
         "sealed_at": block["sealed_at"],
     }
     return sha256_text(canonical_json(payload))
+
+
+def block_signature_payload(block):
+    return canonical_json({
+        "block_hash": block["block_hash"],
+        "block_number": int(block["block_number"]),
+        "merkle_root": block["merkle_root"],
+        "previous_block_hash": block["previous_block_hash"],
+    })
 
 
 def ensure_points_economy_schema(conn):
@@ -422,6 +494,28 @@ def ensure_points_economy_schema(conn):
             """,
             (*item[:9], _json_dumps(item[9]), now, now),
         )
+    conn.execute(
+        """
+        UPDATE points_wallets
+        SET soft_balance=soft_balance+hard_balance,
+            hard_balance=0,
+            soft_frozen=soft_frozen+hard_frozen,
+            hard_frozen=0,
+            total_soft_earned=total_soft_earned+total_hard_earned,
+            total_hard_earned=0,
+            total_soft_spent=total_soft_spent+total_hard_spent,
+            total_hard_spent=0,
+            updated_at=?
+        WHERE hard_balance != 0
+           OR hard_frozen != 0
+           OR total_hard_earned != 0
+           OR total_hard_spent != 0
+        """,
+        (now,),
+    )
+    conn.execute("UPDATE points_rules SET currency_type=? WHERE currency_type='hard'", (INTERNAL_CURRENCY,))
+    conn.execute("UPDATE economy_price_catalog SET currency_type=? WHERE currency_type='hard'", (INTERNAL_CURRENCY,))
+    conn.execute("UPDATE points_pending_rewards SET currency_type=? WHERE currency_type='hard'", (INTERNAL_CURRENCY,))
 
 
 class PointsLedgerService:
@@ -436,6 +530,50 @@ class PointsLedgerService:
     def _public_account_id(self, user_id):
         return public_account_id(self.chain_secret, user_id)
 
+    def _node_fingerprint(self):
+        return sha256_text(f"pointschain-node:{self.chain_secret}")
+
+    def _sign_block(self, block):
+        secret = str(self.chain_secret or "").encode("utf-8")
+        return hmac.new(secret, block_signature_payload(block).encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _ensure_local_node(self, conn):
+        now = utc_now()
+        fingerprint = self._node_fingerprint()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO points_chain_nodes (
+                node_id, node_name, node_type, public_key, public_key_fingerprint,
+                enabled, created_at, updated_at
+            ) VALUES ('single-node', 'Local PointsChain node', 'local_hmac', ?, ?, 1, ?, ?)
+            """,
+            (fingerprint, fingerprint, now, now),
+        )
+
+    def _backfill_missing_block_signatures(self, conn):
+        self._ensure_local_node(conn)
+        now = utc_now()
+        blocks = conn.execute(
+            """
+            SELECT b.*
+            FROM points_chain_blocks b
+            LEFT JOIN points_chain_block_signatures s ON s.block_id=b.id AND s.node_id='single-node'
+            WHERE s.id IS NULL
+            ORDER BY b.block_number ASC
+            """
+        ).fetchall()
+        for block in blocks:
+            if compute_block_hash(block) != block["block_hash"]:
+                continue
+            conn.execute(
+                """
+                INSERT INTO points_chain_block_signatures (
+                    block_id, node_id, signature_algorithm, public_key_fingerprint, signature, signed_at
+                ) VALUES (?, 'single-node', 'hmac-sha256', ?, ?, ?)
+                """,
+                (block["id"], self._node_fingerprint(), self._sign_block(block), now),
+            )
+
     def _audit_log(self, conn, event_type, severity, message, *, actor=None, target_user_id=None, ledger_id=None, block_id=None, metadata=None):
         conn.execute(
             """
@@ -447,8 +585,8 @@ class PointsLedgerService:
             (
                 event_type,
                 severity,
-                int(actor["id"]) if actor and actor.get("id") else None,
-                actor.get("role") if actor else None,
+                int(actor_value(actor, "id")) if actor_value(actor, "id") else None,
+                actor_value(actor, "role"),
                 target_user_id,
                 ledger_id,
                 block_id,
@@ -457,6 +595,27 @@ class PointsLedgerService:
                 utc_now(),
             ),
         )
+
+    def list_chain_audit_logs(self, *, limit=100):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT * FROM points_chain_audit_logs
+                ORDER BY id DESC LIMIT ?
+                """,
+                (min(200, max(1, int(limit or 100))),),
+            ).fetchall()
+            logs = []
+            for row in rows:
+                item = {key: row[key] for key in row.keys() if key != "metadata_json"}
+                item["message"] = public_currency_text(item.get("message") or "")
+                item["metadata"] = public_currency_payload(_json_loads(row["metadata_json"], {}))
+                logs.append(item)
+            return logs
+        finally:
+            conn.close()
 
     def ensure_wallet(self, conn, user_id):
         now = utc_now()
@@ -482,17 +641,26 @@ class PointsLedgerService:
     def serialize_wallet(self, row):
         if not row:
             return None
+        points_balance = int(row["soft_balance"] or 0) + int(row["hard_balance"] or 0)
+        points_frozen = int(row["soft_frozen"] or 0) + int(row["hard_frozen"] or 0)
+        total_points_earned = int(row["total_soft_earned"] or 0) + int(row["total_hard_earned"] or 0)
+        total_points_spent = int(row["total_soft_spent"] or 0) + int(row["total_hard_spent"] or 0)
         return {
             "user_id": row["user_id"],
             "public_account_id": self._public_account_id(row["user_id"]),
-            "soft_balance": row["soft_balance"],
-            "hard_balance": row["hard_balance"],
-            "soft_frozen": row["soft_frozen"],
-            "hard_frozen": row["hard_frozen"],
-            "total_soft_earned": row["total_soft_earned"],
-            "total_hard_earned": row["total_hard_earned"],
-            "total_soft_spent": row["total_soft_spent"],
-            "total_hard_spent": row["total_hard_spent"],
+            "currency_type": DISPLAY_CURRENCY,
+            "points_balance": points_balance,
+            "points_frozen": points_frozen,
+            "total_points_earned": total_points_earned,
+            "total_points_spent": total_points_spent,
+            "soft_balance": points_balance,
+            "hard_balance": 0,
+            "soft_frozen": points_frozen,
+            "hard_frozen": 0,
+            "total_soft_earned": total_points_earned,
+            "total_hard_earned": 0,
+            "total_soft_spent": total_points_spent,
+            "total_hard_spent": 0,
             "wallet_status": row["wallet_status"],
             "risk_level": row["risk_level"],
             "created_at": row["created_at"],
@@ -504,7 +672,7 @@ class PointsLedgerService:
             "id": row["id"],
             "ledger_uuid": row["ledger_uuid"],
             "public_account_id": row["public_account_id"],
-            "currency_type": row["currency_type"],
+            "currency_type": display_currency_type(row["currency_type"]),
             "direction": row["direction"],
             "amount": row["amount"],
             "balance_before": row["balance_before"],
@@ -530,18 +698,20 @@ class PointsLedgerService:
         return data
 
     def _balance_column(self, currency_type):
-        if currency_type not in CURRENCIES:
-            raise ValueError("currency_type must be soft or hard")
-        return "soft_balance" if currency_type == "soft" else "hard_balance"
+        normalize_currency_type(currency_type)
+        return "soft_balance"
 
     def _frozen_column(self, currency_type):
-        return "soft_frozen" if currency_type == "soft" else "hard_frozen"
+        normalize_currency_type(currency_type)
+        return "soft_frozen"
 
     def _earned_column(self, currency_type):
-        return "total_soft_earned" if currency_type == "soft" else "total_hard_earned"
+        normalize_currency_type(currency_type)
+        return "total_soft_earned"
 
     def _spent_column(self, currency_type):
-        return "total_soft_spent" if currency_type == "soft" else "total_hard_spent"
+        normalize_currency_type(currency_type)
+        return "total_soft_spent"
 
     def _last_ledger_hash(self, conn):
         row = conn.execute("SELECT ledger_hash FROM points_ledger ORDER BY id DESC LIMIT 1").fetchone()
@@ -551,6 +721,104 @@ class PointsLedgerService:
         if not idempotency_key:
             return None
         return conn.execute("SELECT * FROM points_ledger WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+
+    def _admin_account_rows(self, conn):
+        cols = table_columns(conn, "users")
+        if "id" not in cols or "username" not in cols or "role" not in cols:
+            return []
+        status_filter = "AND COALESCE(status, 'active')='active'" if "status" in cols else ""
+        return conn.execute(
+            f"""
+            SELECT id, username, role FROM users
+            WHERE username<>'root'
+              AND role IN ('manager', 'super_admin')
+              {status_filter}
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
+    def award_signup_bonus(self, *, user_id, actor=None):
+        return self.record_transaction(
+            user_id=user_id,
+            currency_type=DISPLAY_CURRENCY,
+            direction="credit",
+            amount=SIGNUP_BONUS_POINTS,
+            action_type="new_user_signup_bonus",
+            reference_type="user_registration",
+            reference_id=str(user_id),
+            idempotency_key=f"new_user_signup_bonus:{int(user_id)}",
+            reason="new user signup bonus",
+            public_metadata={"grant": "signup_bonus", "amount": SIGNUP_BONUS_POINTS},
+            actor=actor,
+        )
+
+    def award_admin_initial_grant(self, *, user_id, actor=None):
+        return self.record_transaction(
+            user_id=user_id,
+            currency_type=DISPLAY_CURRENCY,
+            direction="credit",
+            amount=ADMIN_INITIAL_POINTS,
+            action_type="admin_initial_grant",
+            reference_type="genesis_admin_allocation",
+            reference_id=str(user_id),
+            idempotency_key=f"admin_initial_grant:{int(user_id)}",
+            reason="admin genesis allocation",
+            public_metadata={"grant": "admin_initial", "amount": ADMIN_INITIAL_POINTS},
+            actor=actor,
+        )
+
+    def current_salary_week(self):
+        year, week, _weekday = datetime.now(timezone.utc).isocalendar()
+        return f"{int(year)}-W{int(week):02d}"
+
+    def award_admin_weekly_salary(self, *, user_id, salary_week=None, actor=None):
+        week = salary_week or self.current_salary_week()
+        return self.record_transaction(
+            user_id=user_id,
+            currency_type=DISPLAY_CURRENCY,
+            direction="credit",
+            amount=ADMIN_WEEKLY_SALARY_POINTS,
+            action_type="admin_weekly_salary",
+            reference_type="admin_salary",
+            reference_id=week,
+            idempotency_key=f"admin_weekly_salary:{week}:{int(user_id)}",
+            reason=f"admin weekly salary {week}",
+            public_metadata={"grant": "admin_weekly_salary", "salary_week": week, "amount": ADMIN_WEEKLY_SALARY_POINTS},
+            actor=actor,
+        )
+
+    def bootstrap_admin_initial_grants(self, *, actor=None, seal_genesis=True):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            admins = [dict(row) for row in self._admin_account_rows(conn)]
+            has_blocks = conn.execute("SELECT 1 FROM points_chain_blocks LIMIT 1").fetchone() is not None
+        finally:
+            conn.close()
+        created = []
+        for admin in admins:
+            result = self.award_admin_initial_grant(user_id=admin["id"], actor=actor)
+            if result.get("created"):
+                created.append({"user_id": admin["id"], "username": admin["username"], "role": admin["role"]})
+        sealed = None
+        if seal_genesis and created and not has_blocks:
+            sealed = self.seal_block(actor=actor, limit=500)
+        return {"ok": True, "created": created, "created_count": len(created), "sealed": sealed}
+
+    def award_admin_weekly_salaries(self, *, salary_week=None, actor=None):
+        week = salary_week or self.current_salary_week()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            admins = [dict(row) for row in self._admin_account_rows(conn)]
+        finally:
+            conn.close()
+        created = []
+        for admin in admins:
+            result = self.award_admin_weekly_salary(user_id=admin["id"], salary_week=week, actor=actor)
+            if result.get("created"):
+                created.append({"user_id": admin["id"], "username": admin["username"], "role": admin["role"]})
+        return {"ok": True, "salary_week": week, "created": created, "created_count": len(created)}
 
     def _record_transaction(
         self,
@@ -572,8 +840,7 @@ class PointsLedgerService:
         risk_flag="none",
         risk_score=0,
     ):
-        if currency_type not in CURRENCIES:
-            raise ValueError("currency_type must be soft or hard")
+        currency_type = normalize_currency_type(currency_type)
         if direction not in LEDGER_DIRECTIONS:
             raise ValueError("unsupported ledger direction")
         amount = int(amount)
@@ -672,8 +939,8 @@ class PointsLedgerService:
                 ledger_hash,
                 risk_flag,
                 int(risk_score or 0),
-                int(actor["id"]) if actor and actor.get("id") else None,
-                actor.get("role") if actor else None,
+                int(actor_value(actor, "id")) if actor_value(actor, "id") else None,
+                actor_value(actor, "role"),
                 now,
             ),
         )
@@ -690,11 +957,11 @@ class PointsLedgerService:
             conn,
             "LEDGER_APPEND",
             "info",
-            f"{direction} {amount} {currency_type} for user {user_id}",
+            f"{direction} {amount} {DISPLAY_CURRENCY} for user {user_id}",
             actor=actor,
             target_user_id=int(user_id),
             ledger_id=row["id"],
-            metadata={"action_type": action_type, "reference_type": reference_type, "reference_id": reference_id},
+            metadata={"currency_type": DISPLAY_CURRENCY, "action_type": action_type, "reference_type": reference_type, "reference_id": reference_id},
         )
         return row, True
 
@@ -737,7 +1004,7 @@ class PointsLedgerService:
                     reference_type=reference_type,
                     reference_id=reference_id,
                     metadata=metadata,
-                    submitted_by=actor["id"] if actor else user_id,
+                    submitted_by=actor_value(actor, "id", user_id),
                 )
                 conn.commit()
                 return {"ok": True, "pending_review": True, "pending_reward": dict(pending)}
@@ -843,15 +1110,16 @@ class PointsLedgerService:
             amount=amount,
             action_type=f"admin_adjust_{direction}",
             reference_type="admin_adjustment",
-            reference_id=reference_id or f"actor:{actor.get('id')}:target:{user_id}:{utc_now()}",
+            reference_id=reference_id or f"actor:{actor_value(actor, 'id')}:target:{user_id}:{utc_now()}",
             idempotency_key=None,
             reason=reason,
             public_metadata={"admin_action": True},
-            private_metadata={"actor_username": actor.get("username")},
+            private_metadata={"actor_username": actor_value(actor, "username")},
             actor=actor,
         )
 
     def _create_pending_reward(self, conn, *, user_id, currency_type, amount, action_type, reference_type=None, reference_id=None, metadata=None, submitted_by=None):
+        currency_type = normalize_currency_type(currency_type)
         cur = conn.execute(
             """
             INSERT INTO points_pending_rewards (
@@ -878,7 +1146,7 @@ class PointsLedgerService:
                 reference_type=reference_type,
                 reference_id=reference_id,
                 metadata=metadata,
-                submitted_by=actor.get("id") if actor else None,
+                submitted_by=actor_value(actor, "id"),
             )
             self._audit_log(conn, "PENDING_REWARD_CREATED", "info", f"pending reward {row['id']} created", actor=actor, target_user_id=int(user_id))
             conn.commit()
@@ -910,7 +1178,7 @@ class PointsLedgerService:
                 SET status=?, reviewed_by=?, review_note=?, reviewed_at=?
                 WHERE id=? AND status='pending'
                 """,
-                (status, actor.get("id") if actor else None, review_note or "", utc_now(), int(pending_reward_id)),
+                (status, actor_value(actor, "id"), review_note or "", utc_now(), int(pending_reward_id)),
             )
             ledger = None
             if decision == "approve":
@@ -938,6 +1206,79 @@ class PointsLedgerService:
         finally:
             conn.close()
 
+    def rollback_ledger(self, *, actor, ledger_uuid, reason):
+        reason = str(reason or "").strip()
+        if not reason:
+            raise ValueError("reason is required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            original = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
+            if not original:
+                raise ValueError("ledger not found")
+            if original["status"] == "reversed":
+                raise ValueError("ledger already reversed")
+            if str(original["action_type"] or "").startswith("rollback:"):
+                raise ValueError("rollback ledger cannot be rolled back again")
+            reverse_map = {
+                "credit": "reverse",
+                "transfer_in": "transfer_out",
+                "debit": "credit",
+                "transfer_out": "transfer_in",
+                "freeze": "unfreeze",
+                "unfreeze": "freeze",
+            }
+            reverse_direction = reverse_map.get(original["direction"])
+            if not reverse_direction:
+                raise ValueError("unsupported rollback direction")
+            rollback_row, created = self._record_transaction(
+                conn,
+                user_id=original["user_id"],
+                currency_type=original["currency_type"],
+                direction=reverse_direction,
+                amount=original["amount"],
+                action_type=f"rollback:{original['action_type']}",
+                reference_type="ledger_rollback",
+                reference_id=original["ledger_uuid"],
+                idempotency_key=f"rollback:{original['ledger_uuid']}",
+                reason=reason,
+                public_metadata={
+                    "rollback_of": original["ledger_uuid"],
+                    "original_direction": original["direction"],
+                    "original_action_type": original["action_type"],
+                },
+                private_metadata={"actor_username": actor_value(actor, "username", "")},
+                actor=actor,
+                risk_flag="emergency_rollback",
+                risk_score=100,
+            )
+            conn.execute("UPDATE points_ledger SET status='reversed' WHERE id=?", (original["id"],))
+            self._audit_log(
+                conn,
+                "LEDGER_ROLLBACK",
+                "critical",
+                f"rollback ledger {original['ledger_uuid']}",
+                actor=actor,
+                target_user_id=original["user_id"],
+                ledger_id=rollback_row["id"],
+                metadata={"original_ledger_uuid": original["ledger_uuid"], "reason": reason, "created": created},
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "created": created,
+                "original_ledger": self.serialize_ledger(original, include_user_id=True),
+                "rollback_ledger": self.serialize_ledger(rollback_row, include_user_id=True),
+                "wallet": self.get_wallet(original["user_id"]),
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def list_ledger(self, *, user_id=None, limit=50, offset=0, include_user_id=False):
         conn = self.get_db()
         try:
@@ -959,7 +1300,8 @@ class PointsLedgerService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            return [dict(row) for row in conn.execute("SELECT * FROM points_rules ORDER BY rule_key").fetchall()]
+            rows = conn.execute("SELECT * FROM points_rules ORDER BY rule_key").fetchall()
+            return [{**dict(row), "currency_type": DISPLAY_CURRENCY} for row in rows]
         finally:
             conn.close()
 
@@ -968,7 +1310,7 @@ class PointsLedgerService:
         try:
             self.ensure_schema(conn)
             rows = conn.execute("SELECT * FROM economy_price_catalog WHERE enabled=1 ORDER BY category, base_price, item_key").fetchall()
-            return [{**dict(row), "metadata": _json_loads(row["metadata_json"], {})} for row in rows]
+            return [{**dict(row), "currency_type": DISPLAY_CURRENCY, "metadata": _json_loads(row["metadata_json"], {})} for row in rows]
         finally:
             conn.close()
 
@@ -980,7 +1322,35 @@ class PointsLedgerService:
                 "SELECT * FROM points_pending_rewards WHERE status=? ORDER BY created_at DESC LIMIT ?",
                 (status or "pending", min(200, max(1, int(limit or 100)))),
             ).fetchall()
-            return [dict(row) for row in rows]
+            return [{**dict(row), "currency_type": DISPLAY_CURRENCY} for row in rows]
+        finally:
+            conn.close()
+
+    def list_admin_adjustments(self, *, limit=100):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT l.*, target.username AS target_username, actor.username AS actor_username
+                FROM points_ledger l
+                LEFT JOIN users target ON target.id=l.user_id
+                LEFT JOIN users actor ON actor.id=l.created_by
+                WHERE l.action_type LIKE 'admin_adjust_%'
+                   OR l.action_type LIKE 'rollback:%'
+                   OR l.action_type IN ('admin_initial_grant', 'admin_weekly_salary', 'new_user_signup_bonus')
+                ORDER BY l.id DESC LIMIT ?
+                """,
+                (min(200, max(1, int(limit or 100))),),
+            ).fetchall()
+            adjustments = []
+            for row in rows:
+                item = self.serialize_ledger(row, include_user_id=True)
+                item["target_username"] = row["target_username"] or f"user:{row['user_id']}"
+                item["actor_username"] = row["actor_username"] or (f"user:{row['created_by']}" if row["created_by"] else "system")
+                item["signed_amount"] = int(row["amount"]) if row["direction"] in {"credit", "transfer_in"} else -int(row["amount"])
+                adjustments.append(item)
+            return adjustments
         finally:
             conn.close()
 
@@ -1032,7 +1402,7 @@ class PointsLedgerService:
                     len(rows),
                     rows[0]["id"],
                     rows[-1]["id"],
-                    actor.get("id") if actor else None,
+                    actor_value(actor, "id"),
                     "single-node",
                     sealed_at,
                     sealed_at,
@@ -1046,6 +1416,15 @@ class PointsLedgerService:
             )
             self._audit_log(conn, "POINTS_BLOCK_SEALED", "info", f"sealed points block {block_number}", actor=actor, block_id=block_id, metadata={"ledger_count": len(rows)})
             block = conn.execute("SELECT * FROM points_chain_blocks WHERE id=?", (block_id,)).fetchone()
+            self._ensure_local_node(conn)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO points_chain_block_signatures (
+                    block_id, node_id, signature_algorithm, public_key_fingerprint, signature, signed_at
+                ) VALUES (?, 'single-node', 'hmac-sha256', ?, ?, ?)
+                """,
+                (block_id, self._node_fingerprint(), self._sign_block(block), sealed_at),
+            )
             conn.commit()
             return {"ok": True, "sealed": True, "block": dict(block)}
         except Exception:
@@ -1058,6 +1437,8 @@ class PointsLedgerService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            self._backfill_missing_block_signatures(conn)
+            conn.commit()
             errors = []
             previous = None
             for row in conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall():
@@ -1082,11 +1463,23 @@ class PointsLedgerService:
                     errors.append({"type": "block_merkle_root", "block_id": block["id"]})
                 if compute_block_hash(block) != block["block_hash"]:
                     errors.append({"type": "block_hash", "block_id": block["id"]})
+                signature = conn.execute(
+                    """
+                    SELECT * FROM points_chain_block_signatures
+                    WHERE block_id=? AND node_id='single-node'
+                    """,
+                    (block["id"],),
+                ).fetchone()
+                if not signature:
+                    errors.append({"type": "block_signature_missing", "block_id": block["id"]})
+                elif signature["signature_algorithm"] != "hmac-sha256" or signature["public_key_fingerprint"] != self._node_fingerprint() or signature["signature"] != self._sign_block(block):
+                    errors.append({"type": "block_signature_invalid", "block_id": block["id"]})
                 previous_block = block["block_hash"]
             counts = {
                 "ledger_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()["c"],
                 "sealed_blocks": conn.execute("SELECT COUNT(*) AS c FROM points_chain_blocks").fetchone()["c"],
                 "unsealed_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger WHERE chain_block_id IS NULL").fetchone()["c"],
+                "audit_events": conn.execute("SELECT COUNT(*) AS c FROM points_chain_audit_logs").fetchone()["c"],
             }
             return {"ok": not errors, "errors": errors[:100], "error_count": len(errors), "counts": counts}
         finally:
@@ -1123,15 +1516,14 @@ class PointsLedgerService:
             conn.close()
 
     def economy_stats(self):
+        chain = self.verify_chain()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             wallet = conn.execute(
                 """
-                SELECT COALESCE(SUM(soft_balance), 0) AS soft_balance,
-                       COALESCE(SUM(hard_balance), 0) AS hard_balance,
-                       COALESCE(SUM(soft_frozen), 0) AS soft_frozen,
-                       COALESCE(SUM(hard_frozen), 0) AS hard_frozen,
+                SELECT COALESCE(SUM(soft_balance + hard_balance), 0) AS points_balance,
+                       COALESCE(SUM(soft_frozen + hard_frozen), 0) AS points_frozen,
                        COUNT(*) AS wallets
                 FROM points_wallets
                 """
@@ -1139,16 +1531,80 @@ class PointsLedgerService:
             ledger = conn.execute(
                 """
                 SELECT
-                    COALESCE(SUM(CASE WHEN currency_type='soft' AND direction IN ('credit','transfer_in') THEN amount ELSE 0 END), 0) AS soft_issued,
-                    COALESCE(SUM(CASE WHEN currency_type='soft' AND direction IN ('debit','transfer_out','reverse') THEN amount ELSE 0 END), 0) AS soft_spent,
-                    COALESCE(SUM(CASE WHEN currency_type='hard' AND direction IN ('credit','transfer_in') THEN amount ELSE 0 END), 0) AS hard_issued,
-                    COALESCE(SUM(CASE WHEN currency_type='hard' AND direction IN ('debit','transfer_out','reverse') THEN amount ELSE 0 END), 0) AS hard_spent,
+                    COALESCE(SUM(CASE WHEN direction IN ('credit','transfer_in') THEN amount ELSE 0 END), 0) AS points_issued,
+                    COALESCE(SUM(CASE WHEN direction IN ('debit','transfer_out','reverse') THEN amount ELSE 0 END), 0) AS points_spent,
                     COUNT(*) AS ledger_entries
                 FROM points_ledger
                 WHERE status='confirmed'
                 """
             ).fetchone()
-            chain = self.verify_chain()
-            return {"wallets": dict(wallet), "ledger": dict(ledger), "chain": chain}
+            wallet_data = dict(wallet)
+            ledger_data = dict(ledger)
+            return {"wallets": wallet_data, "ledger": ledger_data, "chain": chain, "currency_type": DISPLAY_CURRENCY}
+        finally:
+            conn.close()
+
+    def block_schedule(self, *, interval_seconds=DEFAULT_BLOCK_INTERVAL_SECONDS):
+        verification = self.verify_chain()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            interval_seconds = max(60, int(interval_seconds or DEFAULT_BLOCK_INTERVAL_SECONDS))
+            last_block = conn.execute("SELECT sealed_at FROM points_chain_blocks ORDER BY block_number DESC LIMIT 1").fetchone()
+            first_unsealed = conn.execute(
+                "SELECT created_at FROM points_ledger WHERE chain_block_id IS NULL ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+            anchor_at = parse_utc_timestamp(last_block["sealed_at"]) if last_block else None
+            if not anchor_at and first_unsealed:
+                anchor_at = parse_utc_timestamp(first_unsealed["created_at"])
+            next_at = anchor_at.timestamp() + interval_seconds if anchor_at else None
+            now_ts = datetime.now(timezone.utc).timestamp()
+            seconds_remaining = int(max(0, next_at - now_ts)) if next_at else None
+            unsealed = int((verification.get("counts") or {}).get("unsealed_entries") or 0)
+            return {
+                "interval_seconds": interval_seconds,
+                "interval_minutes": interval_seconds // 60,
+                "next_seal_at": datetime.fromtimestamp(next_at, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z") if next_at else None,
+                "seconds_remaining": seconds_remaining,
+                "unsealed_entries": unsealed,
+                "due": bool(unsealed and seconds_remaining == 0),
+                "message": "目前沒有未封 ledger" if not unsealed else ("可封塊" if seconds_remaining == 0 else "等待下一次封塊時間"),
+            }
+        finally:
+            conn.close()
+
+    def root_report(self):
+        verification = self.verify_chain()
+        stats = self.economy_stats()
+        audit_logs = self.list_chain_audit_logs(limit=50)
+        adjustments = self.list_admin_adjustments(limit=100)
+        block_schedule = self.block_schedule()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            blocks = conn.execute(
+                """
+                SELECT b.*, s.signature_algorithm, s.public_key_fingerprint, s.signed_at
+                FROM points_chain_blocks b
+                LEFT JOIN points_chain_block_signatures s ON s.block_id=b.id AND s.node_id='single-node'
+                ORDER BY b.block_number DESC LIMIT 10
+                """
+            ).fetchall()
+            high_risk = conn.execute(
+                """
+                SELECT * FROM points_ledger
+                WHERE risk_flag != 'none' OR status != 'confirmed'
+                ORDER BY id DESC LIMIT 20
+                """
+            ).fetchall()
+            return {
+                "verification": verification,
+                "stats": stats,
+                "blocks": [dict(row) for row in blocks],
+                "high_risk_ledger": [self.serialize_ledger(row, include_user_id=True) for row in high_risk],
+                "audit_logs": audit_logs,
+                "adjustments": adjustments,
+                "block_schedule": block_schedule,
+            }
         finally:
             conn.close()

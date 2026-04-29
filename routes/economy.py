@@ -1,6 +1,6 @@
 from flask import request
 
-from services.points_chain import CURRENCIES
+from services.points_chain import DISPLAY_CURRENCY
 
 
 def register_economy_routes(app, deps):
@@ -14,6 +14,14 @@ def register_economy_routes(app, deps):
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     points_service = deps["points_service"]
 
+    def actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        try:
+            return actor[key]
+        except Exception:
+            return actor.get(key, default) if hasattr(actor, "get") else default
+
     def actor_or_401():
         actor = get_current_user_ctx()
         if not actor:
@@ -24,7 +32,7 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return None, err
-        role = "super_admin" if actor.get("username") == "root" else actor.get("role", "user")
+        role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
         if role_rank(role) < role_rank("manager"):
             return None, json_resp({"ok": False, "msg": "需要管理員權限"}, 403)
         return actor, None
@@ -33,7 +41,7 @@ def register_economy_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return None, err
-        if actor.get("username") != "root":
+        if actor_value(actor, "username") != "root":
             return None, json_resp({"ok": False, "msg": "只有 root 可執行此操作"}, 403)
         return actor, None
 
@@ -142,7 +150,7 @@ def register_economy_routes(app, deps):
             return json_resp({"ok": False, "msg": "找不到 ledger"}), 404
         proof_account = proof.get("public_account_id") or (proof.get("ledger") or {}).get("public_account_id")
         if proof_account and proof_account != points_service.get_wallet(actor["id"])["public_account_id"]:
-            admin_role = "super_admin" if actor.get("username") == "root" else actor.get("role", "user")
+            admin_role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
             if role_rank(admin_role) < role_rank("manager"):
                 return json_resp({"ok": False, "msg": "權限不足"}), 403
         return json_resp({"ok": True, "proof": proof})
@@ -181,9 +189,7 @@ def register_economy_routes(app, deps):
         amount = parse_positive_int(data.get("amount"), maximum=1_000_000_000)
         if amount is None:
             return json_resp({"ok": False, "msg": "amount must be positive"}), 400
-        currency_type = str(data.get("currency_type") or "").strip()
-        if currency_type not in CURRENCIES:
-            return json_resp({"ok": False, "msg": "currency_type must be soft or hard"}), 400
+        currency_type = DISPLAY_CURRENCY
         direction = str(data.get("direction") or "").strip()
         reason = str(data.get("reason") or "").strip()
         try:
@@ -200,7 +206,7 @@ def register_economy_routes(app, deps):
                 reason=reason,
                 reference_id=str(data.get("reference_id") or "") or None,
             )
-            audit("POINTS_ADMIN_ADJUST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}, currency={currency_type}, direction={direction}, amount={amount}")
+            audit("POINTS_ADMIN_ADJUST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}, currency=points, direction={direction}, amount={amount}")
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)
@@ -220,9 +226,7 @@ def register_economy_routes(app, deps):
         amount = parse_positive_int(data.get("amount"), maximum=1_000_000_000)
         if amount is None:
             return json_resp({"ok": False, "msg": "amount must be positive"}), 400
-        currency_type = str(data.get("currency_type") or "").strip()
-        if currency_type not in CURRENCIES:
-            return json_resp({"ok": False, "msg": "currency_type must be soft or hard"}), 400
+        currency_type = DISPLAY_CURRENCY
         try:
             reward = points_service.create_pending_reward(
                 actor=actor,
@@ -284,6 +288,43 @@ def register_economy_routes(app, deps):
             return err
         result = points_service.verify_chain()
         return json_resp({"ok": result["ok"], "verification": result})
+
+    @app.route("/api/root/points/report", methods=["GET"])
+    @require_csrf_safe
+    def root_points_report():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return json_resp({"ok": True, "report": points_service.root_report()})
+
+    @app.route("/api/root/points/audit", methods=["GET"])
+    @require_csrf_safe
+    def root_points_audit():
+        actor, err = root_or_403()
+        if err:
+            return err
+        limit = parse_positive_int(request.args.get("limit"), default=100, maximum=200) or 100
+        return json_resp({"ok": True, "audit_logs": points_service.list_chain_audit_logs(limit=limit)})
+
+    @app.route("/api/root/points/ledger/<ledger_uuid>/rollback", methods=["POST"])
+    @require_csrf
+    def root_points_ledger_rollback(ledger_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.rollback_ledger(
+                actor=actor,
+                ledger_uuid=ledger_uuid,
+                reason=str(data.get("reason") or ""),
+            )
+            audit("POINTS_LEDGER_ROLLBACK", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"ledger_uuid={ledger_uuid}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/admin/points/economy/stats", methods=["GET"])
     @require_csrf_safe

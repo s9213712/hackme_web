@@ -5,7 +5,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, make_response
 
-from routes.system_admin import register_system_admin_routes
+from routes.system_admin import register_system_admin_routes, restart_launcher_code
 from services.snapshots import ServerModeService, SnapshotService, ensure_snapshot_schema
 from services.upload_security import ensure_upload_security_schema
 
@@ -648,6 +648,15 @@ def test_manual_restart_uses_restart_scheduler():
     assert data["ok"] is True
     assert data["restart_scheduled"] is True
     assert restart_calls == [{"reason": "manual-restart", "delay_seconds": 1.25}]
+
+
+def test_restart_launcher_waits_for_parent_exit_and_port_release():
+    code = restart_launcher_code()
+    assert "parent_alive()" in code
+    assert "port_is_free()" in code
+    assert "close_fds=True" in code
+    assert "start_new_session=True" in code
+    assert "subprocess.Popen([python_exe, script_path]" in code
 
 
 def test_security_profile_api_validates_and_server_mode_lists_profiles():

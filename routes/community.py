@@ -26,6 +26,38 @@ def register_community_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
     add_violation = deps.get("add_violation")
+    points_service = deps.get("points_service")
+
+    def actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        if hasattr(actor, "keys"):
+            return actor[key] if key in actor.keys() else default
+        return actor.get(key, default) if hasattr(actor, "get") else default
+
+    def award_points(rule_key, *, user_id, reference_type, reference_id, actor=None, metadata=None):
+        if not points_service or not user_id:
+            return
+        if actor and actor_value(actor, "username") == "root":
+            return
+        try:
+            points_service.earn_points(
+                user_id=user_id,
+                rule_key=rule_key,
+                reference_type=reference_type,
+                reference_id=str(reference_id or ""),
+                metadata=metadata or {},
+                actor=actor,
+            )
+        except Exception as exc:
+            audit(
+                "POINTS_AWARD_FAILED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "system"),
+                success=False,
+                ua=get_ua(),
+                detail=f"rule={rule_key},user_id={user_id},reference={reference_type}:{reference_id},error={exc}",
+            )
 
     def ensure_community_schema(conn):
         # Guard executescript so AttributeError (missing method on wrapper) can't cause 500 (L-2)
@@ -134,6 +166,7 @@ def register_community_routes(app, deps):
             username            TEXT NOT NULL,
             can_review_threads  INTEGER NOT NULL DEFAULT 1,
             can_pin_posts       INTEGER NOT NULL DEFAULT 1,
+            can_pin_threads     INTEGER NOT NULL DEFAULT 1,
             can_lock_threads    INTEGER NOT NULL DEFAULT 1,
             can_edit_posts      INTEGER NOT NULL DEFAULT 1,
             can_delete_posts    INTEGER NOT NULL DEFAULT 1,
@@ -256,6 +289,7 @@ def register_community_routes(app, deps):
         for name, ddl in (
             ("can_review_threads", "INTEGER NOT NULL DEFAULT 1"),
             ("can_pin_posts", "INTEGER NOT NULL DEFAULT 1"),
+            ("can_pin_threads", "INTEGER NOT NULL DEFAULT 1"),
             ("can_lock_threads", "INTEGER NOT NULL DEFAULT 1"),
             ("can_edit_posts", "INTEGER NOT NULL DEFAULT 1"),
             ("can_delete_posts", "INTEGER NOT NULL DEFAULT 1"),
@@ -329,9 +363,9 @@ def register_community_routes(app, deps):
     def ensure_board_moderator(conn, board_id, user_id, username, created_by="system"):
         now = datetime.now().isoformat()
         conn.execute(
-            "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, "
+            "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, can_pin_threads, "
             "can_lock_threads, can_edit_posts, can_delete_posts, can_reward_authors, can_penalize_posts, created_by, created_at, updated_at) "
-            "VALUES (?, ?, ?, 1, 1, 1, 1, 1, 1, 1, ?, ?, ?) "
+            "VALUES (?, ?, ?, 1, 1, 1, 1, 1, 1, 1, 1, ?, ?, ?) "
             "ON CONFLICT(board_id, user_id) DO UPDATE SET username=excluded.username, updated_at=excluded.updated_at",
             (board_id, user_id, username, created_by, now, now)
         )
@@ -433,6 +467,26 @@ def register_community_routes(app, deps):
             return True
         return bool(row[permission])
 
+    def board_moderator_permissions(conn, board_id, actor):
+        keys = (
+            "can_review_threads",
+            "can_pin_posts",
+            "can_pin_threads",
+            "can_lock_threads",
+            "can_edit_posts",
+            "can_delete_posts",
+            "can_reward_authors",
+            "can_penalize_posts",
+        )
+        if not actor:
+            return {key: False for key in keys}
+        if actor_value(actor, "username") == "root" or can_manage_community(actor):
+            return {key: True for key in keys}
+        row = board_moderator_row(conn, board_id, actor)
+        if not row:
+            return {key: False for key in keys}
+        return {key: bool(row_value(row, key, 0)) for key in keys}
+
     def can_delete_community_content(actor, author_user_id=None, owner_user_id=None):
         if not actor:
             return False
@@ -519,6 +573,7 @@ def register_community_routes(app, deps):
             "username": row["username"],
             "can_review_threads": bool(row["can_review_threads"]),
             "can_pin_posts": bool(row["can_pin_posts"]),
+            "can_pin_threads": bool(row_value(row, "can_pin_threads", row["can_pin_posts"])),
             "can_lock_threads": bool(row["can_lock_threads"]),
             "can_edit_posts": bool(row["can_edit_posts"]),
             "can_delete_posts": bool(row["can_delete_posts"]),
@@ -1058,6 +1113,7 @@ def register_community_routes(app, deps):
             values = {
                 "can_review_threads": 1 if data.get("can_review_threads", True) else 0,
                 "can_pin_posts": 1 if data.get("can_pin_posts", True) else 0,
+                "can_pin_threads": 1 if data.get("can_pin_threads", data.get("can_pin_posts", True)) else 0,
                 "can_lock_threads": 1 if data.get("can_lock_threads", True) else 0,
                 "can_edit_posts": 1 if data.get("can_edit_posts", True) else 0,
                 "can_delete_posts": 1 if data.get("can_delete_posts", True) else 0,
@@ -1065,12 +1121,12 @@ def register_community_routes(app, deps):
                 "can_penalize_posts": 1 if data.get("can_penalize_posts", True) else 0,
             }
             conn.execute(
-                "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, "
+                "INSERT INTO board_moderators (board_id, user_id, username, can_review_threads, can_pin_posts, can_pin_threads, "
                 "can_lock_threads, can_edit_posts, can_delete_posts, can_reward_authors, can_penalize_posts, created_by, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(board_id, user_id) DO UPDATE SET "
                 "username=excluded.username, can_review_threads=excluded.can_review_threads, "
-                "can_pin_posts=excluded.can_pin_posts, can_lock_threads=excluded.can_lock_threads, "
+                "can_pin_posts=excluded.can_pin_posts, can_pin_threads=excluded.can_pin_threads, can_lock_threads=excluded.can_lock_threads, "
                 "can_edit_posts=excluded.can_edit_posts, can_delete_posts=excluded.can_delete_posts, "
                 "can_reward_authors=excluded.can_reward_authors, can_penalize_posts=excluded.can_penalize_posts, "
                 "updated_at=excluded.updated_at",
@@ -1080,6 +1136,7 @@ def register_community_routes(app, deps):
                     user["username"],
                     values["can_review_threads"],
                     values["can_pin_posts"],
+                    values["can_pin_threads"],
                     values["can_lock_threads"],
                     values["can_edit_posts"],
                     values["can_delete_posts"],
@@ -1243,7 +1300,7 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": f"發文太頻繁（{info['limit']} 次 / 5 分鐘）"}), 429
             now = datetime.now().isoformat()
             status = "pending" if thread_requires_review(actor, manageable) else "approved"
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO forum_threads (board_id, title, content, status, post_type, author_user_id, author_username, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (board_id, title, content, status, post_type, actor["id"], actor["username"], now, now)
@@ -1261,6 +1318,15 @@ def register_community_routes(app, deps):
                 ua=get_ua(),
                 detail=f"board_id={board_id}, title={title}, status={status}"
             )
+            if status == "approved":
+                award_points(
+                    "create_post",
+                    user_id=actor["id"],
+                    reference_type="forum_thread",
+                    reference_id=cur.lastrowid,
+                    actor=actor,
+                    metadata={"board_id": board_id, "post_type": post_type},
+                )
             return json_resp({"ok": True, "msg": "主題已建立" if status == "approved" else "主題已送審，待管理員核准後公開", "status": status})
         finally:
             conn.close()
@@ -1475,6 +1541,7 @@ def register_community_routes(app, deps):
             counted_view = record_thread_view(conn, thread_id, actor)
             conn.commit()
             refreshed_view = conn.execute("SELECT view_count FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
+            moderator_permissions = board_moderator_permissions(conn, thread["board_id"], actor)
             return json_resp({
                 "ok": True,
                 "thread": {
@@ -1508,6 +1575,7 @@ def register_community_routes(app, deps):
                     "updated_at": thread["updated_at"],
                     "board_status": thread["board_status"],
                     "can_moderate": manageable,
+                    "moderator_permissions": moderator_permissions,
                 },
                 "posts": [{
                     "id": row["id"],
@@ -1690,7 +1758,7 @@ def register_community_routes(app, deps):
             if bool(thread["is_locked"]):
                 return json_resp({"ok": False, "msg": "此主題已鎖定，暫停留言"}), 403
             now = datetime.now().isoformat()
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO forum_posts (thread_id, content, author_user_id, author_username, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (thread_id, content, actor["id"], actor["username"], now, now)
@@ -1701,6 +1769,14 @@ def register_community_routes(app, deps):
             )
             conn.commit()
             audit("COMMUNITY_THREAD_REPLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"thread_id={thread_id}")
+            award_points(
+                "create_comment",
+                user_id=actor["id"],
+                reference_type="forum_post",
+                reference_id=cur.lastrowid,
+                actor=actor,
+                metadata={"thread_id": thread_id, "board_id": thread["board_id"]},
+            )
             return json_resp({"ok": True, "msg": "留言已送出"})
         finally:
             conn.close()
@@ -1726,7 +1802,7 @@ def register_community_routes(app, deps):
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), status_code
             post = conn.execute(
-                "SELECT p.id, p.thread_id, p.is_hidden, p.is_deleted, t.board_id, t.status AS thread_status, t.is_deleted AS thread_is_deleted, b.status AS board_status, "
+                "SELECT p.id, p.thread_id, p.author_user_id, p.is_hidden, p.is_deleted, t.board_id, t.status AS thread_status, t.is_deleted AS thread_is_deleted, b.status AS board_status, "
                 "b.owner_user_id, b.visibility AS board_visibility, b.is_active AS board_is_active "
                 "FROM forum_posts p "
                 "JOIN forum_threads t ON t.id=p.thread_id "
@@ -1751,6 +1827,11 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "留言已隱藏"}), 403
 
             now = datetime.now().isoformat()
+            previous_reaction = conn.execute(
+                "SELECT value FROM forum_post_reactions WHERE post_id=? AND user_id=?",
+                (post_id, actor["id"]),
+            ).fetchone()
+            previous_value = int(previous_reaction["value"]) if previous_reaction else 0
             if value == 0:
                 conn.execute(
                     "DELETE FROM forum_post_reactions WHERE post_id=? AND user_id=?",
@@ -1787,6 +1868,15 @@ def register_community_routes(app, deps):
             if auto_hidden:
                 audit("COMMUNITY_POST_AUTO_HIDDEN", get_client_ip(), user="system", success=True, ua=get_ua(),
                       detail=f"post_id={post_id}, dislikes={dislike_count}")
+            if value == 1 and previous_value != 1 and int(post["author_user_id"]) != int(actor["id"]):
+                award_points(
+                    "receive_like",
+                    user_id=post["author_user_id"],
+                    reference_type="forum_post_reaction",
+                    reference_id=f"{post_id}:{actor['id']}",
+                    actor=actor,
+                    metadata={"post_id": post_id, "reactor_user_id": actor["id"]},
+                )
             return json_resp({
                 "ok": True,
                 "msg": "已更新反應",
@@ -2035,7 +2125,7 @@ def register_community_routes(app, deps):
             thread = conn.execute("SELECT id, board_id, title, is_deleted FROM forum_threads WHERE id=?", (thread_id,)).fetchone()
             if not thread:
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
-            if not can_moderate_board(conn, thread["board_id"], actor, "can_pin_posts"):
+            if not can_moderate_board(conn, thread["board_id"], actor, "can_pin_threads"):
                 return json_resp({"ok": False, "msg": "只有管理員或版主可置頂主題"}), 403
             if thread["is_deleted"]:
                 return json_resp({"ok": False, "msg": "已刪除主題不可置頂"}), 409

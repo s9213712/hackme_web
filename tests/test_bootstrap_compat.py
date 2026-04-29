@@ -118,6 +118,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     conn.row_factory = sqlite3.Row
     session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
     chat_room_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_rooms)").fetchall()}
+    chat_message_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+    friend_cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_friends)").fetchall()}
     user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     login_location_cols = {row["name"] for row in conn.execute("PRAGMA table_info(login_locations)").fetchall()}
     member_rule_cols = {row["name"] for row in conn.execute("PRAGMA table_info(member_level_rules)").fetchall()}
@@ -156,12 +158,17 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     points_wallet_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_wallets)").fetchall()}
     points_ledger_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_ledger)").fetchall()}
     points_block_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_chain_blocks)").fetchall()}
+    game_match_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
+    game_invite_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_invites)").fetchall()}
+    game_reward_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_leaderboard_rewards)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     root_user = conn.execute("SELECT username, must_change_password, is_default_password, member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
     conn.close()
 
     assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
     assert "is_private" in chat_room_cols
+    assert {"message_type", "sticker_key", "is_revoked", "revoked_at", "revoked_by"} <= chat_message_cols
+    assert {"user_id", "friend_user_id", "status", "requested_by", "updated_at"} <= friend_cols
     assert {
         "member_level", "base_level", "effective_level", "trust_score", "points", "reputation",
         "violation_score", "sanction_status", "sanction_until", "level_updated_at",
@@ -214,7 +221,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"user_id", "soft_balance", "hard_balance", "soft_frozen", "hard_frozen", "wallet_status"} <= points_wallet_cols
     assert {"ledger_uuid", "public_account_id", "currency_type", "direction", "amount", "ledger_hash", "previous_ledger_hash"} <= points_ledger_cols
     assert {"block_number", "previous_block_hash", "merkle_root", "block_hash", "first_ledger_id", "last_ledger_id"} <= points_block_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
+    assert {"game_key", "mode", "white_user_id", "black_user_id", "current_turn", "board_json", "winner_user_id"} <= game_match_cols
+    assert {"game_key", "inviter_user_id", "opponent_user_id", "status", "match_id"} <= game_invite_cols
+    assert {"game_key", "week_key", "user_id", "rank", "score", "reward_points", "ledger_uuid"} <= game_reward_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
     assert root_user["username"] == "root"
     assert root_user["must_change_password"] == 1
     assert root_user["is_default_password"] == 1

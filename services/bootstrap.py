@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 26
+CURRENT_SCHEMA_VERSION = 28
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -30,6 +30,8 @@ SCHEMA_MIGRATIONS = (
     (24, "storage files and albums schema"),
     (25, "storage share links schema"),
     (26, "points economy private chain schema"),
+    (27, "chat recall stickers and friends schema"),
+    (28, "game zone chess schema"),
 )
 
 _STATE = {
@@ -418,6 +420,13 @@ def _table_exists(conn, table_name):
     return row is not None
 
 
+def _table_columns(conn, table_name):
+    try:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    except Exception:
+        return set()
+
+
 def _repair_existing_legacy_tables(
     conn,
     ensure_secure_audit_columns,
@@ -522,6 +531,36 @@ def _ensure_dm_schema(conn):
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dm_threads_a ON dm_threads(participant_a_id, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dm_threads_b ON dm_threads(participant_b_id, updated_at)")
+
+
+def _ensure_chat_social_schema(conn):
+    cols = _table_columns(conn, "chat_messages")
+    for name, ddl in (
+        ("message_type", "TEXT NOT NULL DEFAULT 'text'"),
+        ("sticker_key", "TEXT"),
+        ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
+        ("revoked_at", "TEXT"),
+        ("revoked_by", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {name} {ddl}")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_friends (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status         TEXT    NOT NULL DEFAULT 'pending',
+            requested_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at     TEXT    NOT NULL,
+            updated_at     TEXT    NOT NULL,
+            UNIQUE(user_id, friend_user_id),
+            CHECK (user_id <> friend_user_id),
+            CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_thread ON direct_messages(thread_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_unread ON direct_messages(recipient_user_id, is_read)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blocked_users_pair ON blocked_users(blocker_user_id, blocked_user_id)")
@@ -606,6 +645,12 @@ def apply_schema_migrations(
             from services.points_chain import ensure_points_economy_schema
 
             ensure_points_economy_schema(conn)
+        elif version == 27:
+            _ensure_chat_social_schema(conn)
+        elif version == 28:
+            from routes.games import ensure_game_schema
+
+            ensure_game_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",

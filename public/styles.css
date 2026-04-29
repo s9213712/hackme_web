@@ -738,6 +738,61 @@
       color: var(--text);
     }
 
+    .security-log-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: .8rem;
+      align-items: start;
+      min-width: 0;
+    }
+
+    .security-log-card {
+      min-width: 0;
+      display: grid;
+      gap: .45rem;
+    }
+
+    .security-log-card .mini-title {
+      margin-bottom: 0;
+    }
+
+    .security-log-box {
+      height: 300px;
+      min-width: 0;
+      overflow: auto;
+      font-size: .68rem;
+      line-height: 1.42;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,.28);
+      padding: .65rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      box-sizing: border-box;
+    }
+
+    .security-log-row {
+      display: grid;
+      grid-template-columns: auto auto minmax(0, .9fr) minmax(0, .7fr) minmax(0, 1.6fr);
+      gap: .35rem;
+      align-items: start;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      padding: .32rem .2rem;
+      min-width: 0;
+    }
+
+    .security-log-row span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .security-log-pre {
+      margin: 0;
+    }
+
     .app-action-bar .notification-badge {
       position: absolute;
       top: -.32rem;
@@ -911,6 +966,12 @@
       min-height: 96px;
     }
 
+    .comfyui-share-panel {
+      margin-top: .75rem;
+      padding-top: .75rem;
+      border-top: 1px solid rgba(255,255,255,.08);
+    }
+
     .comfyui-preview {
       min-height: 420px;
       display: grid;
@@ -927,6 +988,89 @@
       max-height: 72vh;
       object-fit: contain;
       display: block;
+    }
+
+    .comfyui-batch-grid {
+      width: 100%;
+      height: 100%;
+      padding: .7rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: .65rem;
+      align-items: start;
+    }
+
+    .comfyui-batch-item {
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      padding: .35rem;
+      cursor: pointer;
+      display: grid;
+      gap: .35rem;
+      text-align: left;
+    }
+
+    .comfyui-batch-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(110,168,254,.35);
+      background: rgba(110,168,254,.12);
+    }
+
+    .comfyui-batch-item img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      max-height: none;
+      object-fit: cover;
+      border-radius: 6px;
+    }
+
+    .comfyui-batch-item span {
+      font-size: .76rem;
+      color: var(--muted);
+    }
+
+    .comfyui-progress-panel {
+      margin-top: .75rem;
+      padding: .65rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
+    }
+
+    .comfyui-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      font-size: .78rem;
+      color: var(--text);
+      margin-bottom: .45rem;
+    }
+
+    .comfyui-progress-track {
+      height: 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.10);
+      overflow: hidden;
+    }
+
+    .comfyui-progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #3ddc97, #62b6ff);
+      transition: width .35s ease;
+    }
+
+    .comfyui-progress-panel.running .comfyui-progress-bar {
+      animation: comfyuiProgressPulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes comfyuiProgressPulse {
+      0%, 100% { filter: brightness(1); }
+      50% { filter: brightness(1.25); }
     }
 
     .drive-card-heading .drive-card-title {
@@ -1017,6 +1161,21 @@
     .drive-file-list {
       display: grid;
       gap: .55rem;
+    }
+
+    .drive-file-preview-layout {
+      display: grid;
+      grid-template-columns: minmax(360px, 1.05fr) minmax(320px, .95fr);
+      gap: 1rem;
+      align-items: start;
+      margin-top: 1rem;
+    }
+
+    .drive-preview-card {
+      position: sticky;
+      top: 1rem;
+      max-height: calc(100vh - 2rem);
+      overflow: auto;
     }
 
     .drive-toolbar {
@@ -1277,6 +1436,98 @@
       aspect-ratio: 16 / 10;
     }
 
+    .chat-friend-panel {
+      display: grid;
+      gap: .45rem;
+      margin-bottom: .65rem;
+      padding-bottom: .65rem;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+
+    .chat-friend-add {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: .4rem;
+    }
+
+    .chat-friend-list {
+      display: grid;
+      gap: .35rem;
+      font-size: .76rem;
+    }
+
+    .chat-friend-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: .35rem;
+      padding: .4rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,.03);
+    }
+
+    .chat-friend-row strong,
+    .chat-friend-row span {
+      overflow-wrap: anywhere;
+      min-width: 0;
+    }
+
+    .chat-sticker-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem;
+      margin-top: .45rem;
+    }
+
+    .chat-sticker-btn {
+      padding: .32rem .55rem;
+      font-size: .72rem;
+    }
+
+    .chat-sticker {
+      display: inline-grid;
+      place-items: center;
+      min-width: 72px;
+      min-height: 48px;
+      margin-top: .28rem;
+      padding: .55rem .75rem;
+      border: 1px solid rgba(130,177,255,.28);
+      border-radius: 8px;
+      background: rgba(130,177,255,.13);
+      color: var(--text);
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .chat-pending-attachment-list {
+      display: grid;
+      gap: .35rem;
+      margin-top: .45rem;
+    }
+
+    .chat-pending-attachment {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .5rem;
+      padding: .4rem .5rem;
+      border: 1px solid rgba(130,177,255,.2);
+      border-radius: 8px;
+      background: rgba(130,177,255,.08);
+      font-size: .76rem;
+    }
+
+    .chat-pending-attachment span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .chat-revoked {
+      color: var(--muted);
+      font-style: italic;
+    }
+
     .drive-preview-panel {
       display: grid;
       gap: .65rem;
@@ -1304,6 +1555,20 @@
       min-height: 320px;
     }
 
+    .album-full-preview-body video,
+    .album-full-preview-body audio,
+    .album-full-preview-body iframe {
+      width: min(96vw, 1180px);
+      max-height: 82vh;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 10px;
+      background: rgba(0,0,0,.3);
+    }
+
+    .album-full-preview-body iframe {
+      height: 82vh;
+    }
+
     .drive-preview-text,
     .drive-preview-archive {
       max-height: 360px;
@@ -1316,6 +1581,67 @@
       word-break: break-word;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: .78rem;
+    }
+
+    .album-full-preview-body .drive-preview-text,
+    .album-full-preview-body .drive-preview-archive {
+      width: min(96vw, 1180px);
+      max-height: 82vh;
+    }
+
+    .album-full-preview-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: none;
+      grid-template-rows: auto 1fr;
+      background: rgba(6, 10, 18, .96);
+      color: var(--text);
+    }
+
+    .album-full-preview-overlay.show {
+      display: grid;
+    }
+
+    body.modal-open {
+      overflow: hidden;
+    }
+
+    .album-full-preview-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      padding: .75rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      background: rgba(15, 20, 32, .92);
+    }
+
+    .album-full-preview-topbar strong,
+    .album-full-preview-topbar .drive-card-sub {
+      overflow-wrap: anywhere;
+    }
+
+    .album-full-preview-body {
+      min-height: 0;
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+      overflow: auto;
+    }
+
+    .album-full-preview-body img {
+      max-width: 100%;
+      max-height: calc(100vh - 96px);
+      object-fit: contain;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(0,0,0,.32);
+    }
+
+    .album-full-preview-body .drive-empty {
+      max-width: 520px;
+      text-align: center;
     }
 
     /* ── Password field with toggle ──────────────────────── */
@@ -1589,6 +1915,21 @@
       word-break: break-word;
     }
 
+    .community-share-image {
+      margin: .45rem 0 .75rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(0,0,0,.22);
+    }
+
+    .community-share-image img {
+      width: 100%;
+      max-height: 64vh;
+      object-fit: contain;
+      display: block;
+    }
+
     .community-actions {
       display: flex;
       gap: .45rem;
@@ -1662,6 +2003,13 @@
       .community-layout {
         grid-template-columns: 1fr;
       }
+      .drive-file-preview-layout {
+        grid-template-columns: 1fr;
+      }
+      .drive-preview-card {
+        position: static;
+        max-height: none;
+      }
       .comfyui-layout {
         grid-template-columns: 1fr;
       }
@@ -1718,7 +2066,8 @@
       min-height: 290px;
     }
 
-    .chat-room-list {
+    .chat-room-list,
+    #chat-room-list {
       max-height: 250px;
       overflow: auto;
       margin-top: .45rem;
@@ -1746,6 +2095,30 @@
       border-color: var(--accent);
       color: #fff;
       background: rgba(108,99,255,.2);
+    }
+
+    .chat-room-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: .35rem;
+      align-items: stretch;
+    }
+
+    .chat-room-delete-btn {
+      width: auto;
+      min-width: 44px;
+      border-radius: 7px;
+      border: 1px solid rgba(255,79,109,.34);
+      background: rgba(255,79,109,.08);
+      color: #ffb3bf;
+      font-size: .72rem;
+      cursor: pointer;
+      padding: .35rem .45rem;
+    }
+
+    .chat-room-delete-btn:hover {
+      color: #fff;
+      background: rgba(255,79,109,.22);
     }
 
     .chat-room-main {
@@ -1801,6 +2174,42 @@
       margin-bottom: .12rem;
       font-size: .68rem;
       letter-spacing: .01em;
+    }
+
+    .chat-message-attachments {
+      display: grid;
+      gap: .35rem;
+      margin-top: .45rem;
+    }
+
+    .chat-message-attachment {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: .45rem;
+      align-items: center;
+      padding: .42rem;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
+    }
+
+    .chat-message-attachment span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .chat-message-attachment small {
+      display: block;
+      margin-top: .08rem;
+      color: var(--muted);
+      font-size: .68rem;
+    }
+
+    .chat-message-attachment-actions {
+      display: flex;
+      gap: .3rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
 
     .chat-report-btn,
@@ -2233,5 +2642,145 @@
       .edit-user-actions .btn {
         width: 100%;
       }
+    }
+
+    .game-zone { text-align: left; }
+    .game-layout {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.4fr) minmax(220px, .85fr);
+      gap: .75rem;
+      align-items: start;
+      margin-top: .85rem;
+    }
+    .game-panel,
+    .game-board-panel {
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.18);
+      border-radius: 8px;
+      padding: .75rem;
+    }
+    .game-catalog-list {
+      display: grid;
+      gap: .5rem;
+      margin: .6rem 0 .75rem;
+    }
+    .game-catalog-item,
+    .game-match-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .65rem;
+      border: 1px solid rgba(255,255,255,.09);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      border-radius: 8px;
+      padding: .55rem .65rem;
+      text-align: left;
+    }
+    .game-catalog-item small,
+    .game-match-row small,
+    .game-list-row small {
+      display: block;
+      color: var(--muted);
+      font-size: .72rem;
+      margin-top: .15rem;
+    }
+    .game-catalog-item.active,
+    .game-match-row.active {
+      border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+    }
+    .game-catalog-icon {
+      width: 2rem;
+      height: 2rem;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 8px;
+      background: rgba(255,255,255,.08);
+      font-size: 1.2rem;
+    }
+    .game-action-grid {
+      grid-template-columns: minmax(160px, 1fr) auto auto;
+      align-items: end;
+    }
+    .game-mini-btn {
+      padding: .28rem .48rem;
+      font-size: .75rem;
+      min-height: 0;
+    }
+    .game-list-row {
+      align-items: center;
+      gap: .5rem;
+    }
+    .chess-board {
+      width: min(100%, 560px);
+      aspect-ratio: 1;
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 8px;
+      overflow: hidden;
+      margin: .7rem auto;
+    }
+    .chess-empty {
+      grid-column: 1 / -1;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      min-height: 14rem;
+    }
+    .chess-square {
+      position: relative;
+      display: grid;
+      place-items: center;
+      border: 0;
+      color: #141414;
+      font-size: clamp(1.35rem, 4vw, 2.4rem);
+      line-height: 1;
+      cursor: pointer;
+      min-width: 0;
+      min-height: 0;
+    }
+    .chess-square.light { background: #e7d5b0; }
+    .chess-square.dark { background: #8c6a43; }
+    .chess-square.selected {
+      outline: 3px solid #3f8cff;
+      outline-offset: -3px;
+    }
+    .chess-square.target::after {
+      content: "";
+      width: 28%;
+      height: 28%;
+      border-radius: 50%;
+      background: rgba(63,140,255,.65);
+      position: absolute;
+    }
+    .chess-square small {
+      position: absolute;
+      left: .2rem;
+      bottom: .14rem;
+      font-size: .55rem;
+      color: rgba(0,0,0,.52);
+    }
+    .game-move-history {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem;
+      max-height: 7rem;
+      overflow: auto;
+      font-size: .75rem;
+      color: var(--muted);
+    }
+    .game-move-history span {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 6px;
+      padding: .18rem .35rem;
+      background: rgba(255,255,255,.04);
+    }
+
+    @media (max-width: 1100px) {
+      .game-layout,
+      .game-action-grid { grid-template-columns: 1fr; }
     }
   

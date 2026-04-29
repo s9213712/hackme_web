@@ -50,18 +50,20 @@ function switchModuleTab(tab) {
   const canAccessDm = !!currentUser && canAccessModule("dm");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
   const canAccessAlbums = canAccessDrive;
+  const canAccessGames = !!currentUser && canAccessModule("games");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm" && !canAccessDm) normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
   if (tab === "community" && !canAccessCommunity) normTab = fallbackModule();
   if (tab === "drive" && !canAccessDrive) normTab = fallbackModule();
   if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
+  if (tab === "games" && !canAccessGames) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
   if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
@@ -75,6 +77,7 @@ function switchModuleTab(tab) {
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
   const modAlbums = $("module-albums");
+  const modGames = $("module-games");
   const modComfyui = $("module-comfyui");
   const modEconomy = $("module-economy");
   const modAccounts = $("module-accounts");
@@ -86,6 +89,7 @@ function switchModuleTab(tab) {
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
   const mAlbums = $("tab-module-albums");
+  const mGames = $("tab-module-games");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
   const mAccounts = $("tab-module-accounts");
@@ -98,6 +102,7 @@ function switchModuleTab(tab) {
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
   if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
+  if (modGames) modGames.classList.toggle("active", normTab === "games");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
@@ -109,6 +114,7 @@ function switchModuleTab(tab) {
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
+  if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
@@ -133,6 +139,9 @@ function switchModuleTab(tab) {
   }
   if (normTab === "albums" && canAccessAlbums) {
     loadAlbumGallery();
+  }
+  if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
+    loadGameZone();
   }
   if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
     loadComfyuiModels();
@@ -957,6 +966,7 @@ async function loadSettings() {
   if ($("s-module-appeals-min-role")) $("s-module-appeals-min-role").value = s.module_appeals_min_role || "user";
   if ($("s-module-accounts-min-role")) $("s-module-accounts-min-role").value = s.module_accounts_min_role || "manager";
   if ($("s-module-comfyui-min-role")) $("s-module-comfyui-min-role").value = s.module_comfyui_min_role || "user";
+  if ($("s-module-games-min-role")) $("s-module-games-min-role").value = s.module_games_min_role || "user";
   if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
   if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
   if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
@@ -999,7 +1009,8 @@ const FEATURE_SETTING_KEYS = [
   "feature_advanced_security_enabled",
   "feature_privacy_uploads_enabled",
   "feature_comfyui_enabled",
-  "feature_economy_enabled"
+  "feature_economy_enabled",
+  "feature_games_enabled"
 ];
 
 function featureSettingInputId(key) {
@@ -1310,7 +1321,7 @@ async function loadSecurityCenter() {
   if (auditBox) {
     const rows = sc.audit_entries || [];
     auditBox.innerHTML = rows.length ? rows.map((e) => `
-      <div style="border-bottom:1px solid rgba(255,255,255,.08);padding:.32rem .2rem;word-break:break-all;">
+      <div class="security-log-row">
         <span style="color:#888;">${sanitize(e.timestamp || "")}</span>
         <span style="color:${e.success ? "#4caf50" : "#ff4f6d"};">${e.success ? "OK" : "FAIL"}</span>
         <span style="color:#e0e0e0;">${sanitize(e.action || "")}</span>
@@ -1789,6 +1800,7 @@ async function saveSettings() {
     module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
     module_accounts_min_role: $("s-module-accounts-min-role")?.value || "manager",
     module_comfyui_min_role: $("s-module-comfyui-min-role")?.value || "user",
+    module_games_min_role: $("s-module-games-min-role")?.value || "user",
     site_bg: $("s-site-bg")?.value || "#0f0f1a",
     site_surface: $("s-site-surface")?.value || "#1a1a2e",
     site_accent: $("s-site-accent")?.value || "#6c63ff",
@@ -1872,20 +1884,83 @@ async function loadServerEnv() {
 
 async function restartServer() {
   if (!confirm("⚠️ 確定要重啟伺服器？所有連線將中斷。")) return;
+  const status = $("restart-server-status");
+  const button = $("restart-server-btn");
+  const previousStartedAt = serverMeta?.started_at || "";
+  if (button) button.disabled = true;
+  if (status) {
+    status.textContent = "已送出重啟指令，等待伺服器離線...";
+    status.className = "msg show";
+  }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/restart", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  if (json.ok) {
-    alert(json.msg || "服務器正在重啟，請稍後重新整理頁面");
-    setTimeout(() => location.reload(), 4500);
-  } else {
-    alert(json.msg || "重啟失敗");
+  try {
+    const res = await fetch(API + "/admin/restart", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "重啟失敗");
+    const wentOffline = await waitForRestartOffline(25000);
+    if (!wentOffline) throw new Error("25 秒內沒有偵測到伺服器離線，重啟流程可能沒有真正執行。");
+    if (status) status.textContent = "已偵測到離線，等待伺服器恢復...";
+    const onlineMeta = await waitForRestartOnline(previousStartedAt, 180000);
+    if (!onlineMeta) throw new Error("3 分鐘內未重新連線，請檢查 server log。");
+    renderServerVersion(onlineMeta);
+    if (status) {
+      status.textContent = "伺服器已重啟完成，正在重新載入頁面...";
+      status.className = "msg show ok";
+    }
+    setTimeout(() => location.reload(), 900);
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "重啟失敗";
+      status.className = "msg show err";
+    } else {
+      alert(err.message || "重啟失敗");
+    }
+    if (button) button.disabled = false;
   }
+}
+
+async function probeRestartVersion(timeoutMs = 1500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(API + "/version?restart_probe=" + Date.now(), {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => ({}));
+    return json && json.ok ? json : null;
+  } catch (_) {
+    clearTimeout(timer);
+    return null;
+  }
+}
+
+async function waitForRestartOffline(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const meta = await probeRestartVersion(1200);
+    if (!meta) return true;
+    await new Promise((resolve) => setTimeout(resolve, 650));
+  }
+  return false;
+}
+
+async function waitForRestartOnline(previousStartedAt, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const meta = await probeRestartVersion(1800);
+    if (meta && (!previousStartedAt || meta.started_at !== previousStartedAt)) return meta;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+  return null;
 }
 
 // ── Snapshot / Reset Server ───────────────────────────────────

@@ -52,6 +52,7 @@ def register_public_routes(app, deps):
     make_token = deps["make_token"]
     normalize_text = deps["normalize_text"]
     parse_birthdate = deps["parse_birthdate"]
+    points_service = deps.get("points_service")
     record_login_failure = deps["record_login_failure"]
     record_security_event = deps["record_security_event"]
     require_csrf = deps["require_csrf"]
@@ -376,6 +377,15 @@ def register_public_routes(app, deps):
                 (cur.lastrowid, hash_password(password), now)
             )
             conn.commit()
+            new_user_id = cur.lastrowid
+            if points_service:
+                try:
+                    points_service.award_signup_bonus(
+                        user_id=new_user_id,
+                        actor={"id": new_user_id, "username": username, "role": "user"},
+                    )
+                except Exception as exc:
+                    audit("POINTS_SIGNUP_BONUS_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
             audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
             return json_resp({"ok":True,"msg":"註冊申請已送出，需經管理員或最高管理者審核後才能登入"})
         finally:
@@ -502,6 +512,15 @@ def register_public_routes(app, deps):
                     )
                     record_login_location(conn, user_row["id"], username, ip, ua)
                 conn.commit()
+
+                if points_service and user_row["username"] != "root" and user_row["role"] in {"manager", "super_admin"}:
+                    try:
+                        points_service.award_admin_weekly_salary(
+                            user_id=user_row["id"],
+                            actor={"id": user_row["id"], "username": user_row["username"], "role": user_row["role"]},
+                        )
+                    except Exception as exc:
+                        audit("POINTS_ADMIN_SALARY_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
 
                 # Create token + save session to DB
                 token = make_token(username)

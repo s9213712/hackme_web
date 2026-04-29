@@ -33,6 +33,7 @@ def register_user_routes(app, deps):
     normalize_text = deps["normalize_text"]
     parse_birthdate = deps["parse_birthdate"]
     parse_positive_int = deps["parse_positive_int"]
+    points_service = deps.get("points_service")
     revoke_user_sessions = deps["revoke_user_sessions"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
@@ -300,8 +301,18 @@ def register_user_routes(app, deps):
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                 (cur.lastrowid, hash_password(password), now)
             )
+            new_user_id = cur.lastrowid
             trim_password_history(conn, cur.lastrowid)
             conn.commit()
+            if points_service and role in {"manager", "super_admin"} and username != "root":
+                try:
+                    points_service.award_admin_initial_grant(
+                        user_id=new_user_id,
+                        actor={"id": actor["id"], "username": actor["username"], "role": actor_role},
+                    )
+                except Exception as exc:
+                    audit("POINTS_ADMIN_INITIAL_GRANT_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target={username}, error={exc}")
             audit("ADMIN_CREATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target={username}, role={role}")
             return json_resp({"ok":True,"msg":"帳號已建立"})
@@ -814,6 +825,15 @@ def register_user_routes(app, deps):
             conn.execute("UPDATE users SET role=?, violation_count=0, updated_at=? WHERE id=?",
                          (to_role, datetime.now().isoformat(), user_id))
             conn.commit()
+            if points_service and to_role in {"manager", "super_admin"} and target["username"] != "root":
+                try:
+                    points_service.award_admin_initial_grant(
+                        user_id=user_id,
+                        actor={"id": actor["id"], "username": actor["username"], "role": actor_role},
+                    )
+                except Exception as exc:
+                    audit("POINTS_ADMIN_INITIAL_GRANT_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target_id={user_id}, error={exc}")
             audit("USER_PROMOTED", get_client_ip(), user=actor["username"],
                   success=True, detail=f"user_id={user_id} {from_role}→{to_role}")
             return json_resp({"ok":True,"msg":f"已升為 {ROLE_LABEL[to_role]}"})

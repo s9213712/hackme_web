@@ -8,6 +8,7 @@ function bindUiEvents() {
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAlbums = $("tab-module-albums");
+  const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
   const tabModuleAccounts = $("tab-module-accounts");
@@ -95,6 +96,7 @@ function bindUiEvents() {
   const chatRefreshRoomBtn = $("chat-room-refresh-btn");
   const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
   const chatSendBtn = $("chat-send-btn");
+  const chatFriendAddBtn = $("chat-friend-add-btn");
   const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
   const chatAttachmentExistingBtn = $("chat-attachment-existing-btn");
   const chatInput = $("chat-message-input");
@@ -122,10 +124,12 @@ function bindUiEvents() {
   const communityReplySubmitBtn = $("community-reply-submit");
   const communityThreadPrevBtn = $("community-thread-prev");
   const communityThreadNextBtn = $("community-thread-next");
+  const communityThreadStickyToggle = $("community-thread-sticky-toggle");
   const communityThreadLockToggle = $("community-thread-lock-toggle");
   const communityThreadDeleteBtn = $("community-thread-delete-btn");
   const communityToolsToggleBtn = $("community-tools-toggle-btn");
   const communityReviewTabBtn = $("community-review-tab-btn");
+  const communityModeratorOpenBtn = $("community-moderator-open-btn");
   const communityModeratorRefreshBtn = $("community-moderator-refresh-btn");
   const communityModeratorSaveBtn = $("community-moderator-save-btn");
   const communityModeratorPreset = $("community-moderator-preset");
@@ -145,13 +149,22 @@ function bindUiEvents() {
   const storageFolderMoveBtn = $("storage-folder-move-btn");
   const albumCreateBtn = $("album-create-btn");
   const albumThumbSize = $("album-thumb-size");
+  const gameRefreshBtn = $("game-refresh-btn");
+  const gameInviteBtn = $("game-invite-btn");
+  const gamePracticeBtn = $("game-practice-btn");
+  const gameResignBtn = $("game-resign-btn");
+  const gameAwardBtn = $("game-award-btn");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
+  const comfyuiInterruptBtn = $("comfyui-interrupt-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
+  const comfyuiShareBtn = $("comfyui-share-btn");
   const comfyuiDiscardBtn = $("comfyui-discard-btn");
   const economyRefreshBtn = $("economy-refresh-btn");
   const economyAdminRefreshBtn = $("economy-admin-refresh-btn");
   const economyAdjustBtn = $("economy-adjust-btn");
+  const economyRootReportBtn = $("economy-root-report-btn");
+  const economyRollbackBtn = $("economy-rollback-btn");
   const economySealBtn = $("economy-seal-btn");
   const economyVerifyBtn = $("economy-verify-btn");
   const sidebarToggle = $("sidebar-toggle");
@@ -167,6 +180,7 @@ function bindUiEvents() {
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
   if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
+  if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
@@ -219,6 +233,10 @@ function bindUiEvents() {
     if (selectedChatRoomId) loadChatMessages(selectedChatRoomId, false);
   });
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
+  if (chatFriendAddBtn) chatFriendAddBtn.addEventListener("click", addChatFriend);
+  document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
+    btn.addEventListener("click", () => sendChatSticker(btn.dataset.chatSticker || ""));
+  });
   if (chatAttachmentUploadBtn) chatAttachmentUploadBtn.addEventListener("click", uploadChatAttachment);
   if (chatAttachmentExistingBtn) chatAttachmentExistingBtn.addEventListener("click", attachExistingChatFile);
   if (dmCreateBtn) dmCreateBtn.addEventListener("click", createDmThread);
@@ -252,8 +270,10 @@ function bindUiEvents() {
     communityThreadPage += 1;
     openCommunityBoard(selectedCommunityBoardId);
   });
+  if (communityThreadStickyToggle) communityThreadStickyToggle.addEventListener("click", toggleCommunityThreadSticky);
   if (communityThreadLockToggle) communityThreadLockToggle.addEventListener("click", toggleCommunityThreadLock);
   if (communityThreadDeleteBtn) communityThreadDeleteBtn.addEventListener("click", deleteCommunityThread);
+  if (communityModeratorOpenBtn) communityModeratorOpenBtn.addEventListener("click", () => toggleCommunityModeratorManager());
   if (communityModeratorRefreshBtn) communityModeratorRefreshBtn.addEventListener("click", () => loadCommunityModerators());
   if (communityModeratorSaveBtn) communityModeratorSaveBtn.addEventListener("click", saveCommunityModerator);
   if (communityModeratorPreset) communityModeratorPreset.addEventListener("change", () => applyModeratorPreset(communityModeratorPreset.value));
@@ -285,15 +305,19 @@ function bindUiEvents() {
     if (typeof getAlbumThumbSize === "function") albumThumbSize.value = getAlbumThumbSize();
     albumThumbSize.addEventListener("change", (event) => setAlbumThumbSize(event.target.value));
   }
+  if (gameRefreshBtn) gameRefreshBtn.addEventListener("click", loadGameZone);
+  if (gameInviteBtn) gameInviteBtn.addEventListener("click", createGameInvite);
+  if (gamePracticeBtn) gamePracticeBtn.addEventListener("click", createPracticeGame);
+  if (gameResignBtn) gameResignBtn.addEventListener("click", resignGame);
+  if (gameAwardBtn) gameAwardBtn.addEventListener("click", awardGameRewards);
   if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
+  if (comfyuiInterruptBtn) comfyuiInterruptBtn.addEventListener("click", interruptComfyuiGeneration);
   if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
+  if (comfyuiShareBtn) comfyuiShareBtn.addEventListener("click", shareComfyuiToCommunity);
   if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
-  if (economyRefreshBtn) economyRefreshBtn.addEventListener("click", loadEconomyDashboard);
-  if (economyAdminRefreshBtn) economyAdminRefreshBtn.addEventListener("click", loadEconomyAdmin);
-  if (economyAdjustBtn) economyAdjustBtn.addEventListener("click", submitEconomyAdjustment);
-  if (economySealBtn) economySealBtn.addEventListener("click", sealPointsChainBlock);
-  if (economyVerifyBtn) economyVerifyBtn.addEventListener("click", verifyPointsChain);
+  if (typeof bindComfyuiDraftPersistence === "function") bindComfyuiDraftPersistence();
+  if (typeof bindEconomyInlineEvents === "function") bindEconomyInlineEvents();
   if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
     setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
   });

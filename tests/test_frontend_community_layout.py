@@ -18,6 +18,8 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'id="community-board-request-cancel-btn"' in index_html
     assert 'id="community-thread-create-open-btn"' in index_html
     assert 'id="community-thread-create-cancel-btn"' in index_html
+    assert 'id="community-moderator-open-btn" type="button" style="display:none;"' in index_html
+    assert 'id="community-moderator-manager" class="community-panel" style="display:none;margin-bottom:.75rem;"' in index_html
     assert 'id="community-tools-panel" class="community-tools-drawer" style="display:none;"' in index_html
     assert 'id="community-review-area" class="community-review-area" style="display:none;"' in index_html
     assert 'id="community-board-stage"' in index_html
@@ -25,15 +27,24 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'id="community-detail-stage" class="community-stage" style="display:none;"' in index_html
     assert 'id="community-board-request-panel" style="display:none;"' in index_html
     assert 'id="community-thread-creator" style="display:none;"' in index_html
+    assert 'id="community-mod-can-pin-threads"' in index_html
+    assert 'id="community-thread-sticky-toggle"' in index_html
 
     assert "communityAnnouncementEditorOpen = false" in community_js
     assert "communityBoardRequestOpen = false" in community_js
     assert "communityThreadCreatorOpen = false" in community_js
+    assert "communityModeratorManagerOpen = false" in community_js
+    assert "toggleCommunityModeratorManager" in community_js
+    assert 'openBtn.textContent = communityModeratorManagerOpen ? "隱藏版主設定" : "版主設定"' in community_js
     assert 'communityMode = "boards"' in community_js
     assert "reactToCommunityThread" in community_js
     assert "rewardCommunityThread" in community_js
     assert "penalizeCommunityPost" in community_js
+    assert "can_pin_threads" in community_js
+    assert "toggleCommunityThreadSticky" in community_js
     assert 'switchModuleTab("announcements")' in bootstrap_js
     assert "toggleCommunityAnnouncementEditor(true)" in bootstrap_js
     assert "toggleCommunityBoardRequest(true)" in bootstrap_js
     assert "toggleCommunityThreadCreator(true)" in bootstrap_js
+    assert "toggleCommunityModeratorManager()" in bootstrap_js
+    assert "toggleCommunityThreadSticky" in bootstrap_js

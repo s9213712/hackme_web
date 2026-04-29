@@ -1,4 +1,7 @@
 let economyLedgerOffset = 0;
+let economyBlockCountdownTimer = null;
+let economyBlockSchedule = null;
+let economyInlineEventsBound = false;
 
 function economySetMsg(text, ok = true) {
   const el = $("economy-msg");
@@ -8,20 +11,84 @@ function economySetMsg(text, ok = true) {
 }
 
 function formatPointsCurrency(currency) {
-  return currency === "hard" ? "hard" : "soft";
+  return "點";
+}
+
+function formatEconomyCountdown(seconds) {
+  const safe = Math.max(0, Number(seconds || 0));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function stopEconomyBlockCountdown() {
+  if (economyBlockCountdownTimer) {
+    clearInterval(economyBlockCountdownTimer);
+    economyBlockCountdownTimer = null;
+  }
+}
+
+function canManageEconomyPoints() {
+  return currentUser === "root" || currentRole === "manager" || currentRole === "super_admin";
+}
+
+function updateEconomyBlockCountdown() {
+  const el = $("economy-chain-countdown");
+  if (!el || !economyBlockSchedule) return;
+  const interval = Number(economyBlockSchedule.interval_minutes || 0);
+  const unsealed = Number(economyBlockSchedule.unsealed_entries || 0);
+  if (!unsealed) {
+    el.textContent = `封塊倒數：目前沒有未封 ledger；設定為每 ${interval || "-"} 分鐘封塊一次`;
+    return;
+  }
+  const target = economyBlockSchedule.nextSealAtMs || 0;
+  const remaining = Math.max(0, Math.ceil((target - Date.now()) / 1000));
+  el.textContent = remaining
+    ? `封塊倒數：${formatEconomyCountdown(remaining)}（每 ${interval || "-"} 分鐘封塊一次）`
+    : `封塊倒數：可封塊（每 ${interval || "-"} 分鐘封塊一次）`;
+}
+
+function startEconomyBlockCountdown(schedule) {
+  stopEconomyBlockCountdown();
+  economyBlockSchedule = null;
+  if (!schedule) {
+    const el = $("economy-chain-countdown");
+    if (el) el.textContent = "封塊倒數：-";
+    return;
+  }
+  const nextMs = schedule.next_seal_at ? Date.parse(schedule.next_seal_at) : 0;
+  economyBlockSchedule = { ...schedule, nextSealAtMs: Number.isFinite(nextMs) ? nextMs : 0 };
+  updateEconomyBlockCountdown();
+  economyBlockCountdownTimer = setInterval(updateEconomyBlockCountdown, 1000);
 }
 
 function renderEconomyWallet(wallet) {
   if (!wallet) return;
-  if ($("economy-soft-balance")) $("economy-soft-balance").textContent = String(wallet.soft_balance || 0);
-  if ($("economy-hard-balance")) $("economy-hard-balance").textContent = String(wallet.hard_balance || 0);
-  if ($("economy-soft-frozen")) $("economy-soft-frozen").textContent = `凍結 ${wallet.soft_frozen || 0}`;
-  if ($("economy-hard-frozen")) $("economy-hard-frozen").textContent = `凍結 ${wallet.hard_frozen || 0}`;
+  const pointsBalance = wallet.points_balance !== undefined
+    ? Number(wallet.points_balance || 0)
+    : Number(wallet.soft_balance || 0) + Number(wallet.hard_balance || 0);
+  const pointsFrozen = wallet.points_frozen !== undefined
+    ? Number(wallet.points_frozen || 0)
+    : Number(wallet.soft_frozen || 0) + Number(wallet.hard_frozen || 0);
+  const pointsEarned = wallet.total_points_earned !== undefined
+    ? Number(wallet.total_points_earned || 0)
+    : Number(wallet.total_soft_earned || 0) + Number(wallet.total_hard_earned || 0);
+  const pointsSpent = wallet.total_points_spent !== undefined
+    ? Number(wallet.total_points_spent || 0)
+    : Number(wallet.total_soft_spent || 0) + Number(wallet.total_hard_spent || 0);
+  if ($("economy-points-balance")) $("economy-points-balance").textContent = String(pointsBalance);
+  if ($("economy-points-frozen")) $("economy-points-frozen").textContent = `凍結 ${pointsFrozen}`;
+  if ($("economy-points-earned")) $("economy-points-earned").textContent = `收入 ${pointsEarned}`;
+  if ($("economy-points-spent")) $("economy-points-spent").textContent = `支出 ${pointsSpent}`;
+  if ($("economy-soft-balance")) $("economy-soft-balance").textContent = String(pointsBalance);
+  if ($("economy-hard-balance")) $("economy-hard-balance").textContent = "0";
+  if ($("economy-soft-frozen")) $("economy-soft-frozen").textContent = `凍結 ${pointsFrozen}`;
+  if ($("economy-hard-frozen")) $("economy-hard-frozen").textContent = "凍結 0";
   if ($("economy-wallet-status")) $("economy-wallet-status").textContent = wallet.wallet_status || "-";
   if ($("economy-public-account")) $("economy-public-account").textContent = wallet.public_account_id || "-";
   const sidebarPoints = $("sidebar-points");
   if (sidebarPoints) {
-    sidebarPoints.dataset.points = `${wallet.soft_balance || 0} / ${wallet.hard_balance || 0}`;
+    sidebarPoints.dataset.points = String(pointsBalance);
     updateSidebarIdentity();
   }
 }
@@ -37,7 +104,7 @@ function renderEconomyCatalog(items) {
     <div class="drive-file-row">
       <div>
         <strong>${sanitize(item.item_name || item.item_key)}</strong>
-        <div class="drive-card-sub">${sanitize(item.category || "-")} · ${formatPointsCurrency(item.currency_type)} ${Number(item.base_price || 0)}</div>
+        <div class="drive-card-sub">${sanitize(item.category || "-")} · ${Number(item.base_price || 0)} ${formatPointsCurrency(item.currency_type)}</div>
       </div>
       <button class="btn" type="button" data-economy-spend="${sanitize(item.item_key)}">試扣</button>
     </div>
@@ -69,6 +136,118 @@ function renderEconomyLedger(rows, targetId = "economy-ledger-list") {
   });
 }
 
+function renderEconomyRootList(rows, targetId, emptyText, renderRow) {
+  const list = $(targetId);
+  if (!list) return;
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (!safeRows.length) {
+    list.innerHTML = `<div class="drive-empty">${sanitize(emptyText)}</div>`;
+    return;
+  }
+  list.innerHTML = safeRows.map(renderRow).join("");
+}
+
+function setEconomyChainStatus(text, ok = true) {
+  const status = $("economy-chain-status");
+  if (!status) return;
+  status.textContent = text || "";
+  status.className = ok ? "drive-card-sub economy-chain-status ok" : "drive-card-sub economy-chain-status err";
+}
+
+function formatEconomyVerificationSummary(verification) {
+  const safe = verification && typeof verification === "object" ? verification : {};
+  const counts = safe.counts && typeof safe.counts === "object" ? safe.counts : {};
+  const state = safe.ok === true ? "全鏈驗證正常" : (safe.ok === false ? "全鏈驗證異常" : "全鏈狀態未知");
+  return `${state}：${Number(counts.ledger_entries || 0)} 筆 ledger，${Number(counts.sealed_blocks || 0)} 個封塊，${Number(counts.unsealed_entries || 0)} 筆未封，${Number(counts.audit_events || 0)} 筆審計事件`;
+}
+
+function renderEconomyRootReport(report) {
+  const safeReport = report && typeof report === "object" ? report : {};
+  const verification = safeReport.verification && typeof safeReport.verification === "object" ? safeReport.verification : {};
+  const counts = verification.counts && typeof verification.counts === "object" ? verification.counts : {};
+  if ($("economy-chain-ok")) {
+    $("economy-chain-ok").textContent = verification.ok === true ? "完整" : (verification.ok === false ? "異常" : "未知");
+  }
+  if ($("economy-chain-counts")) $("economy-chain-counts").textContent = `${Number(counts.ledger_entries || 0)} 筆 ledger`;
+  if ($("economy-chain-blocks")) $("economy-chain-blocks").textContent = String(counts.sealed_blocks || 0);
+  if ($("economy-chain-unsealed")) $("economy-chain-unsealed").textContent = `未封 ${Number(counts.unsealed_entries || 0)}`;
+  if ($("economy-chain-audit-count")) $("economy-chain-audit-count").textContent = String(counts.audit_events || 0);
+  startEconomyBlockCountdown(safeReport.block_schedule || null);
+  renderEconomyRootList(safeReport.blocks, "economy-block-list", "尚無封塊", (block) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>#${Number(block.block_number || 0)} · ${Number(block.ledger_count || 0)} 筆</strong>
+        <div class="drive-card-sub">${sanitize(block.sealed_at || "")} · ${sanitize(block.anchor_status || "local_only")} · ${sanitize(block.signature_algorithm || "unsigned")}</div>
+        <div class="economy-ledger-hash">${sanitize(block.block_hash || "")}</div>
+      </div>
+    </div>
+  `);
+  renderEconomyRootList(safeReport.audit_logs, "economy-audit-list", "尚無審計事件", (row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.event_type || "-")} · ${sanitize(row.severity || "-")}</strong>
+        <div class="drive-card-sub">${sanitize(row.created_at || "")} · actor=${sanitize(row.actor_user_id || "-")} · target=${sanitize(row.target_user_id || "-")}</div>
+        <div class="drive-card-sub">${sanitize(row.message || "")}</div>
+      </div>
+    </div>
+  `);
+  renderEconomyRootList(safeReport.high_risk_ledger, "economy-risk-ledger-list", "尚無異常帳本", (row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.status || "-")} · ${sanitize(row.direction)} ${Number(row.amount || 0)} ${formatPointsCurrency(row.currency_type)}</strong>
+        <div class="drive-card-sub">user ${Number(row.user_id || 0)} · ${sanitize(row.action_type || "-")} · risk=${sanitize(row.risk_flag || "none")}</div>
+        <div class="economy-ledger-hash">${sanitize(row.ledger_uuid || "")}</div>
+      </div>
+      <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
+    </div>
+  `);
+  const riskList = $("economy-risk-ledger-list");
+  if (riskList) {
+    riskList.querySelectorAll("[data-economy-proof]").forEach((btn) => {
+      btn.addEventListener("click", () => loadEconomyProof(btn.dataset.economyProof || ""));
+    });
+  }
+  renderEconomyRootList(safeReport.adjustments, "economy-adjustment-list", "尚無加減分明細", (row) => {
+    const signed = Number(row.signed_amount || 0);
+    const directionText = signed >= 0 ? `+${signed}` : String(signed);
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(row.actor_username || "system")} → ${sanitize(row.target_username || `user:${row.user_id || "-"}`)} · ${directionText} ${formatPointsCurrency(row.currency_type)}</strong>
+          <div class="drive-card-sub">原因：${sanitize(row.reason || "-")} · ${sanitize(row.created_at || "")}</div>
+          <div class="drive-card-sub">動作：${sanitize(row.action_type || "-")} · 狀態：${sanitize(row.status || "-")}</div>
+          <div class="economy-ledger-hash">${sanitize(row.ledger_uuid || "")}</div>
+        </div>
+        <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
+      </div>
+    `;
+  });
+  const adjustmentList = $("economy-adjustment-list");
+  if (adjustmentList) {
+    adjustmentList.querySelectorAll("[data-economy-proof]").forEach((btn) => {
+      btn.addEventListener("click", () => loadEconomyProof(btn.dataset.economyProof || ""));
+    });
+  }
+  const loadedAt = new Date().toLocaleTimeString("zh-TW", { hour12: false });
+  if ($("economy-chain-loaded-at")) $("economy-chain-loaded-at").textContent = `最後更新 ${loadedAt}`;
+  setEconomyChainStatus(formatEconomyVerificationSummary(verification), verification.ok !== false);
+}
+
+function renderEconomyAccountLookup(wallet, ledger) {
+  const safeWallet = wallet && typeof wallet === "object" ? wallet : {};
+  const pointsBalance = Number(safeWallet.points_balance || 0);
+  const pointsFrozen = Number(safeWallet.points_frozen || 0);
+  const pointsEarned = Number(safeWallet.total_points_earned || 0);
+  const pointsSpent = Number(safeWallet.total_points_spent || 0);
+  if ($("economy-query-points-balance")) $("economy-query-points-balance").textContent = String(pointsBalance);
+  if ($("economy-query-points-frozen")) $("economy-query-points-frozen").textContent = `凍結 ${pointsFrozen}`;
+  if ($("economy-query-points-earned")) $("economy-query-points-earned").textContent = `收入 ${pointsEarned}`;
+  if ($("economy-query-points-spent")) $("economy-query-points-spent").textContent = `支出 ${pointsSpent}`;
+  if ($("economy-query-wallet-status")) $("economy-query-wallet-status").textContent = safeWallet.wallet_status || "-";
+  if ($("economy-query-public-account")) $("economy-query-public-account").textContent = safeWallet.public_account_id || "-";
+  renderEconomyLedger(Array.isArray(ledger) ? ledger.slice(0, 12) : [], "economy-query-ledger-list");
+}
+
 async function fetchEconomyJson(url, options = {}) {
   await fetchCsrfToken({ force: true });
   const headers = { ...(options.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
@@ -82,34 +261,70 @@ async function fetchEconomyJson(url, options = {}) {
 async function loadEconomyDashboard() {
   if (!currentUser) return;
   try {
-    const [wallet, ledger, catalog] = await Promise.all([
-      fetchEconomyJson("/points/wallet"),
-      fetchEconomyJson(`/points/ledger?limit=50&offset=${economyLedgerOffset}`),
-      fetchEconomyJson("/points/catalog"),
-    ]);
-    renderEconomyWallet(wallet.wallet);
-    renderEconomyLedger(ledger.ledger || []);
-    renderEconomyCatalog(catalog.catalog || []);
-    if (currentRole === "manager" || currentRole === "super_admin") {
+    const rootMode = currentUser === "root";
+    if ($("economy-page-title")) $("economy-page-title").textContent = rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包";
+    if ($("economy-user-summary-grid")) $("economy-user-summary-grid").style.display = rootMode ? "none" : "";
+    if ($("economy-user-ledger-card")) $("economy-user-ledger-card").style.display = rootMode ? "none" : "";
+    if (rootMode) {
+      if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取中";
+      if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊倒數：讀取中...";
+      const sidebarPoints = $("sidebar-points");
+      if (sidebarPoints) {
+        sidebarPoints.dataset.points = "root: server resources";
+        updateSidebarIdentity();
+      }
+    } else {
+      stopEconomyBlockCountdown();
+      const [wallet, ledger, catalog] = await Promise.all([
+        fetchEconomyJson("/points/wallet"),
+        fetchEconomyJson(`/points/ledger?limit=50&offset=${economyLedgerOffset}`),
+        fetchEconomyJson("/points/catalog"),
+      ]);
+      renderEconomyWallet(wallet.wallet);
+      renderEconomyLedger(ledger.ledger || []);
+      renderEconomyCatalog(catalog.catalog || []);
+    }
+    if (canManageEconomyPoints()) {
       const card = $("economy-admin-card");
       if (card) card.style.display = "";
       loadEconomyAdmin();
     }
     const rootCard = $("economy-root-card");
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";
-    economySetMsg("");
+    const rootReportOk = rootMode ? await loadEconomyRootReport() : true;
+    if (rootReportOk !== false) economySetMsg("");
   } catch (err) {
     economySetMsg(err.message || "PointsChain 讀取失敗", false);
   }
 }
 
-async function loadEconomyAdmin() {
-  if (!(currentRole === "manager" || currentRole === "super_admin")) return;
+async function loadEconomyRootReport() {
+  if (currentUser !== "root") return true;
+  setEconomyChainStatus("讀取 PointsChain 狀態中...");
   try {
-    const [ledger, pending] = await Promise.all([
+    const json = await fetchEconomyJson("/root/points/report");
+    renderEconomyRootReport(json.report || {});
+    economySetMsg("");
+    return true;
+  } catch (err) {
+    stopEconomyBlockCountdown();
+    if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取失敗";
+    if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊倒數：讀取失敗";
+    setEconomyChainStatus(err.message || "PointsChain 狀態讀取失敗", false);
+    economySetMsg(err.message || "PointsChain 狀態讀取失敗", false);
+    return false;
+  }
+}
+
+async function loadEconomyAdmin() {
+  if (!canManageEconomyPoints()) return;
+  try {
+    const [ledger, pending, userList] = await Promise.all([
       fetchEconomyJson("/admin/points/ledger?limit=50"),
       fetchEconomyJson("/admin/points/pending-rewards?status=pending"),
+      fetchEconomyJson("/admin/users"),
     ]);
+    renderEconomyAdjustUserOptions(userList.users || []);
     renderEconomyLedger(ledger.ledger || [], "economy-admin-ledger-list");
     const pendingList = $("economy-pending-list");
     if (pendingList) {
@@ -117,7 +332,7 @@ async function loadEconomyAdmin() {
       pendingList.innerHTML = rows.length ? rows.map((row) => `
         <div class="drive-file-row">
           <div>
-            <strong>#${Number(row.id)} · user ${Number(row.user_id)} · ${Number(row.amount)} ${sanitize(row.currency_type)}</strong>
+            <strong>#${Number(row.id)} · user ${Number(row.user_id)} · ${Number(row.amount)} ${formatPointsCurrency(row.currency_type)}</strong>
             <div class="drive-card-sub">${sanitize(row.action_type || "-")} · ${sanitize(row.created_at || "")}</div>
           </div>
           <div class="drive-file-actions">
@@ -131,7 +346,64 @@ async function loadEconomyAdmin() {
       });
     }
   } catch (err) {
+    const select = $("economy-adjust-user-id");
+    if (select) select.innerHTML = `<option value="">會員讀取失敗</option>`;
     economySetMsg(err.message || "管理資料讀取失敗", false);
+  }
+}
+
+function renderEconomyAdjustUserOptions(rows) {
+  const members = (Array.isArray(rows) ? rows : []).filter((user) => {
+    const username = String(user.username || "").toLowerCase();
+    return username !== "root";
+  });
+  const fillSelect = (select, emptyText) => {
+    if (!select) return;
+    const previous = select.value;
+    if (!members.length) {
+      select.innerHTML = `<option value="">${sanitize(emptyText)}</option>`;
+      return;
+    }
+    select.innerHTML = `<option value="">請選擇會員</option>` + members.map((user) => {
+      const id = Number(user.id);
+      const username = sanitize(user.username || `user ${id}`);
+      const role = sanitize(user.role || "-");
+      const status = sanitize(user.status || "-");
+      return `<option value="${id}">${username}（#${id} / ${role} / ${status}）</option>`;
+    }).join("");
+    if (previous && Array.from(select.options).some((option) => option.value === previous)) {
+      select.value = previous;
+    }
+  };
+  fillSelect($("economy-adjust-user-id"), "沒有可調整會員");
+  fillSelect($("economy-query-user-id"), "沒有可查詢會員");
+}
+
+async function loadEconomyAccountLookup() {
+  if (currentUser !== "root") return;
+  const select = $("economy-query-user-id");
+  const userId = Number(select?.value || 0);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    economySetMsg("請先選擇要查詢的會員", false);
+    return;
+  }
+  const btn = $("economy-account-query-btn");
+  const oldText = btn ? btn.textContent : "";
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "查詢中...";
+    }
+    const json = await fetchEconomyJson(`/admin/points/wallets/${encodeURIComponent(userId)}`);
+    renderEconomyAccountLookup(json.wallet, json.ledger || []);
+    economySetMsg("已更新指定帳戶積分");
+  } catch (err) {
+    economySetMsg(err.message || "帳戶積分查詢失敗", false);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "查詢";
+    }
   }
 }
 
@@ -151,10 +423,21 @@ async function spendEconomyItem(itemKey) {
 }
 
 async function submitEconomyAdjustment() {
+  const btn = $("economy-adjust-btn");
+  const oldText = btn ? btn.textContent : "";
   try {
+    const userId = Number($("economy-adjust-user-id")?.value || 0);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      economySetMsg("請先選擇要調整的會員", false);
+      return;
+    }
+    economySetMsg("正在送出點數調整...");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "送出中...";
+    }
     const payload = {
-      user_id: Number($("economy-adjust-user-id")?.value || 0),
-      currency_type: $("economy-adjust-currency")?.value || "soft",
+      user_id: userId,
       direction: $("economy-adjust-direction")?.value || "credit",
       amount: Number($("economy-adjust-amount")?.value || 0),
       reason: $("economy-adjust-reason")?.value || "",
@@ -165,8 +448,17 @@ async function submitEconomyAdjustment() {
     });
     economySetMsg(`已寫入 ledger：${json.ledger?.ledger_uuid || ""}`);
     await loadEconomyDashboard();
+    if (currentUser === "root") await loadEconomyRootReport();
+    if (currentUser === "root" && String($("economy-query-user-id")?.value || "") === String(userId)) {
+      await loadEconomyAccountLookup();
+    }
   } catch (err) {
     economySetMsg(err.message || "調整失敗", false);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "送出調整";
+    }
   }
 }
 
@@ -189,32 +481,89 @@ async function sealPointsChainBlock() {
       method: "POST",
       body: JSON.stringify({ limit: 100 }),
     });
-    const status = $("economy-chain-status");
-    if (status) status.textContent = JSON.stringify(json, null, 2);
+    const block = json.block || {};
+    setEconomyChainStatus(json.sealed
+      ? `已封存區塊 #${Number(block.block_number || 0)}，包含 ${Number(block.ledger_count || 0)} 筆 ledger`
+      : (json.msg || "目前沒有未封 ledger 可封存"));
     await loadEconomyDashboard();
   } catch (err) {
     economySetMsg(err.message || "封塊失敗", false);
+    setEconomyChainStatus(err.message || "封塊失敗", false);
   }
 }
 
 async function verifyPointsChain() {
   try {
     const json = await fetchEconomyJson("/root/points/chain/verify");
-    const status = $("economy-chain-status");
-    if (status) status.textContent = JSON.stringify(json.verification || json, null, 2);
+    setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || json), (json.verification || json).ok !== false);
+    if (currentUser === "root") await loadEconomyRootReport();
   } catch (err) {
     economySetMsg(err.message || "驗證失敗", false);
+    setEconomyChainStatus(err.message || "驗證失敗", false);
   }
+}
+
+async function rollbackEconomyLedger() {
+  if (currentUser !== "root") return;
+  const ledgerUuid = $("economy-rollback-ledger-uuid")?.value?.trim() || "";
+  const reason = $("economy-rollback-reason")?.value?.trim() || "";
+  if (!ledgerUuid || !reason) {
+    economySetMsg("ledger UUID 與 rollback 原因都必填", false);
+    return;
+  }
+  try {
+    const json = await fetchEconomyJson(`/root/points/ledger/${encodeURIComponent(ledgerUuid)}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+    if ($("economy-rollback-ledger-uuid")) $("economy-rollback-ledger-uuid").value = "";
+    if ($("economy-rollback-reason")) $("economy-rollback-reason").value = "";
+    economySetMsg(`已建立 rollback ledger：${json.rollback_ledger?.ledger_uuid || ""}`);
+    await loadEconomyRootReport();
+    await loadEconomyAdmin();
+  } catch (err) {
+    economySetMsg(err.message || "Rollback 失敗", false);
+  }
+}
+
+function bindEconomyInlineEvents() {
+  if (economyInlineEventsBound) return;
+  economyInlineEventsBound = true;
+  const bindings = [
+    ["economy-refresh-btn", loadEconomyDashboard],
+    ["economy-admin-refresh-btn", loadEconomyAdmin],
+    ["economy-adjust-btn", submitEconomyAdjustment],
+    ["economy-account-query-btn", loadEconomyAccountLookup],
+    ["economy-root-report-btn", loadEconomyRootReport],
+    ["economy-rollback-btn", rollbackEconomyLedger],
+    ["economy-seal-btn", sealPointsChainBlock],
+    ["economy-verify-btn", verifyPointsChain],
+  ];
+  bindings.forEach(([id, handler]) => {
+    const el = $(id);
+    if (!el || el.dataset.economyInlineBound === "1") return;
+    el.dataset.economyInlineBound = "1";
+    el.addEventListener("click", handler);
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindEconomyInlineEvents);
+} else {
+  bindEconomyInlineEvents();
 }
 
 async function loadEconomyProof(ledgerUuid) {
   if (!ledgerUuid) return;
   try {
     const json = await fetchEconomyJson(`/points/ledger/${encodeURIComponent(ledgerUuid)}/proof`);
-    const status = $("economy-chain-status") || $("economy-msg");
-    if (status.tagName === "PRE") status.textContent = JSON.stringify(json.proof, null, 2);
-    else status.textContent = JSON.stringify(json.proof);
+    const proof = json.proof || {};
+    const text = proof.sealed
+      ? `Proof 已封塊：ledger ${sanitize(ledgerUuid)} 位於區塊 #${Number(proof.block_number || 0)}，Merkle path ${Array.isArray(proof.merkle_path) ? proof.merkle_path.length : 0} 層`
+      : `Proof 尚未封塊：ledger ${sanitize(ledgerUuid)} 仍在未封 ledger 中`;
+    setEconomyChainStatus(text);
   } catch (err) {
     economySetMsg(err.message || "Proof 讀取失敗", false);
+    setEconomyChainStatus(err.message || "Proof 讀取失敗", false);
   }
 }

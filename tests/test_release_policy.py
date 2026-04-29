@@ -17,7 +17,7 @@ def _release_id():
 
 def test_release_id_is_synced_to_public_docs():
     release_id = _release_id()
-    assert release_id == "2026.04.29-017"
+    assert release_id == "2026.04.29-020"
     for rel in ("README.md", "README.zh-TW.md", "For_developer.md"):
         assert release_id in (ROOT / rel).read_text(encoding="utf-8")
 

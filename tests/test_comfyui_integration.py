@@ -6,9 +6,9 @@ from flask import Flask, jsonify, make_response
 
 from routes.comfyui import register_comfyui_routes
 from services.cloud_drive import ensure_cloud_drive_attachment_schema
-from services.comfyui_client import ComfyUIImage
+from services.comfyui_client import ComfyUIClient, ComfyUIImage
 from services.member_levels import ensure_member_level_rules_schema
-from services.storage_albums import ensure_storage_album_schema
+from services.storage_albums import create_album, ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
 
 
@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class FakeComfyUIClient:
     base_url = "http://fake-comfyui"
     last_timeout_seconds = None
+    discarded = []
+    interrupted = 0
 
     def health_check(self, *, timeout=3):
         return {"ok": True, "system": {"os": "test"}}
@@ -30,11 +32,20 @@ class FakeComfyUIClient:
 
     def generate_image(self, params, *, timeout_seconds=180):
         FakeComfyUIClient.last_timeout_seconds = timeout_seconds
+        batch_size = int(params.get("batch_size") or 1)
+        images = []
+        for index in range(batch_size):
+            images.append({
+                "image_ref": {"filename": f"hackme_web_{index + 1:05d}_.png", "subfolder": "", "type": "output"},
+                "mime_type": "image/png",
+                "data": f"fake-png-bytes-{index + 1}".encode("utf-8"),
+            })
         return {
             "prompt_id": "prompt-1",
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
-            "mime_type": "image/png",
-            "data": b"fake-png-bytes",
+            "image_ref": images[0]["image_ref"],
+            "mime_type": images[0]["mime_type"],
+            "data": images[0]["data"],
+            "images": images,
         }
 
     def fetch_image(self, image_ref):
@@ -45,6 +56,14 @@ class FakeComfyUIClient:
             mime_type="image/png",
             data=b"fake-png-bytes",
         )
+
+    def discard_image(self, image_ref, *, prompt_id=None):
+        FakeComfyUIClient.discarded.append({"image_ref": dict(image_ref), "prompt_id": prompt_id})
+        return {"file_deleted": True, "file_missing": False, "file_delete_supported": True, "history_deleted": bool(prompt_id)}
+
+    def interrupt(self):
+        FakeComfyUIClient.interrupted += 1
+        return {"interrupted": True}
 
 
 def _json_resp(payload, status=200):
@@ -155,6 +174,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
             "sampler_name": "euler",
             "scheduler": "normal",
             "seed": 123,
+            "batch_size": 3,
         },
     )
     assert generated.status_code == 200
@@ -162,7 +182,29 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert body["image"]["prompt_id"] == "prompt-1"
     assert body["image"]["data_url"].startswith("data:image/png;base64,")
     assert body["image"]["seed"] == 123
+    assert body["image"]["batch_size"] == 3
+    assert len(body["images"]) == 3
+    assert body["images"][2]["image_ref"]["filename"] == "hackme_web_00003_.png"
     assert FakeComfyUIClient.last_timeout_seconds == 600
+
+
+def test_comfyui_workflow_uses_requested_batch_size():
+    workflow = ComfyUIClient("http://fake-comfyui").build_text_to_image_workflow({
+        "model": "dream.safetensors",
+        "prompt": "batch test",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 12,
+        "cfg": 6.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 123,
+        "batch_size": 4,
+        "filename_prefix": "hackme_web",
+    })
+
+    assert workflow["5"]["inputs"]["batch_size"] == 4
 
 
 def test_comfyui_status_reports_offline_backend(tmp_path):
@@ -226,11 +268,214 @@ def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
     assert list(storage_root.glob("users/1/*/hackme_web_00001_.png"))
 
 
+def test_comfyui_discard_deletes_original_comfyui_file(tmp_path):
+    FakeComfyUIClient.discarded = []
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    discarded = client.post(
+        "/api/comfyui/discard",
+        json={
+            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "prompt_id": "prompt-1",
+        },
+    )
+
+    assert discarded.status_code == 200
+    body = discarded.get_json()
+    assert body["discard"]["file_deleted"] is True
+    assert body["discard"]["history_deleted"] is True
+    assert FakeComfyUIClient.discarded == [{
+        "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+        "prompt_id": "prompt-1",
+    }]
+
+
+def test_comfyui_discard_tolerates_plain_text_history_response(tmp_path, monkeypatch):
+    output_dir = tmp_path / "comfy-output"
+    output_dir.mkdir()
+    image_path = output_dir / "plain-history.png"
+    image_path.write_bytes(b"fake-png")
+    monkeypatch.setenv("COMFYUI_OUTPUT_DIR", str(output_dir))
+    calls = []
+
+    class PlainTextResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"OK"
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req.full_url)
+        return PlainTextResponse()
+
+    monkeypatch.setattr("services.comfyui_client.urllib.request.urlopen", fake_urlopen)
+
+    result = ComfyUIClient("http://fake-comfyui").discard_image(
+        {"filename": "plain-history.png", "subfolder": "", "type": "output"},
+        prompt_id="prompt-plain",
+    )
+
+    assert result["file_deleted"] is True
+    assert result["history_deleted"] is True
+    assert not image_path.exists()
+    assert calls == ["http://fake-comfyui/history"]
+
+
+def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
+    FakeComfyUIClient.interrupted = 0
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    interrupted = client.post("/api/comfyui/interrupt", json={})
+
+    assert interrupted.status_code == 200
+    body = interrupted.get_json()
+    assert body["ok"] is True
+    assert body["interrupt"]["interrupted"] is True
+    assert FakeComfyUIClient.interrupted == 1
+
+
+def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
+    calls = []
+
+    class PlainTextResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"interrupted"
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req.full_url)
+        return PlainTextResponse()
+
+    monkeypatch.setattr("services.comfyui_client.urllib.request.urlopen", fake_urlopen)
+
+    result = ComfyUIClient("http://fake-comfyui").interrupt()
+
+    assert result == {"raw": "interrupted"}
+    assert calls == ["http://fake-comfyui/interrupt"]
+
+
+def test_comfyui_save_can_add_generated_image_to_album(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    album, msg = create_album(conn, actor=_actor(), title="AI Gallery")
+    assert msg is None
+    conn.commit()
+    conn.close()
+    client = _build_app(db_path, storage_root).test_client()
+
+    saved = client.post(
+        "/api/comfyui/save",
+        json={
+            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "virtual_path": "/ComfyUI/album.png",
+            "album_id": album["id"],
+        },
+    )
+
+    assert saved.status_code == 200
+    body = saved.get_json()
+    assert body["album"]["id"] == album["id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT file_id, storage_file_id FROM album_files WHERE album_id=? AND deleted_at IS NULL",
+        (album["id"],),
+    ).fetchone()
+    conn.close()
+    assert row["file_id"] == body["file"]["file_id"]
+    assert row["storage_file_id"] == body["storage_file"]["id"]
+
+
+def test_comfyui_share_creates_comfyui_thread_with_preview_grant(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    album, msg = create_album(conn, actor=_actor(), title="Shared AI")
+    assert msg is None
+    conn.commit()
+    conn.close()
+    client = _build_app(db_path, storage_root).test_client()
+
+    shared = client.post(
+        "/api/comfyui/share",
+        json={
+            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "virtual_path": "/ComfyUI/share.png",
+            "album_id": album["id"],
+            "title": "My ComfyUI share",
+            "note": "這張圖的心得",
+            "generation": {
+                "model": "dream.safetensors",
+                "prompt": "a quiet test image",
+                "negative_prompt": "noise",
+                "width": 512,
+                "height": 768,
+                "steps": 18,
+                "cfg": 6.5,
+                "seed": 123,
+                "batch_size": 2,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+            },
+        },
+    )
+
+    assert shared.status_code == 200
+    body = shared.get_json()
+    assert body["thread"]["title"] == "My ComfyUI share"
+    file_id = body["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    thread = conn.execute("SELECT * FROM forum_threads WHERE id=?", (body["thread"]["id"],)).fetchone()
+    grant = conn.execute(
+        "SELECT * FROM file_access_grants WHERE file_id=? AND context_type='forum_thread' AND context_id=?",
+        (file_id, str(body["thread"]["id"])),
+    ).fetchone()
+    album_file = conn.execute(
+        "SELECT id FROM album_files WHERE album_id=? AND file_id=? AND deleted_at IS NULL",
+        (album["id"], file_id),
+    ).fetchone()
+    conn.close()
+    assert thread["board_id"] == body["thread"]["board_id"]
+    assert "[[comfyui-image:" + file_id + "]]" in thread["content"]
+    assert "這張圖的心得" in thread["content"]
+    assert "a quiet test image" in thread["content"]
+    assert "張數：2" in thread["content"]
+    assert grant["granted_to_role"] == "user"
+    assert grant["can_preview"] == 1
+    assert album_file is not None
+
+
 def test_comfyui_frontend_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    community_js = (ROOT / "public" / "js" / "25-community.js").read_text(encoding="utf-8")
     comfyui_js = (ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8")
     settings_py = (ROOT / "services" / "settings.py").read_text(encoding="utf-8")
     smoke = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")
@@ -239,15 +484,45 @@ def test_comfyui_frontend_is_wired():
     assert 'id="module-comfyui"' in index_html
     assert 'id="comfyui-model-select"' in index_html
     assert 'id="comfyui-generate-btn"' in index_html
+    assert 'id="comfyui-interrupt-btn"' in index_html
+    assert 'id="comfyui-batch-size"' in index_html
     assert 'id="comfyui-save-btn"' in index_html
-    assert "/js/36-comfyui.js?v=20260428-comfyui-status" in index_html
+    assert 'id="comfyui-album-select"' in index_html
+    assert 'id="comfyui-share-btn"' in index_html
+    assert 'id="comfyui-progress-panel"' in index_html
+    assert "/js/36-comfyui.js?v=20260429-comfyui-draft" in index_html
+    assert "/styles.css?v=20260429-comfyui-batch" in index_html
     assert 'id="s-comfyui-api-port"' in index_html
     assert 'tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none"' in core_js
     assert 'switchModuleTab("comfyui")' in bootstrap_js
     assert 'normTab === "comfyui"' in admin_js
     assert 'fetch(API + "/comfyui/generate"' in comfyui_js
+    assert 'fetch(API + "/comfyui/interrupt"' in comfyui_js
     assert 'fetch(API + "/comfyui/save"' in comfyui_js
+    assert 'fetch(API + "/comfyui/discard"' in comfyui_js
+    assert 'fetch(API + "/comfyui/share"' in comfyui_js
     assert 'fetch(API + "/comfyui/status"' in comfyui_js
+    assert 'batch_size: comfyuiNumberValue("comfyui-batch-size", 1)' in comfyui_js
+    assert "comfyuiGeneratedImages" in comfyui_js
+    assert "renderComfyuiGeneratedImages" in comfyui_js
+    assert "COMFYUI_DRAFT_FIELD_IDS" in comfyui_js
+    assert "hackme_web:comfyui:draft" in comfyui_js
+    assert "bindComfyuiDraftPersistence" in comfyui_js
+    assert "restoreComfyuiDraft()" in comfyui_js
+    assert 'album_id: selectedComfyuiAlbumId()' in comfyui_js
+    assert "startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS)" in comfyui_js
+    assert "stopComfyuiProgress({ complete: true })" in comfyui_js
+    assert "comfyuiGenerateAbortController.abort()" in comfyui_js
+    assert "comfyuiShareGenerationPayload" in comfyui_js
+    assert "payload.seed = comfyuiCurrentImage.seed" in comfyui_js
+    assert "interruptComfyuiGeneration" in bootstrap_js
+    assert "bindComfyuiDraftPersistence" in bootstrap_js
+    assert 'shareComfyuiToCommunity' in bootstrap_js
+    assert "comfyui-image:" in community_js
+    assert "communityPreviewContentUrl" in community_js
+    assert "csrf_token=${encodeURIComponent(token)}" in community_js
+    assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in community_js
+    assert "/js/25-community.js?v=20260429-moderator-toggle" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": True' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py

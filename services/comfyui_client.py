@@ -1,10 +1,12 @@
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 
 class ComfyUIError(RuntimeError):
@@ -28,7 +30,7 @@ class ComfyUIClient:
     def _url(self, path):
         return f"{self.base_url}{path}"
 
-    def _json_request(self, path, *, method="GET", payload=None, timeout=None):
+    def _json_request(self, path, *, method="GET", payload=None, timeout=None, allow_non_json=False):
         headers = {"Accept": "application/json"}
         body = None
         if payload is not None:
@@ -37,11 +39,17 @@ class ComfyUIClient:
         req = urllib.request.Request(self._url(path), data=body, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                raw = resp.read().decode("utf-8")
+                if not raw.strip():
+                    return {}
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    if allow_non_json:
+                        return {"raw": raw}
+                    raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
-        except json.JSONDecodeError as exc:
-            raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
 
     def get_models(self):
         info = self._json_request("/object_info/CheckpointLoaderSimple")
@@ -102,7 +110,7 @@ class ComfyUIClient:
                 "inputs": {
                     "width": int(params["width"]),
                     "height": int(params["height"]),
-                    "batch_size": 1,
+                    "batch_size": int(params.get("batch_size") or 1),
                 },
             },
             "6": {
@@ -134,9 +142,13 @@ class ComfyUIClient:
             raise ComfyUIError("ComfyUI 未回傳 prompt_id")
         return str(prompt_id)
 
-    def wait_for_first_image(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0):
+    def interrupt(self):
+        return self._json_request("/interrupt", method="POST", payload={}, allow_non_json=True)
+
+    def wait_for_images(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0, expected_count=1):
         deadline = time.time() + int(timeout_seconds)
         last_status = None
+        expected = max(1, int(expected_count or 1))
         while time.time() < deadline:
             history = self._json_request(f"/history/{urllib.parse.quote(prompt_id)}", timeout=self.timeout)
             record = history.get(prompt_id) if isinstance(history, dict) else None
@@ -145,14 +157,22 @@ class ComfyUIClient:
                 last_status = status
                 if status.get("status_str") == "error" or status.get("completed") is False and status.get("status_str") == "error":
                     raise ComfyUIError("ComfyUI 產圖失敗")
+                found = []
                 outputs = record.get("outputs") or {}
                 for output in outputs.values():
                     images = output.get("images") if isinstance(output, dict) else None
                     if images:
-                        return images[0]
+                        found.extend(images)
+                if len(found) >= expected:
+                    return found[:expected]
+                if found and status.get("completed") is True:
+                    return found
             time.sleep(float(poll_interval))
         detail = f"；最後狀態：{last_status}" if last_status else ""
         raise ComfyUIError(f"ComfyUI 產圖逾時{detail}")
+
+    def wait_for_first_image(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0):
+        return self.wait_for_images(prompt_id, timeout_seconds=timeout_seconds, poll_interval=poll_interval, expected_count=1)[0]
 
     def fetch_image(self, image_ref):
         filename = str((image_ref or {}).get("filename") or "").strip()
@@ -172,11 +192,99 @@ class ComfyUIClient:
             raise ComfyUIError("ComfyUI 圖片內容為空")
         return ComfyUIImage(filename=filename, subfolder=subfolder, type=image_type, mime_type=content_type, data=data)
 
+    def _local_dir_for_type(self, image_type):
+        normalized = str(image_type or "output").strip().lower() or "output"
+        if normalized not in {"output", "input", "temp"}:
+            raise ComfyUIError("ComfyUI 圖片類型不支援刪除")
+        explicit = os.environ.get(f"COMFYUI_{normalized.upper()}_DIR")
+        if explicit:
+            return Path(explicit).expanduser()
+        base_dir = os.environ.get("COMFYUI_BASE_DIR")
+        if base_dir:
+            return Path(base_dir).expanduser() / normalized
+        return None
+
+    def _safe_local_image_path(self, image_ref):
+        filename = str((image_ref or {}).get("filename") or "").strip()
+        subfolder = str((image_ref or {}).get("subfolder") or "").strip()
+        image_type = str((image_ref or {}).get("type") or "output").strip() or "output"
+        if not filename:
+            raise ComfyUIError("缺少 ComfyUI 圖片檔名")
+        if Path(filename).name != filename or filename in {".", ".."}:
+            raise ComfyUIError("ComfyUI 圖片檔名不合法")
+        base_dir = self._local_dir_for_type(image_type)
+        if not base_dir:
+            return None
+        relative = Path(subfolder) / filename if subfolder else Path(filename)
+        if relative.is_absolute() or any(part in {"..", ""} for part in relative.parts):
+            raise ComfyUIError("ComfyUI 圖片路徑不合法")
+        base = base_dir.resolve()
+        target = (base / relative).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError as exc:
+            raise ComfyUIError("ComfyUI 圖片路徑超出允許目錄") from exc
+        return target
+
+    def discard_image(self, image_ref, *, prompt_id=None):
+        result = {
+            "file_deleted": False,
+            "file_missing": False,
+            "file_delete_supported": False,
+            "history_deleted": False,
+        }
+        target = self._safe_local_image_path(image_ref)
+        if target:
+            result["file_delete_supported"] = True
+            if target.exists():
+                if not target.is_file():
+                    raise ComfyUIError("ComfyUI 目標路徑不是檔案")
+                target.unlink()
+                result["file_deleted"] = True
+            else:
+                result["file_missing"] = True
+        else:
+            filename = str((image_ref or {}).get("filename") or "").strip()
+            subfolder = str((image_ref or {}).get("subfolder") or "").strip()
+            image_type = str((image_ref or {}).get("type") or "output").strip() or "output"
+            query = urllib.parse.urlencode({"filename": filename, "subfolder": subfolder, "type": image_type})
+            req = urllib.request.Request(self._url(f"/view?{query}"), method="DELETE", headers={"Accept": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout):
+                    result["file_delete_supported"] = True
+                    result["file_deleted"] = True
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    result["file_delete_supported"] = True
+                    result["file_missing"] = True
+                elif exc.code not in {405, 501}:
+                    raise ComfyUIError(f"ComfyUI 原始檔刪除失敗：HTTP {exc.code}") from exc
+            except urllib.error.URLError as exc:
+                raise ComfyUIError(f"ComfyUI 原始檔刪除失敗：{getattr(exc, 'reason', exc)}") from exc
+        if prompt_id:
+            self._json_request("/history", method="POST", payload={"delete": [str(prompt_id)]}, allow_non_json=True)
+            result["history_deleted"] = True
+        return result
+
     def generate_image(self, params, *, timeout_seconds=600):
         workflow = self.build_text_to_image_workflow(params)
         prompt_id = self.queue_prompt(workflow)
-        image_ref = self.wait_for_first_image(prompt_id, timeout_seconds=timeout_seconds)
-        image = self.fetch_image(image_ref)
+        image_refs = self.wait_for_images(
+            prompt_id,
+            timeout_seconds=timeout_seconds,
+            expected_count=int(params.get("batch_size") or 1),
+        )
+        images = [self.fetch_image(image_ref) for image_ref in image_refs]
+        image = images[0]
+        serialized_images = [{
+            "image_ref": {
+                "filename": item.filename,
+                "subfolder": item.subfolder,
+                "type": item.type,
+            },
+            "mime_type": item.mime_type,
+            "data": item.data,
+        } for item in images]
         return {
             "prompt_id": prompt_id,
             "image_ref": {
@@ -186,4 +294,5 @@ class ComfyUIClient:
             },
             "mime_type": image.mime_type,
             "data": image.data,
+            "images": serialized_images,
         }
