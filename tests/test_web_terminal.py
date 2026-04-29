@@ -54,7 +54,7 @@ def _build_app(db_path, storage_root, *, feature_enabled=True, actor=None):
 
 
 def test_container_command_keeps_terminal_sandboxed(tmp_path):
-    mount_path = tmp_path / "storage" / "users" / "1" / "terminal" / "home"
+    mount_path = tmp_path / "storage" / "users" / "1"
     command = build_container_command(
         session_id="abc123",
         mount_path=mount_path,
@@ -79,7 +79,7 @@ def test_root_mount_path_stays_inside_cloud_drive_storage(tmp_path):
     storage_root = tmp_path / "cloud-drive"
     path = root_terminal_mount_path(storage_root, 7)
 
-    assert path == storage_root / "users" / "7" / "terminal" / "home"
+    assert path == storage_root / "users" / "7"
     assert path.is_dir()
 
 

@@ -52,7 +52,7 @@ def ensure_web_terminal_schema(conn):
 
 
 def root_terminal_mount_path(storage_root, root_user_id):
-    relative = f"users/{int(root_user_id)}/terminal/home"
+    relative = f"users/{int(root_user_id)}"
     path = resolve_storage_path(storage_root, relative, create_parent=True)
     path.mkdir(parents=True, exist_ok=True)
     return path
