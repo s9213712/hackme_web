@@ -27,19 +27,78 @@ function webTerminalRenderHealth(health) {
   const box = $("web-terminal-health");
   if (!box) return;
   const rows = (health && health.checks) || [];
+  const config = (health && health.config) || {};
   if (!rows.length) {
     box.innerHTML = '<div class="drive-empty">尚無環境檢查資料</div>';
     return;
   }
-  box.innerHTML = rows.map((row) => `
-    <div class="drive-file-row">
+  if (health && health.ok) {
+    box.innerHTML = '<div class="drive-empty">所有 WebTerminal 環境檢查已通過。</div>';
+    return;
+  }
+  const configHtml = `
+    <div class="drive-file-row" style="align-items:flex-start;">
       <div style="min-width:0;">
-        <strong>${escapeHtml(row.name || "-")}</strong>
-        <div class="drive-card-sub">${escapeHtml(row.message || "")}</div>
+        <strong>目前檢查設定</strong>
+        <div class="drive-card-sub">
+          distro=${sanitize(config.distro || "-")} · network=${sanitize(config.network_mode || "-")} ·
+          image=${sanitize(config.base_image || "-")} · vm_root=${sanitize(config.vm_root || "-")}
+        </div>
       </div>
-      <span class="pill ${row.ok ? "pill-ok" : "pill-danger"}">${row.ok ? "ok" : "fail"}</span>
     </div>
-  `).join("");
+  `;
+  box.innerHTML = configHtml + rows.map((row) => {
+    const message = row.message ? `<div class="drive-card-sub">${sanitize(row.message)}</div>` : "";
+    const why = row.why ? `<div class="drive-card-sub"><strong>用途：</strong>${sanitize(row.why)}</div>` : "";
+    const repair = !row.ok && row.repair ? `<div class="drive-card-sub" style="color:#ffd166;"><strong>修復：</strong><code>${sanitize(row.repair)}</code></div>` : "";
+    return `
+      <div class="drive-file-row" style="align-items:flex-start;">
+        <div style="min-width:0;">
+          <strong>${sanitize(row.label || row.name || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(row.name || "")}</div>
+          ${message}
+          ${why}
+          ${repair}
+        </div>
+        <span class="pill ${row.ok ? "pill-ok" : "pill-danger"}">${row.ok ? "ok" : "fail"}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function webTerminalRenderRequestFailure(error) {
+  const box = $("web-terminal-health");
+  if (!box) return;
+  const target = `${location.origin}${API}/root/web-terminal/qemu/health`;
+  const versionUrl = `${location.origin}${API}/version`;
+  box.innerHTML = `
+    <div class="drive-file-row" style="align-items:flex-start;">
+      <div style="min-width:0;">
+        <strong>Health API 請求沒有成功送達或沒有收到可讀回應</strong>
+        <div class="drive-card-sub"><strong>目前頁面：</strong><code>${sanitize(location.href)}</code></div>
+        <div class="drive-card-sub"><strong>檢查目標：</strong><code>${sanitize(target)}</code></div>
+        <div class="drive-card-sub"><strong>錯誤：</strong>${sanitize(error && error.message ? error.message : String(error || "unknown error"))}</div>
+      </div>
+      <span class="pill pill-danger">fail</span>
+    </div>
+    <div class="drive-file-row" style="align-items:flex-start;">
+      <div style="min-width:0;">
+        <strong>常見原因</strong>
+        <div class="drive-card-sub">1. server 沒在同一個網址/port 上運作，或剛好重啟中。</div>
+        <div class="drive-card-sub">2. 瀏覽器仍載入舊 JS 快取，請用 <code>Ctrl + F5</code> 或開無痕視窗測試。</div>
+        <div class="drive-card-sub">3. 登入 session / CSRF 狀態過期，請登出後重新登入 root。</div>
+        <div class="drive-card-sub">4. 目前頁面是 HTTPS，但 server/API 是 HTTP，瀏覽器會擋 mixed content。</div>
+        <div class="drive-card-sub">5. 瀏覽器外掛或代理阻擋了 <code>/api/root/web-terminal/qemu/health</code>。</div>
+      </div>
+    </div>
+    <div class="drive-file-row" style="align-items:flex-start;">
+      <div style="min-width:0;">
+        <strong>手動確認</strong>
+        <div class="drive-card-sub">先在同一個瀏覽器分頁打開：<code>${sanitize(versionUrl)}</code></div>
+        <div class="drive-card-sub">若版本 API 打不開，就是 server/網址/port 問題；若版本 API 可開但 health 不行，請重新登入 root 後再試。</div>
+      </div>
+    </div>
+  `;
 }
 
 function webTerminalRenderSessions(sessions) {
@@ -47,7 +106,7 @@ function webTerminalRenderSessions(sessions) {
   if (!select) return;
   const active = webTerminalActiveSessionId || select.value || "";
   select.innerHTML = '<option value="">尚無 session</option>' + (sessions || []).map((session) => `
-    <option value="${escapeHtml(session.session_id)}">${escapeHtml(session.vm_name)} · ${escapeHtml(session.status)}</option>
+    <option value="${sanitize(session.session_id)}">${sanitize(session.vm_name)} · ${sanitize(session.status)}</option>
   `).join("");
   if (active && Array.from(select.options).some((opt) => opt.value === active)) select.value = active;
 }
@@ -63,16 +122,38 @@ async function loadWebTerminalQemu() {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" },
     });
-    const json = await res.json().catch(() => ({}));
+    const rawText = await res.text();
+    let json = {};
+    try {
+      json = rawText ? JSON.parse(rawText) : {};
+    } catch (parseErr) {
+      const preview = rawText ? rawText.slice(0, 500) : "(empty response)";
+      if (status) {
+        status.textContent = `環境檢查回應格式錯誤（HTTP ${res.status}）`;
+        status.style.color = "#ff6b7a";
+      }
+      webTerminalRenderHealth(null);
+      webTerminalSetMessage(`後端沒有回 JSON。HTTP ${res.status}。回應前 500 字：${preview}`, false);
+      return;
+    }
     webTerminalRenderHealth(json.health);
+    const failed = json.health && Array.isArray(json.health.failed_checks) ? json.health.failed_checks : [];
     if (status) {
-      status.textContent = json.ok ? "環境可用" : "環境未完成";
+      status.textContent = json.ok ? "環境可用" : `環境未完成：${failed.length || "多"} 項需處理（HTTP ${res.status}）`;
       status.style.color = json.ok ? "#66d37e" : "#ffbd5a";
     }
-    if (!json.ok) webTerminalSetMessage("WebTerminal 尚不能啟動，請依檢查結果執行安裝腳本或修正權限。", false);
+    if (!json.ok) {
+      const summary = json.health && json.health.summary ? json.health.summary : (json.msg || "WebTerminal 尚不能啟動");
+      const failedText = failed.length ? `失敗項目：${failed.join(", ")}。` : "";
+      webTerminalSetMessage(`${summary}。${failedText}請查看上方紅色項目的「修復」指令。`, false);
+    }
   } catch (err) {
-    if (status) status.textContent = "環境檢查失敗";
-    webTerminalSetMessage("Web Terminal 環境檢查失敗：" + err.message, false);
+    if (status) {
+      status.textContent = "環境檢查請求失敗";
+      status.style.color = "#ff6b7a";
+    }
+    webTerminalRenderRequestFailure(err);
+    webTerminalSetMessage("Web Terminal health API 沒有成功完成請求。請依上方「常見原因」與「手動確認」逐項排除。", false);
   }
   await refreshWebTerminalSessions();
 }
@@ -185,4 +266,3 @@ function setupWebTerminalInput() {
     event.preventDefault();
   });
 }
-

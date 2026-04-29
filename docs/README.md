@@ -15,6 +15,8 @@ short [README](../README.md).
   and implementation notes
 - [WebTerminal QEMU/libvirt](web_terminal_qemu.md): optional root VM terminal
   setup, health checks, and security model
+- [WebTerminal QEMU Build Tutorial](web_terminal_qemu_build.md): step-by-step
+  host install, root settings, verification, and troubleshooting
 
 ## Security And Release
 

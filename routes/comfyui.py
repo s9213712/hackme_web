@@ -5,6 +5,7 @@ import re
 import secrets
 from datetime import datetime
 from io import BytesIO
+from urllib.parse import urlparse
 
 from flask import request
 
@@ -13,7 +14,7 @@ from services.comfyui_client import ComfyUIClient, ComfyUIError
 from services.storage_albums import add_album_file, create_storage_file_entry, ensure_storage_album_schema
 
 
-DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://127.0.0.1:8192")
+DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
 DEFAULT_COMFYUI_PORT = 8192
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
@@ -63,12 +64,18 @@ def register_comfyui_routes(app, deps):
 
     def _configured_comfyui_url():
         settings = get_system_settings() or {}
+        default_url = urlparse(DEFAULT_COMFYUI_URL)
+        host = str(settings.get("comfyui_api_host") or default_url.hostname or os.environ.get("COMFYUI_API_HOST") or "localhost").strip()
+        host = host.strip("[]")
+        if not host:
+            host = "localhost"
         try:
-            port = int(settings.get("comfyui_api_port") or DEFAULT_COMFYUI_PORT)
+            port = int(settings.get("comfyui_api_port") or default_url.port or DEFAULT_COMFYUI_PORT)
         except Exception:
             port = DEFAULT_COMFYUI_PORT
         port = min(65535, max(1, port))
-        return f"http://127.0.0.1:{port}"
+        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"http://{display_host}:{port}"
 
     def _configured_max_batch_size():
         settings = get_system_settings() or {}

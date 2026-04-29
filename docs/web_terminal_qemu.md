@@ -4,6 +4,9 @@
 Docker WebTerminal is deprecated on this branch and kept only as archived
 history under `docs/archive/`.
 
+For a step-by-step build flow, use
+[WebTerminal QEMU Build Tutorial](web_terminal_qemu_build.md).
+
 ## Scope
 
 - Only `root` can use the first WebTerminal version.
@@ -43,7 +46,7 @@ Root can configure these in `安全中心 -> 伺服器設定 -> 系統`:
 
 - Enable WebTerminal
 - Ubuntu distro: `ubuntu-22.04` or `ubuntu-24.04`
-- Network mode: `none`, `nat`, or `restricted`
+- Network mode: `user`, `nat`, `restricted`, or `none`
 - VM storage root, default `/var/lib/hackme-vms`
 - base image path
 - vCPU, memory, disk size
@@ -60,7 +63,9 @@ The first implementation only accepts `qemu:///system` as the libvirt URI.
 5. The backend creates a safe VM name: `hackme-term-u{user_id}-{short_uuid}`.
 6. The backend creates an overlay qcow2 disk and cloud-init seed ISO.
 7. `virt-install` imports the VM.
-8. For NAT mode, the server waits for an IP and then bridges SSH to WebSocket.
+8. For `user` mode, QEMU exposes guest SSH on a temporary `127.0.0.1` host port.
+   For libvirt NAT modes, the server waits for a guest IP and then bridges SSH to
+   WebSocket.
 9. Closing the session destroys and undefines the VM.
 
 ## Audit
@@ -84,7 +89,9 @@ fact that host mounts are not used.
 - VM storage must be an absolute non-project path.
 - QEMU/libvirt VM state is not trusted by snapshot/restore. Cloud Drive and
   database state remain the persistent sources.
-- `network=none` is safest. NAT mode is required for the current SSH bridge.
+- `network=none` is safest but is not interactive until the serial console bridge
+  is implemented. `user` mode is recommended on WSL2 because it avoids nested
+  bridge NAT. `nat` uses libvirt's default bridge network.
 
 ## Current MVP Limits
 
@@ -93,4 +100,3 @@ fact that host mounts are not used.
   be implemented as a separate Server Rental module later.
 - `restricted` network mode currently uses the same libvirt default network
   check path as NAT; host firewall rules still need a dedicated implementation.
-

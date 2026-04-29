@@ -1,8 +1,11 @@
 import json
 import os
 import re
+import grp
+import pwd
 import shutil
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -13,8 +16,65 @@ from pathlib import Path
 
 
 VM_NAME_RE = re.compile(r"^hackme-term-u\d+-[a-f0-9]{10}$")
-SAFE_NETWORK_MODES = {"none", "nat", "restricted"}
+SAFE_NETWORK_MODES = {"none", "nat", "restricted", "user"}
 SAFE_DISTROS = {"ubuntu-22.04", "ubuntu-24.04"}
+HEALTH_HINTS = {
+    "command:virsh": {
+        "label": "virsh 指令",
+        "why": "後端需要 virsh 連到 libvirt 管理 VM。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --system",
+    },
+    "command:virt-install": {
+        "label": "virt-install 指令",
+        "why": "建立 cloud image VM 時需要 virt-install。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --system",
+    },
+    "command:qemu-img": {
+        "label": "qemu-img 指令",
+        "why": "建立 qcow2 overlay disk 時需要 qemu-img。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --system",
+    },
+    "command:cloud-localds": {
+        "label": "cloud-localds 指令",
+        "why": "建立 cloud-init seed ISO 時需要 cloud-localds。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --system",
+    },
+    "command:ssh": {
+        "label": "ssh 指令",
+        "why": "目前 MVP 透過 SSH 將 VM terminal 串到 WebSocket。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --system",
+    },
+    "kvm_device": {
+        "label": "/dev/kvm",
+        "why": "KVM 加速需要 /dev/kvm；缺少時通常是 BIOS/UEFI 未開啟虛擬化或 WSL/外層 VM 未開 nested virtualization。",
+        "repair": "確認 BIOS/UEFI virtualization 與 nested virtualization，然後重新登入主機。",
+    },
+    "base_image": {
+        "label": "Ubuntu base image",
+        "why": "WebTerminal 會從 Ubuntu cloud image 建立臨時 VM overlay；檔案不存在或不可讀都不能啟動。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --image；若檔案存在但不可讀，執行 ./install_web_terminal_qemu_dependencies.sh --fix-vm-storage-permissions",
+    },
+    "vm_storage_dir": {
+        "label": "VM 儲存目錄",
+        "why": "後端需要在 VM 儲存目錄建立 overlay disk、cloud-init seed 與 session key。",
+        "repair": "./install_web_terminal_qemu_dependencies.sh --dirs，並確認啟動 server 的使用者在 libvirt 群組。",
+    },
+    "libvirt_connection": {
+        "label": "libvirt 連線",
+        "why": "後端必須能連到 qemu:///system；失敗通常是 libvirtd 未啟動或 server 使用者沒有 libvirt 權限。",
+        "repair": "sudo systemctl enable --now libvirtd；sudo usermod -aG libvirt,kvm $USER；登出重登並重啟 server。",
+    },
+    "libvirt_default_network": {
+        "label": "libvirt default NAT network",
+        "why": "NAT/受限 NAT 模式需要 libvirt default network，否則 VM 取不到 IP，WebSocket SSH bridge 無法連線。",
+        "repair": "sudo virsh net-start default；sudo virsh net-autostart default",
+    },
+    "interactive_network": {
+        "label": "WebTerminal 互動網路",
+        "why": "目前 WebTerminal MVP 透過 SSH bridge 連線，必須使用 NAT、受限 NAT 或 QEMU user-mode NAT。network=none 要等 serial console bridge 實作後才能互動。",
+        "repair": "到 root 系統設定將 WebTerminal 網路模式改成 QEMU user-mode NAT、NAT 出網或受限 NAT。",
+    },
+}
 
 
 class WebTerminalQemuError(RuntimeError):
@@ -34,6 +94,7 @@ class TerminalSession:
     ip_address: str = ""
     ssh_username: str = "root"
     ssh_key_path: str = ""
+    host_ssh_port: int = 0
     disk_path: str = ""
     seed_dir: str = ""
     network_mode: str = "none"
@@ -54,6 +115,7 @@ class TerminalSession:
             "updated_at": self.updated_at,
             "ip_address": self.ip_address,
             "ssh_username": self.ssh_username,
+            "host_ssh_port": self.host_ssh_port,
             "network_mode": self.network_mode,
             "distro": self.distro,
             "vcpus": self.vcpus,
@@ -75,11 +137,58 @@ def _int_setting(settings, key, default, *, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
+def _name_for_uid(uid):
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return str(uid)
+
+
+def _name_for_gid(gid):
+    try:
+        return grp.getgrgid(gid).gr_name
+    except KeyError:
+        return str(gid)
+
+
+def _hypervisor_can_probably_read(path):
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return False
+    mode = st.st_mode
+    owner = _name_for_uid(st.st_uid)
+    group = _name_for_gid(st.st_gid)
+    if owner == "libvirt-qemu" and mode & stat.S_IRUSR:
+        return True
+    if group in {"libvirt", "kvm", "libvirt-qemu"} and mode & stat.S_IRGRP:
+        return True
+    return bool(mode & stat.S_IROTH)
+
+
 def qemu_config_from_settings(settings, *, base_dir):
-    distro = str(_setting(settings, "web_terminal_qemu_distro", "ubuntu-22.04") or "ubuntu-22.04").strip()
+    distro = str(
+        _setting(
+            settings,
+            "web_terminal_qemu_distro",
+            _setting(settings, "web_terminal_distribution", "ubuntu-22.04"),
+        ) or "ubuntu-22.04"
+    ).strip()
     if distro not in SAFE_DISTROS:
         distro = "ubuntu-22.04"
-    network_mode = str(_setting(settings, "web_terminal_qemu_network_mode", "none") or "none").strip()
+    network_mode = str(
+        _setting(
+            settings,
+            "web_terminal_qemu_network_mode",
+            _setting(settings, "web_terminal_network_mode", "none"),
+        ) or "none"
+    ).strip()
+    if network_mode in {"bridge", "internet", "online"}:
+        network_mode = "nat"
+    if network_mode in {"usernat", "slirp", "qemu-user", "qemu_user"}:
+        network_mode = "user"
+    if network_mode in {"offline", "disabled"}:
+        network_mode = "none"
     if network_mode not in SAFE_NETWORK_MODES:
         network_mode = "none"
     vm_root = str(_setting(settings, "web_terminal_qemu_storage_dir", "/var/lib/hackme-vms") or "").strip()
@@ -149,13 +258,46 @@ class LibvirtQemuProvider:
         checks = []
 
         def add(name, ok, message="", detail=None):
-            checks.append({"name": name, "ok": bool(ok), "message": message, "detail": detail})
+            hint = HEALTH_HINTS.get(name, {})
+            checks.append({
+                "name": name,
+                "label": hint.get("label", name),
+                "ok": bool(ok),
+                "message": message,
+                "detail": detail,
+                "why": hint.get("why", ""),
+                "repair": "" if ok else hint.get("repair", ""),
+            })
+
+        def path_state(path):
+            try:
+                p = Path(path)
+                exists = p.exists()
+                readable = os.access(p, os.R_OK) if exists else False
+                return exists, readable, ""
+            except OSError as exc:
+                return False, False, str(exc)
 
         for command in ("virsh", "virt-install", "qemu-img", "cloud-localds", "ssh"):
             add(f"command:{command}", bool(shutil.which(command)), "found" if shutil.which(command) else "missing")
 
         add("kvm_device", os.path.exists("/dev/kvm"), "/dev/kvm exists" if os.path.exists("/dev/kvm") else "/dev/kvm missing")
-        add("base_image", Path(config["base_image"]).exists(), config["base_image"])
+        image_exists, image_readable, image_error = path_state(config["base_image"])
+        image_hypervisor_readable = _hypervisor_can_probably_read(config["base_image"]) if image_exists else False
+        image_message = config["base_image"]
+        if image_error:
+            image_message = f"{config['base_image']}: {image_error}"
+        elif image_exists and not image_readable:
+            image_message = (
+                f"{config['base_image']} exists but is not readable by server process "
+                f"(uid={os.getuid()}, gid={os.getgid()}, groups={','.join(str(g) for g in os.getgroups())}); "
+                f"hypervisor_readable={'yes' if image_hypervisor_readable else 'unknown'}"
+            )
+        add(
+            "base_image",
+            image_exists and (image_readable or image_hypervisor_readable),
+            image_message,
+        )
         try:
             vm_root = validate_vm_root(config["vm_root"], project_base_dir=config["base_dir"])
             add("vm_storage_dir", vm_root.exists() and os.access(vm_root, os.W_OK), str(vm_root))
@@ -167,24 +309,34 @@ class LibvirtQemuProvider:
             add("libvirt_connection", result["ok"], (result["stderr"] or result["stdout"]).strip())
             if config["network_mode"] in {"nat", "restricted"}:
                 net = self.virsh("net-info", "default", timeout=8)
-                add("libvirt_default_network", net["ok"] and "Active: yes" in net["stdout"], (net["stderr"] or net["stdout"]).strip())
+                network_active = bool(net["ok"] and re.search(r"(?m)^Active:\s+yes\b", net["stdout"] or ""))
+                add("libvirt_default_network", network_active, (net["stderr"] or net["stdout"]).strip())
+            elif config["network_mode"] == "none":
+                add("interactive_network", False, "network=none 無法搭配目前的 SSH bridge")
         else:
             add("libvirt_connection", False, "virsh missing")
 
-        ok = all(row["ok"] for row in checks)
-        return {"ok": ok, "checks": checks, "config": public_config(config)}
+        failed = [row for row in checks if not row["ok"]]
+        ok = not failed
+        summary = "WebTerminal QEMU/libvirt 環境可用" if ok else f"{len(failed)} 個必要項目未完成"
+        return {
+            "ok": ok,
+            "summary": summary,
+            "failed_checks": [row["name"] for row in failed],
+            "checks": checks,
+            "config": public_config(config),
+        }
 
     def create_overlay_disk(self, *, base_image, disk_path, disk_gb):
         result = self.run([
             "qemu-img", "create", "-f", "qcow2",
+            "-u",
             "-F", "qcow2", "-b", base_image,
             disk_path,
+            f"{int(disk_gb)}G",
         ])
         if not result["ok"]:
             raise WebTerminalQemuError(result["stderr"] or "qemu-img create failed")
-        resize = self.run(["qemu-img", "resize", disk_path, f"{int(disk_gb)}G"])
-        if not resize["ok"]:
-            raise WebTerminalQemuError(resize["stderr"] or "qemu-img resize failed")
 
     def create_seed_iso(self, *, seed_iso, user_data, meta_data):
         result = self.run(["cloud-localds", seed_iso, user_data, meta_data])
@@ -209,11 +361,33 @@ class LibvirtQemuProvider:
         ]
         if session.network_mode == "none":
             args.extend(["--network", "none"])
+        elif session.network_mode == "user":
+            args.extend([
+                "--network",
+                (
+                    f"type=user,model=virtio,"
+                    f"xpath0.create=./portForward,"
+                    f"xpath1.set=./portForward/@proto=tcp,"
+                    f"xpath2.set=./portForward/@address=127.0.0.1,"
+                    f"xpath3.create=./portForward/range,"
+                    f"xpath4.set=./portForward/range/@start={int(session.host_ssh_port)},"
+                    f"xpath5.set=./portForward/range/@to=22"
+                ),
+            ])
         else:
             args.extend(["--network", "network=default,model=virtio"])
         result = self.run(args, timeout=120)
         if not result["ok"]:
             raise WebTerminalQemuError(result["stderr"] or "virt-install failed")
+
+    def add_user_host_forward(self, *, vm_name, host_port, guest_port=22):
+        if not VM_NAME_RE.fullmatch(vm_name or ""):
+            raise ValueError("unsafe VM name")
+        command = f"hostfwd_add tcp:127.0.0.1:{int(host_port)}-:{int(guest_port)}"
+        result = self.virsh("qemu-monitor-command", vm_name, "--hmp", command, timeout=10)
+        if not result["ok"]:
+            raise WebTerminalQemuError(result["stderr"] or result["stdout"] or "qemu hostfwd_add failed")
+        return result
 
     def destroy_and_undefine(self, vm_name):
         if not VM_NAME_RE.fullmatch(vm_name or ""):
@@ -280,6 +454,9 @@ class QemuWebTerminalManager:
         if not health["ok"]:
             self._audit("WEB_TERMINAL_QEMU_CREATE_BLOCKED", actor, ip, False, {"reason": "health_failed", "health": health})
             return None, "Web Terminal 環境檢查失敗"
+        if config["network_mode"] == "none":
+            self._audit("WEB_TERMINAL_QEMU_CREATE_BLOCKED", actor, ip, False, {"reason": "network_none_not_interactive"})
+            return None, "目前 Web Terminal 透過 SSH bridge 連線，請先將網路模式改成 NAT 或受限 NAT"
         vm_root = validate_vm_root(config["vm_root"], project_base_dir=self.base_dir)
         session_id = uuid.uuid4().hex
         vm_name = f"hackme-term-u{int(actor['id'])}-{session_id[:10]}"
@@ -299,6 +476,7 @@ class QemuWebTerminalManager:
             disk_path=str(image_dir / f"{vm_name}.qcow2"),
             seed_dir=str(seed_dir),
             network_mode=config["network_mode"],
+            host_ssh_port=self._allocate_host_port() if config["network_mode"] == "user" else 0,
             distro=config["distro"],
             vcpus=config["vcpus"],
             memory_mb=config["memory_mb"],
@@ -310,6 +488,7 @@ class QemuWebTerminalManager:
             "session_id": session_id,
             "vm_name": vm_name,
             "network_mode": session.network_mode,
+            "host_ssh_port": session.host_ssh_port or None,
             "distro": session.distro,
             "vcpus": session.vcpus,
             "memory_mb": session.memory_mb,
@@ -345,15 +524,18 @@ class QemuWebTerminalManager:
             raise WebTerminalQemuError("session not found")
         if session.status != "ready" or not session.ip_address:
             raise WebTerminalQemuError("session is not ready")
-        return [
+        command = [
             "ssh",
             "-tt",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10",
             "-i", session.ssh_key_path,
-            f"{session.ssh_username}@{session.ip_address}",
         ]
+        if session.host_ssh_port:
+            command.extend(["-p", str(session.host_ssh_port)])
+        command.append(f"{session.ssh_username}@{session.ip_address}")
+        return command
 
     def _provision_session(self, session_id, config, actor, ip, ua):
         session = self.get_session(session_id)
@@ -368,8 +550,17 @@ class QemuWebTerminalManager:
             provider.create_seed_iso(seed_iso=seed_iso, user_data=user_data, meta_data=meta_data)
             os_variant = "ubuntu22.04" if session.distro == "ubuntu-22.04" else "ubuntu24.04"
             provider.virt_install(session=session, seed_iso=seed_iso, os_variant=os_variant)
-            if session.network_mode == "none":
-                self._set_status(session_id, "ready", "VM 已啟動；network=none 時僅提供 serial/console 設計，SSH bridge 需 NAT 模式")
+            if session.network_mode == "user":
+                provider.add_user_host_forward(vm_name=session.vm_name, host_port=session.host_ssh_port, guest_port=22)
+                with self.lock:
+                    session.ip_address = "127.0.0.1"
+                deadline = time.time() + 120
+                while time.time() < deadline:
+                    if self._ssh_ready(session):
+                        self._set_status(session_id, "ready", f"VM 已啟動；SSH forwarded to 127.0.0.1:{session.host_ssh_port}")
+                        return
+                    time.sleep(2)
+                self._set_status(session_id, "failed", f"VM 已建立但 120 秒內無法透過 127.0.0.1:{session.host_ssh_port} SSH 連線")
                 return
             deadline = time.time() + 120
             while time.time() < deadline:
@@ -384,6 +575,31 @@ class QemuWebTerminalManager:
         except Exception as exc:
             self._set_status(session_id, "failed", str(exc))
             self._audit("WEB_TERMINAL_QEMU_SESSION_FAILED", actor, ip, False, {"session_id": session_id, "vm_name": session.vm_name, "error": str(exc)})
+
+    def _allocate_host_port(self):
+        for _ in range(50):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = int(sock.getsockname()[1])
+            if port >= 1024:
+                return port
+        raise WebTerminalQemuError("failed to allocate local SSH forward port")
+
+    def _ssh_ready(self, session):
+        command = [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=3",
+            "-i", session.ssh_key_path,
+        ]
+        if session.host_ssh_port:
+            command.extend(["-p", str(session.host_ssh_port)])
+        command.append(f"{session.ssh_username}@{session.ip_address}")
+        command.append("true")
+        result = subprocess.run(command, text=True, capture_output=True, timeout=8, check=False)
+        return result.returncode == 0
 
     def _write_ssh_keypair(self, session):
         key_path = Path(session.ssh_key_path)
@@ -500,4 +716,3 @@ def bridge_ssh_to_websocket(command, ws, *, idle_timeout_seconds=900):
             os.kill(pid, 15)
         except Exception:
             pass
-

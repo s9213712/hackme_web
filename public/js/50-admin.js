@@ -1148,11 +1148,12 @@ async function loadSettings() {
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = s.server_ssl_enabled !== false;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-web-terminal-enabled")) $("s-web-terminal-enabled").checked = !!s.web_terminal_enabled;
   if ($("s-web-terminal-qemu-distro")) $("s-web-terminal-qemu-distro").value = s.web_terminal_qemu_distro || "ubuntu-22.04";
-  if ($("s-web-terminal-qemu-network-mode")) $("s-web-terminal-qemu-network-mode").value = s.web_terminal_qemu_network_mode || "none";
+  if ($("s-web-terminal-qemu-network-mode")) $("s-web-terminal-qemu-network-mode").value = s.web_terminal_qemu_network_mode || "user";
   if ($("s-web-terminal-qemu-storage-dir")) $("s-web-terminal-qemu-storage-dir").value = s.web_terminal_qemu_storage_dir || "/var/lib/hackme-vms";
   if ($("s-web-terminal-qemu-base-image-path")) $("s-web-terminal-qemu-base-image-path").value = s.web_terminal_qemu_base_image_path || "";
   if ($("s-web-terminal-qemu-vcpus")) $("s-web-terminal-qemu-vcpus").value = s.web_terminal_qemu_vcpus || 1;
@@ -2112,11 +2113,12 @@ async function saveSettings() {
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     web_terminal_enabled: !!$("s-web-terminal-enabled")?.checked,
     web_terminal_qemu_distro: $("s-web-terminal-qemu-distro")?.value || "ubuntu-22.04",
-    web_terminal_qemu_network_mode: $("s-web-terminal-qemu-network-mode")?.value || "none",
+    web_terminal_qemu_network_mode: $("s-web-terminal-qemu-network-mode")?.value || "user",
     web_terminal_qemu_storage_dir: ($("s-web-terminal-qemu-storage-dir")?.value || "/var/lib/hackme-vms").trim(),
     web_terminal_qemu_base_image_path: ($("s-web-terminal-qemu-base-image-path")?.value || "").trim(),
     web_terminal_qemu_vcpus: parseInt($("s-web-terminal-qemu-vcpus")?.value || "1"),
@@ -2339,18 +2341,20 @@ async function loadSnapshots() {
       </div>
       <div style="color:var(--muted);font-size:.7rem;margin-top:.2rem;">${sanitize(s.notes || "")}</div>
       <div style="display:flex;gap:.4rem;margin-top:.45rem;">
-        <button class="btn btn-primary" data-snapshot-restore="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">Restore</button>
-        <button class="btn" data-snapshot-download="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">下載</button>
-        <button class="btn" data-snapshot-delete="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">刪除</button>
+        <button class="btn btn-primary" type="button" data-snapshot-restore="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">Restore</button>
+        <button class="btn" type="button" data-snapshot-download="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">下載</button>
+        <button class="btn" type="button" data-snapshot-delete="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">刪除</button>
       </div>
     </div>
   `).join("");
   actions.innerHTML = `
-    <button class="btn btn-primary" id="btn-confirm-restore" disabled style="padding:.3rem .75rem;font-size:.78rem;">Restore 選取的 Snapshot</button>
+    <button class="btn btn-primary" type="button" id="btn-confirm-restore" disabled style="padding:.3rem .75rem;font-size:.78rem;">Restore 選取的 Snapshot</button>
     <span id="restore-hint" style="font-size:.72rem;color:var(--muted);margin-left:.4rem;">請先點選要 restore 的 snapshot</span>
   `;
   list.querySelectorAll("[data-snapshot-restore]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       document.querySelectorAll("[data-snapshot-restore]").forEach((b) => { b.classList.remove("btn-primary"); b.classList.add("btn"); });
       btn.classList.remove("btn"); btn.classList.add("btn-primary");
       window._selectedSnapshotId = btn.getAttribute("data-snapshot-restore");
@@ -2361,13 +2365,17 @@ async function loadSnapshots() {
     });
   });
   list.querySelectorAll("[data-snapshot-download]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const id = btn.getAttribute("data-snapshot-download");
       downloadSnapshot(id);
     });
   });
   list.querySelectorAll("[data-snapshot-delete]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const id = btn.getAttribute("data-snapshot-delete");
       if (!confirm(`確定刪除 snapshot ${id}？`)) return;
       await fetchCsrfToken({ force: true });
@@ -2384,7 +2392,9 @@ async function loadSnapshots() {
   });
   const confirmRestoreBtn = $("btn-confirm-restore");
   if (confirmRestoreBtn) {
-    confirmRestoreBtn.addEventListener("click", () => {
+    confirmRestoreBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const sid = window._selectedSnapshotId;
       if (!sid) { alert("請先選取要 restore 的 snapshot"); return; }
       const reason = prompt("請輸入 restore 原因：") || "";

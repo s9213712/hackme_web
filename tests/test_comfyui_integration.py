@@ -758,6 +758,7 @@ def test_comfyui_frontend_is_wired():
     assert "/js/25-community.js?v=20260429-moderator-user-select" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": True' in settings_py
+    assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py
     assert '"comfyui_max_batch_size": 1' in settings_py
     assert "/api/comfyui/models" in smoke

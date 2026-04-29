@@ -52,6 +52,23 @@ SECURITY_TEST_JOBS = {}
 SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
+COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
+def validate_comfyui_api_host(value):
+    host = str(value or "").strip().strip("[]")
+    if not host:
+        return None
+    if len(host) > 253:
+        return None
+    forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
+    if any(part in host for part in forbidden):
+        return None
+    if not COMFYUI_HOST_RE.match(host):
+        return None
+    return host
+
+
 def restart_launcher_code():
     return r"""
 import os
@@ -1202,7 +1219,12 @@ def register_system_admin_routes(app, deps):
             user=actor["username"],
             success=bool(result.get("ok")),
             ua=get_ua(),
-            detail=json.dumps({"ok": result.get("ok"), "failed": [r["name"] for r in result.get("checks", []) if not r.get("ok")]}, ensure_ascii=False),
+            detail=json.dumps({
+                "ok": result.get("ok"),
+                "summary": result.get("summary"),
+                "failed": result.get("failed_checks") or [r["name"] for r in result.get("checks", []) if not r.get("ok")],
+                "config": result.get("config"),
+            }, ensure_ascii=False),
         )
         status = 200 if result.get("ok") else 503
         return json_resp({"ok": bool(result.get("ok")), "health": result, "websocket_available": sock is not None}), status
@@ -1309,6 +1331,11 @@ def register_system_admin_routes(app, deps):
             data["server_listen_port"] = port
         if "server_ssl_enabled" in data:
             data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
+        if "comfyui_api_host" in data:
+            host = validate_comfyui_api_host(data.get("comfyui_api_host"))
+            if host is None:
+                return json_resp({"ok":False,"msg":"comfyui_api_host 必須是主機名稱或 IP，不可包含 http://、路徑、帳密或特殊字元"}), 400
+            data["comfyui_api_host"] = host
         if "comfyui_api_port" in data:
             try:
                 port = int(data.get("comfyui_api_port"))
@@ -1343,8 +1370,8 @@ def register_system_admin_routes(app, deps):
             data["web_terminal_qemu_distro"] = distro
         if "web_terminal_qemu_network_mode" in data:
             mode = str(data.get("web_terminal_qemu_network_mode") or "").strip()
-            if mode not in {"none", "nat", "restricted"}:
-                return json_resp({"ok":False,"msg":"web_terminal_qemu_network_mode 必須是 none、nat 或 restricted"}), 400
+            if mode not in {"none", "nat", "restricted", "user"}:
+                return json_resp({"ok":False,"msg":"web_terminal_qemu_network_mode 必須是 none、nat、restricted 或 user"}), 400
             data["web_terminal_qemu_network_mode"] = mode
         if "web_terminal_qemu_libvirt_uri" in data:
             uri = str(data.get("web_terminal_qemu_libvirt_uri") or "").strip()

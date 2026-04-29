@@ -88,7 +88,9 @@ service is unavailable, the page is disabled. Users can select a model, enter a
 prompt and generation parameters, generate an image, then either save it into
 Cloud Drive or discard it.
 
-Root can change the ComfyUI API port from server settings.
+Root can change the ComfyUI API host/IP and port from server settings. Enter
+only the host name or IP in the host field, for example `localhost` or
+`192.168.1.20`; do not include `http://`, paths, query strings, or credentials.
 
 ### Appeals
 
