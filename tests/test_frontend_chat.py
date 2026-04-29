@@ -13,8 +13,8 @@ def test_chat_room_delete_ui_is_wired():
 
     assert "/js/20-chat.js?v=20260429-chat-attachment-delete" in index_html
     assert "/js/00-core.js?v=20260429-chat-attachment-delete" in index_html
-    assert "/js/90-bootstrap.js?v=20260429-comfyui-draft" in index_html
-    assert "/styles.css?v=20260429-comfyui-post-thumb" in index_html
+    assert "/js/90-bootstrap.js?v=20260429-root-storage-override" in index_html
+    assert "/styles.css?v=20260429-chess-square-fixed" in index_html
     assert 'id="chat-friend-username"' in index_html
     assert 'id="chat-pending-attachment-list"' in index_html
     assert 'data-chat-sticker="smile"' in index_html

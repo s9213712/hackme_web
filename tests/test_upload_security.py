@@ -18,6 +18,7 @@ from services.upload_security import (
     scan_archive_members,
     update_cloud_drive_security_policy,
 )
+from services.storage_quota_overrides import set_storage_quota_override
 
 
 def _conn():
@@ -291,6 +292,36 @@ def test_manager_role_uses_fixed_1gb_cloud_drive_quota(tmp_path, monkeypatch):
         assert usage["quota_source"] == "manager_role_fixed_1gb"
         assert usage["disk"] is None
         assert usage["warning_threshold_percent"] is None
+    finally:
+        conn.close()
+
+
+def test_root_storage_override_takes_priority_over_role_quota(tmp_path):
+    conn = _conn()
+    try:
+        manager = {"id": 1, "username": "admin", "role": "manager", "effective_level": "suspended", "sanction_status": "suspended"}
+        set_storage_quota_override(
+            conn,
+            1,
+            quota_bytes=256 * 1024 * 1024,
+            max_file_size_bytes=12 * 1024 * 1024,
+            upload_rate_limit_per_day=3,
+            can_upload_override=False,
+            reason="root direct quota test",
+            actor_user_id=2,
+        )
+        usage = get_user_cloud_drive_usage(
+            conn,
+            manager,
+            member_rule={"can_upload_attachment": False, "attachment_quota_mb": 0, "max_attachment_size_mb": 0, "upload_rate_limit_per_day": 0},
+            storage_root=tmp_path,
+        )
+        assert usage["quota_source"] == "root_user_override"
+        assert usage["total_bytes"] == 256 * 1024 * 1024
+        assert usage["max_file_size_bytes"] == 12 * 1024 * 1024
+        assert usage["upload_rate_limit_per_day"] == 3
+        assert usage["can_upload"] is False
+        assert usage["root_override"]["reason"] == "root direct quota test"
     finally:
         conn.close()
 

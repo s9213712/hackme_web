@@ -36,7 +36,10 @@ function switchSettingsSection(tab) {
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-settings-" + tab);
   });
-  if (tab === "drive") loadCloudDriveAdminPolicy();
+  if (tab === "drive") {
+    loadCloudDriveAdminPolicy();
+    loadRootStorageUsers();
+  }
   if (tab === "member-levels") loadEditableMemberLevelRules();
 }
 
@@ -368,10 +371,20 @@ async function resetViolations(userId) {
 
 // ── Governance UI ───────────────────────────────────────────
 let governancePendingTargetUserId = "";
+const GOVERNANCE_ACTION_VALUE_HELP = {
+  warn: "可留空。系統會依提案原因替對象記一次違規警告。",
+  mute: "可留空。通過後會將帳號狀態設為 muted，並使其重新登入。",
+  restrict: "可留空，或填 ISO 到期時間，例如 2026-05-01T18:00。通過後會限制發文、上傳等功能。",
+  suspend: "可留空，或填 ISO 到期時間，例如 2026-05-01T18:00。通過後會暫停帳號使用。",
+  downgrade_level: "必填：newbie、normal、restricted 或 suspended。用來調整會員等級。",
+  force_password_reset: "可留空。通過後對象下次登入必須重新設定密碼。",
+  delete: "可留空。通過後帳號會被標記為 deleted，屬高風險操作。",
+};
 
 async function loadGovernanceDashboard() {
   await Promise.allSettled([loadUsers(), loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
   renderGovernanceTargetOptions();
+  updateGovernanceActionValueHelp();
 }
 
 function renderGovernanceTargetOptions(selectedValue = null) {
@@ -396,6 +409,21 @@ function renderGovernanceTargetOptions(selectedValue = null) {
   if (previous && rows.some((user) => String(user.id || "") === previous)) {
     select.value = previous;
     governancePendingTargetUserId = "";
+  }
+}
+
+function updateGovernanceActionValueHelp() {
+  const action = $("governance-action-type")?.value || "warn";
+  const input = $("governance-action-value");
+  const help = $("governance-action-value-help");
+  const text = GOVERNANCE_ACTION_VALUE_HELP[action] || "依處理方式填寫；不需要額外參數時可留空。";
+  if (help) help.textContent = text;
+  if (input) {
+    input.placeholder = action === "downgrade_level"
+      ? "newbie / normal / restricted / suspended"
+      : action === "restrict" || action === "suspend"
+        ? "可留空，或填 2026-05-01T18:00"
+        : "通常可留空";
   }
 }
 
@@ -571,6 +599,7 @@ function openGovernanceProposalForUser(userId, username) {
   renderGovernanceTargetOptions(userId);
   if ($("governance-target-user-id")) $("governance-target-user-id").value = userId;
   if ($("governance-reason")) $("governance-reason").value = `針對 ${username || "user #" + userId} 建立治理提案：`;
+  updateGovernanceActionValueHelp();
 }
 
 // ── Settings & restart ───────────────────────────────────────
@@ -604,6 +633,7 @@ const MEMBER_LEVEL_INT_FIELDS = [
   ["session_idle_timeout_minutes", "閒置登出分鐘"]
 ];
 let editableMemberLevelRules = [];
+let rootStorageUsersCache = [];
 const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "require_scan_before_download",
   "block_unclean_downloads",
@@ -704,6 +734,147 @@ async function saveCloudDriveAdminPolicy() {
     msg.textContent = json.ok ? "雲端硬碟安全政策已儲存" : (json.msg || "儲存失敗");
     msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
+}
+
+function rootStorageFormatBytes(bytes) {
+  if (typeof formatDriveBytes === "function") return formatDriveBytes(bytes);
+  if (bytes === null || bytes === undefined) return "無上限";
+  return `${Number(bytes || 0)} bytes`;
+}
+
+function rootStorageMbFromBytes(bytes) {
+  if (bytes === null || bytes === undefined) return "";
+  return Math.round((Number(bytes || 0) / 1024 / 1024) * 100) / 100;
+}
+
+function setRootStorageMsg(text, ok = true) {
+  const msg = $("root-storage-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function renderRootStorageUsers(users) {
+  const list = $("root-storage-users");
+  const select = $("root-storage-user-select");
+  if (select) {
+    const current = select.value;
+    select.innerHTML = (users || []).length
+      ? `<option value="">選擇要管理的帳號</option>` + users.map((user) => {
+          const label = `${user.username || "user"} · ${rootStorageFormatBytes(user.used_bytes || 0)} / ${rootStorageFormatBytes(user.total_bytes)}`;
+          return `<option value="${sanitize(String(user.user_id || ""))}" ${String(user.user_id || "") === current ? "selected" : ""}>${sanitize(label)}</option>`;
+        }).join("")
+      : `<option value="">沒有帳號資料</option>`;
+  }
+  if (!list) return;
+  if (!users || !users.length) {
+    list.innerHTML = `<div class="drive-card-sub">目前沒有可管理的帳號用量資料</div>`;
+    return;
+  }
+  list.innerHTML = users.map((user) => {
+    const override = user.override || user.root_override || {};
+    const overrideText = override.enabled
+      ? `root 直接設定中 · ${sanitize(override.reason || "未填原因")}`
+      : "沿用角色/會員等級";
+    return `<div class="drive-file-row" data-root-storage-user="${sanitize(String(user.user_id || ""))}">
+      <div>
+        <strong>${sanitize(user.username || `user #${user.user_id}`)}</strong>
+        <div class="drive-card-sub">
+          ${sanitize(user.role || "user")} · ${sanitize(user.effective_level || user.member_level || "-")} ·
+          ${rootStorageFormatBytes(user.used_bytes || 0)} / ${rootStorageFormatBytes(user.total_bytes)} ·
+          ${Number(user.percent_used || 0)}% · ${Number(user.file_count || 0)} 個檔案
+        </div>
+        <div class="drive-card-sub">${sanitize(overrideText)} · quota source=${sanitize(user.quota_source || "-")}</div>
+      </div>
+      <button class="btn" type="button" data-root-storage-select="${sanitize(String(user.user_id || ""))}">管理</button>
+    </div>`;
+  }).join("");
+}
+
+function fillRootStorageOverrideForm(userId) {
+  const user = rootStorageUsersCache.find((item) => String(item.user_id) === String(userId));
+  if (!user) return;
+  const override = user.override || {};
+  if ($("root-storage-user-select")) $("root-storage-user-select").value = String(user.user_id || "");
+  if ($("root-storage-quota-mb")) $("root-storage-quota-mb").value = override.enabled ? rootStorageMbFromBytes(override.quota_bytes) : "";
+  if ($("root-storage-max-file-mb")) $("root-storage-max-file-mb").value = override.enabled ? rootStorageMbFromBytes(override.max_file_size_bytes) : "";
+  if ($("root-storage-daily-limit")) $("root-storage-daily-limit").value = override.enabled && override.upload_rate_limit_per_day !== null && override.upload_rate_limit_per_day !== undefined ? override.upload_rate_limit_per_day : "";
+  if ($("root-storage-can-upload")) {
+    const value = override.enabled ? override.can_upload_override : null;
+    $("root-storage-can-upload").value = value === null || value === undefined ? "inherit" : String(!!value);
+  }
+  if ($("root-storage-override-reason")) $("root-storage-override-reason").value = override.enabled ? (override.reason || "") : "";
+}
+
+async function loadRootStorageUsers() {
+  if (!currentUser || currentUser !== "root") return;
+  if (!$("root-storage-users")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/storage/users", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    setRootStorageMsg(json.msg || "root 雲端硬碟管理資料讀取失敗", false);
+    return;
+  }
+  rootStorageUsersCache = Array.isArray(json.users) ? json.users : [];
+  renderRootStorageUsers(rootStorageUsersCache);
+  const selected = $("root-storage-user-select")?.value || rootStorageUsersCache[0]?.user_id || "";
+  if (selected) fillRootStorageOverrideForm(selected);
+}
+
+async function saveRootStorageOverride() {
+  const userId = $("root-storage-user-select")?.value || "";
+  if (!userId) {
+    setRootStorageMsg("請先選擇帳號", false);
+    return;
+  }
+  const reason = ($("root-storage-override-reason")?.value || "").trim();
+  if (!reason) {
+    setRootStorageMsg("請填寫覆寫原因", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    enabled: true,
+    quota_mb: $("root-storage-quota-mb")?.value || "",
+    max_file_size_mb: $("root-storage-max-file-mb")?.value || "",
+    upload_rate_limit_per_day: $("root-storage-daily-limit")?.value || "",
+    can_upload: $("root-storage-can-upload")?.value || "inherit",
+    reason
+  };
+  const res = await fetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  setRootStorageMsg(json.ok ? "root 直接設定已套用" : (json.msg || "設定失敗"), !!json.ok);
+  if (json.ok) await loadRootStorageUsers();
+}
+
+async function clearRootStorageOverride() {
+  const userId = $("root-storage-user-select")?.value || "";
+  if (!userId) {
+    setRootStorageMsg("請先選擇帳號", false);
+    return;
+  }
+  if (!confirm("清除此帳號的 root 直接雲端硬碟設定？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  setRootStorageMsg(json.ok ? "root 直接設定已清除" : (json.msg || "清除失敗"), !!json.ok);
+  if (json.ok) await loadRootStorageUsers();
 }
 
 async function loadEditableMemberLevelRules() {

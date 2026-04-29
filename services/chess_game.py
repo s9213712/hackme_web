@@ -140,8 +140,12 @@ def attacked_squares(board, by_color):
     return attacked
 
 
+def king_piece(color):
+    return "K" if color == "white" else "k"
+
+
 def king_square(board, color):
-    want = "K" if color == "white" else "k"
+    want = king_piece(color)
     for square, piece in board.items():
         if piece == want:
             return square
@@ -170,12 +174,16 @@ def apply_move_to_board(board, from_square, to_square, promotion=None):
 
 def legal_moves(board, color):
     board = normalize_board(board)
+    if not king_square(board, color) or not king_square(board, opponent(color)):
+        return []
     moves = []
     for from_square, piece in sorted(board.items()):
         if color_of(piece) != color:
             continue
         for to_square in pseudo_targets(board, from_square):
             if board.get(to_square) and color_of(board[to_square]) == color:
+                continue
+            if board.get(to_square) == king_piece(opponent(color)):
                 continue
             next_board, captured = apply_move_to_board(board, from_square, to_square)
             if not in_check(next_board, color):
@@ -198,6 +206,8 @@ def validate_move(board, color, from_square, to_square, promotion=None):
         raise ValueError("起點沒有棋子")
     if color_of(piece) != color:
         raise ValueError("現在不是這個棋子的回合")
+    if board.get(to_square) == king_piece(opponent(color)):
+        raise ValueError("不合法的走法：王不能被吃，必須以將死結束")
     for move in legal_moves(board, color):
         if move["from"] == from_square and move["to"] == to_square:
             next_board, captured = apply_move_to_board(board, from_square, to_square, promotion)
@@ -207,6 +217,11 @@ def validate_move(board, color, from_square, to_square, promotion=None):
 
 
 def game_status(board, turn):
+    board = normalize_board(board)
+    if not king_square(board, turn):
+        return {"status": "finished", "winner_color": opponent(turn), "reason": "king_missing"}
+    if not king_square(board, opponent(turn)):
+        return {"status": "finished", "winner_color": turn, "reason": "king_missing"}
     moves = legal_moves(board, turn)
     if moves:
         return {"status": "active", "winner_color": None, "reason": "check" if in_check(board, turn) else ""}

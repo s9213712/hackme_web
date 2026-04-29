@@ -268,6 +268,61 @@ def test_every_level_change_writes_audit_log(tmp_path):
         conn.close()
 
 
+def test_quota_reduction_level_change_warns_user_with_dm_and_notification(tmp_path):
+    conn = _conn(tmp_path / "levels.db")
+    try:
+        _insert_user(conn, 1, "root", "vip", role="super_admin")
+        _insert_user(conn, 9, "quotauser", "vip")
+        conn.execute(
+            """
+            CREATE TABLE uploaded_files (
+                id TEXT PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL,
+                storage_path TEXT NOT NULL,
+                privacy_mode TEXT NOT NULL,
+                risk_level TEXT NOT NULL,
+                scan_status TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                deleted_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (
+                id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
+                size_bytes, created_at
+            ) VALUES ('f1', 9, 'users/9/f1/a.bin', 'private_scannable', 'low', 'clean', ?, ?)
+            """,
+            (150 * 1024 * 1024, datetime.now().isoformat()),
+        )
+
+        user, err = apply_member_level_change(
+            conn,
+            9,
+            actor="root",
+            source="root",
+            base_level="normal",
+            reason="quota downgrade",
+        )
+
+        assert err is None
+        assert user["effective_level"] == "normal"
+        notice = conn.execute("SELECT * FROM storage_quota_reduction_notices WHERE user_id=9").fetchone()
+        assert notice["status"] == "pending"
+        assert notice["new_quota_bytes"] == 100 * 1024 * 1024
+        assert "24 小時" in notice["notice_message"]
+        notification = conn.execute("SELECT * FROM notifications WHERE user_id=9 AND type='storage_quota_reduced'").fetchone()
+        assert notification is not None
+        dm = conn.execute("SELECT * FROM direct_messages WHERE recipient_user_id=9").fetchone()
+        assert dm is not None
+        assert "完成備份" in dm["body"]
+    finally:
+        conn.close()
+
+
 def test_upgrade_and_sanction_suggestion_use_configured_rules(tmp_path):
     conn = _conn(tmp_path / "levels.db")
     try:

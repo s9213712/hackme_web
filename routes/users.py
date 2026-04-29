@@ -5,6 +5,7 @@ from flask import request, send_file
 
 from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
 from services.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
+from services.sanction_notices import record_admin_sanction_notice
 
 
 def register_user_routes(app, deps):
@@ -71,6 +72,65 @@ def register_user_routes(app, deps):
     def current_session_hash():
         tok = request.cookies.get("session_token")
         return hash_token(tok) if tok else ""
+
+    def _row_snapshot(row):
+        return {key: row[key] for key in row.keys()} if row else {}
+
+    def _sanction_label(data, target):
+        parts = []
+        if "sanction_status" in data:
+            parts.append(f"處分狀態 {target['sanction_status'] or 'none'} -> {normalize_text(data.get('sanction_status')) or 'none'}")
+        if data.get("sanction_until"):
+            parts.append(f"處分期限 {normalize_text(data.get('sanction_until'))}")
+        if "status" in data:
+            parts.append(f"帳號狀態 {target['status'] or '-'} -> {normalize_text(data.get('status')) or '-'}")
+        if "base_level" in data or "member_level" in data:
+            next_level = normalize_text(data.get("base_level") or data.get("member_level"))
+            if next_level:
+                parts.append(f"會員等級 {target['base_level'] or target['member_level'] or '-'} -> {next_level}")
+        return "；".join(parts) or "會員管理處分"
+
+    def _is_punitive_member_update(data, target):
+        if "sanction_status" in data:
+            next_sanction = normalize_text(data.get("sanction_status")) or "none"
+            if next_sanction in {"restricted", "suspended"} and next_sanction != (target["sanction_status"] or "none"):
+                return True
+        if "status" in data:
+            next_status = normalize_text(data.get("status"))
+            if next_status and next_status not in {"active", "pending"} and next_status != target["status"]:
+                return True
+        next_level = normalize_text(data.get("base_level") or data.get("member_level"))
+        if next_level in {"restricted", "suspended"} and next_level != (target["base_level"] or target["member_level"]):
+            return True
+        return False
+
+    def _send_admin_sanction_notice(conn, *, actor, actor_role, target, previous, data):
+        reason = normalize_text(data.get("level_update_reason") or data.get("reason") or "會員管理處分")
+        action_label = _sanction_label(data, target)
+        add_violation(
+            target["id"],
+            target["username"],
+            target["role"],
+            points=0,
+            reason=f"會員管理處分：{action_label}；原因：{reason}",
+            triggered_by=actor_role,
+            actor_username=actor["username"],
+        )
+        latest = conn.execute(
+            "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (target["id"],),
+        ).fetchone()
+        if not latest:
+            return
+        record_admin_sanction_notice(
+            conn,
+            actor=actor,
+            target=target,
+            previous=previous,
+            violation_id=latest["id"],
+            action_label=action_label,
+            reason=reason,
+        )
 
     def ensure_avatar_user_columns(conn):
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -530,6 +590,8 @@ def register_user_routes(app, deps):
 
             revoke_sessions_needed = False
             level_changed = False
+            previous_target = _row_snapshot(target)
+            sanction_notice_needed = False
             updates = []
             params = []
             if "nickname" in data:
@@ -562,6 +624,8 @@ def register_user_routes(app, deps):
                 val = normalize_text(data["status"])
                 if val not in ACCOUNT_STATUSES:
                     return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
+                if _is_punitive_member_update({"status": val}, target):
+                    sanction_notice_needed = True
                 updates.append("status=?")
                 params.append(val)
                 if val != "active":
@@ -594,6 +658,8 @@ def register_user_routes(app, deps):
                 if err:
                     return json_resp({"ok":False,"msg":err}), 400
                 level_changed = True
+                if _is_punitive_member_update(data, target):
+                    sanction_notice_needed = True
             if "role" in data:
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403
@@ -673,6 +739,16 @@ def register_user_routes(app, deps):
                 conn.execute(sql, params)
                 conn.commit()
             elif level_changed:
+                conn.commit()
+            if sanction_notice_needed and target["username"] != "root" and not is_self:
+                _send_admin_sanction_notice(
+                    conn,
+                    actor=actor,
+                    actor_role=actor_role,
+                    target=target,
+                    previous=previous_target,
+                    data=data,
+                )
                 conn.commit()
             if revoke_sessions_needed:
                 revoke_user_sessions(user_id)

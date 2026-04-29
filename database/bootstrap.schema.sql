@@ -473,6 +473,18 @@ CREATE TABLE IF NOT EXISTS user_storage (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS storage_quota_overrides (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    quota_bytes INTEGER,
+    max_file_size_bytes INTEGER,
+    upload_rate_limit_per_day INTEGER,
+    can_upload_override INTEGER,
+    reason TEXT,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS storage_files (
     id TEXT PRIMARY KEY,
     file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
@@ -511,6 +523,26 @@ CREATE TABLE IF NOT EXISTS storage_quota_log (
     reason TEXT,
     actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storage_quota_reduction_notices (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    old_level TEXT,
+    new_level TEXT NOT NULL,
+    old_quota_bytes INTEGER,
+    new_quota_bytes INTEGER NOT NULL,
+    used_bytes_at_notice INTEGER NOT NULL,
+    deadline_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    notice_message TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    purged_at TEXT,
+    deleted_file_count INTEGER NOT NULL DEFAULT 0,
+    deleted_bytes INTEGER NOT NULL DEFAULT 0,
+    CHECK (status IN ('pending', 'resolved', 'purged'))
 );
 
 CREATE TABLE IF NOT EXISTS albums (
@@ -558,6 +590,9 @@ CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_u
 CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id);
 CREATE INDEX IF NOT EXISTS idx_storage_folders_owner_path ON storage_folders(owner_user_id, virtual_path);
 CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_storage_quota_overrides_enabled ON storage_quota_overrides(enabled);
+CREATE INDEX IF NOT EXISTS idx_storage_quota_notices_due ON storage_quota_reduction_notices(status, deadline_at);
+CREATE INDEX IF NOT EXISTS idx_storage_quota_notices_user ON storage_quota_reduction_notices(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at);
@@ -785,6 +820,25 @@ CREATE INDEX IF NOT EXISTS idx_appeal_created_at ON violation_appeals(created_at
 CREATE INDEX IF NOT EXISTS idx_appeal_status     ON violation_appeals(status);
 
 CREATE INDEX IF NOT EXISTS idx_appeal_user      ON violation_appeals(user_id);
+
+CREATE TABLE IF NOT EXISTS admin_sanction_appeal_contexts (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            violation_id          INTEGER NOT NULL UNIQUE,
+            user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            pre_status            TEXT,
+            pre_role              TEXT,
+            pre_base_level        TEXT,
+            pre_member_level      TEXT,
+            pre_effective_level   TEXT,
+            pre_sanction_status   TEXT,
+            pre_sanction_until    TEXT,
+            action_label          TEXT NOT NULL,
+            reason                TEXT NOT NULL,
+            actor_username        TEXT NOT NULL,
+            created_at            TEXT NOT NULL
+        );
+
+CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS reports (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,

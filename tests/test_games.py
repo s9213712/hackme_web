@@ -3,7 +3,7 @@ import sqlite3
 from flask import Flask, jsonify
 
 from routes.games import ensure_game_schema, register_games_routes
-from services.chess_game import initial_board, legal_moves, validate_move
+from services.chess_game import game_status, initial_board, legal_moves, validate_move
 
 
 def _build_app(db_path, actor_box, points_service=None):
@@ -64,6 +64,51 @@ def test_chess_legal_move_validation_blocks_illegal_moves():
         assert "不合法" in str(exc)
     else:
         raise AssertionError("illegal chess move was accepted")
+
+
+def test_chess_rules_forbid_capturing_king_and_force_check_escape():
+    board = {
+        "e1": "K",
+        "e2": "Q",
+        "e8": "k",
+    }
+    assert not any(move["from"] == "e2" and move["to"] == "e8" for move in legal_moves(board, "white"))
+    try:
+        validate_move(board, "white", "e2", "e8")
+    except ValueError as exc:
+        assert "王不能被吃" in str(exc)
+    else:
+        raise AssertionError("king capture was accepted")
+
+    checked_board = {
+        "e1": "K",
+        "e8": "r",
+        "a8": "k",
+        "a2": "R",
+    }
+    assert game_status(checked_board, "white")["reason"] == "check"
+    assert not any(move["from"] == "a2" and move["to"] == "a3" for move in legal_moves(checked_board, "white"))
+    try:
+        validate_move(checked_board, "white", "a2", "a3")
+    except ValueError as exc:
+        assert "不合法" in str(exc)
+    else:
+        raise AssertionError("move that ignores check was accepted")
+
+
+def test_chess_checkmate_and_missing_king_finish_game():
+    board = initial_board()
+    for color, from_square, to_square in (
+        ("white", "f2", "f3"),
+        ("black", "e7", "e5"),
+        ("white", "g2", "g4"),
+        ("black", "d8", "h4"),
+    ):
+        board = validate_move(board, color, from_square, to_square)["board"]
+    assert game_status(board, "white") == {"status": "finished", "winner_color": "black", "reason": "checkmate"}
+
+    missing_white_king = {"a8": "k", "a1": "R"}
+    assert game_status(missing_white_king, "white") == {"status": "finished", "winner_color": "black", "reason": "king_missing"}
 
 
 def test_chess_practice_match_accepts_player_move_and_computer_reply(tmp_path):

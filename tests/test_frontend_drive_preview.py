@@ -105,22 +105,38 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="album-viewer-card"' in index_html
     assert 'id="album-thumb-size"' in index_html
     assert 'id="album-full-preview-overlay"' in index_html
-    assert '/js/35-drive.js?v=20260429-context-attachment-delete' in index_html
-    assert '/styles.css?v=20260429-comfyui-post-thumb' in index_html
+    assert 'class="drive-collapsible-panel" id="album-management-panel"' in index_html
+    assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
+    assert 'data-drive-action="album-preview-prev"' in index_html
+    assert 'data-drive-action="album-preview-next"' in index_html
+    assert '/js/35-drive.js?v=20260429-context-attachment-post-delete' in index_html
+    assert '/styles.css?v=20260429-chess-square-fixed' in index_html
     assert '/js/00-core.js?v=20260429-chat-attachment-delete' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
-    assert '/js/50-admin.js?v=20260429-governance-target-select' in index_html
+    assert '/js/50-admin.js?v=20260429-root-storage-override' in index_html
+    assert 'id="root-storage-user-select"' in index_html
+    assert 'id="root-storage-save-btn"' in index_html
+    assert 'id="root-storage-users"' in index_html
+    assert "function loadRootStorageUsers" in admin_js
+    assert "function saveRootStorageOverride" in admin_js
+    assert '"/root/storage/users"' in admin_js
+    assert 'rootStorageSave.addEventListener("click", saveRootStorageOverride)' in bootstrap_js
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js
     assert "data-drive-action" in drive_js
     assert "function drivePreviewContentUrl(fileId)" in drive_js
     assert "function driveFileIsImage(file)" in drive_js
+    assert "let albumPreviewSequence = []" in drive_js
+    assert "function setAlbumPreviewSequence" in drive_js
+    assert "function stepAlbumPreview(direction)" in drive_js
+    assert "event.key === \"ArrowLeft\"" in drive_js
+    assert "event.key === \"ArrowRight\"" in drive_js
     assert "function renderAttachmentFileSelects" in drive_js
     assert "async function ensureAttachmentFileOptionsLoaded" in drive_js
     assert "請先從下拉選單選擇雲端檔案" in drive_js
     assert 'data-drive-action="delete-context-attachment"' in drive_js
     assert "async function deleteContextAttachment" in drive_js
-    assert "/cloud-drive/refs/${encodeURIComponent(refId)}" in drive_js
+    assert "/cloud-drive/refs/${encodeURIComponent(refId)}/delete" in drive_js
     assert "附件編號讀取失敗" in drive_js
     assert "loadChatMessages(selectedChatRoomId" in drive_js
     assert '<select id="chat-attachment-existing-file-id">' in index_html
@@ -139,6 +155,7 @@ def test_album_viewer_has_dedicated_module():
     assert "async function fetchDrivePreviewBlob(fileId, csrf)" in drive_js
     assert "async function previewAlbumFileFullscreen(fileId" in drive_js
     assert 'data-drive-action="album-full-preview"' in drive_js
+    assert 'data-album-sequence="viewer"' in drive_js
     assert "closeAlbumFullPreview" in drive_js
     assert "hydrateAlbumViewerThumbnails" in drive_js
     assert "const blob = await fetchDrivePreviewBlob(file.file_id, csrf);" in drive_js
@@ -175,6 +192,8 @@ def test_album_viewer_has_dedicated_module():
     assert 'switchModuleTab("albums")' in bootstrap_js
     assert "sidebarToggle.addEventListener" in bootstrap_js
     assert 'normTab === "albums"' in admin_js
+    assert ".drive-collapsible-panel" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert ".album-preview-nav" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
 
 def test_album_preview_category_uses_storage_name_before_uploaded_metadata():

@@ -827,6 +827,51 @@ def test_storage_admin_summary_sync_and_root_purge(tmp_path):
     assert "synced_users" in run.get_json()["maintenance"]
 
 
+def test_root_storage_user_quota_override_api(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(4, "admin", "manager")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    denied = client.put(
+        "/api/root/storage/users/1/quota-override",
+        json={"quota_mb": 2, "reason": "manager should not set root override"},
+    )
+    assert denied.status_code == 403
+
+    actor_box["actor"] = _actor(5, "root", "super_admin")
+    listed = client.get("/api/root/storage/users")
+    assert listed.status_code == 200
+    assert any(row["username"] == "alice" for row in listed.get_json()["users"])
+
+    saved = client.put(
+        "/api/root/storage/users/1/quota-override",
+        json={
+            "quota_mb": 2,
+            "max_file_size_mb": 1,
+            "upload_rate_limit_per_day": 3,
+            "can_upload": False,
+            "reason": "root direct account setting",
+        },
+    )
+    assert saved.status_code == 200
+    payload = saved.get_json()
+    assert payload["override"]["enabled"] is True
+    assert payload["user"]["quota_source"] == "root_user_override"
+    assert payload["user"]["total_bytes"] == 2 * 1024 * 1024
+    assert payload["user"]["can_upload"] is False
+
+    detail = client.get("/api/root/storage/users/1")
+    assert detail.status_code == 200
+    assert detail.get_json()["user"]["override"]["reason"] == "root direct account setting"
+
+    cleared = client.delete("/api/root/storage/users/1/quota-override")
+    assert cleared.status_code == 200
+    assert cleared.get_json()["user"]["quota_source"] == "member_level_rules.attachment_quota_mb"
+
+
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -877,6 +922,15 @@ def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_referenc
     ref_id = attached_again.get_json()["attachment"]["ref_id"]
     removed_ref_compat = client.delete("/api/cloud-drive/refs/", json={"ref_id": ref_id})
     assert removed_ref_compat.status_code == 200
+
+    attached_post_delete = client.post(
+        "/api/cloud-drive/attach-existing",
+        json={"file_id": file_id, "context_type": "forum_post", "context_id": "101", "grant_role": "user"},
+    )
+    assert attached_post_delete.status_code == 200
+    ref_id = attached_post_delete.get_json()["attachment"]["ref_id"]
+    removed_ref_post = client.post(f"/api/cloud-drive/refs/{ref_id}/delete", json={})
+    assert removed_ref_post.status_code == 200
 
     deleted = client.delete(f"/api/cloud-drive/files/{file_id}")
     assert deleted.status_code == 200

@@ -65,6 +65,11 @@ function bindUiEvents() {
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
+  const rootStorageRefresh = $("root-storage-refresh-btn");
+  const rootStorageSave = $("root-storage-save-btn");
+  const rootStorageClear = $("root-storage-clear-btn");
+  const rootStorageUserSelect = $("root-storage-user-select");
+  const rootStorageUsers = $("root-storage-users");
   const serverModeApply = $("server-mode-apply-btn");
   const internalTestTokenRefresh = $("internal-test-token-refresh-btn");
   const internalTestTokenRotate = $("internal-test-token-rotate-btn");
@@ -400,11 +405,21 @@ function bindUiEvents() {
   if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
   if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
   if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
+  if ($("governance-action-type")) $("governance-action-type").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
+  if (rootStorageRefresh) rootStorageRefresh.addEventListener("click", loadRootStorageUsers);
+  if (rootStorageSave) rootStorageSave.addEventListener("click", saveRootStorageOverride);
+  if (rootStorageClear) rootStorageClear.addEventListener("click", clearRootStorageOverride);
+  if (rootStorageUserSelect) rootStorageUserSelect.addEventListener("change", (event) => fillRootStorageOverrideForm(event.target.value));
+  if (rootStorageUsers) rootStorageUsers.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-root-storage-select]");
+    if (!button) return;
+    fillRootStorageOverrideForm(button.dataset.rootStorageSelect || "");
+  });
   if (serverModeApply) serverModeApply.addEventListener("click", applyServerMode);
   if (internalTestTokenRefresh) internalTestTokenRefresh.addEventListener("click", loadInternalTestTokenStatus);
   if (internalTestTokenRotate) internalTestTokenRotate.addEventListener("click", rotateInternalTestToken);

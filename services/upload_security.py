@@ -13,6 +13,7 @@ from io import BytesIO
 from pathlib import Path
 
 from services.identity import is_admin_role
+from services.storage_quota_overrides import apply_storage_quota_override, get_storage_quota_override
 
 
 UPLOAD_PRIVACY_MODES = {
@@ -785,13 +786,15 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         total_bytes = quota_mb * 1024 * 1024
         quota_source = "member_level_rules.attachment_quota_mb"
     remaining_bytes = None if total_bytes is None else max(0, total_bytes - used_bytes)
+    max_file_size_bytes = remaining_bytes if (disk or manager_quota_actor) else (None if root_actor else max_file_size_mb * 1024 * 1024)
+    rate_limit = None if admin_actor else upload_rate_limit_per_day
     percent_used = 0.0
     if total_bytes and total_bytes > 0:
         percent_used = min(100.0, round((used_bytes / total_bytes) * 100, 2))
     elif total_bytes == 0 and used_bytes > 0:
         percent_used = 100.0
 
-    return {
+    usage = {
         "user_id": user_id,
         "effective_level": effective_level,
         "can_upload": can_upload,
@@ -801,8 +804,8 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "remaining_bytes": remaining_bytes,
         "percent_used": percent_used,
         "file_count": file_count,
-        "max_file_size_bytes": remaining_bytes if (disk or manager_quota_actor) else (None if root_actor else max_file_size_mb * 1024 * 1024),
-        "upload_rate_limit_per_day": None if admin_actor else upload_rate_limit_per_day,
+        "max_file_size_bytes": max_file_size_bytes,
+        "upload_rate_limit_per_day": rate_limit,
         "disk": disk,
         "warning_threshold_percent": int(ADMIN_DISK_WARNING_RATIO * 100) if disk else None,
         "warning_threshold_bytes": int(total_bytes * ADMIN_DISK_WARNING_RATIO) if disk and total_bytes is not None else None,
@@ -811,6 +814,7 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "by_risk_level": _count_grouped(conn, user_id, "risk_level"),
         "by_scan_status": _count_grouped(conn, user_id, "scan_status"),
     }
+    return apply_storage_quota_override(usage, get_storage_quota_override(conn, user_id))
 
 
 def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=None):

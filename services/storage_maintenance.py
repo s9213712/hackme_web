@@ -1,6 +1,7 @@
 from datetime import datetime, time, timedelta
 
 from services.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
+from services.storage_quota_enforcement import purge_expired_quota_reduction_files
 
 
 def _parse_daily_time(value):
@@ -60,8 +61,14 @@ def run_storage_maintenance(conn, *, actor_user_id=None, retention_days=30, now=
         )
         for row in users
     ]
+    quota_enforcement = purge_expired_quota_reduction_files(
+        conn,
+        actor_user_id=actor_user_id,
+        now=now,
+    )
     return {
         "purged_trash_entries": int(purged or 0),
+        "quota_enforcement": quota_enforcement,
         "synced_users": len(synced),
         "retention_days": retention_days,
         "cutoff": cutoff,

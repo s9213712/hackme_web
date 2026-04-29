@@ -218,6 +218,31 @@ def test_points_chain_verify_identifies_tampered_ledger(tmp_path):
     assert flagged["verification_errors"][0]["type"] == "ledger_hash"
 
 
+def test_tampered_ledger_cannot_be_rolled_back_from_dirty_row(tmp_path):
+    service = _service(tmp_path)
+    tx = service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=10,
+        action_type="test_credit",
+    )
+    conn = service.get_db()
+    try:
+        conn.execute("DROP TRIGGER trg_points_ledger_core_immutable")
+        conn.execute("UPDATE points_ledger SET amount=99 WHERE ledger_uuid=?", (tx["ledger"]["ledger_uuid"],))
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="tampered"):
+        service.rollback_ledger(
+            actor={"id": 3, "username": "root", "role": "super_admin"},
+            ledger_uuid=tx["ledger"]["ledger_uuid"],
+            reason="dirty rollback should be blocked",
+        )
+
+
 def test_points_chain_seal_adds_local_signature_and_root_report(tmp_path):
     service = _service(tmp_path)
     service.record_transaction(

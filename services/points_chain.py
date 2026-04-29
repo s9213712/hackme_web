@@ -167,6 +167,23 @@ def compute_ledger_hash(row):
     return sha256_text(canonical_json(ledger_hash_payload(row)))
 
 
+def create_points_ledger_immutable_trigger(conn):
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_points_ledger_core_immutable
+        BEFORE UPDATE OF ledger_uuid, user_id, public_account_id, currency_type, direction, amount,
+                         balance_before, balance_after, action_type, reference_type, reference_id,
+                         idempotency_key, reason, public_metadata_json, private_metadata_json,
+                         sensitive_metadata_encrypted, metadata_hash, previous_ledger_hash,
+                         ledger_hash, created_by, created_by_role, created_at
+        ON points_ledger
+        BEGIN
+            SELECT RAISE(ABORT, 'points ledger core fields are immutable');
+        END
+        """
+    )
+
+
 def merkle_root(hashes):
     if not hashes:
         return sha256_text("")
@@ -460,20 +477,7 @@ def ensure_points_economy_schema(conn):
         END
         """
     )
-    conn.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS trg_points_ledger_core_immutable
-        BEFORE UPDATE OF ledger_uuid, user_id, public_account_id, currency_type, direction, amount,
-                         balance_before, balance_after, action_type, reference_type, reference_id,
-                         idempotency_key, reason, public_metadata_json, private_metadata_json,
-                         sensitive_metadata_encrypted, metadata_hash, previous_ledger_hash,
-                         ledger_hash, created_by, created_by_role, created_at
-        ON points_ledger
-        BEGIN
-            SELECT RAISE(ABORT, 'points ledger core fields are immutable');
-        END
-        """
-    )
+    create_points_ledger_immutable_trigger(conn)
     now = utc_now()
     for rule in DEFAULT_RULES:
         conn.execute(
@@ -1334,6 +1338,8 @@ class PointsLedgerService:
             original = conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
             if not original:
                 raise ValueError("ledger not found")
+            if original["ledger_hash"] != compute_ledger_hash(original):
+                raise ValueError("ledger is tampered; repair or restore it before rollback")
             if original["status"] == "reversed":
                 raise ValueError("ledger already reversed")
             if str(original["action_type"] or "").startswith("rollback:"):

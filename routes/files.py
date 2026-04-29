@@ -62,6 +62,11 @@ from services.storage_albums import (
     update_album,
 )
 from services.storage_maintenance import run_storage_maintenance, storage_maintenance_status
+from services.storage_quota_overrides import (
+    clear_storage_quota_override,
+    get_storage_quota_override,
+    set_storage_quota_override,
+)
 from flask import request, send_file
 
 
@@ -110,6 +115,60 @@ def register_file_routes(app, deps):
         if not _is_manager(actor):
             return None, json_resp({"ok": False, "msg": "需要管理員權限"}), 403
         return actor, None
+
+    def _root_or_403():
+        actor, err = _actor_or_401()
+        if err:
+            return None, err
+        if not _is_root(actor):
+            return None, json_resp({"ok": False, "msg": "只有 root 可操作"}, 403)
+        return actor, None
+
+    def _optional_mb_to_bytes(value, field):
+        if value in (None, ""):
+            return None
+        try:
+            mb = float(value)
+        except Exception as exc:
+            raise ValueError(f"{field} 必須是數字") from exc
+        if mb < 0:
+            raise ValueError(f"{field} 不可小於 0")
+        return int(mb * 1024 * 1024)
+
+    def _optional_nonnegative_int(value, field):
+        if value in (None, ""):
+            return None
+        try:
+            number = int(value)
+        except Exception as exc:
+            raise ValueError(f"{field} 必須是整數") from exc
+        if number < 0:
+            raise ValueError(f"{field} 不可小於 0")
+        return number
+
+    def _optional_bool(value):
+        if value in ("", None, "inherit"):
+            return None
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on", "allow", "allowed"}:
+            return True
+        if text in {"0", "false", "no", "off", "deny", "denied"}:
+            return False
+        raise ValueError("can_upload 必須是 true、false 或 inherit")
+
+    def _storage_usage_for_user_row(conn, row):
+        data = dict(row)
+        level = data.get("effective_level") or data.get("member_level") or "newbie"
+        rule = get_member_level_rule(conn, level)
+        usage = get_user_cloud_drive_usage(conn, data, member_rule=rule, storage_root=storage_root)
+        usage["username"] = data.get("username")
+        usage["role"] = data.get("role", "user")
+        usage["member_level"] = data.get("member_level") or data.get("base_level") or data.get("effective_level")
+        usage["effective_level"] = data.get("effective_level") or usage.get("effective_level")
+        usage["override"] = get_storage_quota_override(conn, data.get("id"))
+        return usage
 
     def _requires_download_warning(policy, row):
         if not policy.get("warn_high_risk_downloads"):
@@ -411,6 +470,133 @@ def register_file_routes(app, deps):
                 """
             ).fetchall()
             return json_resp({"ok": True, "users": [dict(row) for row in rows]})
+        finally:
+            conn.close()
+
+    @app.route("/api/root/storage/users", methods=["GET"])
+    @require_csrf_safe
+    def root_storage_users():
+        actor, err = _root_or_403()
+        if err:
+            return err
+        query = (request.args.get("q") or "").strip().lower()
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            rows = conn.execute("SELECT * FROM users ORDER BY username ASC, id ASC LIMIT 300").fetchall()
+            users = []
+            for row in rows:
+                usage = _storage_usage_for_user_row(conn, row)
+                if query and query not in str(usage.get("username") or "").lower():
+                    continue
+                users.append(usage)
+            return json_resp({"ok": True, "users": users})
+        finally:
+            conn.close()
+
+    @app.route("/api/root/storage/users/<int:user_id>", methods=["GET"])
+    @require_csrf_safe
+    def root_storage_user_detail(user_id):
+        actor, err = _root_or_403()
+        if err:
+            return err
+        include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
+        conn = get_db()
+        try:
+            ensure_storage_album_schema(conn)
+            row = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
+            where = "sf.owner_user_id=? AND sf.deleted_at IS NULL AND f.deleted_at IS NULL"
+            params = [int(user_id)]
+            if not include_trashed:
+                where += " AND sf.is_trashed=0"
+            files = conn.execute(
+                f"""
+                SELECT sf.*, f.size_bytes, f.scan_status, f.risk_level, f.privacy_mode
+                FROM storage_files sf
+                JOIN uploaded_files f ON f.id=sf.file_id
+                WHERE {where}
+                ORDER BY sf.updated_at DESC
+                LIMIT 300
+                """,
+                tuple(params),
+            ).fetchall()
+            return json_resp({
+                "ok": True,
+                "user": _storage_usage_for_user_row(conn, row),
+                "files": [dict(item) for item in files],
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/root/storage/users/<int:user_id>/quota-override", methods=["PUT"])
+    @require_csrf
+    def root_storage_set_quota_override(user_id):
+        actor, err = _root_or_403()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True) or {}
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}, 400)
+        try:
+            quota_bytes = _optional_mb_to_bytes(data.get("quota_mb"), "quota_mb")
+            max_file_size_bytes = _optional_mb_to_bytes(data.get("max_file_size_mb"), "max_file_size_mb")
+            upload_rate_limit = _optional_nonnegative_int(data.get("upload_rate_limit_per_day"), "upload_rate_limit_per_day")
+        except ValueError as exc:
+            return json_resp({"ok": False, "msg": str(exc)}, 400)
+        try:
+            can_upload_override = _optional_bool(data.get("can_upload"))
+        except ValueError as exc:
+            return json_resp({"ok": False, "msg": str(exc)}, 400)
+        reason = (data.get("reason") or "").strip()
+        if not reason:
+            return json_resp({"ok": False, "msg": "請填寫 root 覆寫原因"}, 400)
+        conn = get_db()
+        try:
+            target = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+            if not target:
+                return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
+            override = set_storage_quota_override(
+                conn,
+                user_id,
+                enabled=bool(data.get("enabled", True)),
+                quota_bytes=quota_bytes,
+                max_file_size_bytes=max_file_size_bytes,
+                upload_rate_limit_per_day=upload_rate_limit,
+                can_upload_override=can_upload_override,
+                reason=reason,
+                actor_user_id=_actor_value(actor, "id"),
+            )
+            conn.commit()
+            audit(
+                "ROOT_STORAGE_QUOTA_OVERRIDE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"user_id={user_id}, quota_bytes={quota_bytes}, max_file_size_bytes={max_file_size_bytes}, rate={upload_rate_limit}",
+            )
+            return json_resp({"ok": True, "override": override, "user": _storage_usage_for_user_row(conn, target)})
+        finally:
+            conn.close()
+
+    @app.route("/api/root/storage/users/<int:user_id>/quota-override", methods=["DELETE"])
+    @require_csrf
+    def root_storage_clear_quota_override(user_id):
+        actor, err = _root_or_403()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            target = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+            if not target:
+                return json_resp({"ok": False, "msg": "找不到帳號"}, 404)
+            clear_storage_quota_override(conn, user_id)
+            conn.commit()
+            audit("ROOT_STORAGE_QUOTA_OVERRIDE_CLEAR", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}")
+            return json_resp({"ok": True, "user": _storage_usage_for_user_row(conn, target)})
         finally:
             conn.close()
 
@@ -1517,6 +1703,8 @@ def register_file_routes(app, deps):
     @app.route("/api/cloud-drive/refs", methods=["DELETE"])
     @app.route("/api/cloud-drive/refs/", methods=["DELETE"])
     @app.route("/api/cloud-drive/refs/<ref_id>", methods=["DELETE"])
+    @app.route("/api/cloud-drive/refs/delete", methods=["POST"])
+    @app.route("/api/cloud-drive/refs/<ref_id>/delete", methods=["POST"])
     @require_csrf
     def cloud_drive_delete_ref(ref_id=None):
         actor, err = _actor_or_401()

@@ -814,6 +814,8 @@ let selectedAlbumViewerId = "";
 let pendingAlbumPickerResolve = null;
 let albumThumbObjectUrls = [];
 let currentAlbumFullPreviewUrl = "";
+let albumPreviewSequence = [];
+let albumPreviewIndex = -1;
 let lastDrivePreviewClick = { fileId: "", at: 0 };
 const DRIVE_FULLSCREEN_PREVIEW_MS = 450;
 
@@ -897,12 +899,37 @@ function closeAlbumFullPreview() {
   const overlay = $("album-full-preview-overlay");
   const body = $("album-full-preview-body");
   clearAlbumFullPreviewUrl();
+  albumPreviewIndex = -1;
   if (body) body.innerHTML = "";
   if (overlay) {
     overlay.classList.remove("show");
     overlay.setAttribute("aria-hidden", "true");
   }
   document.body.classList.remove("modal-open");
+}
+
+function albumPreviewFileName(file) {
+  return albumFileDisplayName(file || {}) || "圖片預覽";
+}
+
+function setAlbumPreviewSequence(files = [], fileId = "") {
+  const rows = (Array.isArray(files) ? files : [])
+    .filter((file) => file?.file_id && (typeof driveFileIsImage !== "function" || driveFileIsImage(file)));
+  albumPreviewSequence = rows;
+  albumPreviewIndex = rows.findIndex((file) => String(file.file_id) === String(fileId || ""));
+}
+
+function albumPreviewCurrentCountLabel() {
+  if (!albumPreviewSequence.length || albumPreviewIndex < 0) return "";
+  return `${albumPreviewIndex + 1} / ${albumPreviewSequence.length}`;
+}
+
+function updateAlbumPreviewControls() {
+  const hasMany = albumPreviewSequence.length > 1 && albumPreviewIndex >= 0;
+  document.querySelectorAll("[data-drive-action='album-preview-prev'], [data-drive-action='album-preview-next']").forEach((button) => {
+    button.disabled = !hasMany;
+    button.classList.toggle("is-disabled", !hasMany);
+  });
 }
 
 function renderDrivePreviewMetadata(preview, fileId) {
@@ -979,7 +1006,14 @@ async function previewDriveFile(fileId, options = {}) {
   }
 }
 
-async function previewAlbumFileFullscreen(fileId, fileName = "") {
+async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
+  if (Array.isArray(options.files)) {
+    setAlbumPreviewSequence(options.files, fileId);
+  } else if (!albumPreviewSequence.some((file) => String(file.file_id) === String(fileId || ""))) {
+    setAlbumPreviewSequence([], fileId);
+  } else {
+    albumPreviewIndex = albumPreviewSequence.findIndex((file) => String(file.file_id) === String(fileId || ""));
+  }
   const overlay = $("album-full-preview-overlay");
   const title = $("album-full-preview-title");
   const meta = $("album-full-preview-meta");
@@ -989,8 +1023,9 @@ async function previewAlbumFileFullscreen(fileId, fileName = "") {
   overlay.classList.add("show");
   overlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("modal-open");
-  if (title) title.textContent = fileName || "檔案預覽";
+  if (title) title.textContent = fileName || albumPreviewFileName(albumPreviewSequence[albumPreviewIndex]) || "檔案預覽";
   if (meta) meta.textContent = "讀取檔案中...";
+  updateAlbumPreviewControls();
   body.innerHTML = `<div class="drive-empty">讀取檔案中...</div>`;
   try {
     await fetchCsrfToken({ force: true });
@@ -1002,8 +1037,9 @@ async function previewAlbumFileFullscreen(fileId, fileName = "") {
     const json = await res.json().catch(() => ({}));
     if (!json.ok) throw new Error(json.msg || "預覽失敗");
     const preview = json.preview || {};
-    if (title) title.textContent = preview.filename || fileName || "檔案預覽";
-    const baseMeta = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · scan=${preview.scan_status || "-"}`;
+    if (title) title.textContent = preview.filename || fileName || albumPreviewFileName(albumPreviewSequence[albumPreviewIndex]) || "檔案預覽";
+    const countLabel = albumPreviewCurrentCountLabel();
+    const baseMeta = `${countLabel ? `${countLabel} · ` : ""}${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · scan=${preview.scan_status || "-"}`;
     if (preview.render_mode === "text") {
       if (meta) meta.textContent = baseMeta;
       body.innerHTML = `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
@@ -1034,9 +1070,19 @@ async function previewAlbumFileFullscreen(fileId, fileName = "") {
     }
   } catch (err) {
     clearAlbumFullPreviewUrl();
+    updateAlbumPreviewControls();
     if (meta) meta.textContent = "";
     body.innerHTML = `<div class="drive-empty">${sanitize(err.message || "預覽失敗")}</div>`;
   }
+}
+
+function stepAlbumPreview(direction) {
+  if (!albumPreviewSequence.length || albumPreviewIndex < 0) return;
+  const nextIndex = (albumPreviewIndex + direction + albumPreviewSequence.length) % albumPreviewSequence.length;
+  const nextFile = albumPreviewSequence[nextIndex];
+  if (!nextFile?.file_id) return;
+  albumPreviewIndex = nextIndex;
+  previewAlbumFileFullscreen(nextFile.file_id, albumPreviewFileName(nextFile)).catch((err) => alert(err.message || "預覽失敗"));
 }
 
 async function editDriveTextFile(fileId) {
@@ -1118,7 +1164,7 @@ async function deleteContextAttachment(refId, contextType, contextId, targetId) 
     return;
   }
   if (!window.confirm("將此附件從目前項目移除？原雲端檔案不會被刪除。")) return;
-  await storageAction(`/cloud-drive/refs/${encodeURIComponent(refId)}`, "DELETE");
+  await storageAction(`/cloud-drive/refs/${encodeURIComponent(refId)}/delete`, "POST");
   if (contextType === "chat_message" && typeof loadChatMessages === "function" && selectedChatRoomId) {
     await loadChatMessages(selectedChatRoomId, false);
   } else if (contextType && contextId && targetId) {
@@ -2095,9 +2141,14 @@ async function loadAlbumGallery() {
 
 function closeAlbumViewer() {
   selectedAlbumViewerId = "";
+  albumPreviewSequence = [];
+  albumPreviewIndex = -1;
   clearAlbumThumbObjectUrls();
   const card = $("album-viewer-card");
-  if (card) card.style.display = "none";
+  if (card) {
+    card.open = false;
+    card.style.display = "none";
+  }
 }
 
 function renderAlbumPreviewTile(file) {
@@ -2106,7 +2157,7 @@ function renderAlbumPreviewTile(file) {
   const thumbKey = file.id || file.file_id;
   const canTryPreview = category === "image" || category === "metadata";
   const thumb = canTryPreview
-    ? `<div class="drive-gallery-thumb" data-album-thumb-key="${sanitize(thumbKey)}"><span>讀取預覽</span></div>`
+    ? `<button class="drive-gallery-thumb drive-gallery-thumb-button" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer" data-album-thumb-key="${sanitize(thumbKey)}"><span>讀取預覽</span></button>`
     : `<div class="drive-gallery-thumb drive-gallery-thumb-placeholder"><span>${sanitize(category)}</span></div>`;
   return `
     <div class="drive-gallery-tile">
@@ -2116,7 +2167,7 @@ function renderAlbumPreviewTile(file) {
         <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · <span data-album-category-key="${sanitize(thumbKey)}">${sanitize(category)}</span> · scan=${sanitize(file.scan_status || "-")}</div>
       </div>
       <div class="drive-file-actions" style="justify-content:flex-start;">
-        <button class="btn" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}">預覽</button>
+        <button class="btn" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer">預覽</button>
         ${file.storage_file_id ? `<button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.storage_file_id)}">下載</button>` : `<button class="btn" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id)}" data-warn="0">下載</button>`}
       </div>
     </div>
@@ -2154,12 +2205,17 @@ async function openAlbumViewer(id, options = {}) {
   const title = $("album-viewer-title");
   const meta = $("album-viewer-meta");
   const filesEl = $("album-viewer-files");
-  if (card) card.style.display = "block";
+  if (card) {
+    card.style.display = "block";
+    card.open = Boolean(options.openContent);
+  }
   if (filesEl) filesEl.innerHTML = `<div class="drive-empty">讀取相簿中...</div>`;
   try {
     const json = await storageAction(`/storage/albums/${encodeURIComponent(id)}`, "GET");
     const album = json.album || {};
     const files = Array.isArray(album.files) ? album.files : [];
+    albumPreviewSequence = files.filter((file) => file?.file_id && (typeof driveFileIsImage !== "function" || driveFileIsImage(file)));
+    albumPreviewIndex = -1;
     if (title) title.textContent = album.title || "相簿";
     if (meta) meta.textContent = `${albumVisibilityLabel(album.visibility)} · ${files.length} 個檔案${album.description ? ` · ${album.description}` : ""}`;
     if (!filesEl) return;
@@ -2230,9 +2286,12 @@ document.addEventListener("click", (event) => {
   const path = button.dataset.path || "";
   const name = button.dataset.name || "";
   const warn = button.dataset.warn === "1";
+  const albumSequence = button.dataset.albumSequence || "";
   (async () => {
     if (action === "preview") return previewDriveFile(fileId, { fileName: name });
-    if (action === "album-full-preview") return previewAlbumFileFullscreen(fileId, name);
+    if (action === "album-full-preview") return previewAlbumFileFullscreen(fileId, name, albumSequence === "viewer" ? { files: albumPreviewSequence } : {});
+    if (action === "album-preview-prev") return stepAlbumPreview(-1);
+    if (action === "album-preview-next") return stepAlbumPreview(1);
     if (action === "edit-text") return editDriveTextFile(fileId);
     if (action === "save-text") return saveDriveTextFile(fileId);
     if (action === "download") return downloadDriveFile(fileId, warn);
@@ -2273,7 +2332,14 @@ document.addEventListener("focusin", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && $("album-full-preview-overlay")?.classList.contains("show")) {
+  const overlayOpen = $("album-full-preview-overlay")?.classList.contains("show");
+  if (event.key === "Escape" && overlayOpen) {
     closeAlbumFullPreview();
+  } else if (overlayOpen && event.key === "ArrowLeft") {
+    event.preventDefault();
+    stepAlbumPreview(-1);
+  } else if (overlayOpen && event.key === "ArrowRight") {
+    event.preventDefault();
+    stepAlbumPreview(1);
   }
 });

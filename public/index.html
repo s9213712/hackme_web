@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-comfyui-post-thumb" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-chess-square-fixed" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -743,57 +743,29 @@
 
   <div class="module-section" id="module-albums">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
-      <div class="drive-card" style="margin-bottom:1rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">相簿管理</div>
-            <div class="drive-card-sub">建立、編輯與瀏覽相簿；圖片可在雲端硬碟檔案列表直接加入。</div>
-          </div>
-          <button class="btn" type="button" data-drive-action="refresh-albums">刷新</button>
-        </div>
-        <div class="settings-option-grid">
-          <div class="field">
-            <label>相簿名稱</label>
-            <input type="text" id="album-create-title" placeholder="我的相簿" />
-          </div>
-          <div class="field">
-            <label>描述</label>
-            <input type="text" id="album-create-description" placeholder="旅行、專案、公開素材..." />
-          </div>
-          <div class="field">
-            <label>可見性</label>
-            <select id="album-create-visibility">
-              <option value="private">私人</option>
-              <option value="unlisted">不列出，持連結可看</option>
-              <option value="public">公開</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button class="btn btn-primary" id="album-create-btn" type="button">建立</button>
-          </div>
-        </div>
-        <div id="album-list" class="drive-file-list"></div>
-        <div id="album-detail-card" class="drive-album-detail" style="display:none;">
-          <div class="drive-card-heading">
-            <div>
-              <div class="drive-card-title" id="album-detail-title">相簿內容</div>
-              <div class="drive-card-sub" id="album-detail-meta"></div>
-            </div>
-            <button class="btn" type="button" data-drive-action="close-album-detail">關閉</button>
+      <details class="drive-collapsible-panel" id="album-management-panel">
+        <summary>
+          <span>
+            <span class="drive-card-title">相簿管理</span>
+            <span class="drive-card-sub">建立、編輯與瀏覽相簿；圖片可在雲端硬碟檔案列表直接加入。</span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
+            <button class="btn" type="button" data-drive-action="refresh-albums">刷新</button>
           </div>
           <div class="settings-option-grid">
             <div class="field">
               <label>相簿名稱</label>
-              <input type="text" id="album-edit-title" />
+              <input type="text" id="album-create-title" placeholder="我的相簿" />
             </div>
             <div class="field">
               <label>描述</label>
-              <input type="text" id="album-edit-description" />
+              <input type="text" id="album-create-description" placeholder="旅行、專案、公開素材..." />
             </div>
             <div class="field">
               <label>可見性</label>
-              <select id="album-edit-visibility">
+              <select id="album-create-visibility">
                 <option value="private">私人</option>
                 <option value="unlisted">不列出，持連結可看</option>
                 <option value="public">公開</option>
@@ -801,11 +773,43 @@
             </div>
             <div class="field">
               <label>&nbsp;</label>
-              <button class="btn btn-primary" type="button" data-drive-action="save-album-detail">儲存</button>
+              <button class="btn btn-primary" id="album-create-btn" type="button">建立</button>
+            </div>
+          </div>
+          <div id="album-list" class="drive-file-list"></div>
+          <div id="album-detail-card" class="drive-album-detail" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title" id="album-detail-title">相簿內容</div>
+                <div class="drive-card-sub" id="album-detail-meta"></div>
+              </div>
+              <button class="btn" type="button" data-drive-action="close-album-detail">關閉</button>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>相簿名稱</label>
+                <input type="text" id="album-edit-title" />
+              </div>
+              <div class="field">
+                <label>描述</label>
+                <input type="text" id="album-edit-description" />
+              </div>
+              <div class="field">
+                <label>可見性</label>
+                <select id="album-edit-visibility">
+                  <option value="private">私人</option>
+                  <option value="unlisted">不列出，持連結可看</option>
+                  <option value="public">公開</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" type="button" data-drive-action="save-album-detail">儲存</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </details>
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">相簿預覽</div>
@@ -821,16 +825,20 @@
         </div>
       </div>
       <div class="drive-dashboard-grid" id="album-gallery-list" style="margin-top:1rem;"></div>
-      <div class="drive-card" id="album-viewer-card" style="display:none;margin-top:1rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title" id="album-viewer-title">相簿</div>
-            <div class="drive-card-sub" id="album-viewer-meta"></div>
+      <details class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card" style="display:none;margin-top:1rem;">
+        <summary>
+          <span>
+            <span class="drive-card-title" id="album-viewer-title">相簿</span>
+            <span class="drive-card-sub" id="album-viewer-meta"></span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
+            <button class="btn" type="button" data-drive-action="close-album-viewer">關閉</button>
           </div>
-          <button class="btn" type="button" data-drive-action="close-album-viewer">關閉</button>
+          <div id="album-viewer-files" class="drive-gallery-grid"></div>
         </div>
-        <div id="album-viewer-files" class="drive-gallery-grid"></div>
-      </div>
+      </details>
       <div id="album-gallery-msg" class="msg"></div>
     </div>
   </div>
@@ -1222,25 +1230,52 @@
         </div>
         <div class="admin-tools" style="margin-bottom:.8rem;">
           <div class="mini-title">建立治理提案</div>
-          <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;">
-            <select id="governance-target-user-id">
-              <option value="">讀取會員中...</option>
-            </select>
-            <select id="governance-action-type">
-              <option value="warn">warn</option>
-              <option value="mute">mute</option>
-              <option value="restrict">restrict</option>
-              <option value="suspend">suspend</option>
-              <option value="downgrade_level">downgrade_level</option>
-              <option value="force_password_reset">force_password_reset</option>
-              <option value="delete">delete</option>
-            </select>
-            <input type="text" id="governance-action-value" placeholder="動作值，例如 normal 或到期時間" />
-            <input type="number" id="governance-required-votes" min="1" max="10" value="2" />
-            <input type="number" id="governance-ttl-hours" min="1" max="720" value="72" />
-            <button class="btn btn-primary" id="governance-create-proposal" type="button">送出提案</button>
+          <div class="settings-option-grid governance-form-grid">
+            <div class="field">
+              <label>處理對象</label>
+              <select id="governance-target-user-id">
+                <option value="">讀取會員中...</option>
+              </select>
+              <div class="field-hint">選擇要被治理提案影響的會員；root 不能作為目標。</div>
+            </div>
+            <div class="field">
+              <label>處理方式</label>
+              <select id="governance-action-type">
+                <option value="warn">記違規警告</option>
+                <option value="mute">禁言</option>
+                <option value="restrict">限制功能</option>
+                <option value="suspend">暫停帳號</option>
+                <option value="downgrade_level">調整會員等級</option>
+                <option value="force_password_reset">要求重設密碼</option>
+                <option value="delete">標記刪除帳號</option>
+              </select>
+              <div class="field-hint">這是提案通過後要執行的治理動作。</div>
+            </div>
+            <div class="field">
+              <label>動作值</label>
+              <input type="text" id="governance-action-value" placeholder="依處理方式填寫，可留空" />
+              <div class="field-hint" id="governance-action-value-help">警告、禁言、要求重設密碼、刪除帳號通常可留空。</div>
+            </div>
+            <div class="field">
+              <label>需要同意票數</label>
+              <input type="number" id="governance-required-votes" min="1" max="10" value="2" />
+              <div class="field-hint">達到這個同意票數後，提案才算通過。建議一般提案 2 票以上。</div>
+            </div>
+            <div class="field">
+              <label>投票期限（小時）</label>
+              <input type="number" id="governance-ttl-hours" min="1" max="720" value="72" />
+              <div class="field-hint">超過期限仍未通過或否決，提案會失效。72 代表三天。</div>
+            </div>
+            <div class="field governance-submit-field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="governance-create-proposal" type="button">送出提案</button>
+            </div>
           </div>
-          <textarea id="governance-reason" rows="3" maxlength="1000" placeholder="提案原因，必填" style="margin-top:.55rem;"></textarea>
+          <div class="field" style="margin-top:.55rem;">
+            <label>提案原因</label>
+            <textarea id="governance-reason" rows="3" maxlength="1000" placeholder="請寫清楚原因、證據或相關紀錄。例：在 ComfyUI 區連續洗版三次，已由版主提醒仍未改善。"></textarea>
+            <div class="field-hint">必填，會留在治理紀錄中，其他管理者會依此投票。</div>
+          </div>
         </div>
         <div class="admin-tools" style="margin-bottom:.8rem;">
           <div class="mini-title">會員等級規則摘要</div>
@@ -1844,6 +1879,44 @@
                 <input type="number" id="s-storage-trash-retention-days" min="0" max="3650" />
               </div>
             </div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Root 帳號雲端硬碟管理</div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>管理帳號</label>
+                <select id="root-storage-user-select"><option value="">讀取帳號中...</option></select>
+              </div>
+              <div class="field">
+                <label>直接容量上限 MB（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-quota-mb" min="0" placeholder="例如 1024" />
+              </div>
+              <div class="field">
+                <label>直接單檔上限 MB（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-max-file-mb" min="0" placeholder="例如 100" />
+              </div>
+              <div class="field">
+                <label>每日上傳次數（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-daily-limit" min="0" placeholder="例如 20" />
+              </div>
+              <div class="field">
+                <label>上傳權限</label>
+                <select id="root-storage-can-upload">
+                  <option value="inherit">沿用角色/等級</option>
+                  <option value="true">允許上傳</option>
+                  <option value="false">禁止上傳</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>覆寫原因</label>
+                <input type="text" id="root-storage-override-reason" placeholder="例如：臨時專案容量、違規處分、人工例外" />
+              </div>
+            </div>
+            <div class="admin-toolbar" style="margin-top:.55rem;">
+              <button class="btn" type="button" id="root-storage-refresh-btn">重新整理用量</button>
+              <button class="btn btn-primary" type="button" id="root-storage-save-btn">套用 root 直接設定</button>
+              <button class="btn btn-danger" type="button" id="root-storage-clear-btn">清除直接設定</button>
+            </div>
+            <div id="root-storage-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+            <div id="root-storage-users" class="drive-file-list" style="margin-top:.75rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">安全政策</div>
             <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-cd-require-scan-before-download" /> 下載前要求掃描</label></div>
@@ -2087,8 +2160,14 @@
       <strong id="album-full-preview-title">圖片預覽</strong>
       <div id="album-full-preview-meta" class="drive-card-sub"></div>
     </div>
-    <button type="button" class="btn" data-drive-action="close-album-full-preview">關閉</button>
+    <div class="album-full-preview-controls">
+      <button type="button" class="btn" data-drive-action="album-preview-prev" aria-label="上一張">上一張</button>
+      <button type="button" class="btn" data-drive-action="album-preview-next" aria-label="下一張">下一張</button>
+      <button type="button" class="btn" data-drive-action="close-album-full-preview">關閉</button>
+    </div>
   </div>
+  <button type="button" class="album-preview-nav album-preview-nav-prev" data-drive-action="album-preview-prev" aria-label="上一張">‹</button>
+  <button type="button" class="album-preview-nav album-preview-nav-next" data-drive-action="album-preview-next" aria-label="下一張">›</button>
   <div id="album-full-preview-body" class="album-full-preview-body"></div>
 </div>
 
@@ -2196,13 +2275,13 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/33-dm.js?v=20260429-pm-image-preview" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260429-context-attachment-delete" defer></script>
+<script src="/js/35-drive.js?v=20260429-context-attachment-post-delete" defer></script>
 <script src="/js/36-comfyui.js?v=20260429-comfyui-batch-limit" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260429-governance-target-select" defer></script>
+<script src="/js/50-admin.js?v=20260429-root-storage-override" defer></script>
 <script src="/js/55-economy.js?v=20260429-wallet-guard" defer></script>
-<script src="/js/90-bootstrap.js?v=20260429-comfyui-draft" defer></script>
+<script src="/js/90-bootstrap.js?v=20260429-root-storage-override" defer></script>
 </body>
 </html>

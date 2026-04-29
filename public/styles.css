@@ -525,6 +525,14 @@
       margin-bottom: 1rem;
     }
 
+    .field-hint {
+      margin-top: .28rem;
+      color: var(--muted);
+      font-size: .72rem;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
     label {
       display: block;
       font-size: .8rem;
@@ -577,6 +585,18 @@
       min-height: 34px;
       display: flex;
       align-items: center;
+    }
+
+    .settings-option-grid .field:has(.field-hint) {
+      display: block;
+    }
+
+    .governance-form-grid {
+      align-items: start;
+    }
+
+    .governance-submit-field {
+      align-self: end;
     }
 
     .settings-option-grid label {
@@ -1345,6 +1365,48 @@
       padding-top: .85rem;
     }
 
+    .drive-collapsible-panel {
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+      margin-bottom: 1rem;
+      overflow: hidden;
+    }
+
+    .drive-collapsible-panel > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      padding: .85rem 1rem;
+      user-select: none;
+    }
+
+    .drive-collapsible-panel > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .drive-collapsible-panel > summary::after {
+      content: "展開";
+      flex: 0 0 auto;
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 7px;
+      padding: .28rem .5rem;
+      font-size: .72rem;
+    }
+
+    .drive-collapsible-panel[open] > summary::after {
+      content: "收合";
+    }
+
+    .drive-collapsible-body {
+      padding: 0 1rem 1rem;
+      border-top: 1px solid rgba(255,255,255,.08);
+    }
+
     .drive-gallery-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -1409,6 +1471,18 @@
       overflow: hidden;
       color: var(--muted);
       font-size: .76rem;
+    }
+
+    .drive-gallery-thumb-button {
+      cursor: pointer;
+      padding: 0;
+      font: inherit;
+    }
+
+    .drive-gallery-thumb-button:hover,
+    .drive-gallery-thumb-button:focus-visible {
+      border-color: rgba(255,255,255,.32);
+      outline: none;
     }
 
     .drive-gallery-thumb img {
@@ -1617,6 +1691,13 @@
       background: rgba(15, 20, 32, .92);
     }
 
+    .album-full-preview-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem;
+      justify-content: flex-end;
+    }
+
     .album-full-preview-topbar strong,
     .album-full-preview-topbar .drive-card-sub {
       overflow-wrap: anywhere;
@@ -1626,7 +1707,7 @@
       min-height: 0;
       display: grid;
       place-items: center;
-      padding: 1rem;
+      padding: 1rem 4.25rem;
       overflow: auto;
     }
 
@@ -1642,6 +1723,68 @@
     .album-full-preview-body .drive-empty {
       max-width: 520px;
       text-align: center;
+    }
+
+    .album-preview-nav {
+      position: fixed;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 9001;
+      width: 3rem;
+      height: 4.6rem;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 8px;
+      background: rgba(15, 20, 32, .78);
+      color: var(--text);
+      font-size: 2.4rem;
+      line-height: 1;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+
+    .album-preview-nav:hover,
+    .album-preview-nav:focus-visible {
+      background: rgba(40, 52, 78, .92);
+      outline: none;
+    }
+
+    .album-preview-nav:disabled,
+    .album-preview-nav.is-disabled,
+    .album-full-preview-controls .btn:disabled,
+    .album-full-preview-controls .btn.is-disabled {
+      opacity: .38;
+      cursor: not-allowed;
+    }
+
+    .album-preview-nav-prev {
+      left: .75rem;
+    }
+
+    .album-preview-nav-next {
+      right: .75rem;
+    }
+
+    @media (max-width: 720px) {
+      .album-full-preview-topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .album-full-preview-controls {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .album-full-preview-body {
+        padding: .75rem;
+      }
+
+      .album-preview-nav {
+        width: 2.3rem;
+        height: 3.4rem;
+        font-size: 1.8rem;
+      }
     }
 
     /* ── Password field with toggle ──────────────────────── */
@@ -2740,6 +2883,7 @@
       aspect-ratio: 1;
       display: grid;
       grid-template-columns: repeat(8, minmax(0, 1fr));
+      grid-template-rows: repeat(8, minmax(0, 1fr));
       border: 1px solid rgba(255,255,255,.22);
       border-radius: 8px;
       overflow: hidden;
@@ -2756,13 +2900,28 @@
       position: relative;
       display: grid;
       place-items: center;
+      width: 100%;
+      height: 100%;
+      aspect-ratio: 1;
+      box-sizing: border-box;
       border: 0;
+      padding: 0;
       color: #141414;
       font-size: clamp(1.35rem, 4vw, 2.4rem);
       line-height: 1;
       cursor: pointer;
       min-width: 0;
       min-height: 0;
+      overflow: hidden;
+      appearance: none;
+    }
+    .chess-square span {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      height: 100%;
+      line-height: 1;
+      pointer-events: none;
     }
     .chess-square.light { background: #e7d5b0; }
     .chess-square.dark { background: #8c6a43; }
