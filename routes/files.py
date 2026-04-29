@@ -816,9 +816,13 @@ def register_file_routes(app, deps):
             return json_resp({"ok": False, "msg": "購買數量必須是整數"}), 400
         if quantity < 1 or quantity > 20:
             return json_resp({"ok": False, "msg": "單次購買數量需介於 1 到 20"}), 400
-        catalog = _storage_upgrade_catalog(conn)
-        if not any(item.get("item_key") == item_key for item in catalog):
-            return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
+        conn = get_db()
+        try:
+            catalog = _storage_upgrade_catalog(conn)
+            if not any(item.get("item_key") == item_key for item in catalog):
+                return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
+        finally:
+            conn.close()
         try:
             spend = points_service.spend_points(
                 user_id=_actor_value(actor, "id"),

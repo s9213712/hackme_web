@@ -710,7 +710,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
-    assert "/js/36-comfyui.js?v=20260429-comfyui-batch-limit" in index_html
+    assert "/js/36-comfyui.js?v=20260429-root-billing-exempt" in index_html
     assert "/styles.css?v=20260429-ui-polish" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
@@ -731,6 +731,7 @@ def test_comfyui_frontend_is_wired():
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
     assert "非 root 帳號成功產圖後每張扣" in comfyui_js
     assert "function confirmComfyuiBilling(payload)" in comfyui_js
+    assert 'if (currentUser === "root") return { confirmed: true, required: false };' in comfyui_js
     assert "window.confirm" in comfyui_js
     assert "confirm_billing: billingConfirmation.required" in comfyui_js
     assert "json.billing?.charged" in comfyui_js

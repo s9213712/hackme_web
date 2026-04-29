@@ -293,12 +293,15 @@ function renderStorageUpgrade(payload) {
   if (!card || !select || !summary || !list) return;
 
   const canPurchase = Boolean(payload?.can_purchase);
-  driveStorageUpgradeCatalog = Array.isArray(payload?.catalog) ? payload.catalog : [];
+  const isRoot = currentUser === "root";
+  driveStorageUpgradeCatalog = canPurchase && !isRoot && Array.isArray(payload?.catalog) ? payload.catalog : [];
   select.innerHTML = driveStorageUpgradeCatalog.length
     ? driveStorageUpgradeCatalog.map((item) => `<option value="${sanitize(item.item_key)}">${sanitize(storageUpgradeLabel(item))}</option>`).join("")
-    : `<option value="">目前沒有可用的容量方案</option>`;
+    : `<option value="">${isRoot ? "root 不需要購買容量方案" : "目前沒有可用的容量方案"}</option>`;
   select.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
   if (button) button.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+  const quantity = $("drive-storage-upgrade-quantity");
+  if (quantity) quantity.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
 
   const usage = payload?.usage || {};
   const purchased = Number(usage.purchased_extra_bytes || 0);
@@ -2319,6 +2322,10 @@ async function loadStorageUpgradeOptions() {
 
 async function purchaseStorageUpgrade() {
   const msg = $("drive-msg");
+  if (currentUser === "root") {
+    if (msg) flash(msg, "root 依實際磁碟容量控管，不需要購買容量方案", false);
+    return;
+  }
   const itemKey = $("drive-storage-upgrade-select")?.value || "";
   const quantity = Number($("drive-storage-upgrade-quantity")?.value || 1);
   if (!itemKey) {
