@@ -109,7 +109,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
-    assert '/js/35-drive.js?v=20260429-root-storage-exempt' in index_html
+    assert '/js/35-drive.js?v=20260429-storage-purchase-feedback' in index_html
     assert '/styles.css?v=20260429-ui-polish' in index_html
     assert '/js/00-core.js?v=20260429-chat-attachment-delete' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
@@ -244,6 +244,9 @@ def test_cloud_drive_storage_upgrade_ui_is_wired():
     assert 'currentUser === "root"' in drive_js
     assert "root 不需要購買容量方案" in drive_js
     assert "root 依實際磁碟容量控管，不需要購買容量方案" in drive_js
+    assert "let driveStorageUpgradeCanPurchase = false;" in drive_js
+    assert "button.disabled = false;" in drive_js
+    assert "正在購買容量..." in drive_js
     assert "async function loadStorageUpgradeOptions" in drive_js
     assert "async function purchaseStorageUpgrade" in drive_js
     assert "/cloud-drive/storage-upgrades" in drive_js

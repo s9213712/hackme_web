@@ -32,6 +32,8 @@ let driveTransferRows = [];
 let driveAttachmentFileOptions = [];
 let driveAttachmentFileOptionsLoadedAt = 0;
 let driveStorageUpgradeCatalog = [];
+let driveStorageUpgradeCanPurchase = false;
+let driveStorageUpgradeMessage = "";
 
 function drivePrivacyModeLabel(mode) {
   return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
@@ -294,12 +296,18 @@ function renderStorageUpgrade(payload) {
 
   const canPurchase = Boolean(payload?.can_purchase);
   const isRoot = currentUser === "root";
-  driveStorageUpgradeCatalog = canPurchase && !isRoot && Array.isArray(payload?.catalog) ? payload.catalog : [];
+  driveStorageUpgradeCanPurchase = canPurchase && !isRoot;
+  driveStorageUpgradeMessage = payload?.message || (isRoot ? "root 依實際磁碟容量控管，不需要購買容量方案" : "");
+  driveStorageUpgradeCatalog = driveStorageUpgradeCanPurchase && Array.isArray(payload?.catalog) ? payload.catalog : [];
   select.innerHTML = driveStorageUpgradeCatalog.length
     ? driveStorageUpgradeCatalog.map((item) => `<option value="${sanitize(item.item_key)}">${sanitize(storageUpgradeLabel(item))}</option>`).join("")
     : `<option value="">${isRoot ? "root 不需要購買容量方案" : "目前沒有可用的容量方案"}</option>`;
   select.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
-  if (button) button.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+  if (button) {
+    button.disabled = false;
+    button.textContent = driveStorageUpgradeCanPurchase ? "用積分購買容量" : (isRoot ? "root 不需要購買容量" : "容量方案不可購買");
+    button.title = driveStorageUpgradeCanPurchase ? "用積分購買所選雲端硬碟容量" : (driveStorageUpgradeMessage || "目前沒有可購買的容量方案");
+  }
   const quantity = $("drive-storage-upgrade-quantity");
   if (quantity) quantity.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
 
@@ -2322,6 +2330,10 @@ async function loadStorageUpgradeOptions() {
 
 async function purchaseStorageUpgrade() {
   const msg = $("drive-msg");
+  if (!driveStorageUpgradeCanPurchase) {
+    if (msg) flash(msg, driveStorageUpgradeMessage || "目前沒有可購買的容量方案", false);
+    return;
+  }
   if (currentUser === "root") {
     if (msg) flash(msg, "root 依實際磁碟容量控管，不需要購買容量方案", false);
     return;
@@ -2336,23 +2348,32 @@ async function purchaseStorageUpgrade() {
     if (msg) flash(msg, "購買數量需介於 1 到 20", false);
     return;
   }
-  const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/cloud-drive/storage-upgrades/purchase", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ item_key: itemKey, quantity }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) {
-    if (msg) flash(msg, json.msg || `容量購買失敗（HTTP ${res.status}）`, false);
-    return;
-  }
-  if (msg) flash(msg, "容量已加購，積分已扣除", true);
-  renderDriveDashboard({ quota: json.usage });
-  await loadStorageUpgradeOptions();
-  if (typeof loadEconomyDashboard === "function") {
-    loadEconomyDashboard().catch(() => {});
+  const button = document.querySelector("[data-drive-action='purchase-storage-upgrade']");
+  if (button) button.disabled = true;
+  if (msg) flash(msg, "正在購買容量...", true);
+  try {
+    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const res = await fetch(API + "/cloud-drive/storage-upgrades/purchase", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ item_key: itemKey, quantity }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      if (msg) flash(msg, json.msg || `容量購買失敗（HTTP ${res.status}）`, false);
+      return;
+    }
+    if (msg) flash(msg, "容量已加購，積分已扣除", true);
+    renderDriveDashboard({ quota: json.usage });
+    await loadStorageUpgradeOptions();
+    if (typeof loadEconomyDashboard === "function") {
+      loadEconomyDashboard().catch(() => {});
+    }
+  } catch (err) {
+    if (msg) flash(msg, err.message || "容量購買失敗", false);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
