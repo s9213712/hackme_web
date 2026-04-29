@@ -101,7 +101,8 @@ def build_container_command(*, session_id, mount_path, policy=None):
         "-w",
         "/home/root",
         str(policy.image),
-        "/bin/sh",
+        "/bin/bash",
+        "-l",
     ]
 
 

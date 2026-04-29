@@ -73,6 +73,7 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     assert f"{ROOT}:" not in joined
     assert " /:/home/root" not in joined
     assert " /etc:" not in joined
+    assert command[-2:] == ["/bin/bash", "-l"]
 
 
 def test_root_mount_path_stays_inside_cloud_drive_storage(tmp_path):
@@ -126,7 +127,7 @@ def test_frontend_checks_environment_before_opening_session():
     assert 'id="tab-module-web-terminal"' in index_html
     assert 'id="module-web-terminal"' in index_html
     assert "/vendor/xterm/xterm.js" not in index_html
-    assert "/js/39-web-terminal.js?v=20260429-web-terminal-csrf" in index_html
+    assert "/js/39-web-terminal.js?v=20260429-web-terminal-ubuntu" in index_html
     assert 'id="web-terminal-check-btn"' in index_html
     assert "/vendor/xterm/xterm.js" in web_terminal_js
     assert "loadWebTerminalAssets" in web_terminal_js
@@ -143,6 +144,18 @@ def test_frontend_checks_environment_before_opening_session():
     assert "Web Terminal session 未成功建立就關閉" in web_terminal_js
     assert "websocket_available" in web_terminal_js
     assert "web_terminal" in core_js
+    assert "JetBrains Mono" in web_terminal_js
+    assert "scrollback: 4000" in web_terminal_js
+
+
+def test_web_terminal_image_uses_ubuntu_base_with_apt_tools():
+    dockerfile = (ROOT / "docker" / "web-terminal" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM ubuntu:24.04" in dockerfile
+    assert "apt-get update" in dockerfile
+    assert "apt-get install" in dockerfile
+    assert "tmux" in dockerfile
+    assert 'CMD ["/bin/bash", "-l"]' in dockerfile
 
 
 def test_web_terminal_installer_and_docs_are_self_service():

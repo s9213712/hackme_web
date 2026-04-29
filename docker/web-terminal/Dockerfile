@@ -1,11 +1,39 @@
-FROM alpine:3.20
+FROM ubuntu:24.04
 
-RUN adduser -D -h /home/root -s /bin/sh terminal \
-    && apk add --no-cache bash busybox-extras coreutils findutils grep less nano vim \
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        coreutils \
+        curl \
+        dnsutils \
+        file \
+        findutils \
+        git \
+        grep \
+        iproute2 \
+        iputils-ping \
+        less \
+        nano \
+        netcat-openbsd \
+        procps \
+        psmisc \
+        sed \
+        tar \
+        tmux \
+        tree \
+        unzip \
+        vim-tiny \
+        wget \
+        zip \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --home-dir /home/root --shell /bin/bash terminal \
     && mkdir -p /home/root \
     && chown -R terminal:terminal /home/root
 
 USER terminal
 WORKDIR /home/root
 
-CMD ["/bin/sh"]
+CMD ["/bin/bash", "-l"]
