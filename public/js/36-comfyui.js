@@ -11,6 +11,7 @@ let comfyuiProgressTimer = null;
 let comfyuiProgressStartedAt = 0;
 let comfyuiGenerateAbortController = null;
 let comfyuiMaxBatchSize = 1;
+let comfyuiBillingQuote = null;
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 900;
 const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-select",
@@ -87,6 +88,11 @@ function applyComfyuiRuntimeLimits(payload = {}) {
   input.title = comfyuiMaxBatchSize <= 1
     ? "目前系統限制單次只能產生 1 張，root 可在安全中心調整"
     : `目前單次最多 ${comfyuiMaxBatchSize} 張`;
+  comfyuiBillingQuote = payload.billing || null;
+  const generate = $("comfyui-generate-btn");
+  if (generate && comfyuiBillingQuote?.unit_price) {
+    generate.title = `非 root 帳號成功產圖後每張扣 ${comfyuiBillingQuote.unit_price} 點；產圖失敗不扣點，丟棄預覽不退款`;
+  }
 }
 
 function fillComfyuiSelect(id, values, fallback) {
@@ -488,7 +494,10 @@ async function generateComfyuiImage() {
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(true);
-    setComfyuiMessage(`已產生 ${comfyuiGeneratedImages.length} 張圖片；請選擇要儲存或分享的圖片。`, true);
+    const billingText = json.billing?.charged
+      ? `已扣 ${json.billing.total_price} 點。`
+      : "";
+    setComfyuiMessage(`已產生 ${comfyuiGeneratedImages.length} 張圖片；${billingText}請選擇要儲存或分享的圖片。`, true);
   } catch (err) {
     const interrupted = err?.name === "AbortError";
     const message = interrupted ? "已中斷產圖" : (err.message || "產圖失敗");

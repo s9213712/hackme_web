@@ -66,6 +66,59 @@ class FakeComfyUIClient:
         return {"interrupted": True}
 
 
+class FailingComfyUIClient(FakeComfyUIClient):
+    def generate_image(self, params, *, timeout_seconds=180):
+        from services.comfyui_client import ComfyUIError
+
+        raise ComfyUIError("ComfyUI 產圖失敗")
+
+
+class FakePointsService:
+    def __init__(self, balance=100, fail_spend=False):
+        self.balance = int(balance)
+        self.fail_spend = fail_spend
+        self.spends = []
+
+    def list_catalog(self):
+        return [{
+            "item_key": "comfyui_txt2img_basic",
+            "item_name": "基礎生圖一次",
+            "category": "comfyui",
+            "currency_type": "points",
+            "base_price": 5,
+            "enabled": 1,
+            "metadata": {},
+        }]
+
+    def get_wallet(self, user_id):
+        return {"user_id": user_id, "points_balance": self.balance}
+
+    def spend_points(self, *, user_id, item_key, quantity=1, reference_type=None,
+                     reference_id=None, idempotency_key=None, metadata=None, actor=None):
+        if self.fail_spend:
+            raise ValueError("billing failed")
+        amount = 5 * int(quantity or 1)
+        if self.balance < amount:
+            raise ValueError("insufficient balance")
+        self.balance -= amount
+        spend = {
+            "user_id": user_id,
+            "item_key": item_key,
+            "quantity": int(quantity or 1),
+            "reference_type": reference_type,
+            "reference_id": reference_id,
+            "metadata": metadata or {},
+            "amount": amount,
+        }
+        self.spends.append(spend)
+        return {
+            "ok": True,
+            "ledger": {"ledger_uuid": f"ledger-{len(self.spends)}", "amount": amount},
+            "wallet": self.get_wallet(user_id),
+            "item": {"base_price": 5},
+        }
+
+
 def _json_resp(payload, status=200):
     return make_response(jsonify(payload), status)
 
@@ -116,7 +169,7 @@ def _init_db(db_path):
     conn.close()
 
 
-def _build_app(db_path, storage_root, settings=None, comfyui_client=None):
+def _build_app(db_path, storage_root, settings=None, comfyui_client=None, actor=None, points_service=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -129,7 +182,7 @@ def _build_app(db_path, storage_root, settings=None, comfyui_client=None):
         "STORAGE_DIR": str(storage_root),
         "audit": lambda *args, **kwargs: None,
         "get_client_ip": lambda: "127.0.0.1",
-        "get_current_user_ctx": _actor,
+        "get_current_user_ctx": actor or _actor,
         "get_db": get_db,
         "get_system_settings": lambda: {"feature_comfyui_enabled": True, **(settings or {})},
         "get_member_level_rule": lambda conn, level: {
@@ -143,6 +196,7 @@ def _build_app(db_path, storage_root, settings=None, comfyui_client=None):
         "require_csrf": _passthrough,
         "require_csrf_safe": _passthrough,
         "comfyui_client": comfyui_client or FakeComfyUIClient(),
+        "points_service": points_service or FakePointsService(),
     })
     return app
 
@@ -195,7 +249,8 @@ def test_comfyui_batch_limit_is_root_configurable(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    client = _build_app(db_path, storage_root, settings={"comfyui_max_batch_size": 3}).test_client()
+    points = FakePointsService(balance=100)
+    client = _build_app(db_path, storage_root, settings={"comfyui_max_batch_size": 3}, points_service=points).test_client()
 
     generated = client.post(
         "/api/comfyui/generate",
@@ -211,6 +266,85 @@ def test_comfyui_batch_limit_is_root_configurable(tmp_path):
     assert body["image"]["batch_size"] == 3
     assert len(body["images"]) == 3
     assert body["images"][2]["image_ref"]["filename"] == "hackme_web_00003_.png"
+    assert body["billing"]["charged"] is True
+    assert body["billing"]["total_price"] == 15
+    assert points.spends == [{
+        "user_id": 1,
+        "item_key": "comfyui_txt2img_basic",
+        "quantity": 3,
+        "reference_type": "comfyui_generation",
+        "reference_id": "prompt-1",
+        "metadata": {
+            "charged_after_success": True,
+            "unit_price": 5,
+            "quantity": 3,
+            "total_price": 15,
+        },
+        "amount": 15,
+    }]
+
+
+def test_comfyui_generation_failure_does_not_charge_points(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    points = FakePointsService(balance=100)
+    client = _build_app(db_path, storage_root, comfyui_client=FailingComfyUIClient(), points_service=points).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={"model": "dream.safetensors", "prompt": "this will fail", "seed": 123},
+    )
+
+    assert generated.status_code == 503
+    assert points.spends == []
+    assert points.balance == 100
+
+
+def test_comfyui_generation_rejects_when_points_are_insufficient_before_work(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    points = FakePointsService(balance=4)
+    client = _build_app(db_path, storage_root, points_service=points).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={"model": "dream.safetensors", "prompt": "too expensive", "seed": 123},
+    )
+
+    assert generated.status_code == 409
+    assert "積分不足" in generated.get_json()["msg"]
+    assert points.spends == []
+
+
+def test_comfyui_generation_does_not_charge_root(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    points = FakePointsService(balance=0)
+    root_actor = {
+        "id": 1,
+        "username": "root",
+        "role": "super_admin",
+        "member_level": "trusted",
+        "effective_level": "trusted",
+        "sanction_status": "none",
+    }
+    client = _build_app(db_path, storage_root, actor=lambda: root_actor, points_service=points).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={"model": "dream.safetensors", "prompt": "root free", "seed": 123},
+    )
+
+    assert generated.status_code == 200
+    body = generated.get_json()
+    assert body["billing"] == {"charged": False, "exempt": "root"}
+    assert points.spends == []
 
 
 def test_comfyui_workflow_uses_requested_batch_size():
@@ -565,7 +699,10 @@ def test_comfyui_frontend_is_wired():
     assert 'fetch(API + "/comfyui/share"' in comfyui_js
     assert 'fetch(API + "/comfyui/status"' in comfyui_js
     assert 'let comfyuiMaxBatchSize = 1;' in comfyui_js
+    assert 'let comfyuiBillingQuote = null;' in comfyui_js
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
+    assert "非 root 帳號成功產圖後每張扣" in comfyui_js
+    assert "json.billing?.charged" in comfyui_js
     assert 'batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1)))' in comfyui_js
     assert "comfyuiGeneratedImages" in comfyui_js
     assert "renderComfyuiGeneratedImages" in comfyui_js

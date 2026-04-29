@@ -19,6 +19,7 @@ SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
 DEFAULT_GENERATION_TIMEOUT_SECONDS = 600
 MAX_GENERATION_TIMEOUT_SECONDS = 1800
+COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 
 
 class _MemoryFile:
@@ -41,6 +42,7 @@ def register_comfyui_routes(app, deps):
     storage_root = deps.get("STORAGE_DIR", ".")
     get_system_settings = deps.get("get_system_settings", lambda: {})
     injected_client = deps.get("comfyui_client")
+    points_service = deps.get("points_service")
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -74,6 +76,67 @@ def register_comfyui_routes(app, deps):
 
     def _client():
         return injected_client or ComfyUIClient(_configured_comfyui_url())
+
+    def _is_root(actor):
+        return _actor_value(actor, "username") == "root"
+
+    def _comfyui_charge_required(actor):
+        return not _is_root(actor)
+
+    def _comfyui_price_quote(quantity):
+        if not points_service:
+            return None, "積分服務未啟用，無法使用 ComfyUI 產圖"
+        catalog = points_service.list_catalog()
+        item = next((row for row in catalog if row.get("item_key") == COMFYUI_BASIC_PRICE_ITEM_KEY), None)
+        if not item:
+            return None, "ComfyUI 產圖收費項目未啟用"
+        quantity = max(1, int(quantity or 1))
+        unit_price = int(item.get("base_price") or 0)
+        return {
+            "item_key": COMFYUI_BASIC_PRICE_ITEM_KEY,
+            "item_name": item.get("item_name") or "ComfyUI 基礎生圖一次",
+            "unit_price": unit_price,
+            "quantity": quantity,
+            "total_price": unit_price * quantity,
+            "currency_type": "points",
+        }, None
+
+    def _ensure_comfyui_balance(actor, quote):
+        if not quote or not points_service:
+            return None
+        wallet = points_service.get_wallet(_actor_value(actor, "id"))
+        balance = int((wallet or {}).get("points_balance") or 0)
+        if balance < int(quote.get("total_price") or 0):
+            return f"積分不足：本次產圖需要 {quote['total_price']} 點，目前餘額 {balance} 點"
+        return None
+
+    def _charge_comfyui_generation(actor, quote, *, prompt_id):
+        if not quote or not points_service:
+            return None
+        result = points_service.spend_points(
+            user_id=_actor_value(actor, "id"),
+            item_key=quote["item_key"],
+            quantity=quote["quantity"],
+            reference_type="comfyui_generation",
+            reference_id=str(prompt_id or ""),
+            idempotency_key=f"comfyui_generation:{_actor_value(actor, 'id')}:{prompt_id or secrets.token_hex(8)}",
+            metadata={
+                "charged_after_success": True,
+                "unit_price": quote["unit_price"],
+                "quantity": quote["quantity"],
+                "total_price": quote["total_price"],
+            },
+            actor=actor,
+        )
+        return {
+            "charged": True,
+            "item_key": quote["item_key"],
+            "unit_price": quote["unit_price"],
+            "quantity": quote["quantity"],
+            "total_price": quote["total_price"],
+            "ledger_uuid": (result.get("ledger") or {}).get("ledger_uuid"),
+            "wallet": result.get("wallet"),
+        }
 
     def _json_error_from_comfy(exc, active_client=None):
         active_client = active_client or _client()
@@ -400,6 +463,7 @@ def register_comfyui_routes(app, deps):
             "available": True,
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
             "max_batch_size": _configured_max_batch_size(),
+            "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "system": status.get("system") if isinstance(status, dict) else {},
         })
 
@@ -422,6 +486,7 @@ def register_comfyui_routes(app, deps):
             "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
             "max_batch_size": _configured_max_batch_size(),
+            "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
         })
 
     @app.route("/api/comfyui/generate", methods=["POST"])
@@ -437,6 +502,14 @@ def register_comfyui_routes(app, deps):
         params, msg = _normalize_generation_payload(data if isinstance(data, dict) else {})
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
+        quote = None
+        if _comfyui_charge_required(actor):
+            quote, msg = _comfyui_price_quote(params["batch_size"])
+            if msg:
+                return json_resp({"ok": False, "msg": msg}), 503
+            msg = _ensure_comfyui_balance(actor, quote)
+            if msg:
+                return json_resp({"ok": False, "msg": msg}), 409
         active_client = _client()
         try:
             result = active_client.generate_image(
@@ -451,6 +524,13 @@ def register_comfyui_routes(app, deps):
         except ComfyUIError as exc:
             audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)
+        billing = {"charged": False, "exempt": "root"} if not quote else None
+        if quote:
+            try:
+                billing = _charge_comfyui_generation(actor, quote, prompt_id=result.get("prompt_id"))
+            except Exception as exc:
+                audit("COMFYUI_BILLING_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
+                return json_resp({"ok": False, "msg": f"產圖成功，但扣款失敗：{exc}"}), 409
         result_images = result.get("images") if isinstance(result.get("images"), list) else []
         if not result_images:
             result_images = [{
@@ -481,6 +561,7 @@ def register_comfyui_routes(app, deps):
             "ok": True,
             "image": image,
             "images": images,
+            "billing": billing,
         })
 
     @app.route("/api/comfyui/interrupt", methods=["POST"])
