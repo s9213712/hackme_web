@@ -622,6 +622,25 @@
       <div class="admin-toolbar" style="margin-top:.75rem;">
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
+      <div class="drive-card" id="drive-storage-upgrade-card" style="margin-top:1rem;">
+        <div class="drive-card-title">容量加購</div>
+        <div id="drive-storage-upgrade-summary" class="drive-card-sub">讀取容量方案中...</div>
+        <div class="settings-option-grid">
+          <div class="field">
+            <label>加購方案</label>
+            <select id="drive-storage-upgrade-select"></select>
+          </div>
+          <div class="field">
+            <label>數量</label>
+            <input type="number" id="drive-storage-upgrade-quantity" min="1" max="20" value="1" />
+          </div>
+          <div class="field">
+            <label>操作</label>
+            <button class="btn btn-primary" type="button" data-drive-action="purchase-storage-upgrade">用積分購買容量</button>
+          </div>
+        </div>
+        <div id="drive-storage-upgrade-active-list" class="drive-summary"></div>
+      </div>
       <div class="drive-card" style="margin-top:1rem;">
         <div class="drive-card-title">上傳到雲端硬碟</div>
         <div class="settings-option-grid">

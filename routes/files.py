@@ -67,6 +67,12 @@ from services.storage_quota_overrides import (
     get_storage_quota_override,
     set_storage_quota_override,
 )
+from services.storage_quota_purchases import (
+    active_storage_quota_purchases,
+    enrich_storage_upgrade_catalog,
+    record_storage_quota_purchase,
+    storage_upgrade_product,
+)
 from flask import request, send_file
 
 
@@ -86,6 +92,7 @@ def register_file_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     storage_root = deps.get("STORAGE_DIR", ".")
+    points_service = deps.get("points_service")
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -157,6 +164,22 @@ def register_file_routes(app, deps):
         if text in {"0", "false", "no", "off", "deny", "denied"}:
             return False
         raise ValueError("can_upload 必須是 true、false 或 inherit")
+
+    def _parse_json_body():
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return None, json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return None, json_resp({"ok": False, "msg": "Invalid request"}), 400
+        return data, None, None
+
+    def _points_error(exc):
+        msg = str(exc) or exc.__class__.__name__
+        status = 400
+        if "insufficient balance" in msg:
+            status = 409
+        return json_resp({"ok": False, "msg": msg}), status
 
     def _storage_usage_for_user_row(conn, row):
         data = dict(row)
@@ -722,6 +745,100 @@ def register_file_routes(app, deps):
             rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
             usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
             return json_resp({"ok": True, "quota": usage})
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/storage-upgrades", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_storage_upgrades():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        if not points_service:
+            return json_resp({"ok": False, "msg": "積分服務未啟用"}), 503
+        conn = get_db()
+        try:
+            level = _actor_value(actor, "effective_level") or _actor_value(actor, "member_level") or "newbie"
+            rule = get_member_level_rule(conn, level)
+            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
+            catalog = enrich_storage_upgrade_catalog(points_service.list_catalog())
+            return json_resp({
+                "ok": True,
+                "can_purchase": not _is_root(actor),
+                "message": "root 依實際磁碟容量控管，不需要用積分購買容量" if _is_root(actor) else "",
+                "catalog": catalog,
+                "active_purchases": active_storage_quota_purchases(conn, _actor_value(actor, "id")),
+                "usage": usage,
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/cloud-drive/storage-upgrades/purchase", methods=["POST"])
+    @require_csrf
+    def cloud_drive_purchase_storage_upgrade():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        if _is_root(actor):
+            return json_resp({"ok": False, "msg": "root 不需要用積分購買容量"}), 403
+        if not points_service:
+            return json_resp({"ok": False, "msg": "積分服務未啟用"}), 503
+        data, err, status = _parse_json_body()
+        if err:
+            return err, status
+        item_key = str(data.get("item_key") or "").strip()
+        product = storage_upgrade_product(item_key)
+        if not product:
+            return json_resp({"ok": False, "msg": "不支援的容量商品"}), 400
+        try:
+            quantity = int(data.get("quantity") or 1)
+        except Exception:
+            return json_resp({"ok": False, "msg": "購買數量必須是整數"}), 400
+        if quantity < 1 or quantity > 20:
+            return json_resp({"ok": False, "msg": "單次購買數量需介於 1 到 20"}), 400
+        catalog = enrich_storage_upgrade_catalog(points_service.list_catalog())
+        if not any(item.get("item_key") == item_key for item in catalog):
+            return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
+        try:
+            spend = points_service.spend_points(
+                user_id=_actor_value(actor, "id"),
+                item_key=item_key,
+                quantity=quantity,
+                reference_type="cloud_storage_upgrade",
+                reference_id=item_key,
+                idempotency_key=f"cloud_storage_upgrade:{_actor_value(actor, 'id')}:{uuid.uuid4().hex}",
+                metadata={
+                    "storage_bytes": int(product["storage_bytes"]) * quantity,
+                    "duration_days": int(product["duration_days"]),
+                },
+                actor=actor,
+            )
+        except Exception as exc:
+            return _points_error(exc)
+
+        conn = get_db()
+        try:
+            ledger = spend.get("ledger") or {}
+            purchase = record_storage_quota_purchase(
+                conn,
+                user_id=_actor_value(actor, "id"),
+                item_key=item_key,
+                quantity=quantity,
+                points_spent=ledger.get("amount") or (spend.get("item") or {}).get("base_price", 0) * quantity,
+                ledger_uuid=ledger.get("ledger_uuid"),
+            )
+            level = _actor_value(actor, "effective_level") or _actor_value(actor, "member_level") or "newbie"
+            usage = get_user_cloud_drive_usage(conn, actor, member_rule=get_member_level_rule(conn, level), storage_root=storage_root)
+            conn.commit()
+            audit(
+                "CLOUD_STORAGE_UPGRADE_PURCHASE",
+                get_client_ip(),
+                user=_actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"item_key={item_key}, quantity={quantity}, bytes={purchase['purchased_bytes']}",
+            )
+            return json_resp({"ok": True, "purchase": purchase, "wallet": spend.get("wallet"), "usage": usage})
         finally:
             conn.close()
 

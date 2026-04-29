@@ -231,6 +231,28 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "warning_active" in drive_js
 
 
+def test_cloud_drive_storage_upgrade_ui_is_wired():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+    routes_py = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
+    upload_security_py = (ROOT / "services" / "upload_security.py").read_text(encoding="utf-8")
+
+    assert 'id="drive-storage-upgrade-card"' in index_html
+    assert 'id="drive-storage-upgrade-select"' in index_html
+    assert 'data-drive-action="purchase-storage-upgrade"' in index_html
+    assert "function renderStorageUpgrade" in drive_js
+    assert "async function loadStorageUpgradeOptions" in drive_js
+    assert "async function purchaseStorageUpgrade" in drive_js
+    assert "/cloud-drive/storage-upgrades" in drive_js
+    assert "/cloud-drive/storage-upgrades/purchase" in drive_js
+    assert 'if (action === "purchase-storage-upgrade") return purchaseStorageUpgrade();' in drive_js
+    assert '@app.route("/api/cloud-drive/storage-upgrades", methods=["GET"])' in routes_py
+    assert '@app.route("/api/cloud-drive/storage-upgrades/purchase", methods=["POST"])' in routes_py
+    assert "root 不需要用積分購買容量" in routes_py
+    assert "purchased_extra_bytes" in upload_security_py
+    assert "+storage_purchase" in upload_security_py
+
+
 def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
 

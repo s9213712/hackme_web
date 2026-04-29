@@ -14,6 +14,7 @@ from pathlib import Path
 
 from services.identity import is_admin_role
 from services.storage_quota_overrides import apply_storage_quota_override, get_storage_quota_override
+from services.storage_quota_purchases import purchased_storage_summary
 
 
 UPLOAD_PRIVACY_MODES = {
@@ -772,19 +773,32 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     can_upload = admin_actor or (bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"})
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
+    purchased_summary = purchased_storage_summary(conn, user_id) if user_id and not root_actor else {
+        "purchased_extra_bytes": 0,
+        "active_purchase_count": 0,
+        "active_purchases": [],
+        "latest_expires_at": None,
+    }
+    purchased_extra_bytes = int(purchased_summary.get("purchased_extra_bytes") or 0)
     disk = _disk_usage_for_storage_root(storage_root) if root_actor and storage_root else None
     if disk:
         total_bytes = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO)
+        base_quota_bytes = total_bytes
         quota_source = "root_disk_available_90_percent"
     elif manager_quota_actor:
-        total_bytes = MANAGER_CLOUD_DRIVE_QUOTA_BYTES
+        base_quota_bytes = MANAGER_CLOUD_DRIVE_QUOTA_BYTES
+        total_bytes = base_quota_bytes + purchased_extra_bytes
         quota_source = "manager_role_fixed_1gb"
     elif root_actor:
         total_bytes = None
+        base_quota_bytes = None
         quota_source = "root_role_unlimited_no_storage_root"
     else:
-        total_bytes = quota_mb * 1024 * 1024
+        base_quota_bytes = quota_mb * 1024 * 1024
+        total_bytes = base_quota_bytes + purchased_extra_bytes
         quota_source = "member_level_rules.attachment_quota_mb"
+    if purchased_extra_bytes and not root_actor:
+        quota_source = f"{quota_source}+storage_purchase"
     remaining_bytes = None if total_bytes is None else max(0, total_bytes - used_bytes)
     max_file_size_bytes = remaining_bytes if (disk or manager_quota_actor) else (None if root_actor else max_file_size_mb * 1024 * 1024)
     rate_limit = None if admin_actor else upload_rate_limit_per_day
@@ -799,6 +813,9 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "effective_level": effective_level,
         "can_upload": can_upload,
         "quota_source": quota_source,
+        "base_quota_bytes": base_quota_bytes,
+        "purchased_extra_bytes": purchased_extra_bytes,
+        "purchased_storage": purchased_summary,
         "used_bytes": used_bytes,
         "total_bytes": total_bytes,
         "remaining_bytes": remaining_bytes,

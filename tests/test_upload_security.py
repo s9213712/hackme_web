@@ -19,6 +19,7 @@ from services.upload_security import (
     update_cloud_drive_security_policy,
 )
 from services.storage_quota_overrides import set_storage_quota_override
+from services.storage_quota_purchases import record_storage_quota_purchase
 
 
 def _conn():
@@ -292,6 +293,59 @@ def test_manager_role_uses_fixed_1gb_cloud_drive_quota(tmp_path, monkeypatch):
         assert usage["quota_source"] == "manager_role_fixed_1gb"
         assert usage["disk"] is None
         assert usage["warning_threshold_percent"] is None
+    finally:
+        conn.close()
+
+
+def test_purchased_storage_adds_to_non_root_cloud_drive_quota(tmp_path):
+    conn = _conn()
+    try:
+        record_storage_quota_purchase(
+            conn,
+            user_id=1,
+            item_key="cloud_storage_1gb_30d",
+            quantity=2,
+            points_spent=200,
+            ledger_uuid="ledger-storage-test",
+        )
+        user = {"id": 1, "username": "alice", "role": "user", "effective_level": "trusted", "sanction_status": "none"}
+        usage = get_user_cloud_drive_usage(
+            conn,
+            user,
+            member_rule={"can_upload_attachment": True, "attachment_quota_mb": 1, "max_attachment_size_mb": 1, "upload_rate_limit_per_day": 10},
+            storage_root=tmp_path,
+        )
+        assert usage["base_quota_bytes"] == 1024 * 1024
+        assert usage["purchased_extra_bytes"] == 2 * 1024 * 1024 * 1024
+        assert usage["total_bytes"] == 1024 * 1024 + 2 * 1024 * 1024 * 1024
+        assert usage["purchased_storage"]["active_purchase_count"] == 1
+        assert usage["quota_source"].endswith("+storage_purchase")
+    finally:
+        conn.close()
+
+
+def test_root_storage_quota_ignores_purchased_storage(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 20_000
+        used = 10_000
+        free = 10_000
+
+    monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        record_storage_quota_purchase(
+            conn,
+            user_id=1,
+            item_key="cloud_storage_1gb_30d",
+            quantity=2,
+            points_spent=200,
+            ledger_uuid="ledger-root-ignore",
+        )
+        root = {"id": 1, "username": "root", "role": "super_admin", "effective_level": "vip", "sanction_status": "none"}
+        usage = get_user_cloud_drive_usage(conn, root, member_rule={"can_upload_attachment": True}, storage_root=tmp_path)
+        assert usage["total_bytes"] == 9_000
+        assert usage["purchased_extra_bytes"] == 0
+        assert usage["quota_source"] == "root_disk_available_90_percent"
     finally:
         conn.close()
 
