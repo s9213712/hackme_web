@@ -1,19 +1,21 @@
 async function doLogin() {
   const user = sanitize($("li-user").value.trim());
   const pw   = $("li-pw").value;
-  const internalTestToken = $("li-internal-test-token")?.value || "";
+  const internalTestToken = isInternalTestLoginMode() ? ($("li-internal-test-token")?.value || "") : "";
   if (!user || !pw) { flash($("li-msg"), "請填寫帳號與密碼", false); return; }
 
   await fetchCsrfToken({ force: false });
   const csrf = getCsrfToken();
   if (!csrf) {
-    flash($("li-msg"), "無法取得 CSRF token，請重新整理頁面", false);
+    flash($("li-msg"), "安全驗證狀態失效，請重新整理頁面", false);
     return;
   }
   setLoading("li-btn", "li-spinner", true);
   clearMsg();
 
   try {
+    const loginPayload = { username: user, password: pw, csrf_token: csrf };
+    if (internalTestToken) loginPayload.internal_test_token = internalTestToken;
     const res = await fetch(API + "/login", {
       method: "POST",
       credentials: "same-origin",
@@ -21,7 +23,7 @@ async function doLogin() {
         "Content-Type": "application/json",
         "X-CSRF-Token": csrf || ""
       },
-      body: JSON.stringify({ username: user, password: pw, csrf_token: csrf, internal_test_token: internalTestToken })
+      body: JSON.stringify(loginPayload)
     });
     const json = await res.json();
     if (!json.ok) {
@@ -133,7 +135,7 @@ async function doRegister() {
   await fetchCsrfToken({ force: false });
   const csrf = getCsrfToken();
   if (!csrf) {
-    flash($("reg-msg"), "無法取得 CSRF token，請重新整理頁面", false);
+    flash($("reg-msg"), "安全驗證狀態失效，請重新整理頁面", false);
     setLoading("reg-btn", "reg-spinner", false);
     return;
   }
@@ -204,7 +206,7 @@ async function postRecoveryAction(path, payload) {
   await fetchCsrfToken({ force: false });
   const csrf = getCsrfToken();
   if (!csrf) {
-    setRecoveryMsg("無法取得 CSRF token，請重新整理頁面", false);
+    setRecoveryMsg("安全驗證狀態失效，請重新整理頁面", false);
     return null;
   }
   const res = await fetch(API + path, {
@@ -237,7 +239,7 @@ async function confirmPasswordReset() {
   const password = $("reset-new-pw")?.value || "";
   const passwordConfirm = $("reset-new-pw-confirm")?.value || "";
   if (!token) {
-    setRecoveryMsg("請填寫重設密碼 token", false);
+    setRecoveryMsg("請填寫重設密碼驗證碼", false);
     return;
   }
   if (!password || !passwordConfirm) {
@@ -284,7 +286,7 @@ async function requestEmailVerification() {
 async function confirmEmailVerification() {
   const token = $("verify-token")?.value.trim() || "";
   if (!token) {
-    setRecoveryMsg("請填寫 Email 驗證 token", false);
+    setRecoveryMsg("請填寫 Email 驗證碼", false);
     return;
   }
   try {

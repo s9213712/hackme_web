@@ -31,7 +31,7 @@ let chatPollTimer = null;
 let dmThreads = [];
 let selectedDmThreadId = null;
 const CHAT_POLL_MS = 2500;
-const DEFAULT_INACTIVITY_LOGOUT_MS = 3 * 60 * 1000;
+const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 let inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
 let inactivityTimer = null;
 let inactivityCountdownTimer = null;
@@ -316,7 +316,7 @@ function resetInactivityTimer() {
   updateInactivityCountdown();
   inactivityCountdownTimer = setInterval(updateInactivityCountdown, 1000);
   inactivityTimer = setTimeout(async () => {
-    alert("已超過 3 分鐘未操作，系統將自動登出。");
+    alert(`已閒置 ${formatInactivityTimeoutLabel()}，系統將自動登出。`);
     await doLogout();
   }, inactivityLogoutMs);
 }
@@ -376,9 +376,32 @@ function readCookie(name) {
   return item ? decodeURIComponent(item.substring(prefix.length)) : "";
 }
 
+function formatInactivityTimeoutLabel() {
+  const totalSeconds = Math.max(1, Math.round((inactivityLogoutMs || DEFAULT_INACTIVITY_LOGOUT_MS) / 1000));
+  if (totalSeconds % 60 === 0) return `${totalSeconds / 60} 分鐘`;
+  if (totalSeconds > 60) return `${Math.floor(totalSeconds / 60)} 分 ${totalSeconds % 60} 秒`;
+  return `${totalSeconds} 秒`;
+}
+
+function isInternalTestLoginMode() {
+  return siteConfig && siteConfig.server_mode === "internal_test";
+}
+
+function updateLoginModeFields() {
+  const field = $("li-internal-test-token-field");
+  const input = $("li-internal-test-token");
+  const showInternalTestToken = isInternalTestLoginMode();
+  if (field) field.style.display = showInternalTestToken ? "" : "none";
+  if (input) {
+    input.disabled = !showInternalTestToken;
+    if (!showInternalTestToken) input.value = "";
+  }
+}
+
 function applySiteConfig(config) {
   if (!config || typeof config !== "object") return;
   siteConfig = { ...siteConfig, ...config };
+  updateLoginModeFields();
   const root = document.documentElement;
   const mappings = {
     site_bg: "--bg",

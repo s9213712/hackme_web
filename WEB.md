@@ -3,6 +3,11 @@
 `WEB.md` describes the user-facing web application. API details and deployment
 defaults live in [For_developer.md](For_developer.md).
 
+Before any production release, use
+[security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md). The
+checklist treats completed pentesting and completed full functional smoke
+testing as blocking release requirements.
+
 ## UI Shell
 
 After login, the app uses a full-viewport sidebar layout.
@@ -147,5 +152,6 @@ tracked by git:
 - bug reports
 - local security reports
 
-For clean deployments, clone the repository, install dependencies, set bootstrap
-password environment variables, and start `server.py`.
+For clean deployments, clone the repository, install dependencies, and run
+`scripts/run_prod.sh`. On first deployment it opens a setup wizard for bootstrap
+passwords, runtime paths, HTTPS policy, and Gunicorn settings.

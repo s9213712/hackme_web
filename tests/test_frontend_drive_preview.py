@@ -35,7 +35,7 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="storage-trash-list"' in index_html
     assert 'id="album-create-title"' in index_html
     assert 'id="album-create-description"' in index_html
-    assert 'id="album-target-select"' in index_html
+    assert 'id="album-picker-select"' in index_html
     assert 'id="album-list"' in index_html
     assert 'id="album-detail-card"' in index_html
     assert 'id="album-file-list"' in index_html
@@ -79,6 +79,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="sidebar-toggle"' in index_html
     assert 'id="album-gallery-list"' in index_html
     assert 'id="album-viewer-card"' in index_html
+    assert 'id="album-thumb-size"' in index_html
     assert '/js/35-drive.js?v=20260429-torrent-upload' in index_html
     assert '/styles.css?v=20260429-session-topbar' in index_html
     assert '/js/00-core.js?v=20260429-ui-final' in index_html
@@ -93,7 +94,12 @@ def test_album_viewer_has_dedicated_module():
     assert "/cloud-drive/remote-download/torrent-tasks" in drive_js
     assert "FormData" in drive_js
     assert "async function loadAlbumGallery()" in drive_js
-    assert "async function openAlbumViewer(id)" in drive_js
+    assert "async function openAlbumViewer(id" in drive_js
+    assert "async function fetchDrivePreviewBlob(fileId, csrf)" in drive_js
+    assert "hydrateAlbumViewerThumbnails" in drive_js
+    assert "const blob = await fetchDrivePreviewBlob(file.file_id, csrf);" in drive_js
+    assert "const blob = await fetchDrivePreviewContent(file.file_id, csrf);" not in drive_js
+    assert 'data-drive-action="add-cloud-to-album"' in drive_js
     assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js
     assert "SIDEBAR_MENU_CONFIG" in core_js
     assert "SIDEBAR_ICON_PATHS" in core_js
@@ -125,6 +131,18 @@ def test_album_viewer_has_dedicated_module():
     assert 'switchModuleTab("albums")' in bootstrap_js
     assert "sidebarToggle.addEventListener" in bootstrap_js
     assert 'normTab === "albums"' in admin_js
+
+
+def test_album_gallery_layout_wraps_long_filenames():
+    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
+
+    assert 'class="drive-gallery-file-info"' in drive_js
+    assert ".drive-gallery-tile {" in css
+    assert "overflow: hidden;" in css
+    assert ".drive-gallery-tile strong" in css
+    assert "overflow-wrap: anywhere;" in css
+    assert "word-break: break-word;" in css
 
 
 def test_cloud_drive_privacy_modes_use_human_labels():

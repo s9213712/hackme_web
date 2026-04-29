@@ -83,6 +83,9 @@ function bindUiEvents() {
   const securityProfileSave = $("security-profile-save-btn");
   const securityProfileLoadCurrent = $("security-profile-load-current-btn");
   const securityModeSelect = $("security-mode-select");
+  const securityTestRefresh = $("security-test-refresh-btn");
+  const securityPentestStart = $("security-pentest-start-btn");
+  const securityFunctionalStart = $("security-functional-start-btn");
   const serverModeSelect = $("server-mode-select");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
@@ -141,6 +144,7 @@ function bindUiEvents() {
   const storageOrganizeBtn = $("storage-organize-btn");
   const storageFolderMoveBtn = $("storage-folder-move-btn");
   const albumCreateBtn = $("album-create-btn");
+  const albumThumbSize = $("album-thumb-size");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
@@ -277,6 +281,10 @@ function bindUiEvents() {
   if (storageOrganizeBtn) storageOrganizeBtn.addEventListener("click", organizeSelectedStorageFile);
   if (storageFolderMoveBtn) storageFolderMoveBtn.addEventListener("click", moveStorageFolder);
   if (albumCreateBtn) albumCreateBtn.addEventListener("click", createAlbum);
+  if (albumThumbSize) {
+    if (typeof getAlbumThumbSize === "function") albumThumbSize.value = getAlbumThumbSize();
+    albumThumbSize.addEventListener("change", (event) => setAlbumThumbSize(event.target.value));
+  }
   if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
   if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
@@ -388,6 +396,9 @@ function bindUiEvents() {
   if (securityProfileSave) securityProfileSave.addEventListener("click", saveSecurityProfile);
   if (securityProfileLoadCurrent) securityProfileLoadCurrent.addEventListener("click", loadCurrentSecurityProfileDraft);
   if (securityModeSelect) securityModeSelect.addEventListener("change", () => renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview"));
+  if (securityTestRefresh) securityTestRefresh.addEventListener("click", loadSecurityTestJobs);
+  if (securityPentestStart) securityPentestStart.addEventListener("click", startSecurityPentest);
+  if (securityFunctionalStart) securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke);
   if (serverModeSelect) serverModeSelect.addEventListener("change", () => renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview"));
 }
 

@@ -911,7 +911,9 @@ def get_album(conn, *, actor, album_id, include_files=False):
     if include_files:
         files = conn.execute(
             """
-            SELECT af.*, sf.display_name, sf.virtual_path, f.size_bytes, f.scan_status, f.risk_level
+            SELECT af.*, sf.display_name, sf.virtual_path,
+                   f.original_filename_plain_for_public, f.mime_type_plain_for_public,
+                   f.size_bytes, f.scan_status, f.risk_level
             FROM album_files af
             JOIN uploaded_files f ON f.id=af.file_id
             LEFT JOIN storage_files sf ON sf.id=af.storage_file_id

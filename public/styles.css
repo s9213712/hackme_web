@@ -107,17 +107,26 @@
       margin-bottom: 1.5rem;
     }
 
+    .tabs:not(.sidebar-nav) {
+      flex-wrap: wrap;
+    }
+
     .tab {
-      flex: 1;
-      padding: .55rem;
+      flex: 1 1 7rem;
+      min-width: 0;
+      min-height: 2.1rem;
+      padding: .48rem .62rem;
       border: none;
       border-radius: 6px;
       cursor: pointer;
-      font-size: .9rem;
+      font-size: .84rem;
       font-weight: 600;
+      line-height: 1.15;
       background: transparent;
       color: var(--muted);
       transition: background .2s, color .2s;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
 
     .tab.active {
@@ -1181,6 +1190,19 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
       gap: .75rem;
+      min-width: 0;
+    }
+
+    .drive-gallery-grid.album-thumb-small {
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    }
+
+    .drive-gallery-grid.album-thumb-medium {
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    }
+
+    .drive-gallery-grid.album-thumb-large {
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     }
 
     .drive-gallery-tile {
@@ -1192,6 +1214,67 @@
       display: grid;
       align-content: space-between;
       gap: .55rem;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .drive-gallery-tile > div,
+    .drive-gallery-file-info {
+      min-width: 0;
+    }
+
+    .drive-gallery-tile strong {
+      display: block;
+      max-width: 100%;
+      color: var(--text);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.25;
+    }
+
+    .drive-gallery-tile .drive-card-sub {
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.35;
+    }
+
+    .drive-gallery-thumb {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(0,0,0,.22);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: .76rem;
+    }
+
+    .drive-gallery-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .drive-gallery-thumb-placeholder {
+      background: rgba(255,255,255,.045);
+    }
+
+    .album-thumb-small .drive-gallery-tile {
+      padding: .55rem;
+      min-height: 112px;
+    }
+
+    .album-thumb-small .drive-file-actions .btn {
+      padding: .28rem .42rem;
+      font-size: .68rem;
+    }
+
+    .album-thumb-large .drive-gallery-thumb {
+      aspect-ratio: 16 / 10;
     }
 
     .drive-preview-panel {
@@ -1314,14 +1397,53 @@
 
     /* ── Button ───────────────────────────────────────────── */
     .btn {
-      width: 100%;
-      padding: .75rem;
+      box-sizing: border-box;
+      width: auto;
+      max-width: 100%;
+      min-width: 0;
+      min-height: 2.15rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .35rem;
+      padding: .5rem .78rem;
       border: none;
       border-radius: 8px;
-      font-size: 1rem;
+      font-size: .84rem;
       font-weight: 700;
+      line-height: 1.15;
+      text-align: center;
+      white-space: normal;
+      overflow-wrap: anywhere;
       cursor: pointer;
       transition: opacity .2s, transform .1s;
+    }
+
+    .card > .btn,
+    .auth-recovery-panel .btn,
+    .settings-option-grid .field > .btn,
+    .form-section > .btn,
+    .field > .btn {
+      width: 100%;
+    }
+
+    .btn-sm,
+    button.btn-sm {
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: auto;
+      max-width: 100%;
+      min-height: 1.95rem;
+      padding: .34rem .62rem;
+      border-radius: 7px;
+      font-size: .76rem;
+      font-weight: 700;
+      line-height: 1.15;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      cursor: pointer;
     }
 
     .btn-primary {
@@ -1742,13 +1864,17 @@
     .chat-composer-actions { margin-top: .45rem; }
 
     .admin-toolbar {
-      display: grid;
+      display: flex;
       gap: .55rem;
-      grid-template-columns: repeat(2, 1fr);
+      align-items: center;
+      flex-wrap: wrap;
       margin-bottom: .75rem;
     }
 
-    .admin-toolbar .btn { width: 100%; }
+    .admin-toolbar .btn {
+      width: auto;
+      flex: 0 1 auto;
+    }
 
     .mini-title {
       font-size: .82rem;
@@ -1956,7 +2082,7 @@
 
     .member-level-toolbar .btn {
       min-height: 2.35rem;
-      white-space: nowrap;
+      white-space: normal;
     }
 
     .member-level-editor-card {

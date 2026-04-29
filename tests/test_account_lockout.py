@@ -77,6 +77,7 @@ def test_public_version_endpoints_expose_release_id(tmp_path):
     assert site_config.status_code == 200
     assert site_config.get_json()["server_meta"]["release_id"] == "test-release"
     assert site_config.get_json()["server_meta"]["version"] == "test"
+    assert site_config.get_json()["site_config"]["server_mode"] == "preprod"
     assert version.status_code == 200
     assert version.get_json()["release_id"] == "test-release"
 

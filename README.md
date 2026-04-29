@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.04.29-016`**
+**Current Release ID: `2026.04.29-017`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
@@ -21,8 +21,10 @@ details have been moved out of README.
 - [WEB.md](WEB.md): user-facing web UI and feature guide
 - [For_developer.md](For_developer.md): API, server defaults, deployment, and developer notes
 - [SECURITY.md](SECURITY.md): security policy
+- [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md): production pre-release checklist
 - [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md): functional smoke runner
 - [security/PENTEST.md](security/PENTEST.md): pentest runner
+- [docs/BRANCHING_AND_RELEASE.md](docs/BRANCHING_AND_RELEASE.md): branch numbering and release ID policy
 
 ## Fast Start
 
@@ -51,8 +53,8 @@ For a clean deployment:
 
 1. Clone the repository.
 2. Install `requirements.txt`.
-3. Set bootstrap password environment variables.
-4. Run `python3 server.py`.
+3. Run `scripts/run_prod.sh` from a terminal and complete the first deployment
+   setup wizard.
 
 Runtime files and operational defaults are documented in
 [For_developer.md](For_developer.md).

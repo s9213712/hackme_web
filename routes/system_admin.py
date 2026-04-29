@@ -2,9 +2,11 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from flask import request, send_file
 
@@ -37,6 +39,10 @@ from services.upload_security import (
     get_cloud_drive_security_policy,
     update_cloud_drive_security_policy,
 )
+
+
+SECURITY_TEST_JOBS = {}
+SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
 def register_system_admin_routes(app, deps):
@@ -138,6 +144,124 @@ def register_system_admin_routes(app, deps):
             current_ssl_enabled=CURRENT_SERVER_BIND_STATE.get("ssl_enabled"),
             cert_exists=ssl_cert_exists(),
         )
+
+    def _security_test_report_root():
+        path = os.path.join(BASE_DIR, "security", "reports", "root-triggered")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _safe_security_test_int(value, default, minimum, maximum):
+        try:
+            number = int(value if value not in (None, "") else default)
+        except Exception:
+            return None
+        if minimum <= number <= maximum:
+            return number
+        return None
+
+    def _security_test_job_payload(job):
+        payload = {key: job.get(key) for key in (
+            "job_id",
+            "kind",
+            "status",
+            "started_at",
+            "finished_at",
+            "returncode",
+            "command_label",
+            "report_root",
+            "report_dir",
+            "log_path",
+            "error",
+        )}
+        return payload
+
+    def _find_latest_report_dir(report_root, prefix, started_at_ts):
+        try:
+            candidates = []
+            for name in os.listdir(report_root):
+                full = os.path.join(report_root, name)
+                if not os.path.isdir(full):
+                    continue
+                if prefix and not name.startswith(prefix):
+                    continue
+                try:
+                    mtime = os.path.getmtime(full)
+                except Exception:
+                    mtime = 0
+                if mtime + 2 >= started_at_ts:
+                    candidates.append((mtime, full))
+            if not candidates:
+                return ""
+            candidates.sort(reverse=True)
+            return os.path.relpath(candidates[0][1], BASE_DIR)
+        except Exception:
+            return ""
+
+    def _start_security_test_job(kind, command, *, command_label, report_root, report_prefix, actor, env=None):
+        job_id = f"{kind}_{uuid.uuid4().hex[:12]}"
+        started_ts = time.time()
+        actor_username = actor.get("username") if actor else "root"
+        client_ip = get_client_ip()
+        log_dir = os.path.join(report_root, "_jobs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, f"{job_id}.log")
+        job = {
+            "job_id": job_id,
+            "kind": kind,
+            "status": "running",
+            "started_at": datetime.now().isoformat(),
+            "finished_at": "",
+            "returncode": None,
+            "command_label": command_label,
+            "report_root": os.path.relpath(report_root, BASE_DIR),
+            "report_dir": "",
+            "log_path": os.path.relpath(log_path, BASE_DIR),
+            "error": "",
+            "actor": actor_username,
+        }
+        with SECURITY_TEST_JOBS_LOCK:
+            SECURITY_TEST_JOBS[job_id] = job
+
+        def runner():
+            proc_env = os.environ.copy()
+            if env:
+                proc_env.update(env)
+            try:
+                with open(log_path, "w", encoding="utf-8") as log_file:
+                    log_file.write(f"$ {' '.join(command_label)}\n\n")
+                    log_file.flush()
+                    proc = subprocess.Popen(
+                        command,
+                        cwd=BASE_DIR,
+                        env=proc_env,
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    code = proc.wait()
+                status = "passed" if code == 0 else "failed"
+                report_dir = _find_latest_report_dir(report_root, report_prefix, started_ts)
+                with SECURITY_TEST_JOBS_LOCK:
+                    job.update({
+                        "status": status,
+                        "finished_at": datetime.now().isoformat(),
+                        "returncode": code,
+                        "report_dir": report_dir,
+                    })
+                audit("SECURITY_TEST_FINISHED", client_ip, user=actor_username, success=(code == 0), detail=f"job_id={job_id},kind={kind},returncode={code},report_dir={report_dir}")
+            except Exception as exc:
+                with SECURITY_TEST_JOBS_LOCK:
+                    job.update({
+                        "status": "failed",
+                        "finished_at": datetime.now().isoformat(),
+                        "returncode": None,
+                        "error": str(exc),
+                    })
+                audit("SECURITY_TEST_FAILED", client_ip, user=actor_username, success=False, detail=f"job_id={job_id},kind={kind},error={exc}")
+
+        threading.Thread(target=runner, name=f"security-test-{job_id}", daemon=True).start()
+        audit("SECURITY_TEST_STARTED", client_ip, user=actor_username, success=True, detail=f"job_id={job_id},kind={kind},command={command_label}")
+        return job
 
     def safe_count(conn, table, where="", params=()):
         try:
@@ -563,6 +687,112 @@ def register_system_admin_routes(app, deps):
             return error
         limit = request.args.get("limit", 200)
         return json_resp({"ok": True, "server_output": get_server_output(limit=limit)})
+
+    @app.route("/api/root/security-tests", methods=["GET"])
+    @require_csrf_safe
+    def root_security_tests():
+        _, error = require_root_actor()
+        if error:
+            return error
+        with SECURITY_TEST_JOBS_LOCK:
+            jobs = [_security_test_job_payload(job) for job in SECURITY_TEST_JOBS.values()]
+        jobs.sort(key=lambda item: item.get("started_at") or "", reverse=True)
+        return json_resp({"ok": True, "jobs": jobs[:20], "report_root": os.path.relpath(_security_test_report_root(), BASE_DIR)})
+
+    @app.route("/api/root/security-tests/<job_id>", methods=["GET"])
+    @require_csrf_safe
+    def root_security_test_detail(job_id):
+        _, error = require_root_actor()
+        if error:
+            return error
+        with SECURITY_TEST_JOBS_LOCK:
+            job = SECURITY_TEST_JOBS.get(job_id)
+            payload = _security_test_job_payload(job) if job else None
+        if not payload:
+            return json_resp({"ok": False, "msg": "找不到測試任務"}), 404
+        return json_resp({"ok": True, "job": payload})
+
+    @app.route("/api/root/security-tests/pentest", methods=["POST"])
+    @require_csrf
+    def root_security_test_pentest():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
+        if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
+            return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
+        tool_timeout = _safe_security_test_int(data.get("tool_timeout_seconds"), 180, 1, 3600)
+        if tool_timeout is None:
+            return json_resp({"ok": False, "msg": "tool_timeout_seconds 必須介於 1-3600"}), 400
+        report_root = _security_test_report_root()
+        command = [
+            os.path.join(BASE_DIR, "security", "run_pentest.sh"),
+            "--target", target,
+            "--out", report_root,
+            "--tool-timeout", str(tool_timeout),
+        ]
+        only = str(data.get("only") or "").strip()
+        skip = str(data.get("skip") or "").strip()
+        if only:
+            command.extend(["--only", only])
+        if skip:
+            command.extend(["--skip", skip])
+        if bool(data.get("i_own_this_target")):
+            command.append("--i-own-this-target")
+        job = _start_security_test_job(
+            "pentest",
+            command,
+            command_label=["security/run_pentest.sh", "--target", target],
+            report_root=report_root,
+            report_prefix="20",
+            actor=actor,
+        )
+        return json_resp({"ok": True, "msg": "滲透測試已啟動", "job": _security_test_job_payload(job)}, 202)
+
+    @app.route("/api/root/security-tests/functional", methods=["POST"])
+    @require_csrf
+    def root_security_test_functional():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        port = _safe_security_test_int(data.get("port"), 50741, 1, 65535)
+        if port is None:
+            return json_resp({"ok": False, "msg": "port 必須介於 1-65535"}), 400
+        report_root = _security_test_report_root()
+        command = [
+            os.path.join(BASE_DIR, "security", "run_functional_smoke.sh"),
+            "--port", str(port),
+            "--out", report_root,
+        ]
+        if bool(data.get("keep_runtime")):
+            command.append("--keep-runtime")
+        env = {}
+        for key in ("ROOT_PASSWORD", "ROOT_CHANGED_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
+            value = str(data.get(key.lower()) or "").strip()
+            if value:
+                env[key] = value
+        job = _start_security_test_job(
+            "functional",
+            command,
+            command_label=["security/run_functional_smoke.sh", "--port", str(port)],
+            report_root=report_root,
+            report_prefix="functional_",
+            actor=actor,
+            env=env,
+        )
+        return json_resp({"ok": True, "msg": "全功能測試已啟動", "job": _security_test_job_payload(job)}, 202)
 
     @app.route("/api/admin/security-center/thresholds", methods=["PUT"])
     @require_csrf_safe

@@ -5,10 +5,11 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.04.29-016`
-- Schema version: `25`
+- Release ID: `2026.04.29-017`
+- Schema version: `26`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
+- Branch and release policy: [docs/BRANCHING_AND_RELEASE.md](docs/BRANCHING_AND_RELEASE.md)
 
 ## Fast Local Setup
 
@@ -426,15 +427,35 @@ security/run_functional_smoke.sh --port 50741
 
 Security and pentest runner documentation:
 
+- [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md)
 - [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md)
 - [security/PENTEST.md](security/PENTEST.md)
 
 ## Production Start
 
+For first deployment, run the guided setup:
+
 ```bash
-cp .env.production.example .env
-source .env
 ./scripts/run_prod.sh
+```
+
+If `.env` does not exist and the script is attached to a terminal, it opens an
+interactive setup wizard. The wizard asks for bootstrap account passwords,
+runtime directories, bind address, HTTPS/cookie policy, proxy trust, and
+Gunicorn settings, then writes `.env` with mode `600`.
+
+Automation-friendly modes:
+
+```bash
+./scripts/run_prod.sh --check
+./scripts/run_prod.sh --init-db-only
+./scripts/run_prod.sh --no-wizard
+```
+
+To regenerate `.env` intentionally:
+
+```bash
+./scripts/run_prod.sh --wizard
 ```
 
 Recommended production defaults:

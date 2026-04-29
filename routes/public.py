@@ -190,9 +190,15 @@ def register_public_routes(app, deps):
     def get_site_config():
         settings = get_system_settings()
         features = get_feature_settings()
+        conn = get_db()
+        try:
+            server_mode = current_server_mode(conn)
+        finally:
+            conn.close()
         return json_resp({
             "ok": True,
             "site_config": {
+                "server_mode": server_mode,
                 "site_bg": settings.get("site_bg"),
                 "site_surface": settings.get("site_surface"),
                 "site_accent": settings.get("site_accent"),
@@ -597,7 +603,7 @@ def register_public_routes(app, deps):
         password = data.get("password", "") if isinstance(data.get("password"), str) else ""
         password_confirm = data.get("password_confirm", "") if isinstance(data.get("password_confirm"), str) else ""
         if not token:
-            return json_resp({"ok": False, "msg": "token 不可為空"}), 400
+            return json_resp({"ok": False, "msg": "驗證碼不可為空"}), 400
         if password != password_confirm:
             return json_resp({"ok": False, "msg": "兩次密碼輸入不一致"}), 400
         ok, msg = validate_password(password)
@@ -616,7 +622,7 @@ def register_public_routes(app, deps):
             token_row = lookup_valid_token(conn, token=token, purpose="password_reset")
             if not token_row:
                 audit("PASSWORD_RESET_TOKEN_INVALID", ip, ua=ua, success=False)
-                return json_resp({"ok": False, "msg": "token 無效或已過期"}), 400
+                return json_resp({"ok": False, "msg": "驗證碼無效或已過期"}), 400
             current_row = conn.execute(
                 "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (token_row["user_id"],),
@@ -686,14 +692,14 @@ def register_public_routes(app, deps):
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         token = str(data.get("token") or "").strip() if isinstance(data, dict) else ""
         if not token:
-            return json_resp({"ok": False, "msg": "token 不可為空"}), 400
+            return json_resp({"ok": False, "msg": "驗證碼不可為空"}), 400
         conn = get_db()
         try:
             ensure_public_account_columns(conn)
             token_row = lookup_valid_token(conn, token=token, purpose="email_verify")
             if not token_row:
                 audit("EMAIL_VERIFICATION_TOKEN_INVALID", ip, ua=ua, success=False)
-                return json_resp({"ok": False, "msg": "token 無效或已過期"}), 400
+                return json_resp({"ok": False, "msg": "驗證碼無效或已過期"}), 400
             now = datetime.now().isoformat()
             conn.execute("UPDATE users SET email_verified=1, updated_at=? WHERE id=?", (now, token_row["user_id"]))
             mark_token_used(conn, token_row["id"])

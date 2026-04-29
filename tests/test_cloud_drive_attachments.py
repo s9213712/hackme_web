@@ -407,6 +407,8 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     files = added.get_json()["album"]["files"]
     assert len(files) == 1
     assert files[0]["caption"] == "cover"
+    assert files[0]["original_filename_plain_for_public"] == "image.txt"
+    assert "mime_type_plain_for_public" in files[0]
 
     updated = client.put(f"/api/storage/albums/{album['id']}", json={"title": "Trip 2", "visibility": "public"})
     assert updated.status_code == 200

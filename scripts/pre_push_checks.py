@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import ast
 import os
 import pathlib
 import py_compile
@@ -32,6 +33,30 @@ def compile_python():
     for path in iter_python_files():
         py_compile.compile(str(path), doraise=True)
     print("[compile] python syntax OK")
+
+
+def read_release_id():
+    tree = ast.parse((ROOT / "services" / "release_info.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "APP_RELEASE_ID":
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        return node.value.value
+    raise RuntimeError("APP_RELEASE_ID not found in services/release_info.py")
+
+
+def assert_release_docs_synced():
+    release_id = read_release_id()
+    required = [
+        ROOT / "README.md",
+        ROOT / "README.zh-TW.md",
+        ROOT / "For_developer.md",
+    ]
+    missing = [str(path.relative_to(ROOT)) for path in required if release_id not in path.read_text(encoding="utf-8")]
+    if missing:
+        raise RuntimeError(f"release id {release_id} missing from: {', '.join(missing)}")
+    print(f"[release] APP_RELEASE_ID {release_id} is synced")
 
 
 def find_free_port():
@@ -126,6 +151,7 @@ def main():
     args = parser.parse_args()
 
     compile_python()
+    assert_release_docs_synced()
 
     runtime_root = pathlib.Path(tempfile.mkdtemp(prefix="html_learning_prepush_"))
     port = find_free_port()
