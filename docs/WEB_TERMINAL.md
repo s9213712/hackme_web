@@ -22,6 +22,14 @@ The script handles the common setup path:
 - installs local xterm.js assets into `public/vendor/xterm`
 - builds the required Docker image: `hackme-web-terminal:base`
 
+The image is based on the official Ubuntu 24.04 LTS container distribution and
+preinstalls the standard terminal userspace (`ubuntu-standard`, bash, apt tools,
+man pages, tmux, git, curl, rsync, ssh client, and common diagnostic commands).
+Sessions still run with `network none`, `read-only` rootfs, dropped Linux
+capabilities, and only the root user's Cloud Drive mounted at `/home/root`.
+Use the Dockerfile and rebuild the image to add more tools; browser sessions are
+not intended to install packages live.
+
 Then verify:
 
 ```bash

@@ -67,6 +67,8 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     assert "--cap-drop ALL" in joined
     assert "--security-opt no-new-privileges" in joined
     assert "--read-only" in command
+    assert "/run:rw,nosuid,nodev,noexec,size=16m" in command
+    assert "/var/tmp:rw,nosuid,nodev,noexec,size=64m" in command
     assert "--pids-limit 128" in joined
     assert f"{mount_path}:/home/root:rw" in command
     assert "/var/run/docker.sock" not in joined
@@ -154,7 +156,12 @@ def test_web_terminal_image_uses_ubuntu_base_with_apt_tools():
     assert "FROM ubuntu:24.04" in dockerfile
     assert "apt-get update" in dockerfile
     assert "apt-get install" in dockerfile
+    assert "ubuntu-standard" in dockerfile
+    assert "apt-utils" in dockerfile
+    assert "man-db" in dockerfile
+    assert "openssh-client" in dockerfile
     assert "tmux" in dockerfile
+    assert "LANG=C.UTF-8" in dockerfile
     assert 'CMD ["/bin/bash", "-l"]' in dockerfile
 
 
@@ -178,6 +185,7 @@ def test_web_terminal_installer_and_docs_are_self_service():
     assert "./install_web_terminal_dependencies.sh --doctor --venv .venv" in guide
     assert "id -nG \"$USER\"" in guide
     assert "flask-sock" in requirements
+    assert "official Ubuntu 24.04 LTS" in guide
     assert "simple-websocket" in requirements
     assert "activate_or_create_venv" in run_prod
     assert "ensure_python_dependencies" in run_prod
