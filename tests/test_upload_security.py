@@ -19,7 +19,12 @@ from services.upload_security import (
     update_cloud_drive_security_policy,
 )
 from services.storage_quota_overrides import set_storage_quota_override
-from services.storage_quota_purchases import record_storage_quota_purchase
+from services.points_chain import ensure_points_economy_schema
+from services.storage_quota_purchases import (
+    ensure_storage_upgrade_price_catalog,
+    enrich_storage_upgrade_catalog,
+    record_storage_quota_purchase,
+)
 
 
 def _conn():
@@ -320,6 +325,23 @@ def test_purchased_storage_adds_to_non_root_cloud_drive_quota(tmp_path):
         assert usage["total_bytes"] == 1024 * 1024 + 2 * 1024 * 1024 * 1024
         assert usage["purchased_storage"]["active_purchase_count"] == 1
         assert usage["quota_source"].endswith("+storage_purchase")
+    finally:
+        conn.close()
+
+
+def test_storage_upgrade_price_catalog_backfills_missing_items():
+    conn = _conn()
+    try:
+        ensure_points_economy_schema(conn)
+        conn.execute("DELETE FROM economy_price_catalog WHERE item_key LIKE 'cloud_storage_%'")
+        ensure_storage_upgrade_price_catalog(conn)
+        rows = conn.execute(
+            "SELECT * FROM economy_price_catalog WHERE item_key LIKE 'cloud_storage_%' AND enabled=1 ORDER BY item_key"
+        ).fetchall()
+        catalog = enrich_storage_upgrade_catalog([dict(row) for row in rows])
+        assert [item["item_key"] for item in catalog] == ["cloud_storage_10gb_30d", "cloud_storage_1gb_30d"]
+        assert catalog[0]["storage_bytes"] == 10 * 1024 * 1024 * 1024
+        assert catalog[1]["storage_bytes"] == 1024 * 1024 * 1024
     finally:
         conn.close()
 

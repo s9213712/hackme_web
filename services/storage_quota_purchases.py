@@ -15,6 +15,31 @@ STORAGE_UPGRADE_PRODUCTS = {
     },
 }
 
+STORAGE_UPGRADE_PRICE_DEFAULTS = {
+    "cloud_storage_1gb_30d": {
+        "item_name": "雲端容量 1GB / 30 天",
+        "category": "cloud_drive",
+        "currency_type": "soft",
+        "base_price": 100,
+        "dynamic_pricing": 0,
+        "min_price": 50,
+        "max_price": 500,
+        "enabled": 1,
+        "metadata_json": "{}",
+    },
+    "cloud_storage_10gb_30d": {
+        "item_name": "雲端容量 10GB / 30 天",
+        "category": "cloud_drive",
+        "currency_type": "soft",
+        "base_price": 30,
+        "dynamic_pricing": 0,
+        "min_price": 10,
+        "max_price": 100,
+        "enabled": 1,
+        "metadata_json": "{}",
+    },
+}
+
 
 def _now():
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -66,6 +91,34 @@ def enrich_storage_upgrade_catalog(items):
             "label": product["label"],
         })
     return catalog
+
+
+def ensure_storage_upgrade_price_catalog(conn):
+    now = _iso(_now())
+    for item_key, item in STORAGE_UPGRADE_PRICE_DEFAULTS.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO economy_price_catalog (
+                item_key, item_name, category, currency_type, base_price,
+                dynamic_pricing, min_price, max_price, enabled, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item_key,
+                item["item_name"],
+                item["category"],
+                item["currency_type"],
+                item["base_price"],
+                item["dynamic_pricing"],
+                item["min_price"],
+                item["max_price"],
+                item["enabled"],
+                item["metadata_json"],
+                now,
+                now,
+            ),
+        )
 
 
 def record_storage_quota_purchase(conn, *, user_id, item_key, quantity, points_spent, ledger_uuid=None):
