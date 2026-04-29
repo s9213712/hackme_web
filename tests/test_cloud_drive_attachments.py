@@ -428,6 +428,59 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     assert client.get(f"/api/storage/albums/{album['id']}").status_code == 404
 
 
+def test_album_preview_uses_storage_display_name_when_uploaded_metadata_missing(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"fake png bytes"), "opaque.bin"),
+            "virtual_path": "photos/real-photo.png",
+            "display_name": "real-photo.png",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE uploaded_files SET original_filename_plain_for_public=NULL, mime_type_plain_for_public=NULL WHERE id=?",
+            (file_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    created = client.post("/api/storage/albums", json={"title": "Recovered Preview"})
+    assert created.status_code == 200
+    album_id = created.get_json()["album"]["id"]
+
+    added = client.post(f"/api/storage/albums/{album_id}/files", json={"file_id": file_id})
+    assert added.status_code == 200
+    album_file = added.get_json()["album"]["files"][0]
+    assert album_file["display_name"] == "real-photo.png"
+    assert album_file["original_filename_plain_for_public"] is None
+
+    preview = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert preview.status_code == 200
+    preview_body = preview.get_json()["preview"]
+    assert preview_body["filename"] == "real-photo.png"
+    assert preview_body["category"] == "image"
+    assert preview_body["render_mode"] == "media"
+    assert preview_body["mime_type"] == "image/png"
+
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.content_type.startswith("image/png")
+
+
 def test_storage_album_rejects_other_users_file(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

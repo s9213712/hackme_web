@@ -62,6 +62,8 @@ security/run_functional_smoke.sh --keep-runtime
 | `MANAGER_PASSWORD` | `ManagerSmoke123!` | bootstrap manager 密碼。 |
 | `TEST_PASSWORD` | `TestSmoke123!` | bootstrap test user 密碼。 |
 | `START_TIMEOUT` | `45` | 等待 server ready 的秒數。 |
+| `RESET_OFFLINE_TIMEOUT` | `20` | reset server 後等待服務短暫離線的秒數。 |
+| `RESET_RECONNECT_TIMEOUT` | `180` | reset server 後等待服務重新連線且 `started_at` 變更的秒數。 |
 
 ## Runtime Isolation
 
@@ -109,10 +111,14 @@ security/run_functional_smoke.sh --keep-runtime
 5. 驗證 baseline post 還存在。
 6. 驗證 residual 測試資料已消失。
 7. 執行 reset server。
-8. 驗證 baseline post 也消失。
+8. 等待 server 在合理時間內短暫離線，預設 20 秒內必須觀察到連線失敗。
+9. 等待 server 在 3 分鐘內重新連線，並確認 `/api/version.started_at` 已變更。
+10. 重新登入 root。
+11. 驗證 baseline post 也消失。
 
 如果 restore 後看到一堆測試殘留文章，代表 restore 失敗或測試腳本找到真正的功能
-bug。若 reset 後 baseline post 仍存在，代表 reset server 的 runtime 清理不完整。
+bug。若 reset 後沒有先短暫離線，代表可能沒有真的重啟；若 3 分鐘內沒有重新連線，
+代表自動重啟失敗；若 baseline post 仍存在，代表 reset server 的 runtime 清理不完整。
 
 ## Report Output
 
@@ -171,4 +177,3 @@ security/reports/functional_<RUN_ID>/
 | CSRF 相關失敗 | 查看 `raw/00_csrf_token.json`、login 後 cookie jar 與 `server.out`。 |
 | cloud drive upload 失敗 | 查看 `raw/cloud_drive_upload.json` 與 `server.out`，再確認 scanner/security policy 是否阻擋。 |
 | restore/reset 驗證失敗 | 優先視為功能 bug，檢查 `raw/restore_*`、`raw/reset_*`、`server.out`，不要先假設是腳本誤判。 |
-

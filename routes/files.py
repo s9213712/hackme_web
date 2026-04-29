@@ -124,6 +124,29 @@ def register_file_routes(app, deps):
             return False, "高風險檔案目前不允許 inline preview"
         return True, ""
 
+    def _preview_row_with_storage_fallback(conn, actor, row):
+        data = dict(row)
+        if data.get("original_filename_plain_for_public"):
+            return data
+        try:
+            storage_row = conn.execute(
+                """
+                SELECT display_name, virtual_path
+                FROM storage_files
+                WHERE file_id=? AND owner_user_id=? AND deleted_at IS NULL AND COALESCE(is_trashed, 0)=0
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (row["id"], _actor_value(actor, "id")),
+            ).fetchone()
+        except Exception:
+            storage_row = None
+        if storage_row:
+            fallback_name = storage_row["display_name"] or os.path.basename(str(storage_row["virtual_path"] or ""))
+            if fallback_name:
+                data["original_filename_plain_for_public"] = fallback_name
+        return data
+
     def _grant_user_ids_from_payload(data):
         raw = data.get("grant_user_ids") if isinstance(data, dict) else []
         if raw is None:
@@ -1476,7 +1499,8 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            preview = build_preview_metadata(row, path)
+            preview_row = _preview_row_with_storage_fallback(conn, actor, row)
+            preview = build_preview_metadata(preview_row, path)
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return json_resp({"ok": True, "preview": preview})
@@ -1508,7 +1532,8 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            category, mime_type = preview_category(row)
+            preview_row = _preview_row_with_storage_fallback(conn, actor, row)
+            category, mime_type = preview_category(preview_row)
             if category not in {"audio", "video", "image", "pdf"}:
                 return json_resp({"ok": False, "msg": "此檔案類型不支援 inline content preview"}), 415
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_content", result="allowed", reason=category, ip=get_client_ip(), user_agent=get_ua())
@@ -1516,7 +1541,7 @@ def register_file_routes(app, deps):
             return send_file(
                 path,
                 as_attachment=False,
-                download_name=row["original_filename_plain_for_public"] or "preview",
+                download_name=preview_row["original_filename_plain_for_public"] or "preview",
                 mimetype=mime_type,
                 conditional=True,
             )

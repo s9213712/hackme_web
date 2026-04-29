@@ -911,7 +911,27 @@ def get_album(conn, *, actor, album_id, include_files=False):
     if include_files:
         files = conn.execute(
             """
-            SELECT af.*, sf.display_name, sf.virtual_path,
+            SELECT af.*,
+                   COALESCE(sf.display_name, (
+                       SELECT sf2.display_name
+                       FROM storage_files sf2
+                       WHERE sf2.file_id=af.file_id
+                         AND sf2.owner_user_id=?
+                         AND sf2.deleted_at IS NULL
+                         AND COALESCE(sf2.is_trashed, 0)=0
+                       ORDER BY sf2.updated_at DESC, sf2.created_at DESC
+                       LIMIT 1
+                   )) AS display_name,
+                   COALESCE(sf.virtual_path, (
+                       SELECT sf2.virtual_path
+                       FROM storage_files sf2
+                       WHERE sf2.file_id=af.file_id
+                         AND sf2.owner_user_id=?
+                         AND sf2.deleted_at IS NULL
+                         AND COALESCE(sf2.is_trashed, 0)=0
+                       ORDER BY sf2.updated_at DESC, sf2.created_at DESC
+                       LIMIT 1
+                   )) AS virtual_path,
                    f.original_filename_plain_for_public, f.mime_type_plain_for_public,
                    f.size_bytes, f.scan_status, f.risk_level
             FROM album_files af
@@ -920,7 +940,7 @@ def get_album(conn, *, actor, album_id, include_files=False):
             WHERE af.album_id=? AND af.deleted_at IS NULL AND f.deleted_at IS NULL
             ORDER BY af.sort_order ASC, af.created_at ASC
             """,
-            (album_id,),
+            (actor["id"], actor["id"], album_id),
         ).fetchall()
         data["files"] = [dict(file_row) for file_row in files]
     return data

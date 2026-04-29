@@ -268,6 +268,24 @@ function updateSidebarActiveState() {
   });
 }
 
+function showLoginScreen() {
+  document.body.classList.remove("app-authenticated");
+  const successScreen = $("success-screen");
+  if (successScreen) successScreen.classList.remove("show");
+  const adminWrap = $("admin-wrap");
+  if (adminWrap) adminWrap.className = "admin-wrap";
+  const authCard = $("auth-card");
+  if (authCard) authCard.style.display = "";
+  const loginSection = $("sec-login");
+  const registerSection = $("sec-register");
+  const loginTab = $("tab-login");
+  const registerTab = $("tab-register");
+  if (loginSection) loginSection.classList.add("active");
+  if (registerSection) registerSection.classList.remove("active");
+  if (loginTab) loginTab.classList.add("active");
+  if (registerTab) registerTab.classList.remove("active");
+}
+
 function runSidebarAction(action) {
   if (!action) return;
   const [scope, value] = action.split(":");
@@ -317,7 +335,7 @@ function resetInactivityTimer() {
   inactivityCountdownTimer = setInterval(updateInactivityCountdown, 1000);
   inactivityTimer = setTimeout(async () => {
     alert(`已閒置 ${formatInactivityTimeoutLabel()}，系統將自動登出。`);
-    await doLogout();
+    await doLogout({ immediate: true });
   }, inactivityLogoutMs);
 }
 
@@ -931,6 +949,7 @@ function setAuthState(json, showLoginHero = false) {
 }
 
 function resetAuthState() {
+  showLoginScreen();
   currentUser = null;
   currentUserId = null;
   currentRole = "user";
@@ -947,14 +966,11 @@ function resetAuthState() {
   stopChatPoll();
   if (typeof stopNotificationPoll === "function") stopNotificationPoll();
   hideUserEditDialog();
-  document.body.classList.remove("app-authenticated");
-  $("success-screen").classList.remove("show");
   const welcomeMsg = $("welcome-msg");
   if (welcomeMsg) {
     welcomeMsg.classList.remove("birthday-greeting");
     welcomeMsg.textContent = "歡迎回來！";
   }
-  $("admin-wrap").className = "admin-wrap";
   const moduleChat = $("module-chat");
   const moduleDm = $("module-dm");
   const moduleAnnouncements = $("module-announcements");
@@ -982,7 +998,6 @@ function resetAuthState() {
   $("me-user").textContent = "-";
   $("me-role").textContent = "-";
   $("me-nickname").textContent = "-";
-  $("auth-card").style.display = "";
   selectedChatRoomId = null;
   chatRooms = [];
   selectedDmThreadId = null;

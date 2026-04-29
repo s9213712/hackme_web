@@ -82,7 +82,8 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="album-thumb-size"' in index_html
     assert '/js/35-drive.js?v=20260429-torrent-upload' in index_html
     assert '/styles.css?v=20260429-session-topbar' in index_html
-    assert '/js/00-core.js?v=20260429-ui-final' in index_html
+    assert '/js/00-core.js?v=20260429-timeout-login' in index_html
+    assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
     assert '/js/50-admin.js?v=20260429-sidebar' in index_html
     assert "onclick=" not in index_html
     assert "onclick=" not in drive_js

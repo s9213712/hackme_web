@@ -6,10 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_inactivity_timeout_message_uses_configured_duration():
     core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
 
     assert "const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;" in core
     assert "formatInactivityTimeoutLabel" in core
     assert "已閒置 ${formatInactivityTimeoutLabel()}，系統將自動登出。" in core
+    assert "await doLogout({ immediate: true });" in core
+    assert "function showLoginScreen()" in core
+    assert "showLoginScreen();" in auth
+    assert "if (!res.ok && !immediate)" in auth
     assert "已超過 3 分鐘未操作" not in core
 
 

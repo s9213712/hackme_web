@@ -299,16 +299,18 @@ async function confirmEmailVerification() {
   }
 }
 
-async function doLogout() {
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
+async function doLogout(options = {}) {
+  const immediate = !!(options && options.immediate === true);
+  if (immediate) showLoginScreen();
   try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
     const res = await fetch(API + "/logout", {
       method: "POST",
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
-    if (!res.ok) {
+    if (!res.ok && !immediate) {
       flash($("li-msg"), "登出失敗，請稍後再試", false);
     }
   } catch (_) {}

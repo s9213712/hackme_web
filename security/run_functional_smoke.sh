@@ -9,6 +9,8 @@ ROOT_CHANGED_PASSWORD="${ROOT_CHANGED_PASSWORD:-RootSmokeChanged123!}"
 MANAGER_PASSWORD="${MANAGER_PASSWORD:-ManagerSmoke123!}"
 TEST_PASSWORD="${TEST_PASSWORD:-TestSmoke123!}"
 START_TIMEOUT="${START_TIMEOUT:-45}"
+RESET_OFFLINE_TIMEOUT="${RESET_OFFLINE_TIMEOUT:-20}"
+RESET_RECONNECT_TIMEOUT="${RESET_RECONNECT_TIMEOUT:-180}"
 KEEP_RUNTIME=0
 
 usage() {
@@ -26,7 +28,7 @@ What it does:
 
 Environment overrides:
   HOST, PORT, REPORT_ROOT, ROOT_PASSWORD, MANAGER_PASSWORD, TEST_PASSWORD,
-  RUNTIME_ROOT, START_TIMEOUT
+  RUNTIME_ROOT, START_TIMEOUT, RESET_OFFLINE_TIMEOUT, RESET_RECONNECT_TIMEOUT
 USAGE
 }
 
@@ -264,6 +266,56 @@ wait_for_server() {
     sleep 1
   done
   fail "server startup" "not reachable within ${START_TIMEOUT}s; see $SERVER_LOG"
+  return 1
+}
+
+server_started_at() {
+  local out="$1"
+  curl -sS -o "$out" "$BASE_URL/api/version" >/dev/null 2>&1 || return 1
+  json_expr 'data.get("started_at", "")' "$out" 2>/dev/null || true
+}
+
+wait_for_restart_reconnect() {
+  local name="$1"
+  local previous_started_at="$2"
+  local offline_timeout="${3:-$RESET_OFFLINE_TIMEOUT}"
+  local reconnect_timeout="${4:-$RESET_RECONNECT_TIMEOUT}"
+  local offline_deadline=$((SECONDS + offline_timeout))
+  local reconnect_deadline
+  local out="$RAW_DIR/$(safe_name "$name").json"
+  local code=""
+  local started_at=""
+  local observed_offline=0
+
+  while (( SECONDS < offline_deadline )); do
+    code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/version" || true)"
+    if [[ "$code" == "000" || -z "$code" ]]; then
+      observed_offline=1
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "$observed_offline" != "1" ]]; then
+    fail "$name" "server did not go offline within ${offline_timeout}s after restart request; last_http=${code:-none}, body=$out"
+    return 1
+  fi
+  pass "${name} offline phase" "server became unreachable within ${offline_timeout}s"
+
+  reconnect_deadline=$((SECONDS + reconnect_timeout))
+  while (( SECONDS < reconnect_deadline )); do
+    code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/version" || true)"
+    if [[ "$code" == "200" ]]; then
+      started_at="$(json_expr 'data.get("started_at", "")' "$out" 2>/dev/null || true)"
+      if [[ -n "$started_at" && "$started_at" != "$previous_started_at" ]]; then
+        pass "$name" "reconnected within ${reconnect_timeout}s after offline phase; started_at changed ${previous_started_at:-unknown} -> $started_at"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+
+  fail "$name" "server did not reconnect with a new started_at within ${reconnect_timeout}s after offline phase; previous=${previous_started_at:-unknown}, last_http=${code:-none}, body=$out"
   return 1
 }
 
@@ -605,8 +657,13 @@ run_checks() {
     pass "restore removed residual category" "residual category not visible after restore"
   fi
 
+  local reset_started_at_before
+  reset_started_at_before="$(server_started_at "$RAW_DIR/reset_before_version.json" || true)"
   request "server reset runtime state" "POST" "/api/admin/system-reset" "200" '{"confirm":"RESET_RUNTIME_STATE","reason":"functional smoke reset verification"}'
-  refresh_csrf_quiet
+  wait_for_restart_reconnect "server reset restart reconnect" "$reset_started_at_before" "$RESET_OFFLINE_TIMEOUT" "$RESET_RECONNECT_TIMEOUT" || true
+  rm -f "$COOKIE_JAR"
+  fetch_public_csrf || true
+  login_root || true
   request "reset verify baseline board gone" "GET" "/api/community/boards/${BASELINE_BOARD_ID}/threads" "404"
   pass "reset removed baseline post" "baseline board/thread no longer visible after reset"
 }
@@ -621,6 +678,8 @@ cat > "$SUMMARY" <<EOF
 - started_at_utc: \`$RUN_ID\`
 - runtime_root: \`$RUNTIME_ROOT\`
 - keep_runtime: \`$KEEP_RUNTIME\`
+- reset_offline_timeout_seconds: \`$RESET_OFFLINE_TIMEOUT\`
+- reset_reconnect_timeout_seconds: \`$RESET_RECONNECT_TIMEOUT\`
 - pre_start_snapshot: \`$PRE_START_SNAPSHOT\`
 - server_log: \`$SERVER_LOG\`
 - failures: \`$FAILURES\`
@@ -640,7 +699,7 @@ $(cat "$RESULTS_TSV")
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
 - PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, economy stats
-- snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, and server reset verification that removes the baseline post
+- snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, server reset must go offline within 20 seconds then reconnect within 180 seconds by default, and reset verification that removes the baseline post
 - storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete, remote download capability checks
 - ComfyUI integration: model endpoint wiring and optional backend availability check
 - accounts: admin user creation/listing, account sessions when account-security feature is enabled
