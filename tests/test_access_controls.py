@@ -43,6 +43,7 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "server_listen_host": "",
         "server_listen_port": 0,
         "server_ssl_enabled": True,
+        "comfyui_api_host": "localhost",
         "comfyui_api_port": 8192,
         "comfyui_max_batch_size": 1,
     }
@@ -257,24 +258,29 @@ def test_invalid_server_bind_settings_are_rejected():
     assert state["server_listen_port"] == 0
 
 
-def test_root_can_configure_comfyui_api_port_without_restart_hint():
+def test_root_can_configure_comfyui_api_endpoint_without_restart_hint():
     app, state = _admin_app()
     client = app.test_client()
 
-    res = client.put("/api/admin/settings", json={"comfyui_api_port": 8193})
+    res = client.put("/api/admin/settings", json={"comfyui_api_host": "192.168.1.20", "comfyui_api_port": 8193})
 
     assert res.status_code == 200
+    assert state["comfyui_api_host"] == "192.168.1.20"
     assert state["comfyui_api_port"] == 8193
+    assert res.get_json()["settings"]["comfyui_api_host"] == "192.168.1.20"
     assert res.get_json()["settings"]["comfyui_api_port"] == 8193
 
 
-def test_invalid_comfyui_api_port_is_rejected():
+def test_invalid_comfyui_api_endpoint_is_rejected():
     app, state = _admin_app()
     client = app.test_client()
 
-    res = client.put("/api/admin/settings", json={"comfyui_api_port": 70000})
+    bad_host = client.put("/api/admin/settings", json={"comfyui_api_host": "http://127.0.0.1:8192/prompt"})
+    bad_port = client.put("/api/admin/settings", json={"comfyui_api_port": 70000})
 
-    assert res.status_code == 400
+    assert bad_host.status_code == 400
+    assert bad_port.status_code == 400
+    assert state["comfyui_api_host"] == "localhost"
     assert state["comfyui_api_port"] == 8192
 
 

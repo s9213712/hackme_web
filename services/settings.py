@@ -45,6 +45,7 @@ DEFAULT_SETTINGS = {
     "module_accounts_min_role": "manager",
     "module_comfyui_min_role": "user",
     "module_games_min_role": "user",
+    "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
     "comfyui_api_port": 8192,
     "comfyui_max_batch_size": 1,
     "chat_filter_rules_json": "",

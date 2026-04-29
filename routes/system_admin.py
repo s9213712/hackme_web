@@ -46,6 +46,23 @@ SECURITY_TEST_JOBS = {}
 SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
+COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
+def validate_comfyui_api_host(value):
+    host = str(value or "").strip().strip("[]")
+    if not host:
+        return None
+    if len(host) > 253:
+        return None
+    forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
+    if any(part in host for part in forbidden):
+        return None
+    if not COMFYUI_HOST_RE.match(host):
+        return None
+    return host
+
+
 def restart_launcher_code():
     return r"""
 import os
@@ -1199,6 +1216,11 @@ def register_system_admin_routes(app, deps):
             data["server_listen_port"] = port
         if "server_ssl_enabled" in data:
             data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
+        if "comfyui_api_host" in data:
+            host = validate_comfyui_api_host(data.get("comfyui_api_host"))
+            if host is None:
+                return json_resp({"ok":False,"msg":"comfyui_api_host 必須是主機名稱或 IP，不可包含 http://、路徑、帳密或特殊字元"}), 400
+            data["comfyui_api_host"] = host
         if "comfyui_api_port" in data:
             try:
                 port = int(data.get("comfyui_api_port"))

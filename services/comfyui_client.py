@@ -23,8 +23,8 @@ class ComfyUIImage:
 
 
 class ComfyUIClient:
-    def __init__(self, base_url="http://127.0.0.1:8192", timeout=30):
-        self.base_url = str(base_url or "http://127.0.0.1:8192").rstrip("/")
+    def __init__(self, base_url="http://localhost:8192", timeout=30):
+        self.base_url = str(base_url or "http://localhost:8192").rstrip("/")
         self.timeout = int(timeout or 30)
 
     def _url(self, path):
