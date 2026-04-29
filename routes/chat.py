@@ -196,6 +196,14 @@ def register_chat_routes(app, deps):
     role_rank = deps["role_rank"]
     verify_csrf_token = deps["verify_csrf_token"]
 
+    def is_official_chat_room(row):
+        if not row:
+            return False
+        try:
+            return row["name"] == OFFICIAL_CHAT_ROOM_NAME
+        except Exception:
+            return row.get("name") == OFFICIAL_CHAT_ROOM_NAME if hasattr(row, "get") else False
+
     @app.route("/api/chat/rooms", methods=["GET", "POST"], strict_slashes=False)
     @require_csrf_safe
     def chat_rooms():
@@ -229,6 +237,7 @@ def register_chat_routes(app, deps):
                             "owner_user_id": r["owner_user_id"],
                             "owner_username": r["owner_username"] or "未知",
                             "is_private": r["is_private"],
+                            "is_official": is_official_chat_room(r),
                             "created_at": r["created_at"]
                         } for r in rows
                     ]
@@ -411,7 +420,7 @@ def register_chat_routes(app, deps):
             ).fetchone()
             if not room or not room["is_active"]:
                 return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
-            if room["name"] == OFFICIAL_CHAT_ROOM_NAME and room["owner_username"] == "root":
+            if is_official_chat_room(room):
                 return json_resp({"ok":False,"msg":"官方聊天室不可刪除"}), 403
             member = conn.execute(
                 "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",

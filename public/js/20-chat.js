@@ -457,6 +457,7 @@ function canDeleteChatMessage(message) {
 
 function canDeleteChatRoom(room) {
   if (!room || !room.id) return false;
+  if (room.is_official || String(room.name || "") === "官方聊天室") return false;
   if (String(currentUser || "") === "root") return true;
   if (Number(room.owner_user_id) === Number(currentUserId)) return true;
   if (String(room.owner_username || "") === "root") return false;

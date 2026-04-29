@@ -11,7 +11,7 @@ def test_chat_room_delete_ui_is_wired():
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/js/20-chat.js?v=20260429-chat-attachment-delete" in index_html
+    assert "/js/20-chat.js?v=20260429-official-chat-protect" in index_html
     assert "/js/00-core.js?v=20260429-chat-attachment-delete" in index_html
     assert "/js/90-bootstrap.js?v=20260429-comfyui-load-last" in index_html
     assert "/styles.css?v=20260429-ui-polish" in index_html
@@ -28,6 +28,7 @@ def test_chat_room_delete_ui_is_wired():
     assert 'data-context-type="chat_message"' in core_js
     assert 'data-target-id="chat-messages"' in core_js
     assert "function canDeleteChatRoom(room)" in chat_js
+    assert "room.is_official" in chat_js
     assert "async function deleteChatRoom(roomId)" in chat_js
     assert "async function sendChatSticker(stickerKey)" in chat_js
     assert "async function addChatFriend()" in chat_js
