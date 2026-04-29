@@ -36,6 +36,15 @@ def register_web_terminal_routes(app, deps):
             return None, (json_resp({"ok": False, "msg": "只有 root 可使用 Web Terminal"}), 403)
         return actor, None
 
+    def verify_websocket_csrf(token, actor):
+        if not verify_csrf_token:
+            return True
+        username = actor.get("username") if actor else ""
+        try:
+            return bool(verify_csrf_token(token, username))
+        except TypeError:
+            return bool(verify_csrf_token(token))
+
     @app.route("/api/root/web-terminal/status", methods=["GET"])
     @require_csrf_safe
     def web_terminal_status():
@@ -81,7 +90,7 @@ def register_web_terminal_routes(app, deps):
             ws.send("Web Terminal is disabled by root settings.\r\n")
             return
         token = request.args.get("csrf_token") or request.headers.get("X-CSRF-Token") or ""
-        if verify_csrf_token and not verify_csrf_token(token):
+        if not verify_websocket_csrf(token, actor):
             ws.send("CSRF token invalid.\r\n")
             return
         session = None

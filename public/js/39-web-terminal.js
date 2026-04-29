@@ -5,6 +5,8 @@ let webTerminalTerm = null;
 let webTerminalStatusCache = null;
 let webTerminalAssetsPromise = null;
 let webTerminalAssetError = "";
+let webTerminalCloseRequested = false;
+let webTerminalReceivedMessage = false;
 
 function loadWebTerminalAssets() {
   if (typeof window.Terminal === "function") return Promise.resolve(true);
@@ -198,6 +200,8 @@ async function openWebTerminalSession() {
   webTerminalTerm.focus();
 
   const csrf = await fetchCsrfToken();
+  webTerminalCloseRequested = false;
+  webTerminalReceivedMessage = false;
   webTerminalSocket = new WebSocket(webTerminalSocketUrl(csrf));
   const openBtn = $("web-terminal-open-btn");
   const closeBtn = $("web-terminal-close-btn");
@@ -210,19 +214,29 @@ async function openWebTerminalSession() {
   });
   webTerminalSocket.onopen = () => setWebTerminalMessage("Web Terminal session 已建立。", true);
   webTerminalSocket.onmessage = (event) => {
-    if (webTerminalTerm) webTerminalTerm.write(String(event.data || ""));
+    const text = String(event.data || "");
+    webTerminalReceivedMessage = true;
+    if (/failed|requires root|disabled|CSRF token invalid/i.test(text)) {
+      setWebTerminalMessage(text.trim() || "Web Terminal session 建立失敗。", false);
+    }
+    if (webTerminalTerm) webTerminalTerm.write(text);
   };
   webTerminalSocket.onerror = () => setWebTerminalMessage("Web Terminal WebSocket 連線失敗。", false);
   webTerminalSocket.onclose = () => {
     webTerminalSocket = null;
     if (closeBtn) closeBtn.disabled = true;
     renderWebTerminalStatus(webTerminalStatusCache || { ok: false, terminal: {} });
-    setWebTerminalMessage("Web Terminal session 已關閉。", true);
+    if (webTerminalCloseRequested) {
+      setWebTerminalMessage("Web Terminal session 已關閉。", true);
+    } else if (!webTerminalReceivedMessage) {
+      setWebTerminalMessage("Web Terminal session 未成功建立就關閉，請重新檢查環境或查看 server log。", false);
+    }
   };
 }
 
 function closeWebTerminalSession() {
   if (webTerminalSocket) {
+    webTerminalCloseRequested = true;
     try { webTerminalSocket.close(); } catch (_) {}
     webTerminalSocket = null;
   }

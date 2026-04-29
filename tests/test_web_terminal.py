@@ -47,7 +47,7 @@ def _build_app(db_path, storage_root, *, feature_enabled=True, actor=None):
         "is_feature_enabled": lambda key: feature_enabled if key == "web_terminal" else True,
         "json_resp": _json_resp,
         "require_csrf_safe": _passthrough,
-        "verify_csrf_token": lambda token: True,
+        "verify_csrf_token": lambda token, username: bool(token or username),
         "web_terminal_manager": FakeTerminalManager(),
     })
     return app
@@ -126,6 +126,7 @@ def test_frontend_checks_environment_before_opening_session():
     assert 'id="tab-module-web-terminal"' in index_html
     assert 'id="module-web-terminal"' in index_html
     assert "/vendor/xterm/xterm.js" not in index_html
+    assert "/js/39-web-terminal.js?v=20260429-web-terminal-csrf" in index_html
     assert 'id="web-terminal-check-btn"' in index_html
     assert "/vendor/xterm/xterm.js" in web_terminal_js
     assert "loadWebTerminalAssets" in web_terminal_js
@@ -138,6 +139,8 @@ def test_frontend_checks_environment_before_opening_session():
     assert "不要只用 sudo check" in web_terminal_js
     assert "Docker socket 屬於" in web_terminal_js
     assert "sg ${sock.group} -c 'scripts/run_prod.sh'" in web_terminal_js
+    assert "webTerminalCloseRequested" in web_terminal_js
+    assert "Web Terminal session 未成功建立就關閉" in web_terminal_js
     assert "websocket_available" in web_terminal_js
     assert "web_terminal" in core_js
 
@@ -206,3 +209,11 @@ def test_status_payload_reports_docker_daemon_access_separately(tmp_path):
     assert "permission denied" in payload["runtime_error"]
     assert payload["image_available"] is False
     assert payload["process"]["docker_sock"]["exists"] is True
+
+
+def test_websocket_csrf_verification_uses_actor_username():
+    route_source = (ROOT / "routes" / "web_terminal.py").read_text(encoding="utf-8")
+
+    assert "def verify_websocket_csrf(token, actor):" in route_source
+    assert 'username = actor.get("username") if actor else ""' in route_source
+    assert "verify_csrf_token(token, username)" in route_source
