@@ -7,25 +7,32 @@ cd "$BASE_DIR"
 
 MODE="run"
 WIZARD="auto"
+VENV_DIR="${VENV_DIR:-$BASE_DIR/.venv}"
+SKIP_INSTALL="${HACKME_SKIP_PIP_INSTALL:-0}"
 
 usage() {
   cat <<'USAGE'
 Usage:
   scripts/run_prod.sh [--wizard] [--no-wizard] [--check] [--init-db-only]
+                      [--venv PATH] [--skip-install]
 
 Modes:
   --wizard       Run the first deployment setup wizard and write .env.
   --no-wizard    Do not prompt; fail if required settings are missing.
   --check        Validate environment and print the launch plan, then exit.
   --init-db-only Initialize or migrate the database, then exit.
+  --skip-install Do not create a virtualenv or install Python packages.
+  --venv PATH     Virtualenv path. Default: .venv in the repository root.
 
 Environment:
   ENV_FILE       Path to the env file. Default: .env in the repository root.
+  VENV_DIR       Virtualenv path. Default: .venv.
+  HACKME_SKIP_PIP_INSTALL=1 disables automatic Python dependency install.
 
 First deployment:
-  Run scripts/run_prod.sh from a terminal. If .env is missing, the wizard asks
-  for bootstrap passwords, runtime directories, bind address, HTTPS policy, and
-  Gunicorn settings.
+  Run scripts/run_prod.sh from a terminal. The script creates .venv when needed,
+  installs requirements.txt, opens the setup wizard when .env is missing,
+  initializes the database, and starts Gunicorn.
 USAGE
 }
 
@@ -45,6 +52,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     --init-db-only)
       MODE="init-db-only"
+      shift
+      ;;
+    --skip-install)
+      SKIP_INSTALL="1"
+      shift
+      ;;
+    --venv)
+      shift
+      VENV_DIR="${1:-}"
+      if [[ -z "$VENV_DIR" ]]; then
+        echo "--venv requires a path" >&2
+        exit 2
+      fi
       shift
       ;;
     -h|--help)
@@ -85,6 +105,57 @@ import shlex
 import sys
 print(shlex.quote(sys.argv[1]))
 PY
+}
+
+path_mtime() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+try:
+    print(int(os.path.getmtime(sys.argv[1])))
+except OSError:
+    print(0)
+PY
+}
+
+python_import_ok() {
+  python3 - "$1" <<'PY'
+import importlib.util
+import sys
+sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)
+PY
+}
+
+activate_or_create_venv() {
+  if [[ "$SKIP_INSTALL" == "1" ]]; then
+    return 0
+  fi
+  if [[ "$MODE" == "check" && ! -x "$VENV_DIR/bin/python3" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$VENV_DIR/bin/python3" ]]; then
+    say "建立 Python virtualenv：$VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+  fi
+  # shellcheck disable=SC1091
+  . "$VENV_DIR/bin/activate"
+}
+
+ensure_python_dependencies() {
+  if [[ "$SKIP_INSTALL" == "1" || "$MODE" == "check" ]]; then
+    return 0
+  fi
+  local requirements="$BASE_DIR/requirements.txt"
+  local stamp="$VENV_DIR/.hackme_requirements_mtime"
+  local req_mtime old_mtime
+  req_mtime="$(path_mtime "$requirements")"
+  old_mtime="$(cat "$stamp" 2>/dev/null || printf '0')"
+  if [[ "$req_mtime" != "$old_mtime" ]] || ! python_import_ok flask || ! python_import_ok gunicorn || ! python_import_ok flask_sock; then
+    say "安裝/更新 Python 套件：requirements.txt"
+    python3 -m pip install --upgrade pip
+    python3 -m pip install -r "$requirements"
+    printf '%s\n' "$req_mtime" > "$stamp"
+  fi
 }
 
 prompt_default() {
@@ -270,6 +341,9 @@ load_env_file() {
 }
 
 should_run_wizard() {
+  if [[ "$MODE" == "check" ]]; then
+    return 1
+  fi
   if [[ "$WIZARD" == "yes" ]]; then
     return 0
   fi
@@ -349,6 +423,8 @@ if should_run_wizard; then
 fi
 
 load_env_file
+activate_or_create_venv
+ensure_python_dependencies
 
 export IP_BLOCKING_ENABLED="${IP_BLOCKING_ENABLED:-true}"
 export FORCE_HTTPS="${FORCE_HTTPS:-true}"

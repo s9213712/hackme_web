@@ -9,6 +9,8 @@ short [README](../README.md).
 - [Web UI Guide](WEB.md): user-facing pages and feature behavior
 - [Developer Guide](For_developer.md): API, deployment, runtime state, and
   operator notes
+- [Web Terminal Setup](WEB_TERMINAL.md): optional root-only container terminal
+  dependency installer and troubleshooting
 - [Project Phase Status](PHASE_STATUS.md): current project status and pending
   phase notes
 - [Implementation Workflow](implementation_workflow.md): development workflow

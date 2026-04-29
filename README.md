@@ -25,16 +25,12 @@ project status.
 ## Fast Start
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
-export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
-export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
-export HTML_LEARNING_TEST_PASSWORD='change-this-test-password'
-python3 server.py
+scripts/run_prod.sh
 ```
 
-Then open the URL printed by the server. Default local URL:
+On a fresh checkout this creates `.venv`, installs Python dependencies, opens
+the first deployment wizard, initializes the database, and starts Gunicorn.
+Open the URL printed by the server. Default local URL:
 
 ```text
 http://127.0.0.1:5000/
@@ -48,9 +44,8 @@ is generated at boot and should not be committed.
 For a clean deployment:
 
 1. Clone the repository.
-2. Install `requirements.txt`.
-3. Run `scripts/run_prod.sh` from a terminal and complete the first deployment
-   setup wizard.
+2. Run `scripts/run_prod.sh` from a terminal.
+3. Complete the first deployment setup wizard.
 
 Runtime files and operational defaults are documented in
 [docs/For_developer.md](docs/For_developer.md).
@@ -62,8 +57,8 @@ server settings UI. If you plan to enable it, install its host dependencies
 first:
 
 ```bash
-./install_web_terminal_dependencies.sh --check
-./install_web_terminal_dependencies.sh --all
+./install_web_terminal_dependencies.sh --doctor --venv .venv
+./install_web_terminal_dependencies.sh --all --venv .venv
 ```
 
 The feature is designed to run commands only inside a restricted container and
@@ -71,6 +66,10 @@ to use Cloud Drive as the persistent storage source. When root opens the Web
 Terminal page, the frontend runs an environment check first and reports missing
 Docker, xterm.js assets, Python WebSocket packages, or the terminal container
 image before allowing a session to start.
+
+If Docker group membership changes during installation, restart the login shell
+or the service process before using Web Terminal. The installer prints the exact
+repair command when this is required.
 
 ## Local Checks
 

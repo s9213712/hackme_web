@@ -14,14 +14,14 @@ behavior is documented in [WEB.md](WEB.md).
 ## Fast Local Setup
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
-export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
-export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
-export HTML_LEARNING_TEST_PASSWORD='change-this-test-password'
-python3 server.py
+scripts/run_prod.sh
 ```
+
+The script creates `.venv` when needed, installs `requirements.txt`, opens the
+first deployment wizard when `.env` is missing, initializes or migrates the
+database, and starts Gunicorn. Use `scripts/run_prod.sh --check` for a read-only
+environment check and `scripts/run_prod.sh --skip-install` when an external
+package manager owns the Python environment.
 
 Default local URL:
 
@@ -176,6 +176,27 @@ Remote download APIs:
 - `GET /api/cloud-drive/remote-download/tasks/{task_id}`
 
 BT/magnet/`.torrent` support depends on `aria2c`.
+
+### Optional Web Terminal
+
+Web Terminal is intentionally optional. It requires Docker, Node/npm for local
+xterm.js assets, Python WebSocket packages, and the local
+`hackme-web-terminal:base` container image. The installer is designed to handle
+the common setup path:
+
+```bash
+./install_web_terminal_dependencies.sh --doctor --venv .venv
+./install_web_terminal_dependencies.sh --all --venv .venv
+```
+
+`--all` installs host packages with sudo when needed, installs Python packages,
+copies xterm.js assets into `public/vendor/xterm`, and builds the terminal
+container image. If Docker group membership changes, start a new login shell or
+restart the service process before opening Web Terminal from the browser.
+
+Use `./install_web_terminal_dependencies.sh --doctor --venv .venv` after installation. It
+prints concrete repair commands for missing Docker access, missing xterm assets,
+or a missing container image.
 
 ### Storage and Albums
 

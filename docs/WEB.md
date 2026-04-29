@@ -90,6 +90,26 @@ Cloud Drive or discard it.
 
 Root can change the ComfyUI API port from server settings.
 
+Non-root accounts are charged points after ComfyUI successfully returns images.
+Failed generations are not charged. Discarding a successful preview does not
+refund the generation cost.
+
+### Web Terminal
+
+Web Terminal is an optional root-only page. It starts a restricted Linux
+container instead of a host shell, mounts only root's existing Cloud Drive
+storage into `/home/root`, and removes the container when the session closes or
+times out. Install and verify the optional host dependencies with:
+
+```bash
+./install_web_terminal_dependencies.sh --doctor --venv .venv
+./install_web_terminal_dependencies.sh --all --venv .venv
+```
+
+The installer builds the required `hackme-web-terminal:base` Docker image and
+prints concrete repair commands when Docker permissions require a new login
+shell or service restart.
+
 ### Appeals
 
 Users can view violation history and submit appeals. Root/manager review is

@@ -136,3 +136,23 @@ def test_frontend_checks_environment_before_opening_session():
     assert "runtime_available" in web_terminal_js
     assert "websocket_available" in web_terminal_js
     assert "web_terminal" in core_js
+
+
+def test_web_terminal_installer_and_docs_are_self_service():
+    installer = (ROOT / "install_web_terminal_dependencies.sh").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs" / "WEB_TERMINAL.md").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    run_prod = (ROOT / "scripts" / "run_prod.sh").read_text(encoding="utf-8")
+
+    assert "--doctor" in installer
+    assert "sudo docker info" in installer
+    assert "docker image $IMAGE_NAME: ok" in installer
+    assert "python3-venv" in installer
+    assert "./install_web_terminal_dependencies.sh --all --venv .venv" in readme
+    assert "./install_web_terminal_dependencies.sh --doctor --venv .venv" in guide
+    assert "flask-sock" in requirements
+    assert "simple-websocket" in requirements
+    assert "activate_or_create_venv" in run_prod
+    assert "ensure_python_dependencies" in run_prod
+    assert "scripts/run_prod.sh" in readme
