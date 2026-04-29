@@ -57,9 +57,10 @@ function switchModuleTab(tab) {
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
   const canAccessEconomy = !!currentUser && canAccessModule("economy");
+  const canAccessWebTerminal = currentUser === "root" && canAccessModule("web_terminal");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessWebTerminal ? "web-terminal" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm" && !canAccessDm) normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
@@ -69,6 +70,7 @@ function switchModuleTab(tab) {
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
+  if (tab === "web-terminal" && !canAccessWebTerminal) normTab = fallbackModule();
   if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
   if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
   if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
@@ -83,6 +85,7 @@ function switchModuleTab(tab) {
   const modGames = $("module-games");
   const modComfyui = $("module-comfyui");
   const modEconomy = $("module-economy");
+  const modWebTerminal = $("module-web-terminal");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
@@ -95,6 +98,7 @@ function switchModuleTab(tab) {
   const mGames = $("tab-module-games");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
+  const mWebTerminal = $("tab-module-web-terminal");
   const mAccounts = $("tab-module-accounts");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
@@ -108,6 +112,7 @@ function switchModuleTab(tab) {
   if (modGames) modGames.classList.toggle("active", normTab === "games");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
+  if (modWebTerminal) modWebTerminal.classList.toggle("active", normTab === "web-terminal");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
@@ -120,6 +125,7 @@ function switchModuleTab(tab) {
   if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
+  if (mWebTerminal) mWebTerminal.classList.toggle("active", normTab === "web-terminal");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
@@ -151,6 +157,9 @@ function switchModuleTab(tab) {
   }
   if (normTab === "economy" && canAccessEconomy && typeof loadEconomyDashboard === "function") {
     loadEconomyDashboard();
+  }
+  if (normTab === "web-terminal" && canAccessWebTerminal && typeof loadWebTerminalStatus === "function") {
+    loadWebTerminalStatus({ notify: true });
   }
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
@@ -1219,7 +1228,8 @@ const FEATURE_SETTING_KEYS = [
   "feature_privacy_uploads_enabled",
   "feature_comfyui_enabled",
   "feature_economy_enabled",
-  "feature_games_enabled"
+  "feature_games_enabled",
+  "feature_web_terminal_enabled"
 ];
 
 function featureSettingInputId(key) {

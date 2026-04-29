@@ -18,6 +18,7 @@ from routes.chat import register_chat_routes
 from routes.public import register_public_routes
 from routes.users import register_user_routes
 from routes.operations import register_operation_routes
+from routes.web_terminal import register_web_terminal_routes
 from services.audit import (
     _chain_hash,
     audit,
@@ -1229,6 +1230,17 @@ register_operation_routes(app, {
     "integrity_guard": integrity_guard,
     "verify_audit_integrity": verify_audit_integrity,
     "verify_violation_integrity": verify_violation_integrity,
+})
+
+register_web_terminal_routes(app, {
+    "STORAGE_DIR": STORAGE_DIR,
+    "audit": audit,
+    "get_current_user_ctx": get_current_user_ctx,
+    "get_db": get_db,
+    "is_feature_enabled": is_feature_enabled,
+    "json_resp": json_resp,
+    "require_csrf_safe": require_csrf_safe,
+    "verify_csrf_token": verify_csrf_token,
 })
 
 

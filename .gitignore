@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+node_modules/
+public/vendor/
 database/database.db
 database/database.db.bak
 database/app.db

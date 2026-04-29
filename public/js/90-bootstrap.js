@@ -11,6 +11,7 @@ function bindUiEvents() {
   const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
+  const tabModuleWebTerminal = $("tab-module-web-terminal");
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
@@ -175,6 +176,9 @@ function bindUiEvents() {
   const economyRollbackBtn = $("economy-rollback-btn");
   const economySealBtn = $("economy-seal-btn");
   const economyVerifyBtn = $("economy-verify-btn");
+  const webTerminalCheckBtn = $("web-terminal-check-btn");
+  const webTerminalOpenBtn = $("web-terminal-open-btn");
+  const webTerminalCloseBtn = $("web-terminal-close-btn");
   const sidebarToggle = $("sidebar-toggle");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
@@ -191,6 +195,7 @@ function bindUiEvents() {
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
+  if (tabModuleWebTerminal) tabModuleWebTerminal.addEventListener("click", () => switchModuleTab("web-terminal"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
@@ -211,6 +216,9 @@ function bindUiEvents() {
   if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
+  if (webTerminalCheckBtn && typeof loadWebTerminalStatus === "function") webTerminalCheckBtn.addEventListener("click", () => loadWebTerminalStatus({ notify: true }));
+  if (webTerminalOpenBtn && typeof openWebTerminalSession === "function") webTerminalOpenBtn.addEventListener("click", openWebTerminalSession);
+  if (webTerminalCloseBtn && typeof closeWebTerminalSession === "function") webTerminalCloseBtn.addEventListener("click", closeWebTerminalSession);
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
   if (recoveryToggle) recoveryToggle.addEventListener("click", toggleRecoveryPanel);

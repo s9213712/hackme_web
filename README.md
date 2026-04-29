@@ -55,6 +55,23 @@ For a clean deployment:
 Runtime files and operational defaults are documented in
 [docs/For_developer.md](docs/For_developer.md).
 
+## Optional Web Terminal
+
+Web Terminal is an optional root-only feature. It can be disabled from the root
+server settings UI. If you plan to enable it, install its host dependencies
+first:
+
+```bash
+./install_web_terminal_dependencies.sh --check
+./install_web_terminal_dependencies.sh --all
+```
+
+The feature is designed to run commands only inside a restricted container and
+to use Cloud Drive as the persistent storage source. When root opens the Web
+Terminal page, the frontend runs an environment check first and reports missing
+Docker, xterm.js assets, Python WebSocket packages, or the terminal container
+image before allowing a session to start.
+
 ## Local Checks
 
 Before pushing:

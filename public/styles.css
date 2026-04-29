@@ -1938,6 +1938,64 @@
     .msg.ok   { background: rgba(0,212,170,.18); color: var(--accent2); border: 1px solid rgba(0,212,170,.35); }
     .msg.err  { background: rgba(255,79,109,.18); color: var(--danger); border: 1px solid rgba(255,79,109,.35); }
 
+    .web-terminal-card {
+      display: flex;
+      flex-direction: column;
+      gap: .75rem;
+      min-height: min(680px, calc(100vh - 9rem));
+    }
+    .web-terminal-checks {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: .55rem;
+    }
+    .web-terminal-check {
+      display: flex;
+      align-items: flex-start;
+      gap: .55rem;
+      padding: .65rem .7rem;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+    }
+    .web-terminal-check strong,
+    .web-terminal-check small {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+    .web-terminal-check small {
+      margin-top: .15rem;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.35;
+    }
+    .web-terminal-check-dot {
+      width: .65rem;
+      height: .65rem;
+      margin-top: .18rem;
+      border-radius: 999px;
+      flex: 0 0 auto;
+      background: var(--danger);
+      box-shadow: 0 0 0 3px rgba(255,79,109,.16);
+    }
+    .web-terminal-check.ok .web-terminal-check-dot {
+      background: var(--accent2);
+      box-shadow: 0 0 0 3px rgba(0,212,170,.16);
+    }
+    .web-terminal-screen {
+      flex: 1 1 auto;
+      min-height: 420px;
+      height: min(62vh, 620px);
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: #05070b;
+      padding: .45rem;
+    }
+    .web-terminal-screen .terminal {
+      height: 100%;
+    }
+
     .info-grid {
       display: grid;
       gap: .45rem;

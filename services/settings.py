@@ -82,6 +82,7 @@ DEFAULT_SETTINGS = {
     "feature_comfyui_enabled": True,
     "feature_economy_enabled": True,
     "feature_games_enabled": True,
+    "feature_web_terminal_enabled": False,
     "integrity_guard_enabled": True,
     "integrity_guard_strict_mode": False,
     "security_pending_chat_reports_threshold": 10,

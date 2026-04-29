@@ -78,6 +78,7 @@ const SIDEBAR_ICON_PATHS = {
   game: '<path d="M8 4h8v4h-3v3h3v3h-3v6h-2v-6H8v-3h3V8H8z"/><path d="M5 20h14"/>',
   spark: '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/>',
   wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H19v14H6.5A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 11h4v4h-4z"/><path d="M7 5V3.8L17 5"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 8 4 4-4 4"/><path d="M13 16h4"/>',
   appeal: '<path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><path d="M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   shield: '<path d="M12 3 20 6v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-5"/>',
@@ -114,6 +115,7 @@ const SIDEBAR_MENU_CONFIG = [
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
   { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分系統", group: "工具" },
+  { tabId: "tab-module-web-terminal", module: "web_terminal", tab: "web-terminal", icon: "terminal", label: "Web Terminal", group: "管理", role: "root" },
   { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
   {
     tabId: "tab-module-accounts",
@@ -160,7 +162,7 @@ function sidebarItemForTab(tabId) {
 function canShowSidebarItem(item) {
   if (!item || !currentUser) return false;
   if (item.hideForSuperAdmin && currentRole === "super_admin") return false;
-  if (item.role === "root") return currentUser === "root";
+  if (item.role === "root") return currentUser === "root" && (!item.module || canAccessModule(item.module));
   if (item.role === "super_admin") return currentRole === "super_admin";
   return canAccessModule(item.module);
 }
@@ -962,6 +964,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
+  const tabModuleWebTerminal = $("tab-module-web-terminal");
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
@@ -977,6 +980,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
+  if (tabModuleWebTerminal) tabModuleWebTerminal.style.display = (currentUser === "root" && canAccessModule("web_terminal")) ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (typeof syncSidebarMenuVisibility === "function") {
     syncSidebarMenuVisibility();
@@ -1065,6 +1069,7 @@ function resetAuthState() {
   const moduleGames = $("module-games");
   const moduleComfyui = $("module-comfyui");
   const moduleEconomy = $("module-economy");
+  const moduleWebTerminal = $("module-web-terminal");
   const moduleAccounts = $("module-accounts");
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
@@ -1077,6 +1082,7 @@ function resetAuthState() {
   if (moduleGames) moduleGames.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleEconomy) moduleEconomy.classList.remove("active");
+  if (moduleWebTerminal) moduleWebTerminal.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");

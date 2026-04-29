@@ -222,6 +222,7 @@
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
+        <button class="tab" id="tab-module-web-terminal" style="display:none;">Web Terminal</button>
         <button class="tab" id="tab-module-appeals">申覆</button>
         <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
         <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
@@ -1137,6 +1138,30 @@
         <div id="economy-chain-status" class="drive-card-sub economy-chain-status" style="margin-top:.75rem;">全鏈狀態尚未讀取</div>
       </div>
       <div id="economy-msg" class="msg"></div>
+      </div>
+  </div>
+
+  <div class="module-section" id="module-web-terminal">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">Web Terminal</div>
+      <div class="drive-card web-terminal-card">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">root 隔離終端機</div>
+            <div class="drive-card-sub" id="web-terminal-status">尚未檢查環境</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" id="web-terminal-check-btn" type="button">檢查環境</button>
+            <button class="btn btn-primary btn-sm" id="web-terminal-open-btn" type="button" disabled>開啟 Terminal</button>
+            <button class="btn btn-danger btn-sm" id="web-terminal-close-btn" type="button" disabled>關閉</button>
+          </div>
+        </div>
+        <div id="web-terminal-msg" class="msg"></div>
+        <div id="web-terminal-checks" class="web-terminal-checks"></div>
+        <div id="web-terminal-screen" class="web-terminal-screen">
+          <div class="drive-empty">通過環境檢查後才能開啟 terminal session。</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1744,6 +1769,7 @@
             <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-web-terminal-enabled" /> Web Terminal（root-only，可選）</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-personalization-enabled" /> 個人化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
@@ -2329,6 +2355,7 @@
 <script src="/js/36-comfyui.js?v=20260429-comfyui-load-last" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
+<script src="/js/39-web-terminal.js?v=20260429-web-terminal" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260429-restart-button" defer></script>
 <script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
