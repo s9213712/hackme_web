@@ -167,6 +167,37 @@ def register_economy_routes(app, deps):
             "ledger": points_service.list_ledger(user_id=user_id, limit=50, include_user_id=True),
         })
 
+    @app.route("/api/root/points/wallets/<int:user_id>/sanction", methods=["POST"])
+    @require_csrf
+    def root_points_wallet_sanction(user_id):
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = points_service.sanction_wallet(
+                actor=actor,
+                user_id=user_id,
+                wallet_status=str(data.get("wallet_status") or ""),
+                risk_level=str(data.get("risk_level") or ""),
+                reason=str(data.get("reason") or ""),
+                freeze_amount=int(data.get("freeze_amount") or 0),
+                unfreeze_amount=int(data.get("unfreeze_amount") or 0),
+            )
+            audit(
+                "POINTS_WALLET_SANCTION",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"user_id={user_id}, status={result['wallet'].get('wallet_status')}, risk={result['wallet'].get('risk_level')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/admin/points/ledger", methods=["GET"])
     @require_csrf_safe
     def admin_points_ledger():

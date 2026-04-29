@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from flask import Flask, jsonify, make_response
@@ -128,6 +129,12 @@ def test_admin_features_endpoint_is_root_only():
     app.testing = True
     actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
     feature_state = {"feature_chat_enabled": True, "feature_dm_enabled": False}
+    audit_log = []
+
+    def save_feature_settings(data):
+        updates = {k: bool(v) for k, v in data.items() if k in feature_state}
+        feature_state.update(updates)
+        return updates
 
     register_system_admin_routes(app, {
         "ANCHOR_DIR": ".",
@@ -137,12 +144,12 @@ def test_admin_features_endpoint_is_root_only():
         "LOG_DIR": ".",
         "SERVER_LOG_PATH": "server.log",
         "activate_emergency_lockdown": lambda reason: None,
-        "audit": lambda *args, **kwargs: None,
+        "audit": lambda *args, **kwargs: audit_log.append((args, kwargs)),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": lambda: None,
         "get_feature_settings": lambda: dict(feature_state),
-        "get_system_settings": lambda: {},
+        "get_system_settings": lambda: dict(feature_state),
         "is_audit_chain_enabled": lambda: False,
         "json_resp": _json_resp,
         "repair_audit_chain": lambda **kwargs: {"entries_resealed": 0},
@@ -150,7 +157,7 @@ def test_admin_features_endpoint_is_root_only():
         "require_csrf": _passthrough,
         "require_csrf_safe": _passthrough,
         "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
-        "save_feature_settings": lambda data: {k: bool(v) for k, v in data.items() if k in feature_state},
+        "save_feature_settings": save_feature_settings,
         "save_settings": lambda data: data,
         "verify_audit_integrity": lambda: (True, None, "ok"),
     })
@@ -163,6 +170,15 @@ def test_admin_features_endpoint_is_root_only():
     res = client.put("/api/admin/features", json={"feature_chat_enabled": False, "maintenance_mode": True})
     assert res.status_code == 200
     assert res.get_json()["features"] == {"feature_chat_enabled": False}
+    feature_audit = next(call for call in audit_log if call[0][0] == "FEATURE_FLAGS_CHANGED")
+    detail = json.loads(feature_audit[1]["detail"])
+    assert detail["scope"] == "feature_flags"
+    assert detail["changes"] == [{
+        "key": "feature_chat_enabled",
+        "old": True,
+        "new": False,
+        "changed": True,
+    }]
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     res = client.get("/api/admin/features")
@@ -174,6 +190,7 @@ def test_admin_settings_validates_cloud_drive_storage_root(tmp_path):
     app.testing = True
     actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
     state = {"server_listen_host": "", "server_listen_port": 0, "cloud_drive_storage_root": ""}
+    audit_log = []
     storage_dir = tmp_path / "current-storage"
     storage_dir.mkdir()
 
@@ -191,7 +208,7 @@ def test_admin_settings_validates_cloud_drive_storage_root(tmp_path):
         "STORAGE_DIR": str(storage_dir),
         "CURRENT_SERVER_BIND_STATE": {"host": "127.0.0.1", "port": 5000},
         "activate_emergency_lockdown": lambda reason: None,
-        "audit": lambda *args, **kwargs: None,
+        "audit": lambda *args, **kwargs: audit_log.append((args, kwargs)),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": lambda: None,
@@ -220,6 +237,12 @@ def test_admin_settings_validates_cloud_drive_storage_root(tmp_path):
     assert res.status_code == 200
     assert data["settings"]["cloud_drive_storage_root"] == str(next_root)
     assert data["cloud_drive_storage"]["restart_required"] is True
+    settings_audit = next(call for call in audit_log if call[0][0] == "SETTINGS_CHANGED")
+    detail = json.loads(settings_audit[1]["detail"])
+    assert detail["scope"] == "system_settings"
+    assert detail["changes"][0]["key"] == "cloud_drive_storage_root"
+    assert detail["changes"][0]["old"] == ""
+    assert detail["changes"][0]["new"] == str(next_root)
 
 
 def test_admin_cloud_drive_security_policy_endpoint_is_root_only(tmp_path):

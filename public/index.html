@@ -997,8 +997,8 @@
       <div class="drive-card" id="economy-admin-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
-            <div class="drive-card-title">管理員調整與審核</div>
-            <div class="drive-card-sub">補償、扣回與高價值獎勵都會寫入 PointsChain ledger</div>
+            <div class="drive-card-title" id="economy-admin-card-title">手動加減分與待審核</div>
+            <div class="drive-card-sub" id="economy-admin-card-sub">這裡只負責送出補償、扣回與審核；root 的加減分歷史統一在下方明細查看</div>
           </div>
           <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
         </div>
@@ -1046,6 +1046,34 @@
             <div><span class="drive-card-sub">目前積分</span><strong id="economy-query-points-balance">-</strong><small id="economy-query-points-frozen">凍結 -</small></div>
             <div><span class="drive-card-sub">累計收支</span><strong id="economy-query-points-earned">收入 -</strong><small id="economy-query-points-spent">支出 -</small></div>
             <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-query-wallet-status">-</strong><small id="economy-query-public-account">-</small></div>
+          </div>
+          <div class="drive-card" id="economy-wallet-sanction-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">錢包處分</div>
+            <div class="drive-card-sub">root 可凍結、限制或禁用指定會員錢包；點數凍結/解凍會寫入 ledger。</div>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field">
+                <label>錢包狀態</label>
+                <select id="economy-wallet-sanction-status">
+                  <option value="active">正常</option>
+                  <option value="limited">限制</option>
+                  <option value="frozen">凍結</option>
+                  <option value="closed">禁用</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>風險等級</label>
+                <select id="economy-wallet-sanction-risk">
+                  <option value="normal">正常</option>
+                  <option value="watch">觀察</option>
+                  <option value="high">高風險</option>
+                  <option value="blocked">封鎖</option>
+                </select>
+              </div>
+              <div class="field"><label>同時凍結點數</label><input type="number" id="economy-wallet-freeze-amount" min="0" value="0" /></div>
+              <div class="field"><label>同時解凍點數</label><input type="number" id="economy-wallet-unfreeze-amount" min="0" value="0" /></div>
+              <div class="field"><label>處分原因</label><input type="text" id="economy-wallet-sanction-reason" maxlength="180" placeholder="必填，會寫入審計" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-wallet-sanction-btn" type="button">套用處分</button></div>
+            </div>
           </div>
           <div id="economy-query-ledger-list" class="drive-file-list" style="margin-top:.75rem;">
             <div class="drive-empty">請先選擇帳戶並查詢</div>
@@ -2165,7 +2193,7 @@
 <script src="/js/38-games.js?v=20260429-game-refresh-csrf" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260429-security-log-layout" defer></script>
-<script src="/js/55-economy.js?v=20260429-pointschain-status-text" defer></script>
+<script src="/js/55-economy.js?v=20260429-wallet-sanctions" defer></script>
 <script src="/js/90-bootstrap.js?v=20260429-comfyui-draft" defer></script>
 </body>
 </html>

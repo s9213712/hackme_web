@@ -119,7 +119,7 @@ from services.integrity_guard import IntegrityGuard, ensure_integrity_schema
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
-from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, PointsLedgerService, ensure_points_economy_schema
 from services.release_info import APP_NAME, APP_RELEASE_ID
 from services.runtime_output import get_runtime_output, install_runtime_output_capture
 from services.server_bind import effective_server_bind, effective_server_ssl
@@ -1294,6 +1294,48 @@ def start_storage_maintenance_worker():
     return worker
 
 
+def start_points_chain_block_worker():
+    try:
+        check_interval = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_CHECK_INTERVAL_SECONDS", "15"))
+    except ValueError:
+        check_interval = 15
+    try:
+        ledger_threshold = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_LEDGER_THRESHOLD", str(DEFAULT_BLOCK_LEDGER_THRESHOLD)))
+    except ValueError:
+        ledger_threshold = DEFAULT_BLOCK_LEDGER_THRESHOLD
+    try:
+        max_interval_seconds = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_MAX_INTERVAL_SECONDS", str(DEFAULT_BLOCK_MAX_INTERVAL_SECONDS)))
+    except ValueError:
+        max_interval_seconds = DEFAULT_BLOCK_MAX_INTERVAL_SECONDS
+    check_interval = max(5, check_interval)
+    ledger_threshold = max(1, ledger_threshold)
+    max_interval_seconds = max(60, max_interval_seconds)
+
+    def loop():
+        actor = {"username": "system", "role": "system"}
+        while True:
+            try:
+                result = points_service.seal_due_block(actor=actor, ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds, limit=500)
+                if result.get("sealed"):
+                    block = result.get("block") or {}
+                    audit(
+                        "POINTS_AUTO_BLOCK_SEALED",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"block_number={block.get('block_number')},ledger_count={block.get('ledger_count')}",
+                    )
+                elif result.get("ok") is False:
+                    audit("POINTS_AUTO_BLOCK_SKIPPED", "0.0.0.0", user="system", success=False, detail=str(result.get("msg") or "verification failed"))
+            except Exception as exc:
+                audit("POINTS_AUTO_BLOCK_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            time.sleep(check_interval)
+
+    worker = threading.Thread(target=loop, name="points-chain-block-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     install_runtime_output_capture(SERVER_LOG_PATH)
@@ -1328,6 +1370,7 @@ if __name__ == "__main__":
                 raise SystemExit("Integrity Guard strict mode blocked startup due to high risk findings")
     start_daily_snapshot_worker()
     start_storage_maintenance_worker()
+    start_points_chain_block_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")

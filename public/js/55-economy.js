@@ -35,8 +35,23 @@ function canManageEconomyPoints() {
 function updateEconomyBlockCountdown() {
   const el = $("economy-chain-countdown");
   if (!el || !economyBlockSchedule) return;
-  const interval = Number(economyBlockSchedule.interval_minutes || 0);
   const unsealed = Number(economyBlockSchedule.unsealed_entries || 0);
+  const threshold = Number(economyBlockSchedule.ledger_threshold || 10);
+  if (economyBlockSchedule.mode === "hybrid" || economyBlockSchedule.mode === "ledger_count") {
+    const remainingEntries = Math.max(0, threshold - unsealed);
+    const target = economyBlockSchedule.nextSealAtMs || 0;
+    const remainingSeconds = target ? Math.max(0, Math.ceil((target - Date.now()) / 1000)) : null;
+    if (!unsealed) {
+      el.textContent = `封塊進度：目前沒有未封 ledger；累積 ${threshold} 筆或最長等待 ${economyBlockSchedule.max_interval_minutes || "-"} 分鐘自動封塊`;
+    } else if (remainingEntries) {
+      const timeText = remainingSeconds === null ? "" : `，時間還剩 ${formatEconomyCountdown(remainingSeconds)}`;
+      el.textContent = `封塊進度：${unsealed}/${threshold} 筆，還差 ${remainingEntries} 筆${timeText}`;
+    } else {
+      el.textContent = `封塊進度：${unsealed}/${threshold} 筆，可自動封塊`;
+    }
+    return;
+  }
+  const interval = Number(economyBlockSchedule.interval_minutes || 0);
   if (!unsealed) {
     el.textContent = `封塊倒數：目前沒有未封 ledger；設定為每 ${interval || "-"} 分鐘封塊一次`;
     return;
@@ -53,7 +68,7 @@ function startEconomyBlockCountdown(schedule) {
   economyBlockSchedule = null;
   if (!schedule) {
     const el = $("economy-chain-countdown");
-    if (el) el.textContent = "封塊倒數：-";
+    if (el) el.textContent = "封塊進度：-";
     return;
   }
   const nextMs = schedule.next_seal_at ? Date.parse(schedule.next_seal_at) : 0;
@@ -194,8 +209,15 @@ function renderEconomyRootReport(report) {
   renderEconomyRootList(safeReport.high_risk_ledger, "economy-risk-ledger-list", "尚無異常帳本", (row) => `
     <div class="drive-file-row">
       <div>
-        <strong>${sanitize(row.status || "-")} · ${sanitize(row.direction)} ${Number(row.amount || 0)} ${formatPointsCurrency(row.currency_type)}</strong>
-        <div class="drive-card-sub">user ${Number(row.user_id || 0)} · ${sanitize(row.action_type || "-")} · risk=${sanitize(row.risk_flag || "none")}</div>
+        <strong>${sanitize(row.verification_status || row.status || "-")} · ${sanitize(row.direction)} ${Number(row.amount || 0)} ${formatPointsCurrency(row.currency_type)}</strong>
+        <div class="drive-card-sub">ledger #${Number(row.id || 0)} · user ${Number(row.user_id || 0)} · ${sanitize(row.action_type || "-")} · risk=${sanitize(row.risk_flag || "none")}</div>
+        ${(Array.isArray(row.verification_errors) ? row.verification_errors : []).map((issue) => `
+          <div class="drive-card-sub">
+            驗證異常：${sanitize(issue.type || "-")} · ${sanitize(issue.message || "")}
+          </div>
+          ${issue.expected_ledger_hash || issue.actual_ledger_hash ? `<div class="economy-ledger-hash">expected=${sanitize(issue.expected_ledger_hash || "-")} · actual=${sanitize(issue.actual_ledger_hash || "-")}</div>` : ""}
+          ${issue.expected_previous_ledger_hash || issue.actual_previous_ledger_hash ? `<div class="economy-ledger-hash">prev expected=${sanitize(issue.expected_previous_ledger_hash || "-")} · prev actual=${sanitize(issue.actual_previous_ledger_hash || "-")}</div>` : ""}
+        `).join("")}
         <div class="economy-ledger-hash">${sanitize(row.ledger_uuid || "")}</div>
       </div>
       <button class="btn" type="button" data-economy-proof="${sanitize(row.ledger_uuid || "")}">Proof</button>
@@ -245,6 +267,8 @@ function renderEconomyAccountLookup(wallet, ledger) {
   if ($("economy-query-points-spent")) $("economy-query-points-spent").textContent = `支出 ${pointsSpent}`;
   if ($("economy-query-wallet-status")) $("economy-query-wallet-status").textContent = safeWallet.wallet_status || "-";
   if ($("economy-query-public-account")) $("economy-query-public-account").textContent = safeWallet.public_account_id || "-";
+  if ($("economy-wallet-sanction-status")) $("economy-wallet-sanction-status").value = safeWallet.wallet_status || "active";
+  if ($("economy-wallet-sanction-risk")) $("economy-wallet-sanction-risk").value = safeWallet.risk_level || "normal";
   renderEconomyLedger(Array.isArray(ledger) ? ledger.slice(0, 12) : [], "economy-query-ledger-list");
 }
 
@@ -267,7 +291,7 @@ async function loadEconomyDashboard() {
     if ($("economy-user-ledger-card")) $("economy-user-ledger-card").style.display = rootMode ? "none" : "";
     if (rootMode) {
       if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取中";
-      if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊倒數：讀取中...";
+      if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊進度：讀取中...";
       const sidebarPoints = $("sidebar-points");
       if (sidebarPoints) {
         sidebarPoints.dataset.points = "root: server resources";
@@ -309,7 +333,7 @@ async function loadEconomyRootReport() {
   } catch (err) {
     stopEconomyBlockCountdown();
     if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取失敗";
-    if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊倒數：讀取失敗";
+    if ($("economy-chain-countdown")) $("economy-chain-countdown").textContent = "封塊進度：讀取失敗";
     setEconomyChainStatus(err.message || "PointsChain 狀態讀取失敗", false);
     economySetMsg(err.message || "PointsChain 狀態讀取失敗", false);
     return false;
@@ -319,13 +343,30 @@ async function loadEconomyRootReport() {
 async function loadEconomyAdmin() {
   if (!canManageEconomyPoints()) return;
   try {
+    const rootMode = currentUser === "root";
     const [ledger, pending, userList] = await Promise.all([
       fetchEconomyJson("/admin/points/ledger?limit=50"),
       fetchEconomyJson("/admin/points/pending-rewards?status=pending"),
       fetchEconomyJson("/admin/users"),
     ]);
     renderEconomyAdjustUserOptions(userList.users || []);
-    renderEconomyLedger(ledger.ledger || [], "economy-admin-ledger-list");
+    const adminTitle = $("economy-admin-card-title");
+    const adminSub = $("economy-admin-card-sub");
+    const adminLedgerList = $("economy-admin-ledger-list");
+    if (adminTitle) adminTitle.textContent = rootMode ? "手動加減分與待審核" : "管理員調整與審核";
+    if (adminSub) {
+      adminSub.textContent = rootMode
+        ? "這裡只負責送出補償、扣回與審核；加減分歷史統一在下方明細查看"
+        : "補償、扣回與高價值獎勵都會寫入 PointsChain ledger";
+    }
+    if (adminLedgerList) {
+      adminLedgerList.style.display = rootMode ? "none" : "";
+      if (rootMode) {
+        adminLedgerList.innerHTML = "";
+      } else {
+        renderEconomyLedger(ledger.ledger || [], "economy-admin-ledger-list");
+      }
+    }
     const pendingList = $("economy-pending-list");
     if (pendingList) {
       const rows = pending.pending_rewards || [];
@@ -403,6 +444,52 @@ async function loadEconomyAccountLookup() {
     if (btn) {
       btn.disabled = false;
       btn.textContent = oldText || "查詢";
+    }
+  }
+}
+
+async function sanctionEconomyWallet() {
+  if (currentUser !== "root") return;
+  const select = $("economy-query-user-id");
+  const userId = Number(select?.value || 0);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    economySetMsg("請先選擇要處分的會員", false);
+    return;
+  }
+  const reason = $("economy-wallet-sanction-reason")?.value?.trim() || "";
+  if (!reason) {
+    economySetMsg("請輸入錢包處分原因", false);
+    return;
+  }
+  const btn = $("economy-wallet-sanction-btn");
+  const oldText = btn ? btn.textContent : "";
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "處理中...";
+    }
+    await fetchEconomyJson(`/root/points/wallets/${encodeURIComponent(userId)}/sanction`, {
+      method: "POST",
+      body: JSON.stringify({
+        wallet_status: $("economy-wallet-sanction-status")?.value || "active",
+        risk_level: $("economy-wallet-sanction-risk")?.value || "normal",
+        freeze_amount: Number($("economy-wallet-freeze-amount")?.value || 0),
+        unfreeze_amount: Number($("economy-wallet-unfreeze-amount")?.value || 0),
+        reason,
+      }),
+    });
+    const refreshed = await fetchEconomyJson(`/admin/points/wallets/${encodeURIComponent(userId)}`);
+    renderEconomyAccountLookup(refreshed.wallet, refreshed.ledger || []);
+    if ($("economy-wallet-freeze-amount")) $("economy-wallet-freeze-amount").value = "0";
+    if ($("economy-wallet-unfreeze-amount")) $("economy-wallet-unfreeze-amount").value = "0";
+    economySetMsg("已套用錢包處分");
+    await loadEconomyRootReport();
+  } catch (err) {
+    economySetMsg(err.message || "錢包處分失敗", false);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "套用處分";
     }
   }
 }
@@ -534,6 +621,7 @@ function bindEconomyInlineEvents() {
     ["economy-admin-refresh-btn", loadEconomyAdmin],
     ["economy-adjust-btn", submitEconomyAdjustment],
     ["economy-account-query-btn", loadEconomyAccountLookup],
+    ["economy-wallet-sanction-btn", sanctionEconomyWallet],
     ["economy-root-report-btn", loadEconomyRootReport],
     ["economy-rollback-btn", rollbackEconomyLedger],
     ["economy-seal-btn", sealPointsChainBlock],

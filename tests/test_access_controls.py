@@ -1,3 +1,5 @@
+import json
+
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
@@ -29,7 +31,7 @@ def _passthrough(fn):
     return fn
 
 
-def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, current_ssl_enabled=False):
+def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, current_ssl_enabled=False, audit_log=None):
     app = Flask(__name__)
     app.testing = True
     state = settings_state or {
@@ -59,7 +61,7 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "LOG_DIR": ".",
         "SERVER_LOG_PATH": "server.log",
         "activate_emergency_lockdown": lambda reason: None,
-        "audit": lambda *args, **kwargs: None,
+        "audit": (lambda *args, **kwargs: audit_log.append((args, kwargs))) if audit_log is not None else (lambda *args, **kwargs: None),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor or {"id": 1, "username": "root", "role": "super_admin"},
         "get_db": lambda: None,
@@ -138,7 +140,8 @@ def test_admin_access_controls_endpoint_updates_safe_payload():
 
 
 def test_admin_rotates_maintenance_bypass_token_once():
-    app, state = _admin_app()
+    audit_log = []
+    app, state = _admin_app(audit_log=audit_log)
     client = app.test_client()
     res = client.post("/api/admin/access-controls/maintenance-bypass-token", json={"confirm": "ROTATE", "ttl_minutes": 15})
     data = res.get_json()
@@ -150,6 +153,12 @@ def test_admin_rotates_maintenance_bypass_token_once():
     assert data["access_controls"]["maintenance_bypass_token_expires_at"] == state["maintenance_bypass_token_expires_at"]
     assert verify_maintenance_bypass_token(data["token"], state["maintenance_bypass_token_hash"], state["maintenance_bypass_token_expires_at"]) is True
     assert "maintenance_bypass_token_hash" not in data["access_controls"]
+    event = next(call for call in audit_log if call[0][0] == "MAINTENANCE_BYPASS_TOKEN_ROTATED")
+    detail = json.loads(event[1]["detail"])
+    changes = {row["key"]: row for row in detail["changes"]}
+    assert changes["maintenance_bypass_token_hash"]["old"] == ""
+    assert changes["maintenance_bypass_token_hash"]["new"] == "<redacted>"
+    assert data["token"] not in event[1]["detail"]
 
 
 def test_access_controls_are_root_only():

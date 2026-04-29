@@ -13,7 +13,9 @@ LEGACY_CURRENCY_RE = re.compile(r"\b(?:soft|hard)\b", re.IGNORECASE)
 LEDGER_DIRECTIONS = {"credit", "debit", "freeze", "unfreeze", "reverse", "transfer_in", "transfer_out"}
 LEDGER_STATUSES = {"pending", "confirmed", "reversed", "disputed", "frozen"}
 WALLET_STATUSES = {"active", "frozen", "limited", "closed"}
-DEFAULT_BLOCK_INTERVAL_SECONDS = 5 * 60
+DEFAULT_BLOCK_INTERVAL_SECONDS = 24 * 60 * 60
+DEFAULT_BLOCK_LEDGER_THRESHOLD = 30
+DEFAULT_BLOCK_MAX_INTERVAL_SECONDS = 24 * 60 * 60
 SIGNUP_BONUS_POINTS = 100
 ADMIN_INITIAL_POINTS = 1000
 ADMIN_WEEKLY_SALARY_POINTS = 100
@@ -853,8 +855,10 @@ class PointsLedgerService:
         wallet = self.ensure_wallet(conn, user_id)
         if wallet["wallet_status"] == "closed":
             raise ValueError("wallet is closed")
-        if wallet["wallet_status"] == "frozen" and direction in {"credit", "debit", "freeze", "unfreeze"}:
+        if wallet["wallet_status"] == "frozen" and direction in {"credit", "debit", "freeze"}:
             raise ValueError("wallet is frozen")
+        if wallet["wallet_status"] == "limited" and direction in {"debit", "transfer_out"}:
+            raise ValueError("wallet is limited")
 
         balance_col = self._balance_column(currency_type)
         frozen_col = self._frozen_column(currency_type)
@@ -974,6 +978,116 @@ class PointsLedgerService:
             row, created = self._record_transaction(conn, **kwargs)
             conn.commit()
             return {"ok": True, "created": created, "ledger": self.serialize_ledger(row, include_user_id=True), "wallet": self.get_wallet(row["user_id"])}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def sanction_wallet(
+        self,
+        *,
+        actor,
+        user_id,
+        wallet_status=None,
+        risk_level=None,
+        reason="",
+        freeze_amount=0,
+        unfreeze_amount=0,
+    ):
+        status = str(wallet_status or "").strip().lower()
+        if status and status not in WALLET_STATUSES:
+            raise ValueError("unsupported wallet status")
+        risk = str(risk_level or "").strip().lower()
+        allowed_risk = {"normal", "watch", "high", "blocked"}
+        if risk and risk not in allowed_risk:
+            raise ValueError("unsupported wallet risk level")
+        reason_text = str(reason or "").strip()
+        if not reason_text:
+            raise ValueError("reason required")
+        freeze_amount = int(freeze_amount or 0)
+        unfreeze_amount = int(unfreeze_amount or 0)
+        if freeze_amount < 0 or unfreeze_amount < 0:
+            raise ValueError("freeze amount must not be negative")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (int(user_id),)).fetchone()
+            if target and (target["username"] == "root" or target["role"] == "super_admin"):
+                raise ValueError("root wallet cannot be sanctioned")
+            wallet = self.ensure_wallet(conn, user_id)
+            ledger_rows = []
+            if unfreeze_amount:
+                row, _created = self._record_transaction(
+                    conn,
+                    user_id=user_id,
+                    currency_type=DISPLAY_CURRENCY,
+                    direction="unfreeze",
+                    amount=unfreeze_amount,
+                    action_type="root_wallet_unfreeze",
+                    reference_type="wallet_sanction",
+                    reference_id=str(user_id),
+                    reason=reason_text,
+                    public_metadata={"wallet_sanction": True, "requested_status": status or wallet["wallet_status"]},
+                    actor=actor,
+                    risk_flag="root_action",
+                    risk_score=0,
+                )
+                ledger_rows.append(row)
+                wallet = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (int(user_id),)).fetchone()
+            if freeze_amount:
+                row, _created = self._record_transaction(
+                    conn,
+                    user_id=user_id,
+                    currency_type=DISPLAY_CURRENCY,
+                    direction="freeze",
+                    amount=freeze_amount,
+                    action_type="root_wallet_freeze",
+                    reference_type="wallet_sanction",
+                    reference_id=str(user_id),
+                    reason=reason_text,
+                    public_metadata={"wallet_sanction": True, "requested_status": status or wallet["wallet_status"]},
+                    actor=actor,
+                    risk_flag="root_action",
+                    risk_score=0,
+                )
+                ledger_rows.append(row)
+                wallet = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (int(user_id),)).fetchone()
+            next_status = status or wallet["wallet_status"]
+            next_risk = risk or wallet["risk_level"]
+            now = utc_now()
+            conn.execute(
+                "UPDATE points_wallets SET wallet_status=?, risk_level=?, updated_at=? WHERE user_id=?",
+                (next_status, next_risk, now, int(user_id)),
+            )
+            self._audit_log(
+                conn,
+                "WALLET_SANCTION",
+                "warning" if next_status in {"frozen", "closed"} or next_risk in {"high", "blocked"} else "info",
+                f"wallet sanction user {int(user_id)} status={next_status} risk={next_risk}",
+                actor=actor,
+                target_user_id=int(user_id),
+                metadata={
+                    "wallet_status": next_status,
+                    "risk_level": next_risk,
+                    "reason": reason_text,
+                    "freeze_amount": freeze_amount,
+                    "unfreeze_amount": unfreeze_amount,
+                    "ledger_uuids": [row["ledger_uuid"] for row in ledger_rows],
+                },
+            )
+            conn.commit()
+            wallet = conn.execute("SELECT * FROM points_wallets WHERE user_id=?", (int(user_id),)).fetchone()
+            result = {
+                "ok": True,
+                "wallet": self.serialize_wallet(wallet),
+                "ledgers": [self.serialize_ledger(row, include_user_id=True) for row in ledger_rows],
+            }
+            if ledger_rows:
+                result["forced_block"] = self.force_seal_block(actor=actor, reason="wallet_sanction")
+            return result
         except Exception:
             conn.rollback()
             raise
@@ -1103,7 +1217,7 @@ class PointsLedgerService:
             raise ValueError("direction must be credit or debit")
         if not str(reason or "").strip():
             raise ValueError("reason is required")
-        return self.record_transaction(
+        result = self.record_transaction(
             user_id=user_id,
             currency_type=currency_type,
             direction=direction,
@@ -1117,6 +1231,8 @@ class PointsLedgerService:
             private_metadata={"actor_username": actor_value(actor, "username")},
             actor=actor,
         )
+        result["forced_block"] = self.force_seal_block(actor=actor, reason="admin_adjust")
+        return result
 
     def _create_pending_reward(self, conn, *, user_id, currency_type, amount, action_type, reference_type=None, reference_id=None, metadata=None, submitted_by=None):
         currency_type = normalize_currency_type(currency_type)
@@ -1266,13 +1382,15 @@ class PointsLedgerService:
                 metadata={"original_ledger_uuid": original["ledger_uuid"], "reason": reason, "created": created},
             )
             conn.commit()
-            return {
+            result = {
                 "ok": True,
                 "created": created,
                 "original_ledger": self.serialize_ledger(original, include_user_id=True),
                 "rollback_ledger": self.serialize_ledger(rollback_row, include_user_id=True),
                 "wallet": self.get_wallet(original["user_id"]),
             }
+            result["forced_block"] = self.force_seal_block(actor=actor, reason="ledger_rollback")
+            return result
         except Exception:
             conn.rollback()
             raise
@@ -1433,6 +1551,25 @@ class PointsLedgerService:
         finally:
             conn.close()
 
+    def seal_due_block(self, *, actor=None, ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD, max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, limit=100):
+        schedule = self.block_schedule(ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds)
+        if not schedule.get("chain_ok", True):
+            return {"ok": False, "sealed": False, "msg": "points chain verification failed", "schedule": schedule}
+        if not schedule.get("due"):
+            return {"ok": True, "sealed": False, "msg": schedule.get("message") or "not due", "schedule": schedule}
+        result = self.seal_block(actor=actor, limit=limit)
+        result["schedule"] = schedule
+        return result
+
+    def force_seal_block(self, *, actor=None, reason="", limit=500):
+        verification = self.verify_chain()
+        if verification.get("ok") is not True:
+            return {"ok": False, "sealed": False, "msg": "points chain verification failed", "verification": verification}
+        result = self.seal_block(actor=actor, limit=limit)
+        result["forced"] = True
+        result["reason"] = str(reason or "")
+        return result
+
     def verify_chain(self):
         conn = self.get_db()
         try:
@@ -1441,28 +1578,89 @@ class PointsLedgerService:
             conn.commit()
             errors = []
             previous = None
+            previous_ledger = None
             for row in conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall():
                 if row["previous_ledger_hash"] != previous:
-                    errors.append({"type": "ledger_previous_hash", "ledger_id": row["id"]})
+                    errors.append({
+                        "type": "ledger_previous_hash",
+                        "severity": "critical",
+                        "message": f"ledger #{row['id']} previous hash mismatch",
+                        "ledger_id": row["id"],
+                        "ledger_uuid": row["ledger_uuid"],
+                        "expected_previous_ledger_hash": previous,
+                        "actual_previous_ledger_hash": row["previous_ledger_hash"],
+                        "previous_ledger_id": previous_ledger["id"] if previous_ledger else None,
+                        "previous_ledger_uuid": previous_ledger["ledger_uuid"] if previous_ledger else None,
+                        "ledger": self.serialize_ledger(row, include_user_id=True),
+                    })
                 expected = compute_ledger_hash(row)
                 if row["ledger_hash"] != expected:
-                    errors.append({"type": "ledger_hash", "ledger_id": row["id"]})
+                    errors.append({
+                        "type": "ledger_hash",
+                        "severity": "critical",
+                        "message": f"ledger #{row['id']} content hash mismatch",
+                        "ledger_id": row["id"],
+                        "ledger_uuid": row["ledger_uuid"],
+                        "expected_ledger_hash": expected,
+                        "actual_ledger_hash": row["ledger_hash"],
+                        "ledger": self.serialize_ledger(row, include_user_id=True),
+                    })
                 previous = row["ledger_hash"]
+                previous_ledger = row
             previous_block = None
             for block in conn.execute("SELECT * FROM points_chain_blocks ORDER BY block_number ASC").fetchall():
                 if block["previous_block_hash"] != previous_block:
-                    errors.append({"type": "block_previous_hash", "block_id": block["id"]})
+                    errors.append({
+                        "type": "block_previous_hash",
+                        "severity": "critical",
+                        "message": f"block #{block['block_number']} previous hash mismatch",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "expected_previous_block_hash": previous_block,
+                        "actual_previous_block_hash": block["previous_block_hash"],
+                    })
                 ledgers = conn.execute(
-                    "SELECT ledger_hash FROM points_ledger WHERE id BETWEEN ? AND ? ORDER BY id ASC",
+                    "SELECT id, ledger_uuid, ledger_hash FROM points_ledger WHERE id BETWEEN ? AND ? ORDER BY id ASC",
                     (block["first_ledger_id"], block["last_ledger_id"]),
                 ).fetchall()
                 hashes = [row["ledger_hash"] for row in ledgers]
                 if len(hashes) != int(block["ledger_count"]):
-                    errors.append({"type": "block_ledger_count", "block_id": block["id"]})
-                if merkle_root(hashes) != block["merkle_root"]:
-                    errors.append({"type": "block_merkle_root", "block_id": block["id"]})
-                if compute_block_hash(block) != block["block_hash"]:
-                    errors.append({"type": "block_hash", "block_id": block["id"]})
+                    errors.append({
+                        "type": "block_ledger_count",
+                        "severity": "critical",
+                        "message": f"block #{block['block_number']} ledger count mismatch",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "expected_ledger_count": int(block["ledger_count"]),
+                        "actual_ledger_count": len(hashes),
+                        "first_ledger_id": block["first_ledger_id"],
+                        "last_ledger_id": block["last_ledger_id"],
+                    })
+                expected_merkle_root = merkle_root(hashes)
+                if expected_merkle_root != block["merkle_root"]:
+                    errors.append({
+                        "type": "block_merkle_root",
+                        "severity": "critical",
+                        "message": f"block #{block['block_number']} merkle root mismatch",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "expected_merkle_root": expected_merkle_root,
+                        "actual_merkle_root": block["merkle_root"],
+                        "first_ledger_id": block["first_ledger_id"],
+                        "last_ledger_id": block["last_ledger_id"],
+                        "ledger_uuids": [ledger["ledger_uuid"] for ledger in ledgers],
+                    })
+                expected_block_hash = compute_block_hash(block)
+                if expected_block_hash != block["block_hash"]:
+                    errors.append({
+                        "type": "block_hash",
+                        "severity": "critical",
+                        "message": f"block #{block['block_number']} block hash mismatch",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "expected_block_hash": expected_block_hash,
+                        "actual_block_hash": block["block_hash"],
+                    })
                 signature = conn.execute(
                     """
                     SELECT * FROM points_chain_block_signatures
@@ -1471,9 +1669,24 @@ class PointsLedgerService:
                     (block["id"],),
                 ).fetchone()
                 if not signature:
-                    errors.append({"type": "block_signature_missing", "block_id": block["id"]})
+                    errors.append({
+                        "type": "block_signature_missing",
+                        "severity": "high",
+                        "message": f"block #{block['block_number']} signature missing",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                    })
                 elif signature["signature_algorithm"] != "hmac-sha256" or signature["public_key_fingerprint"] != self._node_fingerprint() or signature["signature"] != self._sign_block(block):
-                    errors.append({"type": "block_signature_invalid", "block_id": block["id"]})
+                    errors.append({
+                        "type": "block_signature_invalid",
+                        "severity": "critical",
+                        "message": f"block #{block['block_number']} signature invalid",
+                        "block_id": block["id"],
+                        "block_number": block["block_number"],
+                        "signature_algorithm": signature["signature_algorithm"],
+                        "public_key_fingerprint": signature["public_key_fingerprint"],
+                        "expected_public_key_fingerprint": self._node_fingerprint(),
+                    })
                 previous_block = block["block_hash"]
             counts = {
                 "ledger_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()["c"],
@@ -1544,31 +1757,41 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def block_schedule(self, *, interval_seconds=DEFAULT_BLOCK_INTERVAL_SECONDS):
+    def block_schedule(self, *, ledger_threshold=DEFAULT_BLOCK_LEDGER_THRESHOLD, max_interval_seconds=DEFAULT_BLOCK_MAX_INTERVAL_SECONDS):
         verification = self.verify_chain()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            interval_seconds = max(60, int(interval_seconds or DEFAULT_BLOCK_INTERVAL_SECONDS))
-            last_block = conn.execute("SELECT sealed_at FROM points_chain_blocks ORDER BY block_number DESC LIMIT 1").fetchone()
+            ledger_threshold = max(1, int(ledger_threshold or DEFAULT_BLOCK_LEDGER_THRESHOLD))
+            max_interval_seconds = max(60, int(max_interval_seconds or DEFAULT_BLOCK_MAX_INTERVAL_SECONDS))
             first_unsealed = conn.execute(
                 "SELECT created_at FROM points_ledger WHERE chain_block_id IS NULL ORDER BY id ASC LIMIT 1"
             ).fetchone()
-            anchor_at = parse_utc_timestamp(last_block["sealed_at"]) if last_block else None
-            if not anchor_at and first_unsealed:
-                anchor_at = parse_utc_timestamp(first_unsealed["created_at"])
-            next_at = anchor_at.timestamp() + interval_seconds if anchor_at else None
+            anchor_at = parse_utc_timestamp(first_unsealed["created_at"]) if first_unsealed else None
+            next_at = anchor_at.timestamp() + max_interval_seconds if anchor_at else None
             now_ts = datetime.now(timezone.utc).timestamp()
             seconds_remaining = int(max(0, next_at - now_ts)) if next_at else None
             unsealed = int((verification.get("counts") or {}).get("unsealed_entries") or 0)
+            chain_ok = verification.get("ok") is True
+            entries_remaining = max(0, ledger_threshold - unsealed)
+            count_due = unsealed >= ledger_threshold
+            time_due = bool(unsealed and seconds_remaining == 0)
+            due_reason = "count" if count_due else ("time" if time_due else None)
             return {
-                "interval_seconds": interval_seconds,
-                "interval_minutes": interval_seconds // 60,
+                "mode": "hybrid",
+                "ledger_threshold": ledger_threshold,
+                "entries_remaining": entries_remaining,
+                "max_interval_seconds": max_interval_seconds,
+                "max_interval_minutes": max_interval_seconds // 60,
+                "interval_seconds": max_interval_seconds,
+                "interval_minutes": max_interval_seconds // 60,
                 "next_seal_at": datetime.fromtimestamp(next_at, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z") if next_at else None,
                 "seconds_remaining": seconds_remaining,
                 "unsealed_entries": unsealed,
-                "due": bool(unsealed and seconds_remaining == 0),
-                "message": "目前沒有未封 ledger" if not unsealed else ("可封塊" if seconds_remaining == 0 else "等待下一次封塊時間"),
+                "chain_ok": chain_ok,
+                "due": bool(chain_ok and (count_due or time_due)),
+                "due_reason": due_reason,
+                "message": "全鏈驗證異常，暫停自動封塊" if not chain_ok else ("目前沒有未封 ledger" if not unsealed else (f"已累積 {unsealed}/{ledger_threshold} 筆，可封塊" if count_due else ("已到達最長等待時間，可封塊" if time_due else f"已累積 {unsealed}/{ledger_threshold} 筆，尚需 {entries_remaining} 筆或等待時間到"))),
             }
         finally:
             conn.close()
@@ -1597,11 +1820,36 @@ class PointsLedgerService:
                 ORDER BY id DESC LIMIT 20
                 """
             ).fetchall()
+            high_risk_by_id = {int(row["id"]): self.serialize_ledger(row, include_user_id=True) for row in high_risk}
+            for error in verification.get("errors") or []:
+                ledger = error.get("ledger") if isinstance(error, dict) else None
+                ledger_id = int(error.get("ledger_id") or 0) if isinstance(error, dict) else 0
+                if not ledger_id:
+                    continue
+                if not ledger:
+                    row = conn.execute("SELECT * FROM points_ledger WHERE id=?", (ledger_id,)).fetchone()
+                    ledger = self.serialize_ledger(row, include_user_id=True) if row else None
+                if not ledger:
+                    continue
+                existing = high_risk_by_id.get(ledger_id) or dict(ledger)
+                issues = list(existing.get("verification_errors") or [])
+                issues.append({
+                    "type": error.get("type"),
+                    "message": error.get("message"),
+                    "expected_ledger_hash": error.get("expected_ledger_hash"),
+                    "actual_ledger_hash": error.get("actual_ledger_hash"),
+                    "expected_previous_ledger_hash": error.get("expected_previous_ledger_hash"),
+                    "actual_previous_ledger_hash": error.get("actual_previous_ledger_hash"),
+                })
+                existing["verification_errors"] = issues
+                existing["verification_status"] = "tampered"
+                high_risk_by_id[ledger_id] = existing
+            high_risk_ledger = sorted(high_risk_by_id.values(), key=lambda row: int(row.get("id") or 0), reverse=True)[:20]
             return {
                 "verification": verification,
                 "stats": stats,
                 "blocks": [dict(row) for row in blocks],
-                "high_risk_ledger": [self.serialize_ledger(row, include_user_id=True) for row in high_risk],
+                "high_risk_ledger": high_risk_ledger,
                 "audit_logs": audit_logs,
                 "adjustments": adjustments,
                 "block_schedule": block_schedule,

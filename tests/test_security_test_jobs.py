@@ -90,10 +90,12 @@ def test_root_can_start_functional_smoke_job(tmp_path, monkeypatch):
 def test_root_can_start_pentest_job_with_authorized_target(tmp_path, monkeypatch):
     system_admin.SECURITY_TEST_JOBS.clear()
     commands = []
+    envs = []
 
     class CaptureProcess(_FakeProcess):
         def __init__(self, command, **kwargs):
             commands.append(command)
+            envs.append(kwargs.get("env") or {})
             super().__init__(command, **kwargs)
 
     monkeypatch.setattr(system_admin.subprocess, "Popen", CaptureProcess)
@@ -103,6 +105,10 @@ def test_root_can_start_pentest_job_with_authorized_target(tmp_path, monkeypatch
         "target": "https://example.test",
         "i_own_this_target": True,
         "only": "nmap",
+        "root_password": "RootSecret123!",
+        "root_username": "root-checker",
+        "manager_username": "manager-checker",
+        "user_username": "user-checker",
     })
     data = res.get_json()
     job = _wait_for_job_done(client, data["job"]["job_id"])
@@ -112,6 +118,10 @@ def test_root_can_start_pentest_job_with_authorized_target(tmp_path, monkeypatch
     assert job["status"] == "passed"
     assert "--i-own-this-target" in commands[0]
     assert "nmap" in commands[0]
+    assert envs[0]["ROOT_PASSWORD"] == "RootSecret123!"
+    assert envs[0]["PENTEST_ROOT_USERNAME"] == "root-checker"
+    assert envs[0]["PENTEST_MANAGER_USERNAME"] == "manager-checker"
+    assert envs[0]["PENTEST_USER_USERNAME"] == "user-checker"
 
 
 def test_security_test_jobs_are_root_only(tmp_path):

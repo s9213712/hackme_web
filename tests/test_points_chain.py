@@ -187,6 +187,37 @@ def test_points_chain_seal_verify_and_proof(tmp_path):
     assert verification["counts"]["unsealed_entries"] == 0
 
 
+def test_points_chain_verify_identifies_tampered_ledger(tmp_path):
+    service = _service(tmp_path)
+    tx = service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=10,
+        action_type="test_credit",
+    )
+    conn = service.get_db()
+    try:
+        conn.execute("DROP TRIGGER trg_points_ledger_core_immutable")
+        conn.execute("UPDATE points_ledger SET amount=99 WHERE ledger_uuid=?", (tx["ledger"]["ledger_uuid"],))
+        conn.commit()
+    finally:
+        conn.close()
+
+    verification = service.verify_chain()
+    assert verification["ok"] is False
+    error = next(row for row in verification["errors"] if row["type"] == "ledger_hash")
+    assert error["ledger_uuid"] == tx["ledger"]["ledger_uuid"]
+    assert error["ledger"]["amount"] == 99
+    assert error["expected_ledger_hash"]
+    assert error["actual_ledger_hash"] == tx["ledger"]["ledger_hash"]
+
+    report = service.root_report()
+    flagged = next(row for row in report["high_risk_ledger"] if row["ledger_uuid"] == tx["ledger"]["ledger_uuid"])
+    assert flagged["verification_status"] == "tampered"
+    assert flagged["verification_errors"][0]["type"] == "ledger_hash"
+
+
 def test_points_chain_seal_adds_local_signature_and_root_report(tmp_path):
     service = _service(tmp_path)
     service.record_transaction(
@@ -212,8 +243,10 @@ def test_points_chain_seal_adds_local_signature_and_root_report(tmp_path):
     assert report["verification"]["ok"] is True
     assert report["blocks"][0]["signature_algorithm"] == "hmac-sha256"
     assert report["audit_logs"][0]["event_type"] in {"POINTS_BLOCK_SEALED", "LEDGER_APPEND"}
-    assert report["block_schedule"]["interval_minutes"] == 5
-    assert report["block_schedule"]["unsealed_entries"] == 1
+    assert report["block_schedule"]["mode"] == "hybrid"
+    assert report["block_schedule"]["ledger_threshold"] == 30
+    assert report["block_schedule"]["max_interval_minutes"] == 24 * 60
+    assert report["block_schedule"]["unsealed_entries"] == 0
     assert report["adjustments"][0]["actor_username"] == "root"
     assert report["adjustments"][0]["target_username"] == "alice"
     assert report["adjustments"][0]["signed_amount"] == 7
@@ -289,3 +322,129 @@ def test_root_rollback_creates_compensating_append_only_ledger(tmp_path):
             ledger_uuid=tx["ledger"]["ledger_uuid"],
             reason="duplicate correction",
         )
+
+
+def test_root_can_sanction_wallet_and_freeze_points(tmp_path):
+    service = _service(tmp_path)
+    root_actor = {"id": 3, "username": "root", "role": "super_admin"}
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=20,
+        action_type="test_credit",
+    )
+
+    frozen = service.sanction_wallet(
+        actor=root_actor,
+        user_id=1,
+        wallet_status="frozen",
+        risk_level="high",
+        reason="abuse investigation",
+        freeze_amount=7,
+    )
+
+    assert frozen["wallet"]["wallet_status"] == "frozen"
+    assert frozen["wallet"]["risk_level"] == "high"
+    assert frozen["wallet"]["points_balance"] == 13
+    assert frozen["wallet"]["points_frozen"] == 7
+    assert frozen["ledgers"][0]["direction"] == "freeze"
+
+    with pytest.raises(ValueError, match="wallet is frozen"):
+        service.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="debit",
+            amount=1,
+            action_type="test_debit",
+        )
+
+    active = service.sanction_wallet(
+        actor=root_actor,
+        user_id=1,
+        wallet_status="active",
+        risk_level="normal",
+        reason="appeal accepted",
+        unfreeze_amount=7,
+    )
+
+    assert active["wallet"]["wallet_status"] == "active"
+    assert active["wallet"]["risk_level"] == "normal"
+    assert active["wallet"]["points_balance"] == 20
+    assert active["wallet"]["points_frozen"] == 0
+    assert active["ledgers"][0]["direction"] == "unfreeze"
+    audit_events = [row["event_type"] for row in service.list_chain_audit_logs(limit=20)]
+    assert "WALLET_SANCTION" in audit_events
+
+    limited = service.sanction_wallet(
+        actor=root_actor,
+        user_id=1,
+        wallet_status="limited",
+        risk_level="watch",
+        reason="temporary spend limit",
+    )
+    assert limited["wallet"]["wallet_status"] == "limited"
+    with pytest.raises(ValueError, match="wallet is limited"):
+        service.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="debit",
+            amount=1,
+            action_type="test_limited_spend",
+        )
+
+    with pytest.raises(ValueError, match="root wallet cannot be sanctioned"):
+        service.sanction_wallet(
+            actor=root_actor,
+            user_id=3,
+            wallet_status="closed",
+            risk_level="blocked",
+            reason="root should not be point-sanctioned",
+        )
+
+
+def test_points_chain_auto_seals_when_hybrid_count_threshold_is_met(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    for idx in range(9):
+        service.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="credit",
+            amount=1,
+            action_type=f"test_credit_{idx}",
+        )
+
+    pending = service.seal_due_block(actor=actor, ledger_threshold=10)
+    assert pending["sealed"] is False
+    assert pending["schedule"]["unsealed_entries"] == 9
+    assert pending["schedule"]["entries_remaining"] == 1
+
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=1,
+        action_type="test_credit_9",
+    )
+    sealed = service.seal_due_block(actor=actor, ledger_threshold=10)
+
+    assert sealed["sealed"] is True
+    assert sealed["block"]["ledger_count"] == 10
+    assert service.verify_chain()["counts"]["unsealed_entries"] == 0
+
+
+def test_high_risk_admin_adjust_forces_block(tmp_path):
+    service = _service(tmp_path)
+    result = service.admin_adjust(
+        actor={"id": 3, "username": "root", "role": "super_admin"},
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5,
+        reason="manual correction",
+    )
+
+    assert result["forced_block"]["sealed"] is True
+    assert result["forced_block"]["reason"] == "admin_adjust"
+    assert service.verify_chain()["counts"]["unsealed_entries"] == 0

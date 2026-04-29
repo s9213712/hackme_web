@@ -108,6 +108,7 @@ def register_system_admin_routes(app, deps):
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
+    points_service = deps.get("points_service")
     save_feature_settings = deps["save_feature_settings"]
     save_settings = deps["save_settings"]
     server_mode_service = deps.get("server_mode_service")
@@ -164,6 +165,70 @@ def register_system_admin_routes(app, deps):
         if role_rank(actor_role) < role_rank("super_admin"):
             return None, (json_resp({"ok":False,"msg":"只有最高管理者可查看健康中心"}), 403)
         return actor, None
+
+    def _is_sensitive_setting_key(key):
+        lowered = str(key or "").lower()
+        return any(marker in lowered for marker in ("password", "secret", "token", "hash", "key"))
+
+    def _audit_setting_value(key, value):
+        if _is_sensitive_setting_key(key):
+            return "<redacted>" if str(value or "") else ""
+        return value
+
+    def _audit_settings_changed(event_type, actor, before, saved, *, scope="", extra=None):
+        before = dict(before or {})
+        saved = dict(saved or {})
+        changes = []
+        for key in sorted(saved):
+            old_value = before.get(key)
+            new_value = saved.get(key)
+            changes.append({
+                "key": key,
+                "old": _audit_setting_value(key, old_value),
+                "new": _audit_setting_value(key, new_value),
+                "changed": old_value != new_value,
+            })
+        detail = {
+            "scope": scope or event_type,
+            "changed_keys": [row["key"] for row in changes if row["changed"]],
+            "keys": [row["key"] for row in changes],
+            "changes": changes,
+        }
+        if extra:
+            detail["extra"] = extra
+        audit(
+            event_type,
+            get_client_ip(),
+            user=actor["username"] if actor else "-",
+            success=True,
+            ua=get_ua(),
+            detail=json.dumps(detail, ensure_ascii=False, sort_keys=True),
+        )
+
+    def _force_points_block(reason, actor):
+        if not points_service:
+            return None
+        result = points_service.force_seal_block(actor=actor, reason=reason)
+        if result.get("sealed"):
+            block = result.get("block") or {}
+            audit(
+                "POINTS_FORCE_BLOCK_SEALED",
+                get_client_ip(),
+                user=actor["username"] if actor else "-",
+                success=True,
+                ua=get_ua(),
+                detail=f"reason={reason},block_number={block.get('block_number')},ledger_count={block.get('ledger_count')}",
+            )
+        elif result.get("ok") is False:
+            audit(
+                "POINTS_FORCE_BLOCK_FAILED",
+                get_client_ip(),
+                user=actor["username"] if actor else "-",
+                success=False,
+                ua=get_ua(),
+                detail=f"reason={reason},msg={result.get('msg')}",
+            )
+        return result
 
     def cloud_drive_storage_payload(settings):
         configured = str(settings.get("cloud_drive_storage_root") or "").strip()
@@ -792,6 +857,20 @@ def register_system_admin_routes(app, deps):
             command.extend(["--skip", skip])
         if bool(data.get("i_own_this_target")):
             command.append("--i-own-this-target")
+        env = {}
+        for key in ("ROOT_PASSWORD", "MANAGER_PASSWORD", "TEST_PASSWORD"):
+            value = str(data.get(key.lower()) or "").strip()
+            if value:
+                env[key] = value
+        username_env_keys = {
+            "root_username": "PENTEST_ROOT_USERNAME",
+            "manager_username": "PENTEST_MANAGER_USERNAME",
+            "user_username": "PENTEST_USER_USERNAME",
+        }
+        for payload_key, env_key in username_env_keys.items():
+            value = str(data.get(payload_key) or "").strip()
+            if value:
+                env[env_key] = value
         job = _start_security_test_job(
             "pentest",
             command,
@@ -799,6 +878,7 @@ def register_system_admin_routes(app, deps):
             report_root=report_root,
             report_prefix="20",
             actor=actor,
+            env=env,
         )
         return json_resp({"ok": True, "msg": "滲透測試已啟動", "job": _security_test_job_payload(job)}, 202)
 
@@ -866,8 +946,9 @@ def register_system_admin_routes(app, deps):
             updates[key] = value
         if not updates:
             return json_resp({"ok": False, "msg": "沒有可寫入的閾值"}), 400
+        before_settings = get_system_settings()
         saved = save_settings(updates)
-        audit("SECURITY_THRESHOLDS_CHANGED", get_client_ip(), user=actor["username"], success=True, detail=str(saved))
+        _audit_settings_changed("SECURITY_THRESHOLDS_CHANGED", actor, before_settings, saved, scope="security_thresholds")
         return json_resp({"ok": True, "msg": "安全閾值已更新", "thresholds": {key: get_system_settings().get(key) for key in SECURITY_THRESHOLD_KEYS}})
 
     @app.route("/api/admin/security-center/controls", methods=["PUT"])
@@ -885,8 +966,9 @@ def register_system_admin_routes(app, deps):
         updates = {key: data[key] for key in SECURITY_SETTING_KEYS if key in data}
         if not updates:
             return json_resp({"ok": False, "msg": "沒有可寫入的安全機制開關"}), 400
+        before_settings = get_system_settings()
         saved = save_settings(updates)
-        audit("SECURITY_CONTROLS_CHANGED", get_client_ip(), user=actor["username"], success=True, detail=str(saved))
+        _audit_settings_changed("SECURITY_CONTROLS_CHANGED", actor, before_settings, saved, scope="security_controls")
         return json_resp({"ok": True, "msg": "安全機制設定已更新", "settings": {key: get_system_settings().get(key) for key in SECURITY_SETTING_KEYS}})
 
     @app.route("/api/admin/security-center/profiles", methods=["GET", "POST"])
@@ -1152,12 +1234,12 @@ def register_system_admin_routes(app, deps):
             if not re.fullmatch(r"\d{2}:\d{2}", str(data.get("storage_maintenance_daily_time") or "")):
                 return json_resp({"ok":False,"msg":"storage_maintenance_daily_time 必須是 HH:MM"}), 400
 
+        before_settings = get_system_settings()
         settings = save_settings(data)
         if not settings:
             return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
 
-        audit("SETTINGS_CHANGED", get_client_ip(), user=actor["username"],
-              detail=str(settings))
+        _audit_settings_changed("SETTINGS_CHANGED", actor, before_settings, settings, scope="system_settings")
         return json_resp({
             "ok": True,
             "msg": "系統參數已更新",
@@ -1215,11 +1297,11 @@ def register_system_admin_routes(app, deps):
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
+        before_settings = get_system_settings()
         updates = save_feature_settings(data)
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的功能開關"}), 400
-        audit("FEATURE_FLAGS_CHANGED", get_client_ip(), user=actor["username"], success=True,
-              detail=str(updates))
+        _audit_settings_changed("FEATURE_FLAGS_CHANGED", actor, before_settings, updates, scope="feature_flags")
         return json_resp({"ok":True,"msg":"功能開關已更新","features":updates})
 
     @app.route("/api/admin/access-controls", methods=["GET", "PUT"])
@@ -1248,9 +1330,9 @@ def register_system_admin_routes(app, deps):
             updates["internal_test_login_token_expires_at"] = ""
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
+        before_settings = get_system_settings()
         saved = save_settings(updates)
-        audit("ACCESS_CONTROLS_CHANGED", get_client_ip(), user=actor["username"], success=True,
-              detail=str(access_control_settings_payload({**get_system_settings(), **saved})))
+        _audit_settings_changed("ACCESS_CONTROLS_CHANGED", actor, before_settings, saved, scope="access_controls")
         return json_resp({"ok":True,"msg":"存取控制設定已更新","access_controls":access_control_settings_payload(get_system_settings())})
 
     @app.route("/api/admin/access-controls/maintenance-bypass-token", methods=["POST"])
@@ -1274,12 +1356,19 @@ def register_system_admin_routes(app, deps):
             ttl_minutes = 30
         token = generate_maintenance_bypass_token()
         expires_at = maintenance_bypass_expires_at(ttl_minutes)
-        save_settings({
+        before_settings = get_system_settings()
+        saved = save_settings({
             "maintenance_bypass_token_hash": hash_maintenance_bypass_token(token),
             "maintenance_bypass_token_expires_at": expires_at,
         })
-        audit("MAINTENANCE_BYPASS_TOKEN_ROTATED", get_client_ip(), user=actor["username"], success=True,
-              detail=f"token_hash_rotated,ttl_minutes={ttl_minutes},expires_at={expires_at}")
+        _audit_settings_changed(
+            "MAINTENANCE_BYPASS_TOKEN_ROTATED",
+            actor,
+            before_settings,
+            saved,
+            scope="maintenance_bypass_token",
+            extra={"ttl_minutes": ttl_minutes, "expires_at": expires_at},
+        )
         return json_resp({
             "ok": True,
             "msg": "maintenance bypass token 已更新，token 只會顯示這一次",
@@ -1310,12 +1399,19 @@ def register_system_admin_routes(app, deps):
             ttl_minutes = 24 * 60
         token = generate_internal_test_token()
         expires_at = maintenance_bypass_expires_at(ttl_minutes)
-        save_settings({
+        before_settings = get_system_settings()
+        saved = save_settings({
             "internal_test_login_token_hash": hash_internal_test_token(token),
             "internal_test_login_token_expires_at": expires_at,
         })
-        audit("INTERNAL_TEST_TOKEN_ROTATED", get_client_ip(), user=actor["username"], success=True,
-              detail=f"token_hash_rotated,ttl_minutes={ttl_minutes},expires_at={expires_at}")
+        _audit_settings_changed(
+            "INTERNAL_TEST_TOKEN_ROTATED",
+            actor,
+            before_settings,
+            saved,
+            scope="internal_test_token",
+            extra={"ttl_minutes": ttl_minutes, "expires_at": expires_at},
+        )
         return json_resp({
             "ok": True,
             "msg": "內測登入 token 已更新，token 只會顯示這一次",
@@ -1397,7 +1493,11 @@ def register_system_admin_routes(app, deps):
         result = snapshot_service.create_snapshot(snapshot_type=snapshot_type, actor=actor, notes=data.get("notes") or "")
         if not result.ok:
             return json_resp({"ok":False,"msg":"snapshot 建立失敗","error":result.error,"snapshot_id":result.snapshot_id}), 500
-        return json_resp({"ok":True,"snapshot_id":result.snapshot_id,"status":result.status})
+        block_result = _force_points_block("snapshot_create", actor)
+        payload = {"ok":True,"snapshot_id":result.snapshot_id,"status":result.status}
+        if block_result:
+            payload["points_block"] = block_result
+        return json_resp(payload)
 
     @app.route("/api/admin/snapshots/daily", methods=["GET", "POST"])
     @require_csrf_safe
@@ -1425,6 +1525,8 @@ def register_system_admin_routes(app, deps):
             force=bool(data.get("force")),
             notes=data.get("notes") or "",
         )
+        if result.get("ok") and result.get("created"):
+            result["points_block"] = _force_points_block("daily_snapshot", actor)
         return json_resp(result), (200 if result.get("ok") else 500)
 
     @app.route("/api/admin/system-reset", methods=["POST"])
@@ -1522,6 +1624,8 @@ def register_system_admin_routes(app, deps):
             reason=request.form.get("reason") or "",
             dry_run=dry_run,
         )
+        if result.get("ok") and not dry_run:
+            result["points_block"] = _force_points_block("snapshot_restore_upload", actor)
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/snapshots/<snapshot_id>/restore", methods=["POST"])
@@ -1554,6 +1658,8 @@ def register_system_admin_routes(app, deps):
             )
         except ValueError as exc:
             return json_resp({"ok":False,"msg":str(exc)}), 400
+        if result.get("ok") and not dry_run:
+            result["points_block"] = _force_points_block("snapshot_restore", actor)
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/server-mode", methods=["GET", "POST"])
@@ -1578,6 +1684,8 @@ def register_system_admin_routes(app, deps):
             confirm=data.get("confirm"),
             notes=data.get("notes") or "",
         )
+        if result.get("ok"):
+            result["points_block"] = _force_points_block("server_mode_change", actor)
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/server-mode/exit-superweak", methods=["POST"])
@@ -1600,6 +1708,8 @@ def register_system_admin_routes(app, deps):
             confirm=data.get("confirm"),
             reason=data.get("reason") or "",
         )
+        if result.get("ok"):
+            result["points_block"] = _force_points_block("superweak_exit", actor)
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])
@@ -1614,7 +1724,9 @@ def register_system_admin_routes(app, deps):
         audit_before = verify_audit_integrity() if is_audit_chain_enabled() else (None, None, "audit chain disabled")
         audit_result = repair_audit_chain(reason=f"manual_repair_by={actor['username']}")
         violation_result = repair_violation_chains()
-        save_settings({"maintenance_mode": False})
+        before_settings = get_system_settings()
+        saved = save_settings({"maintenance_mode": False})
+        _audit_settings_changed("SETTINGS_CHANGED", actor, before_settings, saved, scope="integrity_repair")
         audit_after = verify_audit_integrity() if is_audit_chain_enabled() else (None, None, "audit chain disabled")
 
         audit(

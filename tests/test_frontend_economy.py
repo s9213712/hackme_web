@@ -25,15 +25,24 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-query-user-id"' in index_html
     assert 'id="economy-account-query-btn"' in index_html
     assert 'id="economy-query-points-balance"' in index_html
+    assert 'id="economy-wallet-sanction-card"' in index_html
+    assert 'id="economy-wallet-sanction-status"' in index_html
+    assert 'id="economy-wallet-sanction-risk"' in index_html
+    assert 'id="economy-wallet-freeze-amount"' in index_html
+    assert 'id="economy-wallet-unfreeze-amount"' in index_html
+    assert 'id="economy-wallet-sanction-btn"' in index_html
     assert 'id="economy-query-ledger-list"' in index_html
     assert 'id="economy-adjustment-list"' in index_html
+    assert 'id="economy-admin-card-title"' in index_html
+    assert 'id="economy-admin-card-sub"' in index_html
     assert '<select id="economy-adjust-user-id">' in index_html
     assert '<input type="number" id="economy-adjust-user-id"' not in index_html
     assert 'id="economy-adjust-currency"' not in index_html
     assert "全站積分" in index_html
     assert "加減分明細" in index_html
+    assert "手動加減分與待審核" in index_html
     assert "積分系統" in index_html
-    assert "/js/55-economy.js?v=20260429-pointschain-status-text" in index_html
+    assert "/js/55-economy.js?v=20260429-wallet-sanctions" in index_html
     assert "/js/90-bootstrap.js?v=20260429-comfyui-draft" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包"' in economy_js
@@ -44,15 +53,21 @@ def test_root_points_page_is_chain_operations_console():
     assert "最後更新" in economy_js
     assert "bindEconomyInlineEvents" in economy_js
     assert "economy-adjustment-list" in economy_js
+    assert 'adminLedgerList.style.display = rootMode ? "none" : ""' in economy_js
+    assert 'adminTitle.textContent = rootMode ? "手動加減分與待審核" : "管理員調整與審核"' in economy_js
+    assert "加減分歷史統一在下方明細查看" in economy_js
     assert 'fetchEconomyJson("/admin/users")' in economy_js
     assert "function renderEconomyAdjustUserOptions" in economy_js
     assert "async function loadEconomyAccountLookup()" in economy_js
+    assert "async function sanctionEconomyWallet()" in economy_js
     assert "renderEconomyAccountLookup" in economy_js
     assert "formatEconomyVerificationSummary" in economy_js
     assert "setEconomyChainStatus" in economy_js
     assert "JSON.stringify(json.report?.verification" not in economy_js
     assert "JSON.stringify(json.verification" not in economy_js
     assert '/admin/points/wallets/${encodeURIComponent(userId)}' in economy_js
+    assert '/root/points/wallets/${encodeURIComponent(userId)}/sanction' in economy_js
+    assert '["economy-wallet-sanction-btn", sanctionEconomyWallet]' in economy_js
     assert "economy-account-query-btn" in economy_js
     assert "會員讀取失敗" in economy_js
     assert "請先選擇要查詢的會員" in economy_js
