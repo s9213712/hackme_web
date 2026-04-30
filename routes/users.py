@@ -510,9 +510,9 @@ def register_user_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
-        # Authorization: only self, admin, or super_admin can view this avatar (L-5)
+        # Authorization: only self or manager-and-above can view this avatar.
         actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if actor["id"] != user_id and actor_role not in {"admin", "super_admin"}:
+        if actor["id"] != user_id and role_rank(actor_role) < role_rank("manager"):
             return json_resp({"ok": False, "msg": "權限不足"}), 403
         conn = get_db()
         try:

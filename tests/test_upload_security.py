@@ -87,8 +87,7 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
                 "image_reencode_enabled": False,
                 "image_reencode_max_pixels": 12345,
                 "yara_enabled": True,
-                "yara_command": "/usr/bin/yara",
-                "yara_rules_path": "/etc/yara/rules",
+                "yara_command": "yara",
                 "max_daily_downloads": 40,
                 "notes": "root tuned policy",
             },
@@ -103,8 +102,7 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         assert policy["image_reencode_enabled"] is False
         assert policy["image_reencode_max_pixels"] == 12345
         assert policy["yara_enabled"] is True
-        assert policy["yara_command"] == "/usr/bin/yara"
-        assert policy["yara_rules_path"] == "/etc/yara/rules"
+        assert policy["yara_command"] == "yara"
         assert policy["max_daily_downloads"] == 40
         assert policy["notes"] == "root tuned policy"
 
@@ -115,6 +113,14 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         policy, err = update_cloud_drive_security_policy(conn, {"scanner_backend": "cloud_api"})
         assert policy is None
         assert "scanner_backend" in err
+
+        policy, err = update_cloud_drive_security_policy(conn, {"scanner_command": "/bin/sh -c id"})
+        assert policy is None
+        assert "scanner_command" in err
+
+        policy, err = update_cloud_drive_security_policy(conn, {"yara_command": "/usr/bin/yara"})
+        assert policy is None
+        assert "yara_command" in err
     finally:
         conn.close()
 

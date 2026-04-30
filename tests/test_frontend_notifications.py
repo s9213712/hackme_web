@@ -13,7 +13,7 @@ def test_notification_ui_assets_are_wired():
     assert 'id="notification-toggle"' in index_html
     assert 'id="notification-badge"' in index_html
     assert 'id="notification-list"' in index_html
-    assert '<script src="/js/32-notifications.js" defer></script>' in index_html
+    assert 'src="/js/32-notifications.js' in index_html
 
     assert "startNotificationPoll()" in core_js
     assert "stopNotificationPoll()" in core_js

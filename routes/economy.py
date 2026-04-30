@@ -1,3 +1,7 @@
+import hashlib
+import json
+import time
+
 from flask import request
 
 from services.points_chain import DISPLAY_CURRENCY
@@ -62,6 +66,19 @@ def register_economy_routes(app, deps):
         if number < 1 or number > maximum:
             return None
         return number
+
+    def _stable_spend_key(*, user_id, item_key, quantity):
+        payload = json.dumps(
+            {
+                "user_id": int(user_id),
+                "item_key": str(item_key),
+                "quantity": int(quantity),
+                "minute_bucket": int(time.time() // 60),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return "spend:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def service_error(exc):
         msg = str(exc) or exc.__class__.__name__
@@ -128,10 +145,10 @@ def register_economy_routes(app, deps):
                 user_id=actor["id"],
                 item_key=item_key,
                 quantity=quantity,
-                reference_type=str(data.get("reference_type") or "manual_spend"),
-                reference_id=str(data.get("reference_id") or ""),
-                idempotency_key=str(data.get("idempotency_key") or "") or None,
-                metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+                reference_type="price_catalog",
+                reference_id=f"catalog:{item_key}",
+                idempotency_key=_stable_spend_key(user_id=actor["id"], item_key=item_key, quantity=quantity),
+                metadata={},
                 actor=actor,
             )
             audit("POINTS_SPEND", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"item_key={item_key}, quantity={quantity}")
@@ -149,10 +166,12 @@ def register_economy_routes(app, deps):
         if not proof:
             return json_resp({"ok": False, "msg": "找不到 ledger"}), 404
         proof_account = proof.get("public_account_id") or (proof.get("ledger") or {}).get("public_account_id")
-        if proof_account and proof_account != points_service.get_wallet(actor["id"])["public_account_id"]:
-            admin_role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
-            if role_rank(admin_role) < role_rank("manager"):
-                return json_resp({"ok": False, "msg": "權限不足"}), 403
+        admin_role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
+        is_manager = role_rank(admin_role) >= role_rank("manager")
+        if not proof_account and not is_manager:
+            return json_resp({"ok": False, "msg": "權限不足"}), 403
+        if proof_account and proof_account != points_service.get_wallet(actor["id"])["public_account_id"] and not is_manager:
+            return json_resp({"ok": False, "msg": "權限不足"}), 403
         return json_resp({"ok": True, "proof": proof})
 
     @app.route("/api/admin/points/wallets/<int:user_id>", methods=["GET"])
@@ -258,16 +277,20 @@ def register_economy_routes(app, deps):
         if amount is None:
             return json_resp({"ok": False, "msg": "amount must be positive"}), 400
         currency_type = DISPLAY_CURRENCY
+        action_type = str(data.get("action_type") or "manual_pending_reward").strip()[:80]
+        reference_id = str(data.get("reference_id") or "").strip()[:120]
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        metadata = {k: metadata[k] for k in ("reason", "source", "moderation_case_id") if k in metadata}
         try:
             reward = points_service.create_pending_reward(
                 actor=actor,
                 user_id=int(data.get("user_id")),
                 currency_type=currency_type,
                 amount=amount,
-                action_type=str(data.get("action_type") or "manual_pending_reward"),
-                reference_type=str(data.get("reference_type") or "admin_review"),
-                reference_id=str(data.get("reference_id") or ""),
-                metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+                action_type=action_type,
+                reference_type="admin_review",
+                reference_id=reference_id,
+                metadata=metadata,
             )
             return json_resp({"ok": True, "pending_reward": reward})
         except Exception as exc:

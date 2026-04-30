@@ -946,7 +946,7 @@ def register_system_admin_routes(app, deps):
         return json_resp({"ok": True, "msg": "全功能測試已啟動", "job": _security_test_job_payload(job)}, 202)
 
     @app.route("/api/admin/security-center/thresholds", methods=["PUT"])
-    @require_csrf_safe
+    @require_csrf
     def admin_security_center_thresholds():
         actor, error = require_root_actor()
         if error:
@@ -976,7 +976,7 @@ def register_system_admin_routes(app, deps):
         return json_resp({"ok": True, "msg": "安全閾值已更新", "thresholds": {key: get_system_settings().get(key) for key in SECURITY_THRESHOLD_KEYS}})
 
     @app.route("/api/admin/security-center/controls", methods=["PUT"])
-    @require_csrf_safe
+    @require_csrf
     def admin_security_center_controls():
         actor, error = require_root_actor()
         if error:

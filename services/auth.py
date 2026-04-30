@@ -279,6 +279,8 @@ def require_csrf_safe(f):
         if not verify_csrf_token(csrf_tok, user):
             _record_csrf_failure("invalid_safe", user)
             return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            delete_csrf_token(csrf_tok)
         return f(*args, **kwargs)
     return decorated
 

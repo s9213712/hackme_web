@@ -418,8 +418,8 @@ TRUSTED_PROXY_IPS = parse_ip_set(os.environ.get("TRUSTED_PROXY_IPS", ""))
 USE_XFF = os.environ.get("USE_XFF", "false").strip().lower() in {"1", "true", "on", "yes"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
 IP_BLOCKING_ENABLED = _env_bool("IP_BLOCKING_ENABLED", default=True)
-FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=False)
-SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=False)
+FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=True)
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)
 SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
 SESSION_COOKIE_SAMESITE = _env_session_samesite()
 

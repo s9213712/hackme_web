@@ -1,10 +1,13 @@
 import ipaddress
+import http.client
 import mimetypes
 import os
 import shutil
 import socket
+import ssl
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +44,21 @@ def remote_download_capabilities():
     }
 
 
+def _ip_is_public(address):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
 def _host_is_public(hostname):
     if not hostname:
         return False
@@ -50,13 +68,101 @@ def _host_is_public(hostname):
         return False
     for info in infos:
         address = info[4][0]
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            return False
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        if not _ip_is_public(address):
             return False
     return True
+
+
+def _resolve_public_endpoint(hostname, port):
+    if not hostname:
+        raise RemoteDownloadError("下載網址缺少主機名稱")
+    try:
+        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise RemoteDownloadError("下載網址無法解析") from exc
+    candidates = []
+    for family, socktype, proto, _, sockaddr in infos:
+        address = sockaddr[0]
+        if not _ip_is_public(address):
+            raise RemoteDownloadError("下載網址不可指向 localhost、內網或保留位址")
+        candidates.append((family, socktype, proto, sockaddr))
+    if not candidates:
+        raise RemoteDownloadError("下載網址沒有可用的公開 IP")
+    return candidates[0]
+
+
+def _validate_tracker_url(tracker_url):
+    parsed = urllib.parse.urlparse(str(tracker_url or "").strip())
+    if parsed.scheme not in {"http", "https", "udp"} or not parsed.hostname:
+        raise RemoteDownloadError("BT tracker URL 格式不支援")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    _resolve_public_endpoint(parsed.hostname, port)
+
+
+def validate_magnet_trackers(url):
+    parsed = urllib.parse.urlparse(url)
+    params = urllib.parse.parse_qs(parsed.query)
+    for tracker in params.get("tr", []):
+        _validate_tracker_url(tracker)
+
+
+def _bdecode(data, index=0):
+    marker = data[index:index + 1]
+    if marker == b"i":
+        end = data.index(b"e", index)
+        return int(data[index + 1:end]), end + 1
+    if marker == b"l":
+        index += 1
+        out = []
+        while data[index:index + 1] != b"e":
+            item, index = _bdecode(data, index)
+            out.append(item)
+        return out, index + 1
+    if marker == b"d":
+        index += 1
+        out = {}
+        while data[index:index + 1] != b"e":
+            key, index = _bdecode(data, index)
+            value, index = _bdecode(data, index)
+            out[key] = value
+        return out, index + 1
+    if marker.isdigit():
+        colon = data.index(b":", index)
+        length = int(data[index:colon])
+        start = colon + 1
+        end = start + length
+        return data[start:end], end
+    raise ValueError("invalid bencode")
+
+
+def _decode_tracker_value(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
+def validate_torrent_file_trackers(torrent_path):
+    try:
+        with open(torrent_path, "rb") as fh:
+            data = fh.read(2 * 1024 * 1024 + 1)
+        decoded, _ = _bdecode(data)
+    except Exception as exc:
+        raise RemoteDownloadError("BT 種子檔格式無法解析") from exc
+    if not isinstance(decoded, dict):
+        raise RemoteDownloadError("BT 種子檔格式無效")
+    trackers = []
+    announce = decoded.get(b"announce")
+    if announce:
+        trackers.append(_decode_tracker_value(announce))
+    announce_list = decoded.get(b"announce-list")
+    if isinstance(announce_list, list):
+        for tier in announce_list:
+            if isinstance(tier, list):
+                trackers.extend(_decode_tracker_value(item) for item in tier)
+            else:
+                trackers.append(_decode_tracker_value(tier))
+    for tracker in trackers:
+        _validate_tracker_url(tracker)
 
 
 def validate_remote_url(raw_url):
@@ -64,6 +170,7 @@ def validate_remote_url(raw_url):
     if not url:
         raise RemoteDownloadError("請輸入下載網址")
     if url.startswith("magnet:?"):
+        validate_magnet_trackers(url)
         return {"kind": "magnet", "url": url}
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -97,40 +204,102 @@ def _emit_progress(progress_callback, **payload):
         pass
 
 
-def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_callback=None):
-    request = urllib.request.Request(url, headers={"User-Agent": "hackme_web-remote-downloader/1.0"})
-    tmpdir = tempfile.mkdtemp(prefix="hackme_remote_")
+def _http_response_once(url, *, timeout_seconds=60):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise RemoteDownloadError("只支援 http 或 https direct link")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    family, socktype, proto, sockaddr = _resolve_public_endpoint(parsed.hostname, port)
+    sock = socket.socket(family, socktype, proto)
+    sock.settimeout(timeout_seconds)
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            filename = _filename_from_response(url, response.headers)
-            mimetype = response.headers.get_content_type() or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        sock.connect(sockaddr)
+        if parsed.scheme == "https":
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=parsed.hostname)
+            sock.settimeout(timeout_seconds)
+        path = urllib.parse.urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+        host_header = parsed.hostname or ""
+        if parsed.port and parsed.port not in {80, 443}:
+            host_header = f"{host_header}:{parsed.port}"
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host_header}\r\n"
+            "User-Agent: hackme_web-remote-downloader/1.0\r\n"
+            "Accept: */*\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("ascii", "ignore")
+        sock.sendall(request)
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        return response, sock
+    except Exception:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        raise
+
+
+def _open_http_response(url, *, timeout_seconds=60, redirects=0):
+    response, sock = _http_response_once(url, timeout_seconds=timeout_seconds)
+    if response.status in {301, 302, 303, 307, 308}:
+        location = response.getheader("Location")
+        response.close()
+        sock.close()
+        if redirects >= 3 or not location:
+            raise RemoteDownloadError("遠端下載重新導向次數過多")
+        next_url = urllib.parse.urljoin(url, location)
+        validate_remote_url(next_url)
+        return _open_http_response(next_url, timeout_seconds=timeout_seconds, redirects=redirects + 1)
+    if response.status >= 400:
+        response.close()
+        sock.close()
+        raise RemoteDownloadError(f"遠端伺服器回應 HTTP {response.status}")
+    return response, sock
+
+
+def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_callback=None):
+    tmpdir = tempfile.mkdtemp(prefix="hackme_remote_")
+    response = None
+    sock = None
+    try:
+        response, sock = _open_http_response(url, timeout_seconds=timeout_seconds)
+        filename = _filename_from_response(url, response.headers)
+        mimetype = response.headers.get_content_type() or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        total_bytes = None
+        try:
+            length = response.headers.get("Content-Length")
+            total_bytes = int(length) if length else None
+        except Exception:
             total_bytes = None
-            try:
-                length = response.headers.get("Content-Length")
-                total_bytes = int(length) if length else None
-            except Exception:
-                total_bytes = None
-            target = os.path.join(tmpdir, filename)
-            total = 0
-            _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=0, total_bytes=total_bytes)
-            with open(target, "wb") as out:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if max_bytes is not None and total > int(max_bytes):
-                        raise RemoteDownloadError("遠端檔案超過容量限制")
-                    out.write(chunk)
-                    _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
-            _emit_progress(progress_callback, phase="downloaded", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
+        if max_bytes is not None and total_bytes is not None and total_bytes > int(max_bytes):
+            raise RemoteDownloadError("遠端檔案超過容量限制")
+        target = os.path.join(tmpdir, filename)
+        total = 0
+        _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=0, total_bytes=total_bytes)
+        with open(target, "wb") as out:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if max_bytes is not None and total > int(max_bytes):
+                    raise RemoteDownloadError("遠端檔案超過容量限制")
+                out.write(chunk)
+                _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
+        _emit_progress(progress_callback, phase="downloaded", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
         return DownloadedFile(path=target, filename=filename, mimetype=mimetype, cleanup_dir=tmpdir)
-    except urllib.error.URLError as exc:
+    except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        raise RemoteDownloadError(f"遠端下載失敗：{getattr(exc, 'reason', exc)}") from exc
+        raise RemoteDownloadError(f"遠端下載失敗：{exc}") from exc
     except Exception:
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise
+    finally:
+        if response:
+            response.close()
+        if sock:
+            sock.close()
 
 
 def _zip_download_dir(tmpdir, files):
@@ -184,6 +353,12 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         "--log-level=notice",
         "--seed-time=0",
         "--bt-stop-timeout=120",
+        "--bt-enable-lpd=false",
+        "--enable-dht=false",
+        "--enable-peer-exchange=false",
+        "--max-tries=2",
+        "--max-file-not-found=2",
+        "--file-allocation=none",
         "--follow-torrent=mem",
         "--allow-overwrite=false",
         "--auto-file-renaming=true",
@@ -193,7 +368,23 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
     ]
     try:
         _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=None, total_bytes=None)
-        proc = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout_seconds)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        started = time.monotonic()
+        while proc.poll() is None:
+            if time.monotonic() - started > timeout_seconds:
+                proc.kill()
+                proc.communicate(timeout=5)
+                raise RemoteDownloadError("BT 下載逾時")
+            if max_bytes is not None:
+                total_downloaded = sum(os.path.getsize(path) for path in Path(tmpdir).rglob("*") if path.is_file())
+                if total_downloaded > int(max_bytes):
+                    proc.kill()
+                    proc.communicate(timeout=5)
+                    raise RemoteDownloadError("BT 下載內容超過容量限制")
+                _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=total_downloaded, total_bytes=int(max_bytes))
+            time.sleep(0.5)
+        stdout, stderr = proc.communicate()
+        proc = subprocess.CompletedProcess(cmd, proc.returncode, stdout=stdout, stderr=stderr)
         if proc.returncode != 0:
             raise RemoteDownloadError(_aria2_failure_message(proc, log_path))
         files = [
@@ -242,6 +433,7 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, prog
 def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", timeout_seconds=300, max_bytes=None, progress_callback=None):
     if not os.path.isfile(torrent_path):
         raise RemoteDownloadError("找不到 BT 種子檔")
+    validate_torrent_file_trackers(torrent_path)
     return _download_bt_with_aria2(
         torrent_path,
         source_label=display_name or "BT 檔案",

@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -165,6 +164,8 @@ CLOUD_DRIVE_POLICY_INT_FIELDS = {
 CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "yara_command", "yara_rules_path", "notes"}
 
 ALLOWED_SCANNER_BACKENDS = {"disabled", "clamav"}
+ALLOWED_CLAMAV_COMMANDS = {"clamdscan", "clamscan"}
+ALLOWED_YARA_COMMANDS = {"yara"}
 
 MIME_SIGNATURES = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -700,14 +701,25 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
         updates.append("scanner_backend=?")
         params.append(value)
     if "scanner_command" in data:
+        scanner_command = str(data.get("scanner_command") or "").strip()
+        if scanner_command and scanner_command not in ALLOWED_CLAMAV_COMMANDS:
+            return None, "scanner_command 僅可為 clamdscan 或 clamscan，不能填路徑或參數"
         updates.append("scanner_command=?")
-        params.append(str(data.get("scanner_command") or "").strip()[:500])
+        params.append(scanner_command)
     if "yara_command" in data:
+        yara_command = str(data.get("yara_command") or "").strip()
+        if yara_command and yara_command not in ALLOWED_YARA_COMMANDS:
+            return None, "yara_command 僅可為 yara，不能填路徑或參數"
         updates.append("yara_command=?")
-        params.append(str(data.get("yara_command") or "").strip()[:500])
+        params.append(yara_command)
     if "yara_rules_path" in data:
+        rules_path = str(data.get("yara_rules_path") or "").strip()
+        if rules_path:
+            ok, reason = _validate_yara_rules_path(rules_path)
+            if not ok:
+                return None, reason
         updates.append("yara_rules_path=?")
-        params.append(str(data.get("yara_rules_path") or "").strip()[:500])
+        params.append(rules_path[:500])
     if "notes" in data:
         updates.append("notes=?")
         params.append(str(data.get("notes") or "")[:1000])
@@ -1145,11 +1157,20 @@ def _update_file_scan_state(conn, file_id, *, scan_status, risk_level=None):
     conn.execute(f"UPDATE uploaded_files SET {', '.join(fields)} WHERE id=?", tuple(params))
 
 
+def _resolve_named_binary(configured, allowed, fallback_order):
+    configured = str(configured or "").strip()
+    candidates = [configured] if configured else list(fallback_order)
+    for name in candidates:
+        if name not in allowed:
+            continue
+        path = shutil.which(name)
+        if path:
+            return [path]
+    return []
+
+
 def _resolve_clamav_command(policy):
-    configured = str(policy.get("scanner_command") or "").strip()
-    if configured:
-        return configured
-    return shutil.which("clamdscan") or shutil.which("clamscan")
+    return _resolve_named_binary(policy.get("scanner_command"), ALLOWED_CLAMAV_COMMANDS, ("clamdscan", "clamscan"))
 
 
 def _parse_clamav_output(output):
@@ -1161,10 +1182,25 @@ def _parse_clamav_output(output):
 
 
 def _resolve_yara_command(policy):
-    configured = str(policy.get("yara_command") or "").strip()
+    return _resolve_named_binary(policy.get("yara_command"), ALLOWED_YARA_COMMANDS, ("yara",))
+
+
+def _allowed_yara_rules_root():
+    configured = str(os.environ.get("HACKME_YARA_RULES_DIR") or "").strip()
     if configured:
-        return configured
-    return shutil.which("yara")
+        return Path(configured).expanduser().resolve()
+    return (Path.cwd() / "security" / "yara_rules").resolve()
+
+
+def _validate_yara_rules_path(rules_path):
+    try:
+        allowed_root = _allowed_yara_rules_root()
+        resolved = Path(rules_path).expanduser().resolve()
+        if os.path.commonpath([str(allowed_root), str(resolved)]) != str(allowed_root):
+            return False, f"yara_rules_path 必須位於 {allowed_root}"
+    except Exception:
+        return False, "yara_rules_path 格式錯誤"
+    return True, "ok"
 
 
 def run_yara_scan(path, *, policy):
@@ -1173,17 +1209,19 @@ def run_yara_scan(path, *, policy):
     rules_path = str(policy.get("yara_rules_path") or "").strip()
     if not rules_path:
         return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_rules_not_configured"}}
+    ok, reason = _validate_yara_rules_path(rules_path)
+    if not ok:
+        return {"result": "failed", "malware_name": None, "details": {"reason": "yara_rules_path_not_allowed", "message": reason}}
     command = _resolve_yara_command(policy)
     if not command:
         return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_command_not_found"}}
     started_at = datetime.now().isoformat()
     timeout = int(policy.get("scanner_timeout_seconds") or 60)
-    command_parts = shlex.split(command)
-    if not command_parts:
+    if not command:
         return {"result": "not_required", "malware_name": None, "scan_started_at": started_at, "details": {"reason": "empty_yara_command"}}
     try:
         completed = subprocess.run(
-            [*command_parts, "-r", rules_path, str(path)],
+            [*command, "-r", rules_path, str(path)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1194,12 +1232,12 @@ def run_yara_scan(path, *, policy):
             "result": "failed",
             "malware_name": None,
             "scan_started_at": started_at,
-            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command[0])},
         }
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     details = {
         "returncode": completed.returncode,
-        "command": os.path.basename(command_parts[0]),
+        "command": os.path.basename(command[0]),
         "rules_path": rules_path,
         "output_tail": output[-1000:],
     }
@@ -1223,8 +1261,7 @@ def run_clamav_scan(path, *, policy):
         }
     started_at = datetime.now().isoformat()
     timeout = int(policy.get("scanner_timeout_seconds") or 60)
-    command_parts = shlex.split(command)
-    if not command_parts:
+    if not command:
         return {
             "result": "failed",
             "malware_name": None,
@@ -1233,7 +1270,7 @@ def run_clamav_scan(path, *, policy):
         }
     try:
         completed = subprocess.run(
-            [*command_parts, "--no-summary", str(path)],
+            [*command, "--no-summary", str(path)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1244,12 +1281,12 @@ def run_clamav_scan(path, *, policy):
             "result": "failed",
             "malware_name": None,
             "scan_started_at": started_at,
-            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command[0])},
         }
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     details = {
         "returncode": completed.returncode,
-        "command": os.path.basename(command_parts[0]),
+        "command": os.path.basename(command[0]),
         "output_tail": output[-1000:],
     }
     if completed.returncode == 0:

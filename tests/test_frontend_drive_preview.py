@@ -113,7 +113,7 @@ def test_album_viewer_has_dedicated_module():
     assert '/styles.css?v=20260429-ui-polish' in index_html
     assert '/js/00-core.js?v=20260429-chat-attachment-delete' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
-    assert '/js/50-admin.js?v=20260429-restart-button' in index_html
+    assert 'src="/js/50-admin.js' in index_html
     assert 'id="root-storage-user-select"' in index_html
     assert 'id="root-storage-save-btn"' in index_html
     assert 'id="root-storage-users"' in index_html

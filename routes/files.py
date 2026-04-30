@@ -82,6 +82,7 @@ from flask import request, send_file
 
 _REMOTE_DOWNLOAD_TASKS = {}
 _REMOTE_DOWNLOAD_TASKS_LOCK = threading.Lock()
+_REMOTE_DOWNLOAD_ACTIVE_USERS = set()
 
 
 def register_file_routes(app, deps):
@@ -313,6 +314,20 @@ def register_file_routes(app, deps):
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             return dict(task) if task else None
 
+    def _user_has_active_remote_download(user_id):
+        try:
+            user_id = int(user_id)
+        except Exception:
+            return True
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            if user_id in _REMOTE_DOWNLOAD_ACTIVE_USERS:
+                return True
+            return any(
+                int(task.get("owner_user_id") or 0) == user_id
+                and task.get("status") in {"queued", "running"}
+                for task in _REMOTE_DOWNLOAD_TASKS.values()
+            )
+
     def _remote_progress_updater(task_id):
         def _callback(event):
             loaded = event.get("loaded_bytes")
@@ -342,10 +357,18 @@ def register_file_routes(app, deps):
         if not task:
             return
         actor = task["actor"]
+        owner_user_id = int(task.get("owner_user_id") or _actor_value(actor, "id") or 0)
         downloaded = None
         file_storage = None
         conn = None
         try:
+            with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                if owner_user_id in _REMOTE_DOWNLOAD_ACTIVE_USERS:
+                    task_ref = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+                    if task_ref:
+                        task_ref.update(status="failed", phase="failed", error="已有遠端下載正在進行，請等完成後再新增", msg="已有遠端下載正在進行")
+                    return
+                _REMOTE_DOWNLOAD_ACTIVE_USERS.add(owner_user_id)
             conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
@@ -441,6 +464,8 @@ def register_file_routes(app, deps):
                 shutil.rmtree(downloaded.cleanup_dir, ignore_errors=True)
             if task.get("torrent_cleanup_dir"):
                 shutil.rmtree(task["torrent_cleanup_dir"], ignore_errors=True)
+            with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(owner_user_id)
             if conn:
                 conn.close()
 
@@ -1569,6 +1594,8 @@ def register_file_routes(app, deps):
             validate_remote_url(url)
         except RemoteDownloadError as exc:
             return json_resp({"ok": False, "msg": str(exc)}), 400
+        if _user_has_active_remote_download(_actor_value(actor, "id")):
+            return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
         privacy_mode = str(data.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
         virtual_path = str(data.get("virtual_path") or "").strip()
         task_id = uuid.uuid4().hex
@@ -1644,6 +1671,9 @@ def register_file_routes(app, deps):
             if torrent_size > 2 * 1024 * 1024:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return json_resp({"ok": False, "msg": "BT 種子檔太大，請上傳 2MB 以內的 .torrent"}), 400
+            if _user_has_active_remote_download(_actor_value(actor, "id")):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
 
             privacy_mode = str(request.form.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
             virtual_path = str(request.form.get("virtual_path") or "").strip()

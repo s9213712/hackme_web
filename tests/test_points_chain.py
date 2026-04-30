@@ -111,6 +111,39 @@ def test_points_debit_cannot_make_wallet_negative(tmp_path):
     assert service.get_wallet(1)["points_balance"] == 0
 
 
+def test_spend_points_uses_server_idempotency_when_client_omits_key(tmp_path):
+    service = _service(tmp_path)
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=100,
+        action_type="test_credit",
+        idempotency_key="credit:spend",
+    )
+
+    first = service.spend_points(user_id=1, item_key="post_cost_standard")
+    second = service.spend_points(user_id=1, item_key="post_cost_standard")
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert service.get_wallet(1)["points_balance"] == 99
+
+
+def test_ledger_metadata_has_hard_size_cap(tmp_path):
+    service = _service(tmp_path)
+
+    with pytest.raises(ValueError, match="public_metadata is too large"):
+        service.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="credit",
+            amount=1,
+            action_type="test_large_metadata",
+            public_metadata={"blob": "x" * 5000},
+        )
+
+
 def test_signup_bonus_is_single_currency_and_idempotent(tmp_path):
     service = _service(tmp_path)
 

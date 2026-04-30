@@ -27,6 +27,7 @@ DEFAULT_BACKUP_INTERVAL_MINUTES = 60
 DEFAULT_BACKUP_KEEP_RECENT = 5
 DEFAULT_BACKUP_KEEP_DAILY = 7
 DEFAULT_BACKUP_KEEP_WEEKLY = 4
+MAX_LEDGER_METADATA_JSON_BYTES = 4096
 
 DEFAULT_RULES = (
     ("daily_login", "daily_login", "credit", "soft", 5, 5, 5, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "每日登入"}),
@@ -122,6 +123,13 @@ def _json_loads(raw, fallback=None):
 
 def _json_dumps(value):
     return canonical_json(value if value is not None else {})
+
+
+def _metadata_json_checked(value, *, label):
+    raw = _json_dumps(value if value is not None else {})
+    if len(raw.encode("utf-8")) > MAX_LEDGER_METADATA_JSON_BYTES:
+        raise ValueError(f"{label} is too large")
+    return raw
 
 
 def actor_value(actor, key, default=None):
@@ -1616,8 +1624,8 @@ class PointsLedgerService:
             balance_after += amount
             frozen_after -= amount
 
-        public_json = _json_dumps(public_metadata or {})
-        private_json = _json_dumps(private_metadata or {})
+        public_json = _metadata_json_checked(public_metadata or {}, label="public_metadata")
+        private_json = _metadata_json_checked(private_metadata or {}, label="private_metadata")
         meta_hash = metadata_hash(public_metadata or {}, private_metadata or {}, sensitive_metadata_encrypted or "")
         now = utc_now()
         ledger_uuid = str(uuid.uuid4())
@@ -1919,6 +1927,7 @@ class PointsLedgerService:
                 raise ValueError("price catalog item not found or disabled")
             quantity = max(1, int(quantity or 1))
             amount = int(item["base_price"]) * quantity
+            spend_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
             row, created = self._record_transaction(
                 conn,
                 user_id=user_id,
@@ -1928,7 +1937,7 @@ class PointsLedgerService:
                 action_type=f"spend:{item_key}",
                 reference_type=reference_type or "price_catalog",
                 reference_id=reference_id or item_key,
-                idempotency_key=idempotency_key or f"spend:{user_id}:{item_key}:{reference_id or uuid.uuid4()}",
+                idempotency_key=idempotency_key or f"spend:{user_id}:{item_key}:{quantity}:{spend_bucket}",
                 reason=f"spend:{item['item_name']}",
                 public_metadata={"item_key": item_key, "quantity": quantity, **(metadata or {})},
                 actor=actor,
