@@ -55,6 +55,7 @@ security/run_functional_smoke.sh --keep-runtime
 |---|---:|---|
 | `HOST` | `127.0.0.1` | 臨時 server bind host。 |
 | `PORT` | `50734` | 臨時 server port。 |
+| `SMOKE_SCHEME` | `https` | 測試連線協定；預設配合 server 自動產生的本地 TLS 憑證並使用 `curl -k`。 |
 | `REPORT_ROOT` | `security/reports` | 報告根目錄。 |
 | `RUNTIME_ROOT` | `/tmp/hackme_web_functional_<RUN_ID>` | 隔離 runtime 根目錄。 |
 | `ROOT_PASSWORD` | `RootSmoke123!` | 測試 root 初始密碼。 |
@@ -62,7 +63,7 @@ security/run_functional_smoke.sh --keep-runtime
 | `MANAGER_PASSWORD` | `ManagerSmoke123!` | bootstrap manager 密碼。 |
 | `TEST_PASSWORD` | `TestSmoke123!` | bootstrap test user 密碼。 |
 | `START_TIMEOUT` | `45` | 等待 server ready 的秒數。 |
-| `RESET_OFFLINE_TIMEOUT` | `20` | reset server 後等待服務短暫離線的秒數。 |
+| `RESET_OFFLINE_TIMEOUT` | `20` | reset server 後等待服務短暫離線的秒數；若 process 很快完成重啟且 `started_at` 已變更，也視為通過。 |
 | `RESET_RECONNECT_TIMEOUT` | `180` | reset server 後等待服務重新連線且 `started_at` 變更的秒數。 |
 
 ## Runtime Isolation
@@ -93,7 +94,7 @@ security/run_functional_smoke.sh --keep-runtime
 | auth | CSRF token、root login、預設密碼強制修改、session identity。 |
 | admin | health、readiness、anomaly、DB integrity、audit chain、environment、settings、feature flags、access controls、member rules、platform stats、audit log。 |
 | security center | summary、server log、security controls、threshold update、自定義 profile、server mode switch。 |
-| snapshot/restore/reset | 建立 snapshot、restore 後只保留 baseline 發文、reset 後 baseline 發文也消失，並驗證 server 真的短暫離線後重啟。 |
+| snapshot/restore/reset | 建立 snapshot、restore 後只保留 baseline 發文、reset 後 baseline 發文也消失，並驗證 server 真的重啟或 `started_at` 已更新。 |
 | accounts | 建立 smoke user、列出 users、account sessions。 |
 | community/forum | announcement、category、board、board approval、thread、reply、lock、sticky、curate。 |
 | chat/DM | chat room、chat message、DM thread、DM message。 |
@@ -113,14 +114,14 @@ security/run_functional_smoke.sh --keep-runtime
 5. 驗證 baseline post 還存在。
 6. 驗證 residual 測試資料已消失。
 7. 執行 reset server。
-8. 等待 server 在合理時間內短暫離線，預設 20 秒內必須觀察到連線失敗。
-9. 等待 server 在 3 分鐘內重新連線，並確認 `/api/version.started_at` 已變更。
+8. 等待 server 在合理時間內短暫離線，預設 20 秒內觀察連線失敗；若重啟太快沒有可觀察離線窗口，但 `/api/version.started_at` 已變更，也視為 reset restart 成功。
+9. 若已觀察到離線，等待 server 在 3 分鐘內重新連線，並確認 `/api/version.started_at` 已變更。
 10. 重新登入 root。
 11. 驗證 baseline post 也消失。
 
 如果 restore 後看到一堆測試殘留文章，代表 restore 失敗或測試腳本找到真正的功能
-bug。若 reset 後沒有先短暫離線，代表可能沒有真的重啟；若 3 分鐘內沒有重新連線，
-代表自動重啟失敗；若 baseline post 仍存在，代表 reset server 的 runtime 清理不完整。
+bug。若 reset 後沒有短暫離線且 `started_at` 也沒有變更，代表可能沒有真的重啟；若 3 分鐘內沒有重新連線，
+代表自動重啟失敗；若 baseline post 仍存在，代表 reset server 的 runtime 清理不完整。reset 後 production-like 預設只開管理功能，社群等頁面可能回 `503 feature disabled`，此時只要資料已清除即視為正確。
 
 ## Report Output
 

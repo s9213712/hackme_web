@@ -156,6 +156,7 @@ CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(BASE_DIR, "chats"))
 ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(BASE_DIR, "anchors"))
 STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(BASE_DIR, "storage"))
 REPORTS_DIR = _env_path("HTML_LEARNING_REPORTS_DIR", os.path.join(BASE_DIR, "reports"))
+POINTS_CHAIN_BACKUP_DIR = _env_path("POINTS_CHAIN_BACKUP_DIR", os.path.join(DB_DIR, "points_chain_backups"))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
 SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
@@ -934,6 +935,7 @@ points_service = PointsLedgerService(
     get_db=get_db,
     chain_secret=CHAIN_SEED,
     audit=audit,
+    backup_dir=POINTS_CHAIN_BACKUP_DIR,
 )
 server_mode_service = ServerModeService(
     snapshot_service=snapshot_service,

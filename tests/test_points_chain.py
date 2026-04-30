@@ -630,6 +630,9 @@ def test_points_chain_runtime_reset_clears_active_ledger_and_leaves_reset_audit(
     )
     sealed = service.seal_block(actor=actor)
     assert sealed["sealed"] is True
+    backup_root = tmp_path / "points_chain_backups" / "backups"
+    assert backup_root.exists()
+    assert service.list_ledger_backups()
     assert service.verify_chain()["counts"]["ledger_entries"] == 1
 
     reset = service.reset_runtime_chain(actor=actor, reason="server reset", pre_reset_snapshot_id="snap_test")
@@ -639,6 +642,8 @@ def test_points_chain_runtime_reset_clears_active_ledger_and_leaves_reset_audit(
     assert verification["ok"] is True
     assert verification["counts"]["ledger_entries"] == 0
     assert verification["counts"]["sealed_blocks"] == 0
+    assert service.list_ledger_backups() == []
+    assert list(backup_root.iterdir()) == []
     assert service.get_wallet(1)["points_balance"] == 0
     audit_events = service.list_chain_audit_logs(limit=5)
     assert audit_events[0]["event_type"] == "POINTS_CHAIN_RESET"

@@ -393,7 +393,16 @@ def register_system_admin_routes(app, deps):
         audit("SECURITY_TEST_STARTED", client_ip, user=actor_username, success=True, detail=f"job_id={job_id},kind={kind},command={command_label}")
         return job
 
-    def safe_count(conn, table, where="", params=()):
+    def table_exists(conn, table):
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        ).fetchone()
+        return row is not None
+
+    def safe_count(conn, table, where="", params=(), optional=False):
+        if optional and not table_exists(conn, table):
+            return 0, None
         try:
             sql = f"SELECT COUNT(*) AS c FROM {table}"
             if where:
@@ -452,23 +461,23 @@ def register_system_admin_routes(app, deps):
         try:
             now = datetime.now().isoformat()
             counts = {}
-            for key, table, where, params in (
-                ("users_total", "users", "", ()),
-                ("active_users", "users", "status='active'", ()),
-                ("active_sessions", "sessions", "expires_at>? AND COALESCE(is_revoked, 0)=0", (now,)),
-                ("chat_messages", "chat_messages", "", ()),
-                ("pending_chat_reports", "chat_message_reports", "status='pending'", ()),
-                ("pending_appeals", "violation_appeals", "status='pending'", ()),
-                ("pending_moderation_proposals", "moderation_proposals", "status='pending'", ()),
-                ("pending_board_reviews", "forum_boards", "status='pending'", ()),
-                ("pending_thread_reviews", "forum_threads", "status='pending'", ()),
-                ("violations_total", "secure_violations", "", ()),
-                ("audit_entries", "secure_audit", "", ()),
-                ("uploaded_files", "uploaded_files", "deleted_at IS NULL", ()),
-                ("quarantined_files", "uploaded_files", "scan_status='quarantined' OR risk_level='blocked'", ()),
-                ("unknown_encrypted_files", "uploaded_files", "risk_level='unknown_encrypted'", ()),
+            for key, table, where, params, optional in (
+                ("users_total", "users", "", (), False),
+                ("active_users", "users", "status='active'", (), False),
+                ("active_sessions", "sessions", "expires_at>? AND COALESCE(is_revoked, 0)=0", (now,), True),
+                ("chat_messages", "chat_messages", "", (), True),
+                ("pending_chat_reports", "chat_message_reports", "status='pending'", (), True),
+                ("pending_appeals", "violation_appeals", "status='pending'", (), True),
+                ("pending_moderation_proposals", "moderation_proposals", "status='pending'", (), True),
+                ("pending_board_reviews", "forum_boards", "status='pending'", (), True),
+                ("pending_thread_reviews", "forum_threads", "status='pending'", (), True),
+                ("violations_total", "secure_violations", "", (), True),
+                ("audit_entries", "secure_audit", "", (), True),
+                ("uploaded_files", "uploaded_files", "deleted_at IS NULL", (), True),
+                ("quarantined_files", "uploaded_files", "scan_status='quarantined' OR risk_level='blocked'", (), True),
+                ("unknown_encrypted_files", "uploaded_files", "risk_level='unknown_encrypted'", (), True),
             ):
-                value, err = safe_count(conn, table, where, params)
+                value, err = safe_count(conn, table, where, params, optional=optional)
                 counts[key] = value
                 if err:
                     errors[key] = err

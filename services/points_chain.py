@@ -1281,8 +1281,10 @@ class PointsLedgerService:
             "points_pending_rewards",
             "points_economy_daily_stats",
             "points_chain_recovery_state",
+            "points_chain_backup_catalog",
             "points_chain_audit_logs",
         ]
+        backup_files = {"removed": [], "skipped": []}
         try:
             self.ensure_schema(conn)
             before = self._chain_head_summary(conn)
@@ -1320,12 +1322,22 @@ class PointsLedgerService:
                     "reset_tables": reset_tables,
                 },
             )
+            backup_root = self.backup_dir.expanduser()
+            backup_path = backup_root / "backups"
+            if str(backup_path) not in {"", "/"} and backup_path.exists():
+                try:
+                    shutil.rmtree(backup_path)
+                    backup_files["removed"].append(str(backup_path))
+                except Exception as exc:
+                    backup_files["skipped"].append({"path": str(backup_path), "reason": str(exc)})
+            self._backup_root()
             conn.commit()
             return {
                 "ok": True,
                 "reset": True,
                 "before": before,
                 "cleared_tables": reset_tables,
+                "backup_files": backup_files,
             }
         except Exception:
             conn.rollback()

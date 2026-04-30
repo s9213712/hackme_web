@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.pytest_cache/
 database/database.db
 database/database.db.bak
 database/app.db
@@ -17,6 +18,12 @@ database/app.db
 chats/*.jsonl
 !chats/.gitkeep
 storage/
+uploads/
+attachments/
+avatars/
+media/
+logs/
+secure_backups/
 anchors/*.json
 anchors/*.jsonl
 !anchors/.gitkeep

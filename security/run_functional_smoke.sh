@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-50734}"
+SMOKE_SCHEME="${SMOKE_SCHEME:-https}"
 REPORT_ROOT="${REPORT_ROOT:-security/reports}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-RootSmoke123!}"
 ROOT_CHANGED_PASSWORD="${ROOT_CHANGED_PASSWORD:-RootSmokeChanged123!}"
@@ -28,7 +29,7 @@ What it does:
 
 Environment overrides:
   HOST, PORT, REPORT_ROOT, ROOT_PASSWORD, MANAGER_PASSWORD, TEST_PASSWORD,
-  RUNTIME_ROOT, START_TIMEOUT, RESET_OFFLINE_TIMEOUT, RESET_RECONNECT_TIMEOUT
+  RUNTIME_ROOT, SMOKE_SCHEME, START_TIMEOUT, RESET_OFFLINE_TIMEOUT, RESET_RECONNECT_TIMEOUT
 USAGE
 }
 
@@ -73,7 +74,11 @@ COOKIE_JAR="$OUT_DIR/cookies.txt"
 SUMMARY="$OUT_DIR/00_FUNCTIONAL_SMOKE.md"
 RESULTS_TSV="$OUT_DIR/results.tsv"
 SERVER_LOG="$OUT_DIR/server.out"
-BASE_URL="http://${HOST}:${PORT}"
+BASE_URL="${SMOKE_SCHEME}://${HOST}:${PORT}"
+CURL_TLS_ARGS=()
+if [[ "$SMOKE_SCHEME" == "https" ]]; then
+  CURL_TLS_ARGS=(-k)
+fi
 SERVER_PID=""
 CSRF_TOKEN=""
 FAILURES=0
@@ -192,7 +197,7 @@ request() {
       args+=(-d "$body")
     fi
   fi
-  code="$(curl "${args[@]}" "$BASE_URL$path" || true)"
+  code="$(curl "${CURL_TLS_ARGS[@]}" "${args[@]}" "$BASE_URL$path" || true)"
   if expect_code "$code" "$expected"; then
     pass "$name" "$method $path -> $code"
   else
@@ -206,7 +211,7 @@ request() {
 refresh_csrf_quiet() {
   local out="$RAW_DIR/refresh_csrf_$(date +%s%N).json"
   local code
-  code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/csrf-token" || true)"
+  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/csrf-token" || true)"
   if [[ "$code" == "200" ]]; then
     CSRF_TOKEN="$(json_expr 'data["csrf_token"]' "$out" || echo "$CSRF_TOKEN")"
   fi
@@ -219,7 +224,7 @@ upload_file() {
   local expected="$4"
   local out="$RAW_DIR/$(safe_name "$name").json"
   local code
-  code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" \
+  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" \
     -H "X-CSRF-Token: $CSRF_TOKEN" \
     -F "privacy_mode=public_attachment" \
     -F "file=@${file_path};type=text/plain" \
@@ -237,7 +242,7 @@ check_unknown_options() {
   local out="$RAW_DIR/$(safe_name "$name").body"
   local headers="$RAW_DIR/$(safe_name "$name").headers"
   local code allow
-  code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -D "$headers" -o "$out" -w "%{http_code}" \
+  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -D "$headers" -o "$out" -w "%{http_code}" \
     -X OPTIONS -H "X-CSRF-Token: $CSRF_TOKEN" "$BASE_URL/not-real-functional-smoke" || true)"
   allow="$(awk 'BEGIN{IGNORECASE=1} /^Allow:/ {sub(/\r$/, ""); print substr($0, 8)}' "$headers" | tail -n1)"
   if ! expect_code "$code" "200,404"; then
@@ -259,7 +264,7 @@ wait_for_server() {
   local deadline=$((SECONDS + START_TIMEOUT))
   local out="$RAW_DIR/wait_api_version.json"
   while (( SECONDS < deadline )); do
-    if curl -sS -o "$out" "$BASE_URL/api/version" >/dev/null 2>&1; then
+    if curl "${CURL_TLS_ARGS[@]}" -sS -o "$out" "$BASE_URL/api/version" >/dev/null 2>&1; then
       pass "server startup" "reachable at $BASE_URL"
       return 0
     fi
@@ -271,7 +276,7 @@ wait_for_server() {
 
 server_started_at() {
   local out="$1"
-  curl -sS -o "$out" "$BASE_URL/api/version" >/dev/null 2>&1 || return 1
+  curl "${CURL_TLS_ARGS[@]}" -sS -o "$out" "$BASE_URL/api/version" >/dev/null 2>&1 || return 1
   json_expr 'data.get("started_at", "")' "$out" 2>/dev/null || true
 }
 
@@ -288,10 +293,17 @@ wait_for_restart_reconnect() {
   local observed_offline=0
 
   while (( SECONDS < offline_deadline )); do
-    code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/version" || true)"
+    code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/version" || true)"
     if [[ "$code" == "000" || -z "$code" ]]; then
       observed_offline=1
       break
+    fi
+    if [[ "$code" == "200" ]]; then
+      started_at="$(json_expr 'data.get("started_at", "")' "$out" 2>/dev/null || true)"
+      if [[ -n "$started_at" && "$started_at" != "$previous_started_at" ]]; then
+        pass "$name" "restart completed without an observable offline window; started_at changed ${previous_started_at:-unknown} -> $started_at"
+        return 0
+      fi
     fi
     sleep 1
   done
@@ -304,7 +316,7 @@ wait_for_restart_reconnect() {
 
   reconnect_deadline=$((SECONDS + reconnect_timeout))
   while (( SECONDS < reconnect_deadline )); do
-    code="$(curl -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/version" || true)"
+    code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/version" || true)"
     if [[ "$code" == "200" ]]; then
       started_at="$(json_expr 'data.get("started_at", "")' "$out" 2>/dev/null || true)"
       if [[ -n "$started_at" && "$started_at" != "$previous_started_at" ]]; then
@@ -350,7 +362,7 @@ start_server() {
 fetch_public_csrf() {
   local out="$RAW_DIR/00_csrf_token.json"
   local code
-  code="$(curl -sS -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/csrf-token" || true)"
+  code="$(curl "${CURL_TLS_ARGS[@]}" -sS -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" "$BASE_URL/api/csrf-token" || true)"
   if [[ "$code" != "200" ]]; then
     fail "csrf token" "GET /api/csrf-token -> $code"
     return 1
@@ -687,7 +699,7 @@ run_checks() {
   rm -f "$COOKIE_JAR"
   fetch_public_csrf || true
   login_root || true
-  request "reset verify baseline board gone" "GET" "/api/community/boards/${BASELINE_BOARD_ID}/threads" "404"
+  request "reset verify baseline board gone" "GET" "/api/community/boards/${BASELINE_BOARD_ID}/threads" "404,503"
   pass "reset removed baseline post" "baseline board/thread no longer visible after reset"
 }
 

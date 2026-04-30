@@ -19,7 +19,7 @@ class _SnapshotStub:
         return [{"id": "snap_test"}]
 
 
-def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK")):
+def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK"), include_forum_tables=True):
     db_path = tmp_path / "health.db"
     chat_dir = tmp_path / "chats"
     log_dir = tmp_path / "logs"
@@ -30,22 +30,24 @@ def _make_app(tmp_path, actor=None, audit_result=(True, None, "integrity OK")):
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
+    schema = """
         CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, status TEXT);
         CREATE TABLE sessions (id INTEGER PRIMARY KEY, user_id INTEGER, expires_at TEXT, is_revoked INTEGER DEFAULT 0);
         CREATE TABLE chat_messages (id INTEGER PRIMARY KEY);
         CREATE TABLE chat_message_reports (id INTEGER PRIMARY KEY, status TEXT);
         CREATE TABLE violation_appeals (id INTEGER PRIMARY KEY, status TEXT);
         CREATE TABLE moderation_proposals (id INTEGER PRIMARY KEY, status TEXT);
-        CREATE TABLE forum_boards (id INTEGER PRIMARY KEY, status TEXT);
-        CREATE TABLE forum_threads (id INTEGER PRIMARY KEY, status TEXT);
         CREATE TABLE secure_violations (id INTEGER PRIMARY KEY);
         CREATE TABLE secure_audit (id INTEGER PRIMARY KEY);
         CREATE TABLE uploaded_files (id TEXT PRIMARY KEY, scan_status TEXT, risk_level TEXT, deleted_at TEXT);
         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
         """
-    )
+    if include_forum_tables:
+        schema += """
+        CREATE TABLE forum_boards (id INTEGER PRIMARY KEY, status TEXT);
+        CREATE TABLE forum_threads (id INTEGER PRIMARY KEY, status TEXT);
+        """
+    conn.executescript(schema)
     conn.execute(
         "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'current', '2026-01-01T00:00:00')",
         (CURRENT_SCHEMA_VERSION,),
@@ -135,6 +137,19 @@ def test_health_anomaly_reports_quarantined_files(tmp_path):
     assert res.status_code == 200
     assert data["anomaly"]["status"] == "warning"
     assert any(signal["name"] == "quarantined_files" for signal in data["anomaly"]["signals"])
+
+
+def test_health_anomaly_treats_missing_optional_forum_tables_as_zero(tmp_path):
+    app = _make_app(tmp_path, include_forum_tables=False)
+    res = app.test_client().get("/api/admin/health/anomaly")
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert data["anomaly"]["counts"]["pending_board_reviews"] == 0
+    assert data["anomaly"]["counts"]["pending_thread_reviews"] == 0
+    assert "pending_board_reviews" not in data["anomaly"]["errors"]
+    assert "pending_thread_reviews" not in data["anomaly"]["errors"]
+    assert not any(signal["name"] == "count_errors" for signal in data["anomaly"]["signals"])
 
 
 def test_health_audit_chain_reports_broken_chain(tmp_path):
