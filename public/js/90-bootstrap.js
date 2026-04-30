@@ -96,6 +96,7 @@ function bindUiEvents() {
   const securityTestRefresh = $("security-test-refresh-btn");
   const securityPentestStart = $("security-pentest-start-btn");
   const securityFunctionalStart = $("security-functional-start-btn");
+  const securityStressStart = $("security-stress-start-btn");
   const serverModeSelect = $("server-mode-select");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
@@ -451,6 +452,7 @@ function bindUiEvents() {
   if (securityTestRefresh) securityTestRefresh.addEventListener("click", loadSecurityTestJobs);
   if (securityPentestStart) securityPentestStart.addEventListener("click", startSecurityPentest);
   if (securityFunctionalStart) securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke);
+  if (securityStressStart) securityStressStart.addEventListener("click", startSecurityStressTest);
   if (serverModeSelect) serverModeSelect.addEventListener("change", () => renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview"));
 }
 

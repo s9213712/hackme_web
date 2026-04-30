@@ -84,7 +84,9 @@ def test_root_can_start_functional_smoke_job(tmp_path, monkeypatch):
     assert res.status_code == 202
     assert data["job"]["kind"] == "functional"
     assert job["status"] == "passed"
+    assert job["progress_percent"] == 100
     assert job["log_path"].endswith(".log")
+    assert job["log_tail"][0].startswith("$ security/run_functional_smoke.sh")
 
 
 def test_root_can_start_pentest_job_with_authorized_target(tmp_path, monkeypatch):
@@ -124,9 +126,42 @@ def test_root_can_start_pentest_job_with_authorized_target(tmp_path, monkeypatch
     assert envs[0]["PENTEST_USER_USERNAME"] == "user-checker"
 
 
+def test_root_can_start_stress_job(tmp_path, monkeypatch):
+    system_admin.SECURITY_TEST_JOBS.clear()
+    commands = []
+
+    class CaptureProcess(_FakeProcess):
+        def __init__(self, command, **kwargs):
+            commands.append(command)
+            super().__init__(command, **kwargs)
+
+    monkeypatch.setattr(system_admin.subprocess, "Popen", CaptureProcess)
+    client = _app(tmp_path).test_client()
+
+    res = client.post("/api/root/security-tests/stress", json={
+        "target": "https://127.0.0.1:5000",
+        "requests": 25,
+        "concurrency": 5,
+        "paths": "/,/api/version",
+    })
+    data = res.get_json()
+    job = _wait_for_job_done(client, data["job"]["job_id"])
+
+    assert res.status_code == 202
+    assert data["job"]["kind"] == "stress"
+    assert job["status"] == "passed"
+    assert job["progress_percent"] == 100
+    assert any(item.endswith("security/stress_test.py") for item in commands[0])
+    assert "--requests" in commands[0]
+    assert "25" in commands[0]
+    assert "--concurrency" in commands[0]
+    assert "5" in commands[0]
+
+
 def test_security_test_jobs_are_root_only(tmp_path):
     system_admin.SECURITY_TEST_JOBS.clear()
     client = _app(tmp_path, actor={"id": 2, "username": "admin", "role": "manager"}).test_client()
 
     assert client.get("/api/root/security-tests").status_code == 403
     assert client.post("/api/root/security-tests/functional", json={"port": 50741}).status_code == 403
+    assert client.post("/api/root/security-tests/stress", json={"target": "https://127.0.0.1:5000"}).status_code == 403

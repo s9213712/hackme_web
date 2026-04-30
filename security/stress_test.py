@@ -2,6 +2,7 @@
 import argparse
 import json
 import statistics
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -17,7 +18,8 @@ def request_once(base_url, path, timeout):
     url = base_url.rstrip("/") + path
     try:
         req = urllib.request.Request(url, method="GET", headers={"User-Agent": "hackme-web-stress/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        context = ssl._create_unverified_context() if url.startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
             resp.read(2048)
             status = int(resp.status)
     except urllib.error.HTTPError as exc:

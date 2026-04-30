@@ -1411,7 +1411,7 @@
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title">上線前測試</div>
-              <div class="drive-card-sub">root 可啟動滲透測試與全功能測試；報告會寫入 security/reports/root-triggered。</div>
+              <div class="drive-card-sub">root 可啟動滲透測試、全功能測試與壓力測試；報告會寫入 security/reports/root-triggered。</div>
             </div>
             <button class="btn" type="button" id="security-test-refresh-btn">刷新任務</button>
           </div>
@@ -1451,6 +1451,28 @@
             <div class="field">
               <label>&nbsp;</label>
               <button class="btn btn-primary" type="button" id="security-functional-start-btn">開始全功能測試</button>
+            </div>
+          </div>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div class="field">
+              <label>壓力測試 Target URL</label>
+              <input type="text" id="security-stress-target" placeholder="https://127.0.0.1:5000" />
+            </div>
+            <div class="field">
+              <label>總請求數</label>
+              <input type="number" id="security-stress-requests" min="1" max="5000" value="200" />
+            </div>
+            <div class="field">
+              <label>併發數</label>
+              <input type="number" id="security-stress-concurrency" min="1" max="100" value="20" />
+            </div>
+            <div class="field">
+              <label>測試路徑</label>
+              <input type="text" id="security-stress-paths" placeholder="/,/api/version,/api/site-config" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" type="button" id="security-stress-start-btn">開始壓力測試</button>
             </div>
           </div>
           <div id="security-test-msg" class="msg"></div>

@@ -1262,7 +1262,7 @@ async function loadSettings() {
   if ($("s-root-ip-whitelist-enabled")) $("s-root-ip-whitelist-enabled").checked = !!s.root_ip_whitelist_enabled;
   if ($("s-root-ip-whitelist")) $("s-root-ip-whitelist").value = s.root_ip_whitelist || "";
   if ($("s-browser-only-mode-enabled")) $("s-browser-only-mode-enabled").checked = !!s.browser_only_mode_enabled;
-  if ($("s-integrity-guard-enabled")) $("s-integrity-guard-enabled").checked = s.integrity_guard_enabled !== false;
+  if ($("s-integrity-guard-enabled")) $("s-integrity-guard-enabled").checked = !!s.integrity_guard_enabled;
   if ($("s-integrity-guard-strict-mode")) $("s-integrity-guard-strict-mode").checked = !!s.integrity_guard_strict_mode;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
@@ -1273,7 +1273,7 @@ async function loadSettings() {
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
   if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
-  if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = s.server_ssl_enabled !== false;
+  if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = !!s.server_ssl_enabled;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
@@ -1501,14 +1501,20 @@ function renderSecurityTestJobs(jobs) {
     return;
   }
   const colorFor = (status) => status === "passed" ? "#4caf50" : status === "failed" ? "#ff4f6d" : "#ffb74d";
+  const labelFor = (kind) => kind === "pentest" ? "滲透測試" : kind === "functional" ? "全功能測試" : kind === "stress" ? "壓力測試" : (kind || "-");
   list.innerHTML = rows.map((job) => `
     <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(job.kind || "-")} · <span style="color:${colorFor(job.status)};">${sanitize(job.status || "-")}</span></strong>
+      <div style="min-width:0;flex:1;">
+        <strong>${sanitize(labelFor(job.kind))} · <span style="color:${colorFor(job.status)};">${sanitize(job.status || "-")}</span></strong>
         <div class="drive-card-sub">${sanitize(job.started_at || "")}${job.finished_at ? " -> " + sanitize(job.finished_at) : ""}</div>
         <div class="economy-ledger-hash">${sanitize(job.job_id || "")}</div>
-        <div class="drive-card-sub">report: ${sanitize(job.report_dir || job.report_root || "-")}</div>
+        <div class="drive-progress" aria-label="${sanitize(labelFor(job.kind))} progress">
+          <div class="drive-progress-fill ${job.status === "running" ? "indeterminate" : ""}" style="width:${Math.max(0, Math.min(100, Number(job.progress_percent ?? 0)))}%;"></div>
+        </div>
+        <div class="drive-progress-label">${job.status === "running" ? "執行中" : "完成"} · ${Math.round(Number(job.progress_percent ?? 0))}%</div>
+        <div class="drive-card-sub">report: ${sanitize(job.report_dir || (Array.isArray(job.report_artifacts) ? job.report_artifacts.join(", ") : "") || job.report_root || "-")}</div>
         <div class="drive-card-sub">log: ${sanitize(job.log_path || "-")}</div>
+        <pre class="security-log-box security-log-pre" style="max-height:180px;margin-top:.45rem;">${sanitize((job.log_tail || []).join("\n") || "等待測試輸出...")}</pre>
       </div>
       <button class="btn" type="button" data-security-test-job="${sanitize(job.job_id || "")}">查詢</button>
     </div>
@@ -1524,6 +1530,8 @@ async function loadSecurityTestJobs() {
   const csrf = getCsrfToken();
   const target = $("security-pentest-target");
   if (target && !target.value) target.value = window.location.origin;
+  const stressTarget = $("security-stress-target");
+  if (stressTarget && !stressTarget.value) stressTarget.value = window.location.origin;
   const res = await fetch(API + "/root/security-tests", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -1534,6 +1542,10 @@ async function loadSecurityTestJobs() {
     return;
   }
   renderSecurityTestJobs(json.jobs || []);
+  if ((json.jobs || []).some((job) => job.status === "running")) {
+    clearTimeout(window.securityTestPollTimer);
+    window.securityTestPollTimer = setTimeout(loadSecurityTestJobs, 2500);
+  }
 }
 
 async function loadSecurityTestJob(jobId) {
@@ -1591,6 +1603,27 @@ async function startSecurityFunctionalSmoke() {
   });
   const json = await res.json().catch(() => ({}));
   securityTestMsg(json.ok ? `全功能測試已啟動：${json.job?.job_id || ""}` : (json.msg || "全功能測試啟動失敗"), !!json.ok);
+  if (json.ok) await loadSecurityTestJobs();
+}
+
+async function startSecurityStressTest() {
+  if (currentUser !== "root") return;
+  const payload = {
+    target: $("security-stress-target")?.value || window.location.origin,
+    requests: Number($("security-stress-requests")?.value || 200),
+    concurrency: Number($("security-stress-concurrency")?.value || 20),
+    paths: $("security-stress-paths")?.value || "",
+  };
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/security-tests/stress", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  securityTestMsg(json.ok ? `壓力測試已啟動：${json.job?.job_id || ""}` : (json.msg || "壓力測試啟動失敗"), !!json.ok);
   if (json.ok) await loadSecurityTestJobs();
 }
 

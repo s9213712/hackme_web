@@ -290,6 +290,20 @@ def register_system_admin_routes(app, deps):
         return None
 
     def _security_test_job_payload(job):
+        if not job:
+            return None
+        log_path = job.get("log_path") or ""
+        log_abs = os.path.join(BASE_DIR, log_path) if log_path and not os.path.isabs(log_path) else log_path
+        log_tail = []
+        if log_abs:
+            try:
+                with open(log_abs, "r", encoding="utf-8", errors="replace") as handle:
+                    log_tail = [line.rstrip("\n") for line in handle.readlines()[-80:]]
+            except Exception:
+                log_tail = []
+        progress = job.get("progress_percent")
+        if progress is None:
+            progress = 100 if job.get("status") in {"passed", "failed"} else 10
         payload = {key: job.get(key) for key in (
             "job_id",
             "kind",
@@ -300,19 +314,30 @@ def register_system_admin_routes(app, deps):
             "command_label",
             "report_root",
             "report_dir",
+            "report_artifacts",
             "log_path",
             "error",
         )}
+        payload["progress_percent"] = progress
+        payload["log_tail"] = log_tail
         return payload
 
-    def _find_latest_report_dir(report_root, prefix, started_at_ts):
+    def _report_prefixes(prefix):
+        if isinstance(prefix, (list, tuple, set)):
+            return tuple(str(item) for item in prefix if str(item))
+        if prefix:
+            return (str(prefix),)
+        return ()
+
+    def _find_latest_report_artifacts(report_root, prefix, started_at_ts):
+        prefixes = _report_prefixes(prefix)
         try:
             candidates = []
             for name in os.listdir(report_root):
                 full = os.path.join(report_root, name)
-                if not os.path.isdir(full):
+                if not (os.path.isdir(full) or os.path.isfile(full)):
                     continue
-                if prefix and not name.startswith(prefix):
+                if prefixes and not any(name.startswith(item) for item in prefixes):
                     continue
                 try:
                     mtime = os.path.getmtime(full)
@@ -320,12 +345,16 @@ def register_system_admin_routes(app, deps):
                     mtime = 0
                 if mtime + 2 >= started_at_ts:
                     candidates.append((mtime, full))
-            if not candidates:
-                return ""
             candidates.sort(reverse=True)
-            return os.path.relpath(candidates[0][1], BASE_DIR)
+            return [os.path.relpath(path, BASE_DIR) for _, path in candidates[:5]]
         except Exception:
-            return ""
+            return []
+
+    def _find_latest_report_dir(report_root, prefix, started_at_ts):
+        for artifact in _find_latest_report_artifacts(report_root, prefix, started_at_ts):
+            if os.path.isdir(os.path.join(BASE_DIR, artifact)):
+                return artifact
+        return ""
 
     def _start_security_test_job(kind, command, *, command_label, report_root, report_prefix, actor, env=None):
         job_id = f"{kind}_{uuid.uuid4().hex[:12]}"
@@ -345,9 +374,11 @@ def register_system_admin_routes(app, deps):
             "command_label": command_label,
             "report_root": os.path.relpath(report_root, BASE_DIR),
             "report_dir": "",
+            "report_artifacts": [],
             "log_path": os.path.relpath(log_path, BASE_DIR),
             "error": "",
             "actor": actor_username,
+            "progress_percent": 10,
         }
         with SECURITY_TEST_JOBS_LOCK:
             SECURITY_TEST_JOBS[job_id] = job
@@ -371,12 +402,15 @@ def register_system_admin_routes(app, deps):
                     code = proc.wait()
                 status = "passed" if code == 0 else "failed"
                 report_dir = _find_latest_report_dir(report_root, report_prefix, started_ts)
+                report_artifacts = _find_latest_report_artifacts(report_root, report_prefix, started_ts)
                 with SECURITY_TEST_JOBS_LOCK:
                     job.update({
                         "status": status,
                         "finished_at": datetime.now().isoformat(),
                         "returncode": code,
                         "report_dir": report_dir,
+                        "report_artifacts": report_artifacts,
+                        "progress_percent": 100,
                     })
                 audit("SECURITY_TEST_FINISHED", client_ip, user=actor_username, success=(code == 0), detail=f"job_id={job_id},kind={kind},returncode={code},report_dir={report_dir}")
             except Exception as exc:
@@ -386,6 +420,7 @@ def register_system_admin_routes(app, deps):
                         "finished_at": datetime.now().isoformat(),
                         "returncode": None,
                         "error": str(exc),
+                        "progress_percent": 100,
                     })
                 audit("SECURITY_TEST_FAILED", client_ip, user=actor_username, success=False, detail=f"job_id={job_id},kind={kind},error={exc}")
 
@@ -953,6 +988,62 @@ def register_system_admin_routes(app, deps):
             env=env,
         )
         return json_resp({"ok": True, "msg": "全功能測試已啟動", "job": _security_test_job_payload(job)}, 202)
+
+    @app.route("/api/root/security-tests/stress", methods=["POST"])
+    @require_csrf
+    def root_security_test_stress():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True) if request.is_json else {}
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        target = str(data.get("target") or request.host_url or "").strip().rstrip("/")
+        if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
+            return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
+        total_requests = _safe_security_test_int(data.get("requests"), 200, 1, 5000)
+        concurrency = _safe_security_test_int(data.get("concurrency"), 20, 1, 100)
+        timeout_seconds = _safe_security_test_int(data.get("timeout_seconds"), 8, 1, 120)
+        if total_requests is None:
+            return json_resp({"ok": False, "msg": "requests 必須介於 1-5000"}), 400
+        if concurrency is None:
+            return json_resp({"ok": False, "msg": "concurrency 必須介於 1-100"}), 400
+        if timeout_seconds is None:
+            return json_resp({"ok": False, "msg": "timeout_seconds 必須介於 1-120"}), 400
+        paths = str(data.get("paths") or "").strip()
+        report_root = _security_test_report_root()
+        command = [
+            sys.executable,
+            os.path.join(BASE_DIR, "security", "stress_test.py"),
+            "--target", target,
+            "--requests", str(total_requests),
+            "--concurrency", str(concurrency),
+            "--timeout", str(timeout_seconds),
+            "--out", report_root,
+        ]
+        if paths:
+            command.extend(["--paths", paths])
+        job = _start_security_test_job(
+            "stress",
+            command,
+            command_label=[
+                "python3",
+                "security/stress_test.py",
+                "--target",
+                target,
+                "--requests",
+                str(total_requests),
+                "--concurrency",
+                str(concurrency),
+            ],
+            report_root=report_root,
+            report_prefix="stress_",
+            actor=actor,
+        )
+        return json_resp({"ok": True, "msg": "壓力測試已啟動", "job": _security_test_job_payload(job)}, 202)
 
     @app.route("/api/admin/security-center/thresholds", methods=["PUT"])
     @require_csrf
