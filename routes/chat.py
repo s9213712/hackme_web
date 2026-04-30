@@ -181,20 +181,17 @@ def register_chat_routes(app, deps):
     check_user_rate_limit = deps["check_user_rate_limit"]
     db_get_user_from_token = deps["db_get_user_from_token"]
     db_get_user_role = deps["db_get_user_role"]
-    delete_csrf_token = deps["delete_csrf_token"]
     detect_chat_violation = deps["detect_chat_violation"]
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
-    get_request_csrf_token = deps["get_request_csrf_token"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
     parse_positive_int = deps["parse_positive_int"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
-    verify_csrf_token = deps["verify_csrf_token"]
 
     def is_official_chat_room(row):
         if not row:
@@ -503,11 +500,6 @@ def register_chat_routes(app, deps):
                     "room": {"id": room["id"], "name": room["name"]},
                     "messages": messages
                 })
-
-            csrf_tok = get_request_csrf_token()
-            if not verify_csrf_token(csrf_tok, actor["username"]):
-                return json_resp({"ok":False,"msg":"CSRF token 無效或已過期"}), 403
-            delete_csrf_token(csrf_tok)
 
             try:
                 data = request.get_json(force=True)

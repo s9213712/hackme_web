@@ -36,11 +36,14 @@ Manual development start:
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
-export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
-export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
-export HTML_LEARNING_TEST_PASSWORD='change-this-test-password'
 python3 server.py
 ```
+
+Fresh local databases create `root/root`, `admin/admin`, and `test/test`, then
+force those accounts to change password on first login. Set
+`HTML_LEARNING_ROOT_PASSWORD`, `HTML_LEARNING_MANAGER_PASSWORD`, and
+`HTML_LEARNING_TEST_PASSWORD` before first boot if you want different bootstrap
+passwords.
 
 Then open the URL printed by the server. Default local URL:
 

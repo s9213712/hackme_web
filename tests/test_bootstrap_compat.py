@@ -162,7 +162,18 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     game_invite_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_invites)").fetchall()}
     game_reward_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_leaderboard_rewards)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
-    root_user = conn.execute("SELECT username, must_change_password, is_default_password, member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
+    default_users = {
+        row["username"]: dict(row)
+        for row in conn.execute(
+            """
+            SELECT u.username, u.role, u.must_change_password, u.is_default_password,
+                   u.member_level, u.base_level, u.effective_level, p.password_hash
+            FROM users u
+            JOIN user_passwords p ON p.user_id = u.id
+            WHERE u.username IN ('root', 'admin', 'test')
+            """
+        ).fetchall()
+    }
     conn.close()
 
     assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
@@ -228,12 +239,31 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"game_key", "inviter_user_id", "opponent_user_id", "status", "match_id"} <= game_invite_cols
     assert {"game_key", "week_key", "user_id", "rank", "score", "reward_points", "ledger_uuid"} <= game_reward_cols
     assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
-    assert root_user["username"] == "root"
-    assert root_user["must_change_password"] == 1
-    assert root_user["is_default_password"] == 1
-    assert root_user["member_level"] == "normal"
-    assert root_user["base_level"] == "normal"
-    assert root_user["effective_level"] == "normal"
+    assert set(default_users) == {"root", "admin", "test"}
+
+    assert default_users["root"]["role"] == "super_admin"
+    assert default_users["root"]["password_hash"] == "hash:root"
+    assert default_users["root"]["must_change_password"] == 1
+    assert default_users["root"]["is_default_password"] == 1
+    assert default_users["root"]["member_level"] == "normal"
+    assert default_users["root"]["base_level"] == "normal"
+    assert default_users["root"]["effective_level"] == "normal"
+
+    assert default_users["admin"]["role"] == "manager"
+    assert default_users["admin"]["password_hash"] == "hash:admin"
+    assert default_users["admin"]["must_change_password"] == 1
+    assert default_users["admin"]["is_default_password"] == 1
+    assert default_users["admin"]["member_level"] == "normal"
+    assert default_users["admin"]["base_level"] == "normal"
+    assert default_users["admin"]["effective_level"] == "normal"
+
+    assert default_users["test"]["role"] == "user"
+    assert default_users["test"]["password_hash"] == "hash:test"
+    assert default_users["test"]["must_change_password"] == 1
+    assert default_users["test"]["is_default_password"] == 1
+    assert default_users["test"]["member_level"] == "trusted"
+    assert default_users["test"]["base_level"] == "trusted"
+    assert default_users["test"]["effective_level"] == "trusted"
 
 
 def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, monkeypatch):
@@ -293,10 +323,19 @@ def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, m
         bootstrap._STATE.update(original_state)
 
     conn = sqlite3.connect(db_path)
-    count = conn.execute("SELECT COUNT(*) FROM user_passwords").fetchone()[0]
+    root_password_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM user_passwords p
+        JOIN users u ON u.id = p.user_id
+        WHERE u.username='root'
+        """
+    ).fetchone()[0]
+    default_user_count = conn.execute("SELECT COUNT(*) FROM users WHERE username IN ('root', 'admin', 'test')").fetchone()[0]
     root = conn.execute("SELECT member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
     conn.close()
-    assert count == 1
+    assert root_password_count == 1
+    assert default_user_count == 3
     assert tuple(root) == ("normal", "normal", "normal")
 
 

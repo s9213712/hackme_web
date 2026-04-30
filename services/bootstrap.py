@@ -177,9 +177,7 @@ def _bootstrap_password(env_name, username, *, required):
     password = os.environ.get(env_name, "").strip()
     if password:
         return password
-    if required:
-        raise RuntimeError(f"{env_name} is required to bootstrap the initial {username} account")
-    return None
+    return username
 
 
 def _safe_iso(value, fallback=None):

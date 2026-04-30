@@ -34,6 +34,9 @@ Two WebTerminal branches are intentionally preserved but abandoned:
 They are not deleted so their history remains auditable, but they should not be
 merged into the active main line.
 
+Detailed historical notes are archived under
+[docs/archive/webterminal](archive/webterminal/README.md).
+
 ### Docker Attempt
 
 Docker WebTerminal used short-lived containers connected to a browser terminal.

@@ -17,9 +17,6 @@ behavior is documented in [WEB.md](WEB.md).
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
-export HTML_LEARNING_ROOT_PASSWORD='change-this-root-password'
-export HTML_LEARNING_MANAGER_PASSWORD='change-this-manager-password'
-export HTML_LEARNING_TEST_PASSWORD='change-this-test-password'
 python3 server.py
 ```
 
@@ -69,12 +66,14 @@ Do not point storage at `/`, `/etc`, the project root, or `public/`.
 
 On a fresh database:
 
-- `root` is created from `HTML_LEARNING_ROOT_PASSWORD`
-- `admin` is created only when `HTML_LEARNING_MANAGER_PASSWORD` is set
-- `test` is created only when `HTML_LEARNING_TEST_PASSWORD` is set
+- `root/root` is created as the highest administrator (`super_admin`)
+- `admin/admin` is created as `manager`
+- `test/test` is created as a normal user with `trusted` member level
 
 Bootstrap accounts force password change on first login when the password still
-matches the configured bootstrap value.
+matches the bootstrap value. Override the first-boot passwords with
+`HTML_LEARNING_ROOT_PASSWORD`, `HTML_LEARNING_MANAGER_PASSWORD`, and
+`HTML_LEARNING_TEST_PASSWORD`.
 
 ## API Overview
 
