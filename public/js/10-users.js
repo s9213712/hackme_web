@@ -67,6 +67,17 @@ function renderUsers() {
       levelWrap.appendChild(levelBtn);
       actionButtons.push(levelWrap);
     }
+    // Promote button (super_admin only: user -> manager)
+    if (currentRole === "super_admin" && u.role === "user" && !isSelf) {
+      const promoteBtn = document.createElement("button");
+      promoteBtn.className = "btn";
+      promoteBtn.type = "button";
+      promoteBtn.textContent = "升級";
+      promoteBtn.title = "升級為管理者";
+      promoteBtn.style.color = "#82b1ff";
+      promoteBtn.addEventListener("click", () => promoteUser(u.id, u.username));
+      actionButtons.push(promoteBtn);
+    }
     // Demote button (super_admin only: manager→user, user→delete)
     if (currentRole === "super_admin" && u.role === "manager" && !isSelf) {
       const demBtn = document.createElement("button");
