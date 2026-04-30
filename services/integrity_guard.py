@@ -596,6 +596,7 @@ class IntegrityGuard:
             close = True
         approved = 0
         skipped = 0
+        high_risk_skipped = 0
         try:
             self.ensure_schema(conn)
             cutoff = datetime.now() - max_age
@@ -606,6 +607,26 @@ class IntegrityGuard:
                 finding = dict(row)
                 detected_at = _parse_dt(finding.get("detected_at"))
                 if not detected_at or detected_at > cutoff:
+                    continue
+                if finding.get("risk_level") == "high" or finding.get("category") in HIGH_RISK_CATEGORIES:
+                    high_risk_skipped += 1
+                    skipped += 1
+                    note = "high-risk finding requires manual review; auto-approval skipped"
+                    if finding.get("review_note") != note:
+                        conn.execute(
+                            "UPDATE integrity_findings SET review_note=? WHERE id=?",
+                            (note, int(finding["id"])),
+                        )
+                        self.audit(
+                            "INTEGRITY_FINDING_AUTO_APPROVE_SKIPPED_HIGH_RISK",
+                            "-",
+                            user=actor,
+                            success=True,
+                            detail=(
+                                f"id={finding['id']},file_path={finding['file_path']},"
+                                f"risk_level={finding['risk_level']},change_type={finding['change_type']}"
+                            ),
+                        )
                     continue
                 try:
                     entries = self._apply_manifest_update_for_finding(finding)
@@ -635,9 +656,9 @@ class IntegrityGuard:
                         success=False,
                         detail=f"id={finding.get('id')},file_path={finding.get('file_path')},error={exc}",
                     )
-            if approved:
+            if approved or high_risk_skipped:
                 conn.commit()
-            return {"approved": approved, "skipped": skipped}
+            return {"approved": approved, "skipped": skipped, "high_risk_skipped": high_risk_skipped}
         finally:
             if close:
                 conn.close()

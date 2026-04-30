@@ -24,9 +24,10 @@ def test_release_id_is_synced_to_public_docs():
 
 def test_branching_policy_documents_numbered_branch_sequence():
     doc = (ROOT / "docs" / "BRANCHING_AND_RELEASE.md").read_text(encoding="utf-8")
-    assert "01.Economy" in doc
+    assert "01.POINTSCHAIN" in doc
     assert "02-WebTerminal-docker" in doc
     assert "02-WebTerminal-qemu" in doc
+    assert "03.Economy" in doc
     assert "hackme_web_lite" in doc
     assert "last numeric segment by 1" in doc
 
