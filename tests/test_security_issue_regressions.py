@@ -107,3 +107,11 @@ def test_trading_write_guard_does_not_full_replay_on_every_write():
 
     assert "_verify_state_on_conn" not in guard
     assert "trading.enabled" in guard
+
+
+def test_trading_fill_ledger_verification_uses_batch_lookup():
+    trading_engine = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
+    verifier = trading_engine.split("def _verify_fill_ledgers", 1)[1].split("def _verify_open_order_locks", 1)[0]
+
+    assert "ledger_by_uuid" in verifier
+    assert "self._ledger_row" not in verifier

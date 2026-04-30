@@ -900,14 +900,31 @@ class TradingEngineService:
         return conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
 
     def _verify_fill_ledgers(self, conn, errors):
-        for fill in conn.execute(
+        fills = conn.execute(
             """
             SELECT f.*, o.order_uuid
             FROM trading_fills f
             JOIN trading_orders o ON o.id=f.order_id
             ORDER BY f.id ASC
             """
-        ).fetchall():
+        ).fetchall()
+        ledger_by_uuid = {
+            row["ledger_uuid"]: row
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM points_ledger
+                WHERE reference_type='trading_order'
+                  AND action_type IN (
+                    'trading_unfreeze',
+                    'trading_spot_buy',
+                    'trading_spot_sell',
+                    'trading_fee'
+                  )
+                """
+            ).fetchall()
+        }
+        for fill in fills:
             ledger_uuids = _json_loads(fill["points_ledger_uuids_json"], [])
             if not isinstance(ledger_uuids, list) or not ledger_uuids:
                 errors.append({
@@ -919,7 +936,7 @@ class TradingEngineService:
                 continue
             ledgers = []
             for ledger_uuid in ledger_uuids:
-                ledger = self._ledger_row(conn, ledger_uuid)
+                ledger = ledger_by_uuid.get(str(ledger_uuid or ""))
                 if not ledger:
                     errors.append({
                         "type": "fill_ledger_ref_not_found",
@@ -1042,8 +1059,14 @@ class TradingEngineService:
                     "expected_balance_after": running_balance,
                     "actual_balance_after": int(event["balance_after"] or 0),
                 })
+        allocation_ledgers = {
+            row["ledger_uuid"]: row
+            for row in conn.execute(
+                "SELECT * FROM points_ledger WHERE action_type='trading_reserve_allocation' ORDER BY id ASC"
+            ).fetchall()
+        }
         for event in conn.execute("SELECT * FROM trading_reserve_pool_events WHERE event_type='root_reserve_allocation' ORDER BY id ASC").fetchall():
-            ledger = self._ledger_row(conn, event["points_ledger_uuid"])
+            ledger = allocation_ledgers.get(str(event["points_ledger_uuid"] or ""))
             if not ledger:
                 errors.append({
                     "type": "reserve_allocation_ledger_missing",
