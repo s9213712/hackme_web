@@ -452,12 +452,12 @@ function bindUiEvents() {
   if (securityModeApply) securityModeApply.addEventListener("click", applySecurityMode);
   if (securityProfileSave) securityProfileSave.addEventListener("click", saveSecurityProfile);
   if (securityProfileLoadCurrent) securityProfileLoadCurrent.addEventListener("click", loadCurrentSecurityProfileDraft);
-  if (securityModeSelect) securityModeSelect.addEventListener("change", () => renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview"));
+  if (securityModeSelect) securityModeSelect.addEventListener("change", () => previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc"));
   if (securityTestRefresh) securityTestRefresh.addEventListener("click", loadSecurityTestJobs);
   if (securityPentestStart) securityPentestStart.addEventListener("click", startSecurityPentest);
   if (securityFunctionalStart) securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke);
   if (securityStressStart) securityStressStart.addEventListener("click", startSecurityStressTest);
-  if (serverModeSelect) serverModeSelect.addEventListener("change", () => renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview"));
+  if (serverModeSelect) serverModeSelect.addEventListener("change", () => previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s"));
 }
 
 $("li-pw").addEventListener("keydown", (e) => {

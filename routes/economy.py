@@ -5,6 +5,7 @@ import time
 from flask import request
 
 from services.points_chain import DISPLAY_CURRENCY
+from services.sanction_notices import record_admin_sanction_notice
 
 
 def register_economy_routes(app, deps):
@@ -13,6 +14,8 @@ def register_economy_routes(app, deps):
     get_ua = deps.get("get_ua", lambda: "")
     json_resp = deps["json_resp"]
     audit = deps.get("audit", lambda *args, **kwargs: None)
+    add_violation = deps.get("add_violation")
+    get_db = deps.get("get_db")
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
@@ -87,6 +90,61 @@ def register_economy_routes(app, deps):
             status = 409
             return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次調整未寫入帳本", "code": "insufficient_balance"}), status
         return json_resp({"ok": False, "msg": msg}), status
+
+    def notify_member_points_action(*, actor, user_id, action_label, reason, points_ledger_uuid=None):
+        if not add_violation or not get_db:
+            return
+        conn = get_db()
+        try:
+            target = conn.execute(
+                "SELECT id, username, role, status, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?",
+                (int(user_id),),
+            ).fetchone()
+            if not target or target["username"] == "root":
+                return
+            actor_role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
+            add_violation(
+                target["id"],
+                target["username"],
+                target["role"],
+                points=0,
+                reason=f"會員點數權益變更：{action_label}；原因：{reason or '未填寫'}",
+                triggered_by=actor_role,
+                actor_username=actor_value(actor, "username", "admin"),
+            )
+            latest = conn.execute(
+                "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
+                (int(user_id),),
+            ).fetchone()
+            if not latest:
+                return
+            previous = {key: target[key] for key in target.keys()}
+            record_admin_sanction_notice(
+                conn,
+                actor=actor,
+                target=target,
+                previous=previous,
+                violation_id=latest["id"],
+                action_label=action_label,
+                reason=reason or "會員點數權益變更",
+                points_ledger_uuid=points_ledger_uuid,
+            )
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            audit(
+                "MEMBER_POINTS_NOTICE_FAILED",
+                get_client_ip(),
+                user=actor_value(actor, "username", "admin"),
+                success=False,
+                ua=get_ua(),
+                detail=f"user_id={user_id}, error={exc}",
+            )
+        finally:
+            conn.close()
 
     @app.route("/api/points/wallet", methods=["GET"])
     @require_csrf_safe
@@ -261,6 +319,22 @@ def register_economy_routes(app, deps):
                 ua=get_ua(),
                 detail=f"user_id={user_id}, status={result['wallet'].get('wallet_status')}, risk={result['wallet'].get('risk_level')}",
             )
+            changes = []
+            if data.get("wallet_status"):
+                changes.append(f"錢包狀態 {result['wallet'].get('wallet_status')}")
+            if data.get("risk_level"):
+                changes.append(f"風險等級 {result['wallet'].get('risk_level')}")
+            if int(data.get("freeze_amount") or 0):
+                changes.append(f"凍結 {int(data.get('freeze_amount') or 0)} 點")
+            if int(data.get("unfreeze_amount") or 0):
+                changes.append(f"解凍 {int(data.get('unfreeze_amount') or 0)} 點")
+            notify_member_points_action(
+                actor=actor,
+                user_id=user_id,
+                action_label="；".join(changes) or "錢包處分",
+                reason=str(data.get("reason") or "錢包處分"),
+                points_ledger_uuid=(result.get("ledgers") or [{}])[0].get("ledger_uuid") if result.get("ledgers") else None,
+            )
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)
@@ -306,6 +380,13 @@ def register_economy_routes(app, deps):
                 idempotency_key=str(data.get("idempotency_key") or request.headers.get("Idempotency-Key") or "").strip() or None,
             )
             audit("POINTS_ADMIN_ADJUST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}, currency=points, direction={direction}, amount={amount}")
+            notify_member_points_action(
+                actor=actor,
+                user_id=user_id,
+                action_label=f"{'加點' if direction == 'credit' else '扣點'} {amount} 點",
+                reason=reason,
+                points_ledger_uuid=(result.get("ledger") or {}).get("ledger_uuid"),
+            )
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)
@@ -362,6 +443,15 @@ def register_economy_routes(app, deps):
                 review_note=str(data.get("review_note") or ""),
             )
             audit("POINTS_PENDING_REWARD_REVIEW", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"pending_reward_id={pending_reward_id}, decision={data.get('decision')}")
+            reward = result.get("pending_reward") or {}
+            if result.get("ledger"):
+                notify_member_points_action(
+                    actor=actor,
+                    user_id=reward.get("user_id"),
+                    action_label=f"審核通過加點 {reward.get('amount')} 點",
+                    reason=str(data.get("review_note") or "待審核獎勵通過"),
+                    points_ledger_uuid=(result.get("ledger") or {}).get("ledger_uuid"),
+                )
             return json_resp({"ok": True, **result})
         except Exception as exc:
             return service_error(exc)

@@ -57,7 +57,9 @@ def test_admin_sanction_notice_creates_dm_notification_and_restore_context(tmp_p
     assert "你可以到「申覆」分頁提出申覆" in dm["body"]
 
     note = conn.execute("SELECT user_id, type, title, link FROM notifications").fetchone()
-    assert dict(note) == {"user_id": 2, "type": "admin_sanction", "title": "會員處分通知", "link": "/appeals"}
+    assert dict(note) == {"user_id": 2, "type": "member_governance", "title": "會員權益變更通知", "link": "/appeals"}
+    context = conn.execute("SELECT points_ledger_uuid FROM admin_sanction_appeal_contexts WHERE violation_id=7").fetchone()
+    assert context["points_ledger_uuid"] is None
 
     restored = restore_admin_sanction_context(conn, user_id=2, violation_id=7)
     assert restored is True

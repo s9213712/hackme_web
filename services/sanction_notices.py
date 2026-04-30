@@ -27,10 +27,14 @@ def ensure_admin_sanction_appeal_schema(conn):
             action_label TEXT NOT NULL,
             reason TEXT NOT NULL,
             actor_username TEXT NOT NULL,
+            points_ledger_uuid TEXT,
             created_at TEXT NOT NULL
         )
         """
     )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(admin_sanction_appeal_contexts)").fetchall()}
+    if "points_ledger_uuid" not in cols:
+        conn.execute("ALTER TABLE admin_sanction_appeal_contexts ADD COLUMN points_ledger_uuid TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at)")
 
 
@@ -117,26 +121,25 @@ def _create_dm(conn, *, sender_id, recipient_id, body):
     return thread["id"]
 
 
-def _create_notification(conn, *, user_id, title, body, link=None):
+def _create_notification(conn, *, user_id, title, body, link=None, type="admin_sanction"):
     ensure_dm_notification_schema(conn)
     conn.execute(
         """
         INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
-        VALUES (?, 'admin_sanction', ?, ?, ?, 0, ?)
+        VALUES (?, ?, ?, ?, ?, 0, ?)
         """,
-        (int(user_id), title[:120], body[:1000], link, datetime.now().isoformat()),
+        (int(user_id), str(type or "admin_sanction")[:60], title[:120], body[:1000], link, datetime.now().isoformat()),
     )
 
 
-def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id, action_label, reason):
+def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id, action_label, reason, notice_title="會員權益變更通知", notification_type="member_governance", points_ledger_uuid=None):
     ensure_admin_sanction_appeal_schema(conn)
     actor_username = _value(actor, "username", "admin")
-    target_username = _value(target, "username", "user")
     body = (
-        f"你收到一筆會員管理處分。\n\n"
-        f"處分內容：{action_label}\n"
-        f"處分原因：{reason or '未填寫'}\n\n"
-        "你可以到「申覆」分頁提出申覆。申覆時請補充理由、證據或相關脈絡；root 會依申覆紀錄審核是否撤銷處分。"
+        f"你收到一筆會員權益變更通知。\n\n"
+        f"變更內容：{action_label}\n"
+        f"原因：{reason or '未填寫'}\n\n"
+        "你可以到「申覆」分頁提出申覆。申覆時請補充理由、證據或相關脈絡；root 會依申覆紀錄審核是否撤銷或調整。"
     )
     thread_id = _create_dm(
         conn,
@@ -147,17 +150,18 @@ def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id,
     _create_notification(
         conn,
         user_id=int(_value(target, "id")),
-        title="會員處分通知",
-        body="你收到一筆會員管理處分，可於申覆分頁提出申覆。",
+        title=notice_title,
+        body="你收到一筆會員權益變更通知，可於申覆分頁提出申覆。",
         link="/appeals",
+        type=notification_type,
     )
     conn.execute(
         """
         INSERT OR REPLACE INTO admin_sanction_appeal_contexts (
             violation_id, user_id, pre_status, pre_role, pre_base_level, pre_member_level,
             pre_effective_level, pre_sanction_status, pre_sanction_until, action_label,
-            reason, actor_username, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reason, actor_username, points_ledger_uuid, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(violation_id),
@@ -172,6 +176,7 @@ def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id,
             str(action_label or "會員管理處分")[:120],
             str(reason or "")[:1000],
             actor_username[:80],
+            str(points_ledger_uuid or "")[:120] or None,
             datetime.now().isoformat(),
         ),
     )

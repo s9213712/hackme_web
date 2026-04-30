@@ -99,6 +99,26 @@ def test_manual_points_adjustment_reports_insufficient_balance():
     assert "alert(message)" in adjust_frontend
 
 
+def test_member_rights_changes_send_notice_and_appeal_path():
+    users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
+    appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
+    notices = (ROOT / "services" / "sanction_notices.py").read_text(encoding="utf-8")
+
+    assert "def _send_member_governance_notice" in users
+    assert "governance_notice_needed = True" in users
+    assert 'action_label=f"違規點數 +{points}"' in users
+    assert 'action_label=f"角色 {from_role} -> {to_role}"' in users
+    assert "def notify_member_points_action" in economy
+    assert "會員點數權益變更" in economy
+    assert "POINTS_ADMIN_ADJUST" in economy
+    assert "POINTS_WALLET_SANCTION" in economy
+    assert "points_ledger_uuid" in notices
+    assert "points_service.rollback_ledger" in appeals
+    assert 'link="/appeals"' in notices
+    assert "你可以到「申覆」分頁提出申覆" in notices
+
+
 def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
 
