@@ -102,22 +102,24 @@ def test_sell_requires_reserve_pool_and_never_mints_points(tmp_path):
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
 
-    conn = trading.get_db()
-    conn.execute("UPDATE trading_reserve_pool SET balance_points=0")
-    conn.commit()
-    conn.close()
+    trading.update_market(
+        actor=_actor(3, "root", "super_admin"),
+        symbol="ETH/POINTS",
+        manual_price_points=20000,
+        max_order_points=1000000,
+        confirm_jump=True,
+    )
 
     with pytest.raises(ValueError, match="reserve pool is insufficient"):
         trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
 
-    conn = trading.get_db()
-    conn.execute("UPDATE trading_reserve_pool SET balance_points=502")
-    conn.commit()
-    conn.close()
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
 
     sold = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert sold["order"]["status"] == "filled"
     assert points.get_wallet(1)["points_balance"] == 1747
+    ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
+    assert ledger_actions.count("trading_fee") == 2
     assert trading.verify_state()["ok"] is True
 
 
@@ -165,3 +167,42 @@ def test_position_replay_mismatch_enters_trading_safe_mode(tmp_path):
     assert verification["ok"] is False
     with pytest.raises(ValueError, match="safe mode"):
         trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.01")
+
+
+def test_reserve_pool_tampering_enters_trading_safe_mode(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
+
+    conn = trading.get_db()
+    conn.execute("UPDATE trading_reserve_pool SET balance_points=1 WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    verification = trading.verify_state()
+    assert verification["ok"] is False
+    assert any(error["type"] == "reserve_pool_replay_mismatch" for error in verification["errors"])
+    with pytest.raises(ValueError, match="safe mode"):
+        trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", fee_bps=20)
+
+
+def test_open_order_frozen_tampering_enters_trading_safe_mode(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    order = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="limit",
+        quantity="0.1",
+        limit_price_points=4000,
+    )["order"]
+
+    conn = trading.get_db()
+    conn.execute("UPDATE trading_orders SET frozen_points=1 WHERE order_uuid=?", (order["order_uuid"],))
+    conn.commit()
+    conn.close()
+
+    verification = trading.verify_state()
+    assert verification["ok"] is False
+    assert any(error["type"] == "open_order_frozen_points_mismatch" for error in verification["errors"])

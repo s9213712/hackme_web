@@ -944,6 +944,10 @@ trading_service = TradingEngineService(
     points_service=points_service,
     audit=audit,
 )
+snapshot_service.set_post_restore_validators([
+    ("points_chain", lambda: points_service.verify_chain()),
+    ("trading_state", lambda: trading_service.verify_state()),
+])
 server_mode_service = ServerModeService(
     snapshot_service=snapshot_service,
     get_db=get_db,

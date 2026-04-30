@@ -129,6 +129,32 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
     assert any(call[0][0] == "SNAPSHOT_RESTORE_COMPLETED" for call in audit_log)
 
 
+def test_restore_reports_failure_when_post_restore_validation_fails(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    service.set_post_restore_validators([
+        ("trading_state", lambda: {"ok": False, "errors": [{"type": "test_failure"}]}),
+    ])
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="baseline")
+
+    conn = _db(db_path)
+    conn.execute("INSERT INTO posts (id, title) VALUES (2, 'P2')")
+    conn.commit()
+    conn.close()
+
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
+
+    assert restored["ok"] is False
+    assert restored["msg"] == "post-restore validation failed"
+    assert restored["post_restore_validation"]["errors"][0]["name"] == "trading_state"
+    conn = _db(db_path)
+    event = conn.execute("SELECT status, error_message FROM snapshot_restore_events ORDER BY started_at DESC LIMIT 1").fetchone()
+    conn.close()
+    assert event["status"] == "failed"
+    assert "test_failure" in event["error_message"]
+    assert any(call[0][0] == "SNAPSHOT_RESTORE_VALIDATION_FAILED" for call in audit_log)
+
+
 def test_portable_snapshot_archive_restores_on_different_instance(tmp_path):
     source_root = tmp_path / "source"
     target_root = tmp_path / "target"

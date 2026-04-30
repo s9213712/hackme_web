@@ -350,6 +350,7 @@ class SnapshotService:
         runtime_secret_files=None,
         reset_points_chain=None,
         reset_audit_chain=None,
+        post_restore_validators=None,
     ):
         self.get_db = get_db
         self.db_path = Path(db_path)
@@ -360,9 +361,29 @@ class SnapshotService:
         self.audit = audit
         self.reset_points_chain = reset_points_chain
         self.reset_audit_chain = reset_audit_chain
+        self.post_restore_validators = list(post_restore_validators or [])
         self.file_roots = [Path(p) for p in (file_roots or []) if p]
         self.config_files = [Path(p) for p in (config_files or []) if p]
         self.runtime_secret_files = [Path(p) for p in (runtime_secret_files or []) if p]
+
+    def set_post_restore_validators(self, validators):
+        self.post_restore_validators = list(validators or [])
+
+    def _run_post_restore_validators(self):
+        results = []
+        errors = []
+        for name, validator in self.post_restore_validators:
+            try:
+                result = validator()
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            if not isinstance(result, dict):
+                result = {"ok": bool(result), "result": result}
+            item = {"name": name, **result}
+            results.append(item)
+            if item.get("ok") is not True:
+                errors.append(item)
+        return {"ok": not errors, "results": results, "errors": errors}
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
@@ -1095,8 +1116,38 @@ class SnapshotService:
                 conn.commit()
             finally:
                 conn.close()
+            post_restore_validation = self._run_post_restore_validators()
+            if not post_restore_validation["ok"]:
+                conn = self.get_db()
+                try:
+                    self.ensure_schema(conn)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO snapshot_restore_events "
+                        "(id, snapshot_id, restored_by, started_at, completed_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run, error_message) "
+                        "VALUES (?, ?, ?, ?, ?, 'failed', 'full', ?, 1, 0, ?)",
+                        (
+                            event_id,
+                            snapshot_id,
+                            actor_id,
+                            started_at,
+                            datetime.now().isoformat(),
+                            pre.snapshot_id,
+                            json.dumps(post_restore_validation, ensure_ascii=False, sort_keys=True),
+                        ),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                self.audit("SNAPSHOT_RESTORE_VALIDATION_FAILED", "-", user=actor_name, success=False, detail=f"snapshot_id={snapshot_id},validation={post_restore_validation}")
+                return {
+                    "ok": False,
+                    "msg": "post-restore validation failed",
+                    "event_id": event_id,
+                    "pre_restore_snapshot_id": pre.snapshot_id,
+                    "post_restore_validation": post_restore_validation,
+                }
             self.audit("SNAPSHOT_RESTORE_COMPLETED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},reason={reason}")
-            return {"ok": True, "msg": "snapshot restored", "event_id": event_id, "pre_restore_snapshot_id": pre.snapshot_id}
+            return {"ok": True, "msg": "snapshot restored", "event_id": event_id, "pre_restore_snapshot_id": pre.snapshot_id, "post_restore_validation": post_restore_validation}
         except Exception as exc:
             conn = self.get_db()
             try:

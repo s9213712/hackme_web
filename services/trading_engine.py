@@ -663,26 +663,42 @@ class TradingEngineService:
             reserve_delta = total
             self._reserve_delta(conn, delta=reserve_delta, event_type="trade_buy_in", reason="TRADING_SPOT_BUY_AND_FEE", actor=actor, order_id=order["id"])
         else:
+            if notional <= 0:
+                raise ValueError("sell notional is too small")
             net_credit = notional - fee
             if net_credit <= 0:
                 raise ValueError("sell notional is too small after fee")
-            self._reserve_delta(conn, delta=-net_credit, event_type="trade_sell_out", reason="TRADING_SPOT_SELL", actor=actor, order_id=order["id"])
+            self._reserve_delta(conn, delta=-notional, event_type="trade_sell_out", reason="TRADING_SPOT_SELL", actor=actor, order_id=order["id"])
             ledger_uuids.append(self._ledger(
                 conn,
                 user_id=user_id,
                 currency_type="points",
                 direction="credit",
-                amount=net_credit,
+                amount=notional,
                 action_type="trading_spot_sell",
                 reference_type="trading_order",
                 reference_id=order["order_uuid"],
                 idempotency_key=f"trading:spot_sell:{order['order_uuid']}",
                 reason="TRADING_SPOT_SELL",
-                public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional, "fee": fee},
+                public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
                 actor=actor,
             )["ledger_uuid"])
             if fee:
-                self._reserve_delta(conn, delta=0, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
+                ledger_uuids.append(self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="debit",
+                    amount=fee,
+                    action_type="trading_fee",
+                    reference_type="trading_order",
+                    reference_id=order["order_uuid"],
+                    idempotency_key=f"trading:fee:{order['order_uuid']}",
+                    reason="TRADING_FEE",
+                    public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": int(market["fee_bps"]), "side": side},
+                    actor=actor,
+                )["ledger_uuid"])
+                self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
             position = self._position(conn, user_id, market["symbol"])
             if int(position["locked_quantity_units"]) < quantity_units:
                 raise ValueError("insufficient locked spot position")
@@ -786,6 +802,7 @@ class TradingEngineService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
             market = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (str(symbol or "").strip().upper(),)).fetchone()
             if not market:
                 raise ValueError("market not found")
@@ -880,6 +897,192 @@ class TradingEngineService:
                 totals[key] -= int(row["quantity_units"])
         return totals
 
+    def _ledger_row(self, conn, ledger_uuid):
+        return conn.execute("SELECT * FROM points_ledger WHERE ledger_uuid=?", (str(ledger_uuid or ""),)).fetchone()
+
+    def _verify_fill_ledgers(self, conn, errors):
+        for fill in conn.execute(
+            """
+            SELECT f.*, o.order_uuid
+            FROM trading_fills f
+            JOIN trading_orders o ON o.id=f.order_id
+            ORDER BY f.id ASC
+            """
+        ).fetchall():
+            ledger_uuids = _json_loads(fill["points_ledger_uuids_json"], [])
+            if not isinstance(ledger_uuids, list) or not ledger_uuids:
+                errors.append({
+                    "type": "fill_ledger_refs_missing",
+                    "fill_id": fill["id"],
+                    "fill_uuid": fill["fill_uuid"],
+                    "order_id": fill["order_id"],
+                })
+                continue
+            ledgers = []
+            for ledger_uuid in ledger_uuids:
+                ledger = self._ledger_row(conn, ledger_uuid)
+                if not ledger:
+                    errors.append({
+                        "type": "fill_ledger_ref_not_found",
+                        "fill_id": fill["id"],
+                        "fill_uuid": fill["fill_uuid"],
+                        "ledger_uuid": ledger_uuid,
+                    })
+                    continue
+                ledgers.append(ledger)
+                if int(ledger["user_id"]) != int(fill["user_id"]) or ledger["reference_id"] != fill["order_uuid"]:
+                    errors.append({
+                        "type": "fill_ledger_ref_mismatch",
+                        "fill_id": fill["id"],
+                        "ledger_uuid": ledger_uuid,
+                        "expected_user_id": int(fill["user_id"]),
+                        "actual_user_id": int(ledger["user_id"]),
+                        "expected_reference_id": fill["order_uuid"],
+                        "actual_reference_id": ledger["reference_id"],
+                    })
+            actions = {row["action_type"] for row in ledgers}
+            if fill["side"] == "buy":
+                required = {"trading_unfreeze", "trading_spot_buy"}
+            else:
+                required = {"trading_spot_sell"}
+            if int(fill["fee_points"] or 0) > 0:
+                required.add("trading_fee")
+            missing = sorted(required - actions)
+            if missing:
+                errors.append({
+                    "type": "fill_ledger_actions_missing",
+                    "fill_id": fill["id"],
+                    "fill_uuid": fill["fill_uuid"],
+                    "missing_actions": missing,
+                    "actual_actions": sorted(actions),
+                })
+
+    def _verify_open_order_locks(self, conn, errors):
+        ledger_net = {}
+        for row in conn.execute(
+            """
+            SELECT reference_id, direction, amount
+            FROM points_ledger
+            WHERE reference_type='trading_order'
+              AND action_type IN ('trading_freeze', 'trading_unfreeze')
+            ORDER BY id ASC
+            """
+        ).fetchall():
+            reference_id = row["reference_id"]
+            if not reference_id:
+                continue
+            ledger_net.setdefault(reference_id, 0)
+            if row["direction"] == "freeze":
+                ledger_net[reference_id] += int(row["amount"])
+            elif row["direction"] == "unfreeze":
+                ledger_net[reference_id] -= int(row["amount"])
+        order_rows = conn.execute("SELECT * FROM trading_orders ORDER BY id ASC").fetchall()
+        for order in order_rows:
+            expected = int(order["frozen_points"] or 0) if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES else 0
+            actual = ledger_net.get(order["order_uuid"], 0)
+            if expected != actual:
+                errors.append({
+                    "type": "open_order_frozen_points_mismatch",
+                    "order_id": order["id"],
+                    "order_uuid": order["order_uuid"],
+                    "status": order["status"],
+                    "expected_frozen_points": expected,
+                    "actual_frozen_points": actual,
+                })
+        locked_expected = {}
+        for order in order_rows:
+            if order["side"] == "sell" and order["status"] in OPEN_ORDER_STATUSES:
+                key = (int(order["user_id"]), order["market_symbol"])
+                locked_expected[key] = locked_expected.get(key, 0) + int(order["quantity_units"])
+        for row in conn.execute("SELECT user_id, market_symbol, locked_quantity_units FROM trading_spot_positions ORDER BY user_id, market_symbol").fetchall():
+            key = (int(row["user_id"]), row["market_symbol"])
+            expected = locked_expected.pop(key, 0)
+            actual = int(row["locked_quantity_units"] or 0)
+            if expected != actual:
+                errors.append({
+                    "type": "open_sell_locked_quantity_mismatch",
+                    "user_id": key[0],
+                    "market_symbol": key[1],
+                    "expected_locked_quantity_units": expected,
+                    "actual_locked_quantity_units": actual,
+                })
+        for key, expected in locked_expected.items():
+            if expected:
+                errors.append({
+                    "type": "open_sell_locked_position_missing",
+                    "user_id": key[0],
+                    "market_symbol": key[1],
+                    "expected_locked_quantity_units": expected,
+                    "actual_locked_quantity_units": 0,
+                })
+
+    def _verify_reserve_pool(self, conn, errors):
+        fill_delta = int(conn.execute("SELECT COALESCE(SUM(reserve_delta_points), 0) FROM trading_fills").fetchone()[0] or 0)
+        trade_event_delta = int(conn.execute(
+            """
+            SELECT COALESCE(SUM(delta_points), 0)
+            FROM trading_reserve_pool_events
+            WHERE event_type IN ('trade_buy_in', 'trade_sell_out', 'fee_retained')
+            """
+        ).fetchone()[0] or 0)
+        if fill_delta != trade_event_delta:
+            errors.append({
+                "type": "reserve_trade_event_replay_mismatch",
+                "expected_trade_delta_points": fill_delta,
+                "actual_trade_event_delta_points": trade_event_delta,
+            })
+        allocation_delta = 0
+        running_balance = 0
+        for event in conn.execute("SELECT * FROM trading_reserve_pool_events ORDER BY id ASC").fetchall():
+            running_balance += int(event["delta_points"] or 0)
+            if running_balance != int(event["balance_after"] or 0):
+                errors.append({
+                    "type": "reserve_event_balance_after_mismatch",
+                    "event_id": event["id"],
+                    "event_uuid": event["event_uuid"],
+                    "expected_balance_after": running_balance,
+                    "actual_balance_after": int(event["balance_after"] or 0),
+                })
+        for event in conn.execute("SELECT * FROM trading_reserve_pool_events WHERE event_type='root_reserve_allocation' ORDER BY id ASC").fetchall():
+            ledger = self._ledger_row(conn, event["points_ledger_uuid"])
+            if not ledger:
+                errors.append({
+                    "type": "reserve_allocation_ledger_missing",
+                    "event_id": event["id"],
+                    "event_uuid": event["event_uuid"],
+                    "ledger_uuid": event["points_ledger_uuid"],
+                })
+                continue
+            if ledger["action_type"] != "trading_reserve_allocation" or ledger["direction"] != "debit":
+                errors.append({
+                    "type": "reserve_allocation_ledger_mismatch",
+                    "event_id": event["id"],
+                    "event_uuid": event["event_uuid"],
+                    "ledger_uuid": ledger["ledger_uuid"],
+                    "actual_action_type": ledger["action_type"],
+                    "actual_direction": ledger["direction"],
+                })
+            if int(event["delta_points"]) != int(ledger["amount"]):
+                errors.append({
+                    "type": "reserve_allocation_amount_mismatch",
+                    "event_id": event["id"],
+                    "event_uuid": event["event_uuid"],
+                    "expected_delta_points": int(ledger["amount"]),
+                    "actual_delta_points": int(event["delta_points"]),
+                })
+            allocation_delta += int(event["delta_points"] or 0)
+        expected_balance = fill_delta + allocation_delta
+        reserve = self._reserve(conn)
+        actual_balance = int(reserve["balance_points"] or 0)
+        if expected_balance != actual_balance:
+            errors.append({
+                "type": "reserve_pool_replay_mismatch",
+                "expected_balance_points": expected_balance,
+                "actual_balance_points": actual_balance,
+                "fill_delta_points": fill_delta,
+                "allocation_delta_points": allocation_delta,
+            })
+
     def _verify_state_on_conn(self, conn, *, enter_safe_mode=False):
         errors = []
         totals = self._replay_positions(conn)
@@ -907,6 +1110,9 @@ class TradingEngineService:
                     "expected_total_units": expected_total,
                     "actual_total_units": 0,
                 })
+        self._verify_open_order_locks(conn, errors)
+        self._verify_fill_ledgers(conn, errors)
+        self._verify_reserve_pool(conn, errors)
         result = {"ok": not errors, "errors": errors, "checked_at": _now()}
         if errors and enter_safe_mode:
             conn.execute(
