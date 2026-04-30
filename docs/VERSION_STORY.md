@@ -7,10 +7,13 @@ operational hardening.
 
 ## Active Main Line
 
-The active default branch is `01.Economy`.
+The active default branch is `01.POINTSCHAIN`.
 
 `main` is preserved as an older clean baseline, but new project work should land
-on `01.Economy` unless a new feature branch is explicitly created.
+on `01.POINTSCHAIN` unless a new feature branch is explicitly created.
+
+`03.Economy` is the new branch reserved for the real economy-model design work
+that builds on top of the PointsChain foundation.
 
 ## Current Direction
 

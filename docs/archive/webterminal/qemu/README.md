@@ -43,7 +43,6 @@ Repeated failure points included:
 
 ## Decision
 
-The QEMU branch was preserved for audit history, but the active `01.Economy`
+The QEMU branch was preserved for audit history, but the active `01.POINTSCHAIN`
 line does not include WebTerminal runtime code. The old QEMU scripts are not a
 supported install path.
-

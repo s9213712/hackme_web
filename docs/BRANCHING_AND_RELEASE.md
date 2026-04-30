@@ -6,15 +6,16 @@ Feature branches use a two-digit order prefix when they are active development
 branches:
 
 ```text
-01.Economy
+01.POINTSCHAIN
 02-next-feature
-03-future-module
+03.Economy
 ```
 
 Rules:
 
-- `01.Economy` is the current default main line. `main` is retained as an older
-  clean baseline.
+- `01.POINTSCHAIN` is the current default main line. `main` is retained as an
+  older clean baseline.
+- `03.Economy` is reserved for the next economy-model development line.
 - Number prefixes represent branch creation / project sequence order, not
   priority.
 - Use the next unused number when starting a new feature branch.
@@ -25,9 +26,10 @@ Rules:
 Current active and historical sequence:
 
 ```text
-01.Economy                 active default main line
+01.POINTSCHAIN             active default main line
 02-WebTerminal-docker      abandoned, preserved for history
 02-WebTerminal-qemu        abandoned, preserved for history
+03.Economy                 active economy-model development line
 hackme_web_lite            lightweight target branch for low-end devices
 ```
 
