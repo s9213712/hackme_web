@@ -1,6 +1,11 @@
 # WebTerminal QEMU/libvirt Guide
 
-`02-WebTerminal-qemu` uses libvirt/KVM for the optional root WebTerminal.
+`02-WebTerminal-qemu` used libvirt/KVM for the optional root WebTerminal.
+This branch is now abandoned and kept only as historical reference. Do not use
+it as the active development line. See
+[QEMU branch postmortem](archive/web_terminal_qemu_deprecated.md) for the tested
+build flow, errors, and abandonment reason.
+
 Docker WebTerminal is deprecated on this branch and kept only as archived
 history under `docs/archive/`.
 
