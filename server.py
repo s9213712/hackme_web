@@ -11,7 +11,11 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
+from cryptography import x509
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 import argon2
 from flask_talisman import Talisman
 from routes.chat import register_chat_routes
@@ -24,6 +28,7 @@ from services.audit import (
     canonical_json,
     configure_audit_service,
     repair_audit_chain,
+    reset_audit_chain_with_event,
     verify_audit_integrity,
 )
 from services.access_controls import (
@@ -32,6 +37,7 @@ from services.access_controls import (
     maintenance_bypass_required_payload,
     verify_maintenance_bypass_token,
 )
+from services.account_recovery import ensure_account_recovery_schema
 from services.auth import (
     CSRF_TOKEN_TTL,
     SESSION_TTL,
@@ -118,8 +124,10 @@ from services.integrity_guard import IntegrityGuard, ensure_integrity_schema
 from services.member_levels import ensure_member_level_rules_schema, get_member_level_rule
 from services.moderation_proposals import ensure_moderation_proposals_schema
 from services.password_strength import enforce_password_strength, score_password_strength
+from services.points_chain import DEFAULT_BLOCK_LEDGER_THRESHOLD, DEFAULT_BLOCK_MAX_INTERVAL_SECONDS, PointsLedgerService, ensure_points_economy_schema
 from services.release_info import APP_NAME, APP_RELEASE_ID
-from services.server_bind import effective_server_bind
+from services.runtime_output import get_runtime_output, install_runtime_output_capture
+from services.server_bind import effective_server_bind, effective_server_ssl
 from services.snapshots import SnapshotService, ServerModeService, ensure_snapshot_schema
 from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
@@ -218,6 +226,59 @@ def _load_or_create_binary_secret(env_name, path, *, generator):
         f.write(value)
     os.chmod(path, 0o600)
     return value
+
+
+def ensure_local_tls_files(cert_file, key_file):
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        return {"created": False, "cert_file": cert_file, "key_file": key_file}
+
+    os.makedirs(os.path.dirname(os.path.abspath(cert_file)), exist_ok=True)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "TW"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "hackme_web local"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+        ]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.utcnow() - timedelta(minutes=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=825))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(ip_address("127.0.0.1")),
+                    x509.IPAddress(ip_address("::1")),
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    tmp_key = key_file + ".tmp"
+    tmp_cert = cert_file + ".tmp"
+    with open(tmp_key, "wb") as f:
+        f.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+    os.chmod(tmp_key, 0o600)
+    with open(tmp_cert, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    os.chmod(tmp_cert, 0o644)
+    os.replace(tmp_key, key_file)
+    os.replace(tmp_cert, cert_file)
+    return {"created": True, "cert_file": cert_file, "key_file": key_file}
 
 
 # ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
@@ -356,9 +417,9 @@ def _env_session_samesite():
 TRUSTED_PROXY_IPS = parse_ip_set(os.environ.get("TRUSTED_PROXY_IPS", ""))
 USE_XFF = os.environ.get("USE_XFF", "false").strip().lower() in {"1", "true", "on", "yes"}
 UNTRUSTED_XFF_MSG = "X-Forwarded-For from untrusted proxy rejected"
-IP_BLOCKING_ENABLED = _env_bool("IP_BLOCKING_ENABLED", default=False)
-FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=False)
-SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=False)
+IP_BLOCKING_ENABLED = _env_bool("IP_BLOCKING_ENABLED", default=True)
+FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=True)
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)
 SESSION_COOKIE_HTTPONLY = _env_bool("SESSION_COOKIE_HTTPONLY", default=True)
 SESSION_COOKIE_SAMESITE = _env_session_samesite()
 
@@ -443,6 +504,9 @@ FEATURE_ROUTE_GATES = (
     ("feature_system_health_enabled", ("/api/admin/health",)),
     ("feature_privacy_uploads_enabled", ("/api/files/", "/api/files", "/api/cloud-drive/", "/api/cloud-drive", "/api/root/announcement-attachment-requests", "/api/crypto/")),
     ("feature_storage_albums_enabled", ("/api/storage/", "/api/storage", "/api/admin/storage/", "/api/admin/storage")),
+    ("feature_comfyui_enabled", ("/api/comfyui/", "/api/comfyui")),
+    ("feature_economy_enabled", ("/api/points/", "/api/points", "/api/admin/points/", "/api/admin/points", "/api/root/points/", "/api/root/points")),
+    ("feature_games_enabled", ("/api/games/", "/api/games", "/api/root/games/", "/api/root/games")),
 )
 
 
@@ -540,10 +604,11 @@ def validate_phone(v):
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 15000")
     except Exception:
         pass
     return conn
@@ -580,6 +645,7 @@ def user_public_payload(row, *, include_sensitive=False):
     if not row:
         return None
     data = dict(row)
+    is_special_account = data.get("username") == "root" or data.get("role") in {"super_admin", "manager"}
     try:
         avatar_crop = json.loads(data.get("avatar_crop_json") or "{}") if data.get("avatar_crop_json") else {}
     except Exception:
@@ -591,9 +657,11 @@ def user_public_payload(row, *, include_sensitive=False):
         "email": data.get("email"),
         "status": data.get("status"),
         "role": data.get("role"),
-        "member_level": data.get("member_level") or "normal",
-        "base_level": data.get("base_level") or data.get("member_level") or "normal",
-        "effective_level": data.get("effective_level") or data.get("member_level") or "normal",
+        "member_level": None if is_special_account else (data.get("member_level") or "normal"),
+        "base_level": None if is_special_account else (data.get("base_level") or data.get("member_level") or "normal"),
+        "effective_level": None if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal"),
+        "member_level_label": "特殊階級" if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal"),
+        "special_account": is_special_account,
         "trust_score": data.get("trust_score") or 0,
         "points": data.get("points") or 0,
         "reputation": data.get("reputation") or 0,
@@ -711,6 +779,7 @@ def ensure_security_support_schema(conn):
     ensure_snapshot_schema(conn)
     ensure_upload_security_schema(conn)
     ensure_integrity_schema(conn)
+    ensure_account_recovery_schema(conn)
 
     legacy_rows = conn.execute(
         "SELECT ip_address, detail, created_at FROM security_events "
@@ -809,6 +878,7 @@ configure_bootstrap_service(
     load_json=load_json,
     normalize_text=normalize_text,
     hash_password=hash_password,
+    verify_password=verify_password,
     audit=audit,
     refresh_system_settings=refresh_system_settings,
     init_system_settings_table=init_system_settings_table,
@@ -839,6 +909,18 @@ snapshot_service = SnapshotService(
         os.path.join(BASE_DIR, "settings.json"),
         os.path.join(BASE_DIR, ".env"),
     ],
+    runtime_secret_files=[
+        os.path.join(BASE_DIR, ".chain_seed"),
+        os.path.join(BASE_DIR, ".csrfkey"),
+        os.path.join(BASE_DIR, ".fkey"),
+        os.path.join(BASE_DIR, ".fley"),
+        os.path.join(BASE_DIR, ".integrity_key"),
+        os.path.join(BASE_DIR, "integrity_manifest.json"),
+        os.path.join(BASE_DIR, "cert.pem"),
+        os.path.join(BASE_DIR, "key.pem"),
+    ],
+    reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
+    reset_audit_chain=reset_audit_chain_with_event,
 )
 ROOT_INTEGRITY_SIGNING_KEY = os.environ.get("ROOT_INTEGRITY_SIGNING_KEY", "").encode("utf-8") or _INTEGRITY_KEY
 integrity_guard = IntegrityGuard(
@@ -848,12 +930,23 @@ integrity_guard = IntegrityGuard(
     get_db=get_db,
     audit=audit,
 )
-server_mode_service = ServerModeService(snapshot_service=snapshot_service, get_db=get_db, audit=audit, integrity_guard=integrity_guard)
+points_service = PointsLedgerService(
+    get_db=get_db,
+    chain_secret=CHAIN_SEED,
+    audit=audit,
+)
+server_mode_service = ServerModeService(
+    snapshot_service=snapshot_service,
+    get_db=get_db,
+    audit=audit,
+    integrity_guard=integrity_guard,
+    save_settings=save_settings,
+)
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["SECRET_KEY"] = SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB, per-level quota enforced in upload_security.py
 app.config["SESSION_COOKIE_SECURE"] = SESSION_COOKIE_SECURE
 app.config["SESSION_COOKIE_HTTPONLY"] = SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE
@@ -866,7 +959,9 @@ talisman = Talisman(app,
         "default-src": "'self'",
         "script-src":  "'self'",
         "style-src":   "'self'",
-        "img-src":     "'self' data:",
+        "img-src":     "'self' data: blob:",
+        "media-src":   "'self' blob:",
+        "frame-src":   "'self' blob:",
         "font-src":    "'self'",
         "connect-src": "'self'",
         "frame-ancestors": "'none'",
@@ -955,7 +1050,7 @@ def restrict_cors():
         return None
     if not request.path.startswith("/api"):
         return None
-    if request.path in ("/api/csrf-token", "/api/logout", "/api/me", "/api/captcha/challenge"):
+    if request.path in ("/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/captcha/challenge"):
         return None
     if request.path == "/api/login":
         data = request.get_json(silent=True) if request.is_json else {}
@@ -992,7 +1087,7 @@ def enforce_feature_flags():
         return None
     # The settings endpoints must stay reachable, otherwise root can lock the
     # site into a disabled state with no way back through the UI/API.
-    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/captcha/challenge", "/api/me", "/api/login", "/api/logout"):
+    if request.path in ("/api/admin/settings", "/api/admin/features", "/api/site-config", "/api/csrf-token", "/api/captcha/challenge", "/api/me", "/api/login", "/api/logout", "/api/session/idle-timeout"):
         return None
     feature_key = feature_gate_for_path(request.path)
     if not feature_key or is_feature_enabled(feature_key):
@@ -1015,7 +1110,7 @@ def enforce_feature_flags():
 def enforce_required_password_change():
     if request.method == "OPTIONS" or not request.path.startswith("/api"):
         return None
-    allowed = {"/api/csrf-token", "/api/logout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength", "/api/captcha/challenge"}
+    allowed = {"/api/csrf-token", "/api/logout", "/api/session/idle-timeout", "/api/me", "/api/version", "/api/site-config", "/api/password-strength", "/api/captcha/challenge"}
     if request.path in allowed:
         return None
     actor = get_current_user_ctx()
@@ -1054,6 +1149,7 @@ register_public_routes(app, {
     "get_db": get_db,
     "get_feature_settings": get_feature_settings,
     "get_member_level_rule": get_member_level_rule,
+    "get_server_output": get_runtime_output,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "hash_password": hash_password,
@@ -1066,9 +1162,11 @@ register_public_routes(app, {
     "make_token": make_token,
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
+    "points_service": points_service,
     "record_login_failure": record_login_failure,
     "record_security_event": record_security_event,
     "require_csrf": require_csrf,
+    "revoke_user_sessions": revoke_user_sessions,
     "score_password_strength": score_password_strength,
     "store_csrf_token": store_csrf_token,
     "timing_delay": timing_delay,
@@ -1136,6 +1234,7 @@ register_user_routes(app, {
     "normalize_text": normalize_text,
     "parse_birthdate": parse_birthdate,
     "parse_positive_int": parse_positive_int,
+    "points_service": points_service,
     "revoke_user_sessions": revoke_user_sessions,
     "require_csrf": require_csrf,
     "require_csrf_safe": require_csrf_safe,
@@ -1164,6 +1263,8 @@ register_operation_routes(app, {
     "REPORTS_DIR": REPORTS_DIR,
     "SERVER_LOG_PATH": SERVER_LOG_PATH,
     "STORAGE_DIR": STORAGE_DIR,
+    "CERT_FILE": os.path.join(BASE_DIR, "cert.pem"),
+    "KEY_FILE": os.path.join(BASE_DIR, "key.pem"),
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,
     "SESSION_COOKIE_SECURE": SESSION_COOKIE_SECURE,
     "VIOLATION_APPEAL_WINDOW_HOURS": VIOLATION_APPEAL_WINDOW_HOURS,
@@ -1171,12 +1272,14 @@ register_operation_routes(app, {
     "add_violation": add_violation,
     "audit": audit,
     "check_user_rate_limit": check_user_rate_limit,
+    "detect_chat_violation": detect_chat_violation,
     "get_client_ip": get_client_ip,
     "get_current_user_ctx": get_current_user_ctx,
     "get_db": get_db,
     "get_latest_violation": get_latest_violation,
     "get_feature_settings": get_feature_settings,
     "get_member_level_rule": get_member_level_rule,
+    "get_server_output": get_runtime_output,
     "get_system_settings": get_system_settings,
     "get_ua": get_ua,
     "is_audit_chain_enabled": is_audit_chain_enabled,
@@ -1185,6 +1288,7 @@ register_operation_routes(app, {
     "normalize_text": normalize_text,
     "parse_iso_to_datetime": parse_iso_to_datetime,
     "parse_positive_int": parse_positive_int,
+    "points_service": points_service,
     "repair_audit_chain": repair_audit_chain,
     "repair_violation_chains": repair_violation_chains,
     "require_csrf": require_csrf,
@@ -1265,17 +1369,77 @@ def start_storage_maintenance_worker():
     return worker
 
 
+def start_points_chain_block_worker():
+    try:
+        check_interval = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_CHECK_INTERVAL_SECONDS", "15"))
+    except ValueError:
+        check_interval = 15
+    try:
+        ledger_threshold = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_LEDGER_THRESHOLD", str(DEFAULT_BLOCK_LEDGER_THRESHOLD)))
+    except ValueError:
+        ledger_threshold = DEFAULT_BLOCK_LEDGER_THRESHOLD
+    try:
+        max_interval_seconds = int(os.environ.get("HTML_LEARNING_POINTS_BLOCK_MAX_INTERVAL_SECONDS", str(DEFAULT_BLOCK_MAX_INTERVAL_SECONDS)))
+    except ValueError:
+        max_interval_seconds = DEFAULT_BLOCK_MAX_INTERVAL_SECONDS
+    check_interval = max(5, check_interval)
+    ledger_threshold = max(1, ledger_threshold)
+    max_interval_seconds = max(60, max_interval_seconds)
+
+    def loop():
+        actor = {"username": "system", "role": "system"}
+        while True:
+            try:
+                backup_result = points_service.create_scheduled_backup_if_due()
+                if backup_result.get("created"):
+                    audit("POINTS_SCHEDULED_BACKUP_CREATED", "0.0.0.0", user="system", success=bool(backup_result.get("ok")), detail=backup_result.get("backup_id"))
+                result = points_service.seal_due_block(actor=actor, ledger_threshold=ledger_threshold, max_interval_seconds=max_interval_seconds, limit=500)
+                if result.get("sealed"):
+                    block = result.get("block") or {}
+                    audit(
+                        "POINTS_AUTO_BLOCK_SEALED",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"block_number={block.get('block_number')},ledger_count={block.get('ledger_count')}",
+                    )
+                elif result.get("ok") is False:
+                    audit("POINTS_AUTO_BLOCK_SKIPPED", "0.0.0.0", user="system", success=False, detail=str(result.get("msg") or "verification failed"))
+            except Exception as exc:
+                audit("POINTS_AUTO_BLOCK_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            time.sleep(check_interval)
+
+    worker = threading.Thread(target=loop, name="points-chain-block-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    install_runtime_output_capture(SERVER_LOG_PATH)
     init_db(
         ensure_secure_audit_columns=ensure_secure_audit_columns,
         ensure_user_columns=ensure_user_columns,
         ensure_appeal_columns=ensure_appeal_columns,
         ensure_security_support_schema=ensure_security_support_schema,
+        ensure_points_economy_schema=ensure_points_economy_schema,
         ensure_session_columns=ensure_session_columns,
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
+    try:
+        system_actor = {"username": "system", "role": "system"}
+        genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
+        salary = points_service.award_admin_weekly_salaries(actor=system_actor)
+        if genesis.get("created_count") or salary.get("created_count"):
+            audit(
+                "POINTS_BOOTSTRAP_GRANTS",
+                "0.0.0.0",
+                success=True,
+                detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}",
+            )
+    except Exception as exc:
+        audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
     if get_system_settings().get("integrity_guard_enabled", True):
         integrity_status = integrity_guard.scan(actor="system-startup", create_initial_manifest=True)
         if get_system_settings().get("integrity_guard_strict_mode", False):
@@ -1284,19 +1448,31 @@ if __name__ == "__main__":
                 raise SystemExit("Integrity Guard strict mode blocked startup due to high risk findings")
     start_daily_snapshot_worker()
     start_storage_maintenance_worker()
+    start_points_chain_block_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")
-    has_ssl = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
+    tls_generation = ensure_local_tls_files(CERT_FILE, KEY_FILE)
+    if tls_generation.get("created"):
+        audit("TLS_LOCAL_CERT_GENERATED", "0.0.0.0", user="system", success=True, detail="generated cert.pem/key.pem for local deployment")
+    has_ssl_files = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
+    ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)
+    has_ssl = ssl_state["enabled"]
 
     audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
-    scheme = "https" if has_ssl else "http"
+    scheme = ssl_state["scheme"]
     bind = effective_server_bind(get_system_settings())
     host = bind["host"]
     port = bind["port"]
-    SERVER_BIND_STATE.update({"host": host, "port": port})
+    SERVER_BIND_STATE.update({"host": host, "port": port, "ssl_enabled": has_ssl})
     print(f"\n🌐  hackme_web server running at {scheme}://{host}:{port}")
-    print(f"    SSL: {'enabled' if has_ssl else 'disabled (add cert.pem + key.pem to enable)'}")
+    if has_ssl:
+        ssl_label = "enabled"
+    elif ssl_state["enabled_by_setting"] and not has_ssl_files:
+        ssl_label = "disabled (cert.pem + key.pem missing)"
+    else:
+        ssl_label = "disabled by root setting"
+    print(f"    SSL: {ssl_label}")
     print(f"    Audit log: database (secure_audit table + hash-chain)")
     print(f"    Security: Argon2id + timing-noise + account-enum-protection + CSRF + strict-headers\n")
 

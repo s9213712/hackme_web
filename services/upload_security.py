@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +11,10 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
+from services.identity import is_admin_role
+from services.storage_quota_overrides import apply_storage_quota_override, get_storage_quota_override
+from services.storage_quota_purchases import purchased_storage_summary
+
 
 UPLOAD_PRIVACY_MODES = {
     "public_attachment",
@@ -20,6 +23,9 @@ UPLOAD_PRIVACY_MODES = {
     "e2ee_vault_with_client_scan",
 }
 RISK_LEVELS = {"low", "medium", "high", "blocked", "unknown_encrypted"}
+ADMIN_DISK_QUOTA_RATIO = 0.9
+ADMIN_DISK_WARNING_RATIO = 0.8
+MANAGER_CLOUD_DRIVE_QUOTA_BYTES = 1024 * 1024 * 1024
 SCAN_STATUSES = {
     "not_required",
     "pending",
@@ -158,6 +164,8 @@ CLOUD_DRIVE_POLICY_INT_FIELDS = {
 CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "yara_command", "yara_rules_path", "notes"}
 
 ALLOWED_SCANNER_BACKENDS = {"disabled", "clamav"}
+ALLOWED_CLAMAV_COMMANDS = {"clamdscan", "clamscan"}
+ALLOWED_YARA_COMMANDS = {"yara"}
 
 MIME_SIGNATURES = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -330,6 +338,10 @@ def ensure_upload_security_schema(conn):
         )
         """
     )
+    _ensure_uploaded_files_columns(conn)
+    _ensure_encrypted_file_keys_columns(conn)
+    _ensure_file_scan_results_columns(conn)
+    _ensure_file_access_logs_columns(conn)
     _ensure_cloud_drive_policy_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status)")
@@ -342,6 +354,85 @@ def ensure_upload_security_schema(conn):
 
 def _table_columns(conn, table):
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_uploaded_files_columns(conn):
+    columns = _table_columns(conn, "uploaded_files")
+    definitions = {
+        "owner_user_id": "INTEGER NOT NULL DEFAULT 0",
+        "storage_path": "TEXT NOT NULL DEFAULT ''",
+        "privacy_mode": "TEXT NOT NULL DEFAULT 'public_attachment'",
+        "risk_level": "TEXT NOT NULL DEFAULT 'medium'",
+        "scan_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "original_filename_encrypted": "TEXT",
+        "original_filename_plain_for_public": "TEXT",
+        "mime_type_encrypted": "TEXT",
+        "mime_type_plain_for_public": "TEXT",
+        "size_bytes": "INTEGER NOT NULL DEFAULT 0",
+        "ciphertext_sha256": "TEXT",
+        "plaintext_sha256": "TEXT",
+        "encryption_algorithm": "TEXT",
+        "encryption_version": "TEXT",
+        "nonce": "TEXT",
+        "client_scan_report_json": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+        "updated_at": "TEXT",
+        "deleted_at": "TEXT",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {column} {definition}")
+
+
+def _ensure_encrypted_file_keys_columns(conn):
+    columns = _table_columns(conn, "encrypted_file_keys")
+    definitions = {
+        "file_id": "TEXT NOT NULL DEFAULT ''",
+        "recipient_user_id": "INTEGER NOT NULL DEFAULT 0",
+        "encrypted_file_key": "TEXT NOT NULL DEFAULT ''",
+        "wrapped_by": "TEXT NOT NULL DEFAULT 'user_public_key'",
+        "key_version": "INTEGER NOT NULL DEFAULT 1",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+        "revoked_at": "TEXT",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE encrypted_file_keys ADD COLUMN {column} {definition}")
+
+
+def _ensure_file_scan_results_columns(conn):
+    columns = _table_columns(conn, "file_scan_results")
+    definitions = {
+        "file_id": "TEXT NOT NULL DEFAULT ''",
+        "scanner_name": "TEXT NOT NULL DEFAULT 'unknown'",
+        "scanner_version": "TEXT",
+        "scan_started_at": "TEXT",
+        "scan_completed_at": "TEXT",
+        "result": "TEXT NOT NULL DEFAULT 'unknown'",
+        "malware_name": "TEXT",
+        "details_json": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE file_scan_results ADD COLUMN {column} {definition}")
+
+
+def _ensure_file_access_logs_columns(conn):
+    columns = _table_columns(conn, "file_access_logs")
+    definitions = {
+        "file_id": "TEXT NOT NULL DEFAULT ''",
+        "actor_user_id": "INTEGER",
+        "action": "TEXT NOT NULL DEFAULT 'unknown'",
+        "ip": "TEXT",
+        "user_agent": "TEXT",
+        "result": "TEXT NOT NULL DEFAULT 'unknown'",
+        "reason": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE file_access_logs ADD COLUMN {column} {definition}")
 
 
 def _ensure_cloud_drive_policy_columns(conn):
@@ -610,14 +701,25 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
         updates.append("scanner_backend=?")
         params.append(value)
     if "scanner_command" in data:
+        scanner_command = str(data.get("scanner_command") or "").strip()
+        if scanner_command and scanner_command not in ALLOWED_CLAMAV_COMMANDS:
+            return None, "scanner_command 僅可為 clamdscan 或 clamscan，不能填路徑或參數"
         updates.append("scanner_command=?")
-        params.append(str(data.get("scanner_command") or "").strip()[:500])
+        params.append(scanner_command)
     if "yara_command" in data:
+        yara_command = str(data.get("yara_command") or "").strip()
+        if yara_command and yara_command not in ALLOWED_YARA_COMMANDS:
+            return None, "yara_command 僅可為 yara，不能填路徑或參數"
         updates.append("yara_command=?")
-        params.append(str(data.get("yara_command") or "").strip()[:500])
+        params.append(yara_command)
     if "yara_rules_path" in data:
+        rules_path = str(data.get("yara_rules_path") or "").strip()
+        if rules_path:
+            ok, reason = _validate_yara_rules_path(rules_path)
+            if not ok:
+                return None, reason
         updates.append("yara_rules_path=?")
-        params.append(str(data.get("yara_rules_path") or "").strip()[:500])
+        params.append(rules_path[:500])
     if "notes" in data:
         updates.append("notes=?")
         params.append(str(data.get("notes") or "")[:1000])
@@ -652,49 +754,119 @@ def _count_grouped(conn, owner_user_id, field):
     return {row["name"]: {"count": int(row["count"] or 0), "bytes": int(row["bytes"] or 0)} for row in rows}
 
 
-def get_user_cloud_drive_usage(conn, user, member_rule=None):
+def _disk_usage_for_storage_root(storage_root):
+    path = Path(storage_root or ".").expanduser()
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    usage = shutil.disk_usage(str(probe))
+    return {
+        "path": str(path),
+        "probe_path": str(probe),
+        "total_bytes": int(usage.total),
+        "used_bytes": int(usage.used),
+        "free_bytes": int(usage.free),
+    }
+
+
+def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     ensure_upload_security_schema(conn)
     data = dict(user or {})
     user_id = int(data.get("id") or 0)
-    role = data.get("role") or "user"
+    admin_actor = _user_is_admin(data)
+    root_actor = _user_is_root(data)
+    manager_quota_actor = admin_actor and not root_actor
     effective_level = data.get("effective_level") or data.get("member_level") or "newbie"
     sanction_status = data.get("sanction_status") or "none"
     rule = member_rule or {}
     quota_mb = int(rule.get("attachment_quota_mb") or 0)
     max_file_size_mb = int(rule.get("max_attachment_size_mb") or 0)
     upload_rate_limit_per_day = int(rule.get("upload_rate_limit_per_day") or 0)
-    can_upload = (role == "super_admin" or bool(rule.get("can_upload_attachment"))) and sanction_status not in {"restricted", "suspended"}
+    can_upload = admin_actor or (bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"})
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
-    total_bytes = None if role == "super_admin" else quota_mb * 1024 * 1024
+    purchased_summary = purchased_storage_summary(conn, user_id) if user_id and not root_actor else {
+        "purchased_extra_bytes": 0,
+        "active_purchase_count": 0,
+        "active_purchases": [],
+        "latest_expires_at": None,
+    }
+    purchased_extra_bytes = int(purchased_summary.get("purchased_extra_bytes") or 0)
+    disk = _disk_usage_for_storage_root(storage_root) if root_actor and storage_root else None
+    if disk:
+        total_bytes = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO)
+        base_quota_bytes = total_bytes
+        quota_source = "root_disk_available_90_percent"
+    elif manager_quota_actor:
+        base_quota_bytes = MANAGER_CLOUD_DRIVE_QUOTA_BYTES
+        total_bytes = base_quota_bytes + purchased_extra_bytes
+        quota_source = "manager_role_fixed_1gb"
+    elif root_actor:
+        total_bytes = None
+        base_quota_bytes = None
+        quota_source = "root_role_unlimited_no_storage_root"
+    else:
+        base_quota_bytes = quota_mb * 1024 * 1024
+        total_bytes = base_quota_bytes + purchased_extra_bytes
+        quota_source = "member_level_rules.attachment_quota_mb"
+    if purchased_extra_bytes and not root_actor:
+        quota_source = f"{quota_source}+storage_purchase"
     remaining_bytes = None if total_bytes is None else max(0, total_bytes - used_bytes)
+    max_file_size_bytes = remaining_bytes if (disk or manager_quota_actor) else (None if root_actor else max_file_size_mb * 1024 * 1024)
+    rate_limit = None if admin_actor else upload_rate_limit_per_day
     percent_used = 0.0
     if total_bytes and total_bytes > 0:
         percent_used = min(100.0, round((used_bytes / total_bytes) * 100, 2))
     elif total_bytes == 0 and used_bytes > 0:
         percent_used = 100.0
 
-    return {
+    usage = {
         "user_id": user_id,
         "effective_level": effective_level,
         "can_upload": can_upload,
-        "quota_source": "super_admin_unlimited" if role == "super_admin" else "member_level_rules.attachment_quota_mb",
+        "quota_source": quota_source,
+        "base_quota_bytes": base_quota_bytes,
+        "purchased_extra_bytes": purchased_extra_bytes,
+        "purchased_storage": purchased_summary,
         "used_bytes": used_bytes,
         "total_bytes": total_bytes,
         "remaining_bytes": remaining_bytes,
         "percent_used": percent_used,
         "file_count": file_count,
-        "max_file_size_bytes": None if role == "super_admin" else max_file_size_mb * 1024 * 1024,
-        "upload_rate_limit_per_day": None if role == "super_admin" else upload_rate_limit_per_day,
+        "max_file_size_bytes": max_file_size_bytes,
+        "upload_rate_limit_per_day": rate_limit,
+        "disk": disk,
+        "warning_threshold_percent": int(ADMIN_DISK_WARNING_RATIO * 100) if disk else None,
+        "warning_threshold_bytes": int(total_bytes * ADMIN_DISK_WARNING_RATIO) if disk and total_bytes is not None else None,
+        "warning_active": bool(disk and total_bytes is not None and used_bytes >= int(total_bytes * ADMIN_DISK_WARNING_RATIO)),
         "by_privacy_mode": _count_grouped(conn, user_id, "privacy_mode"),
         "by_risk_level": _count_grouped(conn, user_id, "risk_level"),
         "by_scan_status": _count_grouped(conn, user_id, "scan_status"),
     }
+    return apply_storage_quota_override(usage, get_storage_quota_override(conn, user_id))
 
 
-def get_cloud_drive_safety_summary(conn, user, member_rule=None):
+def storage_root_can_accept_bytes(storage_root, size_bytes):
+    if not storage_root:
+        return True, None
+    disk = _disk_usage_for_storage_root(storage_root)
+    safe_free = int(disk["free_bytes"] * ADMIN_DISK_QUOTA_RATIO)
+    if int(size_bytes or 0) > safe_free:
+        return False, {
+            **disk,
+            "safe_free_bytes": safe_free,
+            "safety_ratio": ADMIN_DISK_QUOTA_RATIO,
+        }
+    return True, {
+        **disk,
+        "safe_free_bytes": safe_free,
+        "safety_ratio": ADMIN_DISK_QUOTA_RATIO,
+    }
+
+
+def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=None):
     policy = get_cloud_drive_security_policy(conn)
-    usage = get_user_cloud_drive_usage(conn, user, member_rule=member_rule)
+    usage = get_user_cloud_drive_usage(conn, user, member_rule=member_rule, storage_root=storage_root)
     effective_level = usage["effective_level"]
     restrictions = []
     if not usage["can_upload"]:
@@ -707,8 +879,10 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None):
         restrictions.append("高風險檔案不提供 inline preview")
     if not policy["e2ee_server_scan_claim_allowed"]:
         restrictions.append("E2EE 檔案不可宣稱已完成伺服器完整掃毒")
-    if effective_level in {"restricted", "suspended"}:
+    if not _user_is_admin(user) and effective_level in {"restricted", "suspended"}:
         restrictions.append("restricted/suspended 不可新增上傳或分享")
+    if usage.get("warning_active"):
+        restrictions.append("root 雲端硬碟使用量已超過磁碟安全警示線 80%，請清理檔案或擴充儲存空間")
 
     modes = {
         "public_attachment": "可掃毒、可預覽、站方可處理明文",
@@ -722,6 +896,30 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None):
         "modes": modes,
         "restrictions": restrictions,
     }
+
+
+def _mapping_value(mapping, key, default=None):
+    if not mapping:
+        return default
+    try:
+        return mapping[key]
+    except Exception:
+        return mapping.get(key, default) if hasattr(mapping, "get") else default
+
+
+def _user_role(user):
+    username = _mapping_value(user, "username")
+    if username == "root":
+        return "super_admin"
+    return _mapping_value(user, "role", "user") or "user"
+
+
+def _user_is_root(user):
+    return _mapping_value(user, "username") == "root"
+
+
+def _user_is_admin(user):
+    return is_admin_role(_user_role(user))
 
 
 def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_bytes=0):
@@ -740,11 +938,12 @@ def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_byte
     if mode.startswith("e2ee") and not policy["e2ee_allowed"]:
         return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for encrypted vault uploads", tuple(warnings))
 
-    effective_level = str((user or {}).get("effective_level") or (user or {}).get("member_level") or "newbie")
-    if effective_level in {"restricted", "suspended"}:
-        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, f"{effective_level} users cannot upload", tuple(warnings))
-    if effective_level == "newbie" and category in {"executable", "archive", "office_macro"}:
-        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "newbie users cannot upload this high-risk file type", tuple(warnings))
+    if not _user_is_admin(user):
+        effective_level = str(_mapping_value(user, "effective_level") or _mapping_value(user, "member_level") or "newbie")
+        if effective_level in {"restricted", "suspended"}:
+            return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, f"{effective_level} users cannot upload", tuple(warnings))
+        if effective_level == "newbie" and category in {"executable", "archive", "office_macro"}:
+            return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "newbie users cannot upload this high-risk file type", tuple(warnings))
 
     if mode.startswith("e2ee"):
         risk_level = "unknown_encrypted" if category != "executable" else "high"
@@ -958,11 +1157,20 @@ def _update_file_scan_state(conn, file_id, *, scan_status, risk_level=None):
     conn.execute(f"UPDATE uploaded_files SET {', '.join(fields)} WHERE id=?", tuple(params))
 
 
+def _resolve_named_binary(configured, allowed, fallback_order):
+    configured = str(configured or "").strip()
+    candidates = [configured] if configured else list(fallback_order)
+    for name in candidates:
+        if name not in allowed:
+            continue
+        path = shutil.which(name)
+        if path:
+            return [path]
+    return []
+
+
 def _resolve_clamav_command(policy):
-    configured = str(policy.get("scanner_command") or "").strip()
-    if configured:
-        return configured
-    return shutil.which("clamdscan") or shutil.which("clamscan")
+    return _resolve_named_binary(policy.get("scanner_command"), ALLOWED_CLAMAV_COMMANDS, ("clamdscan", "clamscan"))
 
 
 def _parse_clamav_output(output):
@@ -974,10 +1182,25 @@ def _parse_clamav_output(output):
 
 
 def _resolve_yara_command(policy):
-    configured = str(policy.get("yara_command") or "").strip()
+    return _resolve_named_binary(policy.get("yara_command"), ALLOWED_YARA_COMMANDS, ("yara",))
+
+
+def _allowed_yara_rules_root():
+    configured = str(os.environ.get("HACKME_YARA_RULES_DIR") or "").strip()
     if configured:
-        return configured
-    return shutil.which("yara")
+        return Path(configured).expanduser().resolve()
+    return (Path.cwd() / "security" / "yara_rules").resolve()
+
+
+def _validate_yara_rules_path(rules_path):
+    try:
+        allowed_root = _allowed_yara_rules_root()
+        resolved = Path(rules_path).expanduser().resolve()
+        if os.path.commonpath([str(allowed_root), str(resolved)]) != str(allowed_root):
+            return False, f"yara_rules_path 必須位於 {allowed_root}"
+    except Exception:
+        return False, "yara_rules_path 格式錯誤"
+    return True, "ok"
 
 
 def run_yara_scan(path, *, policy):
@@ -986,17 +1209,19 @@ def run_yara_scan(path, *, policy):
     rules_path = str(policy.get("yara_rules_path") or "").strip()
     if not rules_path:
         return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_rules_not_configured"}}
+    ok, reason = _validate_yara_rules_path(rules_path)
+    if not ok:
+        return {"result": "failed", "malware_name": None, "details": {"reason": "yara_rules_path_not_allowed", "message": reason}}
     command = _resolve_yara_command(policy)
     if not command:
         return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_command_not_found"}}
     started_at = datetime.now().isoformat()
     timeout = int(policy.get("scanner_timeout_seconds") or 60)
-    command_parts = shlex.split(command)
-    if not command_parts:
+    if not command:
         return {"result": "not_required", "malware_name": None, "scan_started_at": started_at, "details": {"reason": "empty_yara_command"}}
     try:
         completed = subprocess.run(
-            [*command_parts, "-r", rules_path, str(path)],
+            [*command, "-r", rules_path, str(path)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1007,12 +1232,12 @@ def run_yara_scan(path, *, policy):
             "result": "failed",
             "malware_name": None,
             "scan_started_at": started_at,
-            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command[0])},
         }
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     details = {
         "returncode": completed.returncode,
-        "command": os.path.basename(command_parts[0]),
+        "command": os.path.basename(command[0]),
         "rules_path": rules_path,
         "output_tail": output[-1000:],
     }
@@ -1036,8 +1261,7 @@ def run_clamav_scan(path, *, policy):
         }
     started_at = datetime.now().isoformat()
     timeout = int(policy.get("scanner_timeout_seconds") or 60)
-    command_parts = shlex.split(command)
-    if not command_parts:
+    if not command:
         return {
             "result": "failed",
             "malware_name": None,
@@ -1046,7 +1270,7 @@ def run_clamav_scan(path, *, policy):
         }
     try:
         completed = subprocess.run(
-            [*command_parts, "--no-summary", str(path)],
+            [*command, "--no-summary", str(path)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1057,12 +1281,12 @@ def run_clamav_scan(path, *, policy):
             "result": "failed",
             "malware_name": None,
             "scan_started_at": started_at,
-            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command[0])},
         }
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     details = {
         "returncode": completed.returncode,
-        "command": os.path.basename(command_parts[0]),
+        "command": os.path.basename(command[0]),
         "output_tail": output[-1000:],
     }
     if completed.returncode == 0:

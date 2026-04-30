@@ -1,21 +1,28 @@
 function switchServerTab(tab) {
   currentServerTab = tab;
-  ["health", "integrity", "settings", "env"].forEach((name) => {
+  if (tab !== "security") stopServerOutputPoll();
+  ["security", "audit", "health", "integrity", "settings", "env"].forEach((name) => {
     const sec = $("sec-server-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
+  ["tab-server-security", "tab-server-audit", "tab-server-health", "tab-server-integrity", "tab-server-settings", "tab-server-env"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-server-" + tab);
   });
-  if (tab === "health") loadServerHealth();
+  if (tab === "security") {
+    loadSecurityCenter();
+    startServerOutputPoll();
+  }
+  if (tab === "audit") loadAudit(0);
+  if (tab === "health") { loadServerHealth(); loadPlatformStats(); }
   if (tab === "integrity") loadIntegrityGuard();
   if (tab === "settings") {
     loadSettings();
     loadServerMode();
   }
   if (tab === "env") loadServerEnv();
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 function switchSettingsSection(tab) {
@@ -29,55 +36,90 @@ function switchSettingsSection(tab) {
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-settings-" + tab);
   });
-  if (tab === "drive") loadCloudDriveAdminPolicy();
+  if (tab === "drive") {
+    loadCloudDriveAdminPolicy();
+    loadRootStorageUsers();
+  }
   if (tab === "member-levels") loadEditableMemberLevelRules();
 }
 
 function switchModuleTab(tab) {
   const canAccessAccounts = canAccessModule("accounts");
-  const canAccessServer = currentRole === "super_admin";
+  const canAccessServer = currentUser === "root";
   const canAccessAppeals = currentRole !== "super_admin" && canAccessModule("appeals");
   const canAccessCommunity = !!currentUser && canAccessModule("community");
+  const canAccessAnnouncements = canAccessCommunity;
   const canAccessChat = !!currentUser && canAccessModule("chat");
   const canAccessDm = !!currentUser && canAccessModule("dm");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
+  const canAccessAlbums = canAccessDrive;
+  const canAccessGames = !!currentUser && canAccessModule("games");
+  const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
+  const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
+  const canAccessEconomy = !!currentUser && canAccessModule("economy");
 
   let normTab = tab;
-  if (tab === "chat" && !canAccessChat) normTab = canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))));
-  if (tab === "dm" && !canAccessDm) normTab = canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : "accounts")));
-  if (tab === "community" && !canAccessCommunity) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessDrive ? "drive" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))));
-  if (tab === "drive" && !canAccessDrive) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessAppeals ? "appeals" : "accounts")));
-  if (tab === "accounts" && !canAccessAccounts) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals")));
-  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : (canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "appeals"))));
-  if (tab === "appeals" && !canAccessAppeals) normTab = canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : "accounts")));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
+  if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
+  if (tab === "dm" && !canAccessDm) normTab = fallbackModule();
+  if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
+  if (tab === "community" && !canAccessCommunity) normTab = fallbackModule();
+  if (tab === "drive" && !canAccessDrive) normTab = fallbackModule();
+  if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
+  if (tab === "games" && !canAccessGames) normTab = fallbackModule();
+  if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
+  if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
+  if (tab === "accounts" && !canAccessAccounts) normTab = fallbackModule();
+  if (tab === "server" && !canAccessServer) normTab = canAccessAccounts ? "accounts" : fallbackModule();
+  if (tab === "appeals" && !canAccessAppeals) normTab = fallbackModule();
 
   currentModuleTab = normTab;
   const modChat = $("module-chat");
   const modDm = $("module-dm");
+  const modAnnouncements = $("module-announcements");
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
+  const modAlbums = $("module-albums");
+  const modGames = $("module-games");
+  const modComfyui = $("module-comfyui");
+  const modEconomy = $("module-economy");
   const modAccounts = $("module-accounts");
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
   const mDm = $("tab-module-dm");
+  const mAnnouncements = $("tab-module-announcements");
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
+  const mAlbums = $("tab-module-albums");
+  const mGames = $("tab-module-games");
+  const mComfyui = $("tab-module-comfyui");
+  const mEconomy = $("tab-module-economy");
   const mAccounts = $("tab-module-accounts");
   const mServer = $("tab-module-server");
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
   if (modDm) modDm.classList.toggle("active", normTab === "dm");
+  if (modAnnouncements) modAnnouncements.classList.toggle("active", normTab === "announcements");
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
+  if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
+  if (modGames) modGames.classList.toggle("active", normTab === "games");
+  if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
+  if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
   if (modAccounts) modAccounts.classList.toggle("active", normTab === "accounts");
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
   if (mDm) mDm.classList.toggle("active", normTab === "dm");
+  if (mAnnouncements) mAnnouncements.classList.toggle("active", normTab === "announcements");
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
+  if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
+  if (mGames) mGames.classList.toggle("active", normTab === "games");
+  if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
+  if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
   if (mAccounts) mAccounts.classList.toggle("active", normTab === "accounts");
   if (mServer) mServer.classList.toggle("active", normTab === "server");
   if (mAppeals) mAppeals.classList.toggle("active", normTab === "appeals");
@@ -85,14 +127,30 @@ function switchModuleTab(tab) {
   if (normTab === "community" && canAccessCommunity) {
     loadCommunityHome();
   }
+  if (normTab === "announcements" && canAccessAnnouncements) {
+    loadAnnouncements();
+  }
   if (normTab === "dm" && canAccessDm && typeof loadDmThreads === "function") {
     loadDmThreads();
   }
+  if (normTab !== "server") stopServerOutputPoll();
   if (normTab === "server" && canAccessServer) {
-    switchServerTab(currentServerTab || "health");
+    switchServerTab(currentServerTab || "security");
   }
   if (normTab === "drive" && canAccessDrive) {
     loadDriveDashboard();
+  }
+  if (normTab === "albums" && canAccessAlbums) {
+    loadAlbumGallery();
+  }
+  if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
+    loadGameZone();
+  }
+  if (normTab === "comfyui" && canAccessComfyui && typeof loadComfyuiModels === "function") {
+    loadComfyuiModels();
+  }
+  if (normTab === "economy" && canAccessEconomy && typeof loadEconomyDashboard === "function") {
+    loadEconomyDashboard();
   }
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
@@ -100,28 +158,30 @@ function switchModuleTab(tab) {
   if (normTab === "accounts" && canAccessAccounts && currentAdminTab) {
     if (!$("sec-" + currentAdminTab)) switchAdminTab("users");
   }
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 function switchAdminTab(tab) {
   currentAdminTab = tab;
-  ["users","audit","violations","governance","appeals","reports"].forEach(t => {
+  ["users","violations","governance","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-audit","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
+  ["tab-users","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
-  if (tab === "audit") loadAudit(0);
   if (tab === "violations") loadViolations(0);
   if (tab === "governance") loadGovernanceDashboard();
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
   if (tab === "reports") loadAdminReports(0, adminReportStatus);
+  if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
 // ── Audit log ───────────────────────────────────────────────
 let auditPage = 0;
 const AUDIT_PAGE_SIZE = 20;
+let serverOutputPollTimer = null;
 
 async function loadAudit(page) {
   await fetchCsrfToken({ force: true });
@@ -310,8 +370,78 @@ async function resetViolations(userId) {
 }
 
 // ── Governance UI ───────────────────────────────────────────
+let governancePendingTargetUserId = "";
+const GOVERNANCE_ACTION_VALUE_HELP = {
+  warn: "可留空。系統會依提案原因替對象記一次違規警告。",
+  mute: "可留空。通過後會將帳號狀態設為 muted，並使其重新登入。",
+  restrict: "可留空，或填 ISO 到期時間，例如 2026-05-01T18:00。通過後會限制發文、上傳等功能。",
+  suspend: "可留空，或填 ISO 到期時間，例如 2026-05-01T18:00。通過後會暫停帳號使用。",
+  downgrade_level: "必填：newbie、normal、restricted 或 suspended。用來調整會員等級。",
+  force_password_reset: "可留空。通過後對象下次登入必須重新設定密碼。",
+  delete: "可留空。通過後帳號會被標記為 deleted，屬高風險操作。",
+};
+const GOVERNANCE_HIGH_RISK_ACTIONS = new Set(["suspend", "delete", "downgrade_level"]);
+
 async function loadGovernanceDashboard() {
-  await Promise.allSettled([loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
+  await Promise.allSettled([loadUsers(), loadMemberLevelRulesSummary(), loadGovernanceProposals()]);
+  renderGovernanceTargetOptions();
+  updateGovernanceActionValueHelp();
+}
+
+function renderGovernanceTargetOptions(selectedValue = null) {
+  const select = $("governance-target-user-id");
+  if (!select) return;
+  const previous = selectedValue === null
+    ? String(select.value || governancePendingTargetUserId || "")
+    : String(selectedValue || "");
+  const rows = Array.isArray(users) ? users : [];
+  if (!rows.length) {
+    select.innerHTML = `<option value="">無法讀取會員清單</option>`;
+    return;
+  }
+  const targetRows = rows.filter((user) => user.username !== "root");
+  select.innerHTML = `<option value="">請選擇治理目標</option>` + targetRows.map((user) => {
+    const id = String(user.id || "");
+    const role = user.username === "root" ? "root" : (user.role || "user");
+    const status = user.status || "-";
+    const level = user.effective_level || user.member_level || "";
+    const label = `${user.username || "unknown"} (#${id}) · ${role} · ${status}${level ? " · " + level : ""}`;
+    return `<option value="${sanitize(id)}">${sanitize(label)}</option>`;
+  }).join("");
+  if (previous && targetRows.some((user) => String(user.id || "") === previous)) {
+    select.value = previous;
+    governancePendingTargetUserId = "";
+  }
+}
+
+function selectedGovernanceTarget() {
+  const targetId = String($("governance-target-user-id")?.value || "");
+  return (Array.isArray(users) ? users : []).find((user) => String(user.id || "") === targetId) || null;
+}
+
+function governancePolicySummary(action, target) {
+  const targetRole = target?.role || "user";
+  const highRisk = GOVERNANCE_HIGH_RISK_ACTIONS.has(action) || targetRole === "manager" || targetRole === "super_admin";
+  return highRisk
+    ? "高風險：需要 root 同意，且另外需要 2 位 admin/manager 同意。通過後必須由 root 執行。"
+    : "一般：需要 1 位 admin/manager 或 root 同意。";
+}
+
+function updateGovernanceActionValueHelp() {
+  const action = $("governance-action-type")?.value || "warn";
+  const input = $("governance-action-value");
+  const help = $("governance-action-value-help");
+  const policy = $("governance-vote-policy");
+  const text = GOVERNANCE_ACTION_VALUE_HELP[action] || "依處理方式填寫；不需要額外參數時可留空。";
+  if (help) help.textContent = text;
+  if (policy) policy.textContent = governancePolicySummary(action, selectedGovernanceTarget());
+  if (input) {
+    input.placeholder = action === "downgrade_level"
+      ? "newbie / normal / restricted / suspended"
+      : action === "restrict" || action === "suspend"
+        ? "可留空，或填 2026-05-01T18:00"
+        : "通常可留空";
+  }
 }
 
 async function loadMemberLevelRulesSummary() {
@@ -374,24 +504,32 @@ async function loadGovernanceProposals() {
     const target = p.target?.username || `#${p.target_user_id}`;
     const proposer = p.proposed_by?.username || `#${p.proposed_by_user_id}`;
     const votes = (p.votes || []).map(v => `${sanitize(v.voter_username || "")}:${sanitize(v.vote || "")}`).join(" · ") || "尚無投票";
+    const policyText = p.policy_summary || (
+      p.required_root_approval
+        ? "高風險：需要 root 同意，且另外需要 2 位 admin/manager 同意。"
+        : "一般：需要 1 位 admin/manager 或 root 同意。"
+    );
+    const progressText = p.required_root_approval
+      ? `root ${p.root_requirement_met ? "已同意" : "未同意"} · admin/manager ${p.manager_approve_count || 0}/${p.required_manager_approvals || 2} · reject ${p.reject_count || 0}`
+      : `${p.approve_count || 0}/${p.required_votes || 1} approve · ${p.reject_count || 0} reject`;
     const canVote = p.status === "pending";
     const canExecute = p.status === "approved";
-    const canOverride = currentUser === "root" && p.status !== "executed";
     return `<div style="border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
       <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
         <strong>#${p.id}</strong>
         <span style="color:#82b1ff;">${sanitize(p.action_type || "")}</span>
         <span>target=${sanitize(target)}</span>
+        <span style="color:${p.risk_level === "high" ? "#ffb74d" : "#82b1ff"};">${p.risk_level === "high" ? "高風險" : "一般"}</span>
         <span style="color:${p.status === "approved" ? "#4caf50" : p.status === "rejected" ? "#ff4f6d" : "#ffb74d"};">${sanitize(p.status || "")}</span>
-        <span style="margin-left:auto;color:var(--muted);">${p.approve_count || 0}/${p.required_votes || 0} approve · ${p.reject_count || 0} reject</span>
+        <span style="margin-left:auto;color:var(--muted);">${sanitize(progressText)}</span>
       </div>
       <div style="color:var(--muted);margin-top:.25rem;">proposer=${sanitize(proposer)} · expires=${sanitize(p.expires_at || "")}</div>
+      <div style="color:#82b1ff;margin-top:.25rem;">${sanitize(policyText)}</div>
       <div style="margin-top:.35rem;white-space:pre-wrap;">${sanitize(p.reason || "")}</div>
       <div style="color:var(--muted);margin-top:.35rem;">votes: ${votes}</div>
       <div class="admin-toolbar" style="display:flex;gap:.45rem;margin-top:.5rem;">
         ${canVote ? `<button class="btn btn-primary" data-governance-vote="approve" data-proposal-id="${p.id}">同意</button><button class="btn" data-governance-vote="reject" data-proposal-id="${p.id}">否決</button>` : ""}
         ${canExecute ? `<button class="btn btn-primary" data-governance-execute="${p.id}">執行</button>` : ""}
-        ${canOverride ? `<button class="btn" style="color:#ffb74d;" data-governance-override="${p.id}">root override</button>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -401,16 +539,13 @@ async function loadGovernanceProposals() {
   list.querySelectorAll("button[data-governance-execute]").forEach((btn) => {
     btn.addEventListener("click", () => executeGovernanceProposal(btn.getAttribute("data-governance-execute")));
   });
-  list.querySelectorAll("button[data-governance-override]").forEach((btn) => {
-    btn.addEventListener("click", () => overrideGovernanceProposal(btn.getAttribute("data-governance-override")));
-  });
 }
 
 async function createGovernanceProposal() {
   const targetId = parseInt($("governance-target-user-id")?.value || "0", 10);
   const reason = ($("governance-reason")?.value || "").trim();
   if (!targetId || !reason) {
-    alert("請填目標 user id 與提案原因");
+    alert("請選擇治理目標並填寫提案原因");
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -419,7 +554,6 @@ async function createGovernanceProposal() {
     target_user_id: targetId,
     action_type: $("governance-action-type")?.value || "warn",
     action_value: ($("governance-action-value")?.value || "").trim() || null,
-    required_votes: parseInt($("governance-required-votes")?.value || "2", 10),
     ttl_hours: parseInt($("governance-ttl-hours")?.value || "72", 10),
     reason
   };
@@ -466,24 +600,13 @@ async function executeGovernanceProposal(proposalId) {
   await Promise.all([loadGovernanceProposals(), loadUsers()]);
 }
 
-async function overrideGovernanceProposal(proposalId) {
-  if (currentUser !== "root" || !confirm("確定 root override 並立即執行此提案？")) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await fetch(API + `/root/moderation/proposals/${proposalId}/override`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  alert(json.msg || (json.ok ? "root override 已執行" : "override 失敗"));
-  await Promise.all([loadGovernanceProposals(), loadUsers()]);
-}
-
 function openGovernanceProposalForUser(userId, username) {
   switchAdminTab("governance");
+  governancePendingTargetUserId = String(userId || "");
+  renderGovernanceTargetOptions(userId);
   if ($("governance-target-user-id")) $("governance-target-user-id").value = userId;
   if ($("governance-reason")) $("governance-reason").value = `針對 ${username || "user #" + userId} 建立治理提案：`;
+  updateGovernanceActionValueHelp();
 }
 
 // ── Settings & restart ───────────────────────────────────────
@@ -517,6 +640,7 @@ const MEMBER_LEVEL_INT_FIELDS = [
   ["session_idle_timeout_minutes", "閒置登出分鐘"]
 ];
 let editableMemberLevelRules = [];
+let rootStorageUsersCache = [];
 const CLOUD_DRIVE_POLICY_BOOL_FIELDS = [
   "require_scan_before_download",
   "block_unclean_downloads",
@@ -619,6 +743,147 @@ async function saveCloudDriveAdminPolicy() {
   }
 }
 
+function rootStorageFormatBytes(bytes) {
+  if (typeof formatDriveBytes === "function") return formatDriveBytes(bytes);
+  if (bytes === null || bytes === undefined) return "無上限";
+  return `${Number(bytes || 0)} bytes`;
+}
+
+function rootStorageMbFromBytes(bytes) {
+  if (bytes === null || bytes === undefined) return "";
+  return Math.round((Number(bytes || 0) / 1024 / 1024) * 100) / 100;
+}
+
+function setRootStorageMsg(text, ok = true) {
+  const msg = $("root-storage-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function renderRootStorageUsers(users) {
+  const list = $("root-storage-users");
+  const select = $("root-storage-user-select");
+  if (select) {
+    const current = select.value;
+    select.innerHTML = (users || []).length
+      ? `<option value="">選擇要管理的帳號</option>` + users.map((user) => {
+          const label = `${user.username || "user"} · ${rootStorageFormatBytes(user.used_bytes || 0)} / ${rootStorageFormatBytes(user.total_bytes)}`;
+          return `<option value="${sanitize(String(user.user_id || ""))}" ${String(user.user_id || "") === current ? "selected" : ""}>${sanitize(label)}</option>`;
+        }).join("")
+      : `<option value="">沒有帳號資料</option>`;
+  }
+  if (!list) return;
+  if (!users || !users.length) {
+    list.innerHTML = `<div class="drive-card-sub">目前沒有可管理的帳號用量資料</div>`;
+    return;
+  }
+  list.innerHTML = users.map((user) => {
+    const override = user.override || user.root_override || {};
+    const overrideText = override.enabled
+      ? `root 直接設定中 · ${sanitize(override.reason || "未填原因")}`
+      : "沿用角色/會員等級";
+    return `<div class="drive-file-row" data-root-storage-user="${sanitize(String(user.user_id || ""))}">
+      <div>
+        <strong>${sanitize(user.username || `user #${user.user_id}`)}</strong>
+        <div class="drive-card-sub">
+          ${sanitize(user.role || "user")} · ${sanitize(user.effective_level || user.member_level || "-")} ·
+          ${rootStorageFormatBytes(user.used_bytes || 0)} / ${rootStorageFormatBytes(user.total_bytes)} ·
+          ${Number(user.percent_used || 0)}% · ${Number(user.file_count || 0)} 個檔案
+        </div>
+        <div class="drive-card-sub">${sanitize(overrideText)} · quota source=${sanitize(user.quota_source || "-")}</div>
+      </div>
+      <button class="btn" type="button" data-root-storage-select="${sanitize(String(user.user_id || ""))}">管理</button>
+    </div>`;
+  }).join("");
+}
+
+function fillRootStorageOverrideForm(userId) {
+  const user = rootStorageUsersCache.find((item) => String(item.user_id) === String(userId));
+  if (!user) return;
+  const override = user.override || {};
+  if ($("root-storage-user-select")) $("root-storage-user-select").value = String(user.user_id || "");
+  if ($("root-storage-quota-mb")) $("root-storage-quota-mb").value = override.enabled ? rootStorageMbFromBytes(override.quota_bytes) : "";
+  if ($("root-storage-max-file-mb")) $("root-storage-max-file-mb").value = override.enabled ? rootStorageMbFromBytes(override.max_file_size_bytes) : "";
+  if ($("root-storage-daily-limit")) $("root-storage-daily-limit").value = override.enabled && override.upload_rate_limit_per_day !== null && override.upload_rate_limit_per_day !== undefined ? override.upload_rate_limit_per_day : "";
+  if ($("root-storage-can-upload")) {
+    const value = override.enabled ? override.can_upload_override : null;
+    $("root-storage-can-upload").value = value === null || value === undefined ? "inherit" : String(!!value);
+  }
+  if ($("root-storage-override-reason")) $("root-storage-override-reason").value = override.enabled ? (override.reason || "") : "";
+}
+
+async function loadRootStorageUsers() {
+  if (!currentUser || currentUser !== "root") return;
+  if (!$("root-storage-users")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/storage/users", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    setRootStorageMsg(json.msg || "root 雲端硬碟管理資料讀取失敗", false);
+    return;
+  }
+  rootStorageUsersCache = Array.isArray(json.users) ? json.users : [];
+  renderRootStorageUsers(rootStorageUsersCache);
+  const selected = $("root-storage-user-select")?.value || rootStorageUsersCache[0]?.user_id || "";
+  if (selected) fillRootStorageOverrideForm(selected);
+}
+
+async function saveRootStorageOverride() {
+  const userId = $("root-storage-user-select")?.value || "";
+  if (!userId) {
+    setRootStorageMsg("請先選擇帳號", false);
+    return;
+  }
+  const reason = ($("root-storage-override-reason")?.value || "").trim();
+  if (!reason) {
+    setRootStorageMsg("請填寫覆寫原因", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    enabled: true,
+    quota_mb: $("root-storage-quota-mb")?.value || "",
+    max_file_size_mb: $("root-storage-max-file-mb")?.value || "",
+    upload_rate_limit_per_day: $("root-storage-daily-limit")?.value || "",
+    can_upload: $("root-storage-can-upload")?.value || "inherit",
+    reason
+  };
+  const res = await fetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  setRootStorageMsg(json.ok ? "root 直接設定已套用" : (json.msg || "設定失敗"), !!json.ok);
+  if (json.ok) await loadRootStorageUsers();
+}
+
+async function clearRootStorageOverride() {
+  const userId = $("root-storage-user-select")?.value || "";
+  if (!userId) {
+    setRootStorageMsg("請先選擇帳號", false);
+    return;
+  }
+  if (!confirm("清除此帳號的 root 直接雲端硬碟設定？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  setRootStorageMsg(json.ok ? "root 直接設定已清除" : (json.msg || "清除失敗"), !!json.ok);
+  if (json.ok) await loadRootStorageUsers();
+}
+
 async function loadEditableMemberLevelRules() {
   if (!currentUser || currentUser !== "root") return;
   const container = $("settings-member-level-rules");
@@ -637,15 +902,15 @@ async function loadEditableMemberLevelRules() {
   editableMemberLevelRules = Array.isArray(json.rules) ? json.rules : [];
   const selected = $("settings-member-level-select")?.value || editableMemberLevelRules[0]?.level || "normal";
   container.innerHTML = `
-    <div class="settings-option-grid" style="margin-bottom:.75rem;">
+    <div class="member-level-toolbar">
       <div class="field">
-        <label>選擇要調整的會員等級</label>
+        <label>會員等級</label>
         <select id="settings-member-level-select">
           ${editableMemberLevelRules.map((rule) => `<option value="${sanitize(rule.level || "")}" ${rule.level === selected ? "selected" : ""}>${sanitize(rule.level || "")}</option>`).join("")}
         </select>
       </div>
       <div class="field">
-        <label>&nbsp;</label>
+        <label>操作</label>
         <button class="btn btn-primary" type="button" id="member-level-rule-save-btn">儲存此等級規則</button>
       </div>
     </div>
@@ -667,17 +932,26 @@ function renderSelectedMemberLevelRule(level) {
     return;
   }
   const bools = MEMBER_LEVEL_BOOL_FIELDS.map(([key, label]) => `
-      <label style="font-size:.74rem;color:var(--text);"><input type="checkbox" data-level="${sanitize(level)}" data-rule-bool="${key}" ${rule[key] ? "checked" : ""} /> ${label}</label>
-    `).join("");
-  const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
-      <label style="font-size:.7rem;color:var(--muted);">${label}
-        <input type="number" min="0" data-level="${sanitize(level)}" data-rule-int="${key}" value="${Number(rule[key] || 0)}" style="margin-top:.18rem;" />
+      <label class="member-level-toggle" title="${sanitize(label)}">
+        <input type="checkbox" data-level="${sanitize(level)}" data-rule-bool="${key}" ${rule[key] ? "checked" : ""} />
+        <span>${sanitize(label)}</span>
       </label>
     `).join("");
-  editor.innerHTML = `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:.7rem;background:rgba(0,0,0,.24);">
-      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.55rem;"><strong style="font-size:.95rem;">${sanitize(rule.level || level)}</strong></div>
-      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.35rem;margin-bottom:.55rem;">${bools}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:.45rem;">${ints}</div>
+  const ints = MEMBER_LEVEL_INT_FIELDS.map(([key, label]) => `
+      <label class="member-level-number-field" title="${sanitize(label)}">
+        <span>${sanitize(label)}</span>
+        <input type="number" min="0" data-level="${sanitize(level)}" data-rule-int="${key}" value="${Number(rule[key] || 0)}" />
+      </label>
+    `).join("");
+  editor.innerHTML = `<div class="member-level-editor-card">
+      <div class="member-level-editor-head">
+        <strong>${sanitize(rule.level || level)}</strong>
+        <span>權限開關與限額門檻</span>
+      </div>
+      <div class="member-level-subtitle">權限開關</div>
+      <div class="member-level-toggle-grid">${bools}</div>
+      <div class="member-level-subtitle">限額與升降級門檻</div>
+      <div class="member-level-number-grid">${ints}</div>
     </div>`;
 }
 
@@ -729,19 +1003,83 @@ async function loadServerMode() {
     return;
   }
   const mode = json.mode || {};
-  if ($("server-mode-select")) $("server-mode-select").value = mode.current_mode || "preprod";
+  populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "preprod");
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
     const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
     status.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
     status.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
   }
+  await loadInternalTestTokenStatus();
+}
+
+async function loadInternalTestTokenStatus() {
+  if (currentUser !== "root") return;
+  const status = $("internal-test-token-status");
+  if (!status) return;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/admin/access-controls", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "讀取失敗");
+    const access = json.access_controls || {};
+    const configured = !!access.internal_test_token_configured;
+    const expired = !!access.internal_test_token_expired;
+    const expires = access.internal_test_token_expires_at || "-";
+    status.textContent = configured ? `已設定，${expired ? "已過期" : "有效"}，到期：${expires}` : "尚未設定內測 token";
+    status.style.color = configured && !expired ? "#4caf50" : "var(--muted)";
+  } catch (err) {
+    status.textContent = err.message || "內測 token 狀態讀取失敗";
+    status.style.color = "#ff4f6d";
+  }
+}
+
+async function rotateInternalTestToken() {
+  const confirmText = $("internal-test-token-confirm")?.value || "";
+  const msg = $("internal-test-token-msg");
+  if (confirmText !== "ROTATE_INTERNAL_TEST_TOKEN") {
+    if (msg) flash(msg, "確認字串必須等於 ROTATE_INTERNAL_TEST_TOKEN", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const ttl = parseInt($("internal-test-token-ttl")?.value || "1440", 10);
+  const res = await fetch(API + "/admin/access-controls/internal-test-token", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: confirmText, ttl_minutes: ttl })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    if (msg) flash(msg, json.msg || "產生內測 token 失敗", false);
+    return;
+  }
+  const outWrap = $("internal-test-token-output-wrap");
+  const out = $("internal-test-token-output");
+  if (outWrap) outWrap.style.display = "block";
+  if (out) {
+    out.value = json.token || "";
+    out.focus();
+    out.select();
+  }
+  if ($("internal-test-token-confirm")) $("internal-test-token-confirm").value = "";
+  if (msg) flash(msg, `內測 token 已產生，到期：${json.expires_at || "-"}`, true);
+  await loadInternalTestTokenStatus();
 }
 
 async function applyServerMode() {
   const target = $("server-mode-select")?.value || "preprod";
   const confirmText = $("server-mode-confirm")?.value || "";
   const notes = $("server-mode-notes")?.value || "";
+  if (target === "production" && confirmText !== "GO_LIVE") {
+    alert("進入 production 上線模式必須在確認欄輸入 GO_LIVE");
+    return;
+  }
   if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
     alert("進入 superweak 必須在確認欄輸入 ENABLE_SUPERWEAK");
     return;
@@ -763,6 +1101,7 @@ async function applyServerMode() {
   if (json.ok) {
     if ($("server-mode-confirm")) $("server-mode-confirm").value = "";
     await loadServerMode();
+    await loadSecurityCenter();
   }
 }
 
@@ -777,6 +1116,7 @@ async function loadSettings() {
   if (!json.ok) return;
   const s = json.settings || {};
   const bind = json.server_bind || {};
+  const ssl = json.server_ssl || {};
   if ($("s-maintenance-mode")) $("s-maintenance-mode").checked = !!s.maintenance_mode;
   if ($("s-audit-chain-enabled")) $("s-audit-chain-enabled").checked = !!s.audit_chain_enabled;
   if ($("s-ip-blocking-enabled")) $("s-ip-blocking-enabled").checked = !!s.ip_blocking_enabled;
@@ -795,8 +1135,13 @@ async function loadSettings() {
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
+  if ($("s-session-idle-timeout")) $("s-session-idle-timeout").value = s.session_idle_timeout_minutes || 10;
+  if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = s.server_ssl_enabled !== false;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
+  if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
+  if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
@@ -809,6 +1154,16 @@ async function loadSettings() {
     bindStatus.textContent = `目前 ${bind.current_host || bind.host || "0.0.0.0"}:${bind.current_port || bind.port || 5000}，下次啟動 ${bind.host || "0.0.0.0"}:${bind.port || 5000}。${restartText}`;
     bindStatus.style.color = bind.restart_required ? "#ffb74d" : "var(--muted)";
   }
+  const sslStatus = $("server-ssl-status");
+  if (sslStatus) {
+    let detail = `目前 ${ssl.current_scheme || "http"}，下次啟動 ${ssl.scheme || "http"}。`;
+    if (ssl.cert_required) detail += " 已要求 HTTPS，但缺少 cert.pem 或 key.pem。";
+    else if (!ssl.enabled_by_setting) detail += " root 設定為停用 HTTPS。";
+    else detail += " HTTPS 憑證檢查通過。";
+    if (ssl.restart_required) detail += " 需重啟才會套用。";
+    sslStatus.textContent = detail;
+    sslStatus.style.color = ssl.cert_required || ssl.restart_required ? "#ffb74d" : "var(--muted)";
+  }
   const driveStorage = json.cloud_drive_storage || {};
   const driveStorageStatus = $("cloud-drive-storage-status");
   if (driveStorageStatus) {
@@ -820,6 +1175,8 @@ async function loadSettings() {
   if ($("s-module-community-min-role")) $("s-module-community-min-role").value = s.module_community_min_role || "user";
   if ($("s-module-appeals-min-role")) $("s-module-appeals-min-role").value = s.module_appeals_min_role || "user";
   if ($("s-module-accounts-min-role")) $("s-module-accounts-min-role").value = s.module_accounts_min_role || "manager";
+  if ($("s-module-comfyui-min-role")) $("s-module-comfyui-min-role").value = s.module_comfyui_min_role || "user";
+  if ($("s-module-games-min-role")) $("s-module-games-min-role").value = s.module_games_min_role || "user";
   if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
   if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
   if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
@@ -860,7 +1217,10 @@ const FEATURE_SETTING_KEYS = [
   "feature_personalization_enabled",
   "feature_social_search_enabled",
   "feature_advanced_security_enabled",
-  "feature_privacy_uploads_enabled"
+  "feature_privacy_uploads_enabled",
+  "feature_comfyui_enabled",
+  "feature_economy_enabled",
+  "feature_games_enabled"
 ];
 
 function featureSettingInputId(key) {
@@ -874,6 +1234,499 @@ function formatBytes(bytes) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const SECURITY_CONTROL_KEYS = [
+  "maintenance_mode",
+  "audit_chain_enabled",
+  "ip_blocking_enabled",
+  "login_violation_enabled",
+  "rate_limit_violation_enabled",
+  "root_ip_whitelist_enabled",
+  "root_ip_whitelist",
+  "browser_only_mode_enabled",
+  "integrity_guard_enabled",
+  "integrity_guard_strict_mode"
+];
+const SECURITY_THRESHOLD_KEYS = [
+  "max_login_failures",
+  "block_duration_minutes",
+  "security_pending_chat_reports_threshold",
+  "security_pending_appeals_threshold",
+  "security_pending_moderation_proposals_threshold",
+  "security_quarantined_files_threshold",
+  "security_unknown_encrypted_files_threshold",
+  "security_log_tail_lines"
+];
+let securityProfiles = [];
+
+function securityInputId(prefix, key) {
+  return prefix + "-" + key.replaceAll("_", "-");
+}
+
+function findSecurityProfile(name) {
+  const profileName = String(name || "");
+  return securityProfiles.find((profile) => profile && profile.name === profileName) || null;
+}
+
+function profileKeysSummary(profile, key) {
+  const data = profile && profile[key] && typeof profile[key] === "object" ? profile[key] : {};
+  const keys = Object.keys(data);
+  return keys.length ? keys.map((item) => `${item}=${JSON.stringify(data[item])}`).join("，") : "未設定";
+}
+
+function renderSecurityProfilePreview(selectId, previewId) {
+  const preview = $(previewId);
+  const select = $(selectId);
+  if (!preview || !select) return;
+  const profile = findSecurityProfile(select.value);
+  if (!profile) {
+    preview.classList.remove("show");
+    preview.innerHTML = "";
+    return;
+  }
+  preview.classList.add("show");
+  preview.innerHTML = `
+    <div><strong>${sanitize(profile.label || profile.name || "")}</strong> ${profile.is_builtin ? "內建" : "自定義"}</div>
+    <div>${sanitize(profile.description || "無描述")}</div>
+    <div>安全開關：${sanitize(profileKeysSummary(profile, "settings"))}</div>
+    <div>閾值：${sanitize(profileKeysSummary(profile, "thresholds"))}</div>
+  `;
+}
+
+function populateProfileSelect(selectId, profiles, selectedMode) {
+  const select = $(selectId);
+  if (!select) return;
+  const rows = Array.isArray(profiles) ? profiles : [];
+  select.innerHTML = rows.map((profile) => `
+    <option value="${sanitize(profile.name || "")}" ${profile.name === selectedMode ? "selected" : ""}>
+      ${sanitize(profile.label || profile.name || "")}${profile.is_builtin ? " · builtin" : " · custom"}
+    </option>
+  `).join("");
+  if (selectedMode && rows.some((profile) => profile.name === selectedMode)) {
+    select.value = selectedMode;
+  }
+}
+
+function renderSecuritySummary(sc) {
+  const summary = $("security-center-summary");
+  if (!summary) return;
+  const anomaly = sc.anomaly || {};
+  const readiness = sc.readiness || {};
+  const audit = sc.audit_integrity || {};
+  const mode = sc.mode || {};
+  const settings = sc.settings || {};
+  const signalCount = Array.isArray(anomaly.signals) ? anomaly.signals.length : 0;
+  const cards = [
+    ["Readiness", readiness.status || "-", readiness.status === "ok" ? "#4caf50" : "#ff4f6d"],
+    ["Anomaly", anomaly.status || "ok", anomaly.status === "ok" ? "#4caf50" : anomaly.status === "critical" ? "#ff4f6d" : "#ffb74d"],
+    ["Signals", String(signalCount), signalCount ? "#ffb74d" : "#4caf50"],
+    ["Audit Chain", audit.enabled === false ? "停用" : audit.ok ? "完整" : "異常", audit.enabled === false ? "#9e9e9e" : audit.ok ? "#4caf50" : "#ff4f6d"],
+    ["Server Mode", mode.current_mode || "preprod", mode.current_mode === "superweak" ? "#ff4f6d" : "#82b1ff"],
+    ["Maintenance", settings.maintenance_mode ? "啟用" : "關閉", settings.maintenance_mode ? "#ff4f6d" : "#4caf50"],
+  ];
+  summary.innerHTML = cards.map(([label, value, color]) => `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
+      <div style="font-size:.68rem;color:var(--muted);">${sanitize(label)}</div>
+      <div style="font-size:1rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-word;">${sanitize(value)}</div>
+    </div>
+  `).join("");
+}
+
+function renderServerOutput(output) {
+  const box = $("security-server-output");
+  if (!box) return;
+  const rows = Array.isArray(output?.lines) ? output.lines : [];
+  if (!rows.length) {
+    box.textContent = "尚無伺服器輸出";
+    return;
+  }
+  box.textContent = rows.map((row) => {
+    const stream = row.stream || "stdout";
+    const ts = row.timestamp || "";
+    const line = row.line || "";
+    return `[${ts}] ${stream}> ${line}`;
+  }).join("\n");
+  box.scrollTop = box.scrollHeight;
+}
+
+function securityTestMsg(text, ok = true) {
+  const msg = $("security-test-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function renderSecurityTestJobs(jobs) {
+  const list = $("security-test-jobs");
+  if (!list) return;
+  const rows = Array.isArray(jobs) ? jobs : [];
+  if (!rows.length) {
+    list.innerHTML = `<div class="drive-empty">尚無 root 啟動的測試任務</div>`;
+    return;
+  }
+  const colorFor = (status) => status === "passed" ? "#4caf50" : status === "failed" ? "#ff4f6d" : "#ffb74d";
+  list.innerHTML = rows.map((job) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(job.kind || "-")} · <span style="color:${colorFor(job.status)};">${sanitize(job.status || "-")}</span></strong>
+        <div class="drive-card-sub">${sanitize(job.started_at || "")}${job.finished_at ? " -> " + sanitize(job.finished_at) : ""}</div>
+        <div class="economy-ledger-hash">${sanitize(job.job_id || "")}</div>
+        <div class="drive-card-sub">report: ${sanitize(job.report_dir || job.report_root || "-")}</div>
+        <div class="drive-card-sub">log: ${sanitize(job.log_path || "-")}</div>
+      </div>
+      <button class="btn" type="button" data-security-test-job="${sanitize(job.job_id || "")}">查詢</button>
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-security-test-job]").forEach((btn) => {
+    btn.addEventListener("click", () => loadSecurityTestJob(btn.dataset.securityTestJob || ""));
+  });
+}
+
+async function loadSecurityTestJobs() {
+  if (currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const target = $("security-pentest-target");
+  if (target && !target.value) target.value = window.location.origin;
+  const res = await fetch(API + "/root/security-tests", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    securityTestMsg(json.msg || "測試任務讀取失敗", false);
+    return;
+  }
+  renderSecurityTestJobs(json.jobs || []);
+}
+
+async function loadSecurityTestJob(jobId) {
+  if (!jobId) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/root/security-tests/${encodeURIComponent(jobId)}`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    securityTestMsg(json.msg || "任務查詢失敗", false);
+    return;
+  }
+  renderSecurityTestJobs([json.job]);
+}
+
+async function startSecurityPentest() {
+  if (currentUser !== "root") return;
+  const target = $("security-pentest-target")?.value || window.location.origin;
+  const payload = {
+    target,
+    only: $("security-pentest-only")?.value || "",
+    skip: $("security-pentest-skip")?.value || "",
+    tool_timeout_seconds: Number($("security-pentest-timeout")?.value || 180),
+    i_own_this_target: !!$("security-pentest-own-target")?.checked,
+  };
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/security-tests/pentest", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  securityTestMsg(json.ok ? `滲透測試已啟動：${json.job?.job_id || ""}` : (json.msg || "滲透測試啟動失敗"), !!json.ok);
+  if (json.ok) await loadSecurityTestJobs();
+}
+
+async function startSecurityFunctionalSmoke() {
+  if (currentUser !== "root") return;
+  const payload = {
+    port: Number($("security-functional-port")?.value || 50741),
+    keep_runtime: !!$("security-functional-keep-runtime")?.checked,
+  };
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/security-tests/functional", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  securityTestMsg(json.ok ? `全功能測試已啟動：${json.job?.job_id || ""}` : (json.msg || "全功能測試啟動失敗"), !!json.ok);
+  if (json.ok) await loadSecurityTestJobs();
+}
+
+async function loadServerOutput() {
+  if (currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/server-output?limit=300", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return;
+  renderServerOutput(json.server_output || {});
+}
+
+function startServerOutputPoll() {
+  if (currentUser !== "root" || currentModuleTab !== "server" || currentServerTab !== "security") return;
+  if (serverOutputPollTimer) return;
+  serverOutputPollTimer = setInterval(loadServerOutput, 2500);
+}
+
+function stopServerOutputPoll() {
+  if (!serverOutputPollTimer) return;
+  clearInterval(serverOutputPollTimer);
+  serverOutputPollTimer = null;
+}
+
+function populateSecurityProfiles(profiles, selectedMode) {
+  securityProfiles = Array.isArray(profiles) ? profiles : [];
+  populateProfileSelect("security-mode-select", securityProfiles, selectedMode);
+  populateProfileSelect("server-mode-select", securityProfiles, selectedMode);
+  renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview");
+  renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview");
+}
+
+async function loadSecurityCenter() {
+  if (currentUser !== "root") return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/security-center", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  const sc = json.security_center || {};
+  if (!json.ok) {
+    const summary = $("security-center-summary");
+    if (summary) summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "安全中心讀取失敗")}</div>`;
+    return;
+  }
+  renderSecuritySummary(sc);
+  const settings = sc.settings || {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!settings[key];
+    else el.value = settings[key] || "";
+  });
+  const thresholds = sc.thresholds || {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (el) el.value = thresholds[key] ?? 0;
+  });
+  const mode = sc.mode || {};
+  populateSecurityProfiles(sc.profiles || [], mode.current_mode || "preprod");
+  const modeStatus = $("security-mode-status");
+  if (modeStatus) {
+    const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
+    const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
+    modeStatus.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
+    modeStatus.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
+  }
+  const auditBox = $("security-audit-entries");
+  if (auditBox) {
+    const rows = sc.audit_entries || [];
+    auditBox.innerHTML = rows.length ? rows.map((e) => `
+      <div class="security-log-row">
+        <span style="color:#888;">${sanitize(e.timestamp || "")}</span>
+        <span style="color:${e.success ? "#4caf50" : "#ff4f6d"};">${e.success ? "OK" : "FAIL"}</span>
+        <span style="color:#e0e0e0;">${sanitize(e.action || "")}</span>
+        <span style="color:#82b1ff;">${sanitize(e.actor || "")}</span>
+        <span style="color:#888;">${sanitize(e.details || "")}</span>
+      </div>
+    `).join("") : "<p style='color:var(--muted);'>暫無審計資料</p>";
+  }
+  const logBox = $("security-server-log");
+  if (logBox) {
+    const log = sc.server_log || {};
+    logBox.textContent = log.exists ? (log.lines || []).join("\n") : `server log 不存在：${log.path || "-"}`;
+  }
+  renderServerOutput(sc.server_output || {});
+  await loadSecurityTestJobs();
+  startServerOutputPoll();
+}
+
+async function saveSecurityCenterControls() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  });
+  const res = await fetch(API + "/admin/security-center/controls", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("security-controls-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "安全機制開關已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) await loadSecurityCenter();
+}
+
+async function saveSecurityThresholds() {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (el) payload[key] = parseInt(el.value || "0", 10);
+  });
+  const res = await fetch(API + "/admin/security-center/thresholds", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("security-thresholds-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "安全閾值已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) await loadSecurityCenter();
+}
+
+async function applySecurityMode() {
+  const target = $("security-mode-select")?.value || "preprod";
+  const confirmText = $("security-mode-confirm")?.value || "";
+  const notes = $("security-mode-notes")?.value || "";
+  if (target === "production" && confirmText !== "GO_LIVE") {
+    alert("進入 production 上線模式必須輸入 GO_LIVE");
+    return;
+  }
+  if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
+    alert("進入 superweak 必須輸入 ENABLE_SUPERWEAK");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/server-mode", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ mode: target, confirm: confirmText, notes })
+  });
+  const json = await res.json().catch(() => ({}));
+  const status = $("security-mode-status");
+  if (status) {
+    status.textContent = json.ok ? "伺服器模式 / 安全設定檔已套用" : (json.msg || "套用失敗");
+    status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) {
+    if ($("security-mode-confirm")) $("security-mode-confirm").value = "";
+    await loadSecurityCenter();
+    await loadServerMode();
+  }
+}
+
+function loadCurrentSecurityProfileDraft() {
+  const settings = {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    settings[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  });
+  const thresholds = {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId("sc", key));
+    if (!el) return;
+    const number = parseInt(el.value || "0", 10);
+    thresholds[key] = Number.isFinite(number) ? number : 0;
+  });
+  const settingsBox = $("security-profile-settings-json");
+  const thresholdsBox = $("security-profile-thresholds-json");
+  if (settingsBox) settingsBox.value = JSON.stringify(settings, null, 2);
+  if (thresholdsBox) thresholdsBox.value = JSON.stringify(thresholds, null, 2);
+  const msg = $("security-profile-msg");
+  if (msg) {
+    msg.textContent = "已帶入目前安全開關與閾值，請填名稱後儲存。";
+    msg.style.color = "var(--muted)";
+  }
+}
+
+async function saveSecurityProfile() {
+  let settings = {};
+  let thresholds = {};
+  try {
+    settings = JSON.parse($("security-profile-settings-json")?.value || "{}");
+    thresholds = JSON.parse($("security-profile-thresholds-json")?.value || "{}");
+  } catch (err) {
+    alert("settings JSON 或 thresholds JSON 格式錯誤");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = {
+    name: $("security-profile-name")?.value || "",
+    label: $("security-profile-label")?.value || "",
+    description: $("security-profile-description")?.value || "",
+    settings,
+    thresholds
+  };
+  const res = await fetch(API + "/admin/security-center/profiles", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  const msg = $("security-profile-msg");
+  if (msg) {
+    msg.textContent = json.ok ? "自定義安全設定檔已儲存" : (json.msg || "儲存失敗");
+    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) {
+    const savedName = json.profile?.name || payload.name;
+    await loadSecurityCenter();
+    await loadServerMode();
+    ["security-mode-select", "server-mode-select"].forEach((id) => {
+      const select = $(id);
+      if (select && savedName) select.value = savedName;
+    });
+    renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview");
+    renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview");
+  }
+}
+
+function healthStatusColor(status) {
+  if (status === "critical") return "#ff4f6d";
+  if (status === "degraded" || status === "warning") return "#ffb74d";
+  return "#4caf50";
+}
+
+function renderHealthMetric(label, value, color = "#82b1ff") {
+  return `
+    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;min-width:0;">
+      <div style="font-size:.68rem;color:var(--muted);">${sanitize(label)}</div>
+      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-word;">${sanitize(value)}</div>
+    </div>
+  `;
+}
+
+function renderHealthRows(rows) {
+  if (!rows.length) return "<p style='color:var(--muted);padding:.65rem;text-align:center;'>目前沒有需要顯示的項目</p>";
+  return rows.map((row) => `
+    <div class="drive-file-row" style="grid-template-columns:minmax(0,1fr) auto;align-items:center;">
+      <div>
+        <strong>${sanitize(row.label)}</strong>
+        ${row.detail ? `<small>${sanitize(row.detail)}</small>` : ""}
+      </div>
+      <span style="color:${row.color || "#82b1ff"};font-weight:700;white-space:nowrap;">${sanitize(row.value)}</span>
+    </div>
+  `).join("");
+}
+
 async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
@@ -885,42 +1738,111 @@ async function loadServerHealth() {
   const json = await res.json().catch(() => ({}));
   const summary = $("server-health-summary");
   const details = $("server-health-details");
-  if (!summary || !details) return;
+  const workqueue = $("server-health-workqueue");
+  const countsBox = $("server-health-counts");
+  const storageBox = $("server-health-storage");
+  const auditBox = $("server-health-audit");
+  if (!summary || !details || !workqueue || !countsBox || !storageBox || !auditBox) return;
   if (!json.ok) {
     summary.innerHTML = `<div style="color:#ff4f6d;">${sanitize(json.msg || "健康度讀取失敗")}</div>`;
     details.textContent = "";
+    workqueue.innerHTML = "";
+    countsBox.innerHTML = "";
+    storageBox.innerHTML = "";
+    auditBox.innerHTML = "";
     return;
   }
   const c = json.counts || {};
   const s = json.storage || {};
+  const capacity = s.capacity_audit || {};
   const auditOk = json.audit_integrity && json.audit_integrity.ok;
   const auditEnabled = !(json.audit_integrity && json.audit_integrity.enabled === false);
+  const readiness = json.readiness || {};
+  const anomaly = json.anomaly || {};
+  const readinessChecks = Array.isArray(readiness.checks) ? readiness.checks : [];
+  const failedChecks = readinessChecks.filter((item) => !item.ok);
+  const anomalySignals = Array.isArray(anomaly.signals) ? anomaly.signals : [];
+  const statusLabel = json.status === "critical" ? "Critical" : json.status === "degraded" ? "Degraded" : "OK";
   const cards = [
-    ["整體狀態", json.status === "ok" ? "正常" : "異常", json.status === "ok" ? "#4caf50" : "#ff4f6d"],
+    ["整體狀態", statusLabel, healthStatusColor(json.status)],
     ["維護模式", json.maintenance_mode ? "啟用" : "關閉", json.maintenance_mode ? "#ff4f6d" : "#4caf50"],
     ["審計鏈", auditEnabled ? (auditOk ? "完整" : "異常") : "停用", auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e"],
-    ["待審檢舉", String(c.pending_reports || 0), (c.pending_reports || 0) ? "#ffb74d" : "#4caf50"],
-    ["待審申覆", String(c.pending_appeals || 0), (c.pending_appeals || 0) ? "#ffb74d" : "#4caf50"],
+    ["Readiness", readiness.status || "unknown", healthStatusColor(readiness.status)],
+    ["Anomaly", anomaly.status || "ok", healthStatusColor(anomaly.status)],
     ["活躍 Session", String(c.active_sessions || 0), "#82b1ff"],
-    ["聊天訊息", String(c.chat_messages || 0), "#82b1ff"],
-    ["資料庫大小", formatBytes(s.database_bytes), "#82b1ff"],
   ];
-  summary.innerHTML = cards.map(([label, value, color]) => `
-    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;">
-      <div style="font-size:.68rem;color:var(--muted);">${label}</div>
-      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;">${sanitize(value)}</div>
-    </div>
-  `).join("");
-  details.innerHTML = `
-    使用者：${c.active_users || 0}/${c.users_total || 0} active ·
-    違規紀錄：${c.violations_total || 0} ·
-    審計紀錄：${c.audit_entries || 0} ·
-    聊天檔案：${s.chat_files || 0} 個 / ${formatBytes(s.chat_bytes)} ·
-    ${json.audit_integrity && json.audit_integrity.details ? sanitize(json.audit_integrity.details) : ""}
-  `;
+  summary.innerHTML = cards.map(([label, value, color]) => renderHealthMetric(label, value, color)).join("");
+  details.textContent = `最後讀取：${new Date().toLocaleString()} · DB schema ${readiness.database?.schema_version ?? "-"} / ${readiness.database?.expected_schema_version ?? "-"}`;
+  const queueRows = [
+    ["待審檢舉", c.pending_reports ?? c.pending_chat_reports ?? 0],
+    ["待審申覆", c.pending_appeals || 0],
+    ["治理提案", c.pending_moderation_proposals || 0],
+    ["看板審核", c.pending_board_reviews || 0],
+    ["主題審核", c.pending_thread_reviews || 0],
+    ["隔離檔案", c.quarantined_files || 0],
+    ["未知加密檔", c.unknown_encrypted_files || 0],
+  ].map(([label, value]) => ({
+    label,
+    value: String(value),
+    color: Number(value) > 0 ? "#ffb74d" : "#4caf50",
+  }));
+  workqueue.innerHTML = renderHealthRows(queueRows);
+  countsBox.innerHTML = renderHealthRows([
+    { label: "使用者", value: `${c.active_users || 0}/${c.users_total || 0}`, detail: "active / total", color: "#82b1ff" },
+    { label: "聊天訊息", value: String(c.chat_messages || 0), color: "#82b1ff" },
+    { label: "上傳檔案", value: String(c.uploaded_files || 0), color: "#82b1ff" },
+    { label: "違規紀錄", value: String(c.violations_total || 0), color: "#82b1ff" },
+    { label: "審計紀錄", value: String(c.audit_entries || 0), color: "#82b1ff" },
+  ]);
+  storageBox.innerHTML = renderHealthRows([
+    { label: "SQLite DB", value: formatBytes(s.database_bytes), color: "#82b1ff" },
+    { label: "聊天檔案", value: `${s.chat_files || 0} / ${formatBytes(s.chat_bytes)}`, detail: s.chat_dir || "chats/", color: "#82b1ff" },
+    { label: "Server logs", value: `${s.log_files || 0} / ${formatBytes(s.log_bytes)}`, color: "#82b1ff" },
+    { label: "Anchor files", value: `${s.anchor_files || 0} / ${formatBytes(s.anchor_bytes)}`, color: "#82b1ff" },
+    { label: "Storage root", value: `${s.storage_files || 0} / ${formatBytes(s.storage_bytes)}`, color: "#82b1ff" },
+    {
+      label: "會員雲端容量審計",
+      value: capacity.status === "critical" ? "超額" : capacity.status === "warning" ? "接近上限" : "正常",
+      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / Host 可承諾 ${formatBytes(capacity.allocatable_cloud_capacity_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
+      color: capacity.status === "critical" ? "#ff4f6d" : capacity.status === "warning" ? "#ffb74d" : "#4caf50",
+    },
+    {
+      label: "Host 實際可用",
+      value: formatBytes(capacity.disk?.free_bytes),
+      detail: `storage root: ${capacity.disk?.path || "-"}`,
+      color: "#82b1ff",
+    },
+  ]);
+  const auditRows = [
+    {
+      label: "Audit chain",
+      value: auditEnabled ? (auditOk ? "完整" : "異常") : "停用",
+      detail: json.audit_integrity?.details || "",
+      color: auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e",
+    },
+    ...failedChecks.map((item) => ({
+      label: `Readiness: ${item.name || "-"}`,
+      value: item.severity || "failed",
+      detail: item.detail || "",
+      color: item.severity === "critical" ? "#ff4f6d" : "#ffb74d",
+    })),
+    ...(capacity.status && capacity.status !== "ok" ? [{
+      label: "Storage capacity audit",
+      value: capacity.status,
+      detail: (capacity.reasons || []).join(", ") || "會員容量承諾已超過 Host 安全容量",
+      color: capacity.status === "critical" ? "#ff4f6d" : "#ffb74d",
+    }] : []),
+    ...anomalySignals.map((item) => ({
+      label: `Anomaly: ${item.name || "-"}`,
+      value: item.level || "-",
+      detail: item.detail || `value=${item.value}, threshold=${item.threshold}`,
+      color: item.level === "critical" ? "#ff4f6d" : item.level === "warning" ? "#ffb74d" : "#82b1ff",
+    })),
+  ];
+  auditBox.innerHTML = renderHealthRows(auditRows);
   const repairBtn = $("integrity-repair-btn");
   if (repairBtn) {
-    repairBtn.disabled = currentUser !== "root";
+    repairBtn.disabled = currentUser !== "root" || !auditEnabled || auditOk !== false;
   }
 }
 
@@ -940,7 +1862,7 @@ async function repairIntegrityChains() {
   const json = await res.json().catch(() => ({}));
   alert(json.msg || (json.ok ? "鏈異常已處理" : "處理失敗"));
   await loadServerHealth();
-  if (currentAdminTab === "audit") await loadAudit(auditPage);
+  if (currentServerTab === "audit") await loadAudit(auditPage);
   if (currentAdminTab === "violations") await loadViolations(violationsPage, violationTargetUser);
 }
 
@@ -984,9 +1906,9 @@ async function loadIntegrityGuard() {
     </div>
   `).join("");
   if ((s.high_risk_pending || 0) > 0) {
-    warning.innerHTML = `<span style="color:#ff4f6d;font-weight:700;">高風險警告：</span>此變更涉及安全核心、root、admin、auth、snapshot、storage 或 Integrity Guard 本身。pending/rejected high risk finding 會阻止進入準上線模式。`;
+    warning.innerHTML = `<span style="color:#ff4f6d;font-weight:700;">高風險警告：</span>此變更涉及安全核心、root、admin、auth、snapshot、storage 或 Integrity Guard 本身。pending finding 會顯示 24 小時，逾期自動 approve；rejected high risk finding 仍會阻止進入準上線模式。`;
   } else if ((s.pending || 0) > 0) {
-    warning.innerHTML = `<span style="color:#ffb74d;font-weight:700;">待處理：</span>存在尚未審核的檔案完整性變更，請確認是否為合法部署。`;
+    warning.innerHTML = `<span style="color:#ffb74d;font-weight:700;">待處理：</span>存在尚未審核的檔案完整性變更，請確認是否為合法部署；pending 超過 24 小時會自動 approve。`;
   } else {
     warning.innerHTML = `<span style="color:#4caf50;font-weight:700;">正常：</span>目前沒有 pending finding。`;
   }
@@ -998,6 +1920,7 @@ async function loadIntegrityGuard() {
   list.innerHTML = findings.map((f) => `
     <div style="border:1px solid ${f.risk_level === "high" ? "rgba(255,79,109,.45)" : "rgba(255,255,255,.1)"};border-radius:9px;padding:.65rem;margin-bottom:.55rem;background:rgba(0,0,0,.22);">
       <div style="display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;">
+        <label style="display:inline-flex;align-items:center;gap:.25rem;color:var(--muted);"><input type="checkbox" class="integrity-finding-check" value="${f.id}" /> 選取</label>
         <strong>#${f.id}</strong>
         <span style="color:${f.risk_level === "high" ? "#ff4f6d" : f.risk_level === "medium" ? "#ffb74d" : "#82b1ff"};">${sanitize(f.risk_level || "")}</span>
         <span style="color:#82b1ff;">${sanitize(f.change_type || "")}</span>
@@ -1015,6 +1938,40 @@ async function loadIntegrityGuard() {
   `).join("");
   list.querySelectorAll("[data-integrity-action]").forEach((btn) => {
     btn.addEventListener("click", () => reviewIntegrityFinding(btn.getAttribute("data-finding-id"), btn.getAttribute("data-integrity-action")));
+  });
+  updateIntegritySelectedCount();
+}
+
+function selectedIntegrityFindingIds() {
+  return Array.from(document.querySelectorAll(".integrity-finding-check:checked"))
+    .map((item) => Number(item.value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function updateIntegritySelectedCount() {
+  const count = selectedIntegrityFindingIds().length;
+  const total = document.querySelectorAll(".integrity-finding-check").length;
+  const el = $("integrity-selected-count");
+  if (el) el.textContent = total > 0 ? `已選取 ${count}/${total} 筆` : "";
+  const selectAll = $("integrity-select-all");
+  if (selectAll) selectAll.checked = count > 0 && count === total;
+  if (selectAll) selectAll.indeterminate = count > 0 && count < total;
+}
+
+function setupIntegritySelectAll() {
+  const selectAll = $("integrity-select-all");
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      const checked = selectAll.checked;
+      document.querySelectorAll(".integrity-finding-check").forEach((cb) => { cb.checked = checked; });
+      updateIntegritySelectedCount();
+    });
+  }
+  // Delegate for dynamically rendered findings
+  document.addEventListener("change", (e) => {
+    if (e.target && e.target.classList.contains("integrity-finding-check")) {
+      updateIntegritySelectedCount();
+    }
   });
 }
 
@@ -1057,6 +2014,37 @@ async function reviewIntegrityFinding(id, action) {
   });
   const json = await res.json().catch(() => ({}));
   alert(json.msg || (json.ok ? "操作完成" : "操作失敗"));
+  await loadIntegrityGuard();
+}
+
+async function reviewSelectedIntegrityFindings(action) {
+  const ids = selectedIntegrityFindingIds();
+  if (!ids.length) {
+    alert("請先勾選要處理的 integrity finding。");
+    return;
+  }
+  let confirmText = "";
+  if (action === "approve") {
+    alert("approve 代表你確認這些檔案變更是合法部署或可信修改，系統將更新 hash manifest。");
+    confirmText = prompt(`將批次 approve ${ids.length} 筆 finding，請輸入 APPROVE INTEGRITY UPDATE 以確認：`) || "";
+    if (confirmText !== "APPROVE INTEGRITY UPDATE") {
+      alert("確認字串不正確，已取消批次 approve。");
+      return;
+    }
+  } else if (!confirm(`確定要 ${action} 選取的 ${ids.length} 筆 integrity finding？`)) {
+    return;
+  }
+  const note = prompt("批次審核備註（可留空）：") || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/integrity/findings/bulk-review", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ action, finding_ids: ids, confirm: confirmText, note })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.ok ? `批次操作完成：${json.reviewed}/${json.total}` : (json.msg || `批次操作失敗：${json.reviewed || 0}/${json.total || ids.length}`));
   await loadIntegrityGuard();
 }
 
@@ -1103,8 +2091,13 @@ async function saveSettings() {
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
     block_duration_minutes: parseInt($("s-block-dur")?.value || "30"),
     session_ttl_hours: parseInt($("s-session-ttl")?.value || "24"),
+    session_idle_timeout_minutes: parseInt($("s-session-idle-timeout")?.value || "0") || null,
+    server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
+    comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
+    comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",
@@ -1115,6 +2108,8 @@ async function saveSettings() {
     module_community_min_role: $("s-module-community-min-role")?.value || "user",
     module_appeals_min_role: $("s-module-appeals-min-role")?.value || "user",
     module_accounts_min_role: $("s-module-accounts-min-role")?.value || "manager",
+    module_comfyui_min_role: $("s-module-comfyui-min-role")?.value || "user",
+    module_games_min_role: $("s-module-games-min-role")?.value || "user",
     site_bg: $("s-site-bg")?.value || "#0f0f1a",
     site_surface: $("s-site-surface")?.value || "#1a1a2e",
     site_accent: $("s-site-accent")?.value || "#6c63ff",
@@ -1138,24 +2133,30 @@ async function saveSettings() {
   const el = $("settings-msg");
   if (el) {
     const bind = json.server_bind || {};
+    const ssl = json.server_ssl || {};
     const driveStorage = json.cloud_drive_storage || {};
     const restartParts = [];
     if (bind.restart_required) restartParts.push("listen IP/port");
+    if (ssl.restart_required) restartParts.push("HTTPS 開關");
     if (driveStorage.restart_required) restartParts.push("雲端硬碟儲存位置");
     const restartHint = restartParts.length ? `，${restartParts.join("、")} 需重啟服務器後生效` : "";
     el.textContent = json.ok ? `✅ 設定已儲存${restartHint}` : (json.msg || "儲存失敗");
     el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {
+    const activeModule = currentModuleTab;
+    const activeServerTab = currentServerTab;
+    const activeSettingsSection = currentSettingsSection;
     applySiteConfig(payload);
-    if (currentUser) setAuthState({
-      username: currentUser,
-      id: currentUserId,
-      role: currentRole,
-      role_label: $("me-role")?.textContent || currentRole,
-      nickname: $("me-nickname")?.textContent || "",
-      birthdate: null
-    });
+    const idleMinutes = Number(payload.session_idle_timeout_minutes ?? 10);
+    inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
+    if (inactivityLogoutMs > 0) resetInactivityTimer();
+    if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
+    if (activeModule && typeof switchModuleTab === "function") {
+      currentServerTab = activeServerTab;
+      currentSettingsSection = activeSettingsSection;
+      switchModuleTab(activeModule);
+    }
   }
 }
 
@@ -1194,21 +2195,446 @@ async function loadServerEnv() {
   details.innerHTML = `BASE_DIR：${sanitize(env.base_dir || "-")}<br>DB：${sanitize(env.database_path || "-")}<br>聊天檔數：${sanitize(String(env.chat_files || 0))}`;
 }
 
-async function restartServer() {
+async function restartServer(event) {
+  if (event && typeof event.preventDefault === "function") event.preventDefault();
   if (!confirm("⚠️ 確定要重啟伺服器？所有連線將中斷。")) return;
+  const status = $("restart-server-status");
+  const button = $("restart-server-btn");
+  const previousStartedAt = serverMeta?.started_at || "";
+  if (button) button.disabled = true;
+  if (status) {
+    status.textContent = "已送出重啟指令，等待伺服器離線...";
+    status.className = "msg show";
+  }
+  try {
+    if (status) status.textContent = "正在驗證操作權限...";
+    const csrf = await fetchCsrfToken({ force: true });
+    if (!csrf) throw new Error("安全驗證狀態失效，請重新整理頁面後再試。");
+    if (status) status.textContent = "已送出重啟指令，等待伺服器離線...";
+    const res = await fetch(API + "/admin/restart", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "重啟失敗");
+    const wentOffline = await waitForRestartOffline(25000);
+    if (!wentOffline) throw new Error("25 秒內沒有偵測到伺服器離線，重啟流程可能沒有真正執行。");
+    if (status) status.textContent = "已偵測到離線，等待伺服器恢復...";
+    const onlineMeta = await waitForRestartOnline(previousStartedAt, 180000);
+    if (!onlineMeta) throw new Error("3 分鐘內未重新連線，請檢查 server log。");
+    renderServerVersion(onlineMeta);
+    if (status) {
+      status.textContent = "伺服器已重啟完成，正在重新載入頁面...";
+      status.className = "msg show ok";
+    }
+    setTimeout(() => location.reload(), 900);
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "重啟失敗";
+      status.className = "msg show err";
+    } else {
+      alert(err.message || "重啟失敗");
+    }
+    if (button) button.disabled = false;
+  }
+}
+
+async function probeRestartVersion(timeoutMs = 1500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(API + "/version?restart_probe=" + Date.now(), {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => ({}));
+    return json && json.ok ? json : null;
+  } catch (_) {
+    clearTimeout(timer);
+    return null;
+  }
+}
+
+async function waitForRestartOffline(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const meta = await probeRestartVersion(1200);
+    if (!meta) return true;
+    await new Promise((resolve) => setTimeout(resolve, 650));
+  }
+  return false;
+}
+
+async function waitForRestartOnline(previousStartedAt, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const meta = await probeRestartVersion(1800);
+    if (meta && (!previousStartedAt || meta.started_at !== previousStartedAt)) return meta;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+  return null;
+}
+
+// ── Snapshot / Reset Server ───────────────────────────────────
+
+async function loadSnapshots() {
+  const list = $("snapshot-list");
+  const actions = $("snapshot-actions");
+  if (!list || !actions) return;
+  list.innerHTML = "<em>載入中…</em>";
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/restart", {
-    method: "POST",
+  const res = await fetch(API + "/admin/snapshots", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
-  if (json.ok) {
-    setTimeout(() => location.reload(), 3000);
-  } else {
-    alert(json.msg || "重啟失敗");
+  if (!json.ok) {
+    list.innerHTML = `<span style="color:#ff4f6d;">${sanitize(json.msg || "載入失敗")}</span>`;
+    actions.innerHTML = "";
+    return;
+  }
+  const snapshots = json.snapshots || [];
+  if (!snapshots.length) {
+    list.innerHTML = "<em>目前沒有 snapshot</em>";
+    actions.innerHTML = "";
+    return;
+  }
+  list.innerHTML = snapshots.map((s) => `
+    <div style="border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:.55rem;margin-bottom:.5rem;background:rgba(0,0,0,.2);">
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+        <strong style="color:#82b1ff;">${sanitize(s.snapshot_id || s.id || "")}</strong>
+        <span style="color:${s.snapshot_type === "manual" ? "#4caf50" : s.snapshot_type === "daily" ? "#ffb74d" : "#9e9e9e"};">${sanitize(s.snapshot_type || "")}</span>
+        <span style="color:var(--muted);font-size:.72rem;">${sanitize(s.created_at || s.ts || "")}</span>
+        <span style="color:var(--muted);font-size:.72rem;">${sanitize(s.actor || "")}</span>
+      </div>
+      <div style="color:var(--muted);font-size:.7rem;margin-top:.2rem;">${sanitize(s.notes || "")}</div>
+      <div style="display:flex;gap:.4rem;margin-top:.45rem;">
+        <button class="btn btn-primary" type="button" data-snapshot-restore="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">Restore</button>
+        <button class="btn" type="button" data-snapshot-download="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">下載</button>
+        <button class="btn" type="button" data-snapshot-delete="${sanitize(s.snapshot_id || s.id || "")}" style="padding:.2rem .6rem;font-size:.72rem;">刪除</button>
+      </div>
+    </div>
+  `).join("");
+  actions.innerHTML = `
+    <button class="btn btn-primary" type="button" id="btn-confirm-restore" disabled style="padding:.3rem .75rem;font-size:.78rem;">Restore 選取的 Snapshot</button>
+    <span id="restore-hint" style="font-size:.72rem;color:var(--muted);margin-left:.4rem;">請先點選要 restore 的 snapshot</span>
+  `;
+  list.querySelectorAll("[data-snapshot-restore]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      document.querySelectorAll("[data-snapshot-restore]").forEach((b) => { b.classList.remove("btn-primary"); b.classList.add("btn"); });
+      btn.classList.remove("btn"); btn.classList.add("btn-primary");
+      window._selectedSnapshotId = btn.getAttribute("data-snapshot-restore");
+      const confirmBtn = $("btn-confirm-restore");
+      if (confirmBtn) { confirmBtn.disabled = false; }
+      const hint = $("restore-hint");
+      if (hint) hint.textContent = `已選取：${window._selectedSnapshotId}，確認後將執行 restore`;
+    });
+  });
+  list.querySelectorAll("[data-snapshot-download]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = btn.getAttribute("data-snapshot-download");
+      downloadSnapshot(id);
+    });
+  });
+  list.querySelectorAll("[data-snapshot-delete]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = btn.getAttribute("data-snapshot-delete");
+      if (!confirm(`確定刪除 snapshot ${id}？`)) return;
+      await fetchCsrfToken({ force: true });
+      const csrf = getCsrfToken();
+      const r = await fetch(API + `/admin/snapshots/${encodeURIComponent(id)}?reason=admin_delete`, {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" }
+      });
+      const j = await r.json().catch(() => ({}));
+      alert(j.msg || (j.ok ? "已刪除" : "刪除失敗"));
+      if (j.ok) await loadSnapshots();
+    });
+  });
+  const confirmRestoreBtn = $("btn-confirm-restore");
+  if (confirmRestoreBtn) {
+    confirmRestoreBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sid = window._selectedSnapshotId;
+      if (!sid) { alert("請先選取要 restore 的 snapshot"); return; }
+      const reason = prompt("請輸入 restore 原因：") || "";
+      const confirmText = prompt(`確定要 restore 到 snapshot ${sid}？\n此操作會重啟服務，請輸入 RESTORE 確認：`) || "";
+      if (confirmText !== "RESTORE") { alert("確認字串不正確，已取消"); return; }
+      performRestore(sid, reason);
+    });
   }
 }
 
-// ── Bind all UI events ───────────────────────────────────────
+async function downloadSnapshot(snapshotId) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/download`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    alert(json.msg || "下載失敗");
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  link.href = url;
+  link.download = match ? match[1] : `${snapshotId}.snapshot.tar.gz`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function performRestore(snapshotId, reason) {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: "RESTORE", reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "Restore 請求已提交，系統將重啟" : "Restore 請求失敗"));
+  if (json.ok) setTimeout(() => location.reload(), 3000);
+}
+
+async function uploadSnapshotRestore() {
+  const input = $("snapshot-upload-file");
+  const file = input?.files?.[0];
+  if (!file) { alert("請先選擇 snapshot 封包"); return; }
+  const reason = prompt("請輸入 restore 原因：") || "";
+  const confirmText = prompt("確定要使用上傳的 snapshot 封包 restore？\n此操作會覆蓋目前 runtime 狀態，請輸入 RESTORE 確認：") || "";
+  if (confirmText !== "RESTORE") { alert("確認字串不正確，已取消"); return; }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("confirm", "RESTORE");
+  form.append("reason", reason);
+  const res = await fetch(API + "/admin/snapshots/upload-restore", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "Upload restore 已完成" : "Upload restore 失敗"));
+  if (json.ok) setTimeout(() => location.reload(), 3000);
+}
+
+async function createSnapshot() {
+  const notes = prompt("Snapshot 備註（可留空）：") || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/snapshots", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: "CREATE_SNAPSHOT", notes })
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "Snapshot 建立成功" : "建立失敗"));
+  if (json.ok) await loadSnapshots();
+}
+
+async function resetServer() {
+  const reason = $("s-reset-reason")?.value || "";
+  const confirmText = $("s-reset-confirm")?.value || "";
+  const status = $("reset-status");
+  if (confirmText !== "RESET_RUNTIME_STATE") {
+    if (status) { status.textContent = "確認字串錯誤，請輸入 RESET_RUNTIME_STATE"; status.style.color = "#ff4f6d"; }
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/system-reset", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ confirm: "RESET_RUNTIME_STATE", reason })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (status) {
+    status.textContent = json.msg || (json.ok ? "Reset 請求已提交，系統將重啟" : "Reset 失敗");
+    status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  }
+  if (json.ok) setTimeout(() => location.reload(), 4500);
+}
+
+// ── Integrity Guard quick-button handlers ──────────────────────
+
+async function refreshIntegrityGuard() {
+  await loadIntegrityGuard();
+}
+
+async function rescanIntegrityGuard() {
+  if (!confirm("重新掃描會比對目前檔案與已核准 manifest，異常不會自動核准。")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/integrity/scan", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({})
+  });
+  const json = await res.json().catch(() => ({}));
+  alert(json.msg || (json.ok ? "掃描完成" : "掃描失敗"));
+  if (json.ok) await loadIntegrityGuard();
+}
+
+async function exportIntegrityGuard() {
+  await exportIntegrityReport();
+}
+
+// ── Platform Stats (traffic, active users, point balance) ─────
+
+function platformStatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function renderPlatformBarChart(title, rows, options = {}) {
+  const maxValue = Math.max(1, ...rows.map((row) => Math.abs(platformStatNumber(row.value))));
+  return `
+    <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
+        <strong style="color:#e0e0f0;">${sanitize(title)}</strong>
+        ${options.caption ? `<small style="color:var(--muted);margin-left:auto;">${sanitize(options.caption)}</small>` : ""}
+      </div>
+      <div style="display:grid;gap:.48rem;">
+        ${rows.map((row) => {
+          const value = platformStatNumber(row.value);
+          const percent = Math.max(3, Math.min(100, Math.round((Math.abs(value) / maxValue) * 100)));
+          const color = row.color || "#82b1ff";
+          return `
+            <div class="platform-chart-row" style="display:grid;grid-template-columns:minmax(5.5rem,.72fr) minmax(8rem,1.6fr) minmax(3.2rem,.35fr);gap:.55rem;align-items:center;">
+              <span style="color:var(--muted);font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sanitize(row.label)}</span>
+              <div style="height:.72rem;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;">
+                <div style="height:100%;width:${percent}%;background:${color};border-radius:999px;"></div>
+              </div>
+              <strong style="color:${color};font-size:.78rem;text-align:right;white-space:nowrap;">${sanitize(String(value))}</strong>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlatformNetChart(stats) {
+  const earned = platformStatNumber(stats.points_earned_month);
+  const spent = platformStatNumber(stats.points_spent_month);
+  const net = platformStatNumber(stats.points_net_month);
+  const maxValue = Math.max(1, earned, spent, Math.abs(net));
+  const positiveWidth = net >= 0 ? Math.min(50, Math.round((net / maxValue) * 50)) : 0;
+  const negativeWidth = net < 0 ? Math.min(50, Math.round((Math.abs(net) / maxValue) * 50)) : 0;
+  const netColor = net >= 0 ? "#4caf50" : "#ff4f6d";
+  return `
+    <div class="platform-stats-chart" style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.75rem;min-width:0;">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;">
+        <strong style="color:#e0e0f0;">本月積分淨值</strong>
+        <small style="color:var(--muted);margin-left:auto;">收入 - 支出</small>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:center;margin:.9rem 0 .6rem;">
+        <div style="height:1.05rem;background:rgba(255,255,255,.08);border-radius:999px 0 0 999px;display:flex;justify-content:flex-end;overflow:hidden;">
+          <div style="height:100%;width:${negativeWidth}%;background:#ff4f6d;"></div>
+        </div>
+        <div style="height:1.05rem;background:rgba(255,255,255,.08);border-radius:0 999px 999px 0;overflow:hidden;">
+          <div style="height:100%;width:${positiveWidth}%;background:#4caf50;"></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:.75rem;font-size:.75rem;color:var(--muted);">
+        <span>支出 ${spent}</span>
+        <strong style="color:${netColor};">淨值 ${net}</strong>
+        <span>收入 ${earned}</span>
+      </div>
+      <div style="margin-top:.75rem;border-top:1px solid rgba(255,255,255,.08);padding-top:.65rem;color:#ce93d8;font-weight:700;">
+        積分總庫存 ${sanitize(String(platformStatNumber(stats.total_points)))}
+      </div>
+    </div>
+  `;
+}
+
+async function loadPlatformStats() {
+  const container = $("platform-stats");
+  if (!container) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/admin/platform-stats", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    container.innerHTML = `<span style="color:#ff4f6d;">${sanitize(json.msg || "讀取失敗")}</span>`;
+    return;
+  }
+  const stats = json.stats || {};
+  container.innerHTML = `
+    ${renderPlatformBarChart("流量與使用者", [
+      { label: "今日瀏覽量", value: stats.page_views_today, color: "#82b1ff" },
+      { label: "同時在線", value: stats.active_sessions, color: "#4caf50" },
+      { label: "本月新用戶", value: stats.new_users_month, color: "#ffb74d" },
+      { label: "總用戶數", value: stats.total_users, color: "#82b1ff" },
+    ], { caption: "人次 / 帳號" })}
+    ${renderPlatformBarChart("本月積分收支", [
+      { label: "收入", value: stats.points_earned_month, color: "#4caf50" },
+      { label: "支出", value: stats.points_spent_month, color: "#ff4f6d" },
+      { label: "淨值", value: stats.points_net_month, color: platformStatNumber(stats.points_net_month) >= 0 ? "#4caf50" : "#ff4f6d" },
+    ], { caption: "points" })}
+    ${renderPlatformNetChart(stats)}
+  `;
+}
+
+ // ── Bind all UI events ───────────────────────────────────────
+(function setupUIBindings() {
+  // Integrity Guard
+  const igRefresh = document.getElementById("integrity-refresh-btn");
+  if (igRefresh) igRefresh.addEventListener("click", refreshIntegrityGuard);
+  const igRescan = document.getElementById("integrity-rescan-btn");
+  if (igRescan) igRescan.addEventListener("click", rescanIntegrityGuard);
+  const igExport = document.getElementById("integrity-export-btn");
+  if (igExport) igExport.addEventListener("click", exportIntegrityGuard);
+  const igBulkApprove = document.getElementById("integrity-bulk-approve-btn");
+  if (igBulkApprove) igBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
+  const igBulkReject = document.getElementById("integrity-bulk-reject-btn");
+  if (igBulkReject) igBulkReject.addEventListener("click", () => reviewSelectedIntegrityFindings("reject"));
+  const igBulkIgnore = document.getElementById("integrity-bulk-ignore-btn");
+  if (igBulkIgnore) igBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
+
+  // Snapshot / Reset
+  const loadSnapBtn = document.getElementById("btn-load-snapshots");
+  if (loadSnapBtn) loadSnapBtn.addEventListener("click", loadSnapshots);
+  const createSnapBtn = document.getElementById("btn-create-snapshot");
+  if (createSnapBtn) createSnapBtn.addEventListener("click", createSnapshot);
+  const uploadRestoreBtn = document.getElementById("btn-upload-snapshot-restore");
+  if (uploadRestoreBtn) uploadRestoreBtn.addEventListener("click", uploadSnapshotRestore);
+  const resetBtn = document.getElementById("btn-reset-server");
+  if (resetBtn) resetBtn.addEventListener("click", resetServer);
+
+  // Platform Stats
+  const psRefreshBtn = document.getElementById("platform-stats-refresh-btn");
+  if (psRefreshBtn) psRefreshBtn.addEventListener("click", loadPlatformStats);
+
+  // Init select-all after DOM ready
+  setupIntegritySelectAll();
+})();

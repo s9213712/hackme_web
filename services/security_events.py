@@ -126,8 +126,6 @@ def record_security_event(event_type, ip, target_user=None, detail="", created_a
 def is_ip_blocked(ip):
     if not _STATE["is_ip_blocking_enabled"]():
         return False
-    if ip == "127.0.0.1" or ip == "::1":
-        return False
     _maybe_cleanup_old_events()
     conn = _STATE["get_db"]()
     try:

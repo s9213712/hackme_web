@@ -18,6 +18,14 @@ from services.upload_security import (
     scan_archive_members,
     update_cloud_drive_security_policy,
 )
+from services.storage_quota_overrides import set_storage_quota_override
+from services.points_chain import ensure_points_economy_schema
+from services.storage_quota_purchases import (
+    ensure_storage_upgrade_price_catalog,
+    enrich_storage_upgrade_catalog,
+    record_storage_quota_purchase,
+)
+from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 
 
 def _conn():
@@ -79,8 +87,7 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
                 "image_reencode_enabled": False,
                 "image_reencode_max_pixels": 12345,
                 "yara_enabled": True,
-                "yara_command": "/usr/bin/yara",
-                "yara_rules_path": "/etc/yara/rules",
+                "yara_command": "yara",
                 "max_daily_downloads": 40,
                 "notes": "root tuned policy",
             },
@@ -95,8 +102,7 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         assert policy["image_reencode_enabled"] is False
         assert policy["image_reencode_max_pixels"] == 12345
         assert policy["yara_enabled"] is True
-        assert policy["yara_command"] == "/usr/bin/yara"
-        assert policy["yara_rules_path"] == "/etc/yara/rules"
+        assert policy["yara_command"] == "yara"
         assert policy["max_daily_downloads"] == 40
         assert policy["notes"] == "root tuned policy"
 
@@ -107,6 +113,14 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         policy, err = update_cloud_drive_security_policy(conn, {"scanner_backend": "cloud_api"})
         assert policy is None
         assert "scanner_backend" in err
+
+        policy, err = update_cloud_drive_security_policy(conn, {"scanner_command": "/bin/sh -c id"})
+        assert policy is None
+        assert "scanner_command" in err
+
+        policy, err = update_cloud_drive_security_policy(conn, {"yara_command": "/usr/bin/yara"})
+        assert policy is None
+        assert "yara_command" in err
     finally:
         conn.close()
 
@@ -215,6 +229,229 @@ def test_cloud_drive_safety_summary_restricted_user_cannot_upload():
         )
         assert summary["usage"]["can_upload"] is False
         assert any("restricted" in item for item in summary["restrictions"])
+    finally:
+        conn.close()
+
+
+def test_root_role_uses_disk_backed_quota(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 20_000
+        used = 10_000
+        free = 10_000
+
+    monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        admin = {"id": 1, "username": "root", "role": "super_admin", "effective_level": "suspended", "sanction_status": "suspended"}
+        usage = get_user_cloud_drive_usage(
+            conn,
+            admin,
+            member_rule={"can_upload_attachment": False, "attachment_quota_mb": 0, "max_attachment_size_mb": 0, "upload_rate_limit_per_day": 0},
+            storage_root=tmp_path,
+        )
+        assert usage["can_upload"] is True
+        assert usage["total_bytes"] == 9_000
+        assert usage["max_file_size_bytes"] == 9_000
+        assert usage["upload_rate_limit_per_day"] is None
+        assert usage["quota_source"] == "root_disk_available_90_percent"
+        assert usage["warning_threshold_percent"] == 80
+        assert usage["warning_active"] is False
+
+        create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/admin/large.txt",
+            privacy_mode="public_attachment",
+            size_bytes=7_300,
+            original_filename="large.txt",
+            user=admin,
+        )
+        summary = get_cloud_drive_safety_summary(conn, admin, member_rule={"can_upload_attachment": False}, storage_root=tmp_path)
+        assert not any("restricted/suspended" in item for item in summary["restrictions"])
+        assert summary["usage"]["warning_active"] is True
+        assert any("80%" in item for item in summary["restrictions"])
+
+        decision = evaluate_upload_policy(
+            conn,
+            filename="backup.zip",
+            privacy_mode="public_attachment",
+            user={"id": 1, "username": "admin", "role": "manager", "effective_level": "newbie"},
+        )
+        assert decision.allowed is True
+    finally:
+        conn.close()
+
+
+def test_manager_role_uses_fixed_1gb_cloud_drive_quota(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 20_000
+        used = 10_000
+        free = 10_000
+
+    monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        manager = {"id": 1, "username": "admin", "role": "manager", "effective_level": "suspended", "sanction_status": "suspended"}
+        usage = get_user_cloud_drive_usage(
+            conn,
+            manager,
+            member_rule={"can_upload_attachment": False, "attachment_quota_mb": 0, "max_attachment_size_mb": 0, "upload_rate_limit_per_day": 0},
+            storage_root=tmp_path,
+        )
+        assert usage["can_upload"] is True
+        assert usage["total_bytes"] == 1024 * 1024 * 1024
+        assert usage["max_file_size_bytes"] == 1024 * 1024 * 1024
+        assert usage["upload_rate_limit_per_day"] is None
+        assert usage["quota_source"] == "manager_role_fixed_1gb"
+        assert usage["disk"] is None
+        assert usage["warning_threshold_percent"] is None
+    finally:
+        conn.close()
+
+
+def test_purchased_storage_adds_to_non_root_cloud_drive_quota(tmp_path):
+    conn = _conn()
+    try:
+        record_storage_quota_purchase(
+            conn,
+            user_id=1,
+            item_key="cloud_storage_1gb_30d",
+            quantity=2,
+            points_spent=200,
+            ledger_uuid="ledger-storage-test",
+        )
+        user = {"id": 1, "username": "alice", "role": "user", "effective_level": "trusted", "sanction_status": "none"}
+        usage = get_user_cloud_drive_usage(
+            conn,
+            user,
+            member_rule={"can_upload_attachment": True, "attachment_quota_mb": 1, "max_attachment_size_mb": 1, "upload_rate_limit_per_day": 10},
+            storage_root=tmp_path,
+        )
+        assert usage["base_quota_bytes"] == 1024 * 1024
+        assert usage["purchased_extra_bytes"] == 2 * 1024 * 1024 * 1024
+        assert usage["total_bytes"] == 1024 * 1024 + 2 * 1024 * 1024 * 1024
+        assert usage["purchased_storage"]["active_purchase_count"] == 1
+        assert usage["quota_source"].endswith("+storage_purchase")
+    finally:
+        conn.close()
+
+
+def test_storage_upgrade_price_catalog_backfills_missing_items():
+    conn = _conn()
+    try:
+        ensure_points_economy_schema(conn)
+        conn.execute("DELETE FROM economy_price_catalog WHERE item_key LIKE 'cloud_storage_%'")
+        ensure_storage_upgrade_price_catalog(conn)
+        rows = conn.execute(
+            "SELECT * FROM economy_price_catalog WHERE item_key LIKE 'cloud_storage_%' AND enabled=1 ORDER BY item_key"
+        ).fetchall()
+        catalog = enrich_storage_upgrade_catalog([dict(row) for row in rows])
+        assert [item["item_key"] for item in catalog] == ["cloud_storage_10gb_30d", "cloud_storage_1gb_30d"]
+        assert catalog[0]["storage_bytes"] == 10 * 1024 * 1024 * 1024
+        assert catalog[1]["storage_bytes"] == 1024 * 1024 * 1024
+    finally:
+        conn.close()
+
+
+def test_root_storage_quota_ignores_purchased_storage(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 20_000
+        used = 10_000
+        free = 10_000
+
+    monkeypatch.setattr("services.upload_security.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        record_storage_quota_purchase(
+            conn,
+            user_id=1,
+            item_key="cloud_storage_1gb_30d",
+            quantity=2,
+            points_spent=200,
+            ledger_uuid="ledger-root-ignore",
+        )
+        root = {"id": 1, "username": "root", "role": "super_admin", "effective_level": "vip", "sanction_status": "none"}
+        usage = get_user_cloud_drive_usage(conn, root, member_rule={"can_upload_attachment": True}, storage_root=tmp_path)
+        assert usage["total_bytes"] == 9_000
+        assert usage["purchased_extra_bytes"] == 0
+        assert usage["quota_source"] == "root_disk_available_90_percent"
+    finally:
+        conn.close()
+
+
+def test_root_storage_override_takes_priority_over_role_quota(tmp_path):
+    conn = _conn()
+    try:
+        manager = {"id": 1, "username": "admin", "role": "manager", "effective_level": "suspended", "sanction_status": "suspended"}
+        set_storage_quota_override(
+            conn,
+            1,
+            quota_bytes=256 * 1024 * 1024,
+            max_file_size_bytes=12 * 1024 * 1024,
+            upload_rate_limit_per_day=3,
+            can_upload_override=False,
+            reason="root direct quota test",
+            actor_user_id=2,
+        )
+        usage = get_user_cloud_drive_usage(
+            conn,
+            manager,
+            member_rule={"can_upload_attachment": False, "attachment_quota_mb": 0, "max_attachment_size_mb": 0, "upload_rate_limit_per_day": 0},
+            storage_root=tmp_path,
+        )
+        assert usage["quota_source"] == "root_user_override"
+        assert usage["total_bytes"] == 256 * 1024 * 1024
+        assert usage["max_file_size_bytes"] == 12 * 1024 * 1024
+        assert usage["upload_rate_limit_per_day"] == 3
+        assert usage["can_upload"] is False
+        assert usage["root_override"]["reason"] == "root direct quota test"
+    finally:
+        conn.close()
+
+
+def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 1_000
+        used = 500
+        free = 500
+
+    monkeypatch.setattr("services.storage_capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        set_storage_quota_override(conn, 1, quota_bytes=0, reason="baseline", actor_user_id=2)
+        set_storage_quota_override(conn, 2, quota_bytes=0, reason="baseline", actor_user_id=2)
+        audit = audit_storage_capacity(conn, tmp_path)
+        assert audit["status"] == "ok"
+        assert audit["allocatable_cloud_capacity_bytes"] == 450
+
+        set_storage_quota_override(
+            conn,
+            1,
+            quota_bytes=800,
+            reason="overcommit test",
+            actor_user_id=2,
+        )
+        audit = audit_storage_capacity(conn, tmp_path)
+        assert audit["status"] == "critical"
+        assert audit["total_overcommitted_by_bytes"] > 0
+        assert "host_storage_overcommitted" in audit["reasons"]
+    finally:
+        conn.close()
+
+
+def test_storage_capacity_guard_blocks_new_quota_when_host_is_full(tmp_path, monkeypatch):
+    class FakeDiskUsage:
+        total = 1_000
+        used = 900
+        free = 100
+
+    monkeypatch.setattr("services.storage_capacity_audit.shutil.disk_usage", lambda path: FakeDiskUsage())
+    conn = _conn()
+    try:
+        ok, msg, projected = can_allocate_storage_bytes(conn, tmp_path, 200)
+        assert ok is False
+        assert "Host" in msg
+        assert projected["projected_total_overcommitted_by_bytes"] > 0
     finally:
         conn.close()
 

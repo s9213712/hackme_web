@@ -1,4 +1,4 @@
-from services.identity import role_rank
+from services.identity import is_admin_role, role_rank
 from services.member_levels import get_member_level_rule, refresh_user_effective_level
 
 ACTIVE_STATUS = "active"
@@ -29,6 +29,10 @@ def actor_role(actor):
     if data.get("username") == "root":
         return "super_admin"
     return data.get("role") or "user"
+
+
+def actor_is_admin(actor):
+    return is_admin_role(actor_role(actor))
 
 
 def actor_status(actor):
@@ -63,6 +67,8 @@ def require_role(actor, min_role):
 
 def get_permission_rule(conn, actor):
     data = _actor_dict(actor)
+    if actor_is_admin(actor):
+        return None
     has_explicit_sanction_level = (
         not data.get("base_level")
         and not data.get("effective_level")
@@ -84,6 +90,8 @@ def _provided_or_loaded_rule(actor, rule=None, conn=None):
 
 
 def _rule_allows(actor, permission, rule=None, conn=None, target=None):
+    if actor_is_admin(actor):
+        return True
     if actor_effective_level(actor) == "suspended":
         return False
     if permission is None:
@@ -119,6 +127,8 @@ def can_report(user, conn=None):
 
 
 def get_rate_limit(user, action, conn=None, rule=None):
+    if actor_is_admin(user):
+        return None
     loaded_rule = _provided_or_loaded_rule(user, rule=rule, conn=conn)
     if not loaded_rule:
         return None
@@ -132,6 +142,8 @@ def require_member_action(actor, action, rule=None, conn=None, target=None):
     ok, msg, status = require_active_actor(actor)
     if not ok:
         return ok, msg, status
+    if actor_is_admin(actor):
+        return True, "", 200
     effective_level = actor_effective_level(actor)
     if effective_level == "suspended":
         return False, "會員等級已停權，僅可登入、查看通知與申訴", 403

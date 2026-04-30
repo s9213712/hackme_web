@@ -11,12 +11,12 @@ database/app.db
 .fkey
 .csrfkey
 .integrity_key
-SECURITY.md
 
 *.log
 *.json
 chats/*.jsonl
 !chats/.gitkeep
+storage/
 anchors/*.json
 anchors/*.jsonl
 !anchors/.gitkeep
@@ -25,9 +25,13 @@ cert.pem
 key.pem
 attack_test/
 pentest_artifacts/
+research/
 reports/*
-!reports/.gitkeep
+!reports/attacks/
+reports/attacks/*
+!reports/attacks/.gitkeep
 !reports/bugs/
+reports/bugs/*
 !reports/bugs/.gitkeep
 architecture_scan.md
 notes/

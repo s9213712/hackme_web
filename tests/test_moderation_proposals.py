@@ -63,10 +63,11 @@ def _seed_users(db_path):
             violation_count INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO users (id, username, role, status, member_level) VALUES
-            (1, 'root', 'super_admin', 'active', 'vip'),
-            (2, 'admin1', 'manager', 'active', 'trusted'),
-            (3, 'admin2', 'manager', 'active', 'trusted'),
-            (4, 'alice', 'user', 'active', 'normal');
+            (1, 'root', 'super_admin', 'active', 'normal'),
+            (2, 'admin1', 'manager', 'active', 'normal'),
+            (3, 'admin2', 'manager', 'active', 'normal'),
+            (4, 'alice', 'user', 'active', 'normal'),
+            (5, 'admin3', 'manager', 'active', 'normal');
         """
     )
     conn.commit()
@@ -82,22 +83,20 @@ def test_moderation_proposal_vote_and_execute(tmp_path):
 
     create = client.post(
         "/api/admin/moderation/proposals",
-        json={"target_user_id": 4, "action_type": "suspend", "reason": "嚴重違規", "required_votes": 2},
+        json={"target_user_id": 4, "action_type": "warn", "reason": "輕微違規", "required_votes": 10},
     )
     assert create.status_code == 200
-    proposal_id = create.get_json()["proposal"]["id"]
+    proposal = create.get_json()["proposal"]
+    assert proposal["risk_level"] == "normal"
+    assert proposal["required_votes"] == 1
+    proposal_id = proposal["id"]
 
     first_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
     assert first_vote.status_code == 200
-    assert first_vote.get_json()["proposal"]["status"] == "pending"
+    assert first_vote.get_json()["proposal"]["status"] == "approved"
 
     duplicate_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
     assert duplicate_vote.status_code == 409
-
-    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
-    second_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
-    assert second_vote.status_code == 200
-    assert second_vote.get_json()["proposal"]["status"] == "approved"
 
     execute = client.post(f"/api/admin/moderation/proposals/{proposal_id}/execute")
     assert execute.status_code == 200
@@ -108,13 +107,13 @@ def test_moderation_proposal_vote_and_execute(tmp_path):
     action = conn.execute("SELECT action_type, target_type, target_id FROM moderation_actions LIMIT 1").fetchone()
     conn.close()
 
-    assert row == ("active", "suspended")
+    assert row == ("active", "normal")
     assert proposal_status == "executed"
-    assert action == ("suspend", "user", 4)
-    assert revoked == [4]
+    assert action == ("warn", "user", 4)
+    assert revoked == []
 
 
-def test_root_override_executes_pending_proposal(tmp_path):
+def test_high_risk_governance_requires_root_and_two_managers(tmp_path):
     db_path = tmp_path / "moderation.db"
     _seed_users(db_path)
     revoked = []
@@ -123,18 +122,66 @@ def test_root_override_executes_pending_proposal(tmp_path):
 
     create = client.post(
         "/api/admin/moderation/proposals",
-        json={"target_user_id": 4, "action_type": "restrict", "reason": "洗版", "required_votes": 3},
+        json={"target_user_id": 4, "action_type": "suspend", "reason": "嚴重違規", "required_votes": 1},
+    )
+    proposal = create.get_json()["proposal"]
+    assert proposal["risk_level"] == "high"
+    assert proposal["required_root_approval"] is True
+    assert proposal["required_manager_approvals"] == 2
+    assert proposal["required_votes"] == 3
+    proposal_id = proposal["id"]
+
+    first_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
+    assert first_vote.status_code == 200
+    assert first_vote.get_json()["proposal"]["status"] == "pending"
+
+    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
+    second_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
+    assert second_vote.status_code == 200
+    assert second_vote.get_json()["proposal"]["status"] == "pending"
+
+    execute_too_early = client.post(f"/api/admin/moderation/proposals/{proposal_id}/execute")
+    assert execute_too_early.status_code == 409
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    root_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
+    assert root_vote.status_code == 200
+    root_payload = root_vote.get_json()["proposal"]
+    assert root_payload["status"] == "approved"
+    assert root_payload["root_requirement_met"] is True
+    assert root_payload["manager_requirement_met"] is True
+
+    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
+    manager_execute = client.post(f"/api/admin/moderation/proposals/{proposal_id}/execute")
+    assert manager_execute.status_code == 403
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    execute = client.post(f"/api/admin/moderation/proposals/{proposal_id}/execute")
+    assert execute.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT status, member_level FROM users WHERE id=4").fetchone()
+    conn.close()
+    assert row == ("active", "suspended")
+    assert revoked == [4]
+
+
+def test_root_override_is_blocked(tmp_path):
+    db_path = tmp_path / "moderation.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 4, "action_type": "restrict", "reason": "洗版"},
     )
     proposal_id = create.get_json()["proposal"]["id"]
 
     actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
     override = client.post(f"/api/root/moderation/proposals/{proposal_id}/override")
-    assert override.status_code == 200
-
-    conn = sqlite3.connect(db_path)
-    row = conn.execute("SELECT status, member_level FROM users WHERE id=4").fetchone()
-    conn.close()
-    assert row == ("active", "restricted")
+    assert override.status_code == 403
 
 
 def test_mod_notes_and_reputation_account_api(tmp_path):

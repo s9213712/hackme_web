@@ -244,16 +244,20 @@ def require_csrf(f):
         user = db_get_user_from_token(tok) if tok else None
 
         if user:
+            # Authenticated: token stored under username
             if not verify_csrf_token(csrf_tok, user):
                 _record_csrf_failure("invalid_authenticated", user)
                 return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
         else:
+            # Unauthenticated: token stored under "__public__" OR under body_username
             if not csrf_tok:
                 _record_csrf_failure("missing_public", body_username or "-")
                 return json_resp({"ok": False, "msg": "CSRF token 缺失"}), 403
-            if not verify_csrf_token(csrf_tok, "__public__") and not (body_username and verify_csrf_token(csrf_tok, body_username)):
-                _record_csrf_failure("invalid_public", body_username or "-")
-                return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+            if not verify_csrf_token(csrf_tok, "__public__"):
+                # Also accept token stored under body_username (e.g. login request)
+                if not body_username or not verify_csrf_token(csrf_tok, body_username):
+                    _record_csrf_failure("invalid_public", body_username or "-")
+                    return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
 
         delete_csrf_token(csrf_tok)
         return f(*args, **kwargs)
@@ -264,6 +268,8 @@ def require_csrf_safe(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         csrf_tok = request.headers.get("X-CSRF-Token", "") or ""
+        if not csrf_tok:
+            csrf_tok = request.args.get("csrf_token", "") or ""
         if not isinstance(csrf_tok, str):
             csrf_tok = ""
         tok = request.cookies.get("session_token")
@@ -273,6 +279,8 @@ def require_csrf_safe(f):
         if not verify_csrf_token(csrf_tok, user):
             _record_csrf_failure("invalid_safe", user)
             return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            delete_csrf_token(csrf_tok)
         return f(*args, **kwargs)
     return decorated
 

@@ -31,6 +31,7 @@ def _conn(path):
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
             status TEXT NOT NULL DEFAULT 'active',
             member_level TEXT NOT NULL DEFAULT 'normal',
             created_at TEXT NOT NULL,
@@ -54,6 +55,7 @@ def _insert_user(conn, user_id, username, level, **overrides):
         "id": user_id,
         "username": username,
         "status": "active",
+        "role": "user",
         "member_level": level,
         "base_level": level,
         "effective_level": level,
@@ -68,9 +70,9 @@ def _insert_user(conn, user_id, username, level, **overrides):
     values.update(overrides)
     conn.execute(
         "INSERT INTO users "
-        "(id, username, status, member_level, base_level, effective_level, created_at, trust_score, points, reputation, "
+        "(id, username, role, status, member_level, base_level, effective_level, created_at, trust_score, points, reputation, "
         "violation_score, sanction_status, sanction_until) "
-        "VALUES (:id, :username, :status, :member_level, :base_level, :effective_level, :created_at, :trust_score, "
+        "VALUES (:id, :username, :role, :status, :member_level, :base_level, :effective_level, :created_at, :trust_score, "
         ":points, :reputation, :violation_score, :sanction_status, :sanction_until)",
         values,
     )
@@ -175,6 +177,24 @@ def test_restricted_can_only_read(tmp_path):
         conn.close()
 
 
+def test_manager_role_bypasses_member_interaction_limits(tmp_path):
+    conn = _conn(tmp_path / "levels.db")
+    try:
+        manager = _insert_user(conn, 12, "admin", "restricted", role="manager")
+        root = _insert_user(conn, 13, "root", "suspended", role="super_admin")
+        assert can_post(manager, conn) is True
+        assert can_comment(manager, conn) is True
+        assert can_upload(manager, conn) is True
+        assert can_report(manager, conn) is True
+        assert get_rate_limit(manager, "community_thread_create", conn) is None
+        assert can_post(root, conn) is True
+        assert can_upload(root, conn) is True
+        assert require_member_action(manager, "community_reply", conn=conn) == (True, "", 200)
+        assert require_member_action(root, "community_thread_create", conn=conn) == (True, "", 200)
+    finally:
+        conn.close()
+
+
 def test_suspended_can_only_login_notifications_and_appeal_surfaces(tmp_path):
     conn = _conn(tmp_path / "levels.db")
     try:
@@ -244,6 +264,61 @@ def test_every_level_change_writes_audit_log(tmp_path):
         assert row["new_effective_level"] == "trusted"
         assert row["reason"] == "manual promotion"
         assert row["source"] == "root"
+    finally:
+        conn.close()
+
+
+def test_quota_reduction_level_change_warns_user_with_dm_and_notification(tmp_path):
+    conn = _conn(tmp_path / "levels.db")
+    try:
+        _insert_user(conn, 1, "root", "vip", role="super_admin")
+        _insert_user(conn, 9, "quotauser", "vip")
+        conn.execute(
+            """
+            CREATE TABLE uploaded_files (
+                id TEXT PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL,
+                storage_path TEXT NOT NULL,
+                privacy_mode TEXT NOT NULL,
+                risk_level TEXT NOT NULL,
+                scan_status TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                deleted_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (
+                id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
+                size_bytes, created_at
+            ) VALUES ('f1', 9, 'users/9/f1/a.bin', 'private_scannable', 'low', 'clean', ?, ?)
+            """,
+            (150 * 1024 * 1024, datetime.now().isoformat()),
+        )
+
+        user, err = apply_member_level_change(
+            conn,
+            9,
+            actor="root",
+            source="root",
+            base_level="normal",
+            reason="quota downgrade",
+        )
+
+        assert err is None
+        assert user["effective_level"] == "normal"
+        notice = conn.execute("SELECT * FROM storage_quota_reduction_notices WHERE user_id=9").fetchone()
+        assert notice["status"] == "pending"
+        assert notice["new_quota_bytes"] == 100 * 1024 * 1024
+        assert "24 小時" in notice["notice_message"]
+        notification = conn.execute("SELECT * FROM notifications WHERE user_id=9 AND type='storage_quota_reduced'").fetchone()
+        assert notification is not None
+        dm = conn.execute("SELECT * FROM direct_messages WHERE recipient_user_id=9").fetchone()
+        assert dm is not None
+        assert "完成備份" in dm["body"]
     finally:
         conn.close()
 

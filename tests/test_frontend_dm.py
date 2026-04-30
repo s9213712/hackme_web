@@ -15,7 +15,7 @@ def test_dm_ui_assets_are_wired():
     assert 'id="module-dm"' in index_html
     assert 'id="dm-thread-list"' in index_html
     assert 'id="dm-message-list"' in index_html
-    assert '<script src="/js/33-dm.js" defer></script>' in index_html
+    assert '/js/33-dm.js?v=20260429-pm-image-preview' in index_html
 
     assert 'canAccessModule("dm")' in core_js
     assert 'normTab === "dm"' in admin_js
@@ -23,3 +23,6 @@ def test_dm_ui_assets_are_wired():
     assert 'fetch(API + "/dm/threads"' in dm_js
     assert 'fetch(API + `/dm/threads/${encodeURIComponent(selectedDmThreadId)}/messages`' in dm_js
     assert 'fetch(API + "/dm/blocks"' in dm_js
+    assert "function renderDmMessageAttachments(attachments)" in dm_js
+    assert "data-drive-action=\"album-full-preview\"" in dm_js
+    assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in dm_js

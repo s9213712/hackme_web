@@ -18,10 +18,81 @@ CREATE TABLE IF NOT EXISTS chat_messages (
             room_id        INTEGER NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
             sender_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
             content        TEXT    NOT NULL,
+            message_type   TEXT    NOT NULL DEFAULT 'text',
+            sticker_key    TEXT,
             is_blocked     INTEGER NOT NULL DEFAULT 0,
+            is_revoked     INTEGER NOT NULL DEFAULT 0,
+            revoked_at     TEXT,
+            revoked_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
             blocked_reason TEXT,
             created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
+
+CREATE TABLE IF NOT EXISTS user_friends (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status         TEXT    NOT NULL DEFAULT 'pending',
+            requested_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, friend_user_id),
+            CHECK (user_id <> friend_user_id),
+            CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        );
+
+CREATE TABLE IF NOT EXISTS game_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_key TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'pvp',
+    status TEXT NOT NULL DEFAULT 'active',
+    white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    current_turn TEXT NOT NULL DEFAULT 'white',
+    board_json TEXT NOT NULL,
+    move_history_json TEXT NOT NULL DEFAULT '[]',
+    winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    result_reason TEXT,
+    leaderboard_week TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    white_deleted_at TEXT,
+    black_deleted_at TEXT,
+    CHECK (game_key IN ('chess')),
+    CHECK (mode IN ('pvp', 'computer')),
+    CHECK (status IN ('active', 'finished', 'cancelled')),
+    CHECK (current_turn IN ('white', 'black'))
+);
+
+CREATE TABLE IF NOT EXISTS game_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_key TEXT NOT NULL,
+    inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    opponent_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    match_id INTEGER REFERENCES game_matches(id) ON DELETE SET NULL,
+    message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    CHECK (game_key IN ('chess')),
+    CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled', 'expired'))
+);
+
+CREATE TABLE IF NOT EXISTS game_leaderboard_rewards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_key TEXT NOT NULL,
+    week_key TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rank INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    reward_points INTEGER NOT NULL,
+    ledger_uuid TEXT,
+    awarded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(game_key, week_key, user_id)
+);
 
 CREATE TABLE IF NOT EXISTS chat_room_members (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +148,28 @@ CREATE TABLE IF NOT EXISTS csrf_tokens (
     token_hash   TEXT    NOT NULL UNIQUE,
     username     TEXT    NOT NULL,
     expires_at   TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_recovery_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose      TEXT    NOT NULL,
+    token_hash   TEXT    NOT NULL UNIQUE,
+    requested_ip TEXT,
+    user_agent   TEXT,
+    created_at   TEXT    NOT NULL,
+    expires_at   TEXT    NOT NULL,
+    used_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mail_outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient  TEXT    NOT NULL,
+    subject    TEXT    NOT NULL,
+    body       TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    status     TEXT    NOT NULL DEFAULT 'queued',
+    created_at TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS captcha_challenges (
@@ -170,6 +263,9 @@ CREATE TABLE IF NOT EXISTS moderation_proposals (
     reason              TEXT NOT NULL,
     status              TEXT NOT NULL DEFAULT 'pending',
     required_votes      INTEGER NOT NULL DEFAULT 2,
+    risk_level          TEXT NOT NULL DEFAULT 'normal',
+    required_root_approval INTEGER NOT NULL DEFAULT 0,
+    required_manager_approvals INTEGER NOT NULL DEFAULT 1,
     approve_count       INTEGER NOT NULL DEFAULT 0,
     reject_count        INTEGER NOT NULL DEFAULT 0,
     expires_at          TEXT NOT NULL,
@@ -382,6 +478,18 @@ CREATE TABLE IF NOT EXISTS user_storage (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS storage_quota_overrides (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    quota_bytes INTEGER,
+    max_file_size_bytes INTEGER,
+    upload_rate_limit_per_day INTEGER,
+    can_upload_override INTEGER,
+    reason TEXT,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS storage_files (
     id TEXT PRIMARY KEY,
     file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
@@ -392,6 +500,17 @@ CREATE TABLE IF NOT EXISTS storage_files (
     is_trashed INTEGER NOT NULL DEFAULT 0,
     trashed_at TEXT,
     restored_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    UNIQUE(owner_user_id, virtual_path)
+);
+
+CREATE TABLE IF NOT EXISTS storage_folders (
+    id TEXT PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    display_name TEXT NOT NULL,
+    virtual_path TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     deleted_at TEXT,
@@ -409,6 +528,26 @@ CREATE TABLE IF NOT EXISTS storage_quota_log (
     reason TEXT,
     actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storage_quota_reduction_notices (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    old_level TEXT,
+    new_level TEXT NOT NULL,
+    old_quota_bytes INTEGER,
+    new_quota_bytes INTEGER NOT NULL,
+    used_bytes_at_notice INTEGER NOT NULL,
+    deadline_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    notice_message TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    purged_at TEXT,
+    deleted_file_count INTEGER NOT NULL DEFAULT 0,
+    deleted_bytes INTEGER NOT NULL DEFAULT 0,
+    CHECK (status IN ('pending', 'resolved', 'purged'))
 );
 
 CREATE TABLE IF NOT EXISTS albums (
@@ -454,7 +593,11 @@ CREATE TABLE IF NOT EXISTS storage_share_links (
 
 CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_user_id, virtual_path);
 CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id);
+CREATE INDEX IF NOT EXISTS idx_storage_folders_owner_path ON storage_folders(owner_user_id, virtual_path);
 CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_storage_quota_overrides_enabled ON storage_quota_overrides(enabled);
+CREATE INDEX IF NOT EXISTS idx_storage_quota_notices_due ON storage_quota_reduction_notices(status, deadline_at);
+CREATE INDEX IF NOT EXISTS idx_storage_quota_notices_user ON storage_quota_reduction_notices(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at);
@@ -683,6 +826,25 @@ CREATE INDEX IF NOT EXISTS idx_appeal_status     ON violation_appeals(status);
 
 CREATE INDEX IF NOT EXISTS idx_appeal_user      ON violation_appeals(user_id);
 
+CREATE TABLE IF NOT EXISTS admin_sanction_appeal_contexts (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            violation_id          INTEGER NOT NULL UNIQUE,
+            user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            pre_status            TEXT,
+            pre_role              TEXT,
+            pre_base_level        TEXT,
+            pre_member_level      TEXT,
+            pre_effective_level   TEXT,
+            pre_sanction_status   TEXT,
+            pre_sanction_until    TEXT,
+            action_label          TEXT NOT NULL,
+            reason                TEXT NOT NULL,
+            actor_username        TEXT NOT NULL,
+            created_at            TEXT NOT NULL
+        );
+
+CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS reports (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     target_type          TEXT NOT NULL,
@@ -722,6 +884,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_time     ON chat_messages(created_at);
 
+CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
+CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
+CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
+
 CREATE INDEX IF NOT EXISTS idx_chat_reports_message ON chat_message_reports(message_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_message_reports(status);
@@ -738,6 +906,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_room_members_user ON chat_room_members(user_
 
 CREATE INDEX IF NOT EXISTS idx_csrf_token_hash ON csrf_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_csrf_expires_at ON csrf_tokens(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_hash ON account_recovery_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_user ON account_recovery_tokens(user_id, purpose, created_at);
+CREATE INDEX IF NOT EXISTS idx_mail_outbox_kind ON mail_outbox(kind, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_ip_blocks_ip ON ip_blocks(ip_address);
 CREATE INDEX IF NOT EXISTS idx_ip_blocks_until ON ip_blocks(blocked_until);

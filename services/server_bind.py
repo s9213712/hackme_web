@@ -79,3 +79,26 @@ def server_bind_settings_payload(settings=None, *, current_host=None, current_po
         "current_port": current["port"],
         "restart_required": current["host"] != bind["host"] or current["port"] != bind["port"],
     }
+
+
+def effective_server_ssl(settings=None, *, cert_exists=False):
+    settings = dict(settings or {})
+    enabled_by_setting = bool(settings.get("server_ssl_enabled", True))
+    return {
+        "enabled": enabled_by_setting and bool(cert_exists),
+        "enabled_by_setting": enabled_by_setting,
+        "cert_exists": bool(cert_exists),
+        "cert_required": enabled_by_setting and not bool(cert_exists),
+        "scheme": "https" if enabled_by_setting and bool(cert_exists) else "http",
+    }
+
+
+def server_ssl_settings_payload(settings=None, *, current_ssl_enabled=None, cert_exists=False):
+    ssl_state = effective_server_ssl(settings=settings, cert_exists=cert_exists)
+    current = ssl_state["enabled"] if current_ssl_enabled is None else bool(current_ssl_enabled)
+    return {
+        **ssl_state,
+        "current_enabled": current,
+        "current_scheme": "https" if current else "http",
+        "restart_required": current != ssl_state["enabled"],
+    }

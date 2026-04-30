@@ -12,13 +12,132 @@ from pathlib import Path
 
 from services.bootstrap import CURRENT_SCHEMA_VERSION
 from services.release_info import APP_RELEASE_ID
+from services.settings import MANAGEMENT_ONLY_RESET_SETTINGS
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
 RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
-SERVER_MODES = {"preprod", "test", "superweak"}
+SERVER_MODES = {"production", "preprod", "internal_test", "test", "superweak"}
+PORTABLE_SNAPSHOT_FILES = ("metadata.json", "checksums.sha256", "db.sqlite3.backup", "uploads.tar.gz", "config.tar.gz", "manifest.json")
+DEFAULT_ACCOUNT_NAMES = ("root", "admin", "test")
+TEST_ACCOUNT_NAMES = ("test",)
+BUILTIN_SECURITY_PROFILES = {
+    "production": {
+        "label": "production（上線）",
+        "description": "正式上線設定檔：安全機制全開、停用測試帳戶，並要求預設帳戶重新設定強密碼。",
+        "settings": {
+            "maintenance_mode": False,
+            "allow_register": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "browser_only_mode_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "feature_account_security_enabled": True,
+            "feature_advanced_security_enabled": True,
+            "feature_identity_governance_enabled": True,
+            "feature_member_governance_enabled": True,
+            "feature_server_modes_enabled": True,
+            "feature_snapshot_restore_enabled": True,
+            "feature_audit_log_enabled": True,
+            "feature_violation_center_enabled": True,
+            "feature_health_center_enabled": True,
+            "captcha_mode": "math",
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 5,
+            "security_pending_appeals_threshold": 5,
+            "security_pending_moderation_proposals_threshold": 5,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 0,
+        },
+    },
+    "preprod": {
+        "label": "preprod（準上線）",
+        "description": "接近正式部署的安全設定檔，要求完整性檢查通過。",
+        "settings": {
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 10,
+            "security_pending_appeals_threshold": 10,
+            "security_pending_moderation_proposals_threshold": 10,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 50,
+        },
+    },
+    "internal_test": {
+        "label": "internal test（內測）",
+        "description": "內測模式：只有 root 可直接登入；其他帳號必須提供 root 發出的內測登入 token。",
+        "settings": {
+            "maintenance_mode": False,
+            "allow_register": False,
+            "audit_chain_enabled": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "feature_account_security_enabled": True,
+            "feature_server_modes_enabled": True,
+            "feature_audit_log_enabled": True,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 10,
+            "security_pending_appeals_threshold": 10,
+            "security_pending_moderation_proposals_threshold": 10,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 25,
+        },
+    },
+    "test": {
+        "label": "test（測試）",
+        "description": "一般測試設定檔，保留主要安全紀錄但降低啟動阻擋。",
+        "settings": {
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 20,
+            "security_pending_appeals_threshold": 20,
+            "security_pending_moderation_proposals_threshold": 20,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 100,
+        },
+    },
+    "superweak": {
+        "label": "superweak（弱化測試）",
+        "description": "高風險弱化測試模式，進入前會建立 before_superweak snapshot。",
+        "settings": {
+            "ip_blocking_enabled": False,
+            "login_violation_enabled": False,
+            "rate_limit_violation_enabled": False,
+            "integrity_guard_strict_mode": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 50,
+            "security_pending_appeals_threshold": 50,
+            "security_pending_moderation_proposals_threshold": 50,
+            "security_quarantined_files_threshold": 10,
+            "security_unknown_encrypted_files_threshold": 250,
+        },
+    },
+}
+PROFILE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 RESETTABLE_TABLES = {
     "appeals",
+    "chat_message_reports",
+    "chat_messages",
     "comments",
     "direct_messages",
     "dm_threads",
@@ -27,6 +146,13 @@ RESETTABLE_TABLES = {
     "file_scan_results",
     "cloud_file_refs",
     "file_access_grants",
+    "forum_boards",
+    "forum_categories",
+    "forum_post_reactions",
+    "forum_thread_reactions",
+    "forum_posts",
+    "forum_threads",
+    "announcements",
     "announcement_attachment_requests",
     "album_files",
     "albums",
@@ -36,6 +162,7 @@ RESETTABLE_TABLES = {
     "notifications",
     "posts",
     "reports",
+    "storage_folders",
     "storage_files",
     "storage_quota_log",
     "storage_share_links",
@@ -116,6 +243,40 @@ def ensure_snapshot_schema(conn):
         "VALUES (1, 'preprod', NULL, NULL, NULL, ?, '')",
         (datetime.now().isoformat(),),
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS security_profiles (
+            name            TEXT PRIMARY KEY,
+            label           TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            settings_json   TEXT NOT NULL DEFAULT '{}',
+            thresholds_json TEXT NOT NULL DEFAULT '{}',
+            is_builtin      INTEGER NOT NULL DEFAULT 0,
+            created_by      INTEGER,
+            updated_by      INTEGER,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        )
+        """
+    )
+    now = datetime.now().isoformat()
+    for name, profile in BUILTIN_SECURITY_PROFILES.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO security_profiles
+            (name, label, description, settings_json, thresholds_json, is_builtin, created_by, updated_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                name,
+                profile["label"],
+                profile["description"],
+                json.dumps(profile["settings"], ensure_ascii=False, sort_keys=True),
+                json.dumps(profile["thresholds"], ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_type_status ON snapshots(type, status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_restore_events_snapshot ON snapshot_restore_events(snapshot_id)")
 
@@ -135,6 +296,8 @@ def _safe_snapshot_id(snapshot_id):
 def _safe_relative_tarinfo(tarinfo):
     name = tarinfo.name
     if not name or name.startswith("/") or ".." in Path(name).parts:
+        return False
+    if tarinfo.issym() or tarinfo.islnk() or tarinfo.isdev():
         return False
     return True
 
@@ -164,15 +327,32 @@ def _parse_daily_snapshot_time(value):
 
 
 class SnapshotService:
-    def __init__(self, *, get_db, db_path, base_dir, storage_root, audit, file_roots=None, config_files=None):
+    def __init__(
+        self,
+        *,
+        get_db,
+        db_path,
+        base_dir,
+        storage_root,
+        audit,
+        file_roots=None,
+        config_files=None,
+        runtime_secret_files=None,
+        reset_points_chain=None,
+        reset_audit_chain=None,
+    ):
         self.get_db = get_db
         self.db_path = Path(db_path)
         self.base_dir = Path(base_dir)
         self.storage_root = Path(storage_root)
         self.snapshots_root = self.storage_root / "snapshots"
+        self.imports_root = self.snapshots_root / ".imports"
         self.audit = audit
+        self.reset_points_chain = reset_points_chain
+        self.reset_audit_chain = reset_audit_chain
         self.file_roots = [Path(p) for p in (file_roots or []) if p]
         self.config_files = [Path(p) for p in (config_files or []) if p]
+        self.runtime_secret_files = [Path(p) for p in (runtime_secret_files or []) if p]
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
@@ -188,6 +368,69 @@ class SnapshotService:
         if root not in path.parents:
             raise ValueError("snapshot path traversal blocked")
         return path
+
+    def _portable_archive_path(self, snapshot_id):
+        return self._snapshot_dir(snapshot_id) / f"{snapshot_id}.snapshot.tar.gz"
+
+    def _local_snapshot_record(self, snapshot_id, *, actor_id=0, notes=None):
+        snapshot_dir = self._snapshot_dir(snapshot_id)
+        metadata_path = snapshot_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+        size_bytes = sum(p.stat().st_size for p in snapshot_dir.rglob("*") if p.is_file())
+        snapshot_type = metadata.get("type") if metadata.get("type") in SNAPSHOT_TYPES else "manual"
+        includes = metadata.get("includes") if isinstance(metadata.get("includes"), dict) else {"database": True, "uploads": True, "config": True}
+        now = datetime.now().isoformat()
+        return {
+            "id": snapshot_id,
+            "type": snapshot_type,
+            "status": "ready",
+            "created_by": int(actor_id or 0),
+            "created_at": metadata.get("created_at") or now,
+            "completed_at": now,
+            "app_version": metadata.get("app_version") or "",
+            "schema_version": str(metadata.get("schema_version") or ""),
+            "source_mode": metadata.get("source_mode") or "imported",
+            "includes_json": json.dumps(includes, ensure_ascii=False, sort_keys=True),
+            "storage_path": str(snapshot_dir),
+            "db_dump_path": str(snapshot_dir / "db.sqlite3.backup"),
+            "files_archive_path": str(snapshot_dir / "uploads.tar.gz"),
+            "config_archive_path": str(snapshot_dir / "config.tar.gz"),
+            "checksum": metadata.get("checksum") or "",
+            "size_bytes": size_bytes,
+            "notes": notes if notes is not None else metadata.get("notes", ""),
+        }
+
+    def _upsert_local_snapshot_record(self, conn, snapshot_id, *, actor_id=0, notes=None):
+        self.ensure_schema(conn)
+        record = self._local_snapshot_record(snapshot_id, actor_id=actor_id, notes=notes)
+        current = conn.execute("SELECT id FROM snapshots WHERE id=?", (snapshot_id,)).fetchone()
+        if current:
+            conn.execute(
+                "UPDATE snapshots SET status=?, storage_path=?, db_dump_path=?, files_archive_path=?, "
+                "config_archive_path=?, checksum=?, size_bytes=?, completed_at=? WHERE id=?",
+                (
+                    record["status"],
+                    record["storage_path"],
+                    record["db_dump_path"],
+                    record["files_archive_path"],
+                    record["config_archive_path"],
+                    record["checksum"],
+                    record["size_bytes"],
+                    record["completed_at"],
+                    snapshot_id,
+                ),
+            )
+            return record
+        conn.execute(
+            "INSERT INTO snapshots "
+            "(id, type, status, created_by, created_at, completed_at, app_version, schema_version, source_mode, "
+            "includes_json, storage_path, db_dump_path, files_archive_path, config_archive_path, checksum, size_bytes, notes) "
+            "VALUES (:id, :type, :status, :created_by, :created_at, :completed_at, :app_version, :schema_version, "
+            ":source_mode, :includes_json, :storage_path, :db_dump_path, :files_archive_path, :config_archive_path, "
+            ":checksum, :size_bytes, :notes)",
+            record,
+        )
+        return record
 
     def _current_mode(self, conn):
         self.ensure_schema(conn)
@@ -218,7 +461,7 @@ class SnapshotService:
             if snapshot_root == root_resolved or snapshot_root in root_resolved.parents:
                 continue
             for path in root_resolved.rglob("*"):
-                if path.is_file() and "__pycache__" not in path.parts:
+                if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts:
                     rel = path.relative_to(self.base_dir.resolve()) if self.base_dir.resolve() in path.resolve().parents else Path(root.name) / path.relative_to(root_resolved)
                     yield path, rel
 
@@ -368,11 +611,11 @@ class SnapshotService:
         finally:
             conn.close()
 
-    def verify_snapshot(self, *, snapshot_id):
-        path = self._snapshot_dir(snapshot_id)
+    def _verify_snapshot_dir(self, path):
+        path = Path(path)
         metadata_path = path / "metadata.json"
         checksums_path = path / "checksums.sha256"
-        required = [metadata_path, checksums_path, path / "db.sqlite3.backup", path / "uploads.tar.gz", path / "config.tar.gz", path / "manifest.json"]
+        required = [path / name for name in PORTABLE_SNAPSHOT_FILES]
         missing = [p.name for p in required if not p.exists()]
         if missing:
             return {"ok": False, "msg": "snapshot 檔案缺失", "missing": missing}
@@ -402,6 +645,124 @@ class SnapshotService:
                         return {"ok": False, "msg": "unsafe tar member", "file": member.name}
         return {"ok": True, "msg": "snapshot verified", "metadata": metadata}
 
+    def verify_snapshot(self, *, snapshot_id):
+        return self._verify_snapshot_dir(self._snapshot_dir(snapshot_id))
+
+    def export_snapshot_archive(self, *, snapshot_id, actor=None):
+        actor_name = self._actor_name(actor)
+        snapshot = self.get_snapshot(snapshot_id=snapshot_id, actor=actor)
+        if not snapshot:
+            return {"ok": False, "msg": "找不到 snapshot"}
+        if snapshot.get("status") != "ready":
+            return {"ok": False, "msg": "snapshot 尚未 ready"}
+        verification = self.verify_snapshot(snapshot_id=snapshot_id)
+        if not verification["ok"]:
+            self.audit("SNAPSHOT_EXPORT_VERIFY_FAILED", "-", user=actor_name, success=False, detail=f"snapshot_id={snapshot_id},reason={verification}")
+            return {"ok": False, "msg": verification["msg"], "verification": verification}
+
+        snapshot_dir = self._snapshot_dir(snapshot_id)
+        archive_path = self._portable_archive_path(snapshot_id)
+        tmp_path = archive_path.with_suffix(archive_path.suffix + ".tmp")
+        with tarfile.open(tmp_path, "w:gz") as tar:
+            for name in PORTABLE_SNAPSHOT_FILES:
+                tar.add(snapshot_dir / name, arcname=f"{snapshot_id}/{name}")
+        os.replace(tmp_path, archive_path)
+        size_bytes = archive_path.stat().st_size
+        self.audit("SNAPSHOT_EXPORTED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},size={size_bytes}")
+        return {
+            "ok": True,
+            "snapshot_id": snapshot_id,
+            "path": str(archive_path),
+            "filename": archive_path.name,
+            "size_bytes": size_bytes,
+            "verification": verification,
+        }
+
+    def _copy_archive_input(self, *, archive_path=None, file_storage=None, dest=None):
+        if archive_path:
+            shutil.copyfile(archive_path, dest)
+            return
+        stream = getattr(file_storage, "stream", file_storage)
+        if hasattr(stream, "seek"):
+            stream.seek(0)
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(stream, out)
+
+    def _locate_imported_snapshot_dir(self, import_dir):
+        direct = [import_dir / name for name in PORTABLE_SNAPSHOT_FILES]
+        if all(path.exists() for path in direct):
+            return import_dir
+        children = [path for path in import_dir.iterdir() if path.is_dir()]
+        matches = [path for path in children if all((path / name).exists() for name in PORTABLE_SNAPSHOT_FILES)]
+        if len(matches) != 1:
+            raise ValueError("snapshot 封包格式錯誤")
+        return matches[0]
+
+    def import_snapshot_archive(self, *, actor, archive_path=None, file_storage=None, notes=None):
+        if not archive_path and file_storage is None:
+            return {"ok": False, "msg": "缺少 snapshot 檔案"}
+        actor_id = self._actor_id(actor)
+        actor_name = self._actor_name(actor)
+        self.imports_root.mkdir(parents=True, exist_ok=True)
+        import_id = f"import_{secrets.token_hex(8)}"
+        import_dir = self.imports_root / import_id
+        package_path = self.imports_root / f"{import_id}.tar.gz"
+        try:
+            import_dir.mkdir(parents=True, exist_ok=False)
+            self._copy_archive_input(archive_path=archive_path, file_storage=file_storage, dest=package_path)
+            if not package_path.exists() or package_path.stat().st_size <= 0:
+                raise ValueError("snapshot 檔案為空")
+            _safe_extract_tar(package_path, import_dir)
+            imported_dir = self._locate_imported_snapshot_dir(import_dir)
+            verification = self._verify_snapshot_dir(imported_dir)
+            if not verification["ok"]:
+                return {"ok": False, "msg": verification["msg"], "verification": verification}
+            metadata = verification.get("metadata") or {}
+            snapshot_id = metadata.get("snapshot_id")
+            if not _safe_snapshot_id(snapshot_id):
+                return {"ok": False, "msg": "snapshot metadata id 格式錯誤"}
+            target_dir = self._snapshot_dir(snapshot_id)
+            if target_dir.exists():
+                return {"ok": False, "msg": "本機已存在相同 snapshot_id", "snapshot_id": snapshot_id}
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(imported_dir), str(target_dir))
+            conn = self.get_db()
+            try:
+                record = self._upsert_local_snapshot_record(
+                    conn,
+                    snapshot_id,
+                    actor_id=actor_id,
+                    notes=f"imported portable snapshot; {notes or ''}".strip(),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self.audit("SNAPSHOT_IMPORTED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},size={record['size_bytes']}")
+            return {"ok": True, "snapshot_id": snapshot_id, "snapshot": self.get_snapshot(snapshot_id=snapshot_id, actor=actor), "verification": verification}
+        except Exception as exc:
+            self.audit("SNAPSHOT_IMPORT_FAILED", "-", user=actor_name, success=False, detail=f"error={exc}")
+            return {"ok": False, "msg": "snapshot 匯入失敗", "error": str(exc)}
+        finally:
+            try:
+                if import_dir.exists():
+                    shutil.rmtree(import_dir)
+                if package_path.exists():
+                    package_path.unlink()
+            except Exception:
+                pass
+
+    def restore_snapshot_archive(self, *, actor, archive_path=None, file_storage=None, reason="", dry_run=False):
+        imported = self.import_snapshot_archive(actor=actor, archive_path=archive_path, file_storage=file_storage, notes=reason)
+        if not imported.get("ok"):
+            return imported
+        result = self.restore_snapshot(
+            snapshot_id=imported["snapshot_id"],
+            actor=actor,
+            reason=reason or "restore from uploaded portable snapshot",
+            dry_run=dry_run,
+        )
+        return {**result, "imported_snapshot_id": imported["snapshot_id"], "import": imported}
+
     def _restore_db(self, snapshot_dir):
         src = sqlite3.connect(str(snapshot_dir / "db.sqlite3.backup"))
         dst = sqlite3.connect(str(self.db_path))
@@ -423,12 +784,73 @@ class SnapshotService:
                         child.unlink()
             root.mkdir(parents=True, exist_ok=True)
 
+    def _rel_to_base_text(self, path):
+        try:
+            return str(Path(path).resolve(strict=False).relative_to(self.base_dir.resolve(strict=False)))
+        except Exception:
+            return str(path)
+
+    def _remove_runtime_secret_files(self):
+        removed = []
+        skipped = []
+        base = self.base_dir.resolve(strict=False)
+        for raw_path in self.runtime_secret_files:
+            path = raw_path if raw_path.is_absolute() else self.base_dir / raw_path
+            rel_text = self._rel_to_base_text(path)
+            try:
+                resolved = path.resolve(strict=False)
+                if resolved != base and base not in resolved.parents:
+                    skipped.append({"path": str(path), "reason": "outside_base_dir"})
+                    continue
+                if not path.exists() and not path.is_symlink():
+                    continue
+                if path.is_dir():
+                    skipped.append({"path": rel_text, "reason": "is_directory"})
+                    continue
+                path.unlink()
+                removed.append(rel_text)
+            except Exception as exc:
+                skipped.append({"path": rel_text, "reason": str(exc)})
+        return {"removed": removed, "skipped": skipped}
+
     def _existing_resettable_tables(self, conn):
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
         existing = {row["name"] if isinstance(row, sqlite3.Row) else row[0] for row in rows}
-        return sorted(existing & RESETTABLE_TABLES)
+        reset_tables = existing & RESETTABLE_TABLES
+        priority = {
+            "forum_post_reactions": 10,
+            "forum_thread_reactions": 11,
+            "forum_posts": 12,
+            "forum_threads": 13,
+            "forum_boards": 14,
+            "forum_categories": 15,
+            "album_files": 20,
+            "albums": 21,
+            "storage_share_links": 30,
+            "file_access_grants": 31,
+            "encrypted_file_keys": 32,
+            "cloud_file_refs": 33,
+            "storage_files": 34,
+            "storage_folders": 35,
+            "uploaded_files": 36,
+            "direct_messages": 40,
+            "dm_threads": 41,
+            "chat_message_reports": 42,
+            "chat_messages": 43,
+        }
+        return sorted(reset_tables, key=lambda name: (priority.get(name, 100), name))
+
+    def _apply_management_only_settings(self, conn, *, actor_name, reset_at):
+        applied = {}
+        for key, value in MANAGEMENT_ONLY_RESET_SETTINGS.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (key, str(bool(value)), reset_at, actor_name or "system_reset"),
+            )
+            applied[key] = bool(value)
+        return applied
 
     def daily_snapshot_status(self, *, settings, now=None):
         now = now or datetime.now()
@@ -510,23 +932,51 @@ class SnapshotService:
                     conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", cleared_tables)
                 except Exception:
                     pass
+            management_settings = self._apply_management_only_settings(conn, actor_name=actor_name, reset_at=reset_at)
             conn.commit()
         finally:
             conn.close()
 
         self._clear_file_roots()
-        self.audit(
-            "SYSTEM_RUNTIME_RESET",
-            "-",
-            user=actor_name,
-            success=True,
-            detail=f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},reason={reason or ''},reset_at={reset_at}",
+        points_result = None
+        if self.reset_points_chain:
+            points_result = self.reset_points_chain(
+                actor=actor,
+                reason=reason or "",
+                pre_reset_snapshot_id=pre.snapshot_id,
+            )
+        secret_result = self._remove_runtime_secret_files()
+        audit_detail = (
+            f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},"
+            f"points_chain_reset={bool(points_result and points_result.get('ok'))},"
+            f"runtime_secret_files_removed={','.join(secret_result['removed'])},"
+            f"runtime_secret_files_skipped={json.dumps(secret_result['skipped'], ensure_ascii=False, sort_keys=True)},"
+            f"management_only_settings={','.join(k for k, v in management_settings.items() if v)},"
+            f"disabled_settings={','.join(k for k, v in management_settings.items() if not v)},"
+            f"reason={reason or ''},reset_at={reset_at}"
         )
+        audit_result = None
+        if self.reset_audit_chain:
+            audit_result = self.reset_audit_chain(
+                "SYSTEM_RUNTIME_RESET",
+                "-",
+                user=actor_name,
+                success=True,
+                detail=audit_detail,
+            )
+        else:
+            self.audit("SYSTEM_RUNTIME_RESET", "-", user=actor_name, success=True, detail=audit_detail)
         return {
             "ok": True,
             "msg": "runtime state reset",
             "pre_reset_snapshot_id": pre.snapshot_id,
             "cleared_tables": cleared_tables,
+            "points_chain_reset": points_result,
+            "audit_chain_reset": audit_result,
+            "management_only_settings": management_settings,
+            "runtime_secret_files_removed": secret_result["removed"],
+            "runtime_secret_files_skipped": secret_result["skipped"],
+            "requires_restart": True,
             "reset_at": reset_at,
         }
 
@@ -586,6 +1036,7 @@ class SnapshotService:
             conn = self.get_db()
             try:
                 self.ensure_schema(conn)
+                self._upsert_local_snapshot_record(conn, snapshot_id, actor_id=actor_id)
                 conn.execute(
                     "INSERT OR REPLACE INTO snapshot_restore_events "
                     "(id, snapshot_id, restored_by, started_at, completed_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run) "
@@ -630,14 +1081,95 @@ class SnapshotService:
 
 
 class ServerModeService:
-    def __init__(self, *, snapshot_service, get_db, audit, integrity_guard=None):
+    def __init__(self, *, snapshot_service, get_db, audit, integrity_guard=None, save_settings=None):
         self.snapshot_service = snapshot_service
         self.get_db = get_db
         self.audit = audit
         self.integrity_guard = integrity_guard
+        self.save_settings = save_settings
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
+
+    def _decode_profile(self, row):
+        if not row:
+            return None
+        data = dict(row)
+        for key in ("settings_json", "thresholds_json"):
+            try:
+                data[key.replace("_json", "")] = json.loads(data.get(key) or "{}")
+            except Exception:
+                data[key.replace("_json", "")] = {}
+            data.pop(key, None)
+        data["is_builtin"] = bool(data.get("is_builtin"))
+        return data
+
+    def list_profiles(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT * FROM security_profiles ORDER BY is_builtin DESC, name"
+            ).fetchall()
+            return [self._decode_profile(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_profile(self, name):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute("SELECT * FROM security_profiles WHERE name=?", (str(name or ""),)).fetchone()
+            return self._decode_profile(row)
+        finally:
+            conn.close()
+
+    def save_profile(self, *, name, label, description="", settings=None, thresholds=None, actor=None):
+        profile_name = str(name or "").strip().lower()
+        if not PROFILE_NAME_RE.fullmatch(profile_name):
+            return {"ok": False, "msg": "profile name 必須是 2-32 字元的小寫英數、底線或連字號，且以英文字母開頭"}
+        if profile_name in SERVER_MODES:
+            return {"ok": False, "msg": "內建模式不可覆寫，請使用自定義名稱"}
+        settings = settings if isinstance(settings, dict) else {}
+        thresholds = thresholds if isinstance(thresholds, dict) else {}
+        try:
+            actor_id = int(actor["id"] if actor else 0)
+        except Exception:
+            actor_id = int(actor.get("id") or 0) if hasattr(actor, "get") else 0
+        now = datetime.now().isoformat()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO security_profiles
+                (name, label, description, settings_json, thresholds_json, is_builtin, created_by, updated_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    label=excluded.label,
+                    description=excluded.description,
+                    settings_json=excluded.settings_json,
+                    thresholds_json=excluded.thresholds_json,
+                    updated_by=excluded.updated_by,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    profile_name,
+                    str(label or profile_name)[:80],
+                    str(description or "")[:500],
+                    json.dumps(settings, ensure_ascii=False, sort_keys=True),
+                    json.dumps(thresholds, ensure_ascii=False, sort_keys=True),
+                    actor_id,
+                    actor_id,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            profile = conn.execute("SELECT * FROM security_profiles WHERE name=?", (profile_name,)).fetchone()
+            return {"ok": True, "profile": self._decode_profile(profile)}
+        finally:
+            conn.close()
 
     def get_current_mode(self):
         conn = self.get_db()
@@ -648,19 +1180,195 @@ class ServerModeService:
         finally:
             conn.close()
 
+    def _apply_production_upload_policy(self, conn):
+        try:
+            from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
+        except Exception:
+            return {"ok": False, "msg": "upload security policy unavailable"}
+        ensure_upload_security_schema(conn)
+        policy, msg = update_cloud_drive_security_policy(conn, {
+            "require_scan_before_download": True,
+            "block_unclean_downloads": True,
+            "warn_high_risk_downloads": True,
+            "allow_inline_preview_for_high_risk": False,
+            "e2ee_server_scan_claim_allowed": False,
+            "revoke_shares_on_suspension": True,
+            "scanner_enabled": True,
+            "scanner_backend": "clamav",
+            "scanner_timeout_seconds": 60,
+            "fail_closed_on_scanner_error": True,
+            "quarantine_on_infected": True,
+            "validate_magic_mime": True,
+            "deep_archive_scan_enabled": True,
+            "max_archive_depth": 2,
+            "office_macro_scan_enabled": True,
+            "image_reencode_enabled": True,
+            "image_reencode_max_pixels": 25_000_000,
+            "yara_enabled": True,
+            "max_archive_files": 200,
+            "max_archive_uncompressed_bytes": 50 * 1024 * 1024,
+            "max_daily_downloads": 500,
+            "notes": "production mode: strict scan, fail-closed download, quarantine and content validation enabled",
+        })
+        if msg:
+            return {"ok": False, "msg": msg}
+        return {"ok": True, "policy": policy}
+
+    def _apply_production_account_policy(self, conn, *, actor):
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "username" not in user_cols or "id" not in user_cols:
+            return {"default_password_reset_required": 0, "test_accounts_disabled": 0, "sessions_revoked": 0}
+        now = datetime.now().isoformat()
+
+        default_where = ["username IN ({})".format(",".join("?" for _ in DEFAULT_ACCOUNT_NAMES))]
+        default_params = list(DEFAULT_ACCOUNT_NAMES)
+        if "is_default_password" in user_cols:
+            default_where.append("COALESCE(is_default_password, 0)=1")
+        default_rows = conn.execute(
+            f"SELECT id FROM users WHERE {' OR '.join(default_where)}",
+            tuple(default_params),
+        ).fetchall()
+        default_ids = [int(row["id"]) for row in default_rows]
+        default_updates = []
+        if "must_change_password" in user_cols:
+            default_updates.append("must_change_password=1")
+        if "is_default_password" in user_cols:
+            default_updates.append("is_default_password=1")
+        if "updated_at" in user_cols:
+            default_updates.append("updated_at=?")
+        if default_ids and default_updates:
+            params = []
+            if "updated_at" in user_cols:
+                params.append(now)
+            placeholders = ",".join("?" for _ in default_ids)
+            conn.execute(
+                f"UPDATE users SET {', '.join(default_updates)} WHERE id IN ({placeholders})",
+                tuple(params + default_ids),
+            )
+
+        test_rows = conn.execute(
+            "SELECT id FROM users WHERE username IN ({})".format(",".join("?" for _ in TEST_ACCOUNT_NAMES)),
+            tuple(TEST_ACCOUNT_NAMES),
+        ).fetchall()
+        test_ids = [int(row["id"]) for row in test_rows]
+        if test_ids and "status" in user_cols:
+            updates = ["status='inactive'"]
+            if "updated_at" in user_cols:
+                updates.append("updated_at=?")
+            params = [now] if "updated_at" in user_cols else []
+            placeholders = ",".join("?" for _ in test_ids)
+            conn.execute(
+                f"UPDATE users SET {', '.join(updates)} WHERE id IN ({placeholders})",
+                tuple(params + test_ids),
+            )
+
+        sessions_revoked = 0
+        session_cols = set()
+        try:
+            session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        except Exception:
+            session_cols = set()
+        if test_ids and {"user_id", "is_revoked"}.issubset(session_cols):
+            placeholders = ",".join("?" for _ in test_ids)
+            updates = ["is_revoked=1"]
+            params = []
+            if "revoked_at" in session_cols:
+                updates.append("revoked_at=?")
+                params.append(now)
+            cur = conn.execute(
+                f"UPDATE sessions SET {', '.join(updates)} WHERE user_id IN ({placeholders}) AND COALESCE(is_revoked, 0)=0",
+                tuple(params + test_ids),
+            )
+            sessions_revoked = int(cur.rowcount or 0)
+
+        return {
+            "default_password_reset_required": len(default_ids),
+            "test_accounts_disabled": len(test_ids),
+            "sessions_revoked": sessions_revoked,
+            "password_policy": "forced reset uses the account password-strength policy",
+            "actor": actor.get("username") if hasattr(actor, "get") else None,
+        }
+
+    def _apply_production_hardening(self, *, actor):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            account_result = self._apply_production_account_policy(conn, actor=actor)
+            upload_policy = self._apply_production_upload_policy(conn)
+            if not upload_policy.get("ok"):
+                conn.rollback()
+                return {"ok": False, "msg": upload_policy.get("msg") or "production upload policy failed"}
+            conn.commit()
+            return {"ok": True, "accounts": account_result, "cloud_drive_policy": upload_policy.get("policy")}
+        finally:
+            conn.close()
+
+    def _apply_internal_test_hardening(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            now = datetime.now().isoformat()
+            session_cols = set()
+            try:
+                session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            except Exception:
+                session_cols = set()
+            revoked = 0
+            if {"user_id", "is_revoked"}.issubset(session_cols):
+                updates = ["is_revoked=1"]
+                params = []
+                if "revoked_at" in session_cols:
+                    updates.append("revoked_at=?")
+                    params.append(now)
+                cur = conn.execute(
+                    f"""
+                    UPDATE sessions
+                    SET {', '.join(updates)}
+                    WHERE COALESCE(is_revoked, 0)=0
+                          AND user_id IN (
+                              SELECT id FROM users
+                              WHERE username<>'root'
+                          )
+                    """,
+                    tuple(params),
+                )
+                revoked = int(cur.rowcount or 0)
+            conn.commit()
+            return {"ok": True, "sessions_revoked": revoked}
+        finally:
+            conn.close()
+
     def switch_mode(self, *, target_mode, actor, confirm, notes=None):
-        if target_mode not in SERVER_MODES:
+        target_mode = str(target_mode or "").strip().lower()
+        profile = self.get_profile(target_mode)
+        if not profile:
             return {"ok": False, "msg": "server mode 錯誤"}
-        if target_mode == "preprod" and self.integrity_guard:
+        if target_mode == "production" and confirm != "GO_LIVE":
+            return {"ok": False, "msg": "進入 production 上線模式必須在確認欄輸入 GO_LIVE"}
+        if target_mode in {"preprod", "production"} and self.integrity_guard:
             allowed, high_risk_count = self.integrity_guard.can_enter_preprod()
             if not allowed:
                 return {
                     "ok": False,
-                    "msg": "存在 pending/rejected high risk Integrity Guard finding，不允許進入準上線模式",
+                    "msg": "存在 pending/rejected high risk Integrity Guard finding，不允許進入準上線或上線模式",
                     "high_risk_count": high_risk_count,
                 }
         if target_mode == "superweak":
             return self.enter_superweak(actor=actor, confirm=confirm, notes=notes)
+        applied_settings = {}
+        if self.save_settings:
+            updates = {}
+            updates.update(profile.get("settings") or {})
+            updates.update(profile.get("thresholds") or {})
+            applied_settings = self.save_settings(updates) if updates else {}
+        production_result = None
+        if target_mode == "production":
+            production_result = self._apply_production_hardening(actor=actor)
+            if not production_result.get("ok"):
+                return production_result
+        internal_test_result = None
+        if target_mode == "internal_test":
+            internal_test_result = self._apply_internal_test_hardening()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -670,8 +1378,8 @@ class ServerModeService:
                 (current, target_mode, int(actor["id"]), datetime.now().isoformat(), notes or ""),
             )
             conn.commit()
-            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},reason={notes or ''}")
-            return {"ok": True, "mode": self.get_current_mode()}
+            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},profile={profile['name']},settings={applied_settings},production={production_result or {}},internal_test={internal_test_result or {}},reason={notes or ''}")
+            return {"ok": True, "mode": self.get_current_mode(), "profile": profile, "applied_settings": applied_settings, "production": production_result, "internal_test": internal_test_result}
         finally:
             conn.close()
 

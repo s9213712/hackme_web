@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from flask import request
 
+from services.sanction_notices import restore_admin_sanction_context
+
 
 def register_appeal_routes(app, deps):
     VIOLATION_APPEAL_WINDOW_HOURS = deps["VIOLATION_APPEAL_WINDOW_HOURS"]
@@ -324,11 +326,22 @@ def register_appeal_routes(app, deps):
             if action == "approve":
                 penalty_points = appeal["penalty_points"] or 0
                 restored_count = max(0, (appeal["violation_count_snapshot"] or 0) - (penalty_points or 0))
-                # 申覆成立→恢復申覆前狀態
-                conn.execute(
-                    "UPDATE users SET status=?, role=?, violation_count=?, blocked_until=CASE WHEN ?='active' THEN NULL ELSE blocked_until END WHERE id=?",
-                    (appeal["pre_status"], appeal["pre_role"], restored_count, appeal["pre_status"], appeal["user_id"])
+                restored_sanction = restore_admin_sanction_context(
+                    conn,
+                    user_id=appeal["user_id"],
+                    violation_id=appeal["latest_violation_id"],
                 )
+                if restored_sanction:
+                    conn.execute(
+                        "UPDATE users SET violation_count=?, updated_at=? WHERE id=?",
+                        (restored_count, reviewed_at, appeal["user_id"]),
+                    )
+                else:
+                    # 申覆成立→恢復申覆前狀態
+                    conn.execute(
+                        "UPDATE users SET status=?, role=?, violation_count=?, blocked_until=CASE WHEN ?='active' THEN NULL ELSE blocked_until END WHERE id=?",
+                        (appeal["pre_status"], appeal["pre_role"], restored_count, appeal["pre_status"], appeal["user_id"])
+                    )
             else:
                 # 若維持原處分，保留目前狀態，但可記錄檢閱備註
                 pass

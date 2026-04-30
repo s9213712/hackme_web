@@ -5,16 +5,18 @@ from datetime import datetime
 from pathlib import Path
 
 from services.storage_paths import resolve_storage_path
+from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import (
     create_uploaded_file_record,
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
     safe_public_filename,
     scan_uploaded_file,
+    storage_root_can_accept_bytes,
 )
 
 
-CONTEXT_TYPES = {"dm", "group_chat", "forum_post", "forum_comment", "announcement"}
+CONTEXT_TYPES = {"dm", "group_chat", "chat_message", "forum_thread", "forum_post", "forum_comment", "announcement"}
 ANNOUNCEMENT_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 
 
@@ -78,8 +80,17 @@ def _now():
     return datetime.now().isoformat()
 
 
+def _actor_value(actor, key, default=None):
+    if not actor:
+        return default
+    try:
+        return actor[key]
+    except Exception:
+        return actor.get(key, default) if hasattr(actor, "get") else default
+
+
 def _actor_role(actor):
-    return "super_admin" if actor and actor.get("username") == "root" else (actor or {}).get("role", "user")
+    return "super_admin" if actor and _actor_value(actor, "username") == "root" else _actor_value(actor, "role", "user")
 
 
 def _role_rank_value(role):
@@ -138,12 +149,22 @@ def _create_file_access_log(conn, *, file_id, actor_user_id, action, result, rea
 
 def list_cloud_files(conn, actor, *, limit=50, offset=0):
     ensure_cloud_drive_attachment_schema(conn)
+    ensure_storage_album_schema(conn)
     rows = conn.execute(
         """
         SELECT f.*, COUNT(r.id) AS ref_count
         FROM uploaded_files f
         LEFT JOIN cloud_file_refs r ON r.file_id=f.id
         WHERE f.owner_user_id=? AND f.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM storage_files sf
+                  WHERE sf.file_id=f.id
+                        AND sf.owner_user_id=f.owner_user_id
+                        AND sf.deleted_at IS NULL
+                        AND sf.is_trashed=1
+                        AND sf.trash_source='cloud_drive_delete'
+              )
         GROUP BY f.id
         ORDER BY f.created_at DESC
         LIMIT ? OFFSET ?
@@ -162,8 +183,8 @@ def serialize_file_row(row):
     return data
 
 
-def _check_quota(conn, actor, member_rule, size_bytes):
-    usage = get_user_cloud_drive_usage(conn, actor, member_rule=member_rule)
+def _check_quota(conn, actor, member_rule, size_bytes, storage_root=None):
+    usage = get_user_cloud_drive_usage(conn, actor, member_rule=member_rule, storage_root=storage_root)
     if not usage["can_upload"]:
         return False, "目前會員等級或處分狀態不可上傳"
     max_file = usage.get("max_file_size_bytes")
@@ -172,6 +193,9 @@ def _check_quota(conn, actor, member_rule, size_bytes):
     remaining = usage.get("remaining_bytes")
     if remaining is not None and int(size_bytes) > int(remaining):
         return False, "雲端硬碟容量不足"
+    disk_ok, _disk = storage_root_can_accept_bytes(storage_root, size_bytes)
+    if not disk_ok:
+        return False, "Host 磁碟可用空間不足，請先清理檔案或擴充儲存空間"
     daily_limit = usage.get("upload_rate_limit_per_day")
     if daily_limit is not None and int(daily_limit) >= 0:
         today = datetime.now().date().isoformat()
@@ -215,7 +239,7 @@ def store_cloud_upload(
         size_bytes = len(data)
         from io import BytesIO
         stream = BytesIO(data)
-    ok, msg = _check_quota(conn, actor, member_rule, size_bytes)
+    ok, msg = _check_quota(conn, actor, member_rule, size_bytes, storage_root=storage_root)
     if not ok:
         if position is not None and hasattr(stream, "seek"):
             stream.seek(position)
@@ -472,10 +496,22 @@ def _insert_grant(conn, *, file_id, user_id=None, role=None, group_id=None, cont
 
 def can_download_file(conn, *, actor, file_id, action="download"):
     ensure_cloud_drive_attachment_schema(conn)
+    ensure_storage_album_schema(conn)
     row = _file_row(conn, file_id)
     if not row:
         return False, "not_found", None
     if row["deleted_at"]:
+        return False, "deleted", row
+    trashed = conn.execute(
+        """
+        SELECT 1 FROM storage_files
+        WHERE file_id=? AND owner_user_id=? AND deleted_at IS NULL
+              AND is_trashed=1 AND trash_source='cloud_drive_delete'
+        LIMIT 1
+        """,
+        (file_id, int(row["owner_user_id"])),
+    ).fetchone()
+    if trashed:
         return False, "deleted", row
     if int(row["owner_user_id"]) == int(actor["id"]) or is_manager_or_root(actor):
         return _scan_allows_download(conn, row), "owner_or_admin", row

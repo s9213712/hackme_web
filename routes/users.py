@@ -5,6 +5,7 @@ from flask import request, send_file
 
 from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
 from services.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
+from services.sanction_notices import record_admin_sanction_notice
 
 
 def register_user_routes(app, deps):
@@ -33,6 +34,7 @@ def register_user_routes(app, deps):
     normalize_text = deps["normalize_text"]
     parse_birthdate = deps["parse_birthdate"]
     parse_positive_int = deps["parse_positive_int"]
+    points_service = deps.get("points_service")
     revoke_user_sessions = deps["revoke_user_sessions"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
@@ -70,6 +72,65 @@ def register_user_routes(app, deps):
     def current_session_hash():
         tok = request.cookies.get("session_token")
         return hash_token(tok) if tok else ""
+
+    def _row_snapshot(row):
+        return {key: row[key] for key in row.keys()} if row else {}
+
+    def _sanction_label(data, target):
+        parts = []
+        if "sanction_status" in data:
+            parts.append(f"處分狀態 {target['sanction_status'] or 'none'} -> {normalize_text(data.get('sanction_status')) or 'none'}")
+        if data.get("sanction_until"):
+            parts.append(f"處分期限 {normalize_text(data.get('sanction_until'))}")
+        if "status" in data:
+            parts.append(f"帳號狀態 {target['status'] or '-'} -> {normalize_text(data.get('status')) or '-'}")
+        if "base_level" in data or "member_level" in data:
+            next_level = normalize_text(data.get("base_level") or data.get("member_level"))
+            if next_level:
+                parts.append(f"會員等級 {target['base_level'] or target['member_level'] or '-'} -> {next_level}")
+        return "；".join(parts) or "會員管理處分"
+
+    def _is_punitive_member_update(data, target):
+        if "sanction_status" in data:
+            next_sanction = normalize_text(data.get("sanction_status")) or "none"
+            if next_sanction in {"restricted", "suspended"} and next_sanction != (target["sanction_status"] or "none"):
+                return True
+        if "status" in data:
+            next_status = normalize_text(data.get("status"))
+            if next_status and next_status not in {"active", "pending"} and next_status != target["status"]:
+                return True
+        next_level = normalize_text(data.get("base_level") or data.get("member_level"))
+        if next_level in {"restricted", "suspended"} and next_level != (target["base_level"] or target["member_level"]):
+            return True
+        return False
+
+    def _send_admin_sanction_notice(conn, *, actor, actor_role, target, previous, data):
+        reason = normalize_text(data.get("level_update_reason") or data.get("reason") or "會員管理處分")
+        action_label = _sanction_label(data, target)
+        add_violation(
+            target["id"],
+            target["username"],
+            target["role"],
+            points=0,
+            reason=f"會員管理處分：{action_label}；原因：{reason}",
+            triggered_by=actor_role,
+            actor_username=actor["username"],
+        )
+        latest = conn.execute(
+            "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (target["id"],),
+        ).fetchone()
+        if not latest:
+            return
+        record_admin_sanction_notice(
+            conn,
+            actor=actor,
+            target=target,
+            previous=previous,
+            violation_id=latest["id"],
+            action_label=action_label,
+            reason=reason,
+        )
 
     def ensure_avatar_user_columns(conn):
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -300,8 +361,18 @@ def register_user_routes(app, deps):
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                 (cur.lastrowid, hash_password(password), now)
             )
+            new_user_id = cur.lastrowid
             trim_password_history(conn, cur.lastrowid)
             conn.commit()
+            if points_service and role in {"manager", "super_admin"} and username != "root":
+                try:
+                    points_service.award_admin_initial_grant(
+                        user_id=new_user_id,
+                        actor={"id": actor["id"], "username": actor["username"], "role": actor_role},
+                    )
+                except Exception as exc:
+                    audit("POINTS_ADMIN_INITIAL_GRANT_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target={username}, error={exc}")
             audit("ADMIN_CREATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target={username}, role={role}")
             return json_resp({"ok":True,"msg":"帳號已建立"})
@@ -377,6 +448,11 @@ def register_user_routes(app, deps):
         mimetype = (getattr(file_storage, "mimetype", "") or "").lower()
         if mimetype not in {"image/jpeg", "image/png", "image/gif"}:
             return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF"}), 400
+        # Enforce extension allowlist (L-1: path traversal + extension validation)
+        filename = (getattr(file_storage, "filename", "") or "").lower()
+        allowed_exts = {".jpg", ".jpeg", ".png", ".gif"}
+        if not any(filename.endswith(ext) for ext in allowed_exts):
+            return json_resp({"ok": False, "msg": "頭像僅支援 JPEG / PNG / GIF 副檔名"}), 400
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
@@ -434,6 +510,10 @@ def register_user_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
+        # Authorization: only self or manager-and-above can view this avatar.
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if actor["id"] != user_id and role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok": False, "msg": "權限不足"}), 403
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
@@ -510,6 +590,8 @@ def register_user_routes(app, deps):
 
             revoke_sessions_needed = False
             level_changed = False
+            previous_target = _row_snapshot(target)
+            sanction_notice_needed = False
             updates = []
             params = []
             if "nickname" in data:
@@ -542,6 +624,8 @@ def register_user_routes(app, deps):
                 val = normalize_text(data["status"])
                 if val not in ACCOUNT_STATUSES:
                     return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
+                if _is_punitive_member_update({"status": val}, target):
+                    sanction_notice_needed = True
                 updates.append("status=?")
                 params.append(val)
                 if val != "active":
@@ -574,6 +658,8 @@ def register_user_routes(app, deps):
                 if err:
                     return json_resp({"ok":False,"msg":err}), 400
                 level_changed = True
+                if _is_punitive_member_update(data, target):
+                    sanction_notice_needed = True
             if "role" in data:
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403
@@ -602,17 +688,21 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":"請再次輸入新密碼"}), 400
                 if pw_confirm != pw:
                     return json_resp({"ok":False,"msg":"兩次密碼輸入不一致"}), 400
+                current_row = conn.execute(
+                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (user_id,)
+                ).fetchone()
                 if is_self:
                     current_pw = data.get("current_password","") if isinstance(data.get("current_password"), str) else ""
                     if not current_pw:
                         return json_resp({"ok":False,"msg":"請輸入目前密碼"}), 400
-                    current_row = conn.execute(
-                        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
-                        (user_id,)
-                    ).fetchone()
                     if not current_row or not verify_password(current_row["password_hash"], current_pw):
                         return json_resp({"ok":False,"msg":"目前密碼錯誤"}), 403
-                if actor_role != "super_admin":
+                if current_row and verify_password(current_row["password_hash"], pw):
+                    return json_resp({"ok":False,"msg":"新密碼不可與目前密碼相同"}), 400
+                target_is_root = normalize_text(target["username"]).lower() == "root"
+                must_follow_password_policy = not target_is_root
+                if must_follow_password_policy:
                     ok, msg = validate_password(pw)
                     if not ok:
                         return json_resp({"ok":False,"msg":msg}), 400
@@ -650,6 +740,16 @@ def register_user_routes(app, deps):
                 conn.execute(sql, params)
                 conn.commit()
             elif level_changed:
+                conn.commit()
+            if sanction_notice_needed and target["username"] != "root" and not is_self:
+                _send_admin_sanction_notice(
+                    conn,
+                    actor=actor,
+                    actor_role=actor_role,
+                    target=target,
+                    previous=previous_target,
+                    data=data,
+                )
                 conn.commit()
             if revoke_sessions_needed:
                 revoke_user_sessions(user_id)
@@ -802,6 +902,15 @@ def register_user_routes(app, deps):
             conn.execute("UPDATE users SET role=?, violation_count=0, updated_at=? WHERE id=?",
                          (to_role, datetime.now().isoformat(), user_id))
             conn.commit()
+            if points_service and to_role in {"manager", "super_admin"} and target["username"] != "root":
+                try:
+                    points_service.award_admin_initial_grant(
+                        user_id=user_id,
+                        actor={"id": actor["id"], "username": actor["username"], "role": actor_role},
+                    )
+                except Exception as exc:
+                    audit("POINTS_ADMIN_INITIAL_GRANT_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target_id={user_id}, error={exc}")
             audit("USER_PROMOTED", get_client_ip(), user=actor["username"],
                   success=True, detail=f"user_id={user_id} {from_role}→{to_role}")
             return json_resp({"ok":True,"msg":f"已升為 {ROLE_LABEL[to_role]}"})
@@ -811,13 +920,22 @@ def register_user_routes(app, deps):
     @app.route("/api/admin/users/<int:user_id>/demote", methods=["POST"])
     @require_csrf
     def admin_user_demote(user_id):
-        """超級管理者可將管理者降為一般用戶（再次降級＝刪除，由系統自動判斷）"""
+        """超級管理者可將管理者降為一般用戶；可選目標狀態：restricted / suspended / inactive"""
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
         if actor["username"] != "root":
             return json_resp({"ok":False,"msg":"只有 root 可降級帳號"}), 403
+
+        try:
+            data = request.get_json(force=True) or {}
+        except:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        target_status = str(data.get("target_status", "inactive")).strip()
+        valid_statuses = {"restricted", "suspended", "inactive"}
+        if target_status not in valid_statuses:
+            return json_resp({"ok":False,"msg":f"無效的目標狀態，支援：{', '.join(valid_statuses)}"}), 400
 
         conn = get_db()
         try:
@@ -830,15 +948,16 @@ def register_user_routes(app, deps):
                 return json_resp({"ok":False,"msg":"最高管理者帳號不可降級"}), 403
             from_role = target["role"]
             if from_role == "user":
+                # Demote user to selected restricted/suspended/inactive state (Bug: demote)
                 conn.execute(
-                    "UPDATE users SET status='inactive', blocked_until=NULL, updated_at=? WHERE id=?",
-                    (datetime.now().isoformat(), user_id)
+                    f"UPDATE users SET status=?, blocked_until=NULL, updated_at=? WHERE id=?",
+                    (target_status, datetime.now().isoformat(), user_id)
                 )
                 conn.commit()
                 revoke_user_sessions(user_id)
                 audit("USER_DEACTIVATED_BY_ADMIN", get_client_ip(), user=actor["username"],
-                      detail=f"user_id={user_id} deactivated from user demotion")
-                return json_resp({"ok":True,"msg":"帳號已停用"})
+                      detail=f"user_id={user_id} demoted to {target_status}")
+                return json_resp({"ok":True,"msg":f"帳號已降級為 {target_status}"})
             # 管理者 → 一般用戶
             conn.execute("UPDATE users SET role='user', violation_count=0, updated_at=? WHERE id=?",
                          (datetime.now().isoformat(), user_id))

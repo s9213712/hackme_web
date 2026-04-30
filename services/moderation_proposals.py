@@ -12,6 +12,47 @@ ACTION_TYPES = {
 }
 PROPOSAL_STATUSES = {"pending", "approved", "rejected", "expired", "cancelled", "executed"}
 VOTES = {"approve", "reject"}
+HIGH_RISK_ACTION_TYPES = {"suspend", "delete", "downgrade_level"}
+
+
+def governance_policy_for_action(action_type, target_role=None):
+    target_role = str(target_role or "user")
+    high_risk = action_type in HIGH_RISK_ACTION_TYPES or target_role in {"manager", "super_admin"}
+    if high_risk:
+        return {
+            "risk_level": "high",
+            "required_votes": 3,
+            "required_root_approval": True,
+            "required_manager_approvals": 2,
+            "summary": "高風險：需要 root 同意，且另外需要 2 位 admin/manager 同意。",
+        }
+    return {
+        "risk_level": "normal",
+        "required_votes": 1,
+        "required_root_approval": False,
+        "required_manager_approvals": 1,
+        "summary": "一般：需要 1 位 admin/manager 或 root 同意。",
+    }
+
+
+def proposal_policy_from_row(row):
+    data = dict(row) if row else {}
+    fallback = governance_policy_for_action(data.get("action_type"), data.get("target_role"))
+    risk_level = data.get("risk_level") or fallback["risk_level"]
+    required_root_approval = bool(data.get("required_root_approval")) if "required_root_approval" in data else fallback["required_root_approval"]
+    required_manager_approvals = int(data.get("required_manager_approvals") or fallback["required_manager_approvals"])
+    required_votes = int(data.get("required_votes") or fallback["required_votes"])
+    return {
+        "risk_level": risk_level,
+        "required_votes": required_votes,
+        "required_root_approval": required_root_approval,
+        "required_manager_approvals": required_manager_approvals,
+        "summary": (
+            "高風險：需要 root 同意，且另外需要 2 位 admin/manager 同意。"
+            if required_root_approval
+            else "一般：需要 1 位 admin/manager 或 root 同意。"
+        ),
+    }
 
 
 def ensure_moderation_proposals_schema(conn):
@@ -51,6 +92,12 @@ def ensure_moderation_proposals_schema(conn):
     proposal_cols = {row["name"] for row in conn.execute("PRAGMA table_info(moderation_proposals)").fetchall()}
     if "action_value" not in proposal_cols:
         conn.execute("ALTER TABLE moderation_proposals ADD COLUMN action_value TEXT")
+    if "risk_level" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'normal'")
+    if "required_root_approval" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN required_root_approval INTEGER NOT NULL DEFAULT 0")
+    if "required_manager_approvals" not in proposal_cols:
+        conn.execute("ALTER TABLE moderation_proposals ADD COLUMN required_manager_approvals INTEGER NOT NULL DEFAULT 1")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_proposals_status ON moderation_proposals(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_proposals_target ON moderation_proposals(target_user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_moderation_votes_proposal ON moderation_votes(proposal_id)")
@@ -62,6 +109,7 @@ def proposal_row_to_dict(row):
     data = dict(row)
     for key in ("required_votes", "approve_count", "reject_count"):
         data[key] = int(data.get(key) or 0)
+    data.update(proposal_policy_from_row(data))
     return data
 
 
@@ -73,13 +121,33 @@ def validate_action_payload(action_type, action_value):
     return True, ""
 
 
-def create_moderation_proposal(conn, *, target_user_id, action_type, action_value, proposed_by_user_id, reason, required_votes=2, ttl_hours=72):
+def create_moderation_proposal(
+    conn,
+    *,
+    target_user_id,
+    action_type,
+    action_value,
+    proposed_by_user_id,
+    reason,
+    required_votes=None,
+    ttl_hours=72,
+    risk_level=None,
+    required_root_approval=None,
+    required_manager_approvals=None,
+):
     ensure_moderation_proposals_schema(conn)
     ok, msg = validate_action_payload(action_type, action_value)
     if not ok:
         return None, msg
+    fallback_policy = governance_policy_for_action(action_type)
+    risk_level = risk_level or fallback_policy["risk_level"]
+    required_root_approval = fallback_policy["required_root_approval"] if required_root_approval is None else bool(required_root_approval)
     try:
-        required_votes = max(1, int(required_votes))
+        required_manager_approvals = max(1, int(required_manager_approvals or fallback_policy["required_manager_approvals"]))
+    except Exception:
+        return None, "required_manager_approvals 格式錯誤"
+    try:
+        required_votes = max(1, int(required_votes or fallback_policy["required_votes"]))
     except Exception:
         return None, "required_votes 格式錯誤"
     reason = (reason or "").strip()
@@ -90,8 +158,8 @@ def create_moderation_proposal(conn, *, target_user_id, action_type, action_valu
     cur = conn.execute(
         "INSERT INTO moderation_proposals "
         "(target_user_id, action_type, action_value, proposed_by_user_id, reason, status, required_votes, "
-        "approve_count, reject_count, expires_at, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, 0, ?, ?, ?)",
+        "approve_count, reject_count, expires_at, created_at, updated_at, risk_level, required_root_approval, required_manager_approvals) "
+        "VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, 0, ?, ?, ?, ?, ?, ?)",
         (
             int(target_user_id),
             action_type,
@@ -102,39 +170,91 @@ def create_moderation_proposal(conn, *, target_user_id, action_type, action_valu
             expires_at,
             now.isoformat(),
             now.isoformat(),
+            risk_level,
+            1 if required_root_approval else 0,
+            required_manager_approvals,
         ),
     )
     row = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (cur.lastrowid,)).fetchone()
     return proposal_row_to_dict(row), None
 
 
+def proposal_vote_state(conn, proposal):
+    proposal = proposal_row_to_dict(proposal) if not isinstance(proposal, dict) else dict(proposal)
+    votes = conn.execute(
+        "SELECT v.vote, u.username, u.role "
+        "FROM moderation_votes v JOIN users u ON u.id=v.voter_user_id "
+        "WHERE v.proposal_id=?",
+        (proposal["id"],),
+    ).fetchall()
+    approve_count = 0
+    reject_count = 0
+    manager_approve_count = 0
+    manager_reject_count = 0
+    root_approved = False
+    root_rejected = False
+    for vote in votes:
+        vote_value = vote["vote"]
+        username = vote["username"]
+        role = vote["role"]
+        if vote_value == "approve":
+            approve_count += 1
+            if username == "root":
+                root_approved = True
+            elif role == "manager":
+                manager_approve_count += 1
+        elif vote_value == "reject":
+            reject_count += 1
+            if username == "root":
+                root_rejected = True
+            elif role == "manager":
+                manager_reject_count += 1
+    policy = proposal_policy_from_row(proposal)
+    requires_root = bool(policy["required_root_approval"])
+    manager_required = int(policy["required_manager_approvals"])
+    root_requirement_met = (not requires_root) or root_approved or proposal.get("proposed_by_username") == "root"
+    manager_requirement_met = manager_approve_count >= manager_required
+    normal_requirement_met = approve_count >= int(policy["required_votes"])
+    approved = (root_requirement_met and manager_requirement_met) if requires_root else normal_requirement_met
+    rejected = (root_rejected or manager_reject_count >= manager_required) if requires_root else reject_count >= int(policy["required_votes"])
+    return {
+        "approve_count": approve_count,
+        "reject_count": reject_count,
+        "manager_approve_count": manager_approve_count,
+        "manager_reject_count": manager_reject_count,
+        "root_approved": root_approved,
+        "root_rejected": root_rejected,
+        "root_requirement_met": root_requirement_met,
+        "manager_requirement_met": manager_requirement_met,
+        "approved": approved,
+        "rejected": rejected,
+        **policy,
+    }
+
+
 def refresh_proposal_vote_counts(conn, proposal_id):
-    counts = conn.execute(
-        "SELECT "
-        "SUM(CASE WHEN vote='approve' THEN 1 ELSE 0 END) AS approve_count, "
-        "SUM(CASE WHEN vote='reject' THEN 1 ELSE 0 END) AS reject_count "
-        "FROM moderation_votes WHERE proposal_id=?",
-        (proposal_id,),
-    ).fetchone()
-    approve_count = int(counts["approve_count"] or 0)
-    reject_count = int(counts["reject_count"] or 0)
     proposal = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()
     if not proposal:
         return None
+    state = proposal_vote_state(conn, proposal)
+    approve_count = int(state["approve_count"])
+    reject_count = int(state["reject_count"])
     status = proposal["status"]
     now = datetime.now()
     if status == "pending" and proposal["expires_at"] <= now.isoformat():
         status = "expired"
-    elif status == "pending" and approve_count >= int(proposal["required_votes"]):
+    elif status == "pending" and state["approved"]:
         status = "approved"
-    elif status == "pending" and reject_count >= int(proposal["required_votes"]):
+    elif status == "pending" and state["rejected"]:
         status = "rejected"
     conn.execute(
         "UPDATE moderation_proposals SET approve_count=?, reject_count=?, status=?, updated_at=? WHERE id=?",
         (approve_count, reject_count, status, now.isoformat(), proposal_id),
     )
     row = conn.execute("SELECT * FROM moderation_proposals WHERE id=?", (proposal_id,)).fetchone()
-    return proposal_row_to_dict(row)
+    data = proposal_row_to_dict(row)
+    data.update(proposal_vote_state(conn, data))
+    return data
 
 
 def cast_action_value(value):

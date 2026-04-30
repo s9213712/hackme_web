@@ -1,14 +1,22 @@
 function bindUiEvents() {
+  if (typeof decorateSidebarMenu === "function") decorateSidebarMenu();
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
   const tabModuleDm = $("tab-module-dm");
+  const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
+  const tabModuleAlbums = $("tab-module-albums");
+  const tabModuleGames = $("tab-module-games");
+  const tabModuleComfyui = $("tab-module-comfyui");
+  const tabModuleEconomy = $("tab-module-economy");
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleAppeals = $("tab-module-appeals");
   const tabServerHealth = $("tab-server-health");
+  const tabServerSecurity = $("tab-server-security");
+  const tabServerAudit = $("tab-server-audit");
   const tabServerIntegrity = $("tab-server-integrity");
   const tabServerSettings = $("tab-server-settings");
   const tabServerEnv = $("tab-server-env");
@@ -19,13 +27,17 @@ function bindUiEvents() {
   const tabSettingsDrive = $("tab-settings-drive");
   const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
-  const tabAudit    = $("tab-audit");
   const tabViol     = $("tab-violations");
   const tabGovernance = $("tab-governance");
   const tabAppeals  = $("tab-appeals");
   const tabReports  = $("tab-reports");
   const liBtn       = $("li-btn");
   const regBtn      = $("reg-btn");
+  const recoveryToggle = $("recovery-toggle");
+  const resetRequestBtn = $("reset-request-btn");
+  const resetConfirmBtn = $("reset-confirm-btn");
+  const verifyRequestBtn = $("verify-request-btn");
+  const verifyConfirmBtn = $("verify-confirm-btn");
   const captchaRefresh = $("captcha-refresh");
   const logoutBtn   = $("logout-btn");
   const bugReportOpenBtn = $("bug-report-open-btn");
@@ -53,13 +65,34 @@ function bindUiEvents() {
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
+  const rootStorageRefresh = $("root-storage-refresh-btn");
+  const rootStorageSave = $("root-storage-save-btn");
+  const rootStorageClear = $("root-storage-clear-btn");
+  const rootStorageUserSelect = $("root-storage-user-select");
+  const rootStorageUsers = $("root-storage-users");
   const serverModeApply = $("server-mode-apply-btn");
+  const internalTestTokenRefresh = $("internal-test-token-refresh-btn");
+  const internalTestTokenRotate = $("internal-test-token-rotate-btn");
   const healthRefresh = $("health-refresh-btn");
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
   const integrityExport = $("integrity-export-btn");
+  const integrityBulkApprove = $("integrity-bulk-approve-btn");
+  const integrityBulkReject = $("integrity-bulk-reject-btn");
+  const integrityBulkIgnore = $("integrity-bulk-ignore-btn");
   const integrityRepair = $("integrity-repair-btn");
   const restartBtn   = $("restart-server-btn");
+  const securityCenterRefresh = $("security-center-refresh-btn");
+  const securityControlsSave = $("security-controls-save-btn");
+  const securityThresholdsSave = $("security-thresholds-save-btn");
+  const securityModeApply = $("security-mode-apply-btn");
+  const securityProfileSave = $("security-profile-save-btn");
+  const securityProfileLoadCurrent = $("security-profile-load-current-btn");
+  const securityModeSelect = $("security-mode-select");
+  const securityTestRefresh = $("security-test-refresh-btn");
+  const securityPentestStart = $("security-pentest-start-btn");
+  const securityFunctionalStart = $("security-functional-start-btn");
+  const serverModeSelect = $("server-mode-select");
   const editSaveBtn = $("user-edit-save");
   const editCancelBtn = $("user-edit-cancel");
   const avatarUploadBtn = $("edit-user-avatar-upload");
@@ -68,6 +101,7 @@ function bindUiEvents() {
   const chatRefreshRoomBtn = $("chat-room-refresh-btn");
   const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
   const chatSendBtn = $("chat-send-btn");
+  const chatFriendAddBtn = $("chat-friend-add-btn");
   const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
   const chatAttachmentExistingBtn = $("chat-attachment-existing-btn");
   const chatInput = $("chat-message-input");
@@ -79,22 +113,68 @@ function bindUiEvents() {
   const dmInput = $("dm-message-input");
   const dmBlockBtn = $("dm-block-user-btn");
   const communityAnnouncementBtn = $("community-announcement-submit");
+  const communityAnnouncementOpenBtn = $("community-announcement-open-btn");
+  const communityAnnouncementCancelBtn = $("community-announcement-cancel-btn");
   const announcementAttachmentUploadBtn = $("announcement-attachment-upload-btn");
   const announcementAttachmentExistingBtn = $("announcement-attachment-existing-btn");
   const communityCategoryCreateBtn = $("community-category-create-btn");
+  const communityCategoryManagerOpenBtn = $("community-category-manager-open-btn");
+  const communityCategoryManagerCloseBtn = $("community-category-manager-close-btn");
+  const communityBoardRequestOpenBtn = $("community-board-request-open-btn");
+  const communityBoardRequestCancelBtn = $("community-board-request-cancel-btn");
   const communityBoardRequestBtn = $("community-board-request-btn");
+  const communityThreadCreateOpenBtn = $("community-thread-create-open-btn");
+  const communityThreadCreateCancelBtn = $("community-thread-create-cancel-btn");
   const communityThreadSubmitBtn = $("community-thread-submit");
   const communityReplySubmitBtn = $("community-reply-submit");
   const communityThreadPrevBtn = $("community-thread-prev");
   const communityThreadNextBtn = $("community-thread-next");
+  const communityThreadStickyToggle = $("community-thread-sticky-toggle");
   const communityThreadLockToggle = $("community-thread-lock-toggle");
   const communityThreadDeleteBtn = $("community-thread-delete-btn");
+  const communityToolsToggleBtn = $("community-tools-toggle-btn");
+  const communityReviewTabBtn = $("community-review-tab-btn");
+  const communityModeratorOpenBtn = $("community-moderator-open-btn");
+  const communityModeratorRefreshBtn = $("community-moderator-refresh-btn");
+  const communityModeratorSaveBtn = $("community-moderator-save-btn");
+  const communityModeratorPreset = $("community-moderator-preset");
+  const communityBackBoardsBtn = $("community-back-boards-btn");
+  const communityBackThreadsBtn = $("community-back-threads-btn");
   const communityBoardSearch = $("community-board-search");
   const communityThreadSearch = $("community-thread-search");
   const driveRefreshBtn = $("drive-refresh-btn");
   const driveUploadBtn = $("drive-upload-btn");
+  const driveRemoteCapabilityBtn = $("drive-remote-capability-btn");
+  const driveRemoteDownloadBtn = $("drive-remote-download-btn");
   const storageUploadBtn = $("storage-upload-btn");
+  const storageFolderUploadBtn = $("storage-folder-upload-btn");
+  const storageRefreshBtn = $("storage-refresh-btn");
+  const storageUploadFile = $("storage-upload-file");
+  const storageUploadFolder = $("storage-upload-folder");
+  const storageFolderCreateBtn = $("storage-folder-create-btn");
+  const storageOrganizeBtn = $("storage-organize-btn");
+  const storageFolderMoveBtn = $("storage-folder-move-btn");
   const albumCreateBtn = $("album-create-btn");
+  const albumThumbSize = $("album-thumb-size");
+  const gameRefreshBtn = $("game-refresh-btn");
+  const gameInviteBtn = $("game-invite-btn");
+  const gamePracticeBtn = $("game-practice-btn");
+  const gameResignBtn = $("game-resign-btn");
+  const gameAwardBtn = $("game-award-btn");
+  const comfyuiRefreshBtn = $("comfyui-refresh-btn");
+  const comfyuiGenerateBtn = $("comfyui-generate-btn");
+  const comfyuiInterruptBtn = $("comfyui-interrupt-btn");
+  const comfyuiSaveBtn = $("comfyui-save-btn");
+  const comfyuiShareBtn = $("comfyui-share-btn");
+  const comfyuiDiscardBtn = $("comfyui-discard-btn");
+  const economyRefreshBtn = $("economy-refresh-btn");
+  const economyAdminRefreshBtn = $("economy-admin-refresh-btn");
+  const economyAdjustBtn = $("economy-adjust-btn");
+  const economyRootReportBtn = $("economy-root-report-btn");
+  const economyRollbackBtn = $("economy-rollback-btn");
+  const economySealBtn = $("economy-seal-btn");
+  const economyVerifyBtn = $("economy-verify-btn");
+  const sidebarToggle = $("sidebar-toggle");
   const userEditOverlay = $("user-edit-overlay");
   const adminAddOverlay = $("admin-add-overlay");
   const bugReportOverlay = $("bug-report-overlay");
@@ -103,11 +183,18 @@ function bindUiEvents() {
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
   if (tabModuleDm) tabModuleDm.addEventListener("click", () => switchModuleTab("dm"));
+  if (tabModuleAnnouncements) tabModuleAnnouncements.addEventListener("click", () => switchModuleTab("announcements"));
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
+  if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
+  if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
+  if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
+  if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));
   if (tabModuleAppeals) tabModuleAppeals.addEventListener("click", () => switchModuleTab("appeals"));
   if (tabModuleAccounts) tabModuleAccounts.addEventListener("click", () => switchModuleTab("accounts"));
   if (tabModuleServer) tabModuleServer.addEventListener("click", () => switchModuleTab("server"));
+  if (tabServerSecurity) tabServerSecurity.addEventListener("click", () => switchServerTab("security"));
+  if (tabServerAudit) tabServerAudit.addEventListener("click", () => switchServerTab("audit"));
   if (tabServerHealth) tabServerHealth.addEventListener("click", () => switchServerTab("health"));
   if (tabServerIntegrity) tabServerIntegrity.addEventListener("click", () => switchServerTab("integrity"));
   if (tabServerSettings) tabServerSettings.addEventListener("click", () => switchServerTab("settings"));
@@ -119,13 +206,17 @@ function bindUiEvents() {
   if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
   if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
-  if (tabAudit)    tabAudit.addEventListener("click",    () => switchAdminTab("audit"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
   if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
+  if (recoveryToggle) recoveryToggle.addEventListener("click", toggleRecoveryPanel);
+  if (resetRequestBtn) resetRequestBtn.addEventListener("click", requestPasswordReset);
+  if (resetConfirmBtn) resetConfirmBtn.addEventListener("click", confirmPasswordReset);
+  if (verifyRequestBtn) verifyRequestBtn.addEventListener("click", requestEmailVerification);
+  if (verifyConfirmBtn) verifyConfirmBtn.addEventListener("click", confirmEmailVerification);
   if (captchaRefresh) captchaRefresh.addEventListener("click", loadCaptchaChallenge);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
   if (bugReportOpenBtn) bugReportOpenBtn.addEventListener("click", showBugReportDialog);
@@ -149,6 +240,10 @@ function bindUiEvents() {
     if (selectedChatRoomId) loadChatMessages(selectedChatRoomId, false);
   });
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
+  if (chatFriendAddBtn) chatFriendAddBtn.addEventListener("click", addChatFriend);
+  document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
+    btn.addEventListener("click", () => sendChatSticker(btn.dataset.chatSticker || ""));
+  });
   if (chatAttachmentUploadBtn) chatAttachmentUploadBtn.addEventListener("click", uploadChatAttachment);
   if (chatAttachmentExistingBtn) chatAttachmentExistingBtn.addEventListener("click", attachExistingChatFile);
   if (dmCreateBtn) dmCreateBtn.addEventListener("click", createDmThread);
@@ -158,10 +253,18 @@ function bindUiEvents() {
   if (dmAttachmentExistingBtn) dmAttachmentExistingBtn.addEventListener("click", attachExistingDmFile);
   if (dmBlockBtn) dmBlockBtn.addEventListener("click", blockSelectedDmUser);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
+  if (communityAnnouncementOpenBtn) communityAnnouncementOpenBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(true));
+  if (communityAnnouncementCancelBtn) communityAnnouncementCancelBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(false));
   if (announcementAttachmentUploadBtn) announcementAttachmentUploadBtn.addEventListener("click", uploadAnnouncementAttachmentRequest);
   if (announcementAttachmentExistingBtn) announcementAttachmentExistingBtn.addEventListener("click", attachExistingAnnouncementFile);
   if (communityCategoryCreateBtn) communityCategoryCreateBtn.addEventListener("click", createCommunityCategory);
+  if (communityCategoryManagerOpenBtn) communityCategoryManagerOpenBtn.addEventListener("click", () => toggleCommunityCategoryManager(true));
+  if (communityCategoryManagerCloseBtn) communityCategoryManagerCloseBtn.addEventListener("click", () => toggleCommunityCategoryManager(false));
+  if (communityBoardRequestOpenBtn) communityBoardRequestOpenBtn.addEventListener("click", () => toggleCommunityBoardRequest(true));
+  if (communityBoardRequestCancelBtn) communityBoardRequestCancelBtn.addEventListener("click", () => toggleCommunityBoardRequest(false));
   if (communityBoardRequestBtn) communityBoardRequestBtn.addEventListener("click", requestCommunityBoard);
+  if (communityThreadCreateOpenBtn) communityThreadCreateOpenBtn.addEventListener("click", () => toggleCommunityThreadCreator(true));
+  if (communityThreadCreateCancelBtn) communityThreadCreateCancelBtn.addEventListener("click", () => toggleCommunityThreadCreator(false));
   if (communityThreadSubmitBtn) communityThreadSubmitBtn.addEventListener("click", createCommunityThread);
   if (communityReplySubmitBtn) communityReplySubmitBtn.addEventListener("click", replyCommunityThread);
   if (communityThreadPrevBtn) communityThreadPrevBtn.addEventListener("click", () => {
@@ -174,8 +277,17 @@ function bindUiEvents() {
     communityThreadPage += 1;
     openCommunityBoard(selectedCommunityBoardId);
   });
+  if (communityThreadStickyToggle) communityThreadStickyToggle.addEventListener("click", toggleCommunityThreadSticky);
   if (communityThreadLockToggle) communityThreadLockToggle.addEventListener("click", toggleCommunityThreadLock);
   if (communityThreadDeleteBtn) communityThreadDeleteBtn.addEventListener("click", deleteCommunityThread);
+  if (communityModeratorOpenBtn) communityModeratorOpenBtn.addEventListener("click", () => toggleCommunityModeratorManager());
+  if (communityModeratorRefreshBtn) communityModeratorRefreshBtn.addEventListener("click", () => loadCommunityModerators());
+  if (communityModeratorSaveBtn) communityModeratorSaveBtn.addEventListener("click", saveCommunityModerator);
+  if (communityModeratorPreset) communityModeratorPreset.addEventListener("change", () => applyModeratorPreset(communityModeratorPreset.value));
+  if (communityToolsToggleBtn) communityToolsToggleBtn.addEventListener("click", () => toggleCommunityTools());
+  if (communityReviewTabBtn) communityReviewTabBtn.addEventListener("click", () => switchCommunityMode(communityMode === "review" ? "boards" : "review"));
+  if (communityBackBoardsBtn) communityBackBoardsBtn.addEventListener("click", showCommunityBoardStage);
+  if (communityBackThreadsBtn) communityBackThreadsBtn.addEventListener("click", showCommunityThreadStage);
   if (communityBoardSearch) communityBoardSearch.addEventListener("input", (e) => {
     communityBoardQuery = e?.target?.value || "";
     renderCommunityBoards();
@@ -187,8 +299,47 @@ function bindUiEvents() {
   });
   if (driveRefreshBtn) driveRefreshBtn.addEventListener("click", loadDriveDashboard);
   if (driveUploadBtn) driveUploadBtn.addEventListener("click", uploadDriveFile);
-  if (storageUploadBtn) storageUploadBtn.addEventListener("click", uploadStorageFile);
+  if (driveRemoteCapabilityBtn) driveRemoteCapabilityBtn.addEventListener("click", loadRemoteDownloadCapabilities);
+  if (driveRemoteDownloadBtn) driveRemoteDownloadBtn.addEventListener("click", startRemoteDriveDownload);
+  if (storageUploadBtn) storageUploadBtn.addEventListener("click", openStorageUploadPicker);
+  if (storageFolderUploadBtn) storageFolderUploadBtn.addEventListener("click", openStorageFolderUploadPicker);
+  if (storageUploadFile) storageUploadFile.addEventListener("change", uploadStorageFile);
+  if (storageUploadFolder) storageUploadFolder.addEventListener("change", uploadStorageFolder);
+  if (storageRefreshBtn) storageRefreshBtn.addEventListener("click", loadDriveDashboard);
+  if (storageFolderCreateBtn) storageFolderCreateBtn.addEventListener("click", createStorageFolder);
+  if (storageOrganizeBtn) storageOrganizeBtn.addEventListener("click", organizeSelectedStorageFile);
+  if (storageFolderMoveBtn) storageFolderMoveBtn.addEventListener("click", moveStorageFolder);
   if (albumCreateBtn) albumCreateBtn.addEventListener("click", createAlbum);
+  if (albumThumbSize) {
+    if (typeof getAlbumThumbSize === "function") albumThumbSize.value = getAlbumThumbSize();
+    albumThumbSize.addEventListener("change", (event) => setAlbumThumbSize(event.target.value));
+  }
+  if (gameRefreshBtn) gameRefreshBtn.addEventListener("click", loadGameZone);
+  if (gameInviteBtn) gameInviteBtn.addEventListener("click", createGameInvite);
+  if (gamePracticeBtn) gamePracticeBtn.addEventListener("click", createPracticeGame);
+  if (gameResignBtn) gameResignBtn.addEventListener("click", resignGame);
+  if (gameAwardBtn) gameAwardBtn.addEventListener("click", awardGameRewards);
+  if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
+  if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
+  if (comfyuiInterruptBtn) comfyuiInterruptBtn.addEventListener("click", interruptComfyuiGeneration);
+  if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
+  if (comfyuiShareBtn) comfyuiShareBtn.addEventListener("click", shareComfyuiToCommunity);
+  if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
+  if (typeof bindComfyuiDraftPersistence === "function") bindComfyuiDraftPersistence();
+  if (typeof bindEconomyInlineEvents === "function") bindEconomyInlineEvents();
+  if (sidebarToggle) sidebarToggle.addEventListener("click", () => {
+    setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+  });
+  const sidebarNav = $("module-main-tabs");
+  if (sidebarNav) {
+    sidebarNav.addEventListener("click", (event) => {
+      const sub = event.target?.closest?.("[data-sidebar-action]");
+      if (!sub) return;
+      event.preventDefault();
+      event.stopPropagation();
+      runSidebarAction(sub.dataset.sidebarAction || "");
+    });
+  }
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);
@@ -254,18 +405,45 @@ function bindUiEvents() {
   if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
   if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
   if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
+  if ($("governance-action-type")) $("governance-action-type").addEventListener("change", updateGovernanceActionValueHelp);
+  if ($("governance-target-user-id")) $("governance-target-user-id").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
+  if (rootStorageRefresh) rootStorageRefresh.addEventListener("click", loadRootStorageUsers);
+  if (rootStorageSave) rootStorageSave.addEventListener("click", saveRootStorageOverride);
+  if (rootStorageClear) rootStorageClear.addEventListener("click", clearRootStorageOverride);
+  if (rootStorageUserSelect) rootStorageUserSelect.addEventListener("change", (event) => fillRootStorageOverrideForm(event.target.value));
+  if (rootStorageUsers) rootStorageUsers.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-root-storage-select]");
+    if (!button) return;
+    fillRootStorageOverrideForm(button.dataset.rootStorageSelect || "");
+  });
   if (serverModeApply) serverModeApply.addEventListener("click", applyServerMode);
+  if (internalTestTokenRefresh) internalTestTokenRefresh.addEventListener("click", loadInternalTestTokenStatus);
+  if (internalTestTokenRotate) internalTestTokenRotate.addEventListener("click", rotateInternalTestToken);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);
   if (integrityExport) integrityExport.addEventListener("click", exportIntegrityReport);
+  if (integrityBulkApprove) integrityBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
+  if (integrityBulkReject) integrityBulkReject.addEventListener("click", () => reviewSelectedIntegrityFindings("reject"));
+  if (integrityBulkIgnore) integrityBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
   if (integrityRepair) integrityRepair.addEventListener("click", repairIntegrityChains);
   if (restartBtn)   restartBtn.addEventListener("click",   restartServer);
+  if (securityCenterRefresh) securityCenterRefresh.addEventListener("click", loadSecurityCenter);
+  if (securityControlsSave) securityControlsSave.addEventListener("click", saveSecurityCenterControls);
+  if (securityThresholdsSave) securityThresholdsSave.addEventListener("click", saveSecurityThresholds);
+  if (securityModeApply) securityModeApply.addEventListener("click", applySecurityMode);
+  if (securityProfileSave) securityProfileSave.addEventListener("click", saveSecurityProfile);
+  if (securityProfileLoadCurrent) securityProfileLoadCurrent.addEventListener("click", loadCurrentSecurityProfileDraft);
+  if (securityModeSelect) securityModeSelect.addEventListener("change", () => renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview"));
+  if (securityTestRefresh) securityTestRefresh.addEventListener("click", loadSecurityTestJobs);
+  if (securityPentestStart) securityPentestStart.addEventListener("click", startSecurityPentest);
+  if (securityFunctionalStart) securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke);
+  if (serverModeSelect) serverModeSelect.addEventListener("change", () => renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview"));
 }
 
 $("li-pw").addEventListener("keydown", (e) => {
@@ -274,14 +452,11 @@ $("li-pw").addEventListener("keydown", (e) => {
 $("reg-pw").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doRegister();
 });
+setupPwToggle("reset-new-pw", "reset-new-pw-toggle");
+setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
 
 (async function init() {
   await loadSiteConfig();
-  try {
-    startClock();
-  } catch (err) {
-    console.error("clock bootstrap failed", err);
-  }
   setupInactivityTracking();
   startServerConnectionMonitor();
   _csrfToken = readCookie("csrf_token");
@@ -301,6 +476,10 @@ $("reg-pw").addEventListener("keydown", (e) => {
     }
   }
   try {
+    if (typeof hasIdleTimeoutLogoutPending === "function" && hasIdleTimeoutLogoutPending()) {
+      if (typeof forceIdleTimeoutLogout === "function") await forceIdleTimeoutLogout();
+      return;
+    }
     const res = await safeFetch(API + "/me", { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
     if (json.ok) setAuthState(json);

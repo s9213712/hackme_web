@@ -9,7 +9,20 @@ const MARKDOWN_ACTIONS = [
 ];
 
 function markdownToSafeHtml(input) {
-  let html = sanitize(input || "");
+  const links = [];
+  const protectedText = String(input || "").replace(/\[([^\]]{1,120})\]\((https?:\/\/[^\s)]+)\)/g, (_, text, url) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (_err) {
+      return `[${text}](${url})`;
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) return `[${text}](${url})`;
+    const token = `@@MD_LINK_${links.length}@@`;
+    links.push(`<a href="${sanitize(parsed.href)}" target="_blank" rel="noopener noreferrer">${sanitize(text)}</a>`);
+    return token;
+  });
+  let html = sanitize(protectedText);
   html = html.replace(/^### (.*)$/gm, "<h3>$1</h3>");
   html = html.replace(/^## (.*)$/gm, "<h2>$1</h2>");
   html = html.replace(/^# (.*)$/gm, "<h1>$1</h1>");
@@ -17,7 +30,9 @@ function markdownToSafeHtml(input) {
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
   html = html.replace(/`(.+?)`/g, "<code>$1</code>");
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  links.forEach((link, index) => {
+    html = html.replace(`@@MD_LINK_${index}@@`, link);
+  });
   return html.split(/\n{2,}/).map((block) => {
     if (/^<(h1|h2|h3|blockquote)/.test(block)) return block.replace(/\n/g, "<br>");
     return `<p>${block.replace(/\n/g, "<br>")}</p>`;

@@ -1,12 +1,20 @@
 import base64
 import hashlib
 import re
-import time
 from datetime import datetime, timedelta
 
 import argon2
 from flask import make_response, request, send_from_directory
 
+from services.access_controls import verify_internal_test_token
+from services.account_recovery import (
+    create_recovery_token,
+    ensure_account_recovery_schema,
+    lookup_valid_token,
+    mark_token_used,
+    normalize_email,
+    queue_mail,
+)
 from services.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
 
 
@@ -44,9 +52,11 @@ def register_public_routes(app, deps):
     make_token = deps["make_token"]
     normalize_text = deps["normalize_text"]
     parse_birthdate = deps["parse_birthdate"]
+    points_service = deps.get("points_service")
     record_login_failure = deps["record_login_failure"]
     record_security_event = deps["record_security_event"]
     require_csrf = deps["require_csrf"]
+    revoke_user_sessions = deps.get("revoke_user_sessions", lambda user_id: 0)
     score_password_strength = deps["score_password_strength"]
     store_csrf_token = deps["store_csrf_token"]
     timing_delay = deps["timing_delay"]
@@ -76,6 +86,122 @@ def register_public_routes(app, deps):
                 target_user=username,
                 detail=f"new_ip_hash={ip_hash[:12]},ua={ua[:80]}",
             )
+
+    def generic_recovery_response():
+        return json_resp({"ok": True, "msg": "如果資料符合，系統會寄出後續操作通知"})
+
+    def current_server_mode(conn):
+        try:
+            row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+            return str(row["current_mode"] or "preprod") if row else "preprod"
+        except Exception:
+            return "preprod"
+
+    def internal_test_login_allowed(settings, data):
+        token = (
+            str(data.get("internal_test_token") or "").strip()
+            or str(data.get("login_token") or "").strip()
+            or request.headers.get("X-Internal-Test-Token", "").strip()
+        )
+        return verify_internal_test_token(
+            token,
+            settings.get("internal_test_login_token_hash", ""),
+            settings.get("internal_test_login_token_expires_at", ""),
+        )
+
+    def production_login_conflict(conn, user_id, ip, now_iso):
+        if current_server_mode(conn) != "production":
+            return None
+        try:
+            ip_conflict = conn.execute(
+                """
+                SELECT s.user_id, u.username
+                FROM sessions s
+                LEFT JOIN users u ON u.id=s.user_id
+                WHERE COALESCE(s.is_revoked, 0)=0
+                  AND s.expires_at>?
+                  AND s.ip_address=?
+                  AND s.user_id<>?
+                LIMIT 1
+                """,
+                (now_iso, ip, user_id),
+            ).fetchone()
+            if ip_conflict:
+                return {
+                    "kind": "ip_reused_by_other_account",
+                    "msg": "正式上線模式禁止同一 IP 同時登入多個帳號，請先登出原帳號",
+                    "detail": f"active_user_id={ip_conflict['user_id']},active_username={ip_conflict['username'] or '-'}",
+                }
+            account_conflict = conn.execute(
+                """
+                SELECT ip_address
+                FROM sessions
+                WHERE user_id=?
+                  AND COALESCE(is_revoked, 0)=0
+                  AND expires_at>?
+                  AND ip_address IS NOT NULL
+                  AND ip_address<>?
+                LIMIT 1
+                """,
+                (user_id, now_iso, ip),
+            ).fetchone()
+            if account_conflict:
+                return {
+                    "kind": "account_active_from_other_ip",
+                    "msg": "正式上線模式禁止同一帳號同時從不同 IP 登入，請先登出其他裝置",
+                    "detail": f"active_ip={account_conflict['ip_address']}",
+                }
+        except Exception as exc:
+            return {
+                "kind": "session_policy_check_failed",
+                "msg": "正式上線模式登入安全檢查失敗，請稍後再試",
+                "detail": f"error={exc}",
+            }
+        return None
+
+    def find_recovery_user(conn, identifier):
+        ident = str(identifier or "").strip()
+        if not ident:
+            return None
+        email = normalize_email(ident)
+        if email:
+            return conn.execute(
+                "SELECT id, username, email, status, email_verified FROM users WHERE lower(email)=lower(?) LIMIT 1",
+                (email,),
+            ).fetchone()
+        username = normalize_text(ident)
+        if not username:
+            return None
+        return conn.execute(
+            "SELECT id, username, email, status, email_verified FROM users WHERE username=? LIMIT 1",
+            (username,),
+        ).fetchone()
+
+    def trim_password_history(conn, user_id, limit=5):
+        conn.execute(
+            "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
+            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+            ")",
+            (user_id, user_id, int(limit)),
+        )
+
+    def ensure_public_account_columns(conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        additions = (
+            ("email", "TEXT"),
+            ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
+            ("failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("locked_until", "TEXT"),
+            ("last_login_at", "TEXT"),
+            ("password_strength_score", "INTEGER NOT NULL DEFAULT 0"),
+            ("password_changed_at", "TEXT"),
+            ("must_change_password", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_default_password", "INTEGER NOT NULL DEFAULT 0"),
+            ("updated_at", "TEXT"),
+        )
+        for name, ddl in additions:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
 
     @app.route("/")
     def index():
@@ -115,9 +241,15 @@ def register_public_routes(app, deps):
     def get_site_config():
         settings = get_system_settings()
         features = get_feature_settings()
+        conn = get_db()
+        try:
+            server_mode = current_server_mode(conn)
+        finally:
+            conn.close()
         return json_resp({
             "ok": True,
             "site_config": {
+                "server_mode": server_mode,
                 "site_bg": settings.get("site_bg"),
                 "site_surface": settings.get("site_surface"),
                 "site_accent": settings.get("site_accent"),
@@ -240,6 +372,7 @@ def register_public_routes(app, deps):
         id_number = normalize_text(data.get("id_number"))
         birthdate = parse_birthdate(data.get("birthdate"))
         phone = normalize_text(data.get("phone"))
+        email = normalize_email(data.get("email"))
 
         # Username validation
         if not username:        return json_resp({"ok":False,"msg":"帳號不可為空"}), 400
@@ -275,22 +408,34 @@ def register_public_routes(app, deps):
         try:
             existing = conn.execute("SELECT 1 FROM users WHERE username=?",(username,)).fetchone()
             if existing:
-                time.sleep(0.3)
+                timing_delay()
                 audit("REGISTER_DUP", ip, username, ua=ua, success=False)
                 # Return generic — don't reveal account exists
                 return json_resp({"ok":False,"msg":"註冊失敗，請稍後再試"}), 409
 
+            # Always do timing-delay to normalize response time (Timing Oracle mitigation)
+            timing_delay()
+
             now = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO users (username, nickname, real_name, birthdate, id_number, phone, status, role, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', 'user', 'newbie', 'newbie', 'newbie', ?, ?, ?)",
-                (username, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), strength["score"], now, now)
+                "INSERT INTO users (username, email, nickname, real_name, birthdate, id_number, phone, status, role, member_level, base_level, effective_level, password_strength_score, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'user', 'newbie', 'newbie', 'newbie', ?, ?, ?)",
+                (username, email or None, encrypt_field(nickname), encrypt_field(real_name), encrypt_field(birthdate), encrypt_field(id_number), encrypt_field(phone), strength["score"], now, now)
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
                 (cur.lastrowid, hash_password(password), now)
             )
             conn.commit()
+            new_user_id = cur.lastrowid
+            if points_service:
+                try:
+                    points_service.award_signup_bonus(
+                        user_id=new_user_id,
+                        actor={"id": new_user_id, "username": username, "role": "user"},
+                    )
+                except Exception as exc:
+                    audit("POINTS_SIGNUP_BONUS_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
             audit("REGISTER_PENDING", ip, username, ua=ua, success=True, detail="awaiting manager approval")
             return json_resp({"ok":True,"msg":"註冊申請已送出，需經管理員或最高管理者審核後才能登入"})
         finally:
@@ -336,9 +481,10 @@ def register_public_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_public_account_columns(conn)
             user_row = conn.execute(
                 "SELECT id, username, status, blocked_until, locked_until, failed_login_count, role, "
-                "must_change_password, is_default_password FROM users WHERE username=?",
+                "email, email_verified, must_change_password, is_default_password FROM users WHERE username=?",
                 (username,)
             ).fetchone()
 
@@ -391,6 +537,35 @@ def register_public_routes(app, deps):
                 if user_row["status"] != "active":
                     audit("LOGIN_INACTIVE", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                if settings.get("require_email_verification") and not bool(user_row["email_verified"] or 0):
+                    audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
+                    return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
+                if current_server_mode(conn) == "internal_test" and user_row["username"] != "root":
+                    if not internal_test_login_allowed(settings, data):
+                        conn.execute(
+                            "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
+                            (user_row["id"], ip, ua, now),
+                        )
+                        conn.commit()
+                        audit("LOGIN_INTERNAL_TEST_TOKEN_REQUIRED", ip, username, ua=ua, success=False)
+                        return json_resp({"ok":False,"msg":"目前是內測模式，請輸入 root 提供的內測 token"}), 403
+
+                conflict = production_login_conflict(conn, user_row["id"], ip, now)
+                if conflict:
+                    conn.execute(
+                        "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
+                        (user_row["id"], ip, ua, now),
+                    )
+                    conn.commit()
+                    audit(
+                        "LOGIN_PRODUCTION_SESSION_CONFLICT",
+                        ip,
+                        username,
+                        ua=ua,
+                        success=False,
+                        detail=f"{conflict['kind']};{conflict['detail']}",
+                    )
+                    return json_resp({"ok":False,"msg":conflict["msg"]}), 403
 
                 # Log successful attempt
                 conn.execute(
@@ -404,6 +579,15 @@ def register_public_routes(app, deps):
                     )
                     record_login_location(conn, user_row["id"], username, ip, ua)
                 conn.commit()
+
+                if points_service and user_row["username"] != "root" and user_row["role"] in {"manager", "super_admin"}:
+                    try:
+                        points_service.award_admin_weekly_salary(
+                            user_id=user_row["id"],
+                            actor={"id": user_row["id"], "username": user_row["username"], "role": user_row["role"]},
+                        )
+                    except Exception as exc:
+                        audit("POINTS_ADMIN_SALARY_FAILED", ip, username, ua=ua, success=False, detail=str(exc))
 
                 # Create token + save session to DB
                 token = make_token(username)
@@ -456,6 +640,164 @@ def register_public_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/password-reset/request", methods=["POST"])
+    @require_csrf
+    def password_reset_request():
+        ip, ua = get_client_ip(), get_ua()
+        blocked, info = is_rate_limited(f"password-reset:{ip}", max_req=5, window_sec=3600)
+        if blocked:
+            return json_resp({"ok": False, "msg": f"請求太頻繁（每小時最多 {info['limit']} 次）"}), 429
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        identifier = data.get("username_or_email") or data.get("username") or data.get("email") if isinstance(data, dict) else ""
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            ensure_account_recovery_schema(conn)
+            row = find_recovery_user(conn, identifier)
+            if row and row["status"] == "active" and row["email"]:
+                token = create_recovery_token(conn, user_id=row["id"], purpose="password_reset", ip=ip, user_agent=ua, ttl_minutes=60)
+                queue_mail(
+                    conn,
+                    recipient=row["email"],
+                    subject=f"{SERVER_APP_NAME} password reset",
+                    body=f"Password reset token for {row['username']}:\n{token}\nThis token expires in 60 minutes.",
+                    kind="password_reset",
+                )
+                audit("PASSWORD_RESET_REQUESTED", ip, user=row["username"], ua=ua, success=True)
+            else:
+                audit("PASSWORD_RESET_REQUESTED", ip, user="-", ua=ua, success=True, detail="generic_no_delivery")
+            conn.commit()
+            timing_delay()
+            return generic_recovery_response()
+        finally:
+            conn.close()
+
+    @app.route("/api/password-reset/confirm", methods=["POST"])
+    @require_csrf
+    def password_reset_confirm():
+        ip, ua = get_client_ip(), get_ua()
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        token = str(data.get("token") or "").strip()
+        password = data.get("password", "") if isinstance(data.get("password"), str) else ""
+        password_confirm = data.get("password_confirm", "") if isinstance(data.get("password_confirm"), str) else ""
+        if not token:
+            return json_resp({"ok": False, "msg": "驗證碼不可為空"}), 400
+        if password != password_confirm:
+            return json_resp({"ok": False, "msg": "兩次密碼輸入不一致"}), 400
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            token_row = lookup_valid_token(conn, token=token, purpose="password_reset")
+            if not token_row:
+                audit("PASSWORD_RESET_TOKEN_INVALID", ip, ua=ua, success=False)
+                return json_resp({"ok": False, "msg": "驗證碼無效或已過期"}), 400
+            target_is_root = str(token_row["username"] or "").strip().lower() == "root"
+            if not target_is_root:
+                ok, msg = validate_password(password)
+                if not ok:
+                    return json_resp({"ok": False, "msg": msg}), 400
+                if is_feature_enabled("feature_account_security_enabled"):
+                    ok, msg, strength = enforce_password_strength(password, min_score=3)
+                    if not ok:
+                        return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
+                else:
+                    strength = score_password_strength(password)
+            else:
+                strength = score_password_strength(password)
+            current_row = conn.execute(
+                "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (token_row["user_id"],),
+            ).fetchone()
+            if current_row and verify_password(current_row["password_hash"], password):
+                return json_resp({"ok": False, "msg": "新密碼不可與目前密碼相同"}), 400
+            now = datetime.now().isoformat()
+            conn.execute(
+                "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+                (token_row["user_id"], hash_password(password), now),
+            )
+            conn.execute(
+                "UPDATE users SET password_strength_score=?, password_changed_at=?, must_change_password=0, is_default_password=0, failed_login_count=0, locked_until=NULL, updated_at=? WHERE id=?",
+                (strength["score"], now, now, token_row["user_id"]),
+            )
+            mark_token_used(conn, token_row["id"])
+            trim_password_history(conn, token_row["user_id"])
+            conn.commit()
+            revoke_user_sessions(token_row["user_id"])
+            audit("PASSWORD_RESET_CONFIRMED", ip, user=token_row["username"], ua=ua, success=True)
+            return json_resp({"ok": True, "msg": "密碼已重設，請重新登入"})
+        finally:
+            conn.close()
+
+    @app.route("/api/email-verification/request", methods=["POST"])
+    @require_csrf
+    def email_verification_request():
+        ip, ua = get_client_ip(), get_ua()
+        blocked, info = is_rate_limited(f"email-verify:{ip}", max_req=5, window_sec=3600)
+        if blocked:
+            return json_resp({"ok": False, "msg": f"請求太頻繁（每小時最多 {info['limit']} 次）"}), 429
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        identifier = data.get("username_or_email") or data.get("username") or data.get("email") if isinstance(data, dict) else ""
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            ensure_account_recovery_schema(conn)
+            row = find_recovery_user(conn, identifier)
+            if row and row["email"] and not bool(row["email_verified"] or 0):
+                token = create_recovery_token(conn, user_id=row["id"], purpose="email_verify", ip=ip, user_agent=ua, ttl_minutes=1440)
+                queue_mail(
+                    conn,
+                    recipient=row["email"],
+                    subject=f"{SERVER_APP_NAME} email verification",
+                    body=f"Email verification token for {row['username']}:\n{token}\nThis token expires in 24 hours.",
+                    kind="email_verify",
+                )
+                audit("EMAIL_VERIFICATION_REQUESTED", ip, user=row["username"], ua=ua, success=True)
+            else:
+                audit("EMAIL_VERIFICATION_REQUESTED", ip, user="-", ua=ua, success=True, detail="generic_no_delivery")
+            conn.commit()
+            timing_delay()
+            return generic_recovery_response()
+        finally:
+            conn.close()
+
+    @app.route("/api/email-verification/confirm", methods=["POST"])
+    @require_csrf
+    def email_verification_confirm():
+        ip, ua = get_client_ip(), get_ua()
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        token = str(data.get("token") or "").strip() if isinstance(data, dict) else ""
+        if not token:
+            return json_resp({"ok": False, "msg": "驗證碼不可為空"}), 400
+        conn = get_db()
+        try:
+            ensure_public_account_columns(conn)
+            token_row = lookup_valid_token(conn, token=token, purpose="email_verify")
+            if not token_row:
+                audit("EMAIL_VERIFICATION_TOKEN_INVALID", ip, ua=ua, success=False)
+                return json_resp({"ok": False, "msg": "驗證碼無效或已過期"}), 400
+            now = datetime.now().isoformat()
+            conn.execute("UPDATE users SET email_verified=1, updated_at=? WHERE id=?", (now, token_row["user_id"]))
+            mark_token_used(conn, token_row["id"])
+            conn.commit()
+            audit("EMAIL_VERIFIED", ip, user=token_row["username"], ua=ua, success=True)
+            return json_resp({"ok": True, "msg": "Email 已完成驗證"})
+        finally:
+            conn.close()
+
     @app.route("/api/logout", methods=["POST"])
     @require_csrf
     def logout():
@@ -469,21 +811,42 @@ def register_public_routes(app, deps):
         resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
         return resp
 
+    @app.route("/api/session/idle-timeout", methods=["POST"])
+    def idle_timeout_logout():
+        if request.headers.get("X-Idle-Timeout-Logout") != "1":
+            return json_resp({"ok": False, "msg": "缺少閒置登出確認"}), 400
+        ip, ua, tok = get_client_ip(), get_ua(), request.cookies.get("session_token")
+        user = db_get_user_from_token(tok) if tok else None
+        if tok:
+            db_delete_session(tok)
+        audit("IDLE_TIMEOUT_LOGOUT", ip, user=user or "-", ua=ua, success=bool(tok))
+        resp = json_resp({"ok": True, "msg": "閒置逾時，已登出"})
+        resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
+        return resp
+
     @app.route("/api/me", methods=["GET"])
     def me():
         ctx = get_current_user_ctx()
         if not ctx:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         role = "super_admin" if ctx["username"] == "root" else ctx["role"]
-        effective_level = dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal"
-        session_idle_timeout_minutes = 3
-        if get_member_level_rule:
+        is_special_account = ctx["username"] == "root" or role in {"super_admin", "manager"}
+        effective_level = None if is_special_account else (dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal")
+        # 全局覆寫（system_settings）> member_level 規則 > 預設 10
+        settings = get_system_settings()
+        override = settings.get("session_idle_timeout_minutes")
+        if override is not None:
+            session_idle_timeout_minutes = max(1, int(override))
+        elif get_member_level_rule and effective_level:
             conn = get_db()
             try:
                 rule = get_member_level_rule(conn, effective_level) or {}
-                session_idle_timeout_minutes = max(1, int(rule.get("session_idle_timeout_minutes") or 3))
+                session_idle_timeout_minutes = max(1, int(rule.get("session_idle_timeout_minutes") or 10))
             finally:
                 conn.close()
+        else:
+            session_idle_timeout_minutes = 10
         return json_resp({
             "ok": True,
             "id": ctx["id"],
@@ -491,8 +854,11 @@ def register_public_routes(app, deps):
             "role": role,
             "role_label": ROLE_LABEL.get(role, role),
             "status": ctx["status"],
-            "base_level": dict(ctx).get("base_level") or dict(ctx).get("member_level") or "normal",
+            "member_level": None if is_special_account else (dict(ctx).get("member_level") or "normal"),
+            "base_level": None if is_special_account else (dict(ctx).get("base_level") or dict(ctx).get("member_level") or "normal"),
             "effective_level": effective_level,
+            "member_level_label": "特殊階級" if is_special_account else effective_level,
+            "special_account": is_special_account,
             "session_idle_timeout_minutes": session_idle_timeout_minutes,
             "trust_score": dict(ctx).get("trust_score") or 0,
             "reputation": dict(ctx).get("reputation") or 0,

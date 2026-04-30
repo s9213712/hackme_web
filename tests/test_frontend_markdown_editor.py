@@ -10,9 +10,11 @@ def test_markdown_editor_assets_are_wired():
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert 'data-markdown-editor="1"' in index_html
-    assert '<script src="/js/34-markdown-editor.js" defer></script>' in index_html
+    assert 'src="/js/34-markdown-editor.js' in index_html
     assert "function markdownToSafeHtml" in markdown_js
     assert "function attachMarkdownEditor" in markdown_js
-    assert "sanitize(input || \"\")" in markdown_js
+    assert "sanitize(protectedText)" in markdown_js
+    assert "new URL(url)" in markdown_js
+    assert "@@MD_LINK_" in markdown_js
     assert ".markdown-toolbar" in styles
     assert ".markdown-preview" in styles

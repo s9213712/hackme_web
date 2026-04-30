@@ -16,8 +16,11 @@ DEFAULT_SETTINGS = {
     "browser_only_mode_enabled": False,
     "maintenance_bypass_token_hash": "",
     "maintenance_bypass_token_expires_at": "",
+    "internal_test_login_token_hash": "",
+    "internal_test_login_token_expires_at": "",
     "server_listen_host": "",
     "server_listen_port": 0,
+    "server_ssl_enabled": True,
     "cloud_drive_storage_root": "",
     "allow_register": True,
     "require_email_verification": False,
@@ -27,6 +30,7 @@ DEFAULT_SETTINGS = {
     "max_login_failures": 3,
     "block_duration_minutes": 10,
     "session_ttl_hours": 4,
+    "session_idle_timeout_minutes": 10,
     "site_bg": "#0f0f1a",
     "site_surface": "#1a1a2e",
     "site_accent": "#6c63ff",
@@ -39,6 +43,11 @@ DEFAULT_SETTINGS = {
     "module_community_min_role": "user",
     "module_appeals_min_role": "user",
     "module_accounts_min_role": "manager",
+    "module_comfyui_min_role": "user",
+    "module_games_min_role": "user",
+    "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
+    "comfyui_api_port": 8192,
+    "comfyui_max_batch_size": 1,
     "chat_filter_rules_json": "",
     "feature_chat_enabled": True,
     "feature_community_enabled": True,
@@ -71,11 +80,39 @@ DEFAULT_SETTINGS = {
     "feature_social_search_enabled": False,
     "feature_advanced_security_enabled": False,
     "feature_privacy_uploads_enabled": True,
+    "feature_comfyui_enabled": True,
+    "feature_economy_enabled": True,
+    "feature_games_enabled": True,
     "integrity_guard_enabled": True,
     "integrity_guard_strict_mode": False,
+    "security_pending_chat_reports_threshold": 10,
+    "security_pending_appeals_threshold": 10,
+    "security_pending_moderation_proposals_threshold": 10,
+    "security_quarantined_files_threshold": 0,
+    "security_unknown_encrypted_files_threshold": 50,
+    "security_log_tail_lines": 200,
 }
 
 FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))
+MANAGEMENT_ONLY_FEATURE_FLAGS = frozenset({
+    "feature_accounts_enabled",
+    "feature_audit_log_enabled",
+    "feature_violation_center_enabled",
+    "feature_system_health_enabled",
+    "feature_identity_governance_enabled",
+    "feature_account_security_enabled",
+    "feature_member_governance_enabled",
+    "feature_server_modes_enabled",
+    "feature_snapshot_restore_enabled",
+    "feature_health_center_enabled",
+    "feature_advanced_security_enabled",
+})
+MANAGEMENT_ONLY_RESET_SETTINGS = {
+    **{key: key in MANAGEMENT_ONLY_FEATURE_FLAGS for key in FEATURE_FLAG_KEYS},
+    "allow_register": False,
+    "snapshot_daily_auto_enabled": False,
+    "storage_maintenance_auto_enabled": False,
+}
 
 _SETTINGS_LOCK = threading.Lock()
 _SYSTEM_SETTINGS = None

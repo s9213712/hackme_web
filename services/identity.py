@@ -25,6 +25,7 @@ ACCOUNT_STATUSES = {"active", "inactive", "pending", "rejected", "limited", "mut
 
 PHASE1_USER_COLUMNS = (
     ("role", "TEXT NOT NULL DEFAULT 'user'"),
+    ("email", "TEXT"),
     ("member_level", "TEXT NOT NULL DEFAULT 'normal'"),
     ("base_level", "TEXT NOT NULL DEFAULT 'normal'"),
     ("effective_level", "TEXT NOT NULL DEFAULT 'normal'"),
@@ -63,6 +64,10 @@ PHASE1_USER_COLUMNS = (
 
 def role_rank(role):
     return ROLE_RANK.get(role or "user", 0)
+
+
+def is_admin_role(role):
+    return role_rank(role) >= role_rank("manager")
 
 
 def ensure_user_identity_columns(conn):

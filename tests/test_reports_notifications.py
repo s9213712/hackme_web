@@ -82,8 +82,8 @@ def _seed_db(db_path):
     conn.executemany(
         "INSERT INTO users (id, username, role, member_level) VALUES (?, ?, ?, ?)",
         [
-            (1, "root", "super_admin", "vip"),
-            (2, "admin", "manager", "trusted"),
+            (1, "root", "super_admin", "normal"),
+            (2, "admin", "manager", "normal"),
             (3, "alice", "user", "normal"),
             (4, "bob", "user", "normal"),
         ],
@@ -111,7 +111,7 @@ def test_user_report_claim_resolve_and_notifications(tmp_path):
     assert notes.get_json()["unread_count"] == 1
     assert notes.get_json()["notifications"][0]["type"] == "report_submitted"
 
-    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "trusted"}
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}
     listed = client.get("/api/admin/reports")
     assert listed.status_code == 200
     assert listed.get_json()["reports"][0]["id"] == report_id
@@ -141,10 +141,10 @@ def test_report_claim_blocks_other_manager(tmp_path):
     client = _build_app(db_path, actor_box, []).test_client()
 
     report_id = client.post("/api/reports", json={"target_type": "forum_post", "target_id": 20, "reason": "違規內容"}).get_json()["report_id"]
-    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "trusted"}
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}
     assert client.post(f"/api/admin/reports/{report_id}/claim").status_code == 200
 
-    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin", "member_level": "vip"}
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin", "member_level": "normal"}
     blocked = client.post(f"/api/admin/reports/{report_id}/resolve", json={"action": "reject"})
     assert blocked.status_code == 409
     assert "領取" in blocked.get_json()["msg"]

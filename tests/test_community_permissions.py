@@ -21,7 +21,7 @@ def _parse_positive_int(value, default=None, min_value=None, max_value=None):
     return parsed
 
 
-def _build_app(db_path, actor_box):
+def _build_app(db_path, actor_box, detect_chat_violation=None, add_violation=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -39,6 +39,7 @@ def _build_app(db_path, actor_box):
     register_community_routes(app, {
         "audit": lambda *args, **kwargs: None,
         "check_user_rate_limit": lambda *args, **kwargs: (False, {"limit": 10}),
+        "detect_chat_violation": detect_chat_violation or (lambda *args, **kwargs: (False, "")),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor_box["actor"],
         "get_db": get_db,
@@ -49,6 +50,7 @@ def _build_app(db_path, actor_box):
         "require_csrf": passthrough,
         "require_csrf_safe": passthrough,
         "role_rank": _role_rank,
+        "add_violation": add_violation,
     })
     return app
 
@@ -158,6 +160,27 @@ def _announcement_active(db_path, announcement_id):
     return active
 
 
+def test_community_routes_accept_sqlite_row_actor(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        actor = conn.execute("SELECT id, username, role FROM users WHERE username='root'").fetchone()
+    finally:
+        conn.close()
+    actor_box = {"actor": actor}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    announcements = client.get("/api/community/announcements")
+    categories = client.get("/api/community/categories")
+    boards = client.get("/api/community/boards")
+
+    assert announcements.status_code == 200
+    assert categories.status_code == 200
+    assert boards.status_code == 200
+
+
 def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
@@ -165,7 +188,7 @@ def test_forum_board_schema_backfills_slug_and_visibility(tmp_path):
     client = _build_app(str(db_path), actor_box).test_client()
 
     boards = client.get("/api/community/boards").get_json()["boards"]
-    board = next(item for item in boards if item["id"])
+    board = next(item for item in boards if item["title"] == "版面")
 
     assert board["slug"].startswith("board-")
     assert board["visibility"] == "public"
@@ -441,6 +464,80 @@ def test_restricted_member_cannot_create_thread_or_reply(tmp_path):
     assert reply.get_json()["ok"] is False
 
 
+def test_community_sensitive_filter_exempts_only_comfyui_threads(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    violation_calls = []
+
+    def detect_sensitive(text):
+        return ("badword" in (text or "").lower(), "測試敏感詞")
+
+    def add_violation(*args, **kwargs):
+        violation_calls.append({"args": args, "kwargs": kwargs})
+        return "counted", "違規計點 +1", len(violation_calls)
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box, detect_sensitive, add_violation).test_client()
+    boards = client.get("/api/community/boards")
+    assert boards.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    normal_board_id = conn.execute("SELECT id FROM forum_boards WHERE title='遊戲專區'").fetchone()["id"]
+    comfyui_board_id = conn.execute("SELECT id FROM forum_boards WHERE title='ComfyUI專區'").fetchone()["id"]
+    conn.close()
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}
+    blocked_thread = client.post(
+        f"/api/community/boards/{normal_board_id}/threads",
+        json={"title": "normal badword", "content": "clean body"},
+    )
+    assert blocked_thread.status_code == 403
+    assert blocked_thread.get_json()["ok"] is False
+    assert "敏感詞" in blocked_thread.get_json()["msg"]
+
+    comfyui_thread = client.post(
+        f"/api/community/boards/{comfyui_board_id}/threads",
+        json={"title": "ComfyUI badword prompt", "content": "badword workflow parameters"},
+    )
+    assert comfyui_thread.status_code == 200
+    assert comfyui_thread.get_json()["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    thread_id = conn.execute(
+        "SELECT id FROM forum_threads WHERE board_id=? ORDER BY id DESC LIMIT 1",
+        (comfyui_board_id,),
+    ).fetchone()["id"]
+    conn.close()
+
+    blocked_reply = client.post(
+        f"/api/community/threads/{thread_id}/posts",
+        json={"content": "badword reply is not exempt"},
+    )
+    assert blocked_reply.status_code == 403
+    assert blocked_reply.get_json()["ok"] is False
+    assert "敏感詞" in blocked_reply.get_json()["msg"]
+
+    clean_reply = client.post(
+        f"/api/community/threads/{thread_id}/posts",
+        json={"content": "clean reply"},
+    )
+    assert clean_reply.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    post_id = conn.execute("SELECT id FROM forum_posts WHERE thread_id=? LIMIT 1", (thread_id,)).fetchone()["id"]
+    conn.close()
+    blocked_edit = client.put(
+        f"/api/community/posts/{post_id}",
+        json={"content": "edited badword reply"},
+    )
+    assert blocked_edit.status_code == 403
+    assert blocked_edit.get_json()["ok"] is False
+    assert len(violation_calls) == 3
+
+
 def test_manager_can_pin_post(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
@@ -543,6 +640,37 @@ def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):
     assert _post_row(db_path, ids["post"])["is_deleted"] == 1
 
 
+def test_board_moderator_can_pin_thread_without_pin_post_permission(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    assigned = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={"user_id": 4, "can_pin_threads": True, "can_pin_posts": False},
+    )
+    assert assigned.status_code == 200
+    moderator = next(
+        item for item in client.get(f"/api/community/boards/{board_id}/moderators").get_json()["moderators"]
+        if item["user_id"] == 4
+    )
+    assert moderator["can_pin_threads"] is True
+    assert moderator["can_pin_posts"] is False
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    sticky = client.post(f"/api/community/threads/{ids['thread']}/sticky", json={"sticky": True})
+    post_pin = client.post(f"/api/community/posts/{ids['post']}/pin", json={"pinned": True})
+
+    assert sticky.status_code == 200
+    assert post_pin.status_code == 403
+    assert _thread_row(db_path, ids["thread"])["is_sticky"] == 1
+    assert _post_row(db_path, ids["post"])["is_pinned"] == 0
+
+
 def test_board_moderator_can_review_only_assigned_board_threads(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
@@ -580,6 +708,56 @@ def test_board_moderator_can_review_only_assigned_board_threads(tmp_path):
     assert _thread_row(db_path, pending_id)["title"] == "待審主題"
 
 
+def test_board_moderator_reward_and_penalty_permissions_are_scoped(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    assigned = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={
+            "user_id": 4,
+            "can_reward_authors": False,
+            "can_penalize_posts": False,
+            "can_pin_threads": False,
+            "can_pin_posts": True,
+            "can_delete_posts": True,
+        },
+    )
+    assert assigned.status_code == 200
+
+    listed = client.get(f"/api/community/boards/{board_id}/moderators")
+    moderator = next(item for item in listed.get_json()["moderators"] if item["user_id"] == 4)
+    assert moderator["can_reward_authors"] is False
+    assert moderator["can_penalize_posts"] is False
+    assert moderator["can_pin_threads"] is False
+    assert moderator["can_pin_posts"] is True
+    assert moderator["can_delete_posts"] is True
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    reward_denied = client.post(f"/api/community/threads/{ids['thread']}/reward", json={"points": 1})
+    penalty_denied = client.post(f"/api/community/posts/{ids['post']}/penalty", json={"points": 1})
+    assert reward_denied.status_code == 403
+    assert penalty_denied.status_code == 403
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    updated = client.post(
+        f"/api/community/boards/{board_id}/moderators",
+        json={"user_id": 4, "can_reward_authors": True, "can_penalize_posts": True},
+    )
+    assert updated.status_code == 200
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    reward_ok = client.post(f"/api/community/threads/{ids['thread']}/reward", json={"points": 1})
+    penalty_ok = client.post(f"/api/community/posts/{ids['post']}/penalty", json={"points": 1})
+    assert reward_ok.status_code == 200
+    assert penalty_ok.status_code == 200
+
+
 def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)
@@ -610,6 +788,70 @@ def test_dislikes_auto_hide_post_and_create_root_report(tmp_path):
     assert report["post_id"] == ids["post"]
     assert report["status"] == "pending"
     assert "倒讚過多" in report["reason"]
+
+
+def test_default_forum_boards_have_moderator(tmp_path):
+    db_path = tmp_path / "community.db"
+    _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.get("/api/community/boards")
+    assert res.status_code == 200
+    boards = res.get_json()["boards"]
+    by_title = {item["title"]: item for item in boards}
+
+    for title in ("遊戲專區", "二次元專區", "ComfyUI專區", "程式設計區", "AI新知區"):
+        assert title in by_title
+        assert by_title[title]["status"] == "approved"
+        assert by_title[title]["moderator_count"] >= 1
+        assert "root" in by_title[title]["moderators"]
+
+
+def test_thread_reactions_are_available_on_thread_itself(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    liked = client.post(f"/api/community/threads/{ids['thread']}/reaction", json={"value": 1})
+    assert liked.status_code == 200
+    assert liked.get_json()["like_count"] == 1
+
+    detail = client.get(f"/api/community/threads/{ids['thread']}")
+    assert detail.status_code == 200
+    thread = detail.get_json()["thread"]
+    assert thread["like_count"] == 1
+    assert thread["dislike_count"] == 0
+    assert thread["user_reaction"] == 1
+
+
+def test_moderator_can_reward_thread_author_and_penalize_post_author(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    reward = client.post(
+        f"/api/community/threads/{ids['thread']}/reward",
+        json={"points": 3, "reason": "good topic"},
+    )
+    assert reward.status_code == 200
+    penalty = client.post(
+        f"/api/community/posts/{ids['post']}/penalty",
+        json={"points": 2, "reason": "bad reply"},
+    )
+    assert penalty.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    alice = conn.execute("SELECT reputation, violation_count FROM users WHERE id=3").fetchone()
+    actions = conn.execute("SELECT action_type, target_type FROM moderation_actions ORDER BY id ASC").fetchall()
+    conn.close()
+    assert alice["reputation"] == 3
+    assert alice["violation_count"] == 2
+    assert ("reward_thread_author", "forum_thread") in [(row["action_type"], row["target_type"]) for row in actions]
+    assert ("penalize_post_author", "forum_post") in [(row["action_type"], row["target_type"]) for row in actions]
 
 
 def test_dislike_auto_hide_threshold_scales_with_active_users(tmp_path):

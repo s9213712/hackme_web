@@ -1,18 +1,87 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import request
 
+from services.cloud_drive import attach_existing_file, can_download_file, ensure_cloud_drive_attachment_schema
 from services.permissions import require_member_action
+
+CHAT_RECALL_WINDOW_SECONDS = 5 * 60
+CHAT_STICKERS = {
+    "smile": {"label": "微笑", "glyph": ":)"},
+    "thanks": {"label": "感謝", "glyph": "THX"},
+    "ok": {"label": "了解", "glyph": "OK"},
+    "wow": {"label": "驚訝", "glyph": "WOW"},
+    "cheer": {"label": "加油", "glyph": "GO"},
+    "sad": {"label": "難過", "glyph": ":("},
+}
+
+
+def actor_value(actor, key, default=None):
+    if not actor:
+        return default
+    try:
+        return actor[key]
+    except Exception:
+        return actor.get(key, default) if hasattr(actor, "get") else default
 
 
 def actor_role(actor):
-    return "super_admin" if actor and actor.get("username") == "root" else (actor.get("role") or "user")
+    if not actor:
+        return "guest"
+    return "super_admin" if actor_value(actor, "username") == "root" else (actor_value(actor, "role") or "user")
+
+
+def _table_columns(conn, table):
+    try:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
+def ensure_chat_feature_schema(conn):
+    cols = _table_columns(conn, "chat_messages")
+    additions = (
+        ("message_type", "TEXT NOT NULL DEFAULT 'text'"),
+        ("sticker_key", "TEXT"),
+        ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
+        ("revoked_at", "TEXT"),
+        ("revoked_by", "INTEGER"),
+    )
+    for name, ddl in additions:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {name} {ddl}")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_friends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, friend_user_id),
+            CHECK (user_id <> friend_user_id),
+            CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status)")
+
+
+def parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
 
 
 def can_delete_chat_message(actor, message_row, role_rank):
     if not actor or not message_row:
         return False
-    if actor.get("username") == "root":
+    if actor["username"] == "root":
         return True
     if message_row["sender_id"] == actor["id"]:
         return True
@@ -29,6 +98,80 @@ def can_delete_chat_message(actor, message_row, role_rank):
     return role_rank(target_role) < actor_rank
 
 
+def can_recall_chat_message(actor, message_row):
+    if not actor or not message_row:
+        return False
+    if message_row["sender_id"] != actor["id"]:
+        return False
+    created = parse_iso_datetime(message_row["created_at"])
+    if not created:
+        return False
+    return datetime.now() - created <= timedelta(seconds=CHAT_RECALL_WINDOW_SECONDS)
+
+
+def can_delete_chat_room(actor, room_row, role_rank):
+    if not actor or not room_row:
+        return False
+    if actor_value(actor, "username") == "root":
+        return True
+    if room_row["owner_user_id"] == actor_value(actor, "id"):
+        return True
+    actor_rank = role_rank(actor_role(actor))
+    if actor_rank < role_rank("manager"):
+        return False
+    owner_role = "super_admin" if room_row["owner_username"] == "root" else (room_row["owner_role"] or "user")
+    return role_rank(owner_role) < actor_rank
+
+
+def normalize_attachment_file_ids(value, *, limit=8):
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    file_ids = []
+    seen = set()
+    for item in raw_items:
+        file_id = str(item or "").strip()
+        if not file_id or file_id in seen:
+            continue
+        seen.add(file_id)
+        file_ids.append(file_id)
+        if len(file_ids) >= limit:
+            break
+    return file_ids
+
+
+def chat_message_attachment_map(conn, actor, message_ids):
+    ids = [int(mid) for mid in message_ids if mid]
+    if not ids:
+        return {}
+    if not _table_columns(conn, "uploaded_files"):
+        return {}
+    ensure_cloud_drive_attachment_schema(conn)
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT r.id AS ref_id, r.context_id AS message_id, r.file_id, r.context_type, r.context_id,
+               f.original_filename_plain_for_public, f.mime_type_plain_for_public,
+               f.size_bytes, f.scan_status, f.risk_level, f.privacy_mode, f.deleted_at
+        FROM cloud_file_refs r
+        JOIN uploaded_files f ON f.id=r.file_id
+        WHERE r.context_type='chat_message' AND r.context_id IN ({placeholders})
+        ORDER BY r.created_at ASC
+        """,
+        tuple(str(mid) for mid in ids),
+    ).fetchall()
+    by_message = {}
+    for row in rows:
+        if row["deleted_at"]:
+            continue
+        allowed, reason, _ = can_download_file(conn, actor=actor, file_id=row["file_id"])
+        item = dict(row)
+        item["can_download"] = bool(allowed)
+        item["download_reason"] = reason
+        by_message.setdefault(int(row["message_id"]), []).append(item)
+    return by_message
+
+
 def register_chat_routes(app, deps):
     CHAT_MESSAGE_MAX_LEN = deps["CHAT_MESSAGE_MAX_LEN"]
     OFFICIAL_CHAT_ROOM_NAME = deps["OFFICIAL_CHAT_ROOM_NAME"]
@@ -38,20 +181,25 @@ def register_chat_routes(app, deps):
     check_user_rate_limit = deps["check_user_rate_limit"]
     db_get_user_from_token = deps["db_get_user_from_token"]
     db_get_user_role = deps["db_get_user_role"]
-    delete_csrf_token = deps["delete_csrf_token"]
     detect_chat_violation = deps["detect_chat_violation"]
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
     get_client_ip = deps["get_client_ip"]
     get_current_user_ctx = deps["get_current_user_ctx"]
     get_db = deps["get_db"]
-    get_request_csrf_token = deps["get_request_csrf_token"]
     json_resp = deps["json_resp"]
     normalize_text = deps["normalize_text"]
     parse_positive_int = deps["parse_positive_int"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
-    verify_csrf_token = deps["verify_csrf_token"]
+
+    def is_official_chat_room(row):
+        if not row:
+            return False
+        try:
+            return row["name"] == OFFICIAL_CHAT_ROOM_NAME
+        except Exception:
+            return row.get("name") == OFFICIAL_CHAT_ROOM_NAME if hasattr(row, "get") else False
 
     @app.route("/api/chat/rooms", methods=["GET", "POST"], strict_slashes=False)
     @require_csrf_safe
@@ -65,6 +213,7 @@ def register_chat_routes(app, deps):
         if request.method == "GET":
             conn = get_db()
             try:
+                ensure_chat_feature_schema(conn)
                 ensure_user_official_room_membership(conn, urow_id)
                 conn.commit()
                 rows = conn.execute(
@@ -72,7 +221,7 @@ def register_chat_routes(app, deps):
                     "FROM chat_rooms r "
                     "LEFT JOIN users u ON u.id = r.owner_user_id "
                     "INNER JOIN chat_room_members m ON m.room_id = r.id "
-                    "WHERE m.user_id = ? "
+                    "WHERE m.user_id = ? AND COALESCE(r.is_active, 1)=1 "
                     "ORDER BY r.is_private ASC, r.created_at DESC",
                     (urow_id,)
                 ).fetchall()
@@ -85,6 +234,7 @@ def register_chat_routes(app, deps):
                             "owner_user_id": r["owner_user_id"],
                             "owner_username": r["owner_username"] or "未知",
                             "is_private": r["is_private"],
+                            "is_official": is_official_chat_room(r),
                             "created_at": r["created_at"]
                         } for r in rows
                     ]
@@ -100,7 +250,7 @@ def register_chat_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
         name = normalize_text(data.get("name"))
         target_user = normalize_text(data.get("target_user"))
-        if not name:
+        if not name and not target_user:
             return json_resp({"ok":False,"msg":"聊天室名稱不可為空"}), 400
         if len(name) > 48:
             return json_resp({"ok":False,"msg":"聊天室名稱最多 48 字元"}), 400
@@ -114,13 +264,15 @@ def register_chat_routes(app, deps):
         is_private_room = False
         try:
             conn.execute("BEGIN")
+            ensure_chat_feature_schema(conn)
             target_row = None
             if target_user:
                 ok, msg, status = require_member_action(actor, "chat_dm_create", conn=conn)
                 if not ok:
                     return json_resp({"ok":False,"msg":msg}), status
+                user_status_filter = "AND status='active'" if "status" in _table_columns(conn, "users") else ""
                 target_row = conn.execute(
-                    "SELECT id, username FROM users WHERE username=? AND status='active'",
+                    f"SELECT id, username FROM users WHERE username=? {user_status_filter}",
                     (target_user,)
                 ).fetchone()
                 if not target_row:
@@ -131,7 +283,7 @@ def register_chat_routes(app, deps):
                     """SELECT cr.id, cr.name FROM chat_rooms cr
                        INNER JOIN chat_room_members m1 ON m1.room_id = cr.id AND m1.user_id = ?
                        INNER JOIN chat_room_members m2 ON m2.room_id = cr.id AND m2.user_id = ?
-                       WHERE cr.is_private = 1
+                       WHERE cr.is_private = 1 AND COALESCE(cr.is_active, 1)=1
                        LIMIT 1""",
                     (urow_id, target_row["id"])
                 ).fetchone()
@@ -218,9 +370,10 @@ def register_chat_routes(app, deps):
         actor_id = actor["id"]
         conn = get_db()
         try:
+            ensure_chat_feature_schema(conn)
             room = conn.execute(
                 "SELECT r.id, r.name, r.owner_user_id, r.is_private, u.username AS owner_username "
-                "FROM chat_rooms r LEFT JOIN users u ON u.id=r.owner_user_id WHERE r.id=?",
+                "FROM chat_rooms r LEFT JOIN users u ON u.id=r.owner_user_id WHERE r.id=? AND COALESCE(r.is_active, 1)=1",
                 (room_id,)
             ).fetchone()
             if not room:
@@ -247,6 +400,45 @@ def register_chat_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/chat/rooms/<int:room_id>", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def delete_chat_room(room_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            room = conn.execute(
+                "SELECT r.id, r.name, r.owner_user_id, r.is_private, COALESCE(r.is_active, 1) AS is_active, "
+                "u.username AS owner_username, u.role AS owner_role "
+                "FROM chat_rooms r LEFT JOIN users u ON u.id=r.owner_user_id WHERE r.id=?",
+                (room_id,),
+            ).fetchone()
+            if not room or not room["is_active"]:
+                return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
+            if is_official_chat_room(room):
+                return json_resp({"ok":False,"msg":"官方聊天室不可刪除"}), 403
+            member = conn.execute(
+                "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+                (room_id, actor["id"]),
+            ).fetchone()
+            if actor["username"] != "root" and not member and role_rank(actor_role(actor)) < role_rank("manager"):
+                return json_resp({"ok":False,"msg":"你不在此聊天室"}), 403
+            if not can_delete_chat_room(actor, room, role_rank):
+                return json_resp({"ok":False,"msg":"你沒有刪除此聊天室的權限"}), 403
+            conn.execute("UPDATE chat_rooms SET is_active=0 WHERE id=?", (room_id,))
+            conn.commit()
+            audit(
+                "CHAT_ROOM_DELETED",
+                get_client_ip(),
+                user=actor["username"],
+                detail=f"room_id={room_id},name={room['name']},owner={room['owner_username'] or '-'}",
+            )
+            return json_resp({"ok":True,"msg":"聊天室已刪除"})
+        finally:
+            conn.close()
+
     @app.route("/api/chat/rooms/<int:room_id>/messages", methods=["GET", "POST"], strict_slashes=False)
     @require_csrf_safe
     def chat_messages(room_id):
@@ -255,13 +447,14 @@ def register_chat_routes(app, deps):
             return json_resp({"ok":False,"msg":"未登入"}), 401
         conn = get_db()
         try:
+            ensure_chat_feature_schema(conn)
             if request.method == "POST":
                 ok, msg, status = require_member_action(actor, "chat_send", conn=conn)
                 if not ok:
                     return json_resp({"ok":False,"msg":msg}), status
             ensure_user_official_room_membership(conn, actor["id"])
             conn.commit()
-            room = conn.execute("SELECT id, name FROM chat_rooms WHERE id=?", (room_id,)).fetchone()
+            room = conn.execute("SELECT id, name FROM chat_rooms WHERE id=? AND COALESCE(is_active, 1)=1", (room_id,)).fetchone()
             if not room:
                 return json_resp({"ok":False,"msg":"找不到聊天室"}), 404
 
@@ -277,20 +470,29 @@ def register_chat_routes(app, deps):
                 if limit is None:
                     return json_resp({"ok":False,"msg":"limit 參數錯誤"}), 400
                 rows = conn.execute(
-                    "SELECT m.id, m.sender_id, u.username, m.content, m.created_at "
+                    "SELECT m.id, m.sender_id, u.username, m.content, m.created_at, "
+                    "m.message_type, m.sticker_key, m.is_revoked, m.revoked_at "
                     "FROM chat_messages m "
                     "LEFT JOIN users u ON u.id = m.sender_id "
                     "WHERE m.room_id = ? AND m.is_blocked = 0 "
                     "ORDER BY m.id DESC LIMIT ?",
                     (room_id, limit)
                 ).fetchall()
+                attachment_map = chat_message_attachment_map(conn, actor, [r["id"] for r in rows])
                 messages = [
                     {
                         "id": r["id"],
                         "sender_id": r["sender_id"],
                         "sender": r["username"] or "系統",
-                        "content": r["content"],
-                        "created_at": r["created_at"]
+                        "content": "（訊息已收回）" if r["is_revoked"] else r["content"],
+                        "created_at": r["created_at"],
+                        "message_type": "text" if r["is_revoked"] else (r["message_type"] or "text"),
+                        "sticker_key": None if r["is_revoked"] else r["sticker_key"],
+                        "sticker": None if r["is_revoked"] else CHAT_STICKERS.get(r["sticker_key"] or ""),
+                        "is_revoked": bool(r["is_revoked"]),
+                        "revoked_at": r["revoked_at"],
+                        "can_recall": can_recall_chat_message(actor, r) and not r["is_revoked"],
+                        "attachments": [] if r["is_revoked"] else attachment_map.get(int(r["id"]), []),
                     } for r in reversed(rows)
                 ]
                 return json_resp({
@@ -299,18 +501,28 @@ def register_chat_routes(app, deps):
                     "messages": messages
                 })
 
-            csrf_tok = get_request_csrf_token()
-            if not verify_csrf_token(csrf_tok, actor["username"]):
-                return json_resp({"ok":False,"msg":"CSRF token 無效或已過期"}), 403
-            delete_csrf_token(csrf_tok)
-
             try:
                 data = request.get_json(force=True)
             except Exception:
                 return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
             if not isinstance(data, dict):
                 return json_resp({"ok":False,"msg":"Invalid request"}), 400
-            content = (data.get("content") or "").strip()
+            message_type = str(data.get("message_type") or "text").strip().lower()
+            sticker_key = str(data.get("sticker_key") or "").strip().lower()
+            attachment_file_ids = normalize_attachment_file_ids(data.get("attachment_file_ids"))
+            if message_type not in {"text", "sticker"}:
+                return json_resp({"ok":False,"msg":"不支援的訊息類型"}), 400
+            if message_type == "sticker":
+                if attachment_file_ids:
+                    return json_resp({"ok":False,"msg":"表情包訊息不能同時附加檔案"}), 400
+                if sticker_key not in CHAT_STICKERS:
+                    return json_resp({"ok":False,"msg":"不支援的表情包"}), 400
+                content = f"[sticker:{sticker_key}]"
+            else:
+                sticker_key = None
+                content = (data.get("content") or "").strip()
+                if not content and attachment_file_ids:
+                    content = "已分享附件"
             if not content:
                 return json_resp({"ok":False,"msg":"訊息不可為空"}), 400
             if len(content) > CHAT_MESSAGE_MAX_LEN:
@@ -318,9 +530,11 @@ def register_chat_routes(app, deps):
             blocked, info = check_user_rate_limit(actor["id"], "chat_send", max_req=20, window_sec=60)
             if blocked:
                 return json_resp({"ok":False,"msg":f"訊息發送過於頻繁（每分鐘最多 {info['limit']} 則）"}), 429
+            if attachment_file_ids and not _table_columns(conn, "uploaded_files"):
+                return json_resp({"ok":False,"msg":"附件系統尚未初始化，請先完成雲端硬碟上傳"}), 400
 
             is_bad, bad_reason = detect_chat_violation(content)
-            if is_bad:
+            if message_type == "text" and is_bad:
                 warning_count = int(dict(actor).get("chat_violation_warned") or 0)
                 if warning_count == 0:
                     conn.execute(
@@ -353,14 +567,32 @@ def register_chat_routes(app, deps):
 
             created_at = datetime.now().isoformat()
             cur = conn.execute(
-                "INSERT INTO chat_messages (room_id, sender_id, content, created_at) VALUES (?, ?, ?, ?)",
-                (room_id, actor["id"], content, created_at)
+                "INSERT INTO chat_messages (room_id, sender_id, content, message_type, sticker_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (room_id, actor["id"], content, message_type, sticker_key, created_at)
             )
+            message_id = cur.lastrowid
+            if attachment_file_ids:
+                ensure_cloud_drive_attachment_schema(conn)
+                member_rows = conn.execute("SELECT user_id FROM chat_room_members WHERE room_id=?", (room_id,)).fetchall()
+                grant_user_ids = [int(row["user_id"]) for row in member_rows if int(row["user_id"]) != int(actor["id"])]
+                for file_id in attachment_file_ids:
+                    _, attach_msg = attach_existing_file(
+                        conn,
+                        actor=actor,
+                        file_id=file_id,
+                        context_type="chat_message",
+                        context_id=str(message_id),
+                        grant_user_ids=grant_user_ids,
+                        can_preview=True,
+                    )
+                    if attach_msg:
+                        conn.rollback()
+                        return json_resp({"ok":False,"msg":attach_msg}), 400
             conn.commit()
-            transcript_synced = append_chat_record(room_id, cur.lastrowid, actor["username"], content, created_at)
+            transcript_synced = append_chat_record(room_id, message_id, actor["username"], content, created_at)
             if not transcript_synced:
-                audit("CHAT_TRANSCRIPT_WRITE_FAILED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},message_id={cur.lastrowid}")
-            return json_resp({"ok":True,"msg":"訊息已送出","transcript_synced":transcript_synced})
+                audit("CHAT_TRANSCRIPT_WRITE_FAILED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},message_id={message_id}")
+            return json_resp({"ok":True,"msg":"訊息已送出","message_id":message_id,"transcript_synced":transcript_synced})
         finally:
             conn.close()
 
@@ -382,6 +614,7 @@ def register_chat_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_chat_feature_schema(conn)
             msg = conn.execute(
                 "SELECT m.id, m.room_id, m.sender_id, m.content, u.username AS sender_username "
                 "FROM chat_messages m LEFT JOIN users u ON u.id=m.sender_id WHERE m.id=?",
@@ -422,8 +655,9 @@ def register_chat_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_chat_feature_schema(conn)
             msg = conn.execute(
-                "SELECT m.id, m.room_id, m.sender_id, m.is_blocked, u.username AS sender_username, "
+                "SELECT m.id, m.room_id, m.sender_id, m.is_blocked, m.is_revoked, m.created_at, u.username AS sender_username, "
                 "u.role AS sender_role, r.owner_user_id "
                 "FROM chat_messages m "
                 "LEFT JOIN users u ON u.id=m.sender_id "
@@ -440,10 +674,29 @@ def register_chat_routes(app, deps):
                 "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
                 (msg["room_id"], actor["id"]),
             ).fetchone()
-            if actor.get("username") != "root" and not member and role_rank(actor_role(actor)) < role_rank("manager"):
+            if actor["username"] != "root" and not member and role_rank(actor_role(actor)) < role_rank("manager"):
                 return json_resp({"ok":False,"msg":"你不在此聊天室"}), 403
             if not can_delete_chat_message(actor, msg, role_rank):
                 return json_resp({"ok":False,"msg":"你沒有刪除此訊息的權限"}), 403
+
+            is_self_only_recall = msg["sender_id"] == actor["id"] and actor["username"] != "root" and role_rank(actor_role(actor)) < role_rank("manager")
+            if is_self_only_recall:
+                if msg["is_revoked"]:
+                    return json_resp({"ok":True,"msg":"訊息已收回"})
+                if not can_recall_chat_message(actor, msg):
+                    return json_resp({"ok":False,"msg":"留言只能在送出後 5 分鐘內收回"}), 403
+                conn.execute(
+                    "UPDATE chat_messages SET is_revoked=1, revoked_at=?, revoked_by=? WHERE id=?",
+                    (datetime.now().isoformat(), actor["id"], message_id),
+                )
+                conn.commit()
+                audit(
+                    "CHAT_MESSAGE_RECALLED",
+                    get_client_ip(),
+                    user=actor["username"],
+                    detail=f"message_id={message_id},room_id={msg['room_id']}",
+                )
+                return json_resp({"ok":True,"msg":"訊息已收回"})
 
             conn.execute(
                 "UPDATE chat_messages SET is_blocked=1, blocked_reason=? WHERE id=?",
@@ -460,14 +713,163 @@ def register_chat_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/chat/friends", methods=["GET"], strict_slashes=False)
+    @require_csrf_safe
+    def chat_friends():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT f.id, f.user_id, f.friend_user_id, f.status, f.requested_by, f.created_at, f.updated_at,
+                       u1.username AS user_username, u2.username AS friend_username, req.username AS requested_by_username
+                FROM user_friends f
+                JOIN users u1 ON u1.id=f.user_id
+                JOIN users u2 ON u2.id=f.friend_user_id
+                LEFT JOIN users req ON req.id=f.requested_by
+                WHERE f.user_id=? OR f.friend_user_id=?
+                ORDER BY f.updated_at DESC, f.id DESC
+                """,
+                (actor["id"], actor["id"]),
+            ).fetchall()
+            friends = []
+            incoming = []
+            outgoing = []
+            for row in rows:
+                other_id = row["friend_user_id"] if row["user_id"] == actor["id"] else row["user_id"]
+                other_username = row["friend_username"] if row["user_id"] == actor["id"] else row["user_username"]
+                item = {
+                    "id": row["id"],
+                    "user_id": row["user_id"],
+                    "friend_user_id": row["friend_user_id"],
+                    "other_user_id": other_id,
+                    "other_username": other_username,
+                    "status": row["status"],
+                    "requested_by": row["requested_by"],
+                    "requested_by_username": row["requested_by_username"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+                if row["status"] == "accepted":
+                    friends.append(item)
+                elif row["status"] == "pending" and row["requested_by"] == actor["id"]:
+                    outgoing.append(item)
+                elif row["status"] == "pending":
+                    incoming.append(item)
+            return json_resp({"ok":True,"friends":friends,"incoming":incoming,"outgoing":outgoing})
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/friends/requests", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def chat_friend_request():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        username = normalize_text(data.get("username"))
+        if not username:
+            return json_resp({"ok":False,"msg":"請輸入好友帳號"}), 400
+        if username == actor["username"]:
+            return json_resp({"ok":False,"msg":"不能加自己為好友"}), 400
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            user_cols = _table_columns(conn, "users")
+            status_filter = "AND status='active'" if "status" in user_cols else ""
+            target = conn.execute(f"SELECT id, username FROM users WHERE username=? {status_filter}", (username,)).fetchone()
+            if not target:
+                return json_resp({"ok":False,"msg":"找不到指定帳號"}), 404
+            user_a, user_b = sorted([int(actor["id"]), int(target["id"])])
+            existing = conn.execute(
+                "SELECT * FROM user_friends WHERE user_id=? AND friend_user_id=?",
+                (user_a, user_b),
+            ).fetchone()
+            now = datetime.now().isoformat()
+            if existing:
+                if existing["status"] == "accepted":
+                    return json_resp({"ok":True,"msg":"已經是好友"})
+                if existing["status"] == "pending":
+                    return json_resp({"ok":True,"msg":"好友邀請已存在"})
+                conn.execute(
+                    "UPDATE user_friends SET status='pending', requested_by=?, updated_at=? WHERE id=?",
+                    (actor["id"], now, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO user_friends (user_id, friend_user_id, status, requested_by, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?, ?)",
+                    (user_a, user_b, actor["id"], now, now),
+                )
+            conn.commit()
+            audit("CHAT_FRIEND_REQUESTED", get_client_ip(), user=actor["username"], detail=f"target={target['username']}")
+            return json_resp({"ok":True,"msg":"好友邀請已送出"})
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/friends/requests/<int:request_id>/<decision>", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def chat_friend_review(request_id, decision):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        if decision not in {"accept", "reject"}:
+            return json_resp({"ok":False,"msg":"不支援的操作"}), 400
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            row = conn.execute("SELECT * FROM user_friends WHERE id=?", (request_id,)).fetchone()
+            if not row:
+                return json_resp({"ok":False,"msg":"找不到好友邀請"}), 404
+            if row["status"] != "pending":
+                return json_resp({"ok":False,"msg":"好友邀請已處理"}), 409
+            if row["requested_by"] == actor["id"] or actor["id"] not in {row["user_id"], row["friend_user_id"]}:
+                return json_resp({"ok":False,"msg":"你不能處理這筆好友邀請"}), 403
+            status = "accepted" if decision == "accept" else "rejected"
+            conn.execute("UPDATE user_friends SET status=?, updated_at=? WHERE id=?", (status, datetime.now().isoformat(), request_id))
+            conn.commit()
+            audit("CHAT_FRIEND_REVIEWED", get_client_ip(), user=actor["username"], detail=f"request_id={request_id},decision={decision}")
+            return json_resp({"ok":True,"msg":"已加入好友" if decision == "accept" else "已拒絕好友邀請"})
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/friends/<int:friend_user_id>", methods=["DELETE"], strict_slashes=False)
+    @require_csrf
+    def chat_friend_delete(friend_user_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        user_a, user_b = sorted([int(actor["id"]), int(friend_user_id)])
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            cur = conn.execute(
+                "DELETE FROM user_friends WHERE user_id=? AND friend_user_id=? AND status='accepted'",
+                (user_a, user_b),
+            )
+            conn.commit()
+            if cur.rowcount < 1:
+                return json_resp({"ok":False,"msg":"找不到好友關係"}), 404
+            audit("CHAT_FRIEND_REMOVED", get_client_ip(), user=actor["username"], detail=f"friend_user_id={friend_user_id}")
+            return json_resp({"ok":True,"msg":"已解除好友"})
+        finally:
+            conn.close()
+
     @app.route("/api/audit", methods=["GET"])
     def api_audit():
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
         if not user: return json_resp({"ok":False,"msg":"未授權"}), 401
-        if role_rank(db_get_user_role(user) or "user") < role_rank("manager"):
-            audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-manager attempted audit access")
-            return json_resp({"ok":False,"msg":"需要管理者或最高管理者權限"}), 403
+        if user != "root":
+            audit("AUDIT_FORBIDDEN", get_client_ip(), user, detail="non-root attempted audit access")
+            return json_resp({"ok":False,"msg":"只有 root 可檢視審計紀錄"}), 403
 
         conn = get_db()
         try:

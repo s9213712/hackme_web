@@ -1,3 +1,67 @@
+const CHAT_STICKER_LABELS = {
+  smile: "微笑 :)",
+  thanks: "感謝 THX",
+  ok: "了解 OK",
+  wow: "驚訝 WOW",
+  cheer: "加油 GO",
+  sad: "難過 :("
+};
+let pendingChatAttachments = [];
+
+function chatStickerLabel(key, sticker) {
+  return (sticker && (sticker.label || sticker.glyph)) || CHAT_STICKER_LABELS[key] || "表情包";
+}
+
+function chatAttachmentName(item) {
+  return item?.original_filename_plain_for_public || item?.display_name || item?.file_id || "附件";
+}
+
+function renderPendingChatAttachments() {
+  const list = $("chat-pending-attachment-list");
+  if (!list) return;
+  if (!pendingChatAttachments.length) {
+    list.innerHTML = `<div class="drive-empty">尚未選擇要隨訊息送出的附件</div>`;
+    return;
+  }
+  list.innerHTML = pendingChatAttachments.map((item) => `
+    <div class="chat-pending-attachment">
+      <span>${sanitize(chatAttachmentName(item))}</span>
+      <button class="btn btn-danger chat-sticker-btn" type="button" data-remove-chat-pending-attachment="${sanitize(item.file_id || "")}">刪除</button>
+    </div>
+  `).join("");
+}
+
+function removePendingChatAttachment(fileId) {
+  const target = String(fileId || "");
+  if (!target) return;
+  pendingChatAttachments = pendingChatAttachments.filter((item) => String(item.file_id || "") !== target);
+  renderPendingChatAttachments();
+}
+
+function handlePendingChatAttachmentClick(event) {
+  const btn = event.target?.closest?.("[data-remove-chat-pending-attachment]");
+  if (!btn) return;
+  event.preventDefault();
+  event.stopPropagation();
+  removePendingChatAttachment(btn.getAttribute("data-remove-chat-pending-attachment") || "");
+}
+
+function addPendingChatAttachment(file) {
+  const fileId = file?.file_id || file?.id || "";
+  if (!fileId) return;
+  if (pendingChatAttachments.some((item) => item.file_id === fileId)) {
+    renderPendingChatAttachments();
+    return;
+  }
+  pendingChatAttachments.push({ ...file, file_id: fileId });
+  renderPendingChatAttachments();
+}
+
+document.addEventListener("click", (event) => {
+  const list = $("chat-pending-attachment-list");
+  if (list?.contains(event.target)) handlePendingChatAttachmentClick(event);
+});
+
 async function loadChatRooms() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -12,6 +76,7 @@ async function loadChatRooms() {
     }
     chatRooms = Array.isArray(json.rooms) ? json.rooms : [];
     renderChatRooms();
+    loadChatFriends().catch(() => {});
     if (selectedChatRoomId) {
       const exists = chatRooms.some((r) => r.id === selectedChatRoomId);
       if (!exists) {
@@ -30,6 +95,114 @@ async function loadChatRooms() {
       if (msgs) msgs.innerHTML = "<p style=\"color:var(--muted);\">尚未選擇聊天室</p>";
     }
   } catch (_) {}
+}
+
+function renderChatFriends(data) {
+  const list = $("chat-friend-list");
+  if (!list) return;
+  const friends = Array.isArray(data?.friends) ? data.friends : [];
+  const incoming = Array.isArray(data?.incoming) ? data.incoming : [];
+  const outgoing = Array.isArray(data?.outgoing) ? data.outgoing : [];
+  const rows = [];
+  incoming.forEach((item) => {
+    rows.push(`
+      <div class="chat-friend-row">
+        <span>邀請：<strong>${sanitize(item.other_username || "-")}</strong></span>
+        <span>
+          <button class="btn chat-sticker-btn" type="button" data-friend-review="${item.id}" data-decision="accept">接受</button>
+          <button class="btn chat-sticker-btn" type="button" data-friend-review="${item.id}" data-decision="reject">拒絕</button>
+        </span>
+      </div>
+    `);
+  });
+  friends.forEach((item) => {
+    rows.push(`
+      <div class="chat-friend-row">
+        <strong>${sanitize(item.other_username || "-")}</strong>
+        <span>
+          <button class="btn chat-sticker-btn" type="button" data-friend-pm="${sanitize(item.other_username || "")}">私訊</button>
+          <button class="btn chat-sticker-btn" type="button" data-friend-remove="${item.other_user_id}">解除</button>
+        </span>
+      </div>
+    `);
+  });
+  outgoing.forEach((item) => {
+    rows.push(`<div class="chat-friend-row"><span>等待 ${sanitize(item.other_username || "-")} 回覆</span><span></span></div>`);
+  });
+  list.innerHTML = rows.length ? rows.join("") : `<div class="drive-card-sub">尚無好友</div>`;
+  list.querySelectorAll("[data-friend-review]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewChatFriendRequest(btn.dataset.friendReview, btn.dataset.decision));
+  });
+  list.querySelectorAll("[data-friend-pm]").forEach((btn) => {
+    btn.addEventListener("click", () => openPmWithUser(btn.dataset.friendPm || ""));
+  });
+  list.querySelectorAll("[data-friend-remove]").forEach((btn) => {
+    btn.addEventListener("click", () => removeChatFriend(btn.dataset.friendRemove));
+  });
+}
+
+async function loadChatFriends() {
+  if (!currentUser) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/chat/friends", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) renderChatFriends(json);
+}
+
+async function addChatFriend() {
+  const input = $("chat-friend-username");
+  const username = (input?.value || "").trim();
+  if (!username) {
+    setChatMsg("chat-room-warn", "請輸入好友帳號", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/chat/friends/requests", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ username })
+  });
+  const json = await res.json().catch(() => ({}));
+  setChatMsg("chat-room-warn", json.msg || (json.ok ? "好友邀請已送出" : "好友邀請失敗"), !!json.ok);
+  if (json.ok) {
+    if (input) input.value = "";
+    await loadChatFriends();
+  }
+}
+
+async function reviewChatFriendRequest(requestId, decision) {
+  if (!requestId || !decision) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/friends/requests/${encodeURIComponent(requestId)}/${encodeURIComponent(decision)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  setChatMsg("chat-room-warn", json.msg || "好友邀請已處理", !!json.ok);
+  if (json.ok) await loadChatFriends();
+}
+
+async function removeChatFriend(friendUserId) {
+  if (!friendUserId) return;
+  if (!confirm("確定解除好友？")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/friends/${encodeURIComponent(friendUserId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  setChatMsg("chat-room-warn", json.msg || "好友已更新", !!json.ok);
+  if (json.ok) await loadChatFriends();
 }
 
 async function openChatRoom(roomId, autoPoll = true) {
@@ -169,8 +342,9 @@ async function sendChatMessage() {
   }
   const input = $("chat-message-input");
   const content = (input?.value || "").trim();
-  if (!content) {
-    setChatMsg("chat-room-warn", "訊息不可為空", false);
+  const attachmentFileIds = pendingChatAttachments.map((item) => item.file_id).filter(Boolean);
+  if (!content && !attachmentFileIds.length) {
+    setChatMsg("chat-room-warn", "訊息或附件不可為空", false);
     return;
   }
   if (content.length > 500) {
@@ -186,11 +360,13 @@ async function sendChatMessage() {
       "Content-Type": "application/json",
       "X-CSRF-Token": csrf || ""
     },
-    body: JSON.stringify({ content, csrf_token: csrf || "" })
+    body: JSON.stringify({ content, attachment_file_ids: attachmentFileIds, csrf_token: csrf || "" })
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
     if (input) input.value = "";
+    pendingChatAttachments = [];
+    renderPendingChatAttachments();
     setChatMsg("chat-room-warn", "訊息已送出", true);
     await loadChatMessages(selectedChatRoomId, true);
     startChatPoll();
@@ -204,6 +380,33 @@ async function sendChatMessage() {
   if (json.warned || json.reason || json.violation_count) {
     alert(message);
   }
+}
+
+async function sendChatSticker(stickerKey) {
+  if (!selectedChatRoomId) {
+    setChatMsg("chat-room-warn", "請先選擇聊天室", false);
+    return;
+  }
+  if (!CHAT_STICKER_LABELS[stickerKey]) {
+    setChatMsg("chat-room-warn", "不支援的表情包", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/rooms/${selectedChatRoomId}/messages`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ message_type: "sticker", sticker_key: stickerKey, csrf_token: csrf || "" })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    setChatMsg("chat-room-warn", "表情包已送出", true);
+    await loadChatMessages(selectedChatRoomId, true);
+    startChatPoll();
+    return;
+  }
+  setChatMsg("chat-room-warn", json.msg || "表情包發送失敗", false);
 }
 
 async function openPmWithUser(targetUsername) {
@@ -252,9 +455,51 @@ function canDeleteChatMessage(message) {
   return clientRoleRank(currentRole || "user") >= clientRoleRank("manager");
 }
 
-async function deleteChatMessage(messageId) {
+function canDeleteChatRoom(room) {
+  if (!room || !room.id) return false;
+  if (room.is_official || String(room.name || "") === "官方聊天室") return false;
+  if (String(currentUser || "") === "root") return true;
+  if (Number(room.owner_user_id) === Number(currentUserId)) return true;
+  if (String(room.owner_username || "") === "root") return false;
+  return clientRoleRank(currentRole || "user") >= clientRoleRank("manager");
+}
+
+async function deleteChatRoom(roomId) {
+  if (!roomId) return;
+  const room = chatRooms.find((item) => Number(item.id) === Number(roomId));
+  const label = room ? `${room.name}（#${room.id}）` : `#${roomId}`;
+  if (!confirm(`確定要刪除此聊天室 ${label}？歷史資料會保留在資料庫與審計紀錄中。`)) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    setChatMsg("chat-room-warn", json.msg || "聊天室已刪除", true);
+    if (Number(selectedChatRoomId) === Number(roomId)) {
+      selectedChatRoomId = null;
+      stopChatPoll();
+      const memberLabel = $("chat-room-member");
+      if (memberLabel) memberLabel.textContent = "";
+      const title = $("chat-room-title");
+      if (title) title.textContent = "請先建立或加入聊天室";
+      const msgs = $("chat-room-messages");
+      if (msgs) msgs.innerHTML = "<p style=\"color:var(--muted);\">尚未選擇聊天室</p>";
+      const attachments = $("chat-attachment-list");
+      if (attachments) attachments.innerHTML = "";
+    }
+    await loadChatRooms();
+    return;
+  }
+  setChatMsg("chat-room-warn", json.msg || "刪除聊天室失敗", false);
+}
+
+async function deleteChatMessage(messageId, recall = false) {
   if (!messageId) return;
-  if (!confirm("確定要刪除此留言嗎？")) return;
+  if (!confirm(recall ? "確定要收回這則留言嗎？" : "確定要刪除此留言嗎？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const res = await fetch(API + `/chat/messages/${messageId}`, {

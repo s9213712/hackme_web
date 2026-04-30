@@ -7,7 +7,263 @@ function formatDriveBytes(bytes) {
   return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function renderDriveGroupedStats(targetId, grouped, emptyText) {
+const DRIVE_PRIVACY_MODE_LABELS = {
+  private_scannable: "私密檔案",
+  public_attachment: "公開附件",
+  e2ee_vault: "端到端加密",
+  e2ee_vault_with_client_scan: "端到端加密 + 本機掃描",
+};
+
+const DRIVE_PRIVACY_MODE_DESCRIPTIONS = {
+  private_scannable: "伺服器可掃毒，適合一般個人檔案",
+  public_attachment: "可預覽、可分享，不適合機密資料",
+  e2ee_vault: "站方無法讀取，掃毒能力受限",
+  e2ee_vault_with_client_scan: "站方無法讀取，附本機掃描回報",
+};
+
+const DRIVE_E2EE_VAULT_KEY_STORAGE = "hackme_drive_e2ee_vault_key_v1";
+const ATTACHMENT_FILE_SELECT_IDS = [
+  "chat-attachment-existing-file-id",
+  "dm-attachment-existing-file-id",
+  "announcement-attachment-existing-file-id",
+];
+
+let driveTransferRows = [];
+let driveAttachmentFileOptions = [];
+let driveAttachmentFileOptionsLoadedAt = 0;
+let driveStorageUpgradeCatalog = [];
+let driveStorageUpgradeCanPurchase = false;
+let driveStorageUpgradeMessage = "";
+
+function drivePrivacyModeLabel(mode) {
+  return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
+}
+
+function drivePrivacyModeDescription(mode) {
+  return DRIVE_PRIVACY_MODE_DESCRIPTIONS[mode] || "";
+}
+
+function attachmentFileDisplayName(file) {
+  return file?.original_filename_plain_for_public || file?.display_name || file?.filename || file?.id || file?.file_id || "雲端檔案";
+}
+
+function attachmentFileOptionLabel(file) {
+  const id = file?.id || file?.file_id || "";
+  const name = attachmentFileDisplayName(file);
+  const size = typeof formatDriveBytes === "function" ? formatDriveBytes(file?.size_bytes || 0) : `${Number(file?.size_bytes || 0)} bytes`;
+  const scan = file?.scan_status || "-";
+  const risk = file?.risk_level || "-";
+  return `${name} · ${size} · scan=${scan} · risk=${risk} · #${id}`;
+}
+
+function renderAttachmentFileSelects(files = driveAttachmentFileOptions) {
+  const rows = Array.isArray(files) ? files : [];
+  ATTACHMENT_FILE_SELECT_IDS.forEach((id) => {
+    const select = $(id);
+    if (!select) return;
+    const previous = select.value || "";
+    if (!rows.length) {
+      select.innerHTML = `<option value="">目前沒有可選擇的雲端檔案</option>`;
+      return;
+    }
+    select.innerHTML = `<option value="">請選擇雲端檔案</option>` + rows.map((file) => {
+      const fileId = file.id || file.file_id || "";
+      return `<option value="${sanitize(fileId)}">${sanitize(attachmentFileOptionLabel(file))}</option>`;
+    }).join("");
+    if (previous && rows.some((file) => String(file.id || file.file_id || "") === previous)) {
+      select.value = previous;
+    }
+  });
+}
+
+async function ensureAttachmentFileOptionsLoaded({ force = false } = {}) {
+  if (!currentUser || !canAccessModule("privacy_uploads")) return [];
+  const fresh = driveAttachmentFileOptionsLoadedAt && Date.now() - driveAttachmentFileOptionsLoadedAt < 30000;
+  if (!force && fresh) {
+    renderAttachmentFileSelects();
+    return driveAttachmentFileOptions;
+  }
+  ATTACHMENT_FILE_SELECT_IDS.forEach((id) => {
+    const select = $(id);
+    if (select && !select.value) select.innerHTML = `<option value="">讀取雲端檔案中...</option>`;
+  });
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/cloud-drive/files", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    ATTACHMENT_FILE_SELECT_IDS.forEach((id) => {
+      const select = $(id);
+      if (select) select.innerHTML = `<option value="">雲端檔案讀取失敗</option>`;
+    });
+    return [];
+  }
+  driveAttachmentFileOptions = Array.isArray(json.files) ? json.files : [];
+  driveAttachmentFileOptionsLoadedAt = Date.now();
+  renderAttachmentFileSelects();
+  return driveAttachmentFileOptions;
+}
+
+function isDriveE2eeMode(mode) {
+  return String(mode || "").startsWith("e2ee");
+}
+
+function driveBytesToBase64(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  let binary = "";
+  for (let i = 0; i < view.length; i += 1) binary += String.fromCharCode(view[i]);
+  return btoa(binary);
+}
+
+function driveBase64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function driveBufferToHex(buffer) {
+  return Array.from(new Uint8Array(buffer || [])).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function driveRandomNonce(length = 12) {
+  const nonce = new Uint8Array(length);
+  window.crypto.getRandomValues(nonce);
+  return nonce;
+}
+
+async function getDriveE2eeVaultKey() {
+  if (!window.crypto?.subtle) {
+    throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
+  }
+  const existing = localStorage.getItem(DRIVE_E2EE_VAULT_KEY_STORAGE);
+  if (existing) {
+    try {
+      return await window.crypto.subtle.importKey("jwk", JSON.parse(existing), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+    } catch (err) {
+      localStorage.removeItem(DRIVE_E2EE_VAULT_KEY_STORAGE);
+    }
+  }
+  const key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const jwk = await window.crypto.subtle.exportKey("jwk", key);
+  localStorage.setItem(DRIVE_E2EE_VAULT_KEY_STORAGE, JSON.stringify(jwk));
+  return key;
+}
+
+async function encryptDriveJsonMetadata(fileKey, payload) {
+  const nonce = driveRandomNonce();
+  const encoded = new TextEncoder().encode(JSON.stringify(payload || {}));
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, fileKey, encoded);
+  return JSON.stringify({
+    alg: "AES-GCM",
+    v: 1,
+    nonce: driveBytesToBase64(nonce),
+    ciphertext: driveBytesToBase64(ciphertext),
+  });
+}
+
+async function wrapDriveFileKey(fileKey) {
+  const vaultKey = await getDriveE2eeVaultKey();
+  const rawKey = await window.crypto.subtle.exportKey("raw", fileKey);
+  const nonce = driveRandomNonce();
+  const wrapped = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, vaultKey, rawKey);
+  return JSON.stringify({
+    alg: "AES-GCM",
+    v: 1,
+    wrapped_by: "browser_local_vault_key",
+    nonce: driveBytesToBase64(nonce),
+    ciphertext: driveBytesToBase64(wrapped),
+  });
+}
+
+async function unwrapDriveFileKey(encryptedFileKey) {
+  const envelope = JSON.parse(encryptedFileKey || "{}");
+  if (envelope.wrapped_by !== "browser_local_vault_key") {
+    throw new Error("此檔案使用不同金鑰包裝方式，這個瀏覽器目前無法解密。");
+  }
+  const vaultKey = await getDriveE2eeVaultKey();
+  const rawKey = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: driveBase64ToBytes(envelope.nonce) },
+    vaultKey,
+    driveBase64ToBytes(envelope.ciphertext)
+  );
+  return window.crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+}
+
+async function decryptDriveJsonMetadata(fileKey, encryptedMetadata) {
+  if (!encryptedMetadata) return {};
+  const envelope = JSON.parse(encryptedMetadata || "{}");
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: driveBase64ToBytes(envelope.nonce) },
+    fileKey,
+    driveBase64ToBytes(envelope.ciphertext)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+async function decryptDriveE2eeBlob(blob, e2ee) {
+  const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key);
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: driveBase64ToBytes(e2ee.nonce) },
+    fileKey,
+    await blob.arrayBuffer()
+  );
+  const metadata = await decryptDriveJsonMetadata(fileKey, e2ee.encrypted_metadata);
+  return {
+    blob: new Blob([plaintext], { type: metadata.mime_type || "application/octet-stream" }),
+    filename: metadata.filename || "download",
+  };
+}
+
+async function prepareDriveE2eeUpload(file, mode) {
+  if (!window.crypto?.subtle) {
+    throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
+  }
+  const plaintext = await file.arrayBuffer();
+  const fileKey = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const nonce = driveRandomNonce();
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, fileKey, plaintext);
+  const encryptedBlob = new Blob([ciphertext], { type: "application/octet-stream" });
+  const encryptedMetadata = await encryptDriveJsonMetadata(fileKey, {
+    filename: file.name,
+    mime_type: file.type || "application/octet-stream",
+    size_bytes: file.size,
+    encrypted_at: new Date().toISOString(),
+  });
+  const encryptedFileKey = await wrapDriveFileKey(fileKey);
+  const ciphertextHash = await window.crypto.subtle.digest("SHA-256", ciphertext);
+  return {
+    blob: encryptedBlob,
+    filename: "vault.bin",
+    encrypted_metadata: encryptedMetadata,
+    encrypted_file_key: encryptedFileKey,
+    wrapped_by: "browser_local_vault_key",
+    ciphertext_sha256: driveBufferToHex(ciphertextHash),
+    encryption_algorithm: "AES-GCM",
+    encryption_version: "browser-local-v1",
+    nonce: driveBytesToBase64(nonce),
+    client_scan_report: mode === "e2ee_vault_with_client_scan" ? {
+      ok: false,
+      mode: "browser_e2ee_upload",
+      note: "檔案已在瀏覽器端加密；伺服器無法驗證本機掃描結果。",
+    } : null,
+  };
+}
+
+const ALBUM_VISIBILITY_LABELS = {
+  private: "私人",
+  unlisted: "不列出，持連結可看",
+  public: "公開",
+};
+
+function albumVisibilityLabel(value) {
+  return ALBUM_VISIBILITY_LABELS[value] || value || "私人";
+}
+
+function renderDriveGroupedStats(targetId, grouped, emptyText, labelFn) {
   const el = $(targetId);
   if (!el) return;
   const entries = Object.entries(grouped || {});
@@ -17,10 +273,59 @@ function renderDriveGroupedStats(targetId, grouped, emptyText) {
   }
   el.innerHTML = entries.map(([name, item]) => `
     <div class="drive-pill">
-      <strong>${sanitize(name)}</strong>
+      <strong>${sanitize(labelFn ? labelFn(name) : name)}</strong>
       <span>${Number(item.count || 0)} 個 · ${formatDriveBytes(item.bytes || 0)}</span>
     </div>
   `).join("");
+}
+
+function storageUpgradeLabel(item) {
+  const price = Number(item.base_price || 0);
+  const bytes = formatDriveBytes(item.storage_bytes || 0);
+  const days = Number(item.duration_days || 0);
+  return `${item.label || item.item_name || item.item_key} · ${bytes} / ${days} 天 · ${price} 點`;
+}
+
+function renderStorageUpgrade(payload) {
+  const card = $("drive-storage-upgrade-card");
+  const select = $("drive-storage-upgrade-select");
+  const summary = $("drive-storage-upgrade-summary");
+  const list = $("drive-storage-upgrade-active-list");
+  const button = document.querySelector("[data-drive-action='purchase-storage-upgrade']");
+  if (!card || !select || !summary || !list) return;
+
+  const canPurchase = Boolean(payload?.can_purchase);
+  const isRoot = currentUser === "root";
+  driveStorageUpgradeCanPurchase = canPurchase && !isRoot;
+  driveStorageUpgradeMessage = payload?.message || (isRoot ? "root 依實際磁碟容量控管，不需要購買容量方案" : "");
+  driveStorageUpgradeCatalog = driveStorageUpgradeCanPurchase && Array.isArray(payload?.catalog) ? payload.catalog : [];
+  select.innerHTML = driveStorageUpgradeCatalog.length
+    ? driveStorageUpgradeCatalog.map((item) => `<option value="${sanitize(item.item_key)}">${sanitize(storageUpgradeLabel(item))}</option>`).join("")
+    : `<option value="">${isRoot ? "root 不需要購買容量方案" : "目前沒有可用的容量方案"}</option>`;
+  select.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+  if (button) {
+    button.disabled = false;
+    button.textContent = driveStorageUpgradeCanPurchase ? "用積分購買容量" : (isRoot ? "root 不需要購買容量" : "容量方案不可購買");
+    button.title = driveStorageUpgradeCanPurchase ? "用積分購買所選雲端硬碟容量" : (driveStorageUpgradeMessage || "目前沒有可購買的容量方案");
+  }
+  const quantity = $("drive-storage-upgrade-quantity");
+  if (quantity) quantity.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+
+  const usage = payload?.usage || {};
+  const purchased = Number(usage.purchased_extra_bytes || 0);
+  summary.textContent = canPurchase
+    ? `已加購容量：${formatDriveBytes(purchased)}`
+    : (payload?.message || "此帳號不需要加購容量");
+
+  const active = Array.isArray(payload?.active_purchases) ? payload.active_purchases : [];
+  list.innerHTML = active.length
+    ? active.map((row) => `
+      <div class="drive-pill">
+        <strong>${sanitize(row.item_key)}</strong>
+        <span>${formatDriveBytes(row.purchased_bytes || 0)} · 到期 ${sanitize(row.expires_at || "-")}</span>
+      </div>
+    `).join("")
+    : `<div class="drive-empty">目前沒有有效的加購容量</div>`;
 }
 
 function renderDriveDashboard(payload) {
@@ -43,11 +348,18 @@ function renderDriveDashboard(payload) {
   if (limitLabel) {
     const maxFile = formatDriveBytes(quota.max_file_size_bytes);
     const daily = quota.upload_rate_limit_per_day === null || quota.upload_rate_limit_per_day === undefined ? "無上限" : `${quota.upload_rate_limit_per_day} 次`;
-    limitLabel.textContent = `單檔限制：${maxFile} · 每日上傳：${daily} · 檔案數：${Number(quota.file_count || 0)}`;
+    const diskNote = quota.quota_source === "root_disk_available_90_percent"
+      ? ` · root 上限：儲存磁碟可用空間 90%，${quota.warning_threshold_percent || 80}% 起警示`
+      : String(quota.quota_source || "").startsWith("manager_role_fixed_1gb")
+        ? " · manager 上限：1 GB"
+      : "";
+    const purchaseNote = Number(quota.purchased_extra_bytes || 0) > 0 ? ` · 加購：${formatDriveBytes(quota.purchased_extra_bytes)}` : "";
+    limitLabel.textContent = `單檔限制：${maxFile} · 每日上傳：${daily} · 檔案數：${Number(quota.file_count || 0)}${diskNote}${purchaseNote}`;
+    limitLabel.style.color = quota.warning_active ? "#ffb74d" : "var(--muted)";
   }
   if (barFill) {
     barFill.style.width = `${percent}%`;
-    barFill.dataset.warning = percent >= 90 ? "high" : percent >= 70 ? "medium" : "low";
+    barFill.dataset.warning = quota.warning_active || percent >= 80 ? "high" : percent >= 65 ? "medium" : "low";
   }
 
   const list = $("drive-security-list");
@@ -60,7 +372,7 @@ function renderDriveDashboard(payload) {
 
   renderDriveGroupedStats("drive-risk-summary", quota.by_risk_level, "尚無風險統計");
   renderDriveGroupedStats("drive-scan-summary", quota.by_scan_status, "尚無掃描狀態");
-  renderDriveGroupedStats("drive-mode-summary", quota.by_privacy_mode, "尚無隱私模式統計");
+  renderDriveGroupedStats("drive-mode-summary", quota.by_privacy_mode, "尚無隱私模式統計", drivePrivacyModeLabel);
 }
 
 function driveFileNeedsWarning(file) {
@@ -69,31 +381,145 @@ function driveFileNeedsWarning(file) {
   return ["high", "blocked", "unknown_encrypted"].includes(risk) || ["infected", "quarantined", "failed", "unknown_encrypted"].includes(status);
 }
 
+function driveFileExtension(name) {
+  const lower = String(name || "").toLowerCase();
+  for (const ext of [".tar.gz", ".tar.bz2", ".tar.xz"]) {
+    if (lower.endsWith(ext)) return ext;
+  }
+  const dot = lower.lastIndexOf(".");
+  return dot >= 0 ? lower.slice(dot) : "";
+}
+
+function driveFileCategory(file) {
+  const name = file?.display_name || file?.virtual_path || file?.original_filename_plain_for_public || file?.storage_path || "";
+  const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
+  const ext = driveFileExtension(name);
+  if (mime.startsWith("audio/") || [".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"].includes(ext)) return "audio";
+  if (mime.startsWith("video/") || [".m4v", ".mov", ".mp4", ".ogv", ".webm"].includes(ext)) return "video";
+  if (mime.startsWith("image/") || [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(ext)) return "image";
+  if (mime === "application/pdf" || ext === ".pdf") return "pdf";
+  if (mime.startsWith("text/") || [".css", ".csv", ".htm", ".html", ".ini", ".js", ".json", ".log", ".md", ".py", ".sql", ".text", ".toml", ".txt", ".xml", ".yaml", ".yml"].includes(ext)) return "text";
+  if ([".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"].includes(ext)) return "archive";
+  return "metadata";
+}
+
+function driveFileIsImage(file) {
+  return driveFileCategory(file) === "image";
+}
+
+function drivePrimaryAction(file) {
+  const category = driveFileCategory(file);
+  if (category === "text") return { action: "edit-text", label: "編輯" };
+  if (category === "audio" || category === "video") return { action: "preview", label: "串流" };
+  if (category === "metadata") return { action: "preview", label: "資訊" };
+  return { action: "preview", label: "預覽" };
+}
+
+function driveTransferPercent(item) {
+  const raw = Number(item?.progress_percent);
+  if (Number.isFinite(raw)) return Math.max(0, Math.min(100, raw));
+  const loaded = Number(item?.loaded_bytes || 0);
+  const total = Number(item?.total_bytes || 0);
+  if (total > 0) return Math.max(0, Math.min(100, (loaded / total) * 100));
+  return null;
+}
+
+function addDriveTransferRow(item) {
+  const id = item.id || `transfer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const row = {
+    id,
+    kind: item.kind || "upload",
+    status: item.status || "running",
+    phase: item.phase || "starting",
+    name: item.name || item.filename || "處理中的檔案",
+    loaded_bytes: item.loaded_bytes || 0,
+    total_bytes: item.total_bytes ?? null,
+    progress_percent: item.progress_percent ?? 0,
+    msg: item.msg || "準備中",
+  };
+  driveTransferRows = [row, ...driveTransferRows.filter((existing) => existing.id !== id)];
+  renderDriveFiles(lastDriveFiles || []);
+  return id;
+}
+
+function updateDriveTransferRow(id, updates) {
+  let found = false;
+  driveTransferRows = driveTransferRows.map((item) => {
+    if (item.id !== id) return item;
+    found = true;
+    return { ...item, ...updates };
+  });
+  if (!found) {
+    addDriveTransferRow({ id, ...updates });
+    return;
+  }
+  renderDriveFiles(lastDriveFiles || []);
+}
+
+function removeDriveTransferRow(id) {
+  driveTransferRows = driveTransferRows.filter((item) => item.id !== id);
+  renderDriveFiles(lastDriveFiles || []);
+}
+
+function renderDriveTransferRow(item) {
+  const percent = driveTransferPercent(item);
+  const width = percent === null ? 100 : percent;
+  const label = percent === null ? "計算中" : `${Math.round(percent)}%`;
+  const bytes = item.total_bytes
+    ? `${formatDriveBytes(item.loaded_bytes || 0)} / ${formatDriveBytes(item.total_bytes)}`
+    : (item.loaded_bytes ? formatDriveBytes(item.loaded_bytes) : "等待資料");
+  const statusClass = item.status === "failed" ? "failed" : item.status === "completed" ? "completed" : "running";
+  return `
+    <div class="drive-file-row drive-transfer-row ${sanitize(statusClass)}">
+      <div>
+        <strong>${sanitize(item.name || item.filename || "處理中的檔案")}</strong>
+        <div class="drive-card-sub">${sanitize(item.kind === "remote_download" ? "下載中" : "上傳中")} · ${sanitize(item.msg || item.phase || "處理中")} · ${sanitize(bytes)}</div>
+        <div class="drive-progress" aria-label="${sanitize(label)}">
+          <div class="drive-progress-fill ${percent === null ? "indeterminate" : ""}" style="width:${width}%;"></div>
+        </div>
+      </div>
+      <div class="drive-file-actions">
+        <span class="drive-progress-label">${sanitize(label)}</span>
+      </div>
+    </div>
+  `;
+}
+
+let lastDriveFiles = [];
+
 function renderDriveFiles(files) {
   const list = $("drive-file-list");
   if (!list) return;
-  if (!Array.isArray(files) || !files.length) {
+  lastDriveFiles = Array.isArray(files) ? files : [];
+  const transferHtml = driveTransferRows.map(renderDriveTransferRow).join("");
+  if ((!Array.isArray(files) || !files.length) && !driveTransferRows.length) {
     list.innerHTML = `<div class="drive-empty">尚無雲端檔案</div>`;
     return;
   }
-  list.innerHTML = files.map((file) => {
+  const fileHtml = (Array.isArray(files) ? files : []).map((file) => {
     const name = file.original_filename_plain_for_public || file.id || "download.bin";
     const warn = driveFileNeedsWarning(file);
+    const primary = drivePrimaryAction(file);
+    const albumButton = driveFileIsImage(file)
+      ? `<button class="btn" type="button" data-drive-action="add-cloud-to-album" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">加入相簿</button>`
+      : "";
     return `
-      <div class="drive-file-row">
+      <div class="drive-file-row" data-drive-action="preview" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">
         <div>
           <strong>${sanitize(name)}</strong>
-          <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(file.privacy_mode || "-")} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}</div>
+          <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(drivePrivacyModeLabel(file.privacy_mode))}${drivePrivacyModeDescription(file.privacy_mode) ? `（${sanitize(drivePrivacyModeDescription(file.privacy_mode))}）` : ""} · ${sanitize(driveFileCategory(file))} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}</div>
         </div>
         <div class="drive-file-actions">
-          <button class="btn" type="button" onclick="previewDriveFile('${sanitize(file.id)}')">預覽</button>
-          <button class="btn" type="button" onclick="editDriveTextFile('${sanitize(file.id)}')">編輯文字</button>
-          <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(file.id)}', ${warn ? "true" : "false"})">下載</button>
-          <button class="btn btn-danger" type="button" onclick="deleteDriveFile('${sanitize(file.id)}')">刪除</button>
+          <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.id)}">${sanitize(primary.label)}</button>
+          <button class="btn" type="button" data-drive-action="move-cloud-to-storage" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">移動</button>
+          ${albumButton}
+          <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(file.id)}" data-warn="${warn ? "1" : "0"}">下載</button>
+          <button class="btn btn-danger" type="button" data-drive-action="delete-cloud" data-file-id="${sanitize(file.id)}">移到垃圾桶</button>
         </div>
       </div>
     `;
   }).join("");
+  list.innerHTML = transferHtml + fileHtml;
 }
 
 async function loadDriveFiles(csrf) {
@@ -108,7 +534,11 @@ async function loadDriveFiles(csrf) {
     list.innerHTML = `<div class="drive-empty">${sanitize(json.msg || "檔案列表讀取失敗")}</div>`;
     return;
   }
-  renderDriveFiles(json.files || []);
+  const files = json.files || [];
+  renderDriveFiles(files);
+  driveAttachmentFileOptions = Array.isArray(files) ? files : [];
+  driveAttachmentFileOptionsLoadedAt = Date.now();
+  renderAttachmentFileSelects(files);
 }
 
 async function uploadDriveFile() {
@@ -117,24 +547,227 @@ async function uploadDriveFile() {
     alert("請先選擇檔案");
     return;
   }
+  const file = input.files[0];
+  const transferId = addDriveTransferRow({
+    kind: "upload",
+    name: file.name,
+    loaded_bytes: 0,
+    total_bytes: file.size,
+    progress_percent: 0,
+    msg: "等待上傳",
+  });
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+  const privacyMode = $("drive-upload-privacy-mode")?.value || "private_scannable";
   const form = new FormData();
-  form.append("file", input.files[0]);
-  form.append("privacy_mode", $("drive-upload-privacy-mode")?.value || "private_scannable");
-  const res = await fetch(API + "/cloud-drive/upload", {
-    method: "POST",
+  try {
+    if (isDriveE2eeMode(privacyMode)) {
+      updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
+      const encrypted = await prepareDriveE2eeUpload(file, privacyMode);
+      form.append("file", encrypted.blob, encrypted.filename);
+      form.append("encrypted_metadata", encrypted.encrypted_metadata);
+      form.append("encrypted_file_key", encrypted.encrypted_file_key);
+      form.append("wrapped_by", encrypted.wrapped_by);
+      form.append("ciphertext_sha256", encrypted.ciphertext_sha256);
+      form.append("encryption_algorithm", encrypted.encryption_algorithm);
+      form.append("encryption_version", encrypted.encryption_version);
+      form.append("nonce", encrypted.nonce);
+      if (encrypted.client_scan_report) form.append("client_scan_report", JSON.stringify(encrypted.client_scan_report));
+    } else {
+      form.append("file", file);
+    }
+    form.append("privacy_mode", privacyMode);
+    const { status, json } = await xhrUploadWithProgress(API + "/cloud-drive/upload", form, csrf, (event) => {
+      if (event.lengthComputable) {
+        updateDriveTransferRow(transferId, {
+          loaded_bytes: event.loaded,
+          total_bytes: event.total,
+          progress_percent: (event.loaded / event.total) * 100,
+          msg: event.loaded >= event.total ? "伺服器儲存與掃描中" : "上傳中",
+        });
+      } else {
+        updateDriveTransferRow(transferId, {
+          loaded_bytes: event.loaded || 0,
+          total_bytes: null,
+          progress_percent: null,
+          msg: "上傳中",
+        });
+      }
+    });
+    if (status < 200 || status >= 300 || !json.ok) {
+      const detail = json.error_code ? `${json.msg || "雲端硬碟上傳失敗"}（${json.error_code}）` : (json.msg || `雲端硬碟上傳失敗（HTTP ${status}）`);
+      updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
+      alert(detail);
+      return;
+    }
+    updateDriveTransferRow(transferId, { status: "completed", phase: "completed", msg: "上傳完成", progress_percent: 100, loaded_bytes: file.size, total_bytes: file.size });
+    input.value = "";
+    await loadDriveDashboard();
+    removeDriveTransferRow(transferId);
+  } catch (err) {
+    const detail = err.message || "雲端硬碟上傳失敗";
+    updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: detail, progress_percent: 100 });
+    alert(detail);
+  }
+}
+
+function xhrUploadWithProgress(url, form, csrf, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    xhr.upload.onprogress = (event) => {
+      if (typeof onProgress === "function") onProgress(event);
+    };
+    xhr.onload = () => {
+      let json = {};
+      try {
+        json = JSON.parse(xhr.responseText || "{}");
+      } catch (err) {
+        json = {};
+      }
+      resolve({ status: xhr.status, json });
+    };
+    xhr.onerror = () => reject(new Error("上傳連線失敗"));
+    xhr.ontimeout = () => reject(new Error("上傳逾時"));
+    xhr.send(form);
+  });
+}
+
+async function loadRemoteDownloadCapabilities() {
+  const status = $("drive-remote-download-status");
+  if (!currentUser || !canAccessModule("privacy_uploads")) return;
+  await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/cloud-drive/remote-download/capabilities", {
     credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" },
-    body: form
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
-    alert(json.msg || "雲端硬碟上傳失敗");
+    if (status) status.textContent = json.msg || "遠端下載能力讀取失敗";
     return;
   }
-  input.value = "";
-  await loadDriveDashboard();
+  const caps = json.capabilities || {};
+  if (status) {
+    status.textContent = caps.bt_magnet || caps.bt_file
+      ? `Direct link 可用，magnet / .torrent 可用（${caps.aria2c_path || "aria2c"}）`
+      : "Direct link 可用；magnet / .torrent 不可用，伺服器需安裝 aria2c";
+  }
+}
+
+async function startRemoteDriveDownload() {
+  const url = ($("drive-remote-url")?.value || "").trim();
+  const torrentInput = $("drive-remote-torrent-file");
+  const torrentFile = torrentInput?.files?.[0] || null;
+  if (!url && !torrentFile) {
+    alert("請輸入下載網址，或上傳 .torrent BT 種子檔");
+    return;
+  }
+  if (url && torrentFile) {
+    alert("下載網址和 BT 種子檔請擇一使用");
+    return;
+  }
+  const transferId = addDriveTransferRow({
+    kind: "remote_download",
+    name: torrentFile ? torrentFile.name : url,
+    loaded_bytes: 0,
+    total_bytes: null,
+    progress_percent: 0,
+    msg: "建立下載任務",
+  });
+  const button = $("drive-remote-download-btn");
+  const oldText = button ? button.textContent : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "下載中...";
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    let res;
+    if (torrentFile) {
+      const form = new FormData();
+      form.append("torrent_file", torrentFile);
+      form.append("privacy_mode", $("drive-remote-privacy-mode")?.value || "private_scannable");
+      form.append("virtual_path", $("drive-remote-virtual-path")?.value || "");
+      res = await fetch(API + "/cloud-drive/remote-download/torrent-tasks", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": getCsrfToken() || "" },
+        body: form
+      });
+    } else {
+      res = await fetch(API + "/cloud-drive/remote-download/tasks", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+        body: JSON.stringify({
+          url,
+          privacy_mode: $("drive-remote-privacy-mode")?.value || "private_scannable",
+          virtual_path: $("drive-remote-virtual-path")?.value || ""
+        })
+      });
+    }
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載失敗（HTTP ${res.status}）`);
+    const task = json.task || {};
+    updateDriveTransferRow(transferId, {
+      id: transferId,
+      task_id: task.id,
+      status: task.status || "running",
+      phase: task.phase || "queued",
+      msg: task.msg || "已加入下載佇列",
+    });
+    await pollRemoteDownloadTask(task.id, transferId);
+    if ($("drive-remote-url")) $("drive-remote-url").value = "";
+    if (torrentInput) torrentInput.value = "";
+    flash($("drive-msg"), json.msg || "遠端下載已保存", true);
+    await loadDriveDashboard();
+    removeDriveTransferRow(transferId);
+  } catch (err) {
+    updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: err.message || "遠端下載失敗", progress_percent: 100 });
+    alert(err.message || "遠端下載失敗");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = oldText || "開始下載";
+    }
+  }
+}
+
+function driveSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollRemoteDownloadTask(taskId, transferId) {
+  if (!taskId) throw new Error("遠端下載任務建立失敗");
+  while (true) {
+    await driveSleep(900);
+    await fetchCsrfToken({ force: true });
+    const res = await fetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載狀態讀取失敗（HTTP ${res.status}）`);
+    const task = json.task || {};
+    updateDriveTransferRow(transferId, {
+      name: task.filename || task.url || "遠端下載",
+      status: task.status || "running",
+      phase: task.phase || "",
+      loaded_bytes: task.loaded_bytes,
+      total_bytes: task.total_bytes,
+      progress_percent: task.progress_percent,
+      msg: task.msg || "",
+    });
+    const status = $("drive-remote-download-status");
+    if (status) {
+      const percent = task.progress_percent === null || task.progress_percent === undefined ? "計算中" : `${Math.round(Number(task.progress_percent || 0))}%`;
+      status.textContent = `${task.msg || "遠端下載中"} · ${percent}`;
+    }
+    if (task.status === "completed") return task;
+    if (task.status === "failed") throw new Error(task.error || task.msg || "遠端下載失敗");
+  }
 }
 
 async function downloadDriveFile(fileId, likelyHighRisk) {
@@ -162,8 +795,26 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") || "";
   const match = disposition.match(/filename="?([^"]+)"?/i);
-  const name = match ? match[1] : "download.bin";
-  const url = URL.createObjectURL(blob);
+  let name = match ? match[1] : "download.bin";
+  let outputBlob = blob;
+  const keyRes = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/e2ee-key`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (keyRes.ok) {
+    const keyJson = await keyRes.json().catch(() => ({}));
+    if (keyJson.ok && keyJson.e2ee) {
+      try {
+        const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee);
+        outputBlob = decrypted.blob;
+        name = decrypted.filename || name;
+      } catch (err) {
+        alert(`${err.message || "端到端加密檔案解密失敗"}\n\n如果這是在其他瀏覽器或清除過瀏覽器資料後下載，原本的本地 vault key 已不存在，無法解密。`);
+        return;
+      }
+    }
+  }
+  const url = URL.createObjectURL(outputBlob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
@@ -174,16 +825,74 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
 }
 
 async function deleteDriveFile(fileId) {
-  if (!window.confirm("刪除此雲端硬碟檔案？既有附件引用會失效。")) return;
+  if (!window.confirm("將此檔案移到垃圾桶？清空垃圾桶前仍可還原。")) return;
   try {
     await storageAction(`/cloud-drive/files/${encodeURIComponent(fileId)}`, "DELETE");
     await loadDriveDashboard();
   } catch (err) {
-    alert(err.message || "刪除失敗");
+    alert(err.message || "移到垃圾桶失敗");
+  }
+}
+
+async function moveCloudFileToStorage(fileId, name) {
+  const requested = window.prompt("移動到 FileManager 路徑", joinStoragePath(currentStoragePath || "/", name || "file"));
+  if (requested === null) return;
+  const path = normalizeStoragePath(requested, name || "file");
+  if (path === "/") {
+    alert("請輸入包含檔名的路徑");
+    return;
+  }
+  try {
+    await storageAction("/storage/files/attach-existing", "POST", {
+      file_id: fileId,
+      virtual_path: path,
+      display_name: storageBaseName(path),
+    });
+    currentStoragePath = storageDirName(path);
+    await loadDriveDashboard();
+  } catch (err) {
+    alert(err.message || "移動失敗");
   }
 }
 
 let currentDrivePreviewUrl = "";
+let selectedAlbumId = "";
+let selectedStorageFileId = "";
+let selectedStorageFilePath = "";
+let currentStoragePath = "/";
+let storageFilesCache = [];
+let storageFoldersCache = [];
+let storageAlbumsCache = [];
+let selectedAlbumViewerId = "";
+let pendingAlbumPickerResolve = null;
+let albumThumbObjectUrls = [];
+let currentAlbumFullPreviewUrl = "";
+let albumPreviewSequence = [];
+let albumPreviewIndex = -1;
+let lastDrivePreviewClick = { fileId: "", at: 0 };
+const DRIVE_FULLSCREEN_PREVIEW_MS = 450;
+
+function getAlbumThumbSize() {
+  const stored = localStorage.getItem("albumThumbSize") || "medium";
+  return ["small", "medium", "large"].includes(stored) ? stored : "medium";
+}
+
+function setAlbumThumbSize(size) {
+  const normalized = ["small", "medium", "large"].includes(size) ? size : "medium";
+  localStorage.setItem("albumThumbSize", normalized);
+  const select = $("album-thumb-size");
+  if (select) select.value = normalized;
+  const grid = $("album-viewer-files");
+  if (grid) {
+    grid.classList.remove("album-thumb-small", "album-thumb-medium", "album-thumb-large");
+    grid.classList.add(`album-thumb-${normalized}`);
+  }
+}
+
+function clearAlbumThumbObjectUrls() {
+  albumThumbObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  albumThumbObjectUrls = [];
+}
 
 function clearDrivePreviewUrl() {
   if (currentDrivePreviewUrl) {
@@ -192,7 +901,26 @@ function clearDrivePreviewUrl() {
   }
 }
 
-async function fetchDrivePreviewContent(fileId, csrf) {
+function driveFileIsImage(file) {
+  const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
+  const name = String(file?.original_filename_plain_for_public || file?.display_name || file?.filename || "").toLowerCase();
+  return mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(name);
+}
+
+function drivePreviewContentUrl(fileId) {
+  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
+  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+}
+
+function clearAlbumFullPreviewUrl() {
+  if (currentAlbumFullPreviewUrl) {
+    URL.revokeObjectURL(currentAlbumFullPreviewUrl);
+    currentAlbumFullPreviewUrl = "";
+  }
+}
+
+async function fetchDrivePreviewBlob(fileId, csrf) {
   const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -201,26 +929,98 @@ async function fetchDrivePreviewContent(fileId, csrf) {
     const json = await res.json().catch(() => ({}));
     throw new Error(json.msg || "預覽內容讀取失敗");
   }
+  return res.blob();
+}
+
+async function fetchDrivePreviewContent(fileId, csrf) {
+  const blob = await fetchDrivePreviewBlob(fileId, csrf);
   clearDrivePreviewUrl();
-  currentDrivePreviewUrl = URL.createObjectURL(await res.blob());
+  currentDrivePreviewUrl = URL.createObjectURL(blob);
   return currentDrivePreviewUrl;
 }
 
-function renderDrivePreviewMetadata(preview) {
+function closeDrivePreview() {
   const panel = $("drive-preview-panel");
   const card = $("drive-preview-card");
-  if (!panel || !card) return;
+  clearDrivePreviewUrl();
+  if (panel) panel.innerHTML = `<div class="drive-empty">請從左側檔案清單選擇要預覽的檔案</div>`;
+  if (card) card.style.display = "";
+  lastDrivePreviewClick = { fileId: "", at: 0 };
+}
+
+function closeAlbumFullPreview() {
+  const overlay = $("album-full-preview-overlay");
+  const body = $("album-full-preview-body");
+  clearAlbumFullPreviewUrl();
+  albumPreviewIndex = -1;
+  if (body) body.innerHTML = "";
+  if (overlay) {
+    overlay.classList.remove("show");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  document.body.classList.remove("modal-open");
+}
+
+function albumPreviewFileName(file) {
+  return albumFileDisplayName(file || {}) || "圖片預覽";
+}
+
+function setAlbumPreviewSequence(files = [], fileId = "") {
+  const rows = (Array.isArray(files) ? files : [])
+    .filter((file) => file?.file_id && (typeof driveFileIsImage !== "function" || driveFileIsImage(file)));
+  albumPreviewSequence = rows;
+  albumPreviewIndex = rows.findIndex((file) => String(file.file_id) === String(fileId || ""));
+}
+
+function albumPreviewCurrentCountLabel() {
+  if (!albumPreviewSequence.length || albumPreviewIndex < 0) return "";
+  return `${albumPreviewIndex + 1} / ${albumPreviewSequence.length}`;
+}
+
+function updateAlbumPreviewControls() {
+  const hasMany = albumPreviewSequence.length > 1 && albumPreviewIndex >= 0;
+  document.querySelectorAll("[data-drive-action='album-preview-prev'], [data-drive-action='album-preview-next']").forEach((button) => {
+    button.disabled = !hasMany;
+    button.classList.toggle("is-disabled", !hasMany);
+  });
+}
+
+function renderDrivePreviewMetadata(preview, fileId) {
+  const panel = $("drive-preview-panel");
+  const card = $("drive-preview-card");
+  if (!panel || !card) return "";
   card.style.display = "block";
-  panel.innerHTML = `
-    <div><strong>${sanitize(preview.filename || "preview")}</strong></div>
-    <div class="drive-card-sub">${sanitize(preview.category || "-")} · ${formatDriveBytes(preview.size_bytes || 0)} · ${sanitize(preview.mime_type || "-")} · scan=${sanitize(preview.scan_status || "-")}</div>
+  return `
+    <div>
+      <strong>${sanitize(preview.filename || "preview")}</strong>
+      <div class="drive-card-sub">
+        ${sanitize(preview.category || "-")} · ${formatDriveBytes(preview.size_bytes || 0)} · ${sanitize(preview.mime_type || "-")}
+        · ${sanitize(drivePrivacyModeLabel(preview.privacy_mode))} · risk=${sanitize(preview.risk_level || "-")} · scan=${sanitize(preview.scan_status || "-")}
+      </div>
+    </div>
+    <div class="drive-file-actions" style="justify-content:flex-start;">
+      <button class="btn btn-primary" type="button" data-drive-action="download" data-file-id="${sanitize(fileId)}" data-warn="${driveFileNeedsWarning(preview) ? "1" : "0"}">下載</button>
+      ${preview.render_mode === "text" ? `<button class="btn" type="button" data-drive-action="edit-text" data-file-id="${sanitize(fileId)}">編輯文字</button>` : ""}
+      <button class="btn" type="button" data-drive-action="close-preview">關閉預覽</button>
+    </div>
   `;
 }
 
-async function previewDriveFile(fileId) {
+function shouldOpenDriveFullscreen(fileId, options = {}) {
+  if (options.skipRepeatCheck) return false;
+  const now = Date.now();
+  const repeated = lastDrivePreviewClick.fileId === String(fileId || "") && now - lastDrivePreviewClick.at <= DRIVE_FULLSCREEN_PREVIEW_MS;
+  lastDrivePreviewClick = { fileId: String(fileId || ""), at: now };
+  return repeated;
+}
+
+async function previewDriveFile(fileId, options = {}) {
+  if (shouldOpenDriveFullscreen(fileId, options)) {
+    return previewAlbumFileFullscreen(fileId, options.fileName || "");
+  }
   const panel = $("drive-preview-panel");
   const card = $("drive-preview-card");
-  if (card) card.style.display = "block";
+  if (card) card.style.display = "";
   if (panel) panel.innerHTML = `<div class="drive-empty">讀取預覽中...</div>`;
   try {
     await fetchCsrfToken({ force: true });
@@ -232,10 +1032,10 @@ async function previewDriveFile(fileId) {
     const json = await res.json().catch(() => ({}));
     if (!json.ok) throw new Error(json.msg || "預覽失敗");
     const preview = json.preview || {};
-    renderDrivePreviewMetadata(preview);
     if (!panel) return;
+    panel.innerHTML = renderDrivePreviewMetadata(preview, fileId);
     if (preview.render_mode === "text") {
-      panel.innerHTML += `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}<button class="btn" type="button" onclick="editDriveTextFile('${sanitize(fileId)}')">線上修改此文字檔</button>`;
+      panel.innerHTML += `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
       return;
     }
     if (preview.render_mode === "archive") {
@@ -247,6 +1047,7 @@ async function previewDriveFile(fileId) {
       const url = await fetchDrivePreviewContent(fileId, csrf);
       if (preview.category === "audio") panel.innerHTML += `<audio controls src="${url}"></audio>`;
       else if (preview.category === "video") panel.innerHTML += `<video controls src="${url}"></video>`;
+      else if (preview.category === "image") panel.innerHTML += `<img src="${url}" alt="${sanitize(preview.filename || "image preview")}" />`;
       else if (preview.category === "pdf") panel.innerHTML += `<iframe src="${url}" title="PDF preview"></iframe>`;
       else panel.innerHTML += `<div class="drive-empty">此檔案無可用預覽。</div>`;
       return;
@@ -256,6 +1057,85 @@ async function previewDriveFile(fileId) {
     clearDrivePreviewUrl();
     if (panel) panel.innerHTML = `<div class="drive-empty">${sanitize(err.message || "預覽失敗")}</div>`;
   }
+}
+
+async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
+  if (Array.isArray(options.files)) {
+    setAlbumPreviewSequence(options.files, fileId);
+  } else if (!albumPreviewSequence.some((file) => String(file.file_id) === String(fileId || ""))) {
+    setAlbumPreviewSequence([], fileId);
+  } else {
+    albumPreviewIndex = albumPreviewSequence.findIndex((file) => String(file.file_id) === String(fileId || ""));
+  }
+  const overlay = $("album-full-preview-overlay");
+  const title = $("album-full-preview-title");
+  const meta = $("album-full-preview-meta");
+  const body = $("album-full-preview-body");
+  if (!overlay || !body) return previewDriveFile(fileId, { skipRepeatCheck: true, fileName });
+  clearAlbumFullPreviewUrl();
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  if (title) title.textContent = fileName || albumPreviewFileName(albumPreviewSequence[albumPreviewIndex]) || "檔案預覽";
+  if (meta) meta.textContent = "讀取檔案中...";
+  updateAlbumPreviewControls();
+  body.innerHTML = `<div class="drive-empty">讀取檔案中...</div>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "預覽失敗");
+    const preview = json.preview || {};
+    if (title) title.textContent = preview.filename || fileName || albumPreviewFileName(albumPreviewSequence[albumPreviewIndex]) || "檔案預覽";
+    const countLabel = albumPreviewCurrentCountLabel();
+    const baseMeta = `${countLabel ? `${countLabel} · ` : ""}${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · scan=${preview.scan_status || "-"}`;
+    if (preview.render_mode === "text") {
+      if (meta) meta.textContent = baseMeta;
+      body.innerHTML = `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+      return;
+    }
+    if (preview.render_mode === "archive") {
+      const entries = Array.isArray(preview.entries) ? preview.entries : [];
+      if (meta) meta.textContent = baseMeta;
+      body.innerHTML = `<div class="drive-preview-archive">${entries.map((entry) => `${entry.is_dir ? "[dir] " : ""}${sanitize(entry.name || "-")} · ${formatDriveBytes(entry.size || 0)}`).join("\n") || "壓縮檔內無可列出的項目"}</div>${preview.truncated ? '<div class="drive-card-sub">項目過多，已截斷顯示。</div>' : ""}`;
+      return;
+    }
+    if (preview.render_mode !== "media") {
+      throw new Error("這個檔案類型目前只提供右側 metadata 預覽");
+    }
+    const blob = await fetchDrivePreviewBlob(fileId, csrf);
+    currentAlbumFullPreviewUrl = URL.createObjectURL(blob);
+    if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || blob.type || "-"} · scan=${preview.scan_status || "-"}`;
+    if (preview.category === "image") {
+      body.innerHTML = `<img src="${currentAlbumFullPreviewUrl}" alt="${sanitize(preview.filename || fileName || "image preview")}" />`;
+    } else if (preview.category === "video") {
+      body.innerHTML = `<video controls autoplay src="${currentAlbumFullPreviewUrl}"></video>`;
+    } else if (preview.category === "audio") {
+      body.innerHTML = `<audio controls autoplay src="${currentAlbumFullPreviewUrl}"></audio>`;
+    } else if (preview.category === "pdf") {
+      body.innerHTML = `<iframe src="${currentAlbumFullPreviewUrl}" title="${sanitize(preview.filename || fileName || "PDF preview")}"></iframe>`;
+    } else {
+      throw new Error("這個檔案類型目前只支援右側預覽");
+    }
+  } catch (err) {
+    clearAlbumFullPreviewUrl();
+    updateAlbumPreviewControls();
+    if (meta) meta.textContent = "";
+    body.innerHTML = `<div class="drive-empty">${sanitize(err.message || "預覽失敗")}</div>`;
+  }
+}
+
+function stepAlbumPreview(direction) {
+  if (!albumPreviewSequence.length || albumPreviewIndex < 0) return;
+  const nextIndex = (albumPreviewIndex + direction + albumPreviewSequence.length) % albumPreviewSequence.length;
+  const nextFile = albumPreviewSequence[nextIndex];
+  if (!nextFile?.file_id) return;
+  albumPreviewIndex = nextIndex;
+  previewAlbumFileFullscreen(nextFile.file_id, albumPreviewFileName(nextFile)).catch((err) => alert(err.message || "預覽失敗"));
 }
 
 async function editDriveTextFile(fileId) {
@@ -279,8 +1159,8 @@ async function editDriveTextFile(fileId) {
         <div><strong>${sanitize(preview.filename || "text")}</strong></div>
         <textarea id="drive-text-editor" rows="14">${sanitize(preview.text || "")}</textarea>
         <div class="drive-file-actions" style="justify-content:flex-start;">
-          <button class="btn btn-primary" type="button" onclick="saveDriveTextFile('${sanitize(fileId)}')">儲存修改</button>
-          <button class="btn" type="button" onclick="previewDriveFile('${sanitize(fileId)}')">取消</button>
+          <button class="btn btn-primary" type="button" data-drive-action="save-text" data-file-id="${sanitize(fileId)}">儲存修改</button>
+          <button class="btn" type="button" data-drive-action="preview" data-file-id="${sanitize(fileId)}">取消</button>
         </div>
       `;
     }
@@ -295,7 +1175,7 @@ async function saveDriveTextFile(fileId) {
   try {
     await storageAction(`/cloud-drive/files/${encodeURIComponent(fileId)}/text`, "PUT", { content: editor.value });
     await loadDriveDashboard();
-    await previewDriveFile(fileId);
+    await previewDriveFile(fileId, { skipRepeatCheck: true });
   } catch (err) {
     alert(err.message || "儲存失敗");
   }
@@ -311,19 +1191,39 @@ function renderContextAttachmentRefs(targetId, refs) {
   list.innerHTML = refs.map((ref) => {
     const name = ref.original_filename_plain_for_public || ref.file_id || "download.bin";
     const warn = driveFileNeedsWarning(ref);
+    const imagePreview = driveFileIsImage(ref)
+      ? `<button class="chat-message-image-preview" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(ref.file_id)}" data-name="${sanitize(name)}"><img src="${sanitize(drivePreviewContentUrl(ref.file_id))}" alt="${sanitize(name)}" loading="lazy" /></button>`
+      : "";
     return `
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(name)}</strong>
           <div class="drive-card-sub">${formatDriveBytes(ref.size_bytes || 0)} · ${sanitize(ref.context_type || "-")}#${sanitize(ref.context_id || "-")} · risk=${sanitize(ref.risk_level || "-")} · scan=${sanitize(ref.scan_status || "-")}</div>
+          ${imagePreview}
         </div>
         <div class="drive-file-actions">
-          <button class="btn" type="button" onclick="previewDriveFile('${sanitize(ref.file_id)}')">預覽</button>
-          <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" onclick="downloadDriveFile('${sanitize(ref.file_id)}', ${warn ? "true" : "false"})">下載</button>
+          <button class="btn" type="button" data-drive-action="preview" data-file-id="${sanitize(ref.file_id)}">預覽</button>
+          <button class="btn ${warn ? "btn-danger" : "btn-primary"}" type="button" data-drive-action="download" data-file-id="${sanitize(ref.file_id)}" data-warn="${warn ? "1" : "0"}">下載</button>
+          <button class="btn btn-danger" type="button" data-drive-action="delete-context-attachment" data-ref-id="${sanitize(ref.id)}" data-context-type="${sanitize(ref.context_type || "")}" data-context-id="${sanitize(ref.context_id || "")}" data-target-id="${sanitize(targetId)}">移除附件</button>
         </div>
       </div>
     `;
   }).join("");
+}
+
+async function deleteContextAttachment(refId, contextType, contextId, targetId) {
+  if (!refId) {
+    alert("附件編號讀取失敗，請重新整理後再試。");
+    return;
+  }
+  if (!window.confirm("將此附件從目前項目移除？原雲端檔案不會被刪除。")) return;
+  await storageAction(`/cloud-drive/refs/${encodeURIComponent(refId)}/delete`, "POST");
+  if (contextType === "chat_message" && typeof loadChatMessages === "function" && selectedChatRoomId) {
+    await loadChatMessages(selectedChatRoomId, false);
+  } else if (contextType && contextId && targetId) {
+    await loadContextAttachments(contextType, contextId, targetId);
+  }
+  await ensureAttachmentFileOptionsLoaded({ force: true });
 }
 
 async function loadContextAttachments(contextType, contextId, targetId) {
@@ -369,8 +1269,8 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
     body: form
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    alert(json.msg || "附件上傳失敗");
+  if (!res.ok || !json.ok) {
+    alert(json.error_code ? `${json.msg || "附件上傳失敗"}（${json.error_code}）` : (json.msg || `附件上傳失敗（HTTP ${res.status}）`));
     return;
   }
   input.value = "";
@@ -379,7 +1279,7 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
 
 async function attachExistingContextAttachment({ fileId, contextType, contextId, grantUserIds = [], grantRole = null, refresh }) {
   if (!fileId) {
-    alert("請輸入既有雲端 file_id");
+    alert("請先從下拉選單選擇雲端檔案");
     return;
   }
   if (!contextId) {
@@ -397,24 +1297,76 @@ async function attachExistingContextAttachment({ fileId, contextType, contextId,
   if (typeof refresh === "function") await refresh();
 }
 
-async function uploadChatAttachment() {
-  await uploadContextAttachment({
-    fileInputId: "chat-attachment-file",
-    contextType: "group_chat",
-    contextId: selectedChatRoomId,
-    grantRole: "user",
-    refresh: () => loadContextAttachments("group_chat", selectedChatRoomId, "chat-attachment-list")
+async function uploadPendingChatAttachment() {
+  const input = $("chat-attachment-file");
+  if (!input?.files?.[0]) {
+    alert("請先選擇附件檔案");
+    return;
+  }
+  if (!selectedChatRoomId) {
+    alert("請先選擇聊天室");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  form.append("privacy_mode", "private_scannable");
+  const res = await fetch(API + "/cloud-drive/upload", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
   });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    alert(json.error_code ? `${json.msg || "附件上傳失敗"}（${json.error_code}）` : (json.msg || `附件上傳失敗（HTTP ${res.status}）`));
+    return;
+  }
+  input.value = "";
+  await ensureAttachmentFileOptionsLoaded({ force: true });
+  if (typeof addPendingChatAttachment === "function") {
+    addPendingChatAttachment(json.file || {});
+  }
+  setChatMsg("chat-room-warn", "附件已加入待送清單，按送出後會出現在該則訊息下方", true);
+}
+
+async function addExistingChatFileToPending(fileId) {
+  if (!fileId) {
+    await ensureAttachmentFileOptionsLoaded();
+    alert("請先從下拉選單選擇雲端檔案");
+    return;
+  }
+  if (!selectedChatRoomId) {
+    alert("請先選擇聊天室");
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + `/files/${encodeURIComponent(fileId)}/status`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    alert(json.msg || `檔案讀取失敗（HTTP ${res.status}）`);
+    return;
+  }
+  if (typeof addPendingChatAttachment === "function") {
+    addPendingChatAttachment(json.file || { file_id: fileId });
+  }
+  const input = $("chat-attachment-existing-file-id");
+  if (input) input.value = "";
+  setChatMsg("chat-room-warn", "既有雲端檔已加入待送清單，按送出後會出現在該則訊息下方", true);
+}
+
+async function uploadChatAttachment() {
+  await uploadPendingChatAttachment();
 }
 
 async function attachExistingChatFile() {
-  await attachExistingContextAttachment({
-    fileId: $("chat-attachment-existing-file-id")?.value.trim() || "",
-    contextType: "group_chat",
-    contextId: selectedChatRoomId,
-    grantRole: "user",
-    refresh: () => loadContextAttachments("group_chat", selectedChatRoomId, "chat-attachment-list")
-  });
+  await ensureAttachmentFileOptionsLoaded();
+  await addExistingChatFileToPending($("chat-attachment-existing-file-id")?.value.trim() || "");
 }
 
 function currentDmGrantUserIds() {
@@ -430,9 +1382,11 @@ async function uploadDmAttachment() {
     grantUserIds: currentDmGrantUserIds(),
     refresh: () => loadContextAttachments("dm", selectedDmThreadId, "dm-attachment-list")
   });
+  await ensureAttachmentFileOptionsLoaded({ force: true });
 }
 
 async function attachExistingDmFile() {
+  await ensureAttachmentFileOptionsLoaded();
   await attachExistingContextAttachment({
     fileId: $("dm-attachment-existing-file-id")?.value.trim() || "",
     contextType: "dm",
@@ -474,48 +1428,174 @@ async function uploadAnnouncementAttachmentRequest() {
     body: form
   });
   const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    alert(json.msg || "公告附件上傳失敗");
+  if (!res.ok || !json.ok) {
+    alert(json.error_code ? `${json.msg || "公告附件上傳失敗"}（${json.error_code}）` : (json.msg || `公告附件上傳失敗（HTTP ${res.status}）`));
     return;
   }
   input.value = "";
   await createAnnouncementAttachmentRequest(json.file?.file_id, announcementId, $("announcement-attachment-reason")?.value || "");
+  await ensureAttachmentFileOptionsLoaded({ force: true });
 }
 
 async function attachExistingAnnouncementFile() {
   const announcementId = Number($("announcement-attachment-announcement-id")?.value || 0);
+  await ensureAttachmentFileOptionsLoaded();
   const fileId = $("announcement-attachment-existing-file-id")?.value.trim() || "";
   if (!announcementId) {
     alert("請輸入公告 ID");
     return;
   }
   if (!fileId) {
-    alert("請輸入既有雲端 file_id");
+    alert("請先從下拉選單選擇雲端檔案");
     return;
   }
   await createAnnouncementAttachmentRequest(fileId, announcementId, $("announcement-attachment-reason")?.value || "");
 }
 
+function normalizeStoragePath(path, fallbackName = "") {
+  const raw = String(path || fallbackName || "").replace(/\\/g, "/").trim();
+  const parts = raw.split("/").map((part) => part.trim()).filter(Boolean);
+  return parts.length ? `/${parts.join("/")}` : "/";
+}
+
+function storageBaseName(path) {
+  const normalized = normalizeStoragePath(path);
+  if (normalized === "/") return "我的雲端硬碟";
+  return normalized.split("/").filter(Boolean).pop() || normalized;
+}
+
+function storageDirName(path) {
+  const parts = normalizeStoragePath(path).split("/").filter(Boolean);
+  parts.pop();
+  return parts.length ? `/${parts.join("/")}` : "/";
+}
+
+function joinStoragePath(folder, name) {
+  const base = normalizeStoragePath(folder);
+  const cleanName = String(name || "").replace(/\\/g, "/").split("/").filter(Boolean).join("/");
+  if (!cleanName) return base;
+  return base === "/" ? `/${cleanName}` : `${base}/${cleanName}`;
+}
+
+function storageUploadRelativePath(file) {
+  const relative = String(file?.webkitRelativePath || file?.relativePath || file?.name || "").replace(/\\/g, "/");
+  return relative.split("/").filter(Boolean).join("/");
+}
+
+function storageDepth(path) {
+  return normalizeStoragePath(path).split("/").filter(Boolean).length;
+}
+
+function renderStorageBreadcrumb() {
+  const target = $("storage-breadcrumb");
+  if (!target) return;
+  const parts = currentStoragePath.split("/").filter(Boolean);
+  const crumbs = [`<button type="button" data-drive-action="open-storage-folder" data-path="/">我的雲端硬碟</button>`];
+  let walk = "";
+  parts.forEach((part) => {
+    walk += `/${part}`;
+    crumbs.push(`<span>/</span><button type="button" data-drive-action="open-storage-folder" data-path="${sanitize(walk)}">${sanitize(part)}</button>`);
+  });
+  target.innerHTML = crumbs.join("");
+}
+
+function setStorageSelection(id = "", path = "") {
+  selectedStorageFileId = id || "";
+  selectedStorageFilePath = path || "";
+  const label = $("storage-selection-label");
+  if (label) label.textContent = selectedStorageFileId ? `已選取：${selectedStorageFilePath || selectedStorageFileId}` : "未選取檔案";
+}
+
+function renderStorageBrowser() {
+  renderStorageBreadcrumb();
+  renderStorageFolders(storageFoldersCache);
+  renderStorageFiles(storageFilesCache);
+}
+
 function renderStorageFiles(files) {
   const list = $("storage-file-list");
   if (!list) return;
-  if (!Array.isArray(files) || !files.length) {
-    list.innerHTML = `<div class="drive-empty">尚無 Storage 檔案</div>`;
+  const visibleFiles = (Array.isArray(files) ? files : []).filter((file) => storageDirName(file.virtual_path || file.display_name || "") === currentStoragePath);
+  if (!visibleFiles.length) {
+    list.innerHTML = `<div class="drive-empty">這個資料夾沒有檔案</div>`;
     return;
   }
-  list.innerHTML = files.map((file) => `
-    <div class="drive-file-row">
+  list.innerHTML = visibleFiles.map((file) => {
+    const primary = drivePrimaryAction(file);
+    const albumButton = driveFileIsImage(file)
+      ? `<button class="btn" type="button" data-drive-action="add-storage-to-album" data-storage-file-id="${sanitize(file.id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">加入相簿</button>`
+      : "";
+    return `
+    <div class="drive-file-row" data-drive-action="preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">
       <div>
-        <strong>${sanitize(file.display_name || file.virtual_path || file.id)}</strong>
-        <div class="drive-card-sub">${sanitize(file.virtual_path || "-")} · ${formatDriveBytes(file.size_bytes || 0)} · scan=${sanitize(file.scan_status || "-")}</div>
+        <strong>${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}</strong>
+        <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(driveFileCategory(file))} · scan=${sanitize(file.scan_status || "-")} · ${sanitize(file.virtual_path || "-")}</div>
       </div>
       <div class="drive-file-actions">
-        <button class="btn" type="button" onclick="downloadStorageFile('${sanitize(file.id)}')">下載</button>
-        <button class="btn" type="button" onclick="addStorageFileToAlbum('${sanitize(file.id)}')">加到相簿</button>
-        <button class="btn btn-danger" type="button" onclick="trashStorageFile('${sanitize(file.id)}')">回收</button>
+        <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.file_id)}">${sanitize(primary.label)}</button>
+        <button class="btn" type="button" data-drive-action="move-storage-file" data-storage-file-id="${sanitize(file.id)}" data-path="${sanitize(file.virtual_path || "")}">移動</button>
+        <button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.id)}">下載</button>
+        ${albumButton}
+        <button class="btn btn-danger" type="button" data-drive-action="trash-storage" data-storage-file-id="${sanitize(file.id)}">回收</button>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
+}
+
+function renderStorageFolders(folders) {
+  const list = $("storage-folder-list");
+  if (!list) return;
+  const visibleFolders = (Array.isArray(folders) ? folders : []).filter((folder) => {
+    const path = normalizeStoragePath(folder.virtual_path || folder.display_name || "");
+    return path !== "/" && storageDirName(path) === currentStoragePath;
+  });
+  const rows = [];
+  if (currentStoragePath !== "/") {
+    rows.push(`
+      <div class="drive-file-row">
+        <div>
+          <strong>上一層</strong>
+          <div class="drive-card-sub">${sanitize(storageDirName(currentStoragePath))}</div>
+        </div>
+        <div class="drive-file-actions">
+          <button class="btn" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(storageDirName(currentStoragePath))}">開啟</button>
+        </div>
+      </div>
+    `);
+  }
+  if (!visibleFolders.length && !rows.length) {
+    list.innerHTML = `<div class="drive-empty">尚無資料夾</div>`;
+    return;
+  }
+  rows.push(...visibleFolders.map((folder) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(storageBaseName(folder.virtual_path || folder.display_name || "folder"))}</strong>
+        <div class="drive-card-sub">${folder.is_explicit ? "已建立" : "由檔案路徑產生"} · 直接 ${Number(folder.file_count || 0)} 個 · 含子資料夾 ${Number(folder.recursive_file_count || 0)} 個</div>
+      </div>
+      <div class="drive-file-actions">
+        <button class="btn btn-primary" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">開啟</button>
+        <button class="btn" type="button" data-drive-action="folder-to-album" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(storageBaseName(folder.virtual_path || folder.display_name || "folder"))}">設為相簿</button>
+        <button class="btn" type="button" data-drive-action="select-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">移動</button>
+        <button class="btn btn-danger" type="button" data-drive-action="trash-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">刪除</button>
+      </div>
+    </div>
+  `));
+  list.innerHTML = rows.join("");
+}
+
+function updateAlbumTargetSelect(albums) {
+  const select = $("album-picker-select");
+  if (!select) return;
+  const previous = select.value || selectedAlbumId || "";
+  const liveAlbums = Array.isArray(albums) ? albums : [];
+  select.innerHTML = `<option value="">選擇相簿</option>${liveAlbums.map((album) => `
+    <option value="${sanitize(album.id)}">${sanitize(album.title || album.id)}（${albumVisibilityLabel(album.visibility)}）</option>
+  `).join("")}`;
+  if (previous && liveAlbums.some((album) => album.id === previous)) {
+    select.value = previous;
+  }
 }
 
 function renderStorageTrash(files) {
@@ -532,8 +1612,8 @@ function renderStorageTrash(files) {
         <div class="drive-card-sub">${sanitize(file.virtual_path || "-")} · ${formatDriveBytes(file.size_bytes || 0)}</div>
       </div>
       <div class="drive-file-actions">
-        <button class="btn" type="button" onclick="restoreStorageFile('${sanitize(file.id)}')">還原</button>
-        <button class="btn btn-danger" type="button" onclick="purgeStorageFile('${sanitize(file.id)}')">永久移除</button>
+        <button class="btn" type="button" data-drive-action="restore-storage" data-storage-file-id="${sanitize(file.id)}">還原</button>
+        <button class="btn btn-danger" type="button" data-drive-action="purge-storage" data-storage-file-id="${sanitize(file.id)}">永久移除</button>
       </div>
     </div>
   `).join("");
@@ -542,34 +1622,188 @@ function renderStorageTrash(files) {
 function renderAlbums(albums) {
   const list = $("album-list");
   if (!list) return;
+  storageAlbumsCache = Array.isArray(albums) ? albums : [];
+  updateAlbumTargetSelect(storageAlbumsCache);
   if (!Array.isArray(albums) || !albums.length) {
     list.innerHTML = `<div class="drive-empty">尚無相簿</div>`;
+    closeAlbumDetail();
     return;
   }
   list.innerHTML = albums.map((album) => `
     <div class="drive-file-row">
       <div>
         <strong>${sanitize(album.title || album.id)}</strong>
-        <div class="drive-card-sub">id=${sanitize(album.id)} · ${sanitize(album.visibility || "private")} · ${Number(album.file_count || 0)} 個檔案</div>
+        <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}</div>
       </div>
-      <button class="btn btn-danger" type="button" onclick="deleteAlbum('${sanitize(album.id)}')">刪除</button>
+      <div class="drive-file-actions">
+        <button class="btn btn-primary" type="button" data-drive-action="open-album" data-album-id="${sanitize(album.id)}">預覽</button>
+        <button class="btn btn-danger" type="button" data-drive-action="delete-album" data-album-id="${sanitize(album.id)}">刪除</button>
+      </div>
     </div>
   `).join("");
 }
 
 async function loadStorageFiles(csrf) {
   const headers = { "X-CSRF-Token": csrf || "" };
-  const [filesRes, trashRes, albumsRes] = await Promise.all([
+  const [filesRes, trashRes, foldersRes, albumsRes] = await Promise.all([
     fetch(API + "/storage/files", { credentials: "same-origin", headers }),
     fetch(API + "/storage/trash", { credentials: "same-origin", headers }),
+    fetch(API + "/storage/folders", { credentials: "same-origin", headers }),
     fetch(API + "/storage/albums", { credentials: "same-origin", headers })
   ]);
   const filesJson = await filesRes.json().catch(() => ({}));
   const trashJson = await trashRes.json().catch(() => ({}));
+  const foldersJson = await foldersRes.json().catch(() => ({}));
   const albumsJson = await albumsRes.json().catch(() => ({}));
-  renderStorageFiles(filesJson.ok ? filesJson.files || [] : []);
+  storageFilesCache = filesJson.ok ? filesJson.files || [] : [];
+  storageFoldersCache = foldersJson.ok ? foldersJson.folders || [] : [];
+  renderStorageBrowser();
   renderStorageTrash(trashJson.ok ? trashJson.files || [] : []);
   renderAlbums(albumsJson.ok ? albumsJson.albums || [] : []);
+  if (selectedAlbumId && (albumsJson.ok ? (albumsJson.albums || []).some((album) => album.id === selectedAlbumId) : false)) {
+    await openAlbum(selectedAlbumId, { quiet: true });
+  }
+}
+
+async function createStorageFolder() {
+  const input = $("storage-folder-path");
+  const requested = input?.value || window.prompt("新增資料夾名稱", "");
+  if (requested === null) return;
+  if (!String(requested).trim()) return;
+  const path = requested && requested.startsWith("/") ? requested : joinStoragePath(currentStoragePath, requested || "");
+  if (!path.trim()) {
+    alert("請輸入資料夾路徑");
+    return;
+  }
+  try {
+    await storageAction("/storage/folders", "POST", { path });
+    if (input) input.value = "";
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "建立資料夾失敗"); }
+}
+
+function selectStorageFileForOrganize(id, path) {
+  setStorageSelection(id, path);
+}
+
+async function organizeSelectedStorageFile() {
+  if (!selectedStorageFileId) {
+    alert("請先在 Storage 檔案列表選取檔案");
+    return;
+  }
+  const requested = $("storage-organize-path")?.value || window.prompt("移動或重新命名到", selectedStorageFilePath || currentStoragePath);
+  if (requested === null) return;
+  if (!String(requested).trim()) return;
+  const path = requested && requested.startsWith("/") ? requested : joinStoragePath(currentStoragePath, requested || "");
+  if (!path.trim()) {
+    alert("請輸入新路徑");
+    return;
+  }
+  try {
+    await storageAction(`/storage/files/${encodeURIComponent(selectedStorageFileId)}/organize`, "PUT", { virtual_path: path });
+    setStorageSelection("", "");
+    if ($("storage-organize-path")) $("storage-organize-path").value = "";
+    currentStoragePath = storageDirName(path);
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "整理檔案失敗"); }
+}
+
+async function moveStorageFileFromRow(id, currentPath) {
+  setStorageSelection(id, currentPath);
+  const requested = window.prompt("移動或重新命名到", currentPath || currentStoragePath);
+  if (requested === null) return;
+  if (!String(requested).trim()) return;
+  const path = requested && requested.startsWith("/") ? requested : joinStoragePath(currentStoragePath, requested || "");
+  if (!path.trim() || path === "/") {
+    alert("請輸入包含檔名的新路徑");
+    return;
+  }
+  try {
+    await storageAction(`/storage/files/${encodeURIComponent(id)}/organize`, "PUT", { virtual_path: path });
+    setStorageSelection("", "");
+    currentStoragePath = storageDirName(path);
+    await loadDriveDashboard();
+  } catch (err) {
+    alert(err.message || "移動檔案失敗");
+  }
+}
+
+function selectStorageFolderForMove(path) {
+  const oldPath = normalizeStoragePath(path);
+  const requested = window.prompt("移動資料夾到", oldPath);
+  if (!requested) return;
+  if ($("storage-folder-move-old")) $("storage-folder-move-old").value = oldPath;
+  if ($("storage-folder-move-new")) $("storage-folder-move-new").value = requested.startsWith("/") ? requested : joinStoragePath(storageDirName(oldPath), requested);
+  moveStorageFolder();
+}
+
+async function moveStorageFolder() {
+  const oldPath = $("storage-folder-move-old")?.value || "";
+  const newPath = $("storage-folder-move-new")?.value || "";
+  if (!oldPath.trim() || !newPath.trim()) {
+    alert("請輸入原資料夾與新資料夾路徑");
+    return;
+  }
+  try {
+    await storageAction("/storage/folders/move", "PUT", { old_path: oldPath, new_path: newPath });
+    if ($("storage-folder-move-old")) $("storage-folder-move-old").value = "";
+    if ($("storage-folder-move-new")) $("storage-folder-move-new").value = "";
+    currentStoragePath = normalizeStoragePath(newPath);
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "移動資料夾失敗"); }
+}
+
+async function trashStorageFolder(path) {
+  const folderPath = normalizeStoragePath(path);
+  if (!window.confirm(`將資料夾「${folderPath}」與其中檔案移到垃圾桶？`)) return;
+  try {
+    await storageAction("/storage/folders/trash", "POST", { path: folderPath });
+    if (currentStoragePath === folderPath || currentStoragePath.startsWith(`${folderPath}/`)) {
+      currentStoragePath = storageDirName(folderPath);
+    }
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "刪除資料夾失敗"); }
+}
+
+async function createAlbumFromFolder(path, name = "") {
+  const folderPath = normalizeStoragePath(path);
+  const defaultTitle = name || storageBaseName(folderPath) || "資料夾相簿";
+  const title = window.prompt("建立相簿名稱", defaultTitle);
+  if (title === null) return;
+  const cleanTitle = title.trim();
+  if (!cleanTitle) {
+    alert("相簿名稱不可為空");
+    return;
+  }
+  try {
+    const json = await storageAction("/storage/folders/album", "POST", {
+      path: folderPath,
+      title: cleanTitle,
+      visibility: "private"
+    });
+    storageAlbumsCache = [];
+    selectedAlbumId = json.album?.id || selectedAlbumId;
+    await loadDriveDashboard();
+    alert(`已建立相簿「${json.album?.title || cleanTitle}」，加入 ${Number(json.album?.added_count || json.album?.files?.length || 0)} 個檔案`);
+  } catch (err) {
+    alert(err.message || "資料夾設為相簿失敗");
+  }
+}
+
+function openStorageFolder(path) {
+  currentStoragePath = normalizeStoragePath(path);
+  setStorageSelection("", "");
+  renderStorageBrowser();
+}
+
+function openStorageUploadPicker() {
+  const input = $("storage-upload-file");
+  if (input) input.click();
+}
+
+function openStorageFolderUploadPicker() {
+  const input = $("storage-upload-folder");
+  if (input) input.click();
 }
 
 async function uploadStorageFile() {
@@ -583,7 +1817,7 @@ async function uploadStorageFile() {
   const csrf = getCsrfToken();
   const form = new FormData();
   form.append("file", input.files[0]);
-  form.append("virtual_path", pathInput?.value || input.files[0].name);
+  form.append("virtual_path", pathInput?.value || joinStoragePath(currentStoragePath, input.files[0].name));
   const res = await fetch(API + "/storage/files", {
     method: "POST",
     credentials: "same-origin",
@@ -600,19 +1834,107 @@ async function uploadStorageFile() {
   await loadDriveDashboard();
 }
 
-async function storageAction(path, method = "POST", body = null) {
+async function uploadStorageFolder() {
+  const input = $("storage-upload-folder");
+  const files = Array.from(input?.files || []).filter((file) => file && file.name);
+  if (!input || !files.length) {
+    alert("請先選擇資料夾");
+    return;
+  }
+  const totalBytes = files.reduce((sum, file) => sum + Number(file.size || 0), 0);
+  const transferId = addDriveTransferRow({
+    kind: "upload",
+    name: `${storageBaseName(storageUploadRelativePath(files[0]).split("/")[0] || "資料夾")}（${files.length} 個檔案）`,
+    loaded_bytes: 0,
+    total_bytes: totalBytes,
+    progress_percent: 0,
+    msg: "資料夾上傳準備中",
+  });
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+  let uploadedBytes = 0;
+  let okCount = 0;
+  const failures = [];
+  for (const file of files) {
+    const relativePath = storageUploadRelativePath(file);
+    const virtualPath = joinStoragePath(currentStoragePath, relativePath || file.name);
+    updateDriveTransferRow(transferId, {
+      loaded_bytes: uploadedBytes,
+      total_bytes: totalBytes,
+      progress_percent: totalBytes > 0 ? (uploadedBytes / totalBytes) * 100 : null,
+      msg: `上傳中：${relativePath || file.name}`,
+    });
+    const form = new FormData();
+    form.append("file", file);
+    form.append("virtual_path", virtualPath);
+    try {
+      const res = await fetch(API + "/storage/files", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" },
+        body: form
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        failures.push(`${relativePath || file.name}: ${json.msg || `HTTP ${res.status}`}`);
+      } else {
+        okCount += 1;
+      }
+    } catch (err) {
+      failures.push(`${relativePath || file.name}: ${err.message || "上傳失敗"}`);
+    }
+    uploadedBytes += Number(file.size || 0);
+  }
+  updateDriveTransferRow(transferId, {
+    status: failures.length ? "failed" : "completed",
+    phase: failures.length ? "failed" : "completed",
+    loaded_bytes: uploadedBytes,
+    total_bytes: totalBytes,
+    progress_percent: 100,
+    msg: failures.length ? `完成 ${okCount}/${files.length}，失敗 ${failures.length}` : `已上傳 ${okCount} 個檔案`,
+  });
+  input.value = "";
+  await loadDriveDashboard();
+  if (failures.length) {
+    alert(`資料夾上傳完成，但有 ${failures.length} 個檔案失敗：\n${failures.slice(0, 5).join("\n")}${failures.length > 5 ? "\n..." : ""}`);
+  } else {
+    setTimeout(() => removeDriveTransferRow(transferId), 1200);
+  }
+}
+
+async function storageAction(path, method = "POST", body = null) {
+  const csrf = await fetchCsrfToken({ force: true });
   const headers = { "X-CSRF-Token": csrf || "" };
   if (body) headers["Content-Type"] = "application/json";
-  const res = await fetch(API + path, {
+  const options = {
     method,
     credentials: "same-origin",
+    cache: "no-store",
     headers,
     body: body ? JSON.stringify(body) : undefined
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!json.ok) throw new Error(json.msg || "操作失敗");
+  };
+  let res;
+  try {
+    res = await fetch(API + path, options);
+  } catch (err) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      res = await fetch(API + path, options);
+    } catch (retryErr) {
+      throw new Error(`連線失敗：${retryErr.message || err.message || "無法連到 API"}`);
+    }
+  }
+  const text = await res.text().catch(() => "");
+  let json = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch (err) {
+    json = {};
+  }
+  if (!res.ok || !json.ok) {
+    const fallback = res.ok ? "操作失敗" : `操作失敗（HTTP ${res.status}）`;
+    throw new Error(json.msg || fallback);
+  }
   return json;
 }
 
@@ -631,11 +1953,26 @@ async function restoreStorageFile(id) {
 }
 
 async function purgeStorageFile(id) {
-  if (!window.confirm("永久移除此 storage entry？原始雲端檔案不會被刪除。")) return;
+  if (!window.confirm("永久移除此垃圾桶項目？由「我的檔案」移入垃圾桶的檔案會永久失效。")) return;
   try {
     await storageAction(`/storage/files/${encodeURIComponent(id)}/purge`, "DELETE");
     await loadDriveDashboard();
   } catch (err) { alert(err.message); }
+}
+
+async function restoreStorageTrash() {
+  try {
+    await storageAction("/storage/trash/restore", "POST");
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "還原垃圾桶失敗"); }
+}
+
+async function purgeStorageTrash() {
+  if (!window.confirm("清空垃圾桶？由「我的檔案」移入垃圾桶的檔案會永久失效。")) return;
+  try {
+    await storageAction("/storage/trash/purge", "DELETE");
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "清空垃圾桶失敗"); }
 }
 
 async function downloadStorageFile(id) {
@@ -661,17 +1998,58 @@ async function downloadStorageFile(id) {
   URL.revokeObjectURL(url);
 }
 
+async function ensureAlbumChoicesLoaded() {
+  if (storageAlbumsCache.length) return storageAlbumsCache;
+  const json = await storageAction("/storage/albums", "GET");
+  storageAlbumsCache = Array.isArray(json.albums) ? json.albums : [];
+  updateAlbumTargetSelect(storageAlbumsCache);
+  return storageAlbumsCache;
+}
+
+function closeAlbumPicker(value = "") {
+  const overlay = $("album-picker-overlay");
+  if (overlay) overlay.classList.remove("show");
+  if (pendingAlbumPickerResolve) {
+    pendingAlbumPickerResolve(value);
+    pendingAlbumPickerResolve = null;
+  }
+}
+
+async function chooseAlbumForFile(fileLabel = "") {
+  const albums = await ensureAlbumChoicesLoaded();
+  if (!albums.length) {
+    alert("目前沒有相簿，請先到相簿分頁建立相簿");
+    return "";
+  }
+  updateAlbumTargetSelect(albums);
+  const label = $("album-picker-file-label");
+  if (label) label.textContent = fileLabel ? `將「${fileLabel}」加入` : "選擇要加入的相簿";
+  const msg = $("album-picker-msg");
+  if (msg) msg.textContent = "";
+  const select = $("album-picker-select");
+  if (select) select.value = selectedAlbumId && albums.some((album) => album.id === selectedAlbumId) ? selectedAlbumId : albums[0].id;
+  const overlay = $("album-picker-overlay");
+  if (overlay) overlay.classList.add("show");
+  return new Promise((resolve) => {
+    pendingAlbumPickerResolve = resolve;
+  });
+}
+
 async function createAlbum() {
   const title = $("album-create-title")?.value || "";
+  const description = $("album-create-description")?.value || "";
   const visibility = $("album-create-visibility")?.value || "private";
   if (!title.trim()) {
     alert("請輸入相簿名稱");
     return;
   }
   try {
-    await storageAction("/storage/albums", "POST", { title, visibility });
+    const json = await storageAction("/storage/albums", "POST", { title, description, visibility });
     $("album-create-title").value = "";
+    if ($("album-create-description")) $("album-create-description").value = "";
+    selectedAlbumId = json.album?.id || "";
     await loadDriveDashboard();
+    await loadAlbumGallery();
   } catch (err) { alert(err.message); }
 }
 
@@ -679,17 +2057,227 @@ async function deleteAlbum(id) {
   if (!window.confirm("刪除此相簿？不會刪除原始檔案。")) return;
   try {
     await storageAction(`/storage/albums/${encodeURIComponent(id)}`, "DELETE");
+    if (selectedAlbumId === id) closeAlbumDetail();
+    if (selectedAlbumViewerId === id) closeAlbumViewer();
     await loadDriveDashboard();
+    await loadAlbumGallery();
   } catch (err) { alert(err.message); }
 }
 
-async function addStorageFileToAlbum(storageFileId) {
-  const albumId = window.prompt("請輸入相簿 id（可從 AlbumManager 列表複製）");
-  if (!albumId) return;
+async function addCloudFileToAlbum(fileId, fileLabel = "") {
+  const albumId = await chooseAlbumForFile(fileLabel);
+  if (!albumId) {
+    return;
+  }
+  try {
+    await storageAction(`/storage/albums/${encodeURIComponent(albumId)}/files`, "POST", { file_id: fileId });
+    selectedAlbumId = albumId;
+    await loadDriveDashboard();
+    await loadAlbumGallery();
+  } catch (err) { alert(err.message); }
+}
+
+async function addStorageFileToAlbum(storageFileId, fileLabel = "") {
+  const albumId = await chooseAlbumForFile(fileLabel);
+  if (!albumId) {
+    return;
+  }
   try {
     await storageAction(`/storage/albums/${encodeURIComponent(albumId)}/files`, "POST", { storage_file_id: storageFileId });
+    selectedAlbumId = albumId;
     await loadDriveDashboard();
+    await loadAlbumGallery();
   } catch (err) { alert(err.message); }
+}
+
+function albumFileDisplayName(file) {
+  return file.display_name || file.original_filename_plain_for_public || file.virtual_path || file.file_id || "image";
+}
+
+function renderAlbumDetail(album) {
+  const card = $("album-detail-card");
+  if (!card) return;
+  selectedAlbumId = album.id || "";
+  card.style.display = "block";
+  const title = $("album-detail-title");
+  const meta = $("album-detail-meta");
+  if (title) title.textContent = album.title || "相簿內容";
+  if (meta) meta.textContent = `${albumVisibilityLabel(album.visibility)} · ${Number((album.files || []).length)} 個檔案 · ${album.updated_at || album.created_at || ""}`;
+  if ($("album-edit-title")) $("album-edit-title").value = album.title || "";
+  if ($("album-edit-description")) $("album-edit-description").value = album.description || "";
+  if ($("album-edit-visibility")) $("album-edit-visibility").value = album.visibility || "private";
+}
+
+async function openAlbum(id, options = {}) {
+  if (!id) return;
+  try {
+    await openAlbumViewer(id, options);
+  } catch (err) {
+    if (!options.quiet) alert(err.message || "相簿讀取失敗");
+  }
+}
+
+function closeAlbumDetail() {
+  selectedAlbumId = "";
+  const card = $("album-detail-card");
+  if (card) card.style.display = "none";
+}
+
+async function saveAlbumDetail() {
+  if (!selectedAlbumId) return;
+  try {
+    const json = await storageAction(`/storage/albums/${encodeURIComponent(selectedAlbumId)}`, "PUT", {
+      title: $("album-edit-title")?.value || "",
+      description: $("album-edit-description")?.value || "",
+      visibility: $("album-edit-visibility")?.value || "private",
+    });
+    renderAlbumDetail(json.album || {});
+    await loadDriveDashboard();
+    await loadAlbumGallery();
+  } catch (err) { alert(err.message || "相簿儲存失敗"); }
+}
+
+async function removeAlbumFile(albumId, albumFileId) {
+  try {
+    const json = await storageAction(`/storage/albums/${encodeURIComponent(albumId)}/files/${encodeURIComponent(albumFileId)}`, "DELETE");
+    renderAlbumDetail(json.album || {});
+    await loadDriveDashboard();
+  } catch (err) { alert(err.message || "移出相簿失敗"); }
+}
+
+function renderAlbumGallery(albums) {
+  const list = $("album-gallery-list");
+  if (!list) return;
+  if (!Array.isArray(albums) || !albums.length) {
+    list.innerHTML = `<div class="drive-empty">尚無相簿</div>`;
+    return;
+  }
+  list.innerHTML = albums.map((album) => `
+    <div class="drive-gallery-tile">
+      <div>
+        <strong>${sanitize(album.title || album.id)}</strong>
+        <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案</div>
+      </div>
+      <button class="btn btn-primary" type="button" data-drive-action="open-album-viewer" data-album-id="${sanitize(album.id)}">預覽</button>
+    </div>
+  `).join("");
+}
+
+async function loadAlbumGallery() {
+  if (!currentUser || !canAccessModule("privacy_uploads")) return;
+  const msg = $("album-gallery-msg");
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/storage/albums", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "相簿讀取失敗");
+    const albums = json.albums || [];
+    storageAlbumsCache = Array.isArray(albums) ? albums : [];
+    updateAlbumTargetSelect(storageAlbumsCache);
+    renderAlbums(storageAlbumsCache);
+    renderAlbumGallery(storageAlbumsCache);
+    const activeAlbum = storageAlbumsCache.find((album) => album.id === selectedAlbumViewerId) || storageAlbumsCache[0];
+    if (activeAlbum) {
+      await openAlbumViewer(activeAlbum.id, { quiet: true });
+    } else {
+      closeAlbumViewer();
+    }
+    if (msg) msg.className = "msg";
+  } catch (err) {
+    if (msg) flash(msg, err.message || "相簿讀取失敗", false);
+  }
+}
+
+function closeAlbumViewer() {
+  selectedAlbumViewerId = "";
+  albumPreviewSequence = [];
+  albumPreviewIndex = -1;
+  clearAlbumThumbObjectUrls();
+  const card = $("album-viewer-card");
+  if (card) {
+    card.open = false;
+    card.style.display = "none";
+  }
+}
+
+function renderAlbumPreviewTile(file) {
+  const name = albumFileDisplayName(file);
+  const category = driveFileCategory(file);
+  const thumbKey = file.id || file.file_id;
+  const canTryPreview = category === "image" || category === "metadata";
+  const thumb = canTryPreview
+    ? `<button class="drive-gallery-thumb drive-gallery-thumb-button" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer" data-album-thumb-key="${sanitize(thumbKey)}"><span>讀取預覽</span></button>`
+    : `<div class="drive-gallery-thumb drive-gallery-thumb-placeholder"><span>${sanitize(category)}</span></div>`;
+  return `
+    <div class="drive-gallery-tile">
+      ${thumb}
+      <div class="drive-gallery-file-info">
+        <strong>${sanitize(name)}</strong>
+        <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · <span data-album-category-key="${sanitize(thumbKey)}">${sanitize(category)}</span> · scan=${sanitize(file.scan_status || "-")}</div>
+      </div>
+      <div class="drive-file-actions" style="justify-content:flex-start;">
+        <button class="btn" type="button" data-drive-action="album-full-preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(name)}" data-album-sequence="viewer">預覽</button>
+        ${file.storage_file_id ? `<button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.storage_file_id)}">下載</button>` : `<button class="btn" type="button" data-drive-action="download" data-file-id="${sanitize(file.file_id)}" data-warn="0">下載</button>`}
+      </div>
+    </div>
+  `;
+}
+
+async function hydrateAlbumViewerThumbnails(files) {
+  clearAlbumThumbObjectUrls();
+  const previewCandidates = (Array.isArray(files) ? files : []).filter((file) => ["image", "metadata"].includes(driveFileCategory(file)));
+  if (!previewCandidates.length) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  for (const file of previewCandidates) {
+    const thumbKey = file.id || file.file_id;
+    const holder = Array.from(document.querySelectorAll("[data-album-thumb-key]")).find((node) => node.dataset.albumThumbKey === String(thumbKey));
+    if (!holder) continue;
+    try {
+      const blob = await fetchDrivePreviewBlob(file.file_id, csrf);
+      if (!String(blob.type || "").toLowerCase().startsWith("image/")) throw new Error("不是圖片預覽");
+      const url = URL.createObjectURL(blob);
+      albumThumbObjectUrls.push(url);
+      holder.innerHTML = `<img src="${url}" alt="${sanitize(albumFileDisplayName(file))}" loading="lazy" />`;
+      const categoryLabel = Array.from(document.querySelectorAll("[data-album-category-key]")).find((node) => node.dataset.albumCategoryKey === String(thumbKey));
+      if (categoryLabel) categoryLabel.textContent = "image";
+    } catch (err) {
+      holder.innerHTML = `<span>無法預覽</span>`;
+    }
+  }
+}
+
+async function openAlbumViewer(id, options = {}) {
+  if (!id) return;
+  selectedAlbumViewerId = id;
+  const card = $("album-viewer-card");
+  const title = $("album-viewer-title");
+  const meta = $("album-viewer-meta");
+  const filesEl = $("album-viewer-files");
+  if (card) {
+    card.style.display = "block";
+    card.open = Boolean(options.openContent);
+  }
+  if (filesEl) filesEl.innerHTML = `<div class="drive-empty">讀取相簿中...</div>`;
+  try {
+    const json = await storageAction(`/storage/albums/${encodeURIComponent(id)}`, "GET");
+    const album = json.album || {};
+    const files = Array.isArray(album.files) ? album.files : [];
+    albumPreviewSequence = files.filter((file) => file?.file_id && (typeof driveFileIsImage !== "function" || driveFileIsImage(file)));
+    albumPreviewIndex = -1;
+    if (title) title.textContent = album.title || "相簿";
+    if (meta) meta.textContent = `${albumVisibilityLabel(album.visibility)} · ${files.length} 個檔案${album.description ? ` · ${album.description}` : ""}`;
+    if (!filesEl) return;
+    setAlbumThumbSize(getAlbumThumbSize());
+    filesEl.innerHTML = files.length ? files.map(renderAlbumPreviewTile).join("") : `<div class="drive-empty">這本相簿還沒有檔案</div>`;
+    hydrateAlbumViewerThumbnails(files).catch(() => {});
+  } catch (err) {
+    if (filesEl) filesEl.innerHTML = `<div class="drive-empty">${sanitize(err.message || "相簿讀取失敗")}</div>`;
+  }
 }
 
 async function loadDriveDashboard() {
@@ -708,6 +2296,8 @@ async function loadDriveDashboard() {
       return;
     }
     renderDriveDashboard(json);
+    await loadStorageUpgradeOptions();
+    await loadRemoteDownloadCapabilities();
     await loadDriveFiles(csrf);
     await loadStorageFiles(csrf);
     if (msg) msg.className = "msg";
@@ -715,3 +2305,167 @@ async function loadDriveDashboard() {
     if (msg) flash(msg, "雲端硬碟狀態讀取失敗", false);
   }
 }
+
+async function loadStorageUpgradeOptions() {
+  const card = $("drive-storage-upgrade-card");
+  if (!card) return;
+  const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+  const res = await fetch(API + "/cloud-drive/storage-upgrades", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    renderStorageUpgrade({
+      ok: false,
+      can_purchase: false,
+      message: json.msg || `容量方案讀取失敗（HTTP ${res.status}）`,
+      catalog: [],
+      active_purchases: [],
+    });
+    return;
+  }
+  renderStorageUpgrade(json);
+}
+
+async function purchaseStorageUpgrade() {
+  const msg = $("drive-msg");
+  if (!driveStorageUpgradeCanPurchase) {
+    if (msg) flash(msg, driveStorageUpgradeMessage || "目前沒有可購買的容量方案", false);
+    return;
+  }
+  if (currentUser === "root") {
+    if (msg) flash(msg, "root 依實際磁碟容量控管，不需要購買容量方案", false);
+    return;
+  }
+  const itemKey = $("drive-storage-upgrade-select")?.value || "";
+  const quantity = Number($("drive-storage-upgrade-quantity")?.value || 1);
+  if (!itemKey) {
+    if (msg) flash(msg, "請先選擇容量方案", false);
+    return;
+  }
+  if (!Number.isFinite(quantity) || quantity < 1 || quantity > 20) {
+    if (msg) flash(msg, "購買數量需介於 1 到 20", false);
+    return;
+  }
+  const button = document.querySelector("[data-drive-action='purchase-storage-upgrade']");
+  if (button) button.disabled = true;
+  if (msg) flash(msg, "正在購買容量...", true);
+  try {
+    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const res = await fetch(API + "/cloud-drive/storage-upgrades/purchase", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ item_key: itemKey, quantity }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      if (msg) flash(msg, json.msg || `容量購買失敗（HTTP ${res.status}）`, false);
+      return;
+    }
+    if (msg) flash(msg, "容量已加購，積分已扣除", true);
+    renderDriveDashboard({ quota: json.usage });
+    await loadStorageUpgradeOptions();
+    if (typeof loadEconomyDashboard === "function") {
+      loadEconomyDashboard().catch(() => {});
+    }
+  } catch (err) {
+    if (msg) flash(msg, err.message || "容量購買失敗", false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const pickerConfirm = event.target?.closest?.("#album-picker-confirm");
+  if (pickerConfirm) {
+    event.preventDefault();
+    const albumId = $("album-picker-select")?.value || "";
+    if (!albumId) {
+      const msg = $("album-picker-msg");
+      if (msg) flash(msg, "請選擇相簿", false);
+      return;
+    }
+    closeAlbumPicker(albumId);
+    return;
+  }
+  const pickerCancel = event.target?.closest?.("#album-picker-cancel");
+  if (pickerCancel) {
+    event.preventDefault();
+    closeAlbumPicker("");
+    return;
+  }
+  const button = event.target?.closest?.("[data-drive-action]");
+  if (!button) return;
+  event.preventDefault();
+  const action = button.dataset.driveAction;
+  const fileId = button.dataset.fileId || "";
+  const storageFileId = button.dataset.storageFileId || "";
+  const albumId = button.dataset.albumId || "";
+  const albumFileId = button.dataset.albumFileId || "";
+  const refId = button.dataset.refId || "";
+  const contextType = button.dataset.contextType || "";
+  const contextId = button.dataset.contextId || "";
+  const targetId = button.dataset.targetId || "";
+  const path = button.dataset.path || "";
+  const name = button.dataset.name || "";
+  const warn = button.dataset.warn === "1";
+  const albumSequence = button.dataset.albumSequence || "";
+  (async () => {
+    if (action === "preview") return previewDriveFile(fileId, { fileName: name });
+    if (action === "album-full-preview") return previewAlbumFileFullscreen(fileId, name, albumSequence === "viewer" ? { files: albumPreviewSequence } : {});
+    if (action === "album-preview-prev") return stepAlbumPreview(-1);
+    if (action === "album-preview-next") return stepAlbumPreview(1);
+    if (action === "purchase-storage-upgrade") return purchaseStorageUpgrade();
+    if (action === "edit-text") return editDriveTextFile(fileId);
+    if (action === "save-text") return saveDriveTextFile(fileId);
+    if (action === "download") return downloadDriveFile(fileId, warn);
+    if (action === "move-cloud-to-storage") return moveCloudFileToStorage(fileId, name);
+    if (action === "add-cloud-to-album") return addCloudFileToAlbum(fileId, name);
+    if (action === "delete-cloud") return deleteDriveFile(fileId);
+    if (action === "delete-context-attachment") return deleteContextAttachment(refId, contextType, contextId, targetId);
+    if (action === "close-preview") return closeDrivePreview();
+    if (action === "close-album-full-preview") return closeAlbumFullPreview();
+    if (action === "download-storage") return downloadStorageFile(storageFileId);
+    if (action === "select-storage-file") return selectStorageFileForOrganize(storageFileId, path);
+    if (action === "move-storage-file") return moveStorageFileFromRow(storageFileId, path);
+    if (action === "open-storage-folder") return openStorageFolder(path);
+    if (action === "add-storage-to-album") return addStorageFileToAlbum(storageFileId, name);
+    if (action === "trash-storage") return trashStorageFile(storageFileId);
+    if (action === "restore-storage") return restoreStorageFile(storageFileId);
+    if (action === "purge-storage") return purgeStorageFile(storageFileId);
+    if (action === "trash-storage-folder") return trashStorageFolder(path);
+    if (action === "folder-to-album") return createAlbumFromFolder(path, name);
+    if (action === "restore-storage-trash") return restoreStorageTrash();
+    if (action === "purge-storage-trash") return purgeStorageTrash();
+    if (action === "select-storage-folder") return selectStorageFolderForMove(path);
+    if (action === "open-album") return openAlbum(albumId);
+    if (action === "delete-album") return deleteAlbum(albumId);
+    if (action === "close-album-detail") return closeAlbumDetail();
+    if (action === "save-album-detail") return saveAlbumDetail();
+    if (action === "remove-album-file") return removeAlbumFile(albumId, albumFileId);
+    if (action === "open-album-viewer") return openAlbumViewer(albumId);
+    if (action === "close-album-viewer") return closeAlbumViewer();
+    if (action === "refresh-albums") return loadAlbumGallery();
+  })().catch((err) => alert(err.message || "操作失敗"));
+});
+
+document.addEventListener("focusin", (event) => {
+  if (event.target?.matches?.(ATTACHMENT_FILE_SELECT_IDS.map((id) => `#${id}`).join(","))) {
+    ensureAttachmentFileOptionsLoaded().catch(() => {});
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  const overlayOpen = $("album-full-preview-overlay")?.classList.contains("show");
+  if (event.key === "Escape" && overlayOpen) {
+    closeAlbumFullPreview();
+  } else if (overlayOpen && event.key === "ArrowLeft") {
+    event.preventDefault();
+    stepAlbumPreview(-1);
+  } else if (overlayOpen && event.key === "ArrowRight") {
+    event.preventDefault();
+    stepAlbumPreview(1);
+  }
+});

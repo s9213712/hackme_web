@@ -27,7 +27,7 @@ DEFAULT_MEMBER_LEVEL_RULES = {
         "min_reputation": 0,
         "max_violation_score": 0,
         "downgrade_violation_threshold": 3,
-        "session_idle_timeout_minutes": 3,
+        "session_idle_timeout_minutes": 10,
         "require_admin_approval": False,
         "require_root_approval": False,
     },
@@ -54,7 +54,7 @@ DEFAULT_MEMBER_LEVEL_RULES = {
         "min_reputation": 10,
         "max_violation_score": 0,
         "downgrade_violation_threshold": 5,
-        "session_idle_timeout_minutes": 3,
+        "session_idle_timeout_minutes": 10,
         "require_admin_approval": False,
         "require_root_approval": False,
     },
@@ -81,7 +81,7 @@ DEFAULT_MEMBER_LEVEL_RULES = {
         "min_reputation": 10,
         "max_violation_score": 0,
         "downgrade_violation_threshold": 8,
-        "session_idle_timeout_minutes": 3,
+        "session_idle_timeout_minutes": 10,
         "require_admin_approval": False,
         "require_root_approval": False,
     },
@@ -108,7 +108,7 @@ DEFAULT_MEMBER_LEVEL_RULES = {
         "min_reputation": 1000,
         "max_violation_score": 0,
         "downgrade_violation_threshold": 10,
-        "session_idle_timeout_minutes": 3,
+        "session_idle_timeout_minutes": 10,
         "require_admin_approval": True,
         "require_root_approval": False,
     },
@@ -135,7 +135,7 @@ DEFAULT_MEMBER_LEVEL_RULES = {
         "min_reputation": 0,
         "max_violation_score": 0,
         "downgrade_violation_threshold": 0,
-        "session_idle_timeout_minutes": 3,
+        "session_idle_timeout_minutes": 10,
         "require_admin_approval": True,
         "require_root_approval": False,
     },
@@ -162,7 +162,7 @@ DEFAULT_MEMBER_LEVEL_RULES = {
         "min_reputation": 0,
         "max_violation_score": 0,
         "downgrade_violation_threshold": 0,
-        "session_idle_timeout_minutes": 3,
+        "session_idle_timeout_minutes": 10,
         "require_admin_approval": True,
         "require_root_approval": True,
     },
@@ -397,10 +397,23 @@ def record_member_level_audit(conn, *, actor, target_user, old_base_level, new_b
     )
 
 
+def _actor_notice_row(conn, actor_username):
+    username = str(actor_username or "").strip()
+    if not username:
+        return None
+    try:
+        return conn.execute(
+            "SELECT id, username, role FROM users WHERE username=? LIMIT 1",
+            (username,),
+        ).fetchone()
+    except Exception:
+        return None
+
+
 def refresh_user_effective_level(conn, user_id, *, actor="system", source="system", reason="refresh effective level"):
     ensure_member_level_user_columns(conn)
     row = conn.execute(
-        "SELECT id, username, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?",
+        "SELECT id, username, role, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?",
         (user_id,),
     ).fetchone()
     if not row:
@@ -447,7 +460,7 @@ def apply_member_level_change(
 ):
     ensure_member_level_user_columns(conn)
     row = conn.execute(
-        "SELECT id, username, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?",
+        "SELECT id, username, role, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?",
         (user_id,),
     ).fetchone()
     if not row:
@@ -468,6 +481,8 @@ def apply_member_level_change(
         "sanction_until": sanction_until,
     }
     new_effective = compute_effective_level(future)
+    old_member_rule = get_member_level_rule(conn, old_effective)
+    new_member_rule = get_member_level_rule(conn, new_effective)
     now = _now()
     conn.execute(
         "UPDATE users SET base_level=?, effective_level=?, member_level=?, sanction_status=?, sanction_until=?, "
@@ -485,6 +500,26 @@ def apply_member_level_change(
         reason=reason,
         source=source,
     )
+    if old_effective != new_effective:
+        from services.storage_quota_enforcement import maybe_create_quota_reduction_notice
+
+        updated_user = {
+            **data,
+            "base_level": new_base,
+            "effective_level": new_effective,
+            "member_level": new_effective,
+            "sanction_status": new_sanction,
+            "sanction_until": sanction_until,
+        }
+        maybe_create_quota_reduction_notice(
+            conn,
+            user_before=data,
+            user_after=updated_user,
+            old_member_rule=old_member_rule,
+            new_member_rule=new_member_rule,
+            actor=_actor_notice_row(conn, actor),
+            reason=reason,
+        )
     return {
         **data,
         "base_level": new_base,

@@ -47,11 +47,14 @@ function renderUsers() {
       const levelSelect = document.createElement("select");
       levelSelect.id = `member-level-select-${u.id}`;
       levelSelect.style.maxWidth = "105px";
-      ["newbie", "normal", "trusted", "vip"].forEach((level) => {
+      const levelOptions = currentRole === "super_admin"
+        ? ["newbie", "normal", "trusted", "vip", "restricted", "suspended"]
+        : ["newbie", "normal", "trusted", "vip"];
+      levelOptions.forEach((level) => {
         const opt = document.createElement("option");
         opt.value = level;
         opt.textContent = level;
-        if ((u.base_level || u.effective_level || u.member_level || "normal") === level) opt.selected = true;
+        if ((u.effective_level || u.base_level || u.member_level || "normal") === level) opt.selected = true;
         levelSelect.appendChild(opt);
       });
       const levelBtn = document.createElement("button");
@@ -176,7 +179,7 @@ function renderUsers() {
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");
     appendTextCell(u.role_label || u.role || "");
-    appendTextCell(`${u.effective_level || u.member_level || "-"}${u.base_level && u.base_level !== u.effective_level ? ` (${u.base_level})` : ""}`);
+    appendTextCell(u.member_level_label || `${u.effective_level || u.member_level || "-"}${u.base_level && u.base_level !== u.effective_level ? ` (${u.base_level})` : ""}`);
     const statusCell = document.createElement("td");
     const statusSpan = document.createElement("span");
     statusSpan.textContent = "正常";

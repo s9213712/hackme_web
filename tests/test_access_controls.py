@@ -1,3 +1,5 @@
+import json
+
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
@@ -12,7 +14,13 @@ from services.access_controls import (
     parse_ip_whitelist,
     verify_maintenance_bypass_token,
 )
-from services.server_bind import effective_server_bind, validate_listen_host, validate_listen_port
+from services.server_bind import (
+    effective_server_bind,
+    effective_server_ssl,
+    server_ssl_settings_payload,
+    validate_listen_host,
+    validate_listen_port,
+)
 
 
 def _json_resp(payload, status=200):
@@ -23,7 +31,7 @@ def _passthrough(fn):
     return fn
 
 
-def _admin_app(settings_state=None, actor=None):
+def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, current_ssl_enabled=False, audit_log=None):
     app = Flask(__name__)
     app.testing = True
     state = settings_state or {
@@ -34,6 +42,10 @@ def _admin_app(settings_state=None, actor=None):
         "maintenance_bypass_token_expires_at": "",
         "server_listen_host": "",
         "server_listen_port": 0,
+        "server_ssl_enabled": True,
+        "comfyui_api_host": "localhost",
+        "comfyui_api_port": 8192,
+        "comfyui_max_batch_size": 1,
     }
 
     def save_settings(data):
@@ -43,13 +55,15 @@ def _admin_app(settings_state=None, actor=None):
     register_system_admin_routes(app, {
         "ANCHOR_DIR": ".",
         "BASE_DIR": ".",
+        "CERT_FILE": str(cert_file or "missing-cert.pem"),
         "CHAT_DIR": ".",
-        "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000},
+        "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000, "ssl_enabled": current_ssl_enabled},
         "DB_PATH": "missing.db",
+        "KEY_FILE": str(key_file or "missing-key.pem"),
         "LOG_DIR": ".",
         "SERVER_LOG_PATH": "server.log",
         "activate_emergency_lockdown": lambda reason: None,
-        "audit": lambda *args, **kwargs: None,
+        "audit": (lambda *args, **kwargs: audit_log.append((args, kwargs))) if audit_log is not None else (lambda *args, **kwargs: None),
         "get_client_ip": lambda: "127.0.0.1",
         "get_current_user_ctx": lambda: actor or {"id": 1, "username": "root", "role": "super_admin"},
         "get_db": lambda: None,
@@ -128,7 +142,8 @@ def test_admin_access_controls_endpoint_updates_safe_payload():
 
 
 def test_admin_rotates_maintenance_bypass_token_once():
-    app, state = _admin_app()
+    audit_log = []
+    app, state = _admin_app(audit_log=audit_log)
     client = app.test_client()
     res = client.post("/api/admin/access-controls/maintenance-bypass-token", json={"confirm": "ROTATE", "ttl_minutes": 15})
     data = res.get_json()
@@ -140,6 +155,12 @@ def test_admin_rotates_maintenance_bypass_token_once():
     assert data["access_controls"]["maintenance_bypass_token_expires_at"] == state["maintenance_bypass_token_expires_at"]
     assert verify_maintenance_bypass_token(data["token"], state["maintenance_bypass_token_hash"], state["maintenance_bypass_token_expires_at"]) is True
     assert "maintenance_bypass_token_hash" not in data["access_controls"]
+    event = next(call for call in audit_log if call[0][0] == "MAINTENANCE_BYPASS_TOKEN_ROTATED")
+    detail = json.loads(event[1]["detail"])
+    changes = {row["key"]: row for row in detail["changes"]}
+    assert changes["maintenance_bypass_token_hash"]["old"] == ""
+    assert changes["maintenance_bypass_token_hash"]["new"] == "<redacted>"
+    assert data["token"] not in event[1]["detail"]
 
 
 def test_access_controls_are_root_only():
@@ -183,6 +204,47 @@ def test_root_can_configure_server_bind_settings_with_restart_hint():
     assert data["server_bind"]["restart_required"] is True
 
 
+def test_server_ssl_settings_require_root_setting_and_cert_files():
+    enabled = effective_server_ssl({"server_ssl_enabled": True}, cert_exists=True)
+    disabled_by_setting = effective_server_ssl({"server_ssl_enabled": False}, cert_exists=True)
+    missing_cert = effective_server_ssl({"server_ssl_enabled": True}, cert_exists=False)
+    restart = server_ssl_settings_payload(
+        {"server_ssl_enabled": True},
+        current_ssl_enabled=False,
+        cert_exists=True,
+    )
+
+    assert enabled["enabled"] is True
+    assert enabled["scheme"] == "https"
+    assert disabled_by_setting["enabled"] is False
+    assert disabled_by_setting["scheme"] == "http"
+    assert missing_cert["enabled"] is False
+    assert missing_cert["cert_required"] is True
+    assert restart["restart_required"] is True
+
+
+def test_root_can_configure_server_ssl_setting_with_restart_hint(tmp_path):
+    cert_file = tmp_path / "cert.pem"
+    key_file = tmp_path / "key.pem"
+    cert_file.write_text("cert", encoding="utf-8")
+    key_file.write_text("key", encoding="utf-8")
+    app, state = _admin_app(cert_file=cert_file, key_file=key_file, current_ssl_enabled=False)
+    client = app.test_client()
+
+    initial = client.get("/api/admin/settings").get_json()
+    assert initial["server_ssl"]["enabled"] is True
+    assert initial["server_ssl"]["restart_required"] is True
+
+    res = client.put("/api/admin/settings", json={"server_ssl_enabled": False})
+    data = res.get_json()
+
+    assert res.status_code == 200
+    assert state["server_ssl_enabled"] is False
+    assert data["server_ssl"]["enabled"] is False
+    assert data["server_ssl"]["enabled_by_setting"] is False
+    assert data["server_ssl"]["current_enabled"] is False
+
+
 def test_invalid_server_bind_settings_are_rejected():
     app, state = _admin_app()
     client = app.test_client()
@@ -194,6 +256,65 @@ def test_invalid_server_bind_settings_are_rejected():
     assert bad_port.status_code == 400
     assert state["server_listen_host"] == ""
     assert state["server_listen_port"] == 0
+
+
+def test_root_can_configure_comfyui_api_endpoint_without_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_api_host": "192.168.1.20", "comfyui_api_port": 8193})
+
+    assert res.status_code == 200
+    assert state["comfyui_api_host"] == "192.168.1.20"
+    assert state["comfyui_api_port"] == 8193
+    assert res.get_json()["settings"]["comfyui_api_host"] == "192.168.1.20"
+    assert res.get_json()["settings"]["comfyui_api_port"] == 8193
+
+
+def test_invalid_comfyui_api_endpoint_is_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    bad_host = client.put("/api/admin/settings", json={"comfyui_api_host": "http://127.0.0.1:8192/prompt"})
+    bad_port = client.put("/api/admin/settings", json={"comfyui_api_port": 70000})
+
+    assert bad_host.status_code == 400
+    assert bad_port.status_code == 400
+    assert state["comfyui_api_host"] == "localhost"
+    assert state["comfyui_api_port"] == 8192
+
+
+def test_root_can_configure_comfyui_batch_limit_without_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_max_batch_size": 4})
+
+    assert res.status_code == 200
+    assert state["comfyui_max_batch_size"] == 4
+    assert res.get_json()["settings"]["comfyui_max_batch_size"] == 4
+
+
+def test_invalid_comfyui_batch_limit_is_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_max_batch_size": 9})
+
+    assert res.status_code == 400
+    assert state["comfyui_max_batch_size"] == 1
+
+
+def test_admin_environment_exposes_paths_and_pid():
+    app, _ = _admin_app()
+    client = app.test_client()
+
+    res = client.get("/api/admin/environment")
+    assert res.status_code == 200
+    env = res.get_json()["environment"]
+    assert env["pid"] > 0
+    assert env["base_dir"] == "."
+    assert env["database_path"] == "missing.db"
 
 
 def test_effective_server_bind_falls_back_to_environment():

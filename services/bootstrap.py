@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 25
+CURRENT_SCHEMA_VERSION = 28
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -29,6 +29,9 @@ SCHEMA_MIGRATIONS = (
     (23, "direct messages schema"),
     (24, "storage files and albums schema"),
     (25, "storage share links schema"),
+    (26, "points economy private chain schema"),
+    (27, "chat recall stickers and friends schema"),
+    (28, "game zone chess schema"),
 )
 
 _STATE = {
@@ -107,6 +110,31 @@ def _mark_default_account_if_unconfirmed(conn, user_id, now):
         _mark_default_account_password(conn, user_id, now)
 
 
+def _mark_default_account_if_password_matches(conn, user_id, raw_password, now):
+    if not raw_password:
+        return
+    row = conn.execute(
+        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return
+    verify_password = _STATE.get("verify_password")
+    matches = False
+    if verify_password:
+        try:
+            matches = bool(verify_password(row["password_hash"], raw_password))
+        except Exception:
+            matches = False
+    if not matches and _STATE.get("hash_password"):
+        try:
+            matches = row["password_hash"] == _STATE["hash_password"](raw_password)
+        except Exception:
+            matches = False
+    if matches:
+        _mark_default_account_password(conn, user_id, now)
+
+
 def _apply_default_account_level(conn, user_id, base_level, now):
     conn.execute(
         """
@@ -129,13 +157,27 @@ def _apply_default_account_level(conn, user_id, base_level, now):
     )
 
 
+def _clear_special_account_level(conn, user_id, now):
+    conn.execute(
+        """
+        UPDATE users
+        SET base_level='normal',
+            effective_level='normal',
+            member_level='normal',
+            level_updated_at=?,
+            level_update_reason='special role bypasses member levels',
+            updated_at=?
+        WHERE id=?
+        """,
+        (now, now, user_id),
+    )
+
+
 def _bootstrap_password(env_name, username, *, required):
     password = os.environ.get(env_name, "").strip()
     if password:
         return password
-    if required:
-        raise RuntimeError(f"{env_name} is required to bootstrap the initial {username} account")
-    return None
+    return username
 
 
 def _safe_iso(value, fallback=None):
@@ -376,6 +418,13 @@ def _table_exists(conn, table_name):
     return row is not None
 
 
+def _table_columns(conn, table_name):
+    try:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    except Exception:
+        return set()
+
+
 def _repair_existing_legacy_tables(
     conn,
     ensure_secure_audit_columns,
@@ -480,6 +529,36 @@ def _ensure_dm_schema(conn):
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dm_threads_a ON dm_threads(participant_a_id, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dm_threads_b ON dm_threads(participant_b_id, updated_at)")
+
+
+def _ensure_chat_social_schema(conn):
+    cols = _table_columns(conn, "chat_messages")
+    for name, ddl in (
+        ("message_type", "TEXT NOT NULL DEFAULT 'text'"),
+        ("sticker_key", "TEXT"),
+        ("is_revoked", "INTEGER NOT NULL DEFAULT 0"),
+        ("revoked_at", "TEXT"),
+        ("revoked_by", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {name} {ddl}")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_friends (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            friend_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status         TEXT    NOT NULL DEFAULT 'pending',
+            requested_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at     TEXT    NOT NULL,
+            updated_at     TEXT    NOT NULL,
+            UNIQUE(user_id, friend_user_id),
+            CHECK (user_id <> friend_user_id),
+            CHECK (status IN ('pending', 'accepted', 'rejected', 'blocked'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_thread ON direct_messages(thread_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_unread ON direct_messages(recipient_user_id, is_read)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blocked_users_pair ON blocked_users(blocker_user_id, blocked_user_id)")
@@ -560,6 +639,16 @@ def apply_schema_migrations(
             from services.storage_albums import ensure_storage_album_schema
 
             ensure_storage_album_schema(conn)
+        elif version == 26:
+            from services.points_chain import ensure_points_economy_schema
+
+            ensure_points_economy_schema(conn)
+        elif version == 27:
+            _ensure_chat_social_schema(conn)
+        elif version == 28:
+            from routes.games import ensure_game_schema
+
+            ensure_game_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
@@ -579,6 +668,7 @@ def init_db(
     ensure_security_support_schema,
     ensure_official_chat_room,
     hash_password,
+    ensure_points_economy_schema=None,
 ):
     conn = _STATE["get_db"]()
     schema_path = _STATE.get("schema_path") or (_STATE["db_path"] + '.schema.sql')
@@ -597,6 +687,9 @@ def init_db(
     ensure_appeal_columns(conn)
     ensure_session_columns(conn)
     ensure_security_support_schema(conn)
+    if ensure_points_economy_schema is None:
+        from services.points_chain import ensure_points_economy_schema
+    ensure_points_economy_schema(conn)
     _STATE["init_system_settings_table"](conn)
     _STATE["seed_missing_settings"](conn)
     migration_plan = apply_schema_migrations(
@@ -645,8 +738,10 @@ def init_db(
         _insert_password_record(conn, root_id, root_password, hash_password, now)
         _mark_default_account_password(conn, root_id, now)
     elif os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip():
+        root_password = os.environ.get("HTML_LEARNING_ROOT_PASSWORD", "").strip()
+        _mark_default_account_if_password_matches(conn, root_id, root_password, now)
         _mark_default_account_if_unconfirmed(conn, root_id, now)
-    _apply_default_account_level(conn, root_id, "vip", now)
+    _clear_special_account_level(conn, root_id, now)
 
     admin_password = _bootstrap_password("HTML_LEARNING_MANAGER_PASSWORD", "admin", required=False)
     if admin_password:
@@ -665,8 +760,23 @@ def init_db(
             _insert_password_record(conn, admin_id, admin_password, hash_password, now)
             _mark_default_account_password(conn, admin_id, now)
         else:
+            _mark_default_account_if_password_matches(conn, admin_id, admin_password, now)
             _mark_default_account_if_unconfirmed(conn, admin_id, now)
-        _apply_default_account_level(conn, admin_id, "trusted", now)
+        _clear_special_account_level(conn, admin_id, now)
+
+    conn.execute(
+        """
+        UPDATE users
+        SET base_level='normal',
+            effective_level='normal',
+            member_level='normal',
+            level_updated_at=?,
+            level_update_reason='special role bypasses member levels',
+            updated_at=?
+        WHERE username='root' OR role IN ('super_admin', 'manager')
+        """,
+        (now, now),
+    )
 
     test_password = _bootstrap_password("HTML_LEARNING_TEST_PASSWORD", "test", required=False)
     if test_password:
@@ -685,6 +795,7 @@ def init_db(
             _insert_password_record(conn, test_id, test_password, hash_password, now)
             _mark_default_account_password(conn, test_id, now)
         else:
+            _mark_default_account_if_password_matches(conn, test_id, test_password, now)
             _mark_default_account_if_unconfirmed(conn, test_id, now)
         _apply_default_account_level(conn, test_id, "trusted", now)
 

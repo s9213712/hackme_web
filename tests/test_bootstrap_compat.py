@@ -118,6 +118,8 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     conn.row_factory = sqlite3.Row
     session_cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
     chat_room_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_rooms)").fetchall()}
+    chat_message_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+    friend_cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_friends)").fetchall()}
     user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     login_location_cols = {row["name"] for row in conn.execute("PRAGMA table_info(login_locations)").fetchall()}
     member_rule_cols = {row["name"] for row in conn.execute("PRAGMA table_info(member_level_rules)").fetchall()}
@@ -153,12 +155,31 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     integrity_finding_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_findings)").fetchall()}
     integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
     integrity_manifest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_manifest_versions)").fetchall()}
+    points_wallet_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_wallets)").fetchall()}
+    points_ledger_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_ledger)").fetchall()}
+    points_block_cols = {row["name"] for row in conn.execute("PRAGMA table_info(points_chain_blocks)").fetchall()}
+    game_match_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
+    game_invite_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_invites)").fetchall()}
+    game_reward_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_leaderboard_rewards)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
-    root_user = conn.execute("SELECT username, must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
+    default_users = {
+        row["username"]: dict(row)
+        for row in conn.execute(
+            """
+            SELECT u.username, u.role, u.must_change_password, u.is_default_password,
+                   u.member_level, u.base_level, u.effective_level, p.password_hash
+            FROM users u
+            JOIN user_passwords p ON p.user_id = u.id
+            WHERE u.username IN ('root', 'admin', 'test')
+            """
+        ).fetchall()
+    }
     conn.close()
 
     assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
     assert "is_private" in chat_room_cols
+    assert {"message_type", "sticker_key", "is_revoked", "revoked_at", "revoked_by"} <= chat_message_cols
+    assert {"user_id", "friend_user_id", "status", "requested_by", "updated_at"} <= friend_cols
     assert {
         "member_level", "base_level", "effective_level", "trust_score", "points", "reputation",
         "violation_score", "sanction_status", "sanction_until", "level_updated_at",
@@ -173,7 +194,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
         "downgrade_violation_threshold", "session_idle_timeout_minutes", "require_admin_approval",
     } <= member_rule_cols
     assert {"actor", "target_user", "old_base_level", "new_effective_level", "reason", "source"} <= member_audit_cols
-    assert {"target_user_id", "action_type", "status", "required_votes", "approve_count"} <= proposal_cols
+    assert {
+        "target_user_id", "action_type", "status", "required_votes", "approve_count",
+        "risk_level", "required_root_approval", "required_manager_approvals",
+    } <= proposal_cols
     assert {"proposal_id", "voter_user_id", "vote"} <= vote_cols
     assert {"moderator_id", "action_type", "target_type", "target_id"} <= moderation_action_cols
     assert {"moderator_id", "user_id", "note"} <= mod_note_cols
@@ -208,10 +232,38 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
     assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
     assert {"manifest_hash", "manifest_signature", "approved_by"} <= integrity_manifest_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
-    assert root_user["username"] == "root"
-    assert root_user["must_change_password"] == 1
-    assert root_user["is_default_password"] == 1
+    assert {"user_id", "soft_balance", "hard_balance", "soft_frozen", "hard_frozen", "wallet_status"} <= points_wallet_cols
+    assert {"ledger_uuid", "public_account_id", "currency_type", "direction", "amount", "ledger_hash", "previous_ledger_hash"} <= points_ledger_cols
+    assert {"block_number", "previous_block_hash", "merkle_root", "block_hash", "first_ledger_id", "last_ledger_id"} <= points_block_cols
+    assert {"game_key", "mode", "white_user_id", "black_user_id", "current_turn", "board_json", "winner_user_id", "white_deleted_at", "black_deleted_at"} <= game_match_cols
+    assert {"game_key", "inviter_user_id", "opponent_user_id", "status", "match_id"} <= game_invite_cols
+    assert {"game_key", "week_key", "user_id", "rank", "score", "reward_points", "ledger_uuid"} <= game_reward_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+    assert set(default_users) == {"root", "admin", "test"}
+
+    assert default_users["root"]["role"] == "super_admin"
+    assert default_users["root"]["password_hash"] == "hash:root"
+    assert default_users["root"]["must_change_password"] == 1
+    assert default_users["root"]["is_default_password"] == 1
+    assert default_users["root"]["member_level"] == "normal"
+    assert default_users["root"]["base_level"] == "normal"
+    assert default_users["root"]["effective_level"] == "normal"
+
+    assert default_users["admin"]["role"] == "manager"
+    assert default_users["admin"]["password_hash"] == "hash:admin"
+    assert default_users["admin"]["must_change_password"] == 1
+    assert default_users["admin"]["is_default_password"] == 1
+    assert default_users["admin"]["member_level"] == "normal"
+    assert default_users["admin"]["base_level"] == "normal"
+    assert default_users["admin"]["effective_level"] == "normal"
+
+    assert default_users["test"]["role"] == "user"
+    assert default_users["test"]["password_hash"] == "hash:test"
+    assert default_users["test"]["must_change_password"] == 1
+    assert default_users["test"]["is_default_password"] == 1
+    assert default_users["test"]["member_level"] == "trusted"
+    assert default_users["test"]["base_level"] == "trusted"
+    assert default_users["test"]["effective_level"] == "trusted"
 
 
 def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, monkeypatch):
@@ -222,7 +274,7 @@ def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, m
     conn.executescript(schema_path.read_text(encoding="utf-8"))
     now = "2026-01-01T00:00:00"
     cur = conn.execute(
-        "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'active', 'super_admin', ?, ?)",
+        "INSERT INTO users (username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (?, 'active', 'super_admin', 'vip', 'vip', 'vip', ?, ?)",
         ("root", now, now),
     )
     conn.execute(
@@ -271,6 +323,81 @@ def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, m
         bootstrap._STATE.update(original_state)
 
     conn = sqlite3.connect(db_path)
-    count = conn.execute("SELECT COUNT(*) FROM user_passwords").fetchone()[0]
+    root_password_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM user_passwords p
+        JOIN users u ON u.id = p.user_id
+        WHERE u.username='root'
+        """
+    ).fetchone()[0]
+    default_user_count = conn.execute("SELECT COUNT(*) FROM users WHERE username IN ('root', 'admin', 'test')").fetchone()[0]
+    root = conn.execute("SELECT member_level, base_level, effective_level FROM users WHERE username='root'").fetchone()
     conn.close()
-    assert count == 1
+    assert root_password_count == 1
+    assert default_user_count == 3
+    assert tuple(root) == ("normal", "normal", "normal")
+
+
+def test_init_db_marks_existing_default_account_when_env_password_still_matches(tmp_path, monkeypatch):
+    db_path = tmp_path / "existing-default.db"
+    schema_path = Path(__file__).resolve().parents[1] / "database" / "bootstrap.schema.sql"
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(schema_path.read_text(encoding="utf-8"))
+    now = "2026-01-01T00:00:00"
+    cur = conn.execute(
+        "INSERT INTO users (username, status, role, must_change_password, is_default_password, password_changed_at, created_at, updated_at) "
+        "VALUES (?, 'active', 'super_admin', 0, 0, ?, ?, ?)",
+        ("root", "2026-01-02T00:00:00", now, now),
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+        (cur.lastrowid, "hash:RootDefault123!", now),
+    )
+    conn.commit()
+    conn.close()
+
+    missing_json = str(tmp_path / "missing.json")
+    original_state = dict(bootstrap._STATE)
+    monkeypatch.setenv("HTML_LEARNING_ROOT_PASSWORD", "RootDefault123!")
+
+    try:
+        bootstrap.configure_bootstrap_service(
+            get_db=_get_db_factory(str(db_path)),
+            db_path=str(db_path),
+            schema_path=str(schema_path),
+            legacy_fail_log=missing_json,
+            legacy_blocked_ips=missing_json,
+            legacy_rate_limit=missing_json,
+            legacy_audit_log=missing_json,
+            chain_seed="seed",
+            chain_hash=lambda prev_hash, entry_json: f"{prev_hash}:{len(entry_json)}",
+            load_json=lambda path: {},
+            normalize_text=lambda value: value if isinstance(value, str) else "",
+            hash_password=lambda value: f"hash:{value}",
+            verify_password=lambda hashed, raw: hashed == f"hash:{raw}",
+            audit=_noop,
+            refresh_system_settings=_noop,
+            init_system_settings_table=_noop,
+            seed_missing_settings=_noop,
+            import_legacy_settings_files=_noop,
+            default_settings={},
+        )
+        bootstrap.init_db(
+            ensure_secure_audit_columns=_noop,
+            ensure_user_columns=_noop,
+            ensure_appeal_columns=_noop,
+            ensure_session_columns=_ensure_session_columns,
+            ensure_security_support_schema=_noop,
+            ensure_official_chat_room=_noop,
+            hash_password=lambda value: f"hash:{value}",
+        )
+    finally:
+        bootstrap._STATE.clear()
+        bootstrap._STATE.update(original_state)
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT must_change_password, is_default_password FROM users WHERE username='root'").fetchone()
+    conn.close()
+    assert row == (1, 1)

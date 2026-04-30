@@ -5,26 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260429-ui-polish" />
 </head>
 <body>
-  <div class="clock" id="clock">⏰ 載入時間中...</div>
-  <div id="server-connection-light" style="position:fixed;top:12px;right:12px;z-index:9999;display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;border-radius:12px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);font-size:.75rem;color:var(--muted);backdrop-filter:blur(8px);">
-    <span id="server-connection-dot" style="width:10px;height:10px;border-radius:50%;background:#ffb74d;box-shadow:0 0 10px rgba(255,183,77,.65);flex:0 0 auto;"></span>
-    <span>
-      <span id="server-connection-label">連線檢查中</span>
-      <span id="session-countdown-label" class="session-countdown" style="display:block;">未登入</span>
-    </span>
-  </div>
-
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
 <div class="card" id="auth-card">
 
   <h1>Help me improve, hack me please.</h1>
   <p class="subtitle">簡單的帳號註冊與登入系統</p>
+  <div class="auth-server-status" aria-live="polite">
+    <span class="server-status-dot" id="auth-server-dot"></span>
+    <span id="auth-server-label">檢查伺服器狀態中</span>
+  </div>
 
   <!-- Tabs -->
-  <div class="tabs">
+  <div class="tabs auth-tabs">
     <button class="tab active" id="tab-login">登入</button>
     <button class="tab"        id="tab-register">註冊</button>
   </div>
@@ -42,9 +37,51 @@
         <button class="pw-toggle" id="li-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
     </div>
+    <div class="field" id="li-internal-test-token-field" style="display:none;">
+      <label>內測 token（內測模式才需要）</label>
+      <input type="password" id="li-internal-test-token" placeholder="root 提供的內測 token" autocomplete="one-time-code" />
+    </div>
     <button class="btn btn-primary" id="li-btn">登入</button>
     <div class="spinner" id="li-spinner"></div>
     <div class="msg" id="li-msg"></div>
+    <div class="auth-recovery">
+      <button class="auth-link-btn" id="recovery-toggle" type="button">忘記密碼 / Email 驗證</button>
+      <div class="auth-recovery-panel" id="recovery-panel">
+        <div class="field">
+          <label>帳號或 Email</label>
+          <input type="text" id="recovery-identifier" placeholder="username 或 name@example.com" autocomplete="username" />
+        </div>
+        <div class="auth-recovery-actions">
+          <button class="btn" id="reset-request-btn" type="button">寄送重設密碼驗證碼</button>
+          <button class="btn" id="verify-request-btn" type="button">寄送 Email 驗證碼</button>
+        </div>
+        <div class="field">
+          <label>重設密碼驗證碼</label>
+          <input type="text" id="reset-token" placeholder="請輸入驗證碼" autocomplete="one-time-code" />
+        </div>
+        <div class="field">
+          <label>新密碼</label>
+          <div class="pw-wrap">
+            <input type="password" id="reset-new-pw" placeholder="請輸入新密碼" autocomplete="new-password" />
+            <button class="pw-toggle" id="reset-new-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>確認新密碼</label>
+          <div class="pw-wrap">
+            <input type="password" id="reset-new-pw-confirm" placeholder="請再次輸入新密碼" autocomplete="new-password" />
+            <button class="pw-toggle" id="reset-new-pw-confirm-toggle" type="button" aria-label="顯示密碼">👁</button>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="reset-confirm-btn" type="button">重設密碼</button>
+        <div class="field">
+          <label>Email 驗證碼</label>
+          <input type="text" id="verify-token" placeholder="請輸入驗證碼" autocomplete="one-time-code" />
+        </div>
+        <button class="btn" id="verify-confirm-btn" type="button">完成 Email 驗證</button>
+        <div class="msg" id="recovery-msg"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ── Register form ───────────────────────────────── -->
@@ -78,6 +115,10 @@
     <div class="field">
       <label>暱稱</label>
       <input type="text" id="reg-nickname" placeholder="暱稱" autocomplete="nickname" />
+    </div>
+    <div class="field">
+      <label>Email（選填，用於重設密碼與驗證）</label>
+      <input type="email" id="reg-email" placeholder="name@example.com" autocomplete="email" />
     </div>
     <div class="field">
       <label>真實姓名</label>
@@ -125,17 +166,17 @@
     <h2>恭喜登入成功</h2>
     <p id="welcome-msg" style="color:var(--muted); margin-top:.5rem">歡迎回來！</p>
   </div>
-  <div class="info-grid">
-    <div>使用者：<span id="me-user">-</span></div>
-    <div>角色：<span id="me-role">-</span></div>
-    <div>會員等級：<span id="me-level">-</span></div>
-    <div>暱稱：<span id="me-nickname">-</span></div>
-  </div>
-  <div class="success-toolbar">
-    <button class="btn" id="self-edit-btn">修改我的資料</button>
+  <div class="app-action-bar" aria-label="快速操作">
+    <span class="session-countdown" id="session-countdown-label">未登入</span>
+    <button class="btn icon-action-btn" id="self-edit-btn" type="button" title="修改資料" aria-label="修改資料">
+      <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 3.5 13.25 6a7 7 0 0 1 1.55.65l2.65-.85 1.75 3.05-2.05 1.85a7 7 0 0 1 0 1.6l2.05 1.85-1.75 3.05-2.65-.85a7 7 0 0 1-1.55.65L12 20.5H8.5L7.25 18a7 7 0 0 1-1.55-.65l-2.65.85-1.75-3.05 2.05-1.85a7 7 0 0 1 0-1.6L1.3 9.85 3.05 6.8l2.65.85A7 7 0 0 1 7.25 7L8.5 3.5z"/>
+        <circle cx="10.25" cy="12" r="2.4"/>
+      </svg>
+    </button>
     <div class="notification-center" id="notification-center">
-      <button class="btn notification-toggle" id="notification-toggle" type="button">
-        通知 <span id="notification-badge" class="notification-badge" style="display:none;">0</span>
+      <button class="btn icon-action-btn notification-toggle" id="notification-toggle" type="button" title="通知" aria-label="通知">
+        🔔 <span id="notification-badge" class="notification-badge" style="display:none;">0</span>
       </button>
       <div class="notification-panel" id="notification-panel" aria-live="polite">
         <div class="notification-panel-head">
@@ -147,19 +188,72 @@
         </div>
       </div>
     </div>
-    <button class="btn" id="bug-report-open-btn" type="button">回報 Bug</button>
-    <button class="btn" id="logout-btn">登出</button>
+    <button class="btn icon-action-btn" id="bug-report-open-btn" type="button" title="回報 Bug" aria-label="回報 Bug">
+      <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M8 7.5a4 4 0 0 1 8 0"/>
+        <path d="M6.5 11.5a5.5 5.5 0 0 1 11 0v2.8a5.5 5.5 0 0 1-11 0z"/>
+        <path d="M12 8v11"/>
+        <path d="M5 10H3.5M20.5 10H19M5.2 15.2 3.7 16.2M18.8 15.2l1.5 1M7.2 6.7 5.9 5.5M16.8 6.7l1.3-1.2"/>
+        <path d="M9.25 11.25h.01M14.75 11.25h.01"/>
+      </svg>
+    </button>
+    <button class="btn icon-action-btn" id="logout-btn" type="button" title="登出" aria-label="登出">
+      <svg class="action-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 20V4h9v16z"/>
+        <path d="M13 12h7"/>
+        <path d="m17 9 3 3-3 3"/>
+        <circle cx="9" cy="9" r="2"/>
+        <path d="M7 18v-1.2a2.8 2.8 0 0 1 5.6 0V18"/>
+      </svg>
+    </button>
   </div>
-
-  <div class="tabs" id="module-main-tabs" style="margin-top:.75rem;margin-bottom:.65rem;">
-    <button class="tab active" id="tab-module-chat">聊天</button>
-    <button class="tab" id="tab-module-dm" style="display:none;">站內信</button>
-    <button class="tab" id="tab-module-community">討論區</button>
-    <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
-    <button class="tab" id="tab-module-appeals">申覆</button>
-    <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
-    <button class="tab" id="tab-module-server" style="display:none;">伺服器管理</button>
-  </div>
+  <div class="app-shell" id="app-shell">
+    <aside class="app-sidebar" id="app-sidebar" aria-label="主要功能">
+      <div class="sidebar-head">
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-icon">H</span>
+          <span class="sidebar-label">hackme_web</span>
+        </div>
+        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="收合側邊欄" aria-expanded="true">‹</button>
+      </div>
+      <nav class="tabs sidebar-nav" id="module-main-tabs">
+        <button class="tab active" id="tab-module-chat">聊天</button>
+        <button class="tab" id="tab-module-dm" style="display:none;">站內信</button>
+        <button class="tab" id="tab-module-announcements">公告</button>
+        <button class="tab" id="tab-module-community">討論區</button>
+        <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
+        <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
+        <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
+        <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
+        <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
+        <button class="tab" id="tab-module-appeals">申覆</button>
+        <button class="tab" id="tab-module-accounts" style="display:none;">帳號管理</button>
+        <button class="tab" id="tab-module-server" style="display:none;">安全中心</button>
+      </nav>
+      <div class="sidebar-footer" id="sidebar-footer">
+        <div class="sidebar-user-card">
+          <span class="sidebar-user-avatar" id="sidebar-user-avatar">-</span>
+          <span class="sidebar-user-meta">
+            <span class="sidebar-label sidebar-user-name" id="sidebar-current-user">未登入</span>
+            <span class="sidebar-label sidebar-user-role" id="sidebar-current-role">-</span>
+            <span class="sidebar-label sidebar-user-role" id="sidebar-current-level">-</span>
+          </span>
+        </div>
+        <div class="sidebar-stats-card">
+          <div><span class="sidebar-stat-label">積分</span><span class="sidebar-stat-value" id="sidebar-points">0</span></div>
+          <div><span class="sidebar-stat-label">違規扣點</span><span class="sidebar-stat-value" id="sidebar-violations">0</span></div>
+          <div><span class="sidebar-stat-label">權限等級</span><span class="sidebar-stat-value" id="sidebar-effective-level">-</span></div>
+        </div>
+        <div class="sidebar-server-state" id="sidebar-server-state">
+          <span class="sidebar-server-dot" id="sidebar-server-dot"></span>
+          <span class="sidebar-server-meta">
+            <span class="sidebar-label" id="sidebar-server-label">連線檢查中</span>
+            <span class="sidebar-label" id="sidebar-server-version">發佈號: loading...</span>
+          </span>
+        </div>
+      </div>
+    </aside>
+    <main class="app-main" id="app-main">
 
   <div class="module-section active" id="module-chat">
     <div class="admin-tools" id="chat-section" style="margin-top: .95rem; text-align: left;">
@@ -182,6 +276,13 @@
       <div class="chat-layout">
         <div class="chat-room-list-wrap">
           <div class="mini-title">我的聊天室</div>
+          <div class="chat-friend-panel">
+            <div class="chat-friend-add">
+              <input type="text" id="chat-friend-username" placeholder="好友帳號" maxlength="32" />
+              <button class="btn" id="chat-friend-add-btn" type="button">加好友</button>
+            </div>
+            <div id="chat-friend-list" class="chat-friend-list"></div>
+          </div>
           <div id="chat-room-list"></div>
         </div>
 
@@ -196,6 +297,17 @@
             <textarea id="chat-message-input" rows="2" maxlength="500" placeholder="輸入訊息，最多 500 字"></textarea>
             <button class="btn btn-primary" id="chat-send-btn" type="button">送出</button>
           </div>
+          <div id="chat-pending-attachment-list" class="chat-pending-attachment-list">
+            <div class="drive-empty">尚未選擇要隨訊息送出的附件</div>
+          </div>
+          <div class="chat-sticker-bar" id="chat-sticker-bar">
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="smile">微笑</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="thanks">感謝</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="ok">了解</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="wow">驚訝</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="cheer">加油</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="sad">難過</button>
+          </div>
           <div class="chat-composer-actions">
             <button class="btn" id="chat-refresh-msg-btn" type="button">重新整理訊息</button>
           </div>
@@ -203,7 +315,7 @@
             <div class="drive-card-title">聊天室附件</div>
             <div class="settings-option-grid">
               <div class="field"><label>上傳新附件</label><input type="file" id="chat-attachment-file" /></div>
-              <div class="field"><label>既有雲端 file_id</label><input type="text" id="chat-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>選擇雲端檔案</label><select id="chat-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="chat-attachment-upload-btn" type="button">上傳附件</button></div>
               <div class="field"><label>&nbsp;</label><button class="btn" id="chat-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
             </div>
@@ -214,44 +326,76 @@
     </div>
   </div>
 
+  <div class="module-section" id="module-announcements">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">📣 公告</div>
+      <div class="community-panel">
+        <div class="community-panel-head">
+          <div class="mini-title">最新公告</div>
+          <button class="btn community-mini-btn" id="community-announcement-open-btn" type="button" style="display:none;">發布公告</button>
+        </div>
+        <div id="community-announcement-list" class="community-scroll"></div>
+        <div id="community-announcement-editor" style="display:none;margin-top:.75rem;">
+          <div class="field">
+            <label>公告標題</label>
+            <input type="text" id="community-announcement-title" maxlength="80" placeholder="公告標題" />
+          </div>
+          <div class="field">
+            <label>公告內容</label>
+            <textarea id="community-announcement-content" data-markdown-editor="1" rows="4" maxlength="3000" placeholder="輸入公告內容"></textarea>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="community-announcement-pinned" /> 置頂公告</label>
+          </div>
+          <div class="community-actions">
+            <button class="btn btn-primary" id="community-announcement-submit" type="button">發布公告</button>
+            <button class="btn" id="community-announcement-cancel-btn" type="button">取消</button>
+          </div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">公告附件請求（需 root 核准）</div>
+            <div class="settings-option-grid">
+              <div class="field"><label>公告 ID</label><input type="number" id="announcement-attachment-announcement-id" min="1" placeholder="公告 #ID" /></div>
+              <div class="field"><label>上傳新附件</label><input type="file" id="announcement-attachment-file" /></div>
+              <div class="field"><label>選擇雲端檔案</label><select id="announcement-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
+              <div class="field"><label>理由</label><input type="text" id="announcement-attachment-reason" placeholder="附件用途" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="announcement-attachment-upload-btn" type="button">上傳並送審</button></div>
+              <div class="field"><label>&nbsp;</label><button class="btn" id="announcement-attachment-existing-btn" type="button">既有檔送審</button></div>
+            </div>
+            <div class="drive-card-sub">公告附件視為管理文件，送審後需 root 核准才會對公告生效。</div>
+          </div>
+        </div>
+      </div>
+      <div id="announcements-msg" class="msg"></div>
+    </div>
+  </div>
+
   <div class="module-section" id="module-community">
     <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
-      <div class="mini-title">📣 公告欄與討論區</div>
-      <div class="community-layout">
-        <div class="community-column">
+      <div class="community-page-head">
+        <div class="mini-title">討論區</div>
+        <div class="community-actions">
+          <button class="btn community-mini-btn" id="community-tools-toggle-btn" type="button">工具</button>
+          <button class="btn community-mini-btn" id="community-review-tab-btn" type="button" style="display:none;">審核</button>
+        </div>
+      </div>
+      <div id="community-breadcrumb" class="community-breadcrumb">討論區列表</div>
+      <div id="community-tools-panel" class="community-tools-drawer" style="display:none;">
+
           <div class="community-panel">
-            <div class="mini-title">最新公告</div>
-            <div id="community-announcement-list" class="community-scroll"></div>
-            <div id="community-announcement-editor" style="display:none;margin-top:.75rem;">
-              <div class="field">
-                <label>公告標題</label>
-                <input type="text" id="community-announcement-title" maxlength="80" placeholder="公告標題" />
-              </div>
-              <div class="field">
-                <label>公告內容</label>
-                <textarea id="community-announcement-content" data-markdown-editor="1" rows="4" maxlength="3000" placeholder="輸入公告內容"></textarea>
-              </div>
-              <div class="field">
-                <label><input type="checkbox" id="community-announcement-pinned" /> 置頂公告</label>
-              </div>
-              <button class="btn btn-primary" id="community-announcement-submit" type="button">發布公告</button>
-              <div class="drive-card" style="margin-top:.75rem;">
-                <div class="drive-card-title">公告附件請求（需 root 核准）</div>
-                <div class="settings-option-grid">
-                  <div class="field"><label>公告 ID</label><input type="number" id="announcement-attachment-announcement-id" min="1" placeholder="公告 #ID" /></div>
-                  <div class="field"><label>上傳新附件</label><input type="file" id="announcement-attachment-file" /></div>
-                  <div class="field"><label>既有雲端 file_id</label><input type="text" id="announcement-attachment-existing-file-id" placeholder="file_id" /></div>
-                  <div class="field"><label>理由</label><input type="text" id="announcement-attachment-reason" placeholder="附件用途" /></div>
-                  <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="announcement-attachment-upload-btn" type="button">上傳並送審</button></div>
-                  <div class="field"><label>&nbsp;</label><button class="btn" id="announcement-attachment-existing-btn" type="button">既有檔送審</button></div>
-                </div>
-                <div class="drive-card-sub">公告附件視為管理文件，送審後需 root 核准才會對公告生效。</div>
+            <div class="community-panel-head">
+              <div class="mini-title">討論區工具</div>
+              <div class="community-actions">
+                <button class="btn community-mini-btn" id="community-board-request-open-btn" type="button">申請建立討論區</button>
+                <button class="btn community-mini-btn" id="community-category-manager-open-btn" type="button" style="display:none;">管理分類</button>
               </div>
             </div>
           </div>
 
-          <div class="community-panel" id="community-board-request-panel">
-            <div class="mini-title">申請建立討論區</div>
+          <div class="community-panel" id="community-board-request-panel" style="display:none;">
+            <div class="community-panel-head">
+              <div class="mini-title">申請建立討論區</div>
+              <button class="btn community-mini-btn" id="community-board-request-cancel-btn" type="button">收起</button>
+            </div>
             <div class="field">
               <label>討論分類</label>
               <select id="community-board-category"></select>
@@ -287,7 +431,10 @@
           </div>
 
           <div class="community-panel" id="community-category-manager-panel" style="display:none;">
-            <div class="mini-title">討論分類管理</div>
+            <div class="community-panel-head">
+              <div class="mini-title">討論分類管理</div>
+              <button class="btn community-mini-btn" id="community-category-manager-close-btn" type="button">收起</button>
+            </div>
             <div class="field">
               <label>分類名稱</label>
               <input type="text" id="community-category-name" maxlength="80" placeholder="例如：公告討論、技術交流" />
@@ -305,6 +452,10 @@
             <div id="community-category-list" class="community-scroll" style="margin-top:.75rem;"></div>
           </div>
 
+      </div>
+
+      <div id="community-review-area" class="community-review-area" style="display:none;">
+        <div class="community-layout community-review-layout">
           <div class="community-panel" id="community-board-review-panel" style="display:none;">
             <div class="mini-title">待審核討論區</div>
             <div id="community-board-review-list" class="community-scroll"></div>
@@ -315,8 +466,10 @@
             <div id="community-thread-review-list" class="community-scroll"></div>
           </div>
         </div>
+      </div>
 
-        <div class="community-column">
+      <div id="community-main-area" class="community-main-area">
+        <div id="community-board-stage" class="community-stage">
           <div class="community-panel">
             <div class="mini-title">討論區列表</div>
             <div class="field">
@@ -325,11 +478,56 @@
             </div>
             <div id="community-board-list" class="community-scroll"></div>
           </div>
+        </div>
 
+        <div id="community-thread-stage" class="community-stage" style="display:none;">
           <div class="community-panel">
+            <div class="community-panel-head">
+              <button class="btn community-mini-btn" id="community-back-boards-btn" type="button">返回討論區</button>
+              <button class="btn community-mini-btn" id="community-thread-create-open-btn" type="button" style="display:none;">撰寫新主題</button>
+              <button class="btn community-mini-btn" id="community-moderator-open-btn" type="button" style="display:none;">版主設定</button>
+            </div>
             <div class="mini-title" id="community-board-heading">請先選擇討論區</div>
             <div id="community-board-meta" style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem;"></div>
             <div id="community-board-rules-view" class="community-rules" style="display:none;"></div>
+            <div id="community-moderator-manager" class="community-panel" style="display:none;margin-bottom:.75rem;">
+              <div class="community-panel-head">
+                <div class="mini-title">版主與權限範圍</div>
+                <button class="btn community-mini-btn" id="community-moderator-refresh-btn" type="button">重新整理</button>
+              </div>
+              <div class="settings-option-grid">
+                <div class="field">
+                  <label>選擇版主帳號</label>
+                  <select id="community-moderator-user-id">
+                    <option value="">讀取會員中...</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>常用權限組</label>
+                  <select id="community-moderator-preset">
+                    <option value="full">完整版主</option>
+                    <option value="review">只審核主題</option>
+                    <option value="content">內容整理</option>
+                    <option value="discipline">懲處與刪除</option>
+                  </select>
+                </div>
+              </div>
+              <div class="settings-option-grid community-moderator-permissions">
+                <label><input type="checkbox" id="community-mod-can-review-threads" checked /> 審核主題</label>
+                <label><input type="checkbox" id="community-mod-can-pin-threads" checked /> 置頂主題</label>
+                <label><input type="checkbox" id="community-mod-can-pin-posts" checked /> 置頂留言</label>
+                <label><input type="checkbox" id="community-mod-can-lock-threads" checked /> 鎖定主題</label>
+                <label><input type="checkbox" id="community-mod-can-edit-posts" checked /> 編輯留言</label>
+                <label><input type="checkbox" id="community-mod-can-delete-posts" checked /> 刪除主題或留言</label>
+                <label><input type="checkbox" id="community-mod-can-reward-authors" checked /> 獎勵作者</label>
+                <label><input type="checkbox" id="community-mod-can-penalize-posts" checked /> 懲處違規留言</label>
+              </div>
+              <div class="community-actions" style="margin-top:.55rem;">
+                <button class="btn btn-primary community-mini-btn" id="community-moderator-save-btn" type="button">新增 / 更新版主</button>
+              </div>
+              <div id="community-moderator-msg" class="msg"></div>
+              <div id="community-moderator-list" class="community-scroll" style="margin-top:.75rem;max-height:220px;"></div>
+            </div>
             <div id="community-thread-creator" style="display:none;">
               <div class="field">
                 <label>新主題標題</label>
@@ -339,7 +537,10 @@
                 <label>內容</label>
                 <textarea id="community-thread-content" data-markdown-editor="1" rows="4" maxlength="4000" placeholder="輸入主題內容"></textarea>
               </div>
-              <button class="btn btn-primary" id="community-thread-submit" type="button">發布主題</button>
+              <div class="community-actions">
+                <button class="btn btn-primary" id="community-thread-submit" type="button">發布主題</button>
+                <button class="btn" id="community-thread-create-cancel-btn" type="button">取消</button>
+              </div>
             </div>
             <div class="community-list-tools">
               <input type="search" id="community-thread-search" placeholder="搜尋主題、內容、作者" />
@@ -351,10 +552,14 @@
           </div>
         </div>
 
-        <div class="community-column">
+        <div id="community-detail-stage" class="community-stage" style="display:none;">
           <div class="community-panel">
-            <div class="mini-title" id="community-thread-heading">主題內容</div>
+            <div class="community-panel-head">
+              <button class="btn community-mini-btn" id="community-back-threads-btn" type="button">返回主題列表</button>
+              <div class="mini-title" id="community-thread-heading">主題內容</div>
+            </div>
             <div class="community-list-tools" id="community-thread-lock-tools" style="display:none;">
+              <button class="btn community-mini-btn" id="community-thread-sticky-toggle" type="button">置頂主題</button>
               <button class="btn community-mini-btn" id="community-thread-lock-toggle" type="button">鎖定主題</button>
               <button class="btn community-mini-btn" id="community-thread-delete-btn" type="button">刪除主題</button>
             </div>
@@ -421,6 +626,25 @@
       <div class="admin-toolbar" style="margin-top:.75rem;">
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
+      <div class="drive-card" id="drive-storage-upgrade-card" style="margin-top:1rem;">
+        <div class="drive-card-title">容量加購</div>
+        <div id="drive-storage-upgrade-summary" class="drive-card-sub">讀取容量方案中...</div>
+        <div class="settings-option-grid">
+          <div class="field">
+            <label>加購方案</label>
+            <select id="drive-storage-upgrade-select"></select>
+          </div>
+          <div class="field">
+            <label>數量</label>
+            <input type="number" id="drive-storage-upgrade-quantity" min="1" max="20" value="1" />
+          </div>
+          <div class="field">
+            <label>操作</label>
+            <button class="btn btn-primary" type="button" data-drive-action="purchase-storage-upgrade">用積分購買容量</button>
+          </div>
+        </div>
+        <div id="drive-storage-upgrade-active-list" class="drive-summary"></div>
+      </div>
       <div class="drive-card" style="margin-top:1rem;">
         <div class="drive-card-title">上傳到雲端硬碟</div>
         <div class="settings-option-grid">
@@ -431,10 +655,10 @@
           <div class="field">
             <label>隱私模式</label>
             <select id="drive-upload-privacy-mode">
-              <option value="private_scannable">private_scannable</option>
-              <option value="public_attachment">public_attachment</option>
-              <option value="e2ee_vault">e2ee_vault</option>
-              <option value="e2ee_vault_with_client_scan">e2ee_vault_with_client_scan</option>
+              <option value="private_scannable">私密檔案（伺服器掃毒後保存）</option>
+              <option value="public_attachment">公開附件（可預覽、可分享）</option>
+              <option value="e2ee_vault">端到端加密（站方無法讀取）</option>
+              <option value="e2ee_vault_with_client_scan">端到端加密（附本機掃描回報）</option>
             </select>
           </div>
           <div class="field">
@@ -442,60 +666,497 @@
             <button class="btn btn-primary" id="drive-upload-btn" type="button">上傳雲端硬碟</button>
           </div>
         </div>
-        <div class="drive-card-sub">上傳會套用會員等級 quota、掃描政策與風險分級。</div>
+        <div class="drive-card-sub">一般檔案建議選「私密檔案」。只有要公開給他人下載時才選「公開附件」；真正機密的內容才選端到端加密。</div>
       </div>
       <div class="drive-card" style="margin-top:1rem;">
-        <div class="drive-card-title">我的檔案</div>
-        <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。影片、音樂、PDF、文字與 ZIP/TAR 可在通過安全政策後預覽。</div>
-        <div id="drive-file-list" class="drive-file-list"></div>
-      </div>
-      <div class="drive-card" id="drive-preview-card" style="margin-top:1rem;display:none;">
-        <div class="drive-card-title">檔案預覽</div>
-        <div id="drive-preview-panel" class="drive-preview-panel"></div>
-      </div>
-      <div class="drive-dashboard-grid" style="margin-top:1rem;">
-        <div class="drive-card">
-          <div class="drive-card-title">FileManager</div>
-          <div class="field">
-            <label>上傳到 Storage</label>
-            <input type="file" id="storage-upload-file" />
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">遠端下載到雲端硬碟</div>
+            <div class="drive-card-sub" id="drive-remote-download-status">支援 direct link、magnet；上傳 .torrent 需伺服器安裝 aria2c。</div>
           </div>
-          <div class="field">
-            <label>虛擬路徑</label>
-            <input type="text" id="storage-upload-path" placeholder="docs/readme.txt" />
-          </div>
-          <button class="btn btn-primary" id="storage-upload-btn" type="button">上傳 Storage 檔案</button>
-          <div class="drive-card-sub" style="margin-top:.6rem;">Storage 使用雲端硬碟實體檔案，不複製資料。</div>
-          <div id="storage-file-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <button class="btn" id="drive-remote-capability-btn" type="button">檢查能力</button>
         </div>
-        <div class="drive-card">
-          <div class="drive-card-title">回收筒</div>
-          <div id="storage-trash-list" class="drive-file-list"></div>
-        </div>
-      </div>
-      <div class="drive-card" style="margin-top:1rem;">
-        <div class="drive-card-title">AlbumManager</div>
         <div class="settings-option-grid">
           <div class="field">
-            <label>相簿名稱</label>
-            <input type="text" id="album-create-title" placeholder="我的相簿" />
+            <label>下載網址</label>
+            <input type="url" id="drive-remote-url" placeholder="https://example.com/file.zip 或 magnet:?" />
           </div>
           <div class="field">
-            <label>可見性</label>
-            <select id="album-create-visibility">
-              <option value="private">private</option>
-              <option value="unlisted">unlisted</option>
-              <option value="public">public</option>
+            <label>BT 種子檔</label>
+            <input type="file" id="drive-remote-torrent-file" accept=".torrent,application/x-bittorrent" />
+          </div>
+          <div class="field">
+            <label>隱私模式</label>
+            <select id="drive-remote-privacy-mode">
+              <option value="private_scannable">私密檔案（伺服器掃毒後保存）</option>
+              <option value="public_attachment">公開附件（可預覽、可分享）</option>
             </select>
           </div>
           <div class="field">
+            <label>整理到資料夾（選填）</label>
+            <input type="text" id="drive-remote-virtual-path" placeholder="/Downloads/file.zip" />
+          </div>
+          <div class="field">
             <label>&nbsp;</label>
-            <button class="btn btn-primary" id="album-create-btn" type="button">建立相簿</button>
+            <button class="btn btn-primary" id="drive-remote-download-btn" type="button">開始下載</button>
           </div>
         </div>
-        <div id="album-list" class="drive-file-list"></div>
+        <div class="drive-card-sub">貼網址或選 .torrent 擇一下載。遠端下載會套用你的雲端硬碟配額與掃描政策；網址不接受 localhost、內網或本機檔案路徑。</div>
+      </div>
+      <div class="drive-file-preview-layout">
+        <div class="drive-card">
+          <div class="drive-card-title">我的檔案</div>
+          <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。圖片、影片、音樂、PDF、文字與 ZIP/TAR 可在通過安全政策後預覽。</div>
+          <div id="drive-file-list" class="drive-file-list"></div>
+        </div>
+        <div class="drive-card drive-preview-card" id="drive-preview-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">檔案預覽</div>
+              <div class="drive-card-sub">點一次在這裡預覽；連點同一檔案兩次開全頁預覽。</div>
+            </div>
+            <button class="btn" type="button" data-drive-action="close-preview">關閉</button>
+          </div>
+          <div id="drive-preview-panel" class="drive-preview-panel">
+            <div class="drive-empty">請從左側檔案清單選擇要預覽的檔案</div>
+          </div>
+        </div>
+      </div>
+      <div class="drive-dashboard-grid" style="margin-top:1rem;">
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">FileManager</div>
+              <div class="drive-card-sub" id="storage-selection-label">未選取檔案</div>
+            </div>
+            <button class="btn" id="storage-refresh-btn" type="button">重新整理</button>
+          </div>
+          <div class="drive-toolbar">
+            <button class="btn btn-primary" id="storage-upload-btn" type="button">上傳</button>
+            <button class="btn" id="storage-folder-upload-btn" type="button">上傳資料夾</button>
+            <button class="btn" id="storage-folder-create-btn" type="button">新增資料夾</button>
+          </div>
+          <input type="file" id="storage-upload-file" hidden />
+          <input type="file" id="storage-upload-folder" hidden webkitdirectory directory multiple />
+          <input type="text" id="storage-upload-path" hidden />
+          <input type="text" id="storage-folder-path" hidden />
+          <input type="text" id="storage-organize-path" hidden />
+          <input type="text" id="storage-folder-move-old" hidden />
+          <input type="text" id="storage-folder-move-new" hidden />
+          <button class="btn" id="storage-folder-move-btn" type="button" hidden>移動資料夾</button>
+          <div class="drive-breadcrumb" id="storage-breadcrumb"></div>
+          <div class="drive-card-sub" style="margin-top:.6rem;">上傳會放進目前資料夾；Storage 只整理路徑，不複製雲端硬碟實體檔案。</div>
+          <div id="storage-folder-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <div id="storage-file-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div class="drive-card-title">回收筒</div>
+            <div class="drive-file-actions">
+              <button class="btn" type="button" data-drive-action="restore-storage-trash">全部還原</button>
+              <button class="btn btn-danger" type="button" data-drive-action="purge-storage-trash">清空</button>
+            </div>
+          </div>
+          <div id="storage-trash-list" class="drive-file-list"></div>
+        </div>
       </div>
       <div id="drive-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-albums">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <details class="drive-collapsible-panel" id="album-management-panel">
+        <summary>
+          <span>
+            <span class="drive-card-title">相簿管理</span>
+            <span class="drive-card-sub">建立、編輯與瀏覽相簿；圖片可在雲端硬碟檔案列表直接加入。</span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
+            <button class="btn" type="button" data-drive-action="refresh-albums">刷新</button>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>相簿名稱</label>
+              <input type="text" id="album-create-title" placeholder="我的相簿" />
+            </div>
+            <div class="field">
+              <label>描述</label>
+              <input type="text" id="album-create-description" placeholder="旅行、專案、公開素材..." />
+            </div>
+            <div class="field">
+              <label>可見性</label>
+              <select id="album-create-visibility">
+                <option value="private">私人</option>
+                <option value="unlisted">不列出，持連結可看</option>
+                <option value="public">公開</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="album-create-btn" type="button">建立</button>
+            </div>
+          </div>
+          <div id="album-list" class="drive-file-list"></div>
+          <div id="album-detail-card" class="drive-album-detail" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title" id="album-detail-title">相簿內容</div>
+                <div class="drive-card-sub" id="album-detail-meta"></div>
+              </div>
+              <button class="btn" type="button" data-drive-action="close-album-detail">關閉</button>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>相簿名稱</label>
+                <input type="text" id="album-edit-title" />
+              </div>
+              <div class="field">
+                <label>描述</label>
+                <input type="text" id="album-edit-description" />
+              </div>
+              <div class="field">
+                <label>可見性</label>
+                <select id="album-edit-visibility">
+                  <option value="private">私人</option>
+                  <option value="unlisted">不列出，持連結可看</option>
+                  <option value="public">公開</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" type="button" data-drive-action="save-album-detail">儲存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+      <div class="drive-card-heading">
+        <div>
+          <div class="mini-title">相簿預覽</div>
+          <div class="drive-card-sub">預設開啟第一本相簿，圖片直接顯示預覽圖。</div>
+        </div>
+        <div class="field compact-field">
+          <label>預覽圖大小</label>
+          <select id="album-thumb-size">
+            <option value="small">小</option>
+            <option value="medium" selected>中</option>
+            <option value="large">大</option>
+          </select>
+        </div>
+      </div>
+      <div class="drive-dashboard-grid" id="album-gallery-list" style="margin-top:1rem;"></div>
+      <details class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card" style="display:none;margin-top:1rem;">
+        <summary>
+          <span>
+            <span class="drive-card-title" id="album-viewer-title">相簿</span>
+            <span class="drive-card-sub" id="album-viewer-meta"></span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
+            <button class="btn" type="button" data-drive-action="close-album-viewer">關閉</button>
+          </div>
+          <div id="album-viewer-files" class="drive-gallery-grid"></div>
+        </div>
+      </details>
+      <div id="album-gallery-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-games">
+    <div class="admin-tools game-zone">
+      <div class="drive-card-heading">
+        <div>
+          <div class="mini-title">遊戲區</div>
+          <div class="drive-card-sub">目前開放西洋棋；邀請其他玩家對戰，或先與電腦練習。週排行榜只計入玩家對戰。</div>
+        </div>
+        <button class="btn" id="game-refresh-btn" type="button">刷新</button>
+      </div>
+      <div class="game-layout">
+        <section class="game-panel">
+          <div class="drive-card-title">遊戲大廳</div>
+          <div id="game-catalog-list" class="game-catalog-list"></div>
+          <div class="settings-option-grid game-action-grid">
+            <div class="field">
+              <label>邀請玩家</label>
+              <select id="game-invite-user"><option value="">載入玩家中...</option></select>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="game-invite-btn" type="button">送出邀請</button>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn" id="game-practice-btn" type="button">和電腦練習</button>
+            </div>
+          </div>
+          <div class="drive-card-sub">對戰邀請</div>
+          <div id="game-invite-list" class="drive-file-list compact-list"></div>
+          <div class="drive-card-sub">我的棋局</div>
+          <div id="game-match-list" class="drive-file-list compact-list"></div>
+        </section>
+        <section class="game-board-panel">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title" id="game-current-title">尚未選擇棋局</div>
+              <div class="drive-card-sub" id="game-current-status">選擇棋局後即可走棋</div>
+            </div>
+            <button class="btn btn-danger" id="game-resign-btn" type="button" style="display:none;">認輸</button>
+          </div>
+          <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
+          <div id="game-move-history" class="game-move-history"></div>
+        </section>
+        <section class="game-panel">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">週排行榜</div>
+              <div class="drive-card-sub">週末前三名發放 300 / 200 / 100 積分</div>
+            </div>
+            <button class="btn" id="game-award-btn" type="button" style="display:none;">發放週獎勵</button>
+          </div>
+          <div id="game-leaderboard-list" class="drive-file-list compact-list"></div>
+        </section>
+      </div>
+      <div id="game-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-comfyui">
+    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+      <div class="mini-title">AI 產圖</div>
+      <div class="comfyui-layout">
+        <div class="drive-card comfyui-panel">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">ComfyUI</div>
+              <div class="drive-card-sub" id="comfyui-status">尚未連線</div>
+            </div>
+            <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
+          </div>
+          <div class="field">
+            <label>模型</label>
+            <select id="comfyui-model-select">
+              <option value="">讀取模型中...</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>提示詞</label>
+            <textarea id="comfyui-prompt" rows="5" maxlength="3000" placeholder="描述你要產生的圖片"></textarea>
+          </div>
+          <div class="field">
+            <label>負面提示詞</label>
+            <textarea id="comfyui-negative-prompt" rows="3" maxlength="3000" placeholder="不希望出現的內容"></textarea>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field"><label>寬度</label><input type="number" id="comfyui-width" min="64" max="2048" step="8" value="512" /></div>
+            <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="512" /></div>
+            <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
+            <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
+            <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在安全中心調整" /></div>
+            <div class="field"><label>Seed（空白=隨機）</label><input type="number" id="comfyui-seed" min="0" placeholder="random" /></div>
+            <div class="field"><label>Sampler</label><select id="comfyui-sampler"><option value="euler">euler</option></select></div>
+            <div class="field"><label>Scheduler</label><select id="comfyui-scheduler"><option value="normal">normal</option></select></div>
+            <div class="field"><label>儲存到資料夾</label><input type="text" id="comfyui-save-path" placeholder="/ComfyUI/圖片.png" /></div>
+            <div class="field"><label>加入相簿</label><select id="comfyui-album-select"><option value="">不加入相簿</option></select></div>
+          </div>
+          <div class="comfyui-share-panel">
+            <div class="field"><label>分享標題</label><input type="text" id="comfyui-share-title" maxlength="120" placeholder="ComfyUI 產圖分享" /></div>
+            <div class="field"><label>心得留言</label><textarea id="comfyui-share-note" rows="3" maxlength="900" placeholder="這次想分享的心得、用途或調參想法"></textarea></div>
+          </div>
+          <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
+            <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
+            <button class="btn btn-danger" id="comfyui-interrupt-btn" type="button" disabled>中斷產圖</button>
+            <button class="btn" id="comfyui-save-btn" type="button" disabled>存到雲端硬碟</button>
+            <button class="btn" id="comfyui-share-btn" type="button" disabled>分享到 ComfyUI 專區</button>
+            <button class="btn" id="comfyui-discard-btn" type="button" disabled>丟棄預覽</button>
+          </div>
+          <div id="comfyui-msg" class="msg"></div>
+        </div>
+        <div class="drive-card comfyui-preview-card">
+          <div class="drive-card-title">產圖結果</div>
+          <div id="comfyui-preview" class="comfyui-preview">
+            <div class="drive-empty">尚未產生圖片</div>
+          </div>
+          <div id="comfyui-progress-panel" class="comfyui-progress-panel" style="display:none;">
+            <div class="comfyui-progress-head">
+              <span id="comfyui-progress-label">準備中</span>
+              <span id="comfyui-progress-percent">0%</span>
+            </div>
+            <div class="comfyui-progress-track">
+              <div id="comfyui-progress-bar" class="comfyui-progress-bar"></div>
+            </div>
+            <div id="comfyui-progress-detail" class="drive-card-sub">等待 ComfyUI 回應</div>
+          </div>
+          <div id="comfyui-result-meta" class="drive-card-sub"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="module-section" id="module-economy">
+      <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
+        <div class="mini-title" id="economy-page-title">PointsChain 積分錢包</div>
+      <div class="drive-dashboard-grid" id="economy-user-summary-grid">
+        <div class="drive-card">
+          <div class="drive-card-title">我的餘額</div>
+          <div class="settings-option-grid economy-wallet-grid">
+            <div><span class="drive-card-sub">全站積分</span><strong id="economy-points-balance">0</strong><small id="economy-points-frozen">凍結 0</small></div>
+            <div><span class="drive-card-sub">累計收支</span><strong id="economy-points-earned">收入 0</strong><small id="economy-points-spent">支出 0</small></div>
+            <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-wallet-status">-</strong><small id="economy-public-account">-</small></div>
+          </div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">服務價格</div>
+              <div class="drive-card-sub">所有價格由後端 catalog 決定</div>
+            </div>
+            <button class="btn" id="economy-refresh-btn" type="button">重新整理</button>
+          </div>
+          <div id="economy-catalog-list" class="drive-file-list"></div>
+        </div>
+      </div>
+      <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">我的帳本</div>
+            <div class="drive-card-sub">append-only ledger；封塊後可產生 Merkle proof</div>
+          </div>
+        </div>
+        <div id="economy-ledger-list" class="drive-file-list"></div>
+      </div>
+      <div class="drive-card" id="economy-admin-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title" id="economy-admin-card-title">手動加減分與待審核</div>
+            <div class="drive-card-sub" id="economy-admin-card-sub">這裡只負責送出補償、扣回與審核；root 的加減分歷史統一在下方明細查看</div>
+          </div>
+          <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
+        </div>
+        <div class="settings-option-grid">
+          <div class="field"><label>調整對象</label><select id="economy-adjust-user-id"><option value="">讀取會員中...</option></select></div>
+          <div class="field"><label>方向</label><select id="economy-adjust-direction"><option value="credit">加點</option><option value="debit">扣點</option></select></div>
+          <div class="field"><label>數量</label><input type="number" id="economy-adjust-amount" min="1" value="1" /></div>
+          <div class="field"><label>原因</label><input type="text" id="economy-adjust-reason" maxlength="160" placeholder="必填，會進入 audit log" /></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="economy-adjust-btn" type="button">送出調整</button></div>
+        </div>
+        <div id="economy-admin-ledger-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        <div id="economy-pending-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+      </div>
+      <div class="drive-card" id="economy-root-card" style="display:none;margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">root 私有鏈運維</div>
+            <div class="drive-card-sub">root 不受個人積分限制；此頁顯示 PointsChain 狀態、審計與緊急處置</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn" id="economy-root-report-btn" type="button">更新報告</button>
+            <button class="btn" id="economy-backup-btn" type="button">建立帳本備份</button>
+            <button class="btn" id="economy-seal-btn" type="button">封存未封帳本</button>
+            <button class="btn" id="economy-verify-btn" type="button">驗證全鏈</button>
+          </div>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid">
+          <div><span class="drive-card-sub">鏈狀態</span><strong id="economy-chain-ok">-</strong><small id="economy-chain-counts">-</small></div>
+          <div><span class="drive-card-sub">封塊</span><strong id="economy-chain-blocks">0</strong><small id="economy-chain-unsealed">未封 0</small></div>
+          <div><span class="drive-card-sub">審計事件</span><strong id="economy-chain-audit-count">0</strong><small>PointsChain audit</small></div>
+        </div>
+        <div class="drive-card-sub" id="economy-chain-countdown" style="margin-top:.6rem;">封塊倒數：-</div>
+        <div class="drive-card-sub" id="economy-chain-loaded-at" style="margin-top:.25rem;">最後更新 -</div>
+        <div class="drive-card" id="economy-recovery-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">帳本備份與半自動恢復</div>
+              <div class="drive-card-sub">異常時會進入 safe mode，只產生 forensic bundle 與恢復方案；root 確認後才會套用備份並由 ledger 重建 wallet。</div>
+            </div>
+            <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+          </div>
+          <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
+          <div class="settings-option-grid" style="margin-top:.65rem;">
+            <div class="field"><label>恢復備份</label><select id="economy-recovery-backup-id"><option value="">尚無可用備份</option></select></div>
+            <div class="field"><label>確認字串</label><input type="text" id="economy-recovery-confirm" placeholder="RESTORE POINTSCHAIN" /></div>
+          </div>
+          <div id="economy-restore-plan-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+          <div id="economy-backup-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
+        <div class="drive-card" id="economy-account-query-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">查詢帳戶積分</div>
+              <div class="drive-card-sub">root 可選擇指定帳戶，查看目前積分、凍結點數、錢包狀態與最近帳本</div>
+            </div>
+            <button class="btn" id="economy-account-query-btn" type="button">查詢</button>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field"><label>查詢帳戶</label><select id="economy-query-user-id"><option value="">讀取會員中...</option></select></div>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+            <div><span class="drive-card-sub">目前積分</span><strong id="economy-query-points-balance">-</strong><small id="economy-query-points-frozen">凍結 -</small></div>
+            <div><span class="drive-card-sub">累計收支</span><strong id="economy-query-points-earned">收入 -</strong><small id="economy-query-points-spent">支出 -</small></div>
+            <div><span class="drive-card-sub">錢包狀態</span><strong id="economy-query-wallet-status">-</strong><small id="economy-query-public-account">-</small></div>
+          </div>
+          <div class="drive-card" id="economy-wallet-sanction-card" style="margin-top:.75rem;">
+            <div class="drive-card-title">錢包處分</div>
+            <div class="drive-card-sub">root 可凍結、限制或禁用指定會員錢包；點數凍結/解凍會寫入 ledger。</div>
+            <div class="settings-option-grid" style="margin-top:.65rem;">
+              <div class="field">
+                <label>錢包狀態</label>
+                <select id="economy-wallet-sanction-status">
+                  <option value="active">正常</option>
+                  <option value="limited">限制</option>
+                  <option value="frozen">凍結</option>
+                  <option value="closed">禁用</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>風險等級</label>
+                <select id="economy-wallet-sanction-risk">
+                  <option value="normal">正常</option>
+                  <option value="watch">觀察</option>
+                  <option value="high">高風險</option>
+                  <option value="blocked">封鎖</option>
+                </select>
+              </div>
+              <div class="field"><label>同時凍結點數</label><input type="number" id="economy-wallet-freeze-amount" min="0" value="0" /></div>
+              <div class="field"><label>同時解凍點數</label><input type="number" id="economy-wallet-unfreeze-amount" min="0" value="0" /></div>
+              <div class="field"><label>處分原因</label><input type="text" id="economy-wallet-sanction-reason" maxlength="180" placeholder="必填，會寫入審計" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-wallet-sanction-btn" type="button">套用處分</button></div>
+            </div>
+          </div>
+          <div id="economy-query-ledger-list" class="drive-file-list" style="margin-top:.75rem;">
+            <div class="drive-empty">請先選擇帳戶並查詢</div>
+          </div>
+        </div>
+        <div class="settings-option-grid" style="margin-top:.75rem;">
+          <div class="field"><label>Rollback ledger UUID</label><input type="text" id="economy-rollback-ledger-uuid" placeholder="ledger_uuid" /></div>
+          <div class="field"><label>Rollback 原因</label><input type="text" id="economy-rollback-reason" maxlength="180" placeholder="必填，會寫入審計" /></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="economy-rollback-btn" type="button">Rollback 交易</button></div>
+        </div>
+        <div class="drive-dashboard-grid" style="margin-top:.75rem;">
+          <div class="drive-card">
+            <div class="drive-card-title">最近封塊</div>
+            <div id="economy-block-list" class="drive-file-list"></div>
+          </div>
+          <div class="drive-card">
+            <div class="drive-card-title">審計報告</div>
+            <div id="economy-audit-list" class="drive-file-list"></div>
+          </div>
+        </div>
+        <div class="drive-card" style="margin-top:.75rem;">
+          <div class="drive-card-title">異常 / 已 rollback 帳本</div>
+          <div id="economy-risk-ledger-list" class="drive-file-list"></div>
+        </div>
+        <div class="drive-card" style="margin-top:.75rem;">
+          <div class="drive-card-title">加減分明細</div>
+          <div class="drive-card-sub">包含執行者、目標帳戶、加減分、原因與 ledger UUID</div>
+          <div id="economy-adjustment-list" class="drive-file-list"></div>
+        </div>
+        <div id="economy-chain-status" class="drive-card-sub economy-chain-status" style="margin-top:.75rem;">全鏈狀態尚未讀取</div>
+      </div>
+      <div id="economy-msg" class="msg"></div>
     </div>
   </div>
 
@@ -527,7 +1188,7 @@
             <div class="drive-card-title">站內信附件</div>
             <div class="settings-option-grid">
               <div class="field"><label>上傳新附件</label><input type="file" id="dm-attachment-file" /></div>
-              <div class="field"><label>既有雲端 file_id</label><input type="text" id="dm-attachment-existing-file-id" placeholder="file_id" /></div>
+              <div class="field"><label>選擇雲端檔案</label><select id="dm-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="dm-attachment-upload-btn" type="button">上傳附件</button></div>
               <div class="field"><label>&nbsp;</label><button class="btn" id="dm-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
             </div>
@@ -543,7 +1204,6 @@
       <!-- Tabs -->
       <div class="tabs" style="margin-bottom:.6rem;">
         <button class="tab active" id="tab-users">帳號管理</button>
-        <button class="tab" id="tab-audit">審計日誌</button>
         <button class="tab" id="tab-violations">違規計次</button>
         <button class="tab" id="tab-governance">會員治理</button>
         <button class="tab" id="tab-appeals">申覆審核</button>
@@ -582,18 +1242,6 @@
         </div>
       </div>
 
-      <!-- ── 審計日誌 ── -->
-      <div class="form-section" id="sec-audit">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
-          <button class="btn btn-primary" id="audit-refresh">🔄 重新整理</button>
-          <span style="font-size:.75rem;color:var(--muted);">共 <span id="audit-total">0</span> 筆</span>
-          <span id="audit-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
-          <button class="btn" id="audit-prev" style="margin-left:auto;">← 上一頁</button>
-          <button class="btn" id="audit-next">下一頁 →</button>
-        </div>
-        <div id="audit-entries" style="max-height:420px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
-      </div>
-
       <!-- ── 違規計次 ── -->
       <div class="form-section" id="sec-violations">
         <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
@@ -622,23 +1270,52 @@
         </div>
         <div class="admin-tools" style="margin-bottom:.8rem;">
           <div class="mini-title">建立治理提案</div>
-          <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;">
-            <input type="number" id="governance-target-user-id" min="1" placeholder="目標 user id" />
-            <select id="governance-action-type">
-              <option value="warn">warn</option>
-              <option value="mute">mute</option>
-              <option value="restrict">restrict</option>
-              <option value="suspend">suspend</option>
-              <option value="downgrade_level">downgrade_level</option>
-              <option value="force_password_reset">force_password_reset</option>
-              <option value="delete">delete</option>
-            </select>
-            <input type="text" id="governance-action-value" placeholder="動作值，例如 normal 或到期時間" />
-            <input type="number" id="governance-required-votes" min="1" max="10" value="2" />
-            <input type="number" id="governance-ttl-hours" min="1" max="720" value="72" />
-            <button class="btn btn-primary" id="governance-create-proposal" type="button">送出提案</button>
+          <div class="settings-option-grid governance-form-grid">
+            <div class="field">
+              <label>處理對象</label>
+              <select id="governance-target-user-id">
+                <option value="">讀取會員中...</option>
+              </select>
+              <div class="field-hint">選擇要被治理提案影響的會員；root 不能作為目標。</div>
+            </div>
+            <div class="field">
+              <label>處理方式</label>
+              <select id="governance-action-type">
+                <option value="warn">記違規警告</option>
+                <option value="mute">禁言</option>
+                <option value="restrict">限制功能</option>
+                <option value="suspend">暫停帳號</option>
+                <option value="downgrade_level">調整會員等級</option>
+                <option value="force_password_reset">要求重設密碼</option>
+                <option value="delete">標記刪除帳號</option>
+              </select>
+              <div class="field-hint">這是提案通過後要執行的治理動作。</div>
+            </div>
+            <div class="field">
+              <label>動作值</label>
+              <input type="text" id="governance-action-value" placeholder="依處理方式填寫，可留空" />
+              <div class="field-hint" id="governance-action-value-help">警告、禁言、要求重設密碼、刪除帳號通常可留空。</div>
+            </div>
+            <div class="field">
+              <label>投票規則</label>
+              <div id="governance-vote-policy" class="field-hint" style="padding:.55rem;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(0,0,0,.22);">一般：需要 1 位 admin/manager 或 root 同意。</div>
+              <div class="field-hint">票數由系統依處理方式與目標身分自動判定，不可手動降低。</div>
+            </div>
+            <div class="field">
+              <label>投票期限（小時）</label>
+              <input type="number" id="governance-ttl-hours" min="1" max="720" value="72" />
+              <div class="field-hint">超過期限仍未通過或否決，提案會失效。72 代表三天。</div>
+            </div>
+            <div class="field governance-submit-field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="governance-create-proposal" type="button">送出提案</button>
+            </div>
           </div>
-          <textarea id="governance-reason" rows="3" maxlength="1000" placeholder="提案原因，必填" style="margin-top:.55rem;"></textarea>
+          <div class="field" style="margin-top:.55rem;">
+            <label>提案原因</label>
+            <textarea id="governance-reason" rows="3" maxlength="1000" placeholder="請寫清楚原因、證據或相關紀錄。例：在 ComfyUI 區連續洗版三次，已由版主提醒仍未改善。"></textarea>
+            <div class="field-hint">必填，會留在治理紀錄中，其他管理者會依此投票。</div>
+          </div>
         </div>
         <div class="admin-tools" style="margin-bottom:.8rem;">
           <div class="mini-title">會員等級規則摘要</div>
@@ -702,21 +1379,210 @@
 
   <div class="module-section" id="module-server">
     <div class="admin-tools">
-      <div class="mini-title">⚙️ 伺服器管理</div>
+      <div class="mini-title">安全中心</div>
       <div class="tabs" style="margin-top:.65rem;margin-bottom:.7rem;">
-        <button class="tab active" id="tab-server-health">健康度</button>
+        <button class="tab active" id="tab-server-security">總覽</button>
+        <button class="tab" id="tab-server-audit">審計日誌</button>
+        <button class="tab" id="tab-server-health">健康度</button>
         <button class="tab" id="tab-server-integrity">Integrity Guard</button>
         <button class="tab" id="tab-server-settings">伺服器設定</button>
         <button class="tab" id="tab-server-env">系統環境</button>
       </div>
 
-      <div class="form-section active" id="sec-server-health">
+      <div class="form-section" id="sec-server-audit">
+        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+          <button class="btn btn-primary" id="audit-refresh">🔄 重新整理</button>
+          <span style="font-size:.75rem;color:var(--muted);">共 <span id="audit-total">0</span> 筆</span>
+          <span id="audit-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
+          <button class="btn" id="audit-prev" style="margin-left:auto;">← 上一頁</button>
+          <button class="btn" id="audit-next">下一頁 →</button>
+        </div>
+        <div id="audit-entries" style="max-height:420px;overflow-y:auto;font-size:.72rem;font-family:monospace;"></div>
+      </div>
+
+      <div class="form-section active" id="sec-server-security">
+        <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.65rem;">
+          <button class="btn btn-primary" type="button" id="security-center-refresh-btn">重新整理安全中心</button>
+          <button class="btn" type="button" id="security-controls-save-btn">儲存安全開關</button>
+          <button class="btn" type="button" id="security-thresholds-save-btn">儲存閾值</button>
+        </div>
+        <div id="security-center-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">上線前測試</div>
+              <div class="drive-card-sub">root 可啟動滲透測試與全功能測試；報告會寫入 security/reports/root-triggered。</div>
+            </div>
+            <button class="btn" type="button" id="security-test-refresh-btn">刷新任務</button>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>滲透測試 Target URL</label>
+              <input type="text" id="security-pentest-target" placeholder="https://127.0.0.1:5000" />
+            </div>
+            <div class="field">
+              <label>指定項目（空白=全部）</label>
+              <input type="text" id="security-pentest-only" placeholder="nmap,nuclei,sqlmap" />
+            </div>
+            <div class="field">
+              <label>跳過項目</label>
+              <input type="text" id="security-pentest-skip" placeholder="testssl,sslscan" />
+            </div>
+            <div class="field">
+              <label>單工具逾時秒數</label>
+              <input type="number" id="security-pentest-timeout" min="1" max="3600" value="180" />
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="security-pentest-own-target" /> 確認這是本專案授權目標</label>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" type="button" id="security-pentest-start-btn">開始滲透測試</button>
+            </div>
+          </div>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div class="field">
+              <label>全功能測試 Port</label>
+              <input type="number" id="security-functional-port" min="1" max="65535" value="50741" />
+            </div>
+            <div class="field">
+              <label><input type="checkbox" id="security-functional-keep-runtime" /> 保留測試 runtime</label>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" type="button" id="security-functional-start-btn">開始全功能測試</button>
+            </div>
+          </div>
+          <div id="security-test-msg" class="msg"></div>
+          <div id="security-test-jobs" class="drive-file-list" style="margin-top:.75rem;"></div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">安全機制開關</div>
+          <div class="settings-option-grid">
+            <div class="field"><label><input type="checkbox" id="sc-maintenance-mode" /> 維護模式</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-audit-chain-enabled" /> 審計 hash chain</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-ip-blocking-enabled" /> 錯誤登入鎖 IP</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-login-violation-enabled" /> 登入失敗寫入違規</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-rate-limit-violation-enabled" /> 速率限制寫入違規</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-root-ip-whitelist-enabled" /> root IP 白名單</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-browser-only-mode-enabled" /> Browser-only 模式</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-integrity-guard-enabled" /> Integrity Guard</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
+            <div class="field">
+              <label>root IP 白名單</label>
+              <textarea id="sc-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
+            </div>
+          </div>
+          <div id="security-controls-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">伺服器模式與安全設定檔</div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>目標模式 / 設定檔</label>
+              <select id="security-mode-select"></select>
+            </div>
+            <div class="field">
+              <label>確認字串（production 需 GO_LIVE；superweak 需 ENABLE_SUPERWEAK）</label>
+              <input type="text" id="security-mode-confirm" placeholder="需要時輸入確認字串" />
+            </div>
+            <div class="field">
+              <label>備註</label>
+              <input type="text" id="security-mode-notes" placeholder="切換原因" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" type="button" id="security-mode-apply-btn">套用設定檔</button>
+            </div>
+          </div>
+          <div id="security-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+          <div id="security-mode-profile-preview" class="security-profile-preview"></div>
+          <div class="mini-title" style="margin:.9rem 0 .55rem;">新增自定義設定檔</div>
+          <div class="settings-option-grid">
+            <div class="field"><label>名稱</label><input type="text" id="security-profile-name" placeholder="staging_lockdown" /></div>
+            <div class="field"><label>顯示名稱</label><input type="text" id="security-profile-label" placeholder="Staging Lockdown" /></div>
+            <div class="field"><label>描述</label><input type="text" id="security-profile-description" placeholder="用途與風險說明" /></div>
+            <div class="field"><label>&nbsp;</label><button class="btn" type="button" id="security-profile-load-current-btn">帶入目前設定</button></div>
+          </div>
+          <div class="settings-option-grid">
+            <div class="field"><label>settings JSON</label><textarea id="security-profile-settings-json" rows="5" placeholder='{"ip_blocking_enabled":true}'></textarea></div>
+            <div class="field"><label>thresholds JSON</label><textarea id="security-profile-thresholds-json" rows="5" placeholder='{"security_pending_chat_reports_threshold":10}'></textarea></div>
+          </div>
+          <button class="btn" type="button" id="security-profile-save-btn" style="margin-top:.5rem;">儲存自定義設定檔</button>
+          <div id="security-profile-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">閾值管理</div>
+          <div class="settings-option-grid">
+            <div class="field"><label>登入失敗鎖定次數</label><input type="number" id="sc-max-login-failures" min="1" max="100000" /></div>
+            <div class="field"><label>封鎖時長（分鐘）</label><input type="number" id="sc-block-duration-minutes" min="1" max="100000" /></div>
+            <div class="field"><label>待審聊天室檢舉警戒</label><input type="number" id="sc-security-pending-chat-reports-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>待審申覆警戒</label><input type="number" id="sc-security-pending-appeals-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>待審治理提案警戒</label><input type="number" id="sc-security-pending-moderation-proposals-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>隔離檔案警戒</label><input type="number" id="sc-security-quarantined-files-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>未知加密檔案警戒</label><input type="number" id="sc-security-unknown-encrypted-files-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>Server log 顯示行數</label><input type="number" id="sc-security-log-tail-lines" min="1" max="1000" /></div>
+          </div>
+          <div id="security-thresholds-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
+        </div>
+        <div class="security-log-grid">
+          <div class="security-log-card">
+            <div class="mini-title">近期審計資料</div>
+            <div id="security-audit-entries" class="security-log-box"></div>
+          </div>
+          <div class="security-log-card">
+            <div class="mini-title">Server log</div>
+            <pre id="security-server-log" class="security-log-box security-log-pre"></pre>
+          </div>
+          <div class="security-log-card">
+            <div class="mini-title">伺服器即時輸出</div>
+            <pre id="security-server-output" class="security-log-box security-log-pre"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section" id="sec-server-health">
         <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
           <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
           <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
         </div>
-        <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
-        <div id="server-health-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;margin-bottom:.9rem;"></div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">服務狀態</div>
+              <div class="drive-card-sub" id="server-health-details">讀取健康度中...</div>
+            </div>
+          </div>
+          <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.8rem;margin-bottom:.8rem;">
+          <div class="drive-card">
+            <div class="drive-card-title">待處理事項</div>
+            <div id="server-health-workqueue" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </div>
+          <div class="drive-card">
+            <div class="drive-card-title">資料量</div>
+            <div id="server-health-counts" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </div>
+          <div class="drive-card">
+            <div class="drive-card-title">儲存空間</div>
+            <div id="server-health-storage" class="drive-file-list" style="margin-top:.55rem;"></div>
+          </div>
+        </div>
+        <div class="drive-card" style="margin-bottom:.8rem;">
+          <div class="drive-card-title">審計與檢查</div>
+          <div id="server-health-audit" class="drive-file-list" style="margin-top:.55rem;"></div>
+        </div>
+        <div class="drive-card">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">平台流量與積分統計</div>
+              <div class="drive-card-sub">root / super_admin 可查看。</div>
+            </div>
+            <button class="btn btn-primary" type="button" id="platform-stats-refresh-btn">重新整理</button>
+          </div>
+          <div id="platform-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-top:.65rem;"></div>
+        </div>
       </div>
 
       <div class="form-section" id="sec-server-integrity">
@@ -724,8 +1590,18 @@
           <button class="btn btn-primary" type="button" id="integrity-refresh-btn">重新整理</button>
           <button class="btn" type="button" id="integrity-rescan-btn">重新掃描</button>
           <button class="btn" type="button" id="integrity-export-btn">匯出報告</button>
+          <button class="btn btn-primary" type="button" id="integrity-bulk-approve-btn">核准選取</button>
+          <button class="btn" type="button" id="integrity-bulk-reject-btn">拒絕選取</button>
+          <button class="btn" type="button" id="integrity-bulk-ignore-btn">忽略選取</button>
         </div>
         <div id="integrity-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
+        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem;">
+          <label style="display:inline-flex;align-items:center;gap:.25rem;cursor:pointer;font-size:.8rem;color:var(--text);">
+            <input type="checkbox" id="integrity-select-all" style="width:1em;height:1em;" />
+            <strong>全選</strong>
+          </label>
+          <span id="integrity-selected-count" style="font-size:.75rem;color:var(--muted);"></span>
+        </div>
         <div id="integrity-warning" style="font-size:.8rem;margin-bottom:.65rem;"></div>
         <div id="integrity-findings" style="max-height:420px;overflow:auto;font-size:.72rem;"></div>
       </div>
@@ -737,13 +1613,15 @@
             <div class="field">
               <label>目前 / 目標模式</label>
               <select id="server-mode-select">
+                <option value="production">production（上線）</option>
                 <option value="preprod">preprod（準上線）</option>
+                <option value="internal_test">internal test（內測）</option>
                 <option value="test">test（測試）</option>
                 <option value="superweak">superweak（弱化測試）</option>
               </select>
             </div>
             <div class="field">
-              <label>確認字串（進入 superweak 需 ENABLE_SUPERWEAK）</label>
+              <label>確認字串（production 需 GO_LIVE；superweak 需 ENABLE_SUPERWEAK）</label>
               <input type="text" id="server-mode-confirm" placeholder="需要時輸入確認字串" />
             </div>
             <div class="field">
@@ -756,6 +1634,35 @@
             </div>
           </div>
           <div id="server-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+          <div id="server-mode-profile-preview" class="security-profile-preview"></div>
+          <div class="drive-card" style="margin-top:.8rem;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">內測登入 token</div>
+                <div class="drive-card-sub" id="internal-test-token-status">尚未讀取</div>
+              </div>
+              <button class="btn" type="button" id="internal-test-token-refresh-btn">更新狀態</button>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>有效分鐘數</label>
+                <input type="number" id="internal-test-token-ttl" min="5" max="43200" value="1440" />
+              </div>
+              <div class="field">
+                <label>確認字串</label>
+                <input type="text" id="internal-test-token-confirm" placeholder="ROTATE_INTERNAL_TEST_TOKEN" />
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" type="button" id="internal-test-token-rotate-btn">產生 token</button>
+              </div>
+            </div>
+            <div class="field" id="internal-test-token-output-wrap" style="display:none;">
+              <label>新 token（只顯示這一次）</label>
+              <input type="text" id="internal-test-token-output" readonly />
+            </div>
+            <div id="internal-test-token-msg" class="msg"></div>
+          </div>
         </div>
         <form id="settings-form" style="margin-top:.6rem;">
           <div class="tabs" style="margin-bottom:.85rem;">
@@ -854,6 +1761,9 @@
             <div class="field"><label><input type="checkbox" id="s-feature-dm-enabled" /> 站內信</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-attachments-enabled" /> 附件 / 頭像 / CAPTCHA</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-storage-albums-enabled" /> Storage / 相簿</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-personalization-enabled" /> 個人化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
@@ -912,7 +1822,14 @@
               <label>Session 有效期（小時）</label>
               <input type="number" id="s-session-ttl" min="1" max="72" />
             </div>
+            <div class="field">
+              <label>閒置登出時間（分鐘，0 或空白=停用）</label>
+              <input type="number" id="s-session-idle-timeout" min="0" max="1440" placeholder="10" />
+            </div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">伺服器 Listen 設定（需重啟生效）</div>
+            <div class="field">
+              <label><input type="checkbox" id="s-server-ssl-enabled" /> 啟用 SSL / HTTPS（需 cert.pem 與 key.pem，重啟生效）</label>
+            </div>
             <div class="field">
               <label>Listen IP / Host（空白代表沿用環境變數）</label>
               <input type="text" id="s-server-listen-host" placeholder="0.0.0.0 / 127.0.0.1 / localhost / ::" />
@@ -922,6 +1839,21 @@
               <input type="number" id="s-server-listen-port" min="0" max="65535" />
             </div>
             <div id="server-bind-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
+            <div id="server-ssl-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;"></div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">ComfyUI API</div>
+            <div class="field">
+              <label>ComfyUI API Host / IP</label>
+              <input type="text" id="s-comfyui-api-host" placeholder="localhost / 192.168.1.20" />
+            </div>
+            <div class="field">
+              <label>ComfyUI API Port</label>
+              <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8192" />
+            </div>
+            <div class="field">
+              <label>單次產圖張數上限</label>
+              <input type="number" id="s-comfyui-max-batch-size" min="1" max="8" value="1" />
+            </div>
+            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">ComfyUI 會連線到 <code>http://&lt;host&gt;:&lt;port&gt;</code>。Host 僅填主機名稱或 IP，不要包含 <code>http://</code> 或路徑；儲存後立即生效，不需重啟。</div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">自動 Snapshot</div>
             <div class="field">
               <label><input type="checkbox" id="s-snapshot-daily-auto-enabled" /> 每日自動建立 snapshot</label>
@@ -930,6 +1862,29 @@
               <label>每日 snapshot 時間（HH:MM）</label>
               <input type="time" id="s-snapshot-daily-time" />
             </div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Snapshot / Restore / Reset（需 root）</div>
+            <div class="admin-toolbar">
+              <button type="button" id="btn-load-snapshots" class="btn btn-sm">載入 Snapshot 列表</button>
+              <button type="button" id="btn-create-snapshot" class="btn btn-primary btn-sm">手動建立 Snapshot</button>
+            </div>
+            <div id="snapshot-list" style="font-size:.78rem;color:var(--muted);margin-bottom:.75rem;">點擊「載入 Snapshot 列表」查看現有快照</div>
+            <div id="snapshot-actions" style="margin-bottom:.75rem;"></div>
+            <div class="field" style="margin-bottom:.5rem;">
+              <label>上傳 Snapshot 封包 Restore</label>
+              <input type="file" id="snapshot-upload-file" accept=".gz,.tgz,.tar.gz,application/gzip" />
+            </div>
+            <button type="button" id="btn-upload-snapshot-restore" class="btn btn-sm">上傳並 Restore</button>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Reset 伺服器（需 root）</div>
+            <div class="field" style="margin-bottom:.4rem;">
+              <label>Reset 原因（選填）</label>
+              <input type="text" id="s-reset-reason" placeholder="描述進行 reset 的原因…" />
+            </div>
+            <div class="danger-note">Reset 會清除所有 Runtime 狀態並重啟，確認請輸入 <code>RESET_RUNTIME_STATE</code></div>
+            <div class="field" style="margin-bottom:.6rem;">
+              <input type="text" id="s-reset-confirm" placeholder="輸入 RESET_RUNTIME_STATE 確認" />
+            </div>
+            <button type="button" id="btn-reset-server" class="btn btn-danger btn-sm">Reset 伺服器</button>
+            <div id="reset-status" style="font-size:.78rem;margin-top:.5rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">模組開放層級</div>
             <div class="field">
               <label>聊天頁最低可用角色</label>
@@ -962,6 +1917,22 @@
                 <option value="super_admin">最高管理者</option>
               </select>
             </div>
+            <div class="field">
+              <label>AI 產圖最低可用角色</label>
+              <select id="s-module-comfyui-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>遊戲區最低可用角色</label>
+              <select id="s-module-games-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
           </div>
           <div class="form-section" id="sec-settings-drive">
             <div class="mini-title" style="margin-bottom:.8rem;">雲端硬碟儲存位置（需重啟生效）</div>
@@ -982,6 +1953,44 @@
                 <input type="number" id="s-storage-trash-retention-days" min="0" max="3650" />
               </div>
             </div>
+            <div class="mini-title" style="margin:.9rem 0 .55rem;">Root 帳號雲端硬碟管理</div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>管理帳號</label>
+                <select id="root-storage-user-select"><option value="">讀取帳號中...</option></select>
+              </div>
+              <div class="field">
+                <label>直接容量上限 MB（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-quota-mb" min="0" placeholder="例如 1024" />
+              </div>
+              <div class="field">
+                <label>直接單檔上限 MB（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-max-file-mb" min="0" placeholder="例如 100" />
+              </div>
+              <div class="field">
+                <label>每日上傳次數（空白沿用角色/等級）</label>
+                <input type="number" id="root-storage-daily-limit" min="0" placeholder="例如 20" />
+              </div>
+              <div class="field">
+                <label>上傳權限</label>
+                <select id="root-storage-can-upload">
+                  <option value="inherit">沿用角色/等級</option>
+                  <option value="true">允許上傳</option>
+                  <option value="false">禁止上傳</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>覆寫原因</label>
+                <input type="text" id="root-storage-override-reason" placeholder="例如：臨時專案容量、違規處分、人工例外" />
+              </div>
+            </div>
+            <div class="admin-toolbar" style="margin-top:.55rem;">
+              <button class="btn" type="button" id="root-storage-refresh-btn">重新整理用量</button>
+              <button class="btn btn-primary" type="button" id="root-storage-save-btn">套用 root 直接設定</button>
+              <button class="btn btn-danger" type="button" id="root-storage-clear-btn">清除直接設定</button>
+            </div>
+            <div id="root-storage-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+            <div id="root-storage-users" class="drive-file-list" style="margin-top:.75rem;"></div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">安全政策</div>
             <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-cd-require-scan-before-download" /> 下載前要求掃描</label></div>
@@ -1064,10 +2073,11 @@
         </form>
         <div class="mini-title" style="margin-top:1.2rem;color:#ff4f6d;">危險區</div>
         <div class="admin-toolbar" style="margin-top:.5rem;">
-          <button class="btn" id="restart-server-btn" style="background:#ff4f6d;color:#fff;border-color:#ff4f6d;">
+          <button class="btn btn-danger" type="button" id="restart-server-btn">
             重啟服務器
           </button>
         </div>
+        <div id="restart-server-status" class="msg" style="margin-top:.5rem;"></div>
       </div>
 
       <div class="form-section" id="sec-server-env">
@@ -1078,6 +2088,9 @@
         <div id="server-env-details" style="font-size:.74rem;color:var(--muted);word-break:break-all;"></div>
       </div>
     </div>
+  </div>
+
+    </main>
   </div>
 
   <div id="user-edit-overlay" class="user-edit-overlay">
@@ -1169,18 +2182,18 @@
         <input type="text" id="edit-user-level-reason" placeholder="root 手動調整" />
       </div>
     </div>
-    <div class="field">
-      <label>修改密碼（留空不改）</label>
-      <div class="pw-wrap">
-        <input type="password" id="edit-user-pw" placeholder="新密碼" />
-        <button class="pw-toggle" id="edit-user-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
-      </div>
-    </div>
     <div class="field" id="edit-user-current-pw-field" style="display:none;">
       <label>目前密碼</label>
       <div class="pw-wrap">
         <input type="password" id="edit-user-current-pw" placeholder="請先輸入目前密碼" />
         <button class="pw-toggle" id="edit-user-current-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>修改密碼（留空不改）</label>
+      <div class="pw-wrap">
+        <input type="password" id="edit-user-pw" placeholder="新密碼" />
+        <button class="pw-toggle" id="edit-user-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
       </div>
     </div>
     <div class="field">
@@ -1196,6 +2209,40 @@
       <button type="button" id="user-edit-cancel" class="btn">取消</button>
     </div>
   </div>
+</div>
+
+<div id="album-picker-overlay" class="user-edit-overlay">
+  <div class="user-edit-modal">
+    <div class="mini-title">加入相簿</div>
+    <div class="field">
+      <label id="album-picker-file-label">檔案</label>
+      <select id="album-picker-select">
+        <option value="">選擇相簿</option>
+      </select>
+    </div>
+    <div id="album-picker-msg" class="msg"></div>
+    <div class="edit-user-actions">
+      <button type="button" id="album-picker-confirm" class="btn btn-primary">加入</button>
+      <button type="button" id="album-picker-cancel" class="btn">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="album-full-preview-overlay" class="album-full-preview-overlay" aria-hidden="true">
+  <div class="album-full-preview-topbar">
+    <div>
+      <strong id="album-full-preview-title">圖片預覽</strong>
+      <div id="album-full-preview-meta" class="drive-card-sub"></div>
+    </div>
+    <div class="album-full-preview-controls">
+      <button type="button" class="btn" data-drive-action="album-preview-prev" aria-label="上一張">上一張</button>
+      <button type="button" class="btn" data-drive-action="album-preview-next" aria-label="下一張">下一張</button>
+      <button type="button" class="btn" data-drive-action="close-album-full-preview">關閉</button>
+    </div>
+  </div>
+  <button type="button" class="album-preview-nav album-preview-nav-prev" data-drive-action="album-preview-prev" aria-label="上一張">‹</button>
+  <button type="button" class="album-preview-nav album-preview-nav-next" data-drive-action="album-preview-next" aria-label="下一張">›</button>
+  <div id="album-full-preview-body" class="album-full-preview-body"></div>
 </div>
 
 <div id="admin-add-overlay" class="user-edit-overlay">
@@ -1294,18 +2341,21 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js" defer></script>
-<script src="/js/10-users.js" defer></script>
-<script src="/js/20-chat.js" defer></script>
-<script src="/js/25-community.js" defer></script>
-<script src="/js/30-appeals.js" defer></script>
-<script src="/js/32-notifications.js" defer></script>
-<script src="/js/33-dm.js" defer></script>
-<script src="/js/34-markdown-editor.js" defer></script>
-<script src="/js/35-drive.js" defer></script>
-<script src="/js/37-bug-report.js" defer></script>
-<script src="/js/40-auth-users.js" defer></script>
-<script src="/js/50-admin.js" defer></script>
-<script src="/js/90-bootstrap.js" defer></script>
+<script src="/js/00-core.js?v=20260429-chat-attachment-delete" defer></script>
+<script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
+<script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
+<script src="/js/25-community.js?v=20260429-moderator-user-select" defer></script>
+<script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
+<script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
+<script src="/js/33-dm.js?v=20260429-pm-image-preview" defer></script>
+<script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
+<script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
+<script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
+<script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
+<script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
+<script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
+<script src="/js/50-admin.js?v=20260429-storage-capacity-audit" defer></script>
+<script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
+<script src="/js/90-bootstrap.js?v=20260429-root-storage-override" defer></script>
 </body>
 </html>

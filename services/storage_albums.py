@@ -33,6 +33,21 @@ def ensure_storage_album_schema(conn):
             is_trashed INTEGER NOT NULL DEFAULT 0,
             trashed_at TEXT,
             restored_at TEXT,
+            trash_source TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT,
+            UNIQUE(owner_user_id, virtual_path)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS storage_folders (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            display_name TEXT NOT NULL,
+            virtual_path TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             deleted_at TEXT,
@@ -108,11 +123,15 @@ def ensure_storage_album_schema(conn):
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_user_id, virtual_path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_folders_owner_path ON storage_folders(owner_user_id, virtual_path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at)")
+    storage_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_files)").fetchall()}
+    if "trash_source" not in storage_file_cols:
+        conn.execute("ALTER TABLE storage_files ADD COLUMN trash_source TEXT")
 
 
 def normalize_virtual_path(path, display_name=None):
@@ -132,6 +151,58 @@ def normalize_virtual_path(path, display_name=None):
     if not parts:
         raise ValueError("invalid storage path")
     return "/" + "/".join(parts)
+
+
+def _display_name_from_path(path):
+    return str(path or "").rstrip("/").split("/")[-1] or "untitled"
+
+
+def _folder_prefix(path):
+    normalized = normalize_virtual_path(path, "folder")
+    return normalized.rstrip("/")
+
+
+def _is_path_inside(path, folder_path):
+    return path == folder_path or path.startswith(folder_path.rstrip("/") + "/")
+
+
+def _parent_folders_for_file(path):
+    parts = [part for part in str(path or "").split("/") if part]
+    folders = []
+    for idx in range(1, len(parts)):
+        folders.append("/" + "/".join(parts[:idx]))
+    return folders
+
+
+def _storage_path_exists(conn, owner_user_id, path):
+    if conn.execute(
+        "SELECT 1 FROM storage_files WHERE owner_user_id=? AND virtual_path=? LIMIT 1",
+        (int(owner_user_id), path),
+    ).fetchone():
+        return True
+    return bool(conn.execute(
+        "SELECT 1 FROM storage_folders WHERE owner_user_id=? AND virtual_path=? LIMIT 1",
+        (int(owner_user_id), path),
+    ).fetchone())
+
+
+def _unique_storage_path(conn, owner_user_id, desired_path, display_name):
+    base_path = normalize_virtual_path(desired_path, display_name)
+    if not _storage_path_exists(conn, owner_user_id, base_path):
+        return base_path
+    parent = "/" + "/".join(base_path.strip("/").split("/")[:-1])
+    if parent == "/":
+        parent = ""
+    name = _display_name_from_path(base_path)
+    stem, dot, ext = name.rpartition(".")
+    if not stem:
+        stem, dot, ext = name, "", ""
+    for index in range(2, 1000):
+        candidate_name = f"{stem} ({index}){dot}{ext}"
+        candidate = f"{parent}/{candidate_name}" if parent else f"/{candidate_name}"
+        if not _storage_path_exists(conn, owner_user_id, candidate):
+            return candidate
+    raise ValueError("storage path conflict")
 
 
 def get_user_storage_summary(conn, user_id):
@@ -311,6 +382,310 @@ def list_storage_files(conn, *, actor, include_trashed=False, limit=100, offset=
     return [dict(row) for row in rows]
 
 
+def list_storage_folders(conn, *, actor):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    folders = {}
+    explicit_rows = conn.execute(
+        """
+        SELECT * FROM storage_folders
+        WHERE owner_user_id=? AND deleted_at IS NULL
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id,),
+    ).fetchall()
+    for row in explicit_rows:
+        path = row["virtual_path"]
+        folders[path] = {
+            "id": row["id"],
+            "display_name": row["display_name"],
+            "virtual_path": path,
+            "is_explicit": True,
+            "file_count": 0,
+            "recursive_file_count": 0,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+    file_rows = conn.execute(
+        """
+        SELECT virtual_path
+        FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=0
+        """,
+        (owner_user_id,),
+    ).fetchall()
+    for row in file_rows:
+        file_path = row["virtual_path"]
+        parent_parts = _parent_folders_for_file(file_path)
+        direct_parent = parent_parts[-1] if parent_parts else ""
+        for folder_path in parent_parts:
+            folders.setdefault(folder_path, {
+                "id": None,
+                "display_name": _display_name_from_path(folder_path),
+                "virtual_path": folder_path,
+                "is_explicit": False,
+                "file_count": 0,
+                "recursive_file_count": 0,
+                "created_at": None,
+                "updated_at": None,
+            })
+            folders[folder_path]["recursive_file_count"] += 1
+        if direct_parent:
+            folders[direct_parent]["file_count"] += 1
+    return [folders[path] for path in sorted(folders)]
+
+
+def create_storage_folder(conn, *, actor, path):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    try:
+        folder_path = _folder_prefix(path)
+    except ValueError:
+        return None, "資料夾路徑不安全或格式錯誤"
+    if conn.execute(
+        "SELECT id FROM storage_files WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL",
+        (owner_user_id, folder_path),
+    ).fetchone():
+        return None, "同路徑已有檔案"
+    existing = conn.execute(
+        "SELECT * FROM storage_folders WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL",
+        (owner_user_id, folder_path),
+    ).fetchone()
+    if existing:
+        return dict(existing), None
+    now = _now()
+    folder_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO storage_folders (id, owner_user_id, display_name, virtual_path, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (folder_id, owner_user_id, _display_name_from_path(folder_path), folder_path, now, now),
+    )
+    return dict(conn.execute("SELECT * FROM storage_folders WHERE id=?", (folder_id,)).fetchone()), None
+
+
+def move_storage_file(conn, *, actor, storage_file_id, new_virtual_path):
+    ensure_storage_album_schema(conn)
+    row = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
+    if not row or row.get("deleted_at") or int(row.get("is_trashed") or 0):
+        return None, "找不到檔案或檔案已刪除"
+    try:
+        normalized_path = normalize_virtual_path(new_virtual_path, row.get("display_name"))
+    except ValueError:
+        return None, "storage path 不安全或格式錯誤"
+    owner_user_id = int(actor["id"])
+    conflict = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL AND id<>?
+        """,
+        (owner_user_id, normalized_path, storage_file_id),
+    ).fetchone()
+    if conflict:
+        return None, "目標路徑已有檔案"
+    now = _now()
+    conn.execute(
+        """
+        UPDATE storage_files
+        SET virtual_path=?, display_name=?, updated_at=?
+        WHERE id=? AND owner_user_id=?
+        """,
+        (normalized_path, _display_name_from_path(normalized_path), now, storage_file_id, owner_user_id),
+    )
+    return get_storage_file(conn, actor=actor, storage_file_id=storage_file_id), None
+
+
+def move_storage_folder(conn, *, actor, old_path, new_path):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    try:
+        old_folder = _folder_prefix(old_path)
+        new_folder = _folder_prefix(new_path)
+    except ValueError:
+        return None, "資料夾路徑不安全或格式錯誤"
+    if old_folder == new_folder:
+        return {"old_path": old_folder, "new_path": new_folder, "moved_files": 0, "moved_folders": 0}, None
+    if _is_path_inside(new_folder, old_folder):
+        return None, "不能把資料夾移到自己的子資料夾"
+
+    files = conn.execute(
+        """
+        SELECT id, virtual_path FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=0 AND virtual_path LIKE ?
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id, old_folder.rstrip("/") + "/%"),
+    ).fetchall()
+    folders = conn.execute(
+        """
+        SELECT id, virtual_path FROM storage_folders
+        WHERE owner_user_id=? AND deleted_at IS NULL AND (virtual_path=? OR virtual_path LIKE ?)
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id, old_folder, old_folder.rstrip("/") + "/%"),
+    ).fetchall()
+    if not files and not folders:
+        return None, "找不到資料夾或資料夾是空的"
+
+    file_updates = []
+    moving_file_ids = {row["id"] for row in files}
+    for row in files:
+        suffix = row["virtual_path"][len(old_folder):]
+        target_path = new_folder + suffix
+        conflict = conn.execute(
+            """
+            SELECT id FROM storage_files
+            WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL
+            """,
+            (owner_user_id, target_path),
+        ).fetchone()
+        if conflict and conflict["id"] not in moving_file_ids:
+            return None, f"目標路徑已有檔案：{target_path}"
+        file_updates.append((target_path, _display_name_from_path(target_path), row["id"]))
+
+    folder_updates = []
+    moving_folder_ids = {row["id"] for row in folders}
+    for row in folders:
+        suffix = row["virtual_path"][len(old_folder):]
+        target_path = new_folder + suffix
+        conflict = conn.execute(
+            """
+            SELECT id FROM storage_folders
+            WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL
+            """,
+            (owner_user_id, target_path),
+        ).fetchone()
+        if conflict and conflict["id"] not in moving_folder_ids:
+            return None, f"目標路徑已有資料夾：{target_path}"
+        folder_updates.append((target_path, _display_name_from_path(target_path), row["id"]))
+
+    now = _now()
+    for target_path, display_name, row_id in file_updates:
+        conn.execute(
+            "UPDATE storage_files SET virtual_path=?, display_name=?, updated_at=? WHERE id=? AND owner_user_id=?",
+            (target_path, display_name, now, row_id, owner_user_id),
+        )
+    if not folders:
+        folder, msg = create_storage_folder(conn, actor=actor, path=new_folder)
+        if msg:
+            return None, msg
+        folder_updates.append((new_folder, _display_name_from_path(new_folder), folder["id"]))
+    for target_path, display_name, row_id in folder_updates:
+        conn.execute(
+            "UPDATE storage_folders SET virtual_path=?, display_name=?, updated_at=? WHERE id=? AND owner_user_id=?",
+            (target_path, display_name, now, row_id, owner_user_id),
+        )
+    return {
+        "old_path": old_folder,
+        "new_path": new_folder,
+        "moved_files": len(file_updates),
+        "moved_folders": len(folder_updates),
+    }, None
+
+
+def trash_storage_folder(conn, *, actor, path):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    try:
+        folder_path = _folder_prefix(path)
+    except ValueError:
+        return None, "資料夾路徑不安全或格式錯誤"
+    if folder_path == "/":
+        return None, "不能回收根目錄"
+    file_rows = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=0
+              AND virtual_path LIKE ?
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id, folder_path.rstrip("/") + "/%"),
+    ).fetchall()
+    folder_rows = conn.execute(
+        """
+        SELECT id FROM storage_folders
+        WHERE owner_user_id=? AND deleted_at IS NULL
+              AND (virtual_path=? OR virtual_path LIKE ?)
+        ORDER BY virtual_path ASC
+        """,
+        (owner_user_id, folder_path, folder_path.rstrip("/") + "/%"),
+    ).fetchall()
+    if not file_rows and not folder_rows:
+        return None, "找不到資料夾或資料夾是空的"
+    now = _now()
+    conn.executemany(
+        """
+        UPDATE storage_files
+        SET is_trashed=1, trashed_at=?, trash_source=NULL, updated_at=?
+        WHERE id=? AND owner_user_id=?
+        """,
+        [(now, now, row["id"], owner_user_id) for row in file_rows],
+    )
+    conn.executemany(
+        "UPDATE storage_folders SET deleted_at=?, updated_at=? WHERE id=? AND owner_user_id=?",
+        [(now, now, row["id"], owner_user_id) for row in folder_rows],
+    )
+    return {
+        "path": folder_path,
+        "trashed_files": len(file_rows),
+        "deleted_folders": len(folder_rows),
+    }, None
+
+
+def trash_cloud_file_to_storage(conn, *, actor, file_id):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    file_row = conn.execute(
+        "SELECT * FROM uploaded_files WHERE id=? AND owner_user_id=? AND deleted_at IS NULL",
+        (str(file_id or ""), owner_user_id),
+    ).fetchone()
+    if not file_row:
+        return None, "找不到檔案或檔案已刪除"
+    now = _now()
+    storage_rows = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND file_id=? AND deleted_at IS NULL
+        """,
+        (owner_user_id, file_row["id"]),
+    ).fetchall()
+    if storage_rows:
+        conn.executemany(
+            """
+            UPDATE storage_files
+            SET is_trashed=1, trashed_at=?, trash_source='cloud_drive_delete', updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            [(now, now, row["id"], owner_user_id) for row in storage_rows],
+        )
+        return {"file_id": file_row["id"], "storage_file_ids": [row["id"] for row in storage_rows]}, None
+
+    display_name = str(file_row["original_filename_plain_for_public"] or "download.bin").strip()[:160]
+    try:
+        virtual_path = _unique_storage_path(conn, owner_user_id, display_name, display_name)
+    except ValueError:
+        return None, "storage path 不安全或格式錯誤"
+    storage_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO storage_files (
+            id, file_id, owner_user_id, parent_id, display_name, virtual_path,
+            is_trashed, trashed_at, trash_source, created_at, updated_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, 1, ?, 'cloud_drive_delete', ?, ?)
+        """,
+        (storage_id, file_row["id"], owner_user_id, display_name, virtual_path, now, now, now),
+    )
+    sync_user_storage_summary(
+        conn,
+        owner_user_id,
+        actor_user_id=owner_user_id,
+        source="cloud_drive_delete",
+        reason="cloud_file_moved_to_trash",
+    )
+    return {"file_id": file_row["id"], "storage_file_ids": [storage_id]}, None
+
+
 def list_storage_trash(conn, *, actor, limit=100, offset=0):
     ensure_storage_album_schema(conn)
     rows = conn.execute(
@@ -340,7 +715,7 @@ def trash_storage_file(conn, *, actor, storage_file_id):
     conn.execute(
         """
         UPDATE storage_files
-        SET is_trashed=1, trashed_at=?, updated_at=?
+        SET is_trashed=1, trashed_at=?, trash_source=NULL, updated_at=?
         WHERE id=? AND owner_user_id=?
         """,
         (now, now, storage_file_id, int(actor["id"])),
@@ -359,11 +734,21 @@ def restore_storage_file(conn, *, actor, storage_file_id):
     conn.execute(
         """
         UPDATE storage_files
-        SET is_trashed=0, restored_at=?, updated_at=?
+        SET is_trashed=0, restored_at=?, trash_source=NULL, updated_at=?
         WHERE id=? AND owner_user_id=?
         """,
         (now, now, storage_file_id, int(actor["id"])),
     )
+    if row.get("trash_source") == "cloud_drive_delete":
+        conn.execute(
+            """
+            UPDATE storage_files
+            SET trash_source=NULL, updated_at=?
+            WHERE owner_user_id=? AND file_id=? AND deleted_at IS NULL
+                  AND trash_source='cloud_drive_delete'
+            """,
+            (now, int(actor["id"]), row["file_id"]),
+        )
     return get_storage_file(conn, actor=actor, storage_file_id=storage_file_id), None
 
 
@@ -381,6 +766,15 @@ def purge_storage_file(conn, *, actor, storage_file_id):
         """,
         (now, now, storage_file_id, int(actor["id"])),
     )
+    if row.get("trash_source") == "cloud_drive_delete":
+        conn.execute(
+            """
+            UPDATE uploaded_files
+            SET deleted_at=?
+            WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
+            """,
+            (now, row["file_id"], int(actor["id"])),
+        )
     summary = sync_user_storage_summary(
         conn,
         actor["id"],
@@ -391,9 +785,80 @@ def purge_storage_file(conn, *, actor, storage_file_id):
     return {"id": storage_file_id, "storage": summary}, None
 
 
+def restore_storage_trash(conn, *, actor):
+    ensure_storage_album_schema(conn)
+    now = _now()
+    rows = conn.execute(
+        """
+        SELECT id FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=1
+        """,
+        (int(actor["id"]),),
+    ).fetchall()
+    if rows:
+        conn.executemany(
+            """
+            UPDATE storage_files
+            SET is_trashed=0, restored_at=?, trash_source=NULL, updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            [(now, now, row["id"], int(actor["id"])) for row in rows],
+        )
+    return {"restored": len(rows)}, None
+
+
+def purge_storage_trash(conn, *, actor):
+    ensure_storage_album_schema(conn)
+    now = _now()
+    rows = conn.execute(
+        """
+        SELECT id, file_id, trash_source FROM storage_files
+        WHERE owner_user_id=? AND deleted_at IS NULL AND is_trashed=1
+        """,
+        (int(actor["id"]),),
+    ).fetchall()
+    if rows:
+        conn.executemany(
+            """
+            UPDATE storage_files
+            SET deleted_at=?, updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            [(now, now, row["id"], int(actor["id"])) for row in rows],
+        )
+        cloud_file_ids = [row["file_id"] for row in rows if row["trash_source"] == "cloud_drive_delete"]
+        if cloud_file_ids:
+            conn.executemany(
+                """
+                UPDATE uploaded_files
+                SET deleted_at=?
+                WHERE id=? AND owner_user_id=? AND deleted_at IS NULL
+                """,
+                [(now, file_id, int(actor["id"])) for file_id in cloud_file_ids],
+            )
+    summary = sync_user_storage_summary(
+        conn,
+        actor["id"],
+        actor_user_id=actor["id"],
+        source="trash",
+        reason="storage_trash_purged",
+    )
+    return {"purged": len(rows), "storage": summary}, None
+
+
 def _normalize_album_visibility(value):
     visibility = str(value or "private").strip().lower()
     return visibility if visibility in {"private", "unlisted", "public"} else "private"
+
+
+def _is_album_media_storage_row(row):
+    mime = str((row["mime_type_plain_for_public"] if "mime_type_plain_for_public" in row.keys() else "") or "").lower()
+    name = str((row["display_name"] if "display_name" in row.keys() else "") or "").lower()
+    if mime.startswith("image/") or mime.startswith("video/"):
+        return True
+    image_exts = (".avif", ".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", ".svg", ".webp")
+    video_exts = (".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm", ".wmv")
+    return name.endswith(image_exts + video_exts)
 
 
 def _album_row(conn, album_id):
@@ -426,6 +891,70 @@ def create_album(conn, *, actor, title, description="", visibility="private"):
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
 
 
+def create_album_from_storage_folder(conn, *, actor, path, title=None, description="", visibility="private"):
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    try:
+        folder_path = _folder_prefix(path)
+    except ValueError:
+        return None, "資料夾路徑不安全或格式錯誤"
+    if folder_path == "/":
+        return None, "不能直接把根目錄設為相簿"
+    rows = conn.execute(
+        """
+        SELECT sf.id AS storage_file_id, sf.file_id, sf.display_name, sf.virtual_path,
+               f.mime_type_plain_for_public, f.original_filename_plain_for_public
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND sf.is_trashed=0
+              AND f.deleted_at IS NULL AND sf.virtual_path LIKE ?
+        ORDER BY sf.virtual_path ASC
+        """,
+        (owner_user_id, folder_path.rstrip("/") + "/%"),
+    ).fetchall()
+    if not rows:
+        return None, "資料夾內沒有可加入相簿的圖片或影片"
+    invalid = [row for row in rows if not _is_album_media_storage_row(row)]
+    if invalid:
+        names = "、".join(str(row["display_name"] or row["original_filename_plain_for_public"] or row["virtual_path"]) for row in invalid[:3])
+        suffix = " 等" if len(invalid) > 3 else ""
+        return None, f"資料夾內含非圖片/影片檔案：{names}{suffix}"
+    album, msg = create_album(
+        conn,
+        actor=actor,
+        title=title or _display_name_from_path(folder_path),
+        description=description or f"由資料夾 {folder_path} 建立",
+        visibility=visibility,
+    )
+    if msg:
+        return None, msg
+    album_id = album["id"]
+    now = _now()
+    for index, row in enumerate(rows, start=1):
+        conn.execute(
+            """
+            INSERT INTO album_files (
+                id, album_id, storage_file_id, file_id, sort_order, caption, added_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                album_id,
+                row["storage_file_id"],
+                row["file_id"],
+                index,
+                folder_path,
+                int(actor["id"]),
+                now,
+            ),
+        )
+    conn.execute("UPDATE albums SET cover_file_id=?, updated_at=? WHERE id=?", (rows[0]["file_id"], now, album_id))
+    album = get_album(conn, actor=actor, album_id=album_id, include_files=True)
+    album["source_folder"] = folder_path
+    album["added_count"] = len(rows)
+    return album, None
+
+
 def list_albums(conn, *, actor, include_deleted=False, limit=100, offset=0):
     ensure_storage_album_schema(conn)
     where = "owner_user_id=?"
@@ -456,14 +985,36 @@ def get_album(conn, *, actor, album_id, include_files=False):
     if include_files:
         files = conn.execute(
             """
-            SELECT af.*, sf.display_name, sf.virtual_path, f.size_bytes, f.scan_status, f.risk_level
+            SELECT af.*,
+                   COALESCE(sf.display_name, (
+                       SELECT sf2.display_name
+                       FROM storage_files sf2
+                       WHERE sf2.file_id=af.file_id
+                         AND sf2.owner_user_id=?
+                         AND sf2.deleted_at IS NULL
+                         AND COALESCE(sf2.is_trashed, 0)=0
+                       ORDER BY sf2.updated_at DESC, sf2.created_at DESC
+                       LIMIT 1
+                   )) AS display_name,
+                   COALESCE(sf.virtual_path, (
+                       SELECT sf2.virtual_path
+                       FROM storage_files sf2
+                       WHERE sf2.file_id=af.file_id
+                         AND sf2.owner_user_id=?
+                         AND sf2.deleted_at IS NULL
+                         AND COALESCE(sf2.is_trashed, 0)=0
+                       ORDER BY sf2.updated_at DESC, sf2.created_at DESC
+                       LIMIT 1
+                   )) AS virtual_path,
+                   f.original_filename_plain_for_public, f.mime_type_plain_for_public, f.storage_path,
+                   f.size_bytes, f.scan_status, f.risk_level
             FROM album_files af
             JOIN uploaded_files f ON f.id=af.file_id
             LEFT JOIN storage_files sf ON sf.id=af.storage_file_id
             WHERE af.album_id=? AND af.deleted_at IS NULL AND f.deleted_at IS NULL
             ORDER BY af.sort_order ASC, af.created_at ASC
             """,
-            (album_id,),
+            (actor["id"], actor["id"], album_id),
         ).fetchall()
         data["files"] = [dict(file_row) for file_row in files]
     return data

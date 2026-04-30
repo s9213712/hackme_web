@@ -3,9 +3,17 @@ import sqlite3
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
+from services.access_controls import hash_internal_test_token, maintenance_bypass_expires_at
 
 
-def _build_app(db_path, settings, ip_box=None, event_log=None):
+def _build_app(
+    db_path,
+    settings,
+    ip_box=None,
+    event_log=None,
+    db_delete_session=None,
+    db_get_user_from_token=None,
+):
     app = Flask(__name__)
     app.testing = True
 
@@ -29,8 +37,8 @@ def _build_app(db_path, settings, ip_box=None, event_log=None):
         "SESSION_COOKIE_SECURE": False,
         "SESSION_TTL": 3600,
         "audit": lambda *args, **kwargs: None,
-        "db_delete_session": lambda *args, **kwargs: None,
-        "db_get_user_from_token": lambda *args, **kwargs: None,
+        "db_delete_session": db_delete_session or (lambda *args, **kwargs: None),
+        "db_get_user_from_token": db_get_user_from_token or (lambda *args, **kwargs: None),
         "db_save_session": lambda *args, **kwargs: None,
         "decrypt_field": lambda value: value,
         "encrypt_field": lambda value: value,
@@ -67,6 +75,47 @@ def _build_app(db_path, settings, ip_box=None, event_log=None):
     return app
 
 
+def test_idle_timeout_logout_revokes_session_without_csrf(tmp_path):
+    deleted_tokens = []
+    client = _build_app(
+        tmp_path / "timeout.db",
+        {},
+        db_delete_session=lambda token: deleted_tokens.append(token),
+        db_get_user_from_token=lambda token: "alice" if token == "session-1" else None,
+    ).test_client()
+    client.set_cookie("session_token", "session-1")
+    client.set_cookie("csrf_token", "stale-csrf")
+
+    response = client.post(
+        "/api/session/idle-timeout",
+        headers={"X-Idle-Timeout-Logout": "1"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert deleted_tokens == ["session-1"]
+    set_cookie = "\n".join(response.headers.getlist("Set-Cookie"))
+    assert "session_token=;" in set_cookie
+    assert "csrf_token=;" in set_cookie
+
+
+def test_idle_timeout_logout_requires_idle_confirmation_header(tmp_path):
+    deleted_tokens = []
+    client = _build_app(
+        tmp_path / "timeout.db",
+        {},
+        db_delete_session=lambda token: deleted_tokens.append(token),
+        db_get_user_from_token=lambda token: "alice",
+    ).test_client()
+    client.set_cookie("session_token", "session-1")
+
+    response = client.post("/api/session/idle-timeout")
+
+    assert response.status_code == 400
+    assert response.get_json()["ok"] is False
+    assert deleted_tokens == []
+
+
 def test_public_version_endpoints_expose_release_id(tmp_path):
     client = _build_app(tmp_path / "release.db", {}).test_client()
 
@@ -76,6 +125,7 @@ def test_public_version_endpoints_expose_release_id(tmp_path):
     assert site_config.status_code == 200
     assert site_config.get_json()["server_meta"]["release_id"] == "test-release"
     assert site_config.get_json()["server_meta"]["version"] == "test"
+    assert site_config.get_json()["site_config"]["server_mode"] == "preprod"
     assert version.status_code == 200
     assert version.get_json()["release_id"] == "test-release"
 
@@ -120,6 +170,17 @@ def _seed_db(db_path):
             login_at TEXT NOT NULL,
             is_suspicious INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00'
+        );
         """
     )
     conn.execute(
@@ -156,6 +217,154 @@ def test_account_security_locks_user_after_repeated_bad_passwords(tmp_path):
 
     assert row[0] == 2
     assert row[1]
+
+
+def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_path):
+    db_path = tmp_path / "internal-test.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'internal_test');
+        INSERT INTO users (id, username, status, role) VALUES (2, 'root', 'active', 'super_admin');
+        INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (2, 'rootpass', '2026-01-01T00:00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+    token = "issued-by-root"
+    client = _build_app(
+        str(db_path),
+        {
+            "max_login_failures": 3,
+            "block_duration_minutes": 10,
+            "internal_test_login_token_hash": hash_internal_test_token(token),
+            "internal_test_login_token_expires_at": maintenance_bypass_expires_at(30),
+        },
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
+    bad_token = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": "bad"})
+    allowed = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": token})
+    root_allowed = client.post("/api/login", json={"username": "root", "password": "rootpass"})
+
+    assert denied.status_code == 403
+    assert "內測模式" in denied.get_json()["msg"]
+    assert bad_token.status_code == 403
+    assert allowed.status_code == 200
+    assert root_allowed.status_code == 200
+
+
+def test_production_mode_rejects_same_ip_using_different_account(tmp_path):
+    db_path = tmp_path / "production-ip-conflict.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO users (id, username, status, role) VALUES (2, 'bob', 'active', 'user');
+        INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (2, 'correct', '2026-01-01T00:00:00');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (2, 'bob-session', '10.0.0.1', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert denied.status_code == 403
+    assert "同一 IP" in denied.get_json()["msg"]
+
+
+def test_production_mode_rejects_same_account_from_different_ip(tmp_path):
+    db_path = tmp_path / "production-account-conflict.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (1, 'alice-session', '10.0.0.9', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert denied.status_code == 403
+    assert "不同 IP" in denied.get_json()["msg"]
+
+
+def test_production_mode_allows_same_account_same_ip(tmp_path):
+    db_path = tmp_path / "production-same-account-ip.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (1, 'alice-session', '10.0.0.1', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    allowed = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert allowed.status_code == 200
 
 
 def test_successful_login_records_suspicious_new_location(tmp_path):
