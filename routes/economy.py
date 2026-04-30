@@ -302,6 +302,7 @@ def register_economy_routes(app, deps):
                 amount=amount,
                 reason=reason,
                 reference_id=str(data.get("reference_id") or "") or None,
+                idempotency_key=str(data.get("idempotency_key") or request.headers.get("Idempotency-Key") or "").strip() or None,
             )
             audit("POINTS_ADMIN_ADJUST", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id}, currency=points, direction={direction}, amount={amount}")
             return json_resp(result)

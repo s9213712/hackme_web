@@ -4,6 +4,7 @@ from flask import request
 
 from services.cloud_drive import attach_existing_file, can_download_file, ensure_cloud_drive_attachment_schema
 from services.permissions import require_member_action
+from services.sqlite_safe import table_columns as safe_table_columns
 
 CHAT_RECALL_WINDOW_SECONDS = 5 * 60
 CHAT_STICKERS = {
@@ -33,7 +34,7 @@ def actor_role(actor):
 
 def _table_columns(conn, table):
     try:
-        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        return safe_table_columns(conn, table)
     except Exception:
         return set()
 

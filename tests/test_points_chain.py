@@ -665,6 +665,39 @@ def test_high_risk_admin_adjust_forces_block(tmp_path):
     assert service.verify_chain()["counts"]["unsealed_entries"] == 0
 
 
+def test_admin_adjust_is_idempotent_for_client_key(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+
+    first = service.admin_adjust(
+        actor=actor,
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5,
+        reason="manual correction",
+        idempotency_key="adjust-click-1",
+    )
+    second = service.admin_adjust(
+        actor=actor,
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5,
+        reason="manual correction",
+        idempotency_key="adjust-click-1",
+    )
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert service.get_wallet(1)["points_balance"] == 5
+    adjustments = [
+        row for row in service.list_ledger(user_id=1, include_user_id=True)
+        if row["action_type"] == "admin_adjust_credit"
+    ]
+    assert len(adjustments) == 1
+
+
 def test_points_chain_backup_pruning_uses_small_site_retention(tmp_path):
     assert DEFAULT_BACKUP_KEEP_RECENT == 5
     assert DEFAULT_BACKUP_KEEP_DAILY == 7

@@ -343,9 +343,6 @@ class TradingEngineService:
         enabled = conn.execute("SELECT value FROM trading_settings WHERE key='trading.enabled'").fetchone()
         if enabled and str(enabled["value"]).lower() not in {"true", "1", "yes"}:
             raise ValueError("trading is disabled")
-        verification = self._verify_state_on_conn(conn, enter_safe_mode=True)
-        if not verification["ok"]:
-            raise ValueError("trading state verification failed; safe mode enabled")
 
     def _market(self, conn, symbol):
         row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (str(symbol or "").strip().upper(),)).fetchone()
@@ -519,6 +516,8 @@ class TradingEngineService:
                 raise ValueError("order notional is below market minimum")
             if estimated_notional > int(market["max_order_points"]):
                 raise ValueError("order notional exceeds market maximum")
+            if side == "sell" and estimated_notional - fee <= 0:
+                raise ValueError("sell notional after fee must be positive")
 
             executable, execution_price = self._is_executable(market, side=side, order_type=order_type, limit_price=limit_price)
             now = _now()

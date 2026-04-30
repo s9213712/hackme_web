@@ -206,3 +206,23 @@ def test_open_order_frozen_tampering_enters_trading_safe_mode(tmp_path):
     verification = trading.verify_state()
     assert verification["ok"] is False
     assert any(error["type"] == "open_order_frozen_points_mismatch" for error in verification["errors"])
+
+
+def test_sell_order_rejects_zero_net_credit_before_locking_position(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.00000001")
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", fee_bps=5000)
+
+    with pytest.raises(ValueError, match="sell notional after fee"):
+        trading.place_order(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            side="sell",
+            order_type="limit",
+            quantity="0.00000001",
+            limit_price_points=5000,
+        )
+
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["positions"][0]["locked_quantity_units"] == 0

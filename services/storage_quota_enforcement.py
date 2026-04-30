@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from services.notifications import create_notification
+from services.sqlite_safe import table_columns as safe_table_columns
 from services.storage_albums import ensure_storage_album_schema, sync_user_storage_summary
 from services.upload_security import (
     ensure_upload_security_schema,
@@ -26,7 +27,7 @@ def _value(row, key, default=None):
 
 
 def _table_cols(conn, table):
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    return safe_table_columns(conn, table)
 
 
 def ensure_storage_quota_enforcement_schema(conn):

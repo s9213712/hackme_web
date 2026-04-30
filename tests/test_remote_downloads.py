@@ -99,3 +99,11 @@ def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
 
     with pytest.raises(RemoteDownloadError, match="localhost"):
         validate_torrent_file_trackers(torrent)
+
+
+def test_torrent_file_bdecode_depth_is_limited(tmp_path):
+    torrent = tmp_path / "deep.torrent"
+    torrent.write_bytes(b"l" * 80 + b"0:" + b"e" * 80)
+
+    with pytest.raises(RemoteDownloadError, match="格式無法解析"):
+        validate_torrent_file_trackers(torrent)

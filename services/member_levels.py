@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from services.sqlite_safe import table_columns as safe_table_columns
+
 MEMBER_LEVEL_ORDER = ("newbie", "normal", "trusted", "vip", "restricted", "suspended")
 SANCTION_STATUSES = {"none", "restricted", "suspended"}
 
@@ -204,7 +206,7 @@ def _now():
 
 
 def _table_cols(conn, table):
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    return safe_table_columns(conn, table)
 
 
 def ensure_member_level_user_columns(conn):
