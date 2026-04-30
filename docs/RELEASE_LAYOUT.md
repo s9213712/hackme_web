@@ -20,6 +20,11 @@ separate locations so a downloaded release starts cleanly.
 ## Runtime Data
 
 Runtime data is generated on the deployment host and must not be committed.
+A fresh checkout starts in `test` server mode. Chat messages, forum content,
+Cloud Drive files, PointsChain ledger rows, PointsChain blocks, ledger backups,
+and audit chain rows are expected to start empty. Admin initial grants and
+weekly salary jobs are not run at startup unless the operator explicitly sets
+`HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN=true` for a controlled test environment.
 
 | Path | Runtime Data |
 |---|---|
@@ -71,4 +76,3 @@ refactors because they are large maintenance surfaces:
 
 Do not split these files during release cleanup. Split them only in dedicated
 refactor branches with focused regression tests.
-

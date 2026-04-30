@@ -257,8 +257,8 @@ Rejected findings remain explicit operator decisions and are not auto-approved.
 
 Server modes:
 
+- `test`: default mode for fresh deployment and server reset
 - `preprod`: normal hardened mode
-- `test`: test mode state holder
 - `superweak`: intentionally weakened mode for controlled testing
 
 Entering `superweak` requires root confirmation and creates a

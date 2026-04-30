@@ -240,7 +240,7 @@ def ensure_snapshot_schema(conn):
     conn.execute(
         "INSERT OR IGNORE INTO server_modes "
         "(id, current_mode, previous_mode, active_snapshot_id, mode_changed_by, mode_changed_at, notes) "
-        "VALUES (1, 'preprod', NULL, NULL, NULL, ?, '')",
+        "VALUES (1, 'test', NULL, NULL, NULL, ?, '')",
         (datetime.now().isoformat(),),
     )
     conn.execute(
@@ -435,7 +435,7 @@ class SnapshotService:
     def _current_mode(self, conn):
         self.ensure_schema(conn)
         row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
-        return row["current_mode"] if row else "preprod"
+        return row["current_mode"] if row else "test"
 
     def _actor_id(self, actor):
         return int(dict(actor or {}).get("id") or 0)
@@ -850,6 +850,23 @@ class SnapshotService:
                 (key, str(bool(value)), reset_at, actor_name or "system_reset"),
             )
             applied[key] = bool(value)
+        row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+        previous_mode = row["current_mode"] if row else None
+        conn.execute(
+            """
+            INSERT INTO server_modes
+            (id, current_mode, previous_mode, active_snapshot_id, mode_changed_by, mode_changed_at, notes)
+            VALUES (1, 'test', ?, NULL, NULL, ?, 'runtime reset default')
+            ON CONFLICT(id) DO UPDATE SET
+                previous_mode=excluded.previous_mode,
+                current_mode='test',
+                active_snapshot_id=NULL,
+                mode_changed_by=NULL,
+                mode_changed_at=excluded.mode_changed_at,
+                notes=excluded.notes
+            """,
+            (previous_mode, reset_at),
+        )
         return applied
 
     def daily_snapshot_status(self, *, settings, now=None):
@@ -949,6 +966,7 @@ class SnapshotService:
         audit_detail = (
             f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},"
             f"points_chain_reset={bool(points_result and points_result.get('ok'))},"
+            f"server_mode=test,"
             f"runtime_secret_files_removed={','.join(secret_result['removed'])},"
             f"runtime_secret_files_skipped={json.dumps(secret_result['skipped'], ensure_ascii=False, sort_keys=True)},"
             f"management_only_settings={','.join(k for k, v in management_settings.items() if v)},"
@@ -957,13 +975,23 @@ class SnapshotService:
         )
         audit_result = None
         if self.reset_audit_chain:
-            audit_result = self.reset_audit_chain(
-                "SYSTEM_RUNTIME_RESET",
-                "-",
-                user=actor_name,
-                success=True,
-                detail=audit_detail,
-            )
+            try:
+                audit_result = self.reset_audit_chain(
+                    "SYSTEM_RUNTIME_RESET",
+                    "-",
+                    user=actor_name,
+                    success=True,
+                    detail=audit_detail,
+                    write_event=False,
+                )
+            except TypeError:
+                audit_result = self.reset_audit_chain(
+                    "SYSTEM_RUNTIME_RESET",
+                    "-",
+                    user=actor_name,
+                    success=True,
+                    detail=audit_detail,
+                )
         else:
             self.audit("SYSTEM_RUNTIME_RESET", "-", user=actor_name, success=True, detail=audit_detail)
         return {
@@ -973,6 +1001,7 @@ class SnapshotService:
             "cleared_tables": cleared_tables,
             "points_chain_reset": points_result,
             "audit_chain_reset": audit_result,
+            "server_mode": "test",
             "management_only_settings": management_settings,
             "runtime_secret_files_removed": secret_result["removed"],
             "runtime_secret_files_skipped": secret_result["skipped"],

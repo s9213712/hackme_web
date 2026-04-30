@@ -93,9 +93,9 @@ def register_public_routes(app, deps):
     def current_server_mode(conn):
         try:
             row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
-            return str(row["current_mode"] or "preprod") if row else "preprod"
+            return str(row["current_mode"] or "test") if row else "test"
         except Exception:
-            return "preprod"
+            return "test"
 
     def internal_test_login_allowed(settings, data):
         token = (

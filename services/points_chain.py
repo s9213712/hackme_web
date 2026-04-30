@@ -888,6 +888,10 @@ class PointsLedgerService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            ledger_count = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0])
+            block_count = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0])
+            if ledger_count == 0 and block_count == 0:
+                return {"ok": True, "created": False, "msg": "empty chain has no scheduled backup"}
             if not self._scheduled_backup_due(conn):
                 return {"ok": True, "created": False, "msg": "backup interval not due"}
             result = self._create_ledger_backup(conn, reason="scheduled_interval", kind="scheduled")

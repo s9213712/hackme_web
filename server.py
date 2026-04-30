@@ -1429,19 +1429,20 @@ if __name__ == "__main__":
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
-    try:
-        system_actor = {"username": "system", "role": "system"}
-        genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
-        salary = points_service.award_admin_weekly_salaries(actor=system_actor)
-        if genesis.get("created_count") or salary.get("created_count"):
-            audit(
-                "POINTS_BOOTSTRAP_GRANTS",
-                "0.0.0.0",
-                success=True,
-                detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}",
-            )
-    except Exception as exc:
-        audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
+    if os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            system_actor = {"username": "system", "role": "system"}
+            genesis = points_service.bootstrap_admin_initial_grants(actor=system_actor, seal_genesis=True)
+            salary = points_service.award_admin_weekly_salaries(actor=system_actor)
+            if genesis.get("created_count") or salary.get("created_count"):
+                audit(
+                    "POINTS_BOOTSTRAP_GRANTS",
+                    "0.0.0.0",
+                    success=True,
+                    detail=f"genesis={genesis.get('created_count')}, weekly={salary.get('created_count')}, week={salary.get('salary_week')}",
+                )
+        except Exception as exc:
+            audit("POINTS_BOOTSTRAP_GRANTS_FAILED", "0.0.0.0", success=False, detail=str(exc))
     if get_system_settings().get("integrity_guard_enabled", True):
         integrity_status = integrity_guard.scan(actor="system-startup", create_initial_manifest=True)
         if get_system_settings().get("integrity_guard_strict_mode", False):
@@ -1455,13 +1456,10 @@ if __name__ == "__main__":
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")
     tls_generation = ensure_local_tls_files(CERT_FILE, KEY_FILE)
-    if tls_generation.get("created"):
-        audit("TLS_LOCAL_CERT_GENERATED", "0.0.0.0", user="system", success=True, detail="generated cert.pem/key.pem for local deployment")
     has_ssl_files = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
     ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)
     has_ssl = ssl_state["enabled"]
 
-    audit("SERVER_START", "0.0.0.0", detail="hackme_web server started — hardened edition")
     scheme = ssl_state["scheme"]
     bind = effective_server_bind(get_system_settings())
     host = bind["host"]

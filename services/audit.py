@@ -88,11 +88,12 @@ def _maybe_anchor_audit_head(audit_id, chain_hash, entry_hash, reason="interval"
     _last_audit_anchor_at = now
 
 
-def reset_audit_chain_with_event(action, ip, user="-", success=True, ua="-", detail="-"):
-    """Clear the audit runtime chain and write a fresh first event.
+def reset_audit_chain_with_event(action, ip, user="-", success=True, ua="-", detail="-", write_event=True):
+    """Clear the audit runtime chain and optionally write a fresh first event.
 
     Server reset keeps a pre-reset snapshot for recovery, but the live runtime
-    audit chain should start from a new genesis-equivalent entry after reset.
+    audit chain should be able to start from a completely empty state after
+    reset. Callers that need a genesis-equivalent event can keep write_event.
     """
     global _last_audit_anchor_at
     with _audit_db_lock:
@@ -129,8 +130,10 @@ def reset_audit_chain_with_event(action, ip, user="-", success=True, ua="-", det
             except Exception:
                 pass
 
-    audit(action, ip, user=user, success=success, ua=ua, detail=detail)
-    return {"ok": True, "reset": True, "event": action}
+    if write_event:
+        audit(action, ip, user=user, success=success, ua=ua, detail=detail)
+        return {"ok": True, "reset": True, "event": action}
+    return {"ok": True, "reset": True, "event": None}
 
 
 def _verify_latest_audit_anchor(rows_by_id):
