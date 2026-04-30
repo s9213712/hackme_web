@@ -77,6 +77,17 @@ def test_user_demote_accepts_optional_json_body_and_frontend_sends_json():
     assert 'body: JSON.stringify({})' in demote_frontend
 
 
+def test_user_promote_button_is_rendered_and_frontend_sends_json():
+    users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")
+    auth_users_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    promote_frontend = auth_users_js.split('async function promoteUser', 1)[1].split('async function updateUserMemberLevel', 1)[0]
+
+    assert 'currentRole === "super_admin" && u.role === "user" && !isSelf' in users_js
+    assert 'promoteUser(u.id, u.username)' in users_js
+    assert '"Content-Type": "application/json"' in promote_frontend
+    assert 'body: JSON.stringify({})' in promote_frontend
+
+
 def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
 

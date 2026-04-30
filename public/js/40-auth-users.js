@@ -707,7 +707,8 @@ async function promoteUser(userId, username) {
   const res = await fetch(API + "/admin/users/" + userId + "/promote", {
     method: "POST",
     credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({})
   });
   const json = await res.json().catch(() => ({}));
   if (json.ok) {
