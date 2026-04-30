@@ -65,6 +65,18 @@ def test_admin_users_post_uses_method_aware_csrf_guard():
     assert '@app.route("/api/admin/users", methods=["GET","POST"])\n    @require_csrf_by_method' in users
 
 
+def test_user_demote_accepts_optional_json_body_and_frontend_sends_json():
+    users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    auth_users_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    demote_route = users.split('def admin_user_demote(user_id):', 1)[1].split('def admin_user_violation', 1)[0]
+    demote_frontend = auth_users_js.split('async function demoteUser', 1)[1].split('// ── Module', 1)[0]
+
+    assert 'request.get_json(silent=True) or {}' in demote_route
+    assert 'request.get_json(force=True) or {}' not in demote_route
+    assert '"Content-Type": "application/json"' in demote_frontend
+    assert 'body: JSON.stringify({})' in demote_frontend
+
+
 def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
 
