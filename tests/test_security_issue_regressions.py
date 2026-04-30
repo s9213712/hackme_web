@@ -88,6 +88,17 @@ def test_user_promote_button_is_rendered_and_frontend_sends_json():
     assert 'body: JSON.stringify({})' in promote_frontend
 
 
+def test_manual_points_adjustment_reports_insufficient_balance():
+    economy_route = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
+    economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
+    adjust_frontend = economy_js.split("async function submitEconomyAdjustment", 1)[1].split("async function reviewEconomyPendingReward", 1)[0]
+
+    assert "點數不足，無法扣除；本次調整未寫入帳本" in economy_route
+    assert '"code": "insufficient_balance"' in economy_route
+    assert "economyRequestId(\"admin-adjust\")" in adjust_frontend
+    assert "alert(message)" in adjust_frontend
+
+
 def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
 

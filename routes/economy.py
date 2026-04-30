@@ -85,6 +85,7 @@ def register_economy_routes(app, deps):
         status = 400
         if "insufficient balance" in msg:
             status = 409
+            return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次調整未寫入帳本", "code": "insufficient_balance"}), status
         return json_resp({"ok": False, "msg": msg}), status
 
     @app.route("/api/points/wallet", methods=["GET"])
