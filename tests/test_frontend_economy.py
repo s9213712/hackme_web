@@ -50,7 +50,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "function renderEconomyRecovery" in economy_js
     assert 'fetchEconomyJson("/root/points/chain/backups"' in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' in economy_js
-    assert "/js/90-bootstrap.js?v=20260430-root-billing" in index_html
+    assert "/js/90-bootstrap.js?v=20260430-security-tests-feedback" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
     assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js

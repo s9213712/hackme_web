@@ -13,6 +13,7 @@ from io import BytesIO
 from pathlib import Path
 
 from services.identity import is_admin_role
+from services.sqlite_safe import table_columns as safe_table_columns
 from services.storage_quota_overrides import apply_storage_quota_override, get_storage_quota_override
 from services.storage_quota_purchases import purchased_storage_summary
 
@@ -378,7 +379,7 @@ def ensure_upload_security_schema(conn):
 
 
 def _table_columns(conn, table):
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    return safe_table_columns(conn, table)
 
 
 def _ensure_uploaded_files_columns(conn):

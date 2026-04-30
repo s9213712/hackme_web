@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+
+from services.sqlite_safe import table_columns
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,3 +88,14 @@ def test_secure_cookie_defaults_are_secure():
 
     assert 'FORCE_HTTPS = _env_bool("FORCE_HTTPS", default=True)' in server
     assert 'SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)' in server
+
+
+def test_table_columns_rejects_unsafe_identifiers(tmp_path):
+    import sqlite3
+
+    conn = sqlite3.connect(tmp_path / "safe.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+    assert table_columns(conn, "users") == {"id", "username"}
+    with pytest.raises(ValueError, match="unsafe SQLite identifier"):
+        table_columns(conn, 'users); SELECT * FROM sqlite_master;--')

@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from services.sqlite_safe import table_columns as safe_table_columns
+
 
 DISPLAY_CURRENCY = "points"
 INTERNAL_CURRENCY = "soft"
@@ -144,7 +146,7 @@ def actor_value(actor, key, default=None):
 
 def table_columns(conn, table):
     try:
-        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        return safe_table_columns(conn, table)
     except Exception:
         return set()
 
@@ -1968,11 +1970,28 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def admin_adjust(self, *, actor, user_id, currency_type, direction, amount, reason, reference_id=None):
+    def admin_adjust(self, *, actor, user_id, currency_type, direction, amount, reason, reference_id=None, idempotency_key=None):
         if direction not in {"credit", "debit"}:
             raise ValueError("direction must be credit or debit")
         if not str(reason or "").strip():
             raise ValueError("reason is required")
+        client_reference_id = str(reference_id or "").strip()
+        if idempotency_key:
+            idem_key = f"admin_adjust:client:{str(idempotency_key).strip()[:120]}"
+        elif client_reference_id:
+            idem_key = f"admin_adjust:ref:{sha256_text(client_reference_id)}:{direction}"
+        else:
+            bucket = utc_now()[:16]
+            payload = {
+                "actor_id": actor_value(actor, "id"),
+                "target_user_id": int(user_id),
+                "direction": direction,
+                "amount": int(amount),
+                "reason": str(reason or "").strip(),
+                "bucket": bucket,
+            }
+            idem_key = f"admin_adjust:auto:{sha256_text(canonical_json(payload))}"
+        reference_id = client_reference_id or f"actor:{actor_value(actor, 'id')}:target:{user_id}:{utc_now()}"
         result = self.record_transaction(
             user_id=user_id,
             currency_type=currency_type,
@@ -1980,8 +1999,8 @@ class PointsLedgerService:
             amount=amount,
             action_type=f"admin_adjust_{direction}",
             reference_type="admin_adjustment",
-            reference_id=reference_id or f"actor:{actor_value(actor, 'id')}:target:{user_id}:{utc_now()}",
-            idempotency_key=None,
+            reference_id=reference_id,
+            idempotency_key=idem_key,
             reason=reason,
             public_metadata={"admin_action": True},
             private_metadata={"actor_username": actor_value(actor, "username")},

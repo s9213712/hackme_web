@@ -2,6 +2,8 @@ import json
 import os
 from datetime import datetime
 
+from services.sqlite_safe import table_columns as safe_table_columns
+
 CURRENT_SCHEMA_VERSION = 28
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
@@ -420,7 +422,7 @@ def _table_exists(conn, table_name):
 
 def _table_columns(conn, table_name):
     try:
-        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        return safe_table_columns(conn, table_name)
     except Exception:
         return set()
 

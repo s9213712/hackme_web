@@ -18,6 +18,9 @@ from pathlib import Path
 from services.upload_security import safe_public_filename
 
 
+MAX_BDECODE_DEPTH = 64
+
+
 class RemoteDownloadError(RuntimeError):
     pass
 
@@ -106,7 +109,11 @@ def validate_magnet_trackers(url):
         _validate_tracker_url(tracker)
 
 
-def _bdecode(data, index=0):
+def _bdecode(data, index=0, depth=0):
+    if depth > MAX_BDECODE_DEPTH:
+        raise ValueError("bencode nesting depth exceeded")
+    if index >= len(data):
+        raise ValueError("unexpected end of bencode data")
     marker = data[index:index + 1]
     if marker == b"i":
         end = data.index(b"e", index)
@@ -115,15 +122,15 @@ def _bdecode(data, index=0):
         index += 1
         out = []
         while data[index:index + 1] != b"e":
-            item, index = _bdecode(data, index)
+            item, index = _bdecode(data, index, depth + 1)
             out.append(item)
         return out, index + 1
     if marker == b"d":
         index += 1
         out = {}
         while data[index:index + 1] != b"e":
-            key, index = _bdecode(data, index)
-            value, index = _bdecode(data, index)
+            key, index = _bdecode(data, index, depth + 1)
+            value, index = _bdecode(data, index, depth + 1)
             out[key] = value
         return out, index + 1
     if marker.isdigit():

@@ -13,7 +13,7 @@ def test_chat_room_delete_ui_is_wired():
 
     assert "/js/20-chat.js?v=20260429-official-chat-protect" in index_html
     assert "/js/00-core.js?v=20260429-chat-attachment-delete" in index_html
-    assert "/js/90-bootstrap.js?v=20260430-root-billing" in index_html
+    assert "/js/90-bootstrap.js?v=20260430-security-tests-feedback" in index_html
     assert "/styles.css?v=20260430-root-billing" in index_html
     assert 'id="chat-friend-username"' in index_html
     assert 'id="chat-pending-attachment-list"' in index_html
