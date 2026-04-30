@@ -42,16 +42,17 @@ def test_root_points_page_is_chain_operations_console():
     assert "全站積分" in index_html
     assert "加減分明細" in index_html
     assert "手動加減分與待審核" in index_html
-    assert "積分系統" in index_html
+    assert "積分錢包" in index_html
+    assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260430-trading-engine" in index_html
-    assert "/js/56-trading.js?v=20260430-trading-engine" in index_html
+    assert "/js/56-trading.js?v=20260430-trading-page-split" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-approve-btn"' in index_html
     assert "function renderEconomyRecovery" in economy_js
     assert 'fetchEconomyJson("/root/points/chain/backups"' in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' in economy_js
-    assert "/js/90-bootstrap.js?v=20260430-root-billing" in index_html
+    assert "/js/90-bootstrap.js?v=20260430-trading-page-split" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
     assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js
@@ -102,3 +103,34 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetch(API + "/root/economy/catalog"' in admin_js
     assert "saveRootEconomyCatalogItem" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js
+
+
+def test_trading_exchange_is_separate_from_wallet_page():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    economy_section = index_html.split('id="module-economy"', 1)[1].split('id="module-trading"', 1)[0]
+    trading_section = index_html.split('id="module-trading"', 1)[1].split('id="module-dm"', 1)[0]
+
+    assert 'id="tab-module-trading"' in index_html
+    assert "積分交易所" in trading_section
+    assert 'id="trading-card"' in trading_section
+    assert 'id="trading-submit-order-btn"' in trading_section
+    assert 'id="trading-root-card"' in trading_section
+    assert 'id="trading-submit-order-btn"' not in economy_section
+    assert 'id="trading-root-card"' not in economy_section
+    assert 'id="economy-trading-summary-card"' in economy_section
+    assert 'id="economy-spot-position-count"' in economy_section
+    assert 'id="economy-contract-status"' in economy_section
+    assert 'id="economy-trading-order-list"' in economy_section
+    assert 'id="economy-trading-fill-list"' in economy_section
+    assert 'id="economy-catalog-list"' not in economy_section
+    assert "服務價格" not in economy_section
+    assert 'tab-module-trading", module: "trading"' in core_js
+    assert 'switchModuleTab("trading")' in bootstrap_js
+    assert 'if (normTab === "trading"' in admin_js
+    assert "function renderTradingWalletSummary" in trading_js
+    assert 'renderTradingOrders(orders, "economy-trading-order-list", false)' in trading_js
+    assert '["economy-trading-open-btn", openTradingModuleFromWallet]' in trading_js

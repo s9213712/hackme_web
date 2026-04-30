@@ -113,7 +113,8 @@ const SIDEBAR_MENU_CONFIG = [
   { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
-  { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分系統", group: "工具" },
+  { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
+  { tabId: "tab-module-trading", module: "trading", tab: "trading", icon: "wallet", label: "積分交易所", group: "工具" },
   { tabId: "tab-module-appeals", module: "appeals", tab: "appeals", icon: "appeal", label: "申覆", group: "支援", hideForSuperAdmin: true },
   {
     tabId: "tab-module-accounts",
@@ -162,6 +163,7 @@ function canShowSidebarItem(item) {
   if (item.hideForSuperAdmin && currentRole === "super_admin") return false;
   if (item.role === "root") return currentUser === "root";
   if (item.role === "super_admin") return currentRole === "super_admin";
+  if (item.module === "trading") return canAccessModule("economy") && canAccessModule("trading");
   return canAccessModule(item.module);
 }
 
@@ -962,6 +964,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
+  const tabModuleTrading = $("tab-module-trading");
   const tabModuleAppeals = $("tab-module-appeals");
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
@@ -977,6 +980,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
+  if (tabModuleTrading) tabModuleTrading.style.display = (canAccessModule("economy") && canAccessModule("trading")) ? "" : "none";
   if (tabModuleAppeals) tabModuleAppeals.style.display = (currentRole !== "super_admin" && canAccessModule("appeals")) ? "" : "none";
   if (typeof syncSidebarMenuVisibility === "function") {
     syncSidebarMenuVisibility();
@@ -1065,6 +1069,7 @@ function resetAuthState() {
   const moduleGames = $("module-games");
   const moduleComfyui = $("module-comfyui");
   const moduleEconomy = $("module-economy");
+  const moduleTrading = $("module-trading");
   const moduleAccounts = $("module-accounts");
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
@@ -1077,6 +1082,7 @@ function resetAuthState() {
   if (moduleGames) moduleGames.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleEconomy) moduleEconomy.classList.remove("active");
+  if (moduleTrading) moduleTrading.classList.remove("active");
   if (moduleAccounts) moduleAccounts.classList.remove("active");
   if (moduleServer) moduleServer.classList.remove("active");
   if (moduleAppeals) moduleAppeals.classList.remove("active");

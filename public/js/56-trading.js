@@ -10,7 +10,11 @@ let tradingState = {
 let tradingEventsBound = false;
 
 function tradingSetMsg(text, ok = true) {
-  if (typeof economySetMsg === "function") {
+  const msg = $("trading-msg");
+  if (msg && currentModuleTab === "trading") {
+    msg.textContent = text || "";
+    msg.className = text ? `msg show ${ok ? "ok" : "err"}` : "msg";
+  } else if (typeof economySetMsg === "function") {
     economySetMsg(text, ok);
   }
 }
@@ -58,8 +62,8 @@ function renderTradingSummary() {
   }
 }
 
-function renderTradingOrders(rows) {
-  const list = $("trading-order-list");
+function renderTradingOrders(rows, targetId = "trading-order-list", allowCancel = true) {
+  const list = $(targetId);
   if (!list) return;
   if (!rows || !rows.length) {
     list.innerHTML = `<div class="drive-empty">尚無訂單</div>`;
@@ -75,7 +79,7 @@ function renderTradingOrders(rows) {
           <div class="drive-card-sub">${sanitize(row.market_symbol)} · 數量 ${sanitize(row.quantity)} · 價格 ${sanitize(price || "-")} · 凍結 ${Number(row.frozen_points || 0)}</div>
           <div class="economy-ledger-hash">${sanitize(row.order_uuid || "")}</div>
         </div>
-        ${canCancel ? `<button class="btn" type="button" data-trading-cancel="${sanitize(row.order_uuid || "")}">取消</button>` : ""}
+        ${allowCancel && canCancel ? `<button class="btn" type="button" data-trading-cancel="${sanitize(row.order_uuid || "")}">取消</button>` : ""}
       </div>
     `;
   }).join("");
@@ -84,8 +88,8 @@ function renderTradingOrders(rows) {
   });
 }
 
-function renderTradingFills(rows) {
-  const list = $("trading-fill-list");
+function renderTradingFills(rows, targetId = "trading-fill-list") {
+  const list = $(targetId);
   if (!list) return;
   if (!rows || !rows.length) {
     list.innerHTML = `<div class="drive-empty">尚無成交</div>`;
@@ -100,6 +104,30 @@ function renderTradingFills(rows) {
       </div>
     </div>
   `).join("");
+}
+
+function renderTradingWalletSummary(payload = {}) {
+  const positions = Array.isArray(payload.positions) ? payload.positions : [];
+  const orders = Array.isArray(payload.orders) ? payload.orders : [];
+  const fills = Array.isArray(payload.fills) ? payload.fills : [];
+  const state = payload.state || {};
+  const status = $("economy-trading-safe-mode");
+  if (status) {
+    status.textContent = state.safe_mode ? `交易 safe mode：${state.reason || "已啟用"}` : "交易引擎正常";
+    status.style.color = state.safe_mode ? "#ffb74d" : "var(--muted)";
+  }
+  const activePositions = positions.filter((row) => Number(row.quantity || 0) !== 0 || Number(row.locked_quantity || 0) !== 0);
+  if ($("economy-spot-position-count")) $("economy-spot-position-count").textContent = String(activePositions.length);
+  if ($("economy-spot-position-summary")) {
+    $("economy-spot-position-summary").textContent = activePositions.length
+      ? activePositions.slice(0, 2).map((row) => `${row.market_symbol}: ${row.quantity || "0"}`).join(" / ")
+      : "尚無現貨";
+  }
+  if ($("economy-contract-status")) $("economy-contract-status").textContent = "未開放";
+  if ($("economy-trading-fill-count")) $("economy-trading-fill-count").textContent = String(fills.length);
+  if ($("economy-trading-order-count")) $("economy-trading-order-count").textContent = `訂單 ${orders.length}`;
+  renderTradingOrders(orders, "economy-trading-order-list", false);
+  renderTradingFills(fills, "economy-trading-fill-list");
 }
 
 function renderTradingRootReport(report) {
@@ -156,11 +184,16 @@ function populateTradingRootMarketForm() {
 
 async function loadTradingDashboard() {
   if (!currentUser || !canAccessModule("economy")) return;
+  const tradingEnabled = !siteConfig || siteConfig.feature_trading_enabled !== false;
   const card = $("trading-card");
-  if (card && siteConfig && siteConfig.feature_trading_enabled === false) {
+  const summaryCard = $("economy-trading-summary-card");
+  const rootCard = $("trading-root-card");
+  if (card && !tradingEnabled) {
     card.style.display = "none";
-    return;
   }
+  if (summaryCard) summaryCard.style.display = tradingEnabled ? "" : "none";
+  if (rootCard) rootCard.style.display = tradingEnabled && currentUser === "root" ? "" : "none";
+  if (!tradingEnabled) return;
   if (card) card.style.display = "";
   try {
     const json = await fetchTradingJson("/trading/dashboard");
@@ -179,6 +212,7 @@ async function loadTradingDashboard() {
     renderTradingSummary();
     renderTradingOrders(tradingState.orders);
     renderTradingFills(tradingState.fills);
+    renderTradingWalletSummary(payload);
     if (currentUser === "root") await loadTradingRootReport();
   } catch (err) {
     const status = $("trading-safe-mode");
@@ -292,6 +326,10 @@ async function allocateTradingReserve() {
   }
 }
 
+function openTradingModuleFromWallet() {
+  if (typeof switchModuleTab === "function") switchModuleTab("trading");
+}
+
 function syncTradingReserveUserOptions() {
   const source = $("economy-adjust-user-id");
   const target = $("trading-reserve-source-user-id");
@@ -310,6 +348,7 @@ function bindTradingEvents() {
     ["trading-root-refresh-btn", loadTradingRootReport],
     ["trading-root-save-market-btn", saveTradingRootMarket],
     ["trading-reserve-allocate-btn", allocateTradingReserve],
+    ["economy-trading-open-btn", openTradingModuleFromWallet],
   ];
   bindings.forEach(([id, handler]) => {
     const el = $(id);
