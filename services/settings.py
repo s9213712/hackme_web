@@ -59,7 +59,7 @@ DEFAULT_SETTINGS = {
     "feature_system_health_enabled": True,
     "feature_identity_governance_enabled": True,
     "feature_account_security_enabled": False,
-    "feature_member_governance_enabled": False,
+    "feature_member_governance_enabled": True,
     "feature_server_modes_enabled": False,
     "feature_snapshot_restore_enabled": False,
     "snapshot_daily_auto_enabled": False,

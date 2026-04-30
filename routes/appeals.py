@@ -18,6 +18,7 @@ def register_appeal_routes(app, deps):
     parse_positive_int = deps["parse_positive_int"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
+    role_rank = deps["role_rank"]
 
     def _serialize_appeal_row(r):
         if not r:
@@ -225,8 +226,8 @@ def register_appeal_routes(app, deps):
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
         actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if actor_role != "super_admin":
-            return json_resp({"ok":False,"msg":"只有最高管理者可審核申覆"}), 403
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"權限不足"}), 403
 
         status = normalize_text(request.args.get("status","")) or "pending"
         page = parse_positive_int(request.args.get("page", 1))

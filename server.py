@@ -990,6 +990,13 @@ def extra_security_headers(response):
         response.headers["Expires"] = "0"
     return response
 
+
+@app.errorhandler(404)
+def api_not_found(error):
+    if request.path.startswith("/api"):
+        return json_resp({"ok": False, "msg": "Not found"}), 404
+    return error
+
 # ── CORS (tightly scoped — no wildcard) ────────────────────────────────────────
 @app.before_request
 def enforce_root_ip_whitelist():
