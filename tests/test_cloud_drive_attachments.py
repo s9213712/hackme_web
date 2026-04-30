@@ -966,6 +966,53 @@ def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_referenc
     assert download.status_code == 404
 
 
+def test_cloud_drive_refs_requires_private_context_membership(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE dm_threads (
+            id INTEGER PRIMARY KEY,
+            participant_a_id INTEGER NOT NULL,
+            participant_b_id INTEGER NOT NULL,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO dm_threads (id, participant_a_id, participant_b_id, created_at, updated_at) VALUES (1, 1, 2, '2026-01-01', '2026-01-01')"
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"dm private"), "private.txt")},
+        content_type="multipart/form-data",
+    )
+    file_id = uploaded.get_json()["file"]["file_id"]
+    attached = client.post(
+        "/api/cloud-drive/attach-existing",
+        json={"file_id": file_id, "context_type": "dm", "context_id": "1", "grant_user_ids": [2]},
+    )
+    assert attached.status_code == 200
+
+    actor_box["actor"] = _actor(3, "mallory")
+    denied = client.get("/api/cloud-drive/refs?context_type=dm&context_id=1")
+    assert denied.status_code == 403
+
+    actor_box["actor"] = _actor(2, "bob")
+    allowed = client.get("/api/cloud-drive/refs?context_type=dm&context_id=1")
+    assert allowed.status_code == 200
+    assert allowed.get_json()["refs"][0]["file_id"] == file_id
+
+
 def test_announcement_attachment_requires_root_approval_before_visible(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

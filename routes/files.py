@@ -328,6 +328,92 @@ def register_file_routes(app, deps):
                 for task in _REMOTE_DOWNLOAD_TASKS.values()
             )
 
+    def _table_exists(conn, table_name):
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _context_refs_visible_to_actor(conn, actor, context_type, context_id):
+        if _is_manager(actor):
+            return True
+        actor_id = int(_actor_value(actor, "id") or 0)
+        context_type = str(context_type or "").strip()
+        context_id = str(context_id or "").strip()
+        if context_type == "dm":
+            if not _table_exists(conn, "dm_threads"):
+                return True
+            try:
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM dm_threads
+                    WHERE id=? AND (participant_a_id=? OR participant_b_id=?)
+                    """,
+                    (int(context_id), actor_id, actor_id),
+                ).fetchone()
+            except Exception:
+                return False
+            return row is not None
+        if context_type == "group_chat":
+            if not _table_exists(conn, "chat_room_members"):
+                return True
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+                    (int(context_id), actor_id),
+                ).fetchone()
+            except Exception:
+                return False
+            return row is not None
+        if context_type == "chat_message":
+            if not (_table_exists(conn, "chat_messages") and _table_exists(conn, "chat_room_members")):
+                return True
+            try:
+                row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM chat_messages m
+                    JOIN chat_room_members rm ON rm.room_id=m.room_id AND rm.user_id=?
+                    WHERE m.id=?
+                    """,
+                    (actor_id, int(context_id)),
+                ).fetchone()
+            except Exception:
+                return False
+            return row is not None
+        if context_type == "announcement":
+            if not _table_exists(conn, "announcements"):
+                return True
+            row = conn.execute("SELECT 1 FROM announcements WHERE id=? AND is_active=1", (context_id,)).fetchone()
+            return row is not None
+        if context_type == "forum_thread":
+            if not _table_exists(conn, "forum_threads"):
+                return True
+            row = conn.execute(
+                """
+                SELECT 1 FROM forum_threads
+                WHERE id=? AND is_deleted=0 AND (status='approved' OR author_user_id=?)
+                """,
+                (context_id, actor_id),
+            ).fetchone()
+            return row is not None
+        if context_type in {"forum_post", "forum_comment"}:
+            if not (_table_exists(conn, "forum_posts") and _table_exists(conn, "forum_threads")):
+                return True
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM forum_posts p
+                JOIN forum_threads t ON t.id=p.thread_id
+                WHERE p.id=? AND p.is_deleted=0 AND t.is_deleted=0
+                  AND (t.status='approved' OR p.author_user_id=? OR t.author_user_id=?)
+                """,
+                (context_id, actor_id, actor_id),
+            ).fetchone()
+            return row is not None
+        return False
+
     def _remote_progress_updater(task_id):
         def _callback(event):
             loaded = event.get("loaded_bytes")
@@ -1886,6 +1972,8 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
+            if not _context_refs_visible_to_actor(conn, actor, context_type, context_id):
+                return json_resp({"ok": False, "msg": "權限不足"}), 403
             rows = conn.execute(
                 """
                 SELECT r.*, f.original_filename_plain_for_public, f.size_bytes, f.scan_status, f.risk_level,
