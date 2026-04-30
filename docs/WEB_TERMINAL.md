@@ -1,5 +1,10 @@
 # Web Terminal Setup
 
+This Docker WebTerminal branch is abandoned and kept only as historical
+reference. Do not use it as the active development line. See
+[Docker branch postmortem](archive/web_terminal_docker_deprecated.md) for the
+tested build flow, errors, and abandonment reason.
+
 Web Terminal is an optional root-only feature. It is disabled or unavailable
 until its host dependencies pass the environment check.
 
