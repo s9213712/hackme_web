@@ -1981,16 +1981,7 @@ class PointsLedgerService:
         elif client_reference_id:
             idem_key = f"admin_adjust:ref:{sha256_text(client_reference_id)}:{direction}"
         else:
-            bucket = utc_now()[:16]
-            payload = {
-                "actor_id": actor_value(actor, "id"),
-                "target_user_id": int(user_id),
-                "direction": direction,
-                "amount": int(amount),
-                "reason": str(reason or "").strip(),
-                "bucket": bucket,
-            }
-            idem_key = f"admin_adjust:auto:{sha256_text(canonical_json(payload))}"
+            idem_key = None
         reference_id = client_reference_id or f"actor:{actor_value(actor, 'id')}:target:{user_id}:{utc_now()}"
         result = self.record_transaction(
             user_id=user_id,

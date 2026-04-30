@@ -10,6 +10,13 @@ function economySetMsg(text, ok = true) {
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function economyRequestId(prefix = "economy") {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return `${prefix}:${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
 function formatPointsCurrency(currency) {
   return "點";
 }
@@ -590,6 +597,7 @@ async function submitEconomyAdjustment() {
       direction: $("economy-adjust-direction")?.value || "credit",
       amount: Number($("economy-adjust-amount")?.value || 0),
       reason: $("economy-adjust-reason")?.value || "",
+      idempotency_key: economyRequestId("admin-adjust"),
     };
     const json = await fetchEconomyJson("/admin/points/adjust", {
       method: "POST",
@@ -602,7 +610,9 @@ async function submitEconomyAdjustment() {
       await loadEconomyAccountLookup();
     }
   } catch (err) {
-    economySetMsg(err.message || "調整失敗", false);
+    const message = err.message || "調整失敗";
+    economySetMsg(message, false);
+    alert(message);
   } finally {
     if (btn) {
       btn.disabled = false;
