@@ -1490,7 +1490,7 @@ function securityTestMsg(text, ok = true) {
   const msg = $("security-test-msg");
   if (!msg) return;
   msg.textContent = text || "";
-  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+  msg.className = text ? `msg show ${ok ? "ok" : "err"}` : "msg";
 }
 
 function renderSecurityTestJobs(jobs) {
@@ -1527,25 +1527,29 @@ function renderSecurityTestJobs(jobs) {
 
 async function loadSecurityTestJobs() {
   if (currentUser !== "root") return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const target = $("security-pentest-target");
-  if (target && !target.value) target.value = window.location.origin;
-  const stressTarget = $("security-stress-target");
-  if (stressTarget && !stressTarget.value) stressTarget.value = window.location.origin;
-  const res = await fetch(API + "/root/security-tests", {
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    securityTestMsg(json.msg || "測試任務讀取失敗", false);
-    return;
-  }
-  renderSecurityTestJobs(json.jobs || []);
-  if ((json.jobs || []).some((job) => job.status === "running")) {
-    clearTimeout(window.securityTestPollTimer);
-    window.securityTestPollTimer = setTimeout(loadSecurityTestJobs, 2500);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const target = $("security-pentest-target");
+    if (target && !target.value) target.value = window.location.origin;
+    const stressTarget = $("security-stress-target");
+    if (stressTarget && !stressTarget.value) stressTarget.value = window.location.origin;
+    const res = await fetch(API + "/root/security-tests", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      securityTestMsg(json.msg || `測試任務讀取失敗（HTTP ${res.status}）`, false);
+      return;
+    }
+    renderSecurityTestJobs(json.jobs || []);
+    if ((json.jobs || []).some((job) => job.status === "running")) {
+      clearTimeout(window.securityTestPollTimer);
+      window.securityTestPollTimer = setTimeout(loadSecurityTestJobs, 2500);
+    }
+  } catch (err) {
+    securityTestMsg(`測試任務讀取失敗：${err.message || "請檢查伺服器連線"}`, false);
   }
 }
 
@@ -1575,17 +1579,23 @@ async function startSecurityPentest() {
     tool_timeout_seconds: Number($("security-pentest-timeout")?.value || 180),
     i_own_this_target: !!$("security-pentest-own-target")?.checked,
   };
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/security-tests/pentest", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  securityTestMsg(json.ok ? `滲透測試已啟動：${json.job?.job_id || ""}` : (json.msg || "滲透測試啟動失敗"), !!json.ok);
-  if (json.ok) await loadSecurityTestJobs();
+  securityTestMsg("滲透測試啟動中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/root/security-tests/pentest", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    const ok = res.ok && !!json.ok;
+    securityTestMsg(ok ? `滲透測試已啟動：${json.job?.job_id || ""}` : (json.msg || `滲透測試啟動失敗（HTTP ${res.status}）`), ok);
+    if (ok) await loadSecurityTestJobs();
+  } catch (err) {
+    securityTestMsg(`滲透測試啟動失敗：${err.message || "請檢查伺服器連線"}`, false);
+  }
 }
 
 async function startSecurityFunctionalSmoke() {
@@ -1594,17 +1604,23 @@ async function startSecurityFunctionalSmoke() {
     port: Number($("security-functional-port")?.value || 50741),
     keep_runtime: !!$("security-functional-keep-runtime")?.checked,
   };
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/security-tests/functional", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  securityTestMsg(json.ok ? `全功能測試已啟動：${json.job?.job_id || ""}` : (json.msg || "全功能測試啟動失敗"), !!json.ok);
-  if (json.ok) await loadSecurityTestJobs();
+  securityTestMsg("全功能測試啟動中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/root/security-tests/functional", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    const ok = res.ok && !!json.ok;
+    securityTestMsg(ok ? `全功能測試已啟動：${json.job?.job_id || ""}` : (json.msg || `全功能測試啟動失敗（HTTP ${res.status}）`), ok);
+    if (ok) await loadSecurityTestJobs();
+  } catch (err) {
+    securityTestMsg(`全功能測試啟動失敗：${err.message || "請檢查伺服器連線"}`, false);
+  }
 }
 
 async function startSecurityStressTest() {
@@ -1615,17 +1631,23 @@ async function startSecurityStressTest() {
     concurrency: Number($("security-stress-concurrency")?.value || 20),
     paths: $("security-stress-paths")?.value || "",
   };
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/security-tests/stress", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  securityTestMsg(json.ok ? `壓力測試已啟動：${json.job?.job_id || ""}` : (json.msg || "壓力測試啟動失敗"), !!json.ok);
-  if (json.ok) await loadSecurityTestJobs();
+  securityTestMsg("壓力測試啟動中...", true);
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await fetch(API + "/root/security-tests/stress", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    const ok = res.ok && !!json.ok;
+    securityTestMsg(ok ? `壓力測試已啟動：${json.job?.job_id || ""}` : (json.msg || `壓力測試啟動失敗（HTTP ${res.status}）`), ok);
+    if (ok) await loadSecurityTestJobs();
+  } catch (err) {
+    securityTestMsg(`壓力測試啟動失敗：${err.message || "請檢查伺服器連線"}`, false);
+  }
 }
 
 async function loadServerOutput() {
