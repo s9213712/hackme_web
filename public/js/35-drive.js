@@ -1634,6 +1634,7 @@ function renderAlbums(albums) {
       <div>
         <strong>${sanitize(album.title || album.id)}</strong>
         <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}</div>
+        ${albumShareLinkMarkup(album)}
       </div>
       <div class="drive-file-actions">
         <button class="btn btn-primary" type="button" data-drive-action="open-album" data-album-id="${sanitize(album.id)}">預覽</button>
@@ -2094,6 +2095,41 @@ function albumFileDisplayName(file) {
   return file.display_name || file.original_filename_plain_for_public || file.virtual_path || file.file_id || "image";
 }
 
+function absoluteAlbumShareUrl(url) {
+  if (!url) return "";
+  try {
+    return new URL(url, window.location.origin).toString();
+  } catch (err) {
+    return String(url || "");
+  }
+}
+
+function albumShareLinkMarkup(album) {
+  const url = album?.share_url || album?.share_link?.url || "";
+  if (!url) return "";
+  const absolute = absoluteAlbumShareUrl(url);
+  return `
+    <div class="drive-card-sub drive-share-link">
+      <span>分享連結：<a href="${sanitize(url)}" target="_blank" rel="noreferrer">${sanitize(absolute)}</a></span>
+      <button class="btn btn-sm" type="button" data-drive-action="copy-album-share-link" data-share-url="${sanitize(absolute)}">複製</button>
+    </div>
+  `;
+}
+
+async function copyAlbumShareUrl(url) {
+  const shareUrl = absoluteAlbumShareUrl(url);
+  if (!shareUrl) {
+    alert("這本相簿尚未產生分享連結");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(shareUrl);
+    alert("已複製分享連結");
+  } catch (err) {
+    window.prompt("分享連結", shareUrl);
+  }
+}
+
 function renderAlbumDetail(album) {
   const card = $("album-detail-card");
   if (!card) return;
@@ -2102,7 +2138,9 @@ function renderAlbumDetail(album) {
   const title = $("album-detail-title");
   const meta = $("album-detail-meta");
   if (title) title.textContent = album.title || "相簿內容";
-  if (meta) meta.textContent = `${albumVisibilityLabel(album.visibility)} · ${Number((album.files || []).length)} 個檔案 · ${album.updated_at || album.created_at || ""}`;
+  if (meta) {
+    meta.innerHTML = `${sanitize(albumVisibilityLabel(album.visibility))} · ${Number((album.files || []).length)} 個檔案 · ${sanitize(album.updated_at || album.created_at || "")}${albumShareLinkMarkup(album)}`;
+  }
   if ($("album-edit-title")) $("album-edit-title").value = album.title || "";
   if ($("album-edit-description")) $("album-edit-description").value = album.description || "";
   if ($("album-edit-visibility")) $("album-edit-visibility").value = album.visibility || "private";
@@ -2157,6 +2195,7 @@ function renderAlbumGallery(albums) {
       <div>
         <strong>${sanitize(album.title || album.id)}</strong>
         <div class="drive-card-sub">${sanitize(albumVisibilityLabel(album.visibility))} · ${Number(album.file_count || 0)} 個檔案</div>
+        ${albumShareLinkMarkup(album)}
       </div>
       <button class="btn btn-primary" type="button" data-drive-action="open-album-viewer" data-album-id="${sanitize(album.id)}">預覽</button>
     </div>
@@ -2270,7 +2309,9 @@ async function openAlbumViewer(id, options = {}) {
     albumPreviewSequence = files.filter((file) => file?.file_id && (typeof driveFileIsImage !== "function" || driveFileIsImage(file)));
     albumPreviewIndex = -1;
     if (title) title.textContent = album.title || "相簿";
-    if (meta) meta.textContent = `${albumVisibilityLabel(album.visibility)} · ${files.length} 個檔案${album.description ? ` · ${album.description}` : ""}`;
+    if (meta) {
+      meta.innerHTML = `${sanitize(albumVisibilityLabel(album.visibility))} · ${files.length} 個檔案${album.description ? ` · ${sanitize(album.description)}` : ""}${albumShareLinkMarkup(album)}`;
+    }
     if (!filesEl) return;
     setAlbumThumbSize(getAlbumThumbSize());
     filesEl.innerHTML = files.length ? files.map(renderAlbumPreviewTile).join("") : `<div class="drive-empty">這本相簿還沒有檔案</div>`;
@@ -2410,6 +2451,7 @@ document.addEventListener("click", (event) => {
   const targetId = button.dataset.targetId || "";
   const path = button.dataset.path || "";
   const name = button.dataset.name || "";
+  const shareUrl = button.dataset.shareUrl || "";
   const warn = button.dataset.warn === "1";
   const albumSequence = button.dataset.albumSequence || "";
   (async () => {
@@ -2441,6 +2483,7 @@ document.addEventListener("click", (event) => {
     if (action === "purge-storage-trash") return purgeStorageTrash();
     if (action === "select-storage-folder") return selectStorageFolderForMove(path);
     if (action === "open-album") return openAlbum(albumId);
+    if (action === "copy-album-share-link") return copyAlbumShareUrl(shareUrl);
     if (action === "delete-album") return deleteAlbum(albumId);
     if (action === "close-album-detail") return closeAlbumDetail();
     if (action === "save-album-detail") return saveAlbumDetail();
