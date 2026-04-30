@@ -4,10 +4,163 @@ let webTerminalSocket = null;
 let webTerminalPollTimer = null;
 let webTerminalActiveSessionId = "";
 let webTerminalXterm = null;
+let webTerminalFitAddon = null;
+let webTerminalCols = 80;
+let webTerminalRows = 24;
+let webTerminalLastPollLine = "";
+let webTerminalConfiguredRows = 51;
+let webTerminalConfiguredCols = 209;
+const WEB_TERMINAL_SIZE_KEY = "hackme_web_terminal_height";
+const WEB_TERMINAL_RESIZE_PREFIX = "__hackme_terminal_resize__:";
+
+function applyWebTerminalSize(value) {
+  const box = $("web-terminal-box");
+  if (!box) return;
+  const selected = value || localStorage.getItem(WEB_TERMINAL_SIZE_KEY) || "420";
+  const nextHeight = selected === "viewport" ? "calc(100vh - 220px)" : `${Math.max(280, parseInt(selected || "420", 10) || 420)}px`;
+  box.style.height = nextHeight;
+  box.style.minHeight = selected === "viewport" ? "520px" : "280px";
+  box.style.maxHeight = selected === "viewport" ? "calc(100vh - 120px)" : "";
+  box.style.overflow = "hidden";
+  localStorage.setItem(WEB_TERMINAL_SIZE_KEY, selected);
+  const select = $("web-terminal-size-select");
+  if (select && select.value !== selected) select.value = selected;
+  const fallback = $("web-terminal-output");
+  if (fallback) {
+    fallback.style.height = "100%";
+    fallback.style.boxSizing = "border-box";
+    fallback.style.overflow = "auto";
+  }
+  window.requestAnimationFrame(() => resizeWebTerminalViewport());
+}
+
+function scheduleWebTerminalResize() {
+  resizeWebTerminalViewport();
+  window.requestAnimationFrame(() => resizeWebTerminalViewport());
+  window.setTimeout(() => resizeWebTerminalViewport(), 120);
+  window.setTimeout(() => resizeWebTerminalViewport(), 500);
+}
+
+function applyConfiguredTerminalBoxSize(box, rows, cols) {
+  if (!box || !rows) return;
+  const styles = window.getComputedStyle(box);
+  const measure = measureWebTerminalCell(box, styles);
+  const fontSize = parseFloat(styles.fontSize || "13") || 13;
+  const lineHeight = Math.max(14, Math.ceil(measure.height || fontSize * 1.35));
+  const neededHeight = Math.max(280, Math.ceil(rows * lineHeight + 20));
+  box.style.height = `${neededHeight}px`;
+  box.style.minHeight = `${neededHeight}px`;
+  box.style.maxHeight = "";
+  box.style.overflow = "auto";
+}
+
+function resizeWebTerminalViewport() {
+  const box = $("web-terminal-box");
+  if (!box || !webTerminalXterm) return;
+  if (webTerminalConfiguredRows && webTerminalConfiguredCols) {
+    const rows = Math.max(12, Math.min(200, parseInt(webTerminalConfiguredRows, 10) || 51));
+    const cols = Math.max(80, Math.min(400, parseInt(webTerminalConfiguredCols, 10) || 209));
+    applyConfiguredTerminalBoxSize(box, rows, cols);
+    webTerminalRows = rows;
+    webTerminalCols = cols;
+    if (typeof webTerminalXterm.resize === "function") {
+      try {
+        webTerminalXterm.resize(cols, rows);
+      } catch (err) {}
+    }
+    applyConfiguredTerminalBoxSize(box, rows, cols);
+    sendWebTerminalResize();
+    return;
+  }
+  if (webTerminalFitAddon && typeof webTerminalFitAddon.fit === "function") {
+    try {
+      webTerminalFitAddon.fit();
+      webTerminalCols = webTerminalXterm.cols || webTerminalCols;
+      webTerminalRows = webTerminalXterm.rows || webTerminalRows;
+      sendWebTerminalResize();
+      return;
+    } catch (err) {}
+  }
+  const styles = window.getComputedStyle(box);
+  const measure = measureWebTerminalCell(box, styles);
+  const fontSize = parseFloat(styles.fontSize || "13") || 13;
+  const lineHeight = Math.max(14, Math.ceil(measure.height || fontSize * 1.45));
+  const charWidth = Math.max(7, Math.ceil(measure.width || fontSize * 0.62));
+  const boxWidth = Math.max(box.clientWidth, box.getBoundingClientRect().width || 0);
+  const boxHeight = Math.max(box.clientHeight, box.getBoundingClientRect().height || 0);
+  const cols = Math.max(80, Math.floor((boxWidth - 24) / charWidth));
+  const rows = Math.max(12, Math.floor((boxHeight - 16) / lineHeight));
+  webTerminalCols = cols;
+  webTerminalRows = rows;
+  if (typeof webTerminalXterm.resize === "function") {
+    try {
+      webTerminalXterm.resize(cols, rows);
+    } catch (err) {}
+  }
+  if (typeof webTerminalXterm.refresh === "function") {
+    try {
+      webTerminalXterm.refresh(0, Math.max(0, webTerminalXterm.rows - 1));
+    } catch (err) {}
+  }
+  sendWebTerminalResize();
+}
+
+function applyWebTerminalSessionConfig(session) {
+  if (!session) return;
+  if (session.terminal_rows) webTerminalConfiguredRows = session.terminal_rows;
+  if (session.terminal_cols) webTerminalConfiguredCols = session.terminal_cols;
+  scheduleWebTerminalResize();
+}
+
+function measureWebTerminalCell(box, boxStyles) {
+  const xtermElement = box.querySelector(".xterm") || box;
+  const charMeasure = box.querySelector(".xterm-char-measure-element");
+  const charRect = charMeasure ? charMeasure.getBoundingClientRect() : null;
+  if (charRect && charRect.width > 0 && charRect.height > 0) {
+    return { width: charRect.width, height: charRect.height };
+  }
+  const span = document.createElement("span");
+  const styles = window.getComputedStyle(xtermElement);
+  span.textContent = "00000000000000000000";
+  span.style.position = "absolute";
+  span.style.visibility = "hidden";
+  span.style.whiteSpace = "pre";
+  span.style.fontFamily = styles.fontFamily || boxStyles.fontFamily || "monospace";
+  span.style.fontSize = styles.fontSize || boxStyles.fontSize || "13px";
+  span.style.fontWeight = styles.fontWeight || boxStyles.fontWeight || "400";
+  span.style.lineHeight = styles.lineHeight || boxStyles.lineHeight || "normal";
+  box.appendChild(span);
+  const rect = span.getBoundingClientRect();
+  span.remove();
+  return {
+    width: rect.width > 0 ? rect.width / span.textContent.length : 0,
+    height: rect.height || 0,
+  };
+}
+
+function sendWebTerminalResize() {
+  if (!webTerminalSocket || webTerminalSocket.readyState !== WebSocket.OPEN) return;
+  const rows = webTerminalXterm && webTerminalXterm.rows ? webTerminalXterm.rows : webTerminalRows;
+  const cols = webTerminalXterm && webTerminalXterm.cols ? webTerminalXterm.cols : webTerminalCols;
+  try {
+    webTerminalSocket.send(WEB_TERMINAL_RESIZE_PREFIX + JSON.stringify({ rows, cols }));
+  } catch (err) {}
+}
+
+function bindWebTerminalSizeControl() {
+  const select = $("web-terminal-size-select");
+  if (!select || select.dataset.webTerminalSizeBound === "1") return;
+  select.dataset.webTerminalSizeBound = "1";
+  select.addEventListener("change", () => applyWebTerminalSize(select.value));
+  window.addEventListener("resize", () => scheduleWebTerminalResize());
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleWebTerminalResize();
+  });
+}
 
 function webTerminalWrite(text) {
   if (webTerminalXterm) {
-    webTerminalXterm.write(String(text || "").replaceAll("\n", "\r\n"));
+    webTerminalXterm.write(String(text || ""));
     return;
   }
   const out = $("web-terminal-output");
@@ -166,7 +319,12 @@ async function refreshWebTerminalSessions() {
     headers: { "X-CSRF-Token": csrf || "" },
   });
   const json = await res.json().catch(() => ({}));
-  if (json.ok) webTerminalRenderSessions(json.sessions || []);
+  if (json.ok) {
+    webTerminalRenderSessions(json.sessions || []);
+    if (!json.sessions || !json.sessions.some((session) => session.session_id === webTerminalActiveSessionId)) {
+      webTerminalActiveSessionId = "";
+    }
+  }
 }
 
 async function startWebTerminalQemu() {
@@ -174,6 +332,10 @@ async function startWebTerminalQemu() {
   const csrf = getCsrfToken();
   const out = $("web-terminal-output");
   if (out) out.textContent = "";
+  if (webTerminalSocket) {
+    webTerminalSocket.close();
+    webTerminalSocket = null;
+  }
   webTerminalWrite("正在建立隔離 VM session...\n");
   const res = await fetch(API + "/root/web-terminal/qemu/sessions", {
     method: "POST",
@@ -188,6 +350,7 @@ async function startWebTerminalQemu() {
     return;
   }
   webTerminalActiveSessionId = json.session.session_id;
+  applyWebTerminalSessionConfig(json.session);
   webTerminalSetMessage("VM 建立中，等待 ready 後會自動連線。");
   await refreshWebTerminalSessions();
   pollWebTerminalSession(webTerminalActiveSessionId);
@@ -195,6 +358,7 @@ async function startWebTerminalQemu() {
 
 function pollWebTerminalSession(sessionId) {
   clearInterval(webTerminalPollTimer);
+  webTerminalLastPollLine = "";
   webTerminalPollTimer = setInterval(async () => {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
@@ -204,7 +368,14 @@ function pollWebTerminalSession(sessionId) {
     });
     const json = await res.json().catch(() => ({}));
     if (!json.ok || !json.session) return;
-    webTerminalWrite(`[${json.session.status}] ${json.session.message || ""}\n`);
+    applyWebTerminalSessionConfig(json.session);
+    const pollLine = `[${json.session.status}] ${json.session.message || ""}`;
+    if (pollLine !== webTerminalLastPollLine) {
+      webTerminalLastPollLine = pollLine;
+      webTerminalWrite(`${pollLine}\n`);
+    } else {
+      webTerminalSetMessage(pollLine || "VM 建立中...");
+    }
     await refreshWebTerminalSessions();
     if (json.session.status === "ready") {
       clearInterval(webTerminalPollTimer);
@@ -222,9 +393,16 @@ function connectWebTerminalSocket(sessionId) {
   if (webTerminalSocket) webTerminalSocket.close();
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   webTerminalSocket = new WebSocket(`${proto}//${location.host}/api/root/web-terminal/qemu/sessions/${encodeURIComponent(sessionId)}/ws`);
-  webTerminalSocket.onopen = () => webTerminalSetMessage("Terminal 已連線。");
+  webTerminalSocket.onopen = () => {
+    webTerminalSetMessage("Terminal 已連線。");
+    scheduleWebTerminalResize();
+  };
   webTerminalSocket.onmessage = (event) => webTerminalWrite(event.data || "");
-  webTerminalSocket.onclose = () => webTerminalSetMessage("Web Terminal session 已關閉", false);
+  webTerminalSocket.onclose = async () => {
+    webTerminalSetMessage("Web Terminal session 已關閉，VM 已排程清理。", false);
+    webTerminalActiveSessionId = "";
+    await refreshWebTerminalSessions();
+  };
 }
 
 async function closeWebTerminalQemu() {
@@ -248,10 +426,26 @@ async function closeWebTerminalQemu() {
 function setupWebTerminalInput() {
   const box = $("web-terminal-box");
   if (!box) return;
+  bindWebTerminalSizeControl();
+  applyWebTerminalSize();
   if (window.Terminal) {
-    webTerminalXterm = new window.Terminal({ cursorBlink: true, convertEol: true, fontSize: 13 });
+    webTerminalXterm = new window.Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      fontFamily: "'Cascadia Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace",
+      fontSize: 13,
+      letterSpacing: 0,
+      lineHeight: 1,
+      termName: "xterm-256color",
+      windowsMode: false,
+    });
+    if (window.FitAddon && typeof window.FitAddon.FitAddon === "function") {
+      webTerminalFitAddon = new window.FitAddon.FitAddon();
+      webTerminalXterm.loadAddon(webTerminalFitAddon);
+    }
     box.innerHTML = "";
     webTerminalXterm.open(box);
+    scheduleWebTerminalResize();
     webTerminalXterm.onData((data) => {
       if (webTerminalSocket && webTerminalSocket.readyState === WebSocket.OPEN) webTerminalSocket.send(data);
     });

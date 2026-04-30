@@ -51,6 +51,7 @@ Root can configure these in `安全中心 -> 伺服器設定 -> 系統`:
 - base image path
 - vCPU, memory, disk size
 - idle timeout
+- default terminal rows/cols, default `51 x 209`
 
 The first implementation only accepts `qemu:///system` as the libvirt URI.
 
@@ -70,7 +71,17 @@ The first implementation only accepts `qemu:///system` as the libvirt URI.
    silently drop it when the domain is actually defined.
    For libvirt NAT modes, the server waits for a guest IP and then bridges SSH to
    WebSocket.
-9. Closing the session destroys and undefines the VM.
+9. Before the browser can use the terminal, the backend waits for SSH and
+   cloud-init bootstrap. The guest runs `apt update` and installs baseline tools
+   including `sudo`, `ca-certificates`, `curl`, `wget`, `nano`, `vim-tiny`,
+   `iputils-ping`, `dnsutils`, `net-tools`, `unzip`, `ncurses-term`, `screen`,
+   `tmux`, and `htop`.
+10. Closing the session destroys and undefines the VM.
+
+Only one active session is kept per root user. Starting a new session closes and
+removes the previous VM session first. Idle timeout can be set to `0` to disable
+inactivity-based closing; VM cleanup still happens when the WebSocket closes or
+root closes the session explicitly.
 
 ## Audit
 
@@ -115,6 +126,10 @@ Interpretation:
 - port not listening: user-mode `hostfwd_add` did not apply
 - port listening but SSH banner missing: wait for cloud-init/sshd, then inspect
   VM console or cloud-init logs
+- terminal opens but `apt install` cannot find packages: close the session and
+  start a new one so the latest cloud-init baseline is used; then run
+  `apt update` inside the VM if the mirror was temporarily unreachable during
+  bootstrap
 - VM missing: provisioning failed before `virt-install` completed, usually storage
   permissions or base image path
 - `qemu-img` cannot open backing image: the overlay must be created with unsafe
@@ -130,6 +145,20 @@ Interpretation:
 - `network=none` is safest but is not interactive until the serial console bridge
   is implemented. `user` mode is recommended on WSL2 because it avoids nested
   bridge NAT. `nat` uses libvirt's default bridge network.
+- The WebSocket bridge starts SSH with `TERM=xterm-256color`, forces the guest
+  shell to use `TERM=xterm-256color`, `COLORTERM=truecolor`, and
+  `LANG/LC_ALL=C.UTF-8`, then forwards xterm rows/cols resize events into the
+  backend PTY. The browser loads xterm's FitAddon so cols/rows are calculated
+  from the real rendered cell size instead of a rough estimate. Full-screen
+  terminal apps such as `screen`, `tmux`, `htop`, and `btop` rely on this.
+- Root can override the default terminal rows/cols in server settings. When set,
+  the frontend xterm and backend PTY both use the configured size, so `stty size`
+  should match the root setting after opening a new session.
+- The bridge uses an incremental UTF-8 decoder for SSH output. This avoids
+  corrupting box-drawing and block characters when a multi-byte character is
+  split across WebSocket reads. Guest locale defaults to `C.UTF-8` so it matches
+  the local server environment and does not depend on generating an extra locale
+  inside the cloud image.
 
 ## Current MVP Limits
 

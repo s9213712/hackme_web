@@ -3344,6 +3344,22 @@
       color: #fff;
     }
 
+    #web-terminal-box,
+    #web-terminal-box * {
+      overflow-wrap: normal !important;
+      word-break: normal !important;
+      letter-spacing: 0 !important;
+      font-variant-ligatures: none;
+      text-rendering: optimizeSpeed;
+    }
+
+    #web-terminal-box .xterm,
+    #web-terminal-box .xterm-rows,
+    #web-terminal-box .xterm-rows > div {
+      font-family: 'Cascadia Mono', 'Cascadia Code', Consolas, 'Liberation Mono', Menlo, monospace !important;
+      white-space: pre !important;
+    }
+
     @media (max-width: 1100px) {
       .chat-toolbar,
       .chat-layout,

@@ -68,6 +68,7 @@ function bindUiEvents() {
   const webTerminalHealth = $("web-terminal-health-btn");
   const webTerminalStart = $("web-terminal-start-btn");
   const webTerminalClose = $("web-terminal-close-btn");
+  const webTerminalSize = $("web-terminal-size-select");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const rootStorageRefresh = $("root-storage-refresh-btn");
   const rootStorageSave = $("root-storage-save-btn");
@@ -419,6 +420,9 @@ function bindUiEvents() {
   if (webTerminalHealth) webTerminalHealth.addEventListener("click", loadWebTerminalQemu);
   if (webTerminalStart) webTerminalStart.addEventListener("click", startWebTerminalQemu);
   if (webTerminalClose) webTerminalClose.addEventListener("click", closeWebTerminalQemu);
+  if (webTerminalSize && typeof bindWebTerminalSizeControl === "function") {
+    bindWebTerminalSizeControl();
+  }
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (rootStorageRefresh) rootStorageRefresh.addEventListener("click", loadRootStorageUsers);
   if (rootStorageSave) rootStorageSave.addEventListener("click", saveRootStorageOverride);

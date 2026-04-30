@@ -1159,7 +1159,9 @@ async function loadSettings() {
   if ($("s-web-terminal-qemu-vcpus")) $("s-web-terminal-qemu-vcpus").value = s.web_terminal_qemu_vcpus || 1;
   if ($("s-web-terminal-qemu-memory-mb")) $("s-web-terminal-qemu-memory-mb").value = s.web_terminal_qemu_memory_mb || 1024;
   if ($("s-web-terminal-qemu-disk-gb")) $("s-web-terminal-qemu-disk-gb").value = s.web_terminal_qemu_disk_gb || 10;
-  if ($("s-web-terminal-qemu-idle-timeout-seconds")) $("s-web-terminal-qemu-idle-timeout-seconds").value = s.web_terminal_qemu_idle_timeout_seconds || 900;
+  if ($("s-web-terminal-qemu-idle-timeout-seconds")) $("s-web-terminal-qemu-idle-timeout-seconds").value = s.web_terminal_qemu_idle_timeout_seconds ?? 0;
+  if ($("s-web-terminal-qemu-terminal-rows")) $("s-web-terminal-qemu-terminal-rows").value = s.web_terminal_qemu_terminal_rows || 51;
+  if ($("s-web-terminal-qemu-terminal-cols")) $("s-web-terminal-qemu-terminal-cols").value = s.web_terminal_qemu_terminal_cols || 209;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
@@ -2124,7 +2126,9 @@ async function saveSettings() {
     web_terminal_qemu_vcpus: parseInt($("s-web-terminal-qemu-vcpus")?.value || "1"),
     web_terminal_qemu_memory_mb: parseInt($("s-web-terminal-qemu-memory-mb")?.value || "1024"),
     web_terminal_qemu_disk_gb: parseInt($("s-web-terminal-qemu-disk-gb")?.value || "10"),
-    web_terminal_qemu_idle_timeout_seconds: parseInt($("s-web-terminal-qemu-idle-timeout-seconds")?.value || "900"),
+    web_terminal_qemu_idle_timeout_seconds: parseInt($("s-web-terminal-qemu-idle-timeout-seconds")?.value || "0"),
+    web_terminal_qemu_terminal_rows: parseInt($("s-web-terminal-qemu-terminal-rows")?.value || "51"),
+    web_terminal_qemu_terminal_cols: parseInt($("s-web-terminal-qemu-terminal-cols")?.value || "209"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",

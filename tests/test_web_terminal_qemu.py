@@ -5,6 +5,7 @@ from flask import Flask, jsonify, make_response
 from routes.system_admin import register_system_admin_routes
 from services.web_terminal_qemu import (
     LibvirtQemuProvider,
+    QemuWebTerminalManager,
     TerminalSession,
     _hypervisor_can_probably_read,
     qemu_config_from_settings,
@@ -107,6 +108,19 @@ def test_qemu_config_defaults_are_safe():
     assert config["network_mode"] == "none"
     assert config["libvirt_uri"] == "qemu:///system"
     assert config["distro"] == "ubuntu-22.04"
+    assert config["idle_timeout_seconds"] == 0
+    assert config["terminal_rows"] == 51
+    assert config["terminal_cols"] == 209
+
+
+def test_qemu_config_accepts_terminal_rows_and_cols():
+    config = qemu_config_from_settings({
+        "web_terminal_qemu_terminal_rows": 60,
+        "web_terminal_qemu_terminal_cols": 240,
+    }, base_dir="/tmp/project")
+
+    assert config["terminal_rows"] == 60
+    assert config["terminal_cols"] == 240
 
 
 def test_qemu_config_accepts_legacy_docker_keys_for_migration():
@@ -198,6 +212,165 @@ def test_user_mode_host_forward_uses_qemu_monitor_command():
     args = provider.calls[0]
     assert args[:4] == ["virsh", "-c", "qemu:///system", "qemu-monitor-command"]
     assert args[-1] == "hostfwd_add tcp:127.0.0.1:22222-:22"
+
+
+def test_cleanup_user_domains_only_removes_matching_webterminal_domains():
+    class CaptureProvider(LibvirtQemuProvider):
+        def __init__(self):
+            super().__init__()
+            self.destroyed = []
+
+        def virsh(self, *args, timeout=None):
+            if args == ("list", "--all", "--name"):
+                return {
+                    "ok": True,
+                    "stdout": "\n".join([
+                        "hackme-term-u1-abcdef1234",
+                        "hackme-term-u2-abcdef1234",
+                        "unrelated",
+                        "hackme-term-u1-notvalid",
+                    ]),
+                    "stderr": "",
+                    "returncode": 0,
+                }
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+        def destroy_and_undefine(self, vm_name):
+            self.destroyed.append(vm_name)
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    provider = CaptureProvider()
+    result = provider.cleanup_user_domains(1)
+
+    assert result["ok"] is True
+    assert result["cleaned"] == ["hackme-term-u1-abcdef1234"]
+    assert provider.destroyed == ["hackme-term-u1-abcdef1234"]
+
+
+def test_close_session_removes_session_from_manager():
+    class CaptureProvider(LibvirtQemuProvider):
+        def __init__(self):
+            super().__init__()
+            self.destroyed = []
+
+        def destroy_and_undefine(self, vm_name):
+            self.destroyed.append(vm_name)
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    provider = CaptureProvider()
+    manager = QemuWebTerminalManager(
+        base_dir="/tmp/project",
+        storage_dir="/tmp/storage",
+        get_settings=lambda: {"web_terminal_qemu_storage_dir": "/var/lib/hackme-vms"},
+        audit=lambda *args, **kwargs: None,
+        provider=provider,
+    )
+    session = TerminalSession(
+        session_id="sid",
+        user_id=1,
+        username="root",
+        vm_name="hackme-term-u1-abcdef1234",
+        status="ready",
+    )
+    manager.sessions["sid"] = session
+
+    ok, msg = manager.close_session("sid", actor={"username": "root"}, reason="test")
+
+    assert ok is True
+    assert msg == ""
+    assert provider.destroyed == ["hackme-term-u1-abcdef1234"]
+    assert manager.list_sessions() == []
+    assert manager.get_session("sid") is None
+
+
+def test_refresh_session_status_marks_ssh_ready_provisioning_session_ready():
+    manager = QemuWebTerminalManager(
+        base_dir="/tmp/project",
+        storage_dir="/tmp/storage",
+        get_settings=lambda: {},
+        audit=lambda *args, **kwargs: None,
+    )
+    session = TerminalSession(
+        session_id="sid",
+        user_id=1,
+        username="root",
+        vm_name="hackme-term-u1-abcdef1234",
+        status="provisioning",
+        ip_address="127.0.0.1",
+        host_ssh_port=46079,
+    )
+    manager.sessions["sid"] = session
+    manager._ssh_ready = lambda active_session: True
+    manager._wait_for_guest_bootstrap = lambda active_session: None
+
+    refreshed = manager.refresh_session_status("sid")
+
+    assert refreshed.status == "ready"
+    assert "SSH forwarded" in refreshed.message
+
+
+def test_cloud_init_prepares_apt_baseline(tmp_path):
+    session_dir = tmp_path / "seed"
+    session_dir.mkdir()
+    key_path = tmp_path / "id_ed25519"
+    key_path.write_text("private", encoding="utf-8")
+    (tmp_path / "id_ed25519.pub").write_text("ssh-ed25519 fake-key pytest", encoding="utf-8")
+    manager = QemuWebTerminalManager(
+        base_dir=str(tmp_path / "project"),
+        storage_dir=str(tmp_path / "storage"),
+        get_settings=lambda: {},
+        audit=lambda *args, **kwargs: None,
+    )
+    session = TerminalSession(
+        session_id="sid",
+        user_id=1,
+        username="root",
+        vm_name="hackme-term-u1-abcdef1234",
+        ssh_key_path=str(key_path),
+        seed_dir=str(session_dir),
+    )
+
+    user_data, _ = manager._write_cloud_init(session)
+    cloud_init = Path(user_data).read_text(encoding="utf-8")
+
+    assert "package_update: true" in cloud_init
+    assert "package_upgrade: false" in cloud_init
+    assert "  - sudo" in cloud_init
+    assert "  - ca-certificates" in cloud_init
+    assert "  - curl" in cloud_init
+    assert "  - wget" in cloud_init
+    assert "  - locales" in cloud_init
+    assert "  - ncurses-term" in cloud_init
+    assert "  - screen" in cloud_init
+    assert "  - htop" in cloud_init
+    assert "LANG=C.UTF-8" in cloud_init
+    assert "Use apt install <package> as root" in cloud_init
+
+
+def test_web_terminal_bridge_sets_term_and_handles_resize_control():
+    source = (Path(__file__).resolve().parents[1] / "services" / "web_terminal_qemu.py").read_text(encoding="utf-8")
+    frontend = (Path(__file__).resolve().parents[1] / "public" / "js" / "39-web-terminal-qemu.js").read_text(encoding="utf-8")
+
+    assert "TERM" in source
+    assert "xterm-256color" in source
+    assert 'os.environ["TERM"] = "xterm-256color"' in source
+    assert 'os.environ["LANG"] = "C.UTF-8"' in source
+    assert "exec env TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 LC_ALL=C.UTF-8 /bin/bash -l" in source
+    assert "getincrementaldecoder" in source
+    assert "TIOCSWINSZ" in source
+    assert "__hackme_terminal_resize__:" in source
+    assert "sendWebTerminalResize" in frontend
+    assert "scheduleWebTerminalResize" in frontend
+    assert "WEB_TERMINAL_RESIZE_PREFIX" in frontend
+    assert "webTerminalFitAddon.fit()" in frontend
+    assert "measureWebTerminalCell" in frontend
+    assert "window.FitAddon.FitAddon" in frontend
+    assert "webTerminalLastPollLine" in frontend
+    assert "convertEol: false" in frontend
+    assert "fontFamily" in frontend
+    assert "lineHeight: 1" in frontend
+    assert 'termName: "xterm-256color"' in frontend
+    assert 'webTerminalXterm.write(String(text || ""));' in frontend
 
 
 def test_base_image_health_accepts_hypervisor_group_readable_file(tmp_path, monkeypatch):
@@ -302,6 +475,26 @@ def test_qemu_health_accepts_spaced_libvirt_network_active_output(tmp_path):
 
 def test_web_terminal_frontend_uses_existing_sanitize_helper():
     js = (Path(__file__).resolve().parents[1] / "public" / "js" / "39-web-terminal-qemu.js").read_text(encoding="utf-8")
+    html = (Path(__file__).resolve().parents[1] / "public" / "index.html").read_text(encoding="utf-8")
+    css = (Path(__file__).resolve().parents[1] / "public" / "styles.css").read_text(encoding="utf-8")
     assert "escapeHtml(" not in js
     assert "sanitize(" in js
     assert "所有 WebTerminal 環境檢查已通過" in js
+    assert "applyWebTerminalSize" in js
+    assert "bindWebTerminalSizeControl" in js
+    assert "resizeWebTerminalViewport" in js
+    assert "webTerminalXterm.resize" in js
+    assert "webTerminalFitAddon" in js
+    assert "webTerminalConfiguredRows" in js
+    assert "applyWebTerminalSessionConfig" in js
+    assert "applyConfiguredTerminalBoxSize" in js
+    assert '".terminal,.xterm,.xterm-screen,.xterm-viewport"' not in js
+    assert "web-terminal-size-select" in html
+    assert "s-web-terminal-qemu-terminal-rows" in html
+    assert "s-web-terminal-qemu-terminal-cols" in html
+    assert "/vendor/xterm/addon-fit.js" in html
+    assert "web-terminal-isolation" in html
+    assert "#web-terminal-box .xterm-rows > div" in css
+    assert "white-space: pre !important" in css
+    assert "height:100%;box-sizing:border-box;overflow:auto" in html
+    assert 'min="0" max="86400"' in html

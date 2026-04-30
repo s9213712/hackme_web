@@ -360,7 +360,14 @@ def register_economy_routes(app, deps):
                 backup_id=str(data.get("backup_id") or ""),
                 confirm=str(data.get("confirm") or ""),
             )
-            audit("POINTS_CHAIN_RECOVERY_APPLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"backup_id={data.get('backup_id')}")
+            audit(
+                "POINTS_CHAIN_RECOVERY_APPLY",
+                get_client_ip(),
+                user=actor["username"],
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=f"backup_id={data.get('backup_id')},verification_ok={bool((result.get('verification') or {}).get('ok'))}",
+            )
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)

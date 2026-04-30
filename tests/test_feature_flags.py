@@ -71,6 +71,12 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/cloud-drive/upload") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/files/quota") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/crypto/init") == "feature_privacy_uploads_enabled"
+    assert feature_gate_for_path("/api/comfyui/generate") == "feature_comfyui_enabled"
+    assert feature_gate_for_path("/api/points/wallet") == "feature_economy_enabled"
+    assert feature_gate_for_path("/api/admin/points/ledger") == "feature_economy_enabled"
+    assert feature_gate_for_path("/api/root/points/chain/verify") == "feature_economy_enabled"
+    assert feature_gate_for_path("/api/games/chess/practice") == "feature_games_enabled"
+    assert feature_gate_for_path("/api/root/games/chess/weekly-rewards/award") == "feature_games_enabled"
     assert feature_gate_for_path("/api/admin/settings") is None
 
 

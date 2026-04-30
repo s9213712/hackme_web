@@ -12,6 +12,7 @@ from pathlib import Path
 
 from services.bootstrap import CURRENT_SCHEMA_VERSION
 from services.release_info import APP_RELEASE_ID
+from services.settings import MANAGEMENT_ONLY_RESET_SETTINGS
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
 SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
@@ -326,7 +327,19 @@ def _parse_daily_snapshot_time(value):
 
 
 class SnapshotService:
-    def __init__(self, *, get_db, db_path, base_dir, storage_root, audit, file_roots=None, config_files=None):
+    def __init__(
+        self,
+        *,
+        get_db,
+        db_path,
+        base_dir,
+        storage_root,
+        audit,
+        file_roots=None,
+        config_files=None,
+        reset_points_chain=None,
+        reset_audit_chain=None,
+    ):
         self.get_db = get_db
         self.db_path = Path(db_path)
         self.base_dir = Path(base_dir)
@@ -334,6 +347,8 @@ class SnapshotService:
         self.snapshots_root = self.storage_root / "snapshots"
         self.imports_root = self.snapshots_root / ".imports"
         self.audit = audit
+        self.reset_points_chain = reset_points_chain
+        self.reset_audit_chain = reset_audit_chain
         self.file_roots = [Path(p) for p in (file_roots or []) if p]
         self.config_files = [Path(p) for p in (config_files or []) if p]
 
@@ -796,6 +811,16 @@ class SnapshotService:
         }
         return sorted(reset_tables, key=lambda name: (priority.get(name, 100), name))
 
+    def _apply_management_only_settings(self, conn, *, actor_name, reset_at):
+        applied = {}
+        for key, value in MANAGEMENT_ONLY_RESET_SETTINGS.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (key, str(bool(value)), reset_at, actor_name or "system_reset"),
+            )
+            applied[key] = bool(value)
+        return applied
+
     def daily_snapshot_status(self, *, settings, now=None):
         now = now or datetime.now()
         settings = dict(settings or {})
@@ -876,23 +901,45 @@ class SnapshotService:
                     conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", cleared_tables)
                 except Exception:
                     pass
+            management_settings = self._apply_management_only_settings(conn, actor_name=actor_name, reset_at=reset_at)
             conn.commit()
         finally:
             conn.close()
 
         self._clear_file_roots()
-        self.audit(
-            "SYSTEM_RUNTIME_RESET",
-            "-",
-            user=actor_name,
-            success=True,
-            detail=f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},reason={reason or ''},reset_at={reset_at}",
+        points_result = None
+        if self.reset_points_chain:
+            points_result = self.reset_points_chain(
+                actor=actor,
+                reason=reason or "",
+                pre_reset_snapshot_id=pre.snapshot_id,
+            )
+        audit_detail = (
+            f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},"
+            f"points_chain_reset={bool(points_result and points_result.get('ok'))},"
+            f"management_only_settings={','.join(k for k, v in management_settings.items() if v)},"
+            f"disabled_settings={','.join(k for k, v in management_settings.items() if not v)},"
+            f"reason={reason or ''},reset_at={reset_at}"
         )
+        audit_result = None
+        if self.reset_audit_chain:
+            audit_result = self.reset_audit_chain(
+                "SYSTEM_RUNTIME_RESET",
+                "-",
+                user=actor_name,
+                success=True,
+                detail=audit_detail,
+            )
+        else:
+            self.audit("SYSTEM_RUNTIME_RESET", "-", user=actor_name, success=True, detail=audit_detail)
         return {
             "ok": True,
             "msg": "runtime state reset",
             "pre_reset_snapshot_id": pre.snapshot_id,
             "cleared_tables": cleared_tables,
+            "points_chain_reset": points_result,
+            "audit_chain_reset": audit_result,
+            "management_only_settings": management_settings,
             "reset_at": reset_at,
         }
 

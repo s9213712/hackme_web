@@ -24,6 +24,7 @@ from services.audit import (
     canonical_json,
     configure_audit_service,
     repair_audit_chain,
+    reset_audit_chain_with_event,
     verify_audit_integrity,
 )
 from services.access_controls import (
@@ -446,6 +447,9 @@ FEATURE_ROUTE_GATES = (
     ("feature_system_health_enabled", ("/api/admin/health",)),
     ("feature_privacy_uploads_enabled", ("/api/files/", "/api/files", "/api/cloud-drive/", "/api/cloud-drive", "/api/root/announcement-attachment-requests", "/api/crypto/")),
     ("feature_storage_albums_enabled", ("/api/storage/", "/api/storage", "/api/admin/storage/", "/api/admin/storage")),
+    ("feature_comfyui_enabled", ("/api/comfyui/", "/api/comfyui")),
+    ("feature_economy_enabled", ("/api/points/", "/api/points", "/api/admin/points/", "/api/admin/points", "/api/root/points/", "/api/root/points")),
+    ("feature_games_enabled", ("/api/games/", "/api/games", "/api/root/games/", "/api/root/games")),
 )
 
 
@@ -848,6 +852,8 @@ snapshot_service = SnapshotService(
         os.path.join(BASE_DIR, "settings.json"),
         os.path.join(BASE_DIR, ".env"),
     ],
+    reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
+    reset_audit_chain=reset_audit_chain_with_event,
 )
 ROOT_INTEGRITY_SIGNING_KEY = os.environ.get("ROOT_INTEGRITY_SIGNING_KEY", "").encode("utf-8") or _INTEGRITY_KEY
 integrity_guard = IntegrityGuard(

@@ -102,6 +102,8 @@ class TerminalSession:
     vcpus: int = 1
     memory_mb: int = 1024
     disk_gb: int = 10
+    terminal_rows: int = 51
+    terminal_cols: int = 209
 
     def payload(self):
         return {
@@ -121,6 +123,8 @@ class TerminalSession:
             "vcpus": self.vcpus,
             "memory_mb": self.memory_mb,
             "disk_gb": self.disk_gb,
+            "terminal_rows": self.terminal_rows,
+            "terminal_cols": self.terminal_cols,
         }
 
 
@@ -206,7 +210,9 @@ def qemu_config_from_settings(settings, *, base_dir):
         "vcpus": _int_setting(settings, "web_terminal_qemu_vcpus", 1, minimum=1, maximum=4),
         "memory_mb": _int_setting(settings, "web_terminal_qemu_memory_mb", 1024, minimum=512, maximum=8192),
         "disk_gb": _int_setting(settings, "web_terminal_qemu_disk_gb", 10, minimum=5, maximum=100),
-        "idle_timeout_seconds": _int_setting(settings, "web_terminal_qemu_idle_timeout_seconds", 900, minimum=60, maximum=86400),
+        "idle_timeout_seconds": _int_setting(settings, "web_terminal_qemu_idle_timeout_seconds", 0, minimum=0, maximum=86400),
+        "terminal_rows": _int_setting(settings, "web_terminal_qemu_terminal_rows", 51, minimum=12, maximum=200),
+        "terminal_cols": _int_setting(settings, "web_terminal_qemu_terminal_cols", 209, minimum=80, maximum=400),
         "cloud_drive_sync": str(_setting(settings, "web_terminal_qemu_cloud_drive_sync", "staged") or "staged"),
         "base_dir": base_dir,
     }
@@ -395,6 +401,19 @@ class LibvirtQemuProvider:
         self.virsh("destroy", vm_name, timeout=20)
         return self.virsh("undefine", vm_name, "--remove-all-storage", timeout=60)
 
+    def cleanup_user_domains(self, user_id):
+        prefix = f"hackme-term-u{int(user_id)}-"
+        result = self.virsh("list", "--all", "--name", timeout=10)
+        if not result["ok"]:
+            return result
+        cleaned = []
+        for raw_name in (result["stdout"] or "").splitlines():
+            vm_name = raw_name.strip()
+            if vm_name.startswith(prefix) and VM_NAME_RE.fullmatch(vm_name):
+                self.destroy_and_undefine(vm_name)
+                cleaned.append(vm_name)
+        return {"ok": True, "cleaned": cleaned}
+
     def domain_ip(self, vm_name):
         if not VM_NAME_RE.fullmatch(vm_name or ""):
             raise ValueError("unsafe VM name")
@@ -419,6 +438,8 @@ def public_config(config):
         "memory_mb": config.get("memory_mb"),
         "disk_gb": config.get("disk_gb"),
         "idle_timeout_seconds": config.get("idle_timeout_seconds"),
+        "terminal_rows": config.get("terminal_rows"),
+        "terminal_cols": config.get("terminal_cols"),
         "cloud_drive_sync": config.get("cloud_drive_sync"),
     }
 
@@ -443,7 +464,21 @@ class QemuWebTerminalManager:
 
     def list_sessions(self):
         with self.lock:
-            return [session.payload() for session in self.sessions.values()]
+            return [session.payload() for session in self.sessions.values() if session.status != "closed"]
+
+    def refresh_session_status(self, session_id):
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        if session.status == "provisioning" and session.ip_address and self._ssh_ready(session):
+            self._wait_for_guest_bootstrap(session)
+            message = (
+                f"VM 已啟動；SSH forwarded to 127.0.0.1:{session.host_ssh_port}"
+                if session.host_ssh_port else "VM 已啟動，apt 基礎環境已準備"
+            )
+            self._set_status(session_id, "ready", message)
+            session = self.get_session(session_id)
+        return session
 
     def create_session(self, *, actor, ip="-", ua="-"):
         config = self.config()
@@ -457,6 +492,11 @@ class QemuWebTerminalManager:
         if config["network_mode"] == "none":
             self._audit("WEB_TERMINAL_QEMU_CREATE_BLOCKED", actor, ip, False, {"reason": "network_none_not_interactive"})
             return None, "目前 Web Terminal 透過 SSH bridge 連線，請先將網路模式改成 NAT 或受限 NAT"
+        self.close_user_sessions(int(actor["id"]), actor=actor, ip=ip, reason="replace_existing_session")
+        provider = self.provider or LibvirtQemuProvider(libvirt_uri=config["libvirt_uri"])
+        cleanup = provider.cleanup_user_domains(int(actor["id"]))
+        if isinstance(cleanup, dict) and cleanup.get("cleaned"):
+            self._audit("WEB_TERMINAL_QEMU_ORPHAN_CLEANUP", actor, ip, True, {"cleaned": cleanup.get("cleaned")})
         vm_root = validate_vm_root(config["vm_root"], project_base_dir=self.base_dir)
         session_id = uuid.uuid4().hex
         vm_name = f"hackme-term-u{int(actor['id'])}-{session_id[:10]}"
@@ -481,6 +521,8 @@ class QemuWebTerminalManager:
             vcpus=config["vcpus"],
             memory_mb=config["memory_mb"],
             disk_gb=config["disk_gb"],
+            terminal_rows=config["terminal_rows"],
+            terminal_cols=config["terminal_cols"],
         )
         with self.lock:
             self.sessions[session_id] = session
@@ -508,11 +550,22 @@ class QemuWebTerminalManager:
             provider.destroy_and_undefine(session.vm_name)
             self._set_status(session_id, "closed", reason)
             self._audit("WEB_TERMINAL_QEMU_SESSION_CLOSED", actor, ip, True, {"session_id": session_id, "vm_name": session.vm_name, "reason": reason})
+            with self.lock:
+                self.sessions.pop(session_id, None)
             return True, ""
         except Exception as exc:
             self._set_status(session_id, "failed", str(exc))
             self._audit("WEB_TERMINAL_QEMU_SESSION_CLOSE_FAILED", actor, ip, False, {"session_id": session_id, "vm_name": session.vm_name, "error": str(exc)})
             return False, str(exc)
+
+    def close_user_sessions(self, user_id, *, actor=None, ip="-", reason="replace_existing_session"):
+        with self.lock:
+            session_ids = [
+                sid for sid, session in self.sessions.items()
+                if int(session.user_id) == int(user_id) and session.status != "closed"
+            ]
+        for session_id in session_ids:
+            self.close_session(session_id, actor=actor, ip=ip, reason=reason)
 
     def get_session(self, session_id):
         with self.lock:
@@ -535,6 +588,7 @@ class QemuWebTerminalManager:
         if session.host_ssh_port:
             command.extend(["-p", str(session.host_ssh_port)])
         command.append(f"{session.ssh_username}@{session.ip_address}")
+        command.append("exec env TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 LC_ALL=C.UTF-8 /bin/bash -l")
         return command
 
     def _provision_session(self, session_id, config, actor, ip, ua):
@@ -557,6 +611,7 @@ class QemuWebTerminalManager:
                 deadline = time.time() + 120
                 while time.time() < deadline:
                     if self._ssh_ready(session):
+                        self._wait_for_guest_bootstrap(session)
                         self._set_status(session_id, "ready", f"VM 已啟動；SSH forwarded to 127.0.0.1:{session.host_ssh_port}")
                         return
                     time.sleep(2)
@@ -568,7 +623,14 @@ class QemuWebTerminalManager:
                 if ip_addr:
                     with self.lock:
                         session.ip_address = ip_addr
-                    self._set_status(session_id, "ready", "VM 已啟動")
+                    ssh_deadline = time.time() + 120
+                    while time.time() < ssh_deadline:
+                        if self._ssh_ready(session):
+                            self._wait_for_guest_bootstrap(session)
+                            self._set_status(session_id, "ready", "VM 已啟動，apt 基礎環境已準備")
+                            return
+                        time.sleep(2)
+                    self._set_status(session_id, "failed", f"VM 已取得 IP {ip_addr}，但 120 秒內無法 SSH 連線")
                     return
                 time.sleep(2)
             self._set_status(session_id, "failed", "VM 已建立但 120 秒內未取得 IP")
@@ -600,6 +662,29 @@ class QemuWebTerminalManager:
         command.append("true")
         result = subprocess.run(command, text=True, capture_output=True, timeout=8, check=False)
         return result.returncode == 0
+
+    def _run_guest_command(self, session, guest_command, *, timeout=30):
+        command = [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=5",
+            "-i", session.ssh_key_path,
+        ]
+        if session.host_ssh_port:
+            command.extend(["-p", str(session.host_ssh_port)])
+        command.append(f"{session.ssh_username}@{session.ip_address}")
+        command.append(guest_command)
+        return subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False)
+
+    def _wait_for_guest_bootstrap(self, session):
+        # cloud-init prepares apt indexes and basic CLI tools. Do not fail the VM
+        # solely because a mirror is slow; the terminal remains useful for repair.
+        try:
+            self._run_guest_command(session, "cloud-init status --wait --long || true", timeout=180)
+        except Exception:
+            pass
 
     def _write_ssh_keypair(self, session):
         key_path = Path(session.ssh_key_path)
@@ -634,9 +719,35 @@ class QemuWebTerminalManager:
                 f"      - {public_key}",
                 "ssh_pwauth: false",
                 "disable_root: false",
-                "package_update: false",
+                "package_update: true",
+                "package_upgrade: false",
+                "packages:",
+                "  - sudo",
+                "  - ca-certificates",
+                "  - curl",
+                "  - wget",
+                "  - gnupg",
+                "  - locales",
+                "  - lsb-release",
+                "  - nano",
+                "  - vim-tiny",
+                "  - iputils-ping",
+                "  - dnsutils",
+                "  - net-tools",
+                "  - unzip",
+                "  - ncurses-term",
+                "  - screen",
+                "  - tmux",
+                "  - htop",
                 "runcmd:",
                 "  - echo 'hackme_web libvirt terminal VM' > /etc/motd",
+                "  - update-locale LANG=C.UTF-8 LC_ALL=C.UTF-8 || true",
+                "  - printf 'LANG=C.UTF-8\\nLC_ALL=C.UTF-8\\n' > /etc/default/locale",
+                "  - mkdir -p /home/root",
+                "  - chown root:root /home/root",
+                "  - chmod 0755 /home/root",
+                "  - printf '%s\\n' 'echo \"WebTerminal apt baseline ready. Use apt install <package> as root.\"' > /etc/profile.d/hackme-webterminal.sh",
+                "  - chmod 0644 /etc/profile.d/hackme-webterminal.sh",
                 "",
             ]),
             encoding="utf-8",
@@ -666,34 +777,79 @@ class QemuWebTerminalManager:
             pass
 
 
-def bridge_ssh_to_websocket(command, ws, *, idle_timeout_seconds=900):
+def bridge_ssh_to_websocket(command, ws, *, idle_timeout_seconds=0, initial_rows=51, initial_cols=209):
+    import codecs
+    import fcntl
+    import json
     import os
     import pty
     import select
+    import struct
+    import termios
+
+    resize_prefix = "__hackme_terminal_resize__:"
+
+    def set_pty_size(pty_fd, rows, cols):
+        try:
+            rows = max(12, min(200, int(rows)))
+            cols = max(40, min(400, int(cols)))
+            size = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(pty_fd, termios.TIOCSWINSZ, size)
+        except Exception:
+            pass
+
+    def handle_control_message(message):
+        if isinstance(message, bytes):
+            try:
+                message = message.decode("utf-8")
+            except Exception:
+                return False
+        if not isinstance(message, str) or not message.startswith(resize_prefix):
+            return False
+        try:
+            payload = json.loads(message[len(resize_prefix):] or "{}")
+            set_pty_size(fd, payload.get("rows", 24), payload.get("cols", 80))
+        except Exception:
+            pass
+        return True
 
     pid, fd = pty.fork()
     if pid == 0:
+        os.environ["TERM"] = "xterm-256color"
+        os.environ["COLORTERM"] = "truecolor"
+        os.environ["LANG"] = "C.UTF-8"
+        os.environ["LC_ALL"] = "C.UTF-8"
         os.execvp(command[0], command)
+    set_pty_size(fd, initial_rows, initial_cols)
+    output_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     last_activity = time.time()
     ws_closed = False
     try:
         while True:
-            if time.time() - last_activity > idle_timeout_seconds:
+            if idle_timeout_seconds and idle_timeout_seconds > 0 and time.time() - last_activity > idle_timeout_seconds:
                 try:
                     ws.send("\r\n[session idle timeout]\r\n")
                 except Exception:
                     pass
-                break
+                return "idle_timeout"
+            try:
+                finished_pid, _ = os.waitpid(pid, os.WNOHANG)
+                if finished_pid == pid:
+                    return "process_exit"
+            except ChildProcessError:
+                return "process_exit"
             readable, _, _ = select.select([fd], [], [], 0.1)
             if fd in readable:
                 try:
                     data = os.read(fd, 4096)
                 except OSError:
-                    break
+                    return "process_exit"
                 if not data:
-                    break
+                    return "process_exit"
                 last_activity = time.time()
-                ws.send(data.decode("utf-8", errors="replace"))
+                text = output_decoder.decode(data)
+                if text:
+                    ws.send(text)
             if not ws_closed:
                 try:
                     incoming = ws.receive(timeout=0.01)
@@ -704,10 +860,20 @@ def bridge_ssh_to_websocket(command, ws, *, idle_timeout_seconds=900):
                     incoming = None
                 if incoming:
                     last_activity = time.time()
+                    if handle_control_message(incoming):
+                        continue
                     if isinstance(incoming, str):
                         incoming = incoming.encode("utf-8")
                     os.write(fd, incoming)
+                elif ws_closed:
+                    return "websocket_closed"
     finally:
+        try:
+            remaining = output_decoder.decode(b"", final=True)
+            if remaining:
+                ws.send(remaining)
+        except Exception:
+            pass
         try:
             os.close(fd)
         except Exception:

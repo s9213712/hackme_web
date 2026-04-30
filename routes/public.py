@@ -109,6 +109,56 @@ def register_public_routes(app, deps):
             settings.get("internal_test_login_token_expires_at", ""),
         )
 
+    def production_login_conflict(conn, user_id, ip, now_iso):
+        if current_server_mode(conn) != "production":
+            return None
+        try:
+            ip_conflict = conn.execute(
+                """
+                SELECT s.user_id, u.username
+                FROM sessions s
+                LEFT JOIN users u ON u.id=s.user_id
+                WHERE COALESCE(s.is_revoked, 0)=0
+                  AND s.expires_at>?
+                  AND s.ip_address=?
+                  AND s.user_id<>?
+                LIMIT 1
+                """,
+                (now_iso, ip, user_id),
+            ).fetchone()
+            if ip_conflict:
+                return {
+                    "kind": "ip_reused_by_other_account",
+                    "msg": "正式上線模式禁止同一 IP 同時登入多個帳號，請先登出原帳號",
+                    "detail": f"active_user_id={ip_conflict['user_id']},active_username={ip_conflict['username'] or '-'}",
+                }
+            account_conflict = conn.execute(
+                """
+                SELECT ip_address
+                FROM sessions
+                WHERE user_id=?
+                  AND COALESCE(is_revoked, 0)=0
+                  AND expires_at>?
+                  AND ip_address IS NOT NULL
+                  AND ip_address<>?
+                LIMIT 1
+                """,
+                (user_id, now_iso, ip),
+            ).fetchone()
+            if account_conflict:
+                return {
+                    "kind": "account_active_from_other_ip",
+                    "msg": "正式上線模式禁止同一帳號同時從不同 IP 登入，請先登出其他裝置",
+                    "detail": f"active_ip={account_conflict['ip_address']}",
+                }
+        except Exception as exc:
+            return {
+                "kind": "session_policy_check_failed",
+                "msg": "正式上線模式登入安全檢查失敗，請稍後再試",
+                "detail": f"error={exc}",
+            }
+        return None
+
     def find_recovery_user(conn, identifier):
         ident = str(identifier or "").strip()
         if not ident:
@@ -500,6 +550,23 @@ def register_public_routes(app, deps):
                         audit("LOGIN_INTERNAL_TEST_TOKEN_REQUIRED", ip, username, ua=ua, success=False)
                         return json_resp({"ok":False,"msg":"目前是內測模式，請輸入 root 提供的內測 token"}), 403
 
+                conflict = production_login_conflict(conn, user_row["id"], ip, now)
+                if conflict:
+                    conn.execute(
+                        "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
+                        (user_row["id"], ip, ua, now),
+                    )
+                    conn.commit()
+                    audit(
+                        "LOGIN_PRODUCTION_SESSION_CONFLICT",
+                        ip,
+                        username,
+                        ua=ua,
+                        success=False,
+                        detail=f"{conflict['kind']};{conflict['detail']}",
+                    )
+                    return json_resp({"ok":False,"msg":conflict["msg"]}), 403
+
                 # Log successful attempt
                 conn.execute(
                     "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 1, ?)",
@@ -625,16 +692,6 @@ def register_public_routes(app, deps):
             return json_resp({"ok": False, "msg": "驗證碼不可為空"}), 400
         if password != password_confirm:
             return json_resp({"ok": False, "msg": "兩次密碼輸入不一致"}), 400
-        ok, msg = validate_password(password)
-        if not ok:
-            return json_resp({"ok": False, "msg": msg}), 400
-        if is_feature_enabled("feature_account_security_enabled"):
-            ok, msg, strength = enforce_password_strength(password, min_score=3)
-            if not ok:
-                return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
-        else:
-            strength = score_password_strength(password)
-
         conn = get_db()
         try:
             ensure_public_account_columns(conn)
@@ -642,6 +699,19 @@ def register_public_routes(app, deps):
             if not token_row:
                 audit("PASSWORD_RESET_TOKEN_INVALID", ip, ua=ua, success=False)
                 return json_resp({"ok": False, "msg": "驗證碼無效或已過期"}), 400
+            target_is_root = str(token_row["username"] or "").strip().lower() == "root"
+            if not target_is_root:
+                ok, msg = validate_password(password)
+                if not ok:
+                    return json_resp({"ok": False, "msg": msg}), 400
+                if is_feature_enabled("feature_account_security_enabled"):
+                    ok, msg, strength = enforce_password_strength(password, min_score=3)
+                    if not ok:
+                        return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
+                else:
+                    strength = score_password_strength(password)
+            else:
+                strength = score_password_strength(password)
             current_row = conn.execute(
                 "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (token_row["user_id"],),

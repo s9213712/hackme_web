@@ -135,6 +135,7 @@ install_xterm() {
   mkdir -p "$ROOT_DIR/public/vendor/xterm"
   cp "$ROOT_DIR/node_modules/@xterm/xterm/lib/xterm.js" "$ROOT_DIR/public/vendor/xterm/xterm.js"
   cp "$ROOT_DIR/node_modules/@xterm/xterm/css/xterm.css" "$ROOT_DIR/public/vendor/xterm/xterm.css"
+  cp "$ROOT_DIR/node_modules/@xterm/addon-fit/lib/addon-fit.js" "$ROOT_DIR/public/vendor/xterm/addon-fit.js"
   log "xterm.js copied to public/vendor/xterm."
 }
 
@@ -516,7 +517,9 @@ doctor_server() {
   fi
   log "ok: found server pid $pid on port $SERVER_PORT"
   local libvirt_gid=""
+  local kvm_gid=""
   libvirt_gid="$(getent group libvirt 2>/dev/null | awk -F: '{print $3}' || true)"
+  kvm_gid="$(getent group kvm 2>/dev/null | awk -F: '{print $3}' || true)"
   if [[ -z "$libvirt_gid" ]]; then
     log "failed: libvirt group does not exist"
     return 1
@@ -525,8 +528,16 @@ doctor_server() {
     log "ok: server pid $pid has libvirt group ($libvirt_gid)"
   else
     log "failed: server pid $pid does not have libvirt group ($libvirt_gid)"
-    log "repair: stop server and restart it after re-login, or run local dev server with sg libvirt"
+    log "repair: stop server and restart it after re-login, or run local dev server with the command from --print-server-command"
     failed=1
+  fi
+  if [[ -n "$kvm_gid" ]]; then
+    if [[ -r "/proc/$pid/status" ]] && grep -E "^Groups:" "/proc/$pid/status" | grep -qw "$kvm_gid"; then
+      log "ok: server pid $pid has kvm group ($kvm_gid)"
+    else
+      log "warn: server pid $pid does not have kvm group ($kvm_gid)"
+      log "hint: if base images are group-owned by kvm, start server with the command from --print-server-command or run --fix-vm-storage-permissions"
+    fi
   fi
   if [[ "$failed" -eq 0 ]]; then
     log "server doctor result: ok"
@@ -538,12 +549,13 @@ doctor_server() {
 
 print_server_command() {
   cat <<EOF
-Run the development server with libvirt group applied:
+Run the development server with kvm + libvirt groups applied:
 
-  sg libvirt -c 'cd "$ROOT_DIR" && setsid -f env HTML_LEARNING_HOST=127.0.0.1 HTML_LEARNING_PORT=$SERVER_PORT PYTHONPATH="$ROOT_DIR" python3 "$ROOT_DIR/server.py" > /tmp/hackme_web_$SERVER_PORT.out 2>&1'
+  sg kvm -c "sg libvirt -c 'cd $ROOT_DIR && setsid -f env HTML_LEARNING_HOST=127.0.0.1 HTML_LEARNING_PORT=$SERVER_PORT PYTHONPATH=$ROOT_DIR python3 $ROOT_DIR/server.py > /tmp/hackme_web_$SERVER_PORT.out 2>&1'"
 
 Then verify:
 
+  sg kvm -c 'sg libvirt -c "./install_web_terminal_qemu_dependencies.sh --doctor"'
   ./install_web_terminal_qemu_dependencies.sh --doctor-server
 EOF
 }
@@ -585,7 +597,10 @@ while [[ "$#" -gt 0 ]]; do
       server_status=0
       doctor || doctor_status=$?
       doctor_server || server_status=$?
-      if [[ "$doctor_status" -ne 0 || "$server_status" -ne 0 ]]; then
+      if [[ "$server_status" -eq 0 && "$doctor_status" -ne 0 ]]; then
+        log "note: shell doctor failed, but server doctor passed. This usually means this terminal session has not reloaded group membership; the running web server is what the browser uses."
+      fi
+      if [[ "$server_status" -ne 0 ]]; then
         exit 1
       fi
       ;;

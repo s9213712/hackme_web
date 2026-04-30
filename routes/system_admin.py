@@ -1251,7 +1251,7 @@ def register_system_admin_routes(app, deps):
         actor, error = require_root_actor()
         if error:
             return error
-        session = web_terminal_manager.get_session(session_id)
+        session = web_terminal_manager.refresh_session_status(session_id)
         if not session:
             return json_resp({"ok": False, "msg": "找不到 terminal session"}), 404
         if request.method == "GET":
@@ -1279,14 +1279,22 @@ def register_system_admin_routes(app, deps):
             try:
                 command = web_terminal_manager.websocket_ssh_command(session_id)
                 audit("WEB_TERMINAL_QEMU_WS_OPEN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=json.dumps({"session_id": session_id, "vm_name": session.vm_name}, ensure_ascii=False))
-                bridge_ssh_to_websocket(command, ws, idle_timeout_seconds=web_terminal_manager.config()["idle_timeout_seconds"])
-                audit("WEB_TERMINAL_QEMU_WS_CLOSE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=json.dumps({"session_id": session_id, "vm_name": session.vm_name}, ensure_ascii=False))
+                close_reason = bridge_ssh_to_websocket(
+                    command,
+                    ws,
+                    idle_timeout_seconds=web_terminal_manager.config()["idle_timeout_seconds"],
+                    initial_rows=getattr(session, "terminal_rows", 51),
+                    initial_cols=getattr(session, "terminal_cols", 209),
+                )
+                audit("WEB_TERMINAL_QEMU_WS_CLOSE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=json.dumps({"session_id": session_id, "vm_name": session.vm_name, "reason": close_reason}, ensure_ascii=False))
+                web_terminal_manager.close_session(session_id, actor=dict(actor), ip=get_client_ip(), reason=close_reason or "ws_closed")
             except Exception as exc:
                 audit("WEB_TERMINAL_QEMU_WS_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=json.dumps({"session_id": session_id, "error": str(exc)}, ensure_ascii=False))
                 try:
                     ws.send(f"Web Terminal session 已關閉：{exc}\r\n")
                 finally:
                     ws.close()
+                    web_terminal_manager.close_session(session_id, actor=dict(actor), ip=get_client_ip(), reason="ws_failed")
 
     # ── 系統參數（超級管理者 only）───────────────────────────────────────────────
     @app.route("/api/admin/settings", methods=["GET","PUT"])
@@ -1396,7 +1404,9 @@ def register_system_admin_routes(app, deps):
             ("web_terminal_qemu_vcpus", 1, 4),
             ("web_terminal_qemu_memory_mb", 512, 8192),
             ("web_terminal_qemu_disk_gb", 5, 100),
-            ("web_terminal_qemu_idle_timeout_seconds", 60, 86400),
+            ("web_terminal_qemu_idle_timeout_seconds", 0, 86400),
+            ("web_terminal_qemu_terminal_rows", 12, 200),
+            ("web_terminal_qemu_terminal_cols", 80, 400),
         ):
             if key in data:
                 try:

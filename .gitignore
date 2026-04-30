@@ -2,8 +2,10 @@ __pycache__/
 *.pyc
 node_modules/
 database/database.db
+database/database.db-*
 database/database.db.bak
 database/app.db
+database/app.db-*
 .blocked_ips.json
 .fail_log.json
 .rate_limit.json

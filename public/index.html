@@ -6,7 +6,7 @@
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
     <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
-    <link rel="stylesheet" href="/styles.css?v=20260429-ui-polish" />
+    <link rel="stylesheet" href="/styles.css?v=20260430-web-terminal-isolation" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1223,10 +1223,19 @@
           <label>&nbsp;</label>
           <button class="btn" type="button" id="web-terminal-close-btn">關閉 Session</button>
         </div>
+        <div class="field">
+          <label>Terminal 高度</label>
+          <select id="web-terminal-size-select">
+            <option value="420">標準</option>
+            <option value="560">加高</option>
+            <option value="720">大型</option>
+            <option value="viewport">接近全頁</option>
+          </select>
+        </div>
       </div>
       <div id="web-terminal-health" class="drive-file-list" style="margin-top:.75rem;"></div>
-      <div id="web-terminal-box" style="margin-top:.75rem;min-height:420px;background:#06070a;border:1px solid rgba(255,255,255,.12);border-radius:8px;overflow:hidden;">
-        <pre id="web-terminal-output" style="margin:0;padding:1rem;color:#d6f5d6;font-size:.82rem;line-height:1.45;white-space:pre-wrap;">Terminal 尚未連線。</pre>
+      <div id="web-terminal-box" style="margin-top:.75rem;height:420px;min-height:280px;background:#06070a;border:1px solid rgba(255,255,255,.12);border-radius:8px;overflow:hidden;">
+        <pre id="web-terminal-output" style="height:100%;box-sizing:border-box;overflow:auto;margin:0;padding:1rem;color:#d6f5d6;font-size:.82rem;line-height:1.45;white-space:pre-wrap;">Terminal 尚未連線。</pre>
       </div>
       <div id="web-terminal-msg" class="msg"></div>
     </div>
@@ -1897,7 +1906,9 @@
               <div class="field"><label>vCPU</label><input type="number" id="s-web-terminal-qemu-vcpus" min="1" max="4" /></div>
               <div class="field"><label>記憶體 MB</label><input type="number" id="s-web-terminal-qemu-memory-mb" min="512" max="8192" /></div>
               <div class="field"><label>磁碟 GB</label><input type="number" id="s-web-terminal-qemu-disk-gb" min="5" max="100" /></div>
-              <div class="field"><label>閒置逾時秒數</label><input type="number" id="s-web-terminal-qemu-idle-timeout-seconds" min="60" max="86400" /></div>
+              <div class="field"><label>閒置逾時秒數（0=不自動逾時）</label><input type="number" id="s-web-terminal-qemu-idle-timeout-seconds" min="0" max="86400" /></div>
+              <div class="field"><label>Terminal rows</label><input type="number" id="s-web-terminal-qemu-terminal-rows" min="12" max="200" /></div>
+              <div class="field"><label>Terminal cols</label><input type="number" id="s-web-terminal-qemu-terminal-cols" min="80" max="400" /></div>
             </div>
             <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">啟用前請先在 repo 根目錄執行 <code>./install_web_terminal_qemu_dependencies.sh --all</code>。Cloud Drive 第一版採 staged sync 設計，不把主系統目錄直接掛進 VM。</div>
             <div class="mini-title" style="margin:.9rem 0 .55rem;">自動 Snapshot</div>
@@ -2388,6 +2399,7 @@
 </div>
 
 <script src="/vendor/xterm/xterm.js" defer></script>
+<script src="/vendor/xterm/addon-fit.js" defer></script>
 <script src="/js/00-core.js?v=20260429-chat-attachment-delete" defer></script>
 <script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
@@ -2400,7 +2412,7 @@
 <script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
-<script src="/js/39-web-terminal-qemu.js?v=20260429-qemu-terminal-health-detail-4" defer></script>
+<script src="/js/39-web-terminal-qemu.js?v=20260430-qemu-terminal-renderer-align" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260429-storage-capacity-audit" defer></script>
 <script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>

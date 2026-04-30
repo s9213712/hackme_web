@@ -163,11 +163,11 @@ and SSH host port, inspect that live session:
 Run this before closing the failed session. Once the session is closed, libvirt
 destroys/undefines the temporary VM and the evidence is gone.
 
-This catches the common case where your shell has `libvirt` permission but the
-already-running `hackme_web` process was started before group membership took
-effect. If `--doctor-server` says the server PID does not have the `libvirt`
-group, restart the server after logging out and back in, or use the development
-command printed by:
+This catches the common case where your shell and the already-running
+`hackme_web` process do not have the same groups. The web UI uses the server
+process, not your current terminal shell. If `--doctor-server` says the server
+PID does not have the `libvirt` group, restart the server after logging out and
+back in, or use the development command printed by:
 
 ```bash
 ./install_web_terminal_qemu_dependencies.sh --print-server-command
@@ -180,6 +180,15 @@ the failed items at the same time, check these in order:
 groups
 virsh -c qemu:///system list --all
 ./install_web_terminal_qemu_dependencies.sh --doctor-server
+```
+
+If `--doctor-server` says the server PID has `libvirt` and `kvm` but the shell
+doctor still fails, the server is usually fine; the current terminal simply has
+not reloaded group membership. To run a shell-side doctor with the same effective
+groups as the development server:
+
+```bash
+sg kvm -c 'sg libvirt -c "./install_web_terminal_qemu_dependencies.sh --doctor"'
 ```
 
 The important point is that the user who starts `server.py` must be able to read
@@ -219,7 +228,9 @@ scripts/run_prod.sh
 
 The server process must run as a user that can access libvirt/KVM. On a local
 development machine, if you have just added yourself to `libvirt` but have not
-opened a new login session yet, use:
+opened a new login session yet, use the printed command. It applies both `kvm`
+and `libvirt`; this matters when base images are group-owned by `kvm` while
+libvirt management requires `libvirt`:
 
 ```bash
 ./install_web_terminal_qemu_dependencies.sh --print-server-command
@@ -250,7 +261,9 @@ Base image 路徑: leave empty
 vCPU: 1
 記憶體 MB: 1024
 磁碟 GB: 10
-閒置逾時秒數: 900
+閒置逾時秒數: 0
+Terminal rows: 51
+Terminal cols: 209
 ```
 
 Save settings.
@@ -259,7 +272,9 @@ Why user-mode NAT first: WSL2 often drops return traffic for nested libvirt
 bridge NAT. QEMU user-mode NAT lets the QEMU process proxy outbound connections
 directly and exposes guest SSH through a temporary `127.0.0.1` host port.
 `none` is reserved for the later serial-console bridge and is blocked by health
-checks in the current MVP.
+checks in the current MVP. Idle timeout `0` means the backend will not close the
+terminal due to inactivity. The VM is still destroyed when the WebSocket closes,
+when root closes the session, or when root starts a replacement session.
 
 ## 7. Open WebTerminal
 
@@ -276,6 +291,56 @@ Then:
 3. Click `開啟 Terminal`.
 4. Wait for session status to become `ready`.
 5. The browser connects to the VM terminal.
+
+The session is logged in as `root`. New sessions wait for SSH plus cloud-init
+bootstrap before becoming ready. During bootstrap the VM runs `apt update` and
+installs a small baseline: `sudo`, `ca-certificates`, `curl`, `wget`, `gnupg`,
+`lsb-release`, `nano`, `vim-tiny`, `iputils-ping`, `dnsutils`, `net-tools`, and
+`unzip`, plus terminal UI tools `ncurses-term`, `screen`, `tmux`, and `htop`.
+If a package mirror was temporarily unreachable, run `apt update` inside the
+terminal and then retry `apt install <package>`.
+
+Full-screen terminal applications depend on correct terminal metadata. The
+WebSocket bridge starts SSH with `TERM=xterm-256color`, then forces the guest
+login shell to run with `TERM=xterm-256color`, `COLORTERM=truecolor`, and
+`LANG/LC_ALL=C.UTF-8`. It also forwards browser terminal rows/cols changes into
+the backend PTY. The browser uses xterm's FitAddon, so the terminal width should
+match the visible pane instead of staying at 80 columns. If `screen`, `tmux`,
+`htop`, or `btop` looks corrupt, close the old session and start a new one after
+updating this branch, then check inside the VM:
+
+```bash
+echo "$TERM"
+stty size
+```
+
+Expected: `xterm-256color`, and `stty size` should change when you change the
+Terminal height selector in the browser.
+
+Root can set the default `rows` and `cols` in:
+
+```text
+安全中心 -> 伺服器設定 -> 系統 -> WebTerminal
+```
+
+After changing the values, close the old WebTerminal session and open a new one.
+The frontend xterm and backend PTY are both initialized from the same root
+setting. For example, rows `51` and cols `209` should make `stty size` report:
+
+```text
+51 209
+```
+
+Also check the locale if box-drawing characters or btop/htop alignment looks
+wrong:
+
+```bash
+locale
+```
+
+Expected: `LANG=C.UTF-8`. The WebSocket bridge decodes SSH output
+incrementally so Unicode line-drawing characters are not corrupted when a
+multi-byte character is split across reads.
 
 When every check passes, the Web UI hides the detailed checklist and shows only
 a compact success message.
@@ -364,6 +429,9 @@ Read the result like this:
 - `host port is not listening`: QEMU user-mode host forwarding was not applied
 - `port is listening but SSH banner fails`: cloud-init or `sshd` inside the guest
   is not ready
+- `apt install` says package cannot be found: the VM package index did not finish
+  updating; run `apt update` inside the terminal, or close the session and start
+  a new one after this branch's latest cloud-init baseline is deployed
 - `qemu-img` permission errors happen before VM creation and point to storage or
   backing image permissions
 - `dominfo` works but `info usernet` fails: libvirt can see the VM, but QEMU
