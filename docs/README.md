@@ -16,6 +16,8 @@ short [README](../README.md) plus GitHub-required metadata such as
   snapshot/restore, and PointsChain recovery boundaries
 - [Deployment And Operations Scripts](DEPLOYMENT.md): one-command deployment,
   functional smoke, permission pentest, and stress test usage
+- [Release Layout](RELEASE_LAYOUT.md): tracked source, runtime data, generated
+  artifacts, and cleanup boundaries
 - [Project Phase Status](PHASE_STATUS.md): current project status and pending
   phase notes
 - [Implementation Workflow](implementation_workflow.md): development workflow
