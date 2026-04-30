@@ -2330,6 +2330,45 @@ async function saveSettings() {
   }
 }
 
+async function testComfyuiConnection() {
+  const status = $("comfyui-test-connection-status");
+  const button = $("comfyui-test-connection-btn");
+  const host = ($("s-comfyui-api-host")?.value || "localhost").trim();
+  const port = parseInt($("s-comfyui-api-port")?.value || "8192", 10);
+  if (status) {
+    status.textContent = `正在測試 http://${host || "localhost"}:${Number.isFinite(port) ? port : "-"} ...`;
+    status.style.color = "var(--muted)";
+  }
+  if (button) button.disabled = true;
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await fetch(API + "/root/comfyui/test-connection", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": getCsrfToken() || ""
+      },
+      body: JSON.stringify({ host, port })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 連線測試失敗（HTTP ${res.status}）`);
+    if (status) {
+      status.textContent = json.available
+        ? `連線成功：${json.comfyui_url || `http://${host}:${port}`}`
+        : `連線失敗：${json.msg || "ComfyUI 沒有回應"}（${json.comfyui_url || `http://${host}:${port}`}）`;
+      status.style.color = json.available ? "#4caf50" : "#ff4f6d";
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "ComfyUI 連線測試失敗";
+      status.style.color = "#ff4f6d";
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function loadServerEnv() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });

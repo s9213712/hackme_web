@@ -65,6 +65,7 @@ function bindUiEvents() {
   const adminReportsBulkApproveBtn = $("admin-reports-bulk-approve");
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
+  const comfyuiTestConnectionBtn = $("comfyui-test-connection-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const rootCatalogNew = $("root-catalog-new-btn");
   const rootCatalogRefresh = $("root-catalog-refresh-btn");
@@ -167,6 +168,7 @@ function bindUiEvents() {
   const gameResignBtn = $("game-resign-btn");
   const gameAwardBtn = $("game-award-btn");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
+  const comfyuiLoadDraftBtn = $("comfyui-load-draft-btn");
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
   const comfyuiInterruptBtn = $("comfyui-interrupt-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
@@ -326,6 +328,7 @@ function bindUiEvents() {
   if (gameResignBtn) gameResignBtn.addEventListener("click", resignGame);
   if (gameAwardBtn) gameAwardBtn.addEventListener("click", awardGameRewards);
   if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
+  if (comfyuiLoadDraftBtn) comfyuiLoadDraftBtn.addEventListener("click", loadComfyuiLastSettings);
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
   if (comfyuiInterruptBtn) comfyuiInterruptBtn.addEventListener("click", interruptComfyuiGeneration);
   if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
@@ -417,6 +420,7 @@ function bindUiEvents() {
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
   if (rootCatalogRefresh) rootCatalogRefresh.addEventListener("click", loadRootEconomyCatalog);
