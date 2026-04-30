@@ -161,6 +161,11 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     game_match_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     game_invite_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_invites)").fetchall()}
     game_reward_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_leaderboard_rewards)").fetchall()}
+    trading_market_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets)").fetchall()}
+    trading_order_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_orders)").fetchall()}
+    trading_fill_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_fills)").fetchall()}
+    trading_position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_positions)").fetchall()}
+    trading_reserve_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_reserve_pool)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     default_users = {
         row["username"]: dict(row)
@@ -238,7 +243,12 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"game_key", "mode", "white_user_id", "black_user_id", "current_turn", "board_json", "winner_user_id", "white_deleted_at", "black_deleted_at"} <= game_match_cols
     assert {"game_key", "inviter_user_id", "opponent_user_id", "status", "match_id"} <= game_invite_cols
     assert {"game_key", "week_key", "user_id", "rank", "score", "reward_points", "ledger_uuid"} <= game_reward_cols
-    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+    assert {"symbol", "manual_price_points", "futures_enabled", "pvp_matching_enabled", "price_source"} <= trading_market_cols
+    assert {"order_uuid", "user_id", "market_symbol", "side", "order_type", "status", "frozen_points"} <= trading_order_cols
+    assert {"fill_uuid", "order_id", "notional_points", "fee_points", "points_ledger_uuids_json"} <= trading_fill_cols
+    assert {"user_id", "market_symbol", "quantity_units", "locked_quantity_units"} <= trading_position_cols
+    assert {"id", "balance_points", "updated_at"} <= trading_reserve_cols
+    assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
     assert set(default_users) == {"root", "admin", "test"}
 
     assert default_users["root"]["role"] == "super_admin"

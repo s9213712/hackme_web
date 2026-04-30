@@ -1028,6 +1028,54 @@
         </div>
         <div id="economy-ledger-list" class="drive-file-list"></div>
       </div>
+      <div class="drive-card" id="trading-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">現貨交易所</div>
+            <div class="drive-card-sub">第一版僅開放 BTC/POINTS、ETH/POINTS 現貨；期貨、槓桿、清算與 PVP 撮合已預留但不開放。</div>
+          </div>
+          <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
+        </div>
+        <div id="trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
+        <div class="settings-option-grid" style="margin-top:.65rem;">
+          <div class="field">
+            <label>市場</label>
+            <select id="trading-market-select"><option value="">讀取市場中...</option></select>
+          </div>
+          <div class="field">
+            <label>方向</label>
+            <select id="trading-side">
+              <option value="buy">買入</option>
+              <option value="sell">賣出</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>訂單種類</label>
+            <select id="trading-order-type">
+              <option value="market">市價單</option>
+              <option value="limit">限價單</option>
+            </select>
+          </div>
+          <div class="field"><label>數量</label><input type="number" id="trading-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+          <div class="field"><label>限價（點 / 1 單位）</label><input type="number" id="trading-limit-price" min="1" step="1" placeholder="限價單才需要" /></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-submit-order-btn" type="button">送出訂單</button></div>
+        </div>
+        <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
+          <div><span class="drive-card-sub">目前價格</span><strong id="trading-current-price">-</strong><small id="trading-current-market">-</small></div>
+          <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
+          <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-bps">-</strong><small>bps</small></div>
+        </div>
+        <div class="settings-option-grid" style="margin-top:.75rem;">
+          <div>
+            <div class="drive-card-title">訂單</div>
+            <div id="trading-order-list" class="drive-file-list"></div>
+          </div>
+          <div>
+            <div class="drive-card-title">成交</div>
+            <div id="trading-fill-list" class="drive-file-list"></div>
+          </div>
+        </div>
+      </div>
       <div class="drive-card" id="economy-admin-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
@@ -1066,6 +1114,47 @@
         </div>
         <div class="drive-card-sub" id="economy-chain-countdown" style="margin-top:.6rem;">封塊倒數：-</div>
         <div class="drive-card-sub" id="economy-chain-loaded-at" style="margin-top:.25rem;">最後更新 -</div>
+        <div class="drive-card" id="trading-root-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">交易引擎設定</div>
+              <div class="drive-card-sub">價格由 root 手動設定；超過最大跳動比例需勾選確認。儲備池初始為 0，只能由交易收入或 root 明確撥入。</div>
+            </div>
+            <button class="btn" id="trading-root-refresh-btn" type="button">更新交易報告</button>
+          </div>
+          <div class="settings-option-grid economy-wallet-grid">
+            <div><span class="drive-card-sub">儲備池</span><strong id="trading-reserve-balance">0</strong><small>POINTS</small></div>
+            <div><span class="drive-card-sub">交易驗證</span><strong id="trading-verification-status">-</strong><small id="trading-verification-detail">-</small></div>
+            <div><span class="drive-card-sub">高風險功能</span><strong id="trading-risk-flags">關閉</strong><small>futures / pvp</small></div>
+          </div>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
+            <div class="field"><label>手動價格</label><input type="number" id="trading-root-price" min="1" step="1" /></div>
+            <div class="field"><label>最大跳動 bps</label><input type="number" id="trading-root-jump-bps" min="0" step="1" /></div>
+            <div class="field"><label>手續費 bps</label><input type="number" id="trading-root-fee-bps" min="0" max="5000" step="1" /></div>
+            <div class="field"><label>單筆最小點數</label><input type="number" id="trading-root-min-order" min="1" step="1" /></div>
+            <div class="field"><label>單筆最大點數</label><input type="number" id="trading-root-max-order" min="1" step="1" /></div>
+            <div class="field"><label><input type="checkbox" id="trading-root-enabled" /> 啟用市場</label></div>
+            <div class="field"><label><input type="checkbox" id="trading-root-confirm-jump" /> 確認超額價格跳動</label></div>
+            <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-root-save-market-btn" type="button">儲存市場</button></div>
+          </div>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div class="field"><label>撥入來源帳戶</label><select id="trading-reserve-source-user-id"><option value="">讀取會員中...</option></select></div>
+            <div class="field"><label>撥入點數</label><input type="number" id="trading-reserve-amount" min="1" step="1" /></div>
+            <div class="field"><label>原因</label><input type="text" id="trading-reserve-reason" value="ROOT_RESERVE_ALLOCATION" readonly /></div>
+            <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="trading-reserve-allocate-btn" type="button">撥入儲備池</button></div>
+          </div>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div>
+              <div class="drive-card-title">交易審計</div>
+              <div id="trading-audit-list" class="drive-file-list"></div>
+            </div>
+            <div>
+              <div class="drive-card-title">儲備池事件</div>
+              <div id="trading-reserve-event-list" class="drive-file-list"></div>
+            </div>
+          </div>
+        </div>
         <div class="drive-card" id="economy-recovery-card" style="margin-top:.75rem;">
           <div class="drive-card-heading">
             <div>
@@ -1787,6 +1876,7 @@
             <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-trading-enabled" /> 積分交易所</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-personalization-enabled" /> 個人化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
@@ -2439,7 +2529,8 @@
 <script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260430-root-billing" defer></script>
-<script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
+<script src="/js/55-economy.js?v=20260430-trading-engine" defer></script>
+<script src="/js/56-trading.js?v=20260430-trading-engine" defer></script>
 <script src="/js/90-bootstrap.js?v=20260430-root-billing" defer></script>
 </body>
 </html>

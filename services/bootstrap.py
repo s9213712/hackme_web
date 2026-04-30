@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-CURRENT_SCHEMA_VERSION = 28
+CURRENT_SCHEMA_VERSION = 29
 SCHEMA_MIGRATIONS = (
     (1, "bootstrap schema_migrations metadata table"),
     (2, "ensure legacy-compatible users columns"),
@@ -32,6 +32,7 @@ SCHEMA_MIGRATIONS = (
     (26, "points economy private chain schema"),
     (27, "chat recall stickers and friends schema"),
     (28, "game zone chess schema"),
+    (29, "trading engine schema"),
 )
 
 _STATE = {
@@ -649,6 +650,10 @@ def apply_schema_migrations(
             from routes.games import ensure_game_schema
 
             ensure_game_schema(conn)
+        elif version == 29:
+            from services.trading_engine import ensure_trading_schema
+
+            ensure_trading_schema(conn)
 
         conn.execute(
             "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",

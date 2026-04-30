@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-50734}"
-SMOKE_SCHEME="${SMOKE_SCHEME:-https}"
+SMOKE_SCHEME="${SMOKE_SCHEME:-${SCHEME:-https}}"
 REPORT_ROOT="${REPORT_ROOT:-security/reports}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-RootSmoke123!}"
 ROOT_CHANGED_PASSWORD="${ROOT_CHANGED_PASSWORD:-RootSmokeChanged123!}"
@@ -29,7 +29,8 @@ What it does:
 
 Environment overrides:
   HOST, PORT, REPORT_ROOT, ROOT_PASSWORD, MANAGER_PASSWORD, TEST_PASSWORD,
-  RUNTIME_ROOT, SMOKE_SCHEME, START_TIMEOUT, RESET_OFFLINE_TIMEOUT, RESET_RECONNECT_TIMEOUT
+  RUNTIME_ROOT, SMOKE_SCHEME, SCHEME, START_TIMEOUT, RESET_OFFLINE_TIMEOUT,
+  RESET_RECONNECT_TIMEOUT
 USAGE
 }
 
@@ -381,6 +382,18 @@ login_root() {
   pass "auth csrf refresh" "received per-user token"
 }
 
+login_smoke_user() {
+  rm -f "$COOKIE_JAR"
+  fetch_public_csrf || return 1
+  request "auth login smoke user" "POST" "/api/login" "200" "{\"username\":\"smokeuser\",\"password\":\"SmokeUser123!\",\"csrf_token\":\"$CSRF_TOKEN\"}"
+  CSRF_TOKEN="$(csrf_from_cookie)"
+  if [[ -z "$CSRF_TOKEN" ]]; then
+    fail "auth csrf refresh smoke user" "missing csrf_token cookie after smoke user login"
+    return 1
+  fi
+  pass "auth csrf refresh smoke user" "received per-user token"
+}
+
 check_local_tls_files() {
   if [[ -s "$REPO_ROOT/cert.pem" && -s "$REPO_ROOT/key.pem" ]]; then
     pass "local TLS files generated" "cert.pem and key.pem exist locally"
@@ -537,7 +550,7 @@ run_checks() {
   request "points catalog" "GET" "/api/points/catalog" "200"
   request "points rules" "GET" "/api/points/rules" "200"
   if [[ -n "${SMOKE_USER_ID:-}" ]]; then
-    request "points admin credit smoke user" "POST" "/api/admin/points/adjust" "200" "{\"user_id\":$SMOKE_USER_ID,\"currency_type\":\"soft\",\"direction\":\"credit\",\"amount\":25,\"reason\":\"functional smoke seed\"}"
+    request "points admin credit smoke user" "POST" "/api/admin/points/adjust" "200" "{\"user_id\":$SMOKE_USER_ID,\"currency_type\":\"soft\",\"direction\":\"credit\",\"amount\":1000,\"reason\":\"functional smoke seed\"}"
     request "points admin wallet smoke user" "GET" "/api/admin/points/wallets/${SMOKE_USER_ID}" "200"
     request "points admin ledger" "GET" "/api/admin/points/ledger?limit=20" "200"
     request "points chain seal" "POST" "/api/root/points/chain/seal" "200" '{"limit":100}'
@@ -545,6 +558,21 @@ run_checks() {
     request "points chain recovery status" "GET" "/api/root/points/chain/recovery" "200"
     request "points chain backup manual" "POST" "/api/root/points/chain/backups" "200" '{}'
     request "points economy stats" "GET" "/api/admin/points/economy/stats" "200"
+    request "trading root report" "GET" "/api/admin/trading/report" "200"
+    request "trading root update manual price" "POST" "/api/root/trading/markets/ETH%2FPOINTS" "200" '{"manual_price_points":5000,"max_price_jump_bps":1000,"fee_bps":30,"min_order_points":1,"max_order_points":100000,"enabled":true}'
+    login_smoke_user || return 1
+    request "trading user dashboard" "GET" "/api/trading/dashboard" "200"
+    request "trading market buy" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"market","quantity":"0.01"}'
+    request "trading dashboard after buy" "GET" "/api/trading/dashboard" "200"
+    request "trading open limit order" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"limit","quantity":"0.01","limit_price_points":1}'
+    TRADING_LIMIT_ORDER_UUID="$(json_expr 'data["order"]["order_uuid"]' "$(latest_raw "trading open limit order")" || true)"
+    if [[ -n "${TRADING_LIMIT_ORDER_UUID:-}" ]]; then
+      request "trading cancel limit order" "POST" "/api/trading/orders/${TRADING_LIMIT_ORDER_UUID}/cancel" "200" '{}'
+    else
+      skip "trading cancel limit order" "limit order uuid not found"
+    fi
+    login_root || return 1
+    request "trading root report after smoke trades" "GET" "/api/admin/trading/report" "200"
   else
     skip "points admin credit smoke user" "smoke user id missing"
     skip "points chain seal/verify" "smoke user id missing"
@@ -672,7 +700,7 @@ run_checks() {
   check_unknown_options
 
   request "snapshot restore checkpoint" "POST" "/api/admin/snapshots/${APP_SNAPSHOT_ID}/restore" "200" '{"confirm":"RESTORE","reason":"functional smoke cleanup verification"}'
-  refresh_csrf_quiet
+  login_root || return 1
   request "restore verify baseline threads" "GET" "/api/community/boards/${BASELINE_BOARD_ID}/threads" "200"
   if json_bool "any(t['id'] == int('$BASELINE_THREAD_ID') for t in data['threads'])" "$(latest_raw "restore verify baseline threads")"; then
     pass "restore kept baseline post" "thread=$BASELINE_THREAD_ID"
@@ -734,6 +762,7 @@ $(cat "$RESULTS_TSV")
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
 - PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, manual ledger backup, recovery status, economy stats
+- Trading engine: root trading report, manual market price update, user spot market buy, limit order creation/cancellation, root trading audit report
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, server reset must go offline within 20 seconds then reconnect within 180 seconds by default, reset verification that removes the baseline post, and TLS files regenerate after reset
 - deployment-local TLS: cert.pem/key.pem are generated on startup and regenerated after runtime reset
 - storage and files: storage quota/listing, root storage capacity audit, root storage user list, cloud-drive storage upgrade catalog, cloud-drive upload/status/preview/download/delete, remote download capability checks

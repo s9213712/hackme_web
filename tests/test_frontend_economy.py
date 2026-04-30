@@ -43,7 +43,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "加減分明細" in index_html
     assert "手動加減分與待審核" in index_html
     assert "積分系統" in index_html
-    assert "/js/55-economy.js?v=20260429-ledger-backup-recovery" in index_html
+    assert "/js/55-economy.js?v=20260430-trading-engine" in index_html
+    assert "/js/56-trading.js?v=20260430-trading-engine" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-approve-btn"' in index_html

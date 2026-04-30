@@ -10,6 +10,7 @@
 
 ## Phase 12 後待處理
 
+- Economy Phase 2 交易引擎基礎已完成第一版現貨 MVP：BTC/POINTS、ETH/POINTS 市價/限價、取消訂單、root 手動價格、保守儲備池、PointsChain 結算、交易審計、snapshot/restore 一致性檢查與 `security/trading_stress_pentest.py`。期貨、槓桿、清算與 PVP 撮合僅保留資料模型與設定預留，尚未開放 UI/API。
 - 完整 `AuthLayout` 重構待後續處理；目前登入頁先保留可操作的最小復原 UI。
 - 真實 SMTP 或外部寄信服務待後續部署整合；目前 mail adapter 會把 token 信件寫入資料庫 `mail_outbox`，足以支援本機測試與部署端接線。
 - WebSocket 即時通知與 Email 通知摘要待後續處理。

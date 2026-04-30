@@ -132,6 +132,7 @@ from services.snapshots import SnapshotService, ServerModeService, ensure_snapsh
 from services.storage_maintenance import run_storage_maintenance_if_due
 from services.storage_paths import validate_storage_root
 from services.upload_security import ensure_upload_security_schema
+from services.trading_engine import TradingEngineService, ensure_trading_schema
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -507,6 +508,7 @@ FEATURE_ROUTE_GATES = (
     ("feature_storage_albums_enabled", ("/api/storage/", "/api/storage", "/api/admin/storage/", "/api/admin/storage")),
     ("feature_comfyui_enabled", ("/api/comfyui/", "/api/comfyui")),
     ("feature_economy_enabled", ("/api/points/", "/api/points", "/api/admin/points/", "/api/admin/points", "/api/root/points/", "/api/root/points")),
+    ("feature_trading_enabled", ("/api/trading/", "/api/trading", "/api/admin/trading/", "/api/admin/trading", "/api/root/trading/", "/api/root/trading")),
     ("feature_games_enabled", ("/api/games/", "/api/games", "/api/root/games/", "/api/root/games")),
 )
 
@@ -937,6 +939,11 @@ points_service = PointsLedgerService(
     audit=audit,
     backup_dir=POINTS_CHAIN_BACKUP_DIR,
 )
+trading_service = TradingEngineService(
+    get_db=get_db,
+    points_service=points_service,
+    audit=audit,
+)
 server_mode_service = ServerModeService(
     snapshot_service=snapshot_service,
     get_db=get_db,
@@ -1298,6 +1305,7 @@ register_operation_routes(app, {
     "parse_iso_to_datetime": parse_iso_to_datetime,
     "parse_positive_int": parse_positive_int,
     "points_service": points_service,
+    "trading_service": trading_service,
     "repair_audit_chain": repair_audit_chain,
     "repair_violation_chains": repair_violation_chains,
     "require_csrf": require_csrf,
@@ -1436,6 +1444,12 @@ if __name__ == "__main__":
         ensure_official_chat_room=ensure_official_chat_room,
         hash_password=hash_password,
     )
+    conn = get_db()
+    try:
+        ensure_trading_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
     if os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "").strip().lower() in {"1", "true", "yes", "on"}:
         try:
             system_actor = {"username": "system", "role": "system"}

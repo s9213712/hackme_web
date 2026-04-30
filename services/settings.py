@@ -82,6 +82,7 @@ DEFAULT_SETTINGS = {
     "feature_privacy_uploads_enabled": True,
     "feature_comfyui_enabled": True,
     "feature_economy_enabled": True,
+    "feature_trading_enabled": True,
     "feature_games_enabled": True,
     "integrity_guard_enabled": True,
     "integrity_guard_strict_mode": False,

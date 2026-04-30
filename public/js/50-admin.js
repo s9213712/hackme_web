@@ -1357,6 +1357,7 @@ const FEATURE_SETTING_KEYS = [
   "feature_privacy_uploads_enabled",
   "feature_comfyui_enabled",
   "feature_economy_enabled",
+  "feature_trading_enabled",
   "feature_games_enabled"
 ];
 

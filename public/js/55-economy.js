@@ -378,6 +378,9 @@ async function loadEconomyDashboard() {
     const rootCard = $("economy-root-card");
     if (rootCard) rootCard.style.display = currentUser === "root" ? "" : "none";
     const rootReportOk = rootMode ? await loadEconomyRootReport() : true;
+    if (typeof loadTradingDashboard === "function") {
+      await loadTradingDashboard();
+    }
     if (rootReportOk !== false) economySetMsg("");
   } catch (err) {
     economySetMsg(err.message || "PointsChain 讀取失敗", false);
@@ -480,6 +483,7 @@ function renderEconomyAdjustUserOptions(rows) {
   };
   fillSelect($("economy-adjust-user-id"), "沒有可調整會員");
   fillSelect($("economy-query-user-id"), "沒有可查詢會員");
+  if (typeof syncTradingReserveUserOptions === "function") syncTradingReserveUserOptions();
 }
 
 async function loadEconomyAccountLookup() {
