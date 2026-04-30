@@ -17,17 +17,17 @@ def _release_id():
 
 def test_release_id_is_synced_to_public_docs():
     release_id = _release_id()
-    assert release_id == "2026.04.29-022"
+    assert release_id == "2026.04.29-023"
     for rel in ("README.md", "docs/README.zh-TW.md", "docs/For_developer.md"):
         assert release_id in (ROOT / rel).read_text(encoding="utf-8")
 
 
 def test_branching_policy_documents_numbered_branch_sequence():
     doc = (ROOT / "docs" / "BRANCHING_AND_RELEASE.md").read_text(encoding="utf-8")
-    assert "01-feature-new-development" in doc
-    assert "02-feature-forum-governance-security-modes" in doc
-    assert "03-sidebar" in doc
-    assert "04-economy" in doc
+    assert "01.Economy" in doc
+    assert "02-WebTerminal-docker" in doc
+    assert "02-WebTerminal-qemu" in doc
+    assert "hackme_web_lite" in doc
     assert "last numeric segment by 1" in doc
 
 

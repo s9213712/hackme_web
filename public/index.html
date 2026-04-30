@@ -13,9 +13,13 @@
 
   <h1>Help me improve, hack me please.</h1>
   <p class="subtitle">簡單的帳號註冊與登入系統</p>
+  <div class="auth-server-status" aria-live="polite">
+    <span class="server-status-dot" id="auth-server-dot"></span>
+    <span id="auth-server-label">檢查伺服器狀態中</span>
+  </div>
 
   <!-- Tabs -->
-  <div class="tabs">
+  <div class="tabs auth-tabs">
     <button class="tab active" id="tab-login">登入</button>
     <button class="tab"        id="tab-register">註冊</button>
   </div>

@@ -445,7 +445,7 @@ def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_
     assert any(call[0][0] == "SYSTEM_RUNTIME_RESET" for call in audit_log)
 
 
-def test_runtime_reset_removes_generated_secret_files_but_keeps_tls_files(tmp_path):
+def test_runtime_reset_removes_generated_secret_and_tls_files(tmp_path):
     audit_log = []
     base = tmp_path / "app"
     secret_names = [
@@ -455,6 +455,8 @@ def test_runtime_reset_removes_generated_secret_files_but_keeps_tls_files(tmp_pa
         ".fley",
         ".integrity_key",
         "integrity_manifest.json",
+        "cert.pem",
+        "key.pem",
     ]
     service, _db_path, _uploads = _service(
         tmp_path,
@@ -463,8 +465,6 @@ def test_runtime_reset_removes_generated_secret_files_but_keeps_tls_files(tmp_pa
     )
     for name in secret_names:
         (base / name).write_text(f"{name}-value", encoding="utf-8")
-    (base / "cert.pem").write_text("deployment certificate", encoding="utf-8")
-    (base / "key.pem").write_text("deployment private key", encoding="utf-8")
 
     result = service.reset_runtime_state(
         actor={"id": 1, "username": "root"},
@@ -478,8 +478,6 @@ def test_runtime_reset_removes_generated_secret_files_but_keeps_tls_files(tmp_pa
     assert result["runtime_secret_files_skipped"] == []
     for name in secret_names:
         assert not (base / name).exists()
-    assert (base / "cert.pem").exists()
-    assert (base / "key.pem").exists()
     reset_detail = next(call[1]["detail"] for call in audit_log if call[0][0] == "SYSTEM_RUNTIME_RESET")
     assert "runtime_secret_files_removed=" in reset_detail
     assert ".chain_seed" in reset_detail

@@ -97,6 +97,27 @@
       font-size: .74rem;
     }
 
+    .auth-server-status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .45rem;
+      min-height: 1.4rem;
+      margin: -.9rem 0 1rem;
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.2;
+    }
+
+    .server-status-dot {
+      width: .58rem;
+      height: .58rem;
+      border-radius: 999px;
+      background: #ffb74d;
+      box-shadow: 0 0 10px rgba(255,183,77,.75);
+      flex: 0 0 auto;
+    }
+
     /* ── Tabs ─────────────────────────────────────────────── */
     .tabs {
       display: flex;
@@ -109,6 +130,16 @@
 
     .tabs:not(.sidebar-nav) {
       flex-wrap: wrap;
+    }
+
+    .auth-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .auth-tabs .tab {
+      width: 100%;
+      flex: none;
     }
 
     .tab {

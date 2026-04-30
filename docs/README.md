@@ -9,6 +9,12 @@ short [README](../README.md).
 - [Web UI Guide](WEB.md): user-facing pages and feature behavior
 - [Developer Guide](For_developer.md): API, deployment, runtime state, and
   operator notes
+- [Version Story](VERSION_STORY.md): project history, branch decisions, and
+  abandoned WebTerminal notes
+- [Runtime Reset And Recovery](RUNTIME_RESET_AND_RECOVERY.md): reset,
+  snapshot/restore, and PointsChain recovery boundaries
+- [Deployment And Operations Scripts](DEPLOYMENT.md): one-command deployment,
+  functional smoke, permission pentest, and stress test usage
 - [Project Phase Status](PHASE_STATUS.md): current project status and pending
   phase notes
 - [Implementation Workflow](implementation_workflow.md): development workflow

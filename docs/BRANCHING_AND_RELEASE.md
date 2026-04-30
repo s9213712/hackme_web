@@ -2,18 +2,19 @@
 
 ## Branch Numbering
 
-Feature branches use a two-digit order prefix:
+Feature branches use a two-digit order prefix when they are active development
+branches:
 
 ```text
-01-feature-name
+01.Economy
 02-next-feature
-03-sidebar
-04-economy
+03-future-module
 ```
 
 Rules:
 
-- `main` stays unprefixed because it is the default integration branch.
+- `01.Economy` is the current default main line. `main` is retained as an older
+  clean baseline.
 - Number prefixes represent branch creation / project sequence order, not
   priority.
 - Use the next unused number when starting a new feature branch.
@@ -21,13 +22,13 @@ Rules:
 - If a branch already exists without a prefix, rename it before pushing new
   work from that branch.
 
-Current sequence:
+Current active and historical sequence:
 
 ```text
-01-feature-new-development
-02-feature-forum-governance-security-modes
-03-sidebar
-04-economy
+01.Economy                 active default main line
+02-WebTerminal-docker      abandoned, preserved for history
+02-WebTerminal-qemu        abandoned, preserved for history
+hackme_web_lite            lightweight target branch for low-end devices
 ```
 
 ## Release ID Rule

@@ -150,6 +150,7 @@ tracked by git:
 - chat transcripts
 - upload/storage files
 - generated keys
+- local TLS certificate/key files
 - integrity manifest
 - bug reports
 - local security reports

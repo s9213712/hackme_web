@@ -5,7 +5,7 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.04.29-022`
+- Release ID: `2026.04.29-023`
 - Schema version: `26`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -29,8 +29,10 @@ Default local URL:
 http://127.0.0.1:5000/
 ```
 
-If `cert.pem` and `key.pem` exist in the project root, startup switches to
-HTTPS and prints the active URL.
+If `cert.pem` and `key.pem` are missing, startup generates a local self-signed
+certificate/key pair. They are deployment-local runtime files and must not be
+committed. Startup switches to HTTPS when root settings enable SSL and both
+files exist.
 
 ## Runtime State
 
@@ -45,6 +47,7 @@ Ignored runtime state includes:
 - `chats/*.jsonl`
 - `anchors/*.json` and `anchors/*.jsonl`
 - `.fkey`, `.csrfkey`, `.integrity_key`, `.chain_seed`
+- `cert.pem`, `key.pem`
 - `integrity_manifest.json`
 - `reports/bugs/`
 - `security/reports/`

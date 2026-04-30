@@ -11,7 +11,11 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
+from cryptography import x509
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 import argon2
 from flask_talisman import Talisman
 from routes.chat import register_chat_routes
@@ -222,6 +226,59 @@ def _load_or_create_binary_secret(env_name, path, *, generator):
         f.write(value)
     os.chmod(path, 0o600)
     return value
+
+
+def ensure_local_tls_files(cert_file, key_file):
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        return {"created": False, "cert_file": cert_file, "key_file": key_file}
+
+    os.makedirs(os.path.dirname(os.path.abspath(cert_file)), exist_ok=True)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "TW"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "hackme_web local"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+        ]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.utcnow() - timedelta(minutes=1))
+        .not_valid_after(datetime.utcnow() + timedelta(days=825))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(ip_address("127.0.0.1")),
+                    x509.IPAddress(ip_address("::1")),
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    tmp_key = key_file + ".tmp"
+    tmp_cert = cert_file + ".tmp"
+    with open(tmp_key, "wb") as f:
+        f.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+    os.chmod(tmp_key, 0o600)
+    with open(tmp_cert, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    os.chmod(tmp_cert, 0o644)
+    os.replace(tmp_key, key_file)
+    os.replace(tmp_cert, cert_file)
+    return {"created": True, "cert_file": cert_file, "key_file": key_file}
 
 
 # ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
@@ -859,6 +916,8 @@ snapshot_service = SnapshotService(
         os.path.join(BASE_DIR, ".fley"),
         os.path.join(BASE_DIR, ".integrity_key"),
         os.path.join(BASE_DIR, "integrity_manifest.json"),
+        os.path.join(BASE_DIR, "cert.pem"),
+        os.path.join(BASE_DIR, "key.pem"),
     ],
     reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
     reset_audit_chain=reset_audit_chain_with_event,
@@ -1393,6 +1452,9 @@ if __name__ == "__main__":
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")
+    tls_generation = ensure_local_tls_files(CERT_FILE, KEY_FILE)
+    if tls_generation.get("created"):
+        audit("TLS_LOCAL_CERT_GENERATED", "0.0.0.0", user="system", success=True, detail="generated cert.pem/key.pem for local deployment")
     has_ssl_files = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
     ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)
     has_ssl = ssl_state["enabled"]

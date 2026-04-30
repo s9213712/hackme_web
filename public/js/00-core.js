@@ -495,8 +495,8 @@ async function loadSiteConfig() {
 }
 
 function setServerConnectionState(state, label) {
-  const dots = [$("sidebar-server-dot")].filter(Boolean);
-  const labels = [$("sidebar-server-label")].filter(Boolean);
+  const dots = [$("sidebar-server-dot"), $("auth-server-dot")].filter(Boolean);
+  const labels = [$("sidebar-server-label"), $("auth-server-label")].filter(Boolean);
   if (!dots.length || !labels.length) return;
   const colors = {
     online: ["#4caf50", "rgba(76,175,80,.75)"],

@@ -369,6 +369,14 @@ login_root() {
   pass "auth csrf refresh" "received per-user token"
 }
 
+check_local_tls_files() {
+  if [[ -s "$REPO_ROOT/cert.pem" && -s "$REPO_ROOT/key.pem" ]]; then
+    pass "local TLS files generated" "cert.pem and key.pem exist locally"
+  else
+    fail "local TLS files generated" "cert.pem/key.pem missing after startup"
+  fi
+}
+
 change_default_root_password() {
   request "auth change default root password" "PUT" "/api/admin/users/1" "200" "{\"current_password\":\"$ROOT_PASSWORD\",\"password\":\"$ROOT_CHANGED_PASSWORD\",\"password_confirm\":\"$ROOT_CHANGED_PASSWORD\"}"
   ROOT_PASSWORD="$ROOT_CHANGED_PASSWORD"
@@ -475,6 +483,7 @@ run_checks() {
   request "public version" "GET" "/api/version" "200"
   request "public password strength" "POST" "/api/password-strength" "200" '{"pass''word":"SmokeUser123!"}'
   request "public captcha challenge" "GET" "/api/captcha/challenge" "200"
+  check_local_tls_files
 
   login_root || return 1
   request "auth me" "GET" "/api/me" "200"
@@ -521,6 +530,8 @@ run_checks() {
     request "points admin ledger" "GET" "/api/admin/points/ledger?limit=20" "200"
     request "points chain seal" "POST" "/api/root/points/chain/seal" "200" '{"limit":100}'
     request "points chain verify" "GET" "/api/root/points/chain/verify" "200"
+    request "points chain recovery status" "GET" "/api/root/points/chain/recovery" "200"
+    request "points chain backup manual" "POST" "/api/root/points/chain/backups" "200" '{}'
     request "points economy stats" "GET" "/api/admin/points/economy/stats" "200"
   else
     skip "points admin credit smoke user" "smoke user id missing"
@@ -555,6 +566,14 @@ run_checks() {
 
   request "files quota" "GET" "/api/files/quota" "200"
   request "files security policy" "GET" "/api/files/security-policy" "200"
+  request "cloud drive storage upgrades root" "GET" "/api/cloud-drive/storage-upgrades" "200"
+  if json_bool 'data.get("can_purchase") == False and "root" in str(data.get("message", "")).lower()' "$(latest_raw "cloud drive storage upgrades root")"; then
+    pass "root storage purchase bypass" "root does not need storage purchase plans"
+  else
+    fail "root storage purchase bypass" "root should not see purchasable storage plans"
+  fi
+  request "root storage users" "GET" "/api/root/storage/users" "200"
+  request "admin storage capacity summary" "GET" "/api/admin/storage/summary" "200"
   ROOT_QUOTA_SOURCE="$(json_expr 'data["security"]["usage"]["quota_source"]' "$(latest_raw "files security policy")" || true)"
   ROOT_QUOTA_TOTAL="$(json_expr 'data["security"]["usage"]["total_bytes"]' "$(latest_raw "files security policy")" || true)"
   ROOT_QUOTA_WARN="$(json_expr 'data["security"]["usage"]["warning_threshold_percent"]' "$(latest_raw "files security policy")" || true)"
@@ -664,6 +683,7 @@ run_checks() {
   reset_started_at_before="$(server_started_at "$RAW_DIR/reset_before_version.json" || true)"
   request "server reset runtime state" "POST" "/api/admin/system-reset" "200" '{"confirm":"RESET_RUNTIME_STATE","reason":"functional smoke reset verification"}'
   wait_for_restart_reconnect "server reset restart reconnect" "$reset_started_at_before" "$RESET_OFFLINE_TIMEOUT" "$RESET_RECONNECT_TIMEOUT" || true
+  check_local_tls_files
   rm -f "$COOKIE_JAR"
   fetch_public_csrf || true
   login_root || true
@@ -701,9 +721,10 @@ $(cat "$RESULTS_TSV")
 - authentication: CSRF bootstrap, root login, forced default-password change, session identity
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
-- PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, economy stats
-- snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, server reset must go offline within 20 seconds then reconnect within 180 seconds by default, and reset verification that removes the baseline post
-- storage and files: storage quota/listing, cloud-drive upload/status/preview/download/delete, remote download capability checks
+- PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, manual ledger backup, recovery status, economy stats
+- snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, server reset must go offline within 20 seconds then reconnect within 180 seconds by default, reset verification that removes the baseline post, and TLS files regenerate after reset
+- deployment-local TLS: cert.pem/key.pem are generated on startup and regenerated after runtime reset
+- storage and files: storage quota/listing, root storage capacity audit, root storage user list, cloud-drive storage upgrade catalog, cloud-drive upload/status/preview/download/delete, remote download capability checks
 - ComfyUI integration: model endpoint wiring and optional backend availability check
 - accounts: admin user creation/listing, account sessions when account-security feature is enabled
 - community: announcements, categories, boards, board approval, board moderator permission scope, thread create/detail/reply/reaction/reward/lock/sticky/curate
