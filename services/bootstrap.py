@@ -701,7 +701,7 @@ def init_db(
         ensure_security_support_schema,
     )
     conn.commit()
-    if migration_plan["applied"]:
+    if migration_plan["applied"] and int(migration_plan.get("previous") or 0) > 0:
         _STATE["audit"]("DB_SCHEMA_MIGRATION", "127.0.0.1", user="system", detail=f"schema migrated from v{migration_plan['previous']} to v{migration_plan['current']}")
 
     migration_summary = migrate_legacy_json_artifacts(conn)
