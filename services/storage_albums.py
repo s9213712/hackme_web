@@ -121,12 +121,29 @@ def ensure_storage_album_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS album_share_links (
+            id TEXT PRIMARY KEY,
+            album_id TEXT NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token TEXT NOT NULL UNIQUE,
+            token_hash TEXT NOT NULL UNIQUE,
+            revoked_at TEXT,
+            access_count INTEGER NOT NULL DEFAULT 0,
+            last_accessed_at TEXT,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_files_owner_path ON storage_files(owner_user_id, virtual_path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_files_file ON storage_files(file_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_folders_owner_path ON storage_folders(owner_user_id, virtual_path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_quota_log_user ON storage_quota_log(user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_album_files_album ON album_files(album_id, sort_order, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_album_share_links_album ON album_share_links(album_id, revoked_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_owner ON storage_share_links(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_storage_share_links_file ON storage_share_links(storage_file_id, revoked_at)")
     storage_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_files)").fetchall()}
@@ -851,6 +868,79 @@ def _normalize_album_visibility(value):
     return visibility if visibility in {"private", "unlisted", "public"} else "private"
 
 
+def _album_share_url(token):
+    return f"/shared/albums/{token}" if token else ""
+
+
+def _album_share_link_payload(row):
+    if not row:
+        return None
+    token = row["token"]
+    return {
+        "id": row["id"],
+        "album_id": row["album_id"],
+        "created_at": row["created_at"],
+        "access_count": int(row["access_count"] or 0),
+        "last_accessed_at": row["last_accessed_at"],
+        "url": _album_share_url(token),
+    }
+
+
+def _active_album_share_link(conn, album_id):
+    ensure_storage_album_schema(conn)
+    return conn.execute(
+        """
+        SELECT * FROM album_share_links
+        WHERE album_id=? AND revoked_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (album_id,),
+    ).fetchone()
+
+
+def ensure_album_share_link(conn, *, actor, album_id):
+    ensure_storage_album_schema(conn)
+    album = _album_row(conn, album_id)
+    if not album or album["deleted_at"] or int(album["owner_user_id"]) != int(actor["id"]):
+        return None, "找不到相簿"
+    existing = _active_album_share_link(conn, album_id)
+    if existing:
+        return _album_share_link_payload(existing), None
+    now = _now()
+    token = secrets.token_urlsafe(32)
+    link_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO album_share_links (
+            id, album_id, owner_user_id, token, token_hash, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            link_id,
+            album_id,
+            int(actor["id"]),
+            token,
+            _hash_share_token(token),
+            int(actor["id"]),
+            now,
+        ),
+    )
+    return _album_share_link_payload(conn.execute("SELECT * FROM album_share_links WHERE id=?", (link_id,)).fetchone()), None
+
+
+def revoke_album_share_links(conn, *, actor, album_id):
+    ensure_storage_album_schema(conn)
+    album = _album_row(conn, album_id)
+    if not album or album["deleted_at"] or int(album["owner_user_id"]) != int(actor["id"]):
+        return None, "找不到相簿"
+    conn.execute(
+        "UPDATE album_share_links SET revoked_at=? WHERE album_id=? AND revoked_at IS NULL",
+        (_now(), album_id),
+    )
+    return {"album_id": album_id}, None
+
+
 def _is_album_media_storage_row(row):
     mime = str((row["mime_type_plain_for_public"] if "mime_type_plain_for_public" in row.keys() else "") or "").lower()
     name = str((row["display_name"] if "display_name" in row.keys() else "") or "").lower()
@@ -872,6 +962,7 @@ def create_album(conn, *, actor, title, description="", visibility="private"):
         return None, "相簿名稱不可為空"
     now = _now()
     album_id = uuid.uuid4().hex
+    normalized_visibility = _normalize_album_visibility(visibility)
     conn.execute(
         """
         INSERT INTO albums (
@@ -883,11 +974,15 @@ def create_album(conn, *, actor, title, description="", visibility="private"):
             int(actor["id"]),
             title[:120],
             str(description or "")[:1000],
-            _normalize_album_visibility(visibility),
+            normalized_visibility,
             now,
             now,
         ),
     )
+    if normalized_visibility == "unlisted":
+        link, msg = ensure_album_share_link(conn, actor=actor, album_id=album_id)
+        if msg:
+            return None, msg
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
 
 
@@ -973,7 +1068,15 @@ def list_albums(conn, *, actor, include_deleted=False, limit=100, offset=0):
         """,
         (*params, int(limit), int(offset)),
     ).fetchall()
-    return [dict(row) for row in rows]
+    albums = []
+    for row in rows:
+        item = dict(row)
+        if item.get("visibility") == "unlisted":
+            item["share_link"] = _album_share_link_payload(_active_album_share_link(conn, item["id"]))
+            if item["share_link"]:
+                item["share_url"] = item["share_link"]["url"]
+        albums.append(item)
+    return albums
 
 
 def get_album(conn, *, actor, album_id, include_files=False):
@@ -982,6 +1085,10 @@ def get_album(conn, *, actor, album_id, include_files=False):
     if not row or row["deleted_at"] or int(row["owner_user_id"]) != int(actor["id"]):
         return None
     data = dict(row)
+    if data.get("visibility") == "unlisted":
+        data["share_link"] = _album_share_link_payload(_active_album_share_link(conn, data["id"]))
+        if data["share_link"]:
+            data["share_url"] = data["share_link"]["url"]
     if include_files:
         files = conn.execute(
             """
@@ -1036,14 +1143,22 @@ def update_album(conn, *, actor, album_id, title=None, description=None, visibil
         fields.append("description=?")
         params.append(str(description or "")[:1000])
     if visibility is not None:
+        next_visibility = _normalize_album_visibility(visibility)
         fields.append("visibility=?")
-        params.append(_normalize_album_visibility(visibility))
+        params.append(next_visibility)
     if not fields:
         return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
     fields.append("updated_at=?")
     params.append(_now())
     params.append(album_id)
     conn.execute(f"UPDATE albums SET {', '.join(fields)} WHERE id=?", tuple(params))
+    if visibility is not None:
+        if next_visibility == "unlisted":
+            link, msg = ensure_album_share_link(conn, actor=actor, album_id=album_id)
+            if msg:
+                return None, msg
+        else:
+            revoke_album_share_links(conn, actor=actor, album_id=album_id)
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
 
 
@@ -1053,6 +1168,7 @@ def delete_album(conn, *, actor, album_id):
         return None, "找不到相簿"
     now = _now()
     conn.execute("UPDATE albums SET deleted_at=?, updated_at=? WHERE id=?", (now, now, album_id))
+    revoke_album_share_links(conn, actor=actor, album_id=album_id)
     return {"id": album_id}, None
 
 
@@ -1237,3 +1353,96 @@ def mark_share_link_accessed(conn, link_id):
         """,
         (_now(), link_id),
     )
+
+
+def resolve_album_share_token(conn, token):
+    ensure_storage_album_schema(conn)
+    token = str(token or "").strip()
+    if not token:
+        return None, "missing_token"
+    row = conn.execute(
+        """
+        SELECT asl.*, a.title, a.description, a.visibility, a.cover_file_id,
+               a.created_at AS album_created_at, a.updated_at AS album_updated_at
+        FROM album_share_links asl
+        JOIN albums a ON a.id=asl.album_id
+        WHERE asl.token_hash=?
+        """,
+        (_hash_share_token(token),),
+    ).fetchone()
+    if not row:
+        return None, "not_found"
+    if row["revoked_at"]:
+        return None, "revoked"
+    if row["visibility"] != "unlisted":
+        return None, "not_unlisted"
+    return row, None
+
+
+def mark_album_share_link_accessed(conn, link_id):
+    conn.execute(
+        """
+        UPDATE album_share_links
+        SET access_count=access_count + 1, last_accessed_at=?
+        WHERE id=?
+        """,
+        (_now(), link_id),
+    )
+
+
+def public_album_payload(conn, share_row):
+    token = share_row["token"]
+    files = conn.execute(
+        """
+        SELECT af.id AS album_file_id, af.file_id, af.caption, af.sort_order,
+               COALESCE(sf.display_name, f.original_filename_plain_for_public, af.file_id) AS display_name,
+               f.mime_type_plain_for_public, f.size_bytes, f.scan_status, f.risk_level
+        FROM album_files af
+        JOIN uploaded_files f ON f.id=af.file_id
+        LEFT JOIN storage_files sf ON sf.id=af.storage_file_id
+        WHERE af.album_id=? AND af.deleted_at IS NULL AND f.deleted_at IS NULL
+        ORDER BY af.sort_order ASC, af.created_at ASC
+        """,
+        (share_row["album_id"],),
+    ).fetchall()
+    return {
+        "id": share_row["album_id"],
+        "title": share_row["title"],
+        "description": share_row["description"] or "",
+        "visibility": share_row["visibility"],
+        "created_at": share_row["album_created_at"],
+        "updated_at": share_row["album_updated_at"],
+        "files": [
+            {
+                "album_file_id": row["album_file_id"],
+                "file_id": row["file_id"],
+                "display_name": row["display_name"],
+                "mime_type": row["mime_type_plain_for_public"],
+                "size_bytes": int(row["size_bytes"] or 0),
+                "scan_status": row["scan_status"],
+                "risk_level": row["risk_level"],
+                "download_url": f"/api/storage/shared/albums/{token}/files/{row['file_id']}/download",
+            }
+            for row in files
+        ],
+    }
+
+
+def resolve_album_share_file(conn, token, file_id):
+    share_row, reason = resolve_album_share_token(conn, token)
+    if not share_row:
+        return None, reason
+    file_row = conn.execute(
+        """
+        SELECT f.*, COALESCE(sf.display_name, f.original_filename_plain_for_public, f.id) AS display_name
+        FROM album_files af
+        JOIN uploaded_files f ON f.id=af.file_id
+        LEFT JOIN storage_files sf ON sf.id=af.storage_file_id
+        WHERE af.album_id=? AND af.file_id=? AND af.deleted_at IS NULL AND f.deleted_at IS NULL
+        LIMIT 1
+        """,
+        (share_row["album_id"], str(file_id or "")),
+    ).fetchone()
+    if not file_row:
+        return None, "file_not_found"
+    return {"share": share_row, "file": file_row}, None

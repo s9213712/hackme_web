@@ -500,6 +500,8 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     album = created.get_json()["album"]
     assert album["title"] == "Trip"
     assert album["visibility"] == "unlisted"
+    assert album["share_url"].startswith("/shared/albums/")
+    assert album["share_link"]["url"] == album["share_url"]
 
     added = client.post(
         f"/api/storage/albums/{album['id']}/files",
@@ -512,9 +514,19 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     assert files[0]["original_filename_plain_for_public"] == "image.txt"
     assert "mime_type_plain_for_public" in files[0]
 
+    public_album = client.get(f"/api/storage/shared/albums/{album['share_url'].rsplit('/', 1)[-1]}")
+    assert public_album.status_code == 200
+    assert public_album.get_json()["album"]["files"][0]["display_name"] == "image.txt"
+
+    public_file = client.get(public_album.get_json()["album"]["files"][0]["download_url"])
+    assert public_file.status_code == 200
+    assert public_file.data == b"album image"
+
     updated = client.put(f"/api/storage/albums/{album['id']}", json={"title": "Trip 2", "visibility": "public"})
     assert updated.status_code == 200
     assert updated.get_json()["album"]["title"] == "Trip 2"
+    assert "share_url" not in updated.get_json()["album"]
+    assert client.get(f"/api/storage/shared/albums/{album['share_url'].rsplit('/', 1)[-1]}").status_code == 404
 
     listed = client.get("/api/storage/albums")
     assert listed.status_code == 200

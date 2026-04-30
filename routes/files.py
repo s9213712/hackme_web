@@ -1,3 +1,4 @@
+import json
 import hashlib
 import os
 import shutil
@@ -51,6 +52,8 @@ from services.storage_albums import (
     purge_storage_trash,
     purge_storage_file,
     remove_album_file,
+    resolve_album_share_file,
+    resolve_album_share_token,
     resolve_share_token,
     restore_storage_trash,
     restore_storage_file,
@@ -61,6 +64,8 @@ from services.storage_albums import (
     trash_storage_folder,
     trash_storage_file,
     update_album,
+    mark_album_share_link_accessed,
+    public_album_payload,
 )
 from services.storage_maintenance import run_storage_maintenance, storage_maintenance_status
 from services.storage_quota_overrides import (
@@ -1636,6 +1641,127 @@ def register_file_routes(app, deps):
             log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return send_file(path, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+        finally:
+            conn.close()
+
+    @app.route("/shared/albums/<token>", methods=["GET"])
+    def storage_album_share_page(token):
+        safe_token = json.dumps(str(token or ""))
+        return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>分享相簿</title>
+  <style>
+    body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #172033; }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 32px 20px; }}
+    .meta {{ color: #667085; margin: 8px 0 24px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }}
+    .tile {{ background: #fff; border: 1px solid #dde3ea; border-radius: 8px; overflow: hidden; }}
+    .thumb {{ aspect-ratio: 1 / 1; display: grid; place-items: center; background: #edf1f5; color: #667085; }}
+    .thumb img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
+    .name {{ padding: 10px 12px; overflow-wrap: anywhere; font-size: 14px; }}
+    .empty {{ padding: 24px; background: #fff; border: 1px solid #dde3ea; border-radius: 8px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="album-title">分享相簿</h1>
+    <div class="meta" id="album-meta">讀取中...</div>
+    <div class="grid" id="album-files"></div>
+  </main>
+  <script>
+  const TOKEN = {safe_token};
+  const titleEl = document.getElementById("album-title");
+  const metaEl = document.getElementById("album-meta");
+  const filesEl = document.getElementById("album-files");
+  function fileKind(file) {{
+    const mime = String(file.mime_type || "").toLowerCase();
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("video/")) return "video";
+    return "file";
+  }}
+  function esc(value) {{
+    return String(value || "").replace(/[&<>"']/g, (ch) => ({{ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }}[ch]));
+  }}
+  fetch(`/api/storage/shared/albums/${{encodeURIComponent(TOKEN)}}`)
+    .then((res) => res.json().then((body) => ({{ status: res.status, body }})))
+    .then((result) => {{
+      if (!result.body.ok) throw new Error(result.body.msg || "分享相簿不存在或已失效");
+      const album = result.body.album || {{}};
+      titleEl.textContent = album.title || "分享相簿";
+      metaEl.textContent = `${{(album.files || []).length}} 個檔案${{album.description ? " · " + album.description : ""}}`;
+      if (!album.files || !album.files.length) {{
+        filesEl.innerHTML = '<div class="empty">這本相簿目前沒有可顯示的檔案</div>';
+        return;
+      }}
+      filesEl.innerHTML = album.files.map((file) => {{
+        const kind = fileKind(file);
+        const href = file.download_url || "#";
+        const safeHref = esc(href);
+        const thumb = kind === "image"
+          ? `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer"><img src="${{safeHref}}?inline=1" alt=""></a>`
+          : `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer">${{esc(kind)}}</a>`;
+        return `<article class="tile">${{thumb}}<div class="name">${{esc(file.display_name || file.file_id || "file")}}</div></article>`;
+      }}).join("");
+    }})
+    .catch((err) => {{
+      titleEl.textContent = "分享相簿無法開啟";
+      metaEl.textContent = err.message || "分享相簿不存在或已失效";
+      filesEl.innerHTML = "";
+    }});
+  </script>
+</body>
+</html>"""
+
+    @app.route("/api/storage/shared/albums/<token>", methods=["GET"])
+    def storage_album_share_api(token):
+        conn = get_db()
+        try:
+            row, reason = resolve_album_share_token(conn, token)
+            if not row:
+                return json_resp({"ok": False, "msg": "分享相簿不存在或已失效", "reason": reason}), 404
+            album = public_album_payload(conn, row)
+            mark_album_share_link_accessed(conn, row["id"])
+            conn.commit()
+            return json_resp({"ok": True, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/shared/albums/<token>/files/<file_id>/download", methods=["GET"])
+    def storage_album_share_file_download(token, file_id):
+        conn = get_db()
+        try:
+            resolved, reason = resolve_album_share_file(conn, token, file_id)
+            if not resolved:
+                return json_resp({"ok": False, "msg": "分享檔案不存在或已失效", "reason": reason}), 404
+            share = resolved["share"]
+            row = resolved["file"]
+            policy = get_cloud_drive_security_policy(conn)
+            if policy.get("block_unclean_downloads") and not str(row["privacy_mode"]).startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
+                return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
+            if _requires_download_warning(policy, row):
+                confirmed = (
+                    request.args.get("confirm_high_risk") == "1"
+                    or request.headers.get("X-Confirm-High-Risk-Download", "").lower() in {"1", "true", "yes"}
+                )
+                if not confirmed:
+                    return json_resp({
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "msg": "此分享檔案為高風險或無法完整掃描，請確認信任來源後再下載。",
+                        "risk_level": row["risk_level"],
+                        "scan_status": row["scan_status"],
+                    }), 409
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            mark_album_share_link_accessed(conn, share["id"])
+            log_file_access(conn, file_id=row["id"], actor_user_id=None, action="album_share_download", result="allowed", reason="album_share_link", ip=get_client_ip(), user_agent=get_ua())
+            conn.commit()
+            inline = request.args.get("inline") == "1"
+            return send_file(path, as_attachment=not inline, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
         finally:
             conn.close()
 

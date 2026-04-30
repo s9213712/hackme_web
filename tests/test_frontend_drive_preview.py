@@ -66,6 +66,10 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function openAlbum(id" in drive_js
     assert "await openAlbumViewer(id, options);" in drive_js
     assert "async function saveAlbumDetail()" in drive_js
+    assert "function albumShareLinkMarkup(album)" in drive_js
+    assert "async function copyAlbumShareUrl(url)" in drive_js
+    assert 'data-drive-action="copy-album-share-link"' in drive_js
+    assert "share_url" in drive_js
     assert "async function removeAlbumFile(albumId, albumFileId)" in drive_js
     assert "請輸入相簿 id" not in drive_js
     assert 'id="storage-breadcrumb"' in index_html
