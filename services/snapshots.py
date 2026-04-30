@@ -337,6 +337,7 @@ class SnapshotService:
         audit,
         file_roots=None,
         config_files=None,
+        runtime_secret_files=None,
         reset_points_chain=None,
         reset_audit_chain=None,
     ):
@@ -351,6 +352,7 @@ class SnapshotService:
         self.reset_audit_chain = reset_audit_chain
         self.file_roots = [Path(p) for p in (file_roots or []) if p]
         self.config_files = [Path(p) for p in (config_files or []) if p]
+        self.runtime_secret_files = [Path(p) for p in (runtime_secret_files or []) if p]
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)
@@ -782,6 +784,35 @@ class SnapshotService:
                         child.unlink()
             root.mkdir(parents=True, exist_ok=True)
 
+    def _rel_to_base_text(self, path):
+        try:
+            return str(Path(path).resolve(strict=False).relative_to(self.base_dir.resolve(strict=False)))
+        except Exception:
+            return str(path)
+
+    def _remove_runtime_secret_files(self):
+        removed = []
+        skipped = []
+        base = self.base_dir.resolve(strict=False)
+        for raw_path in self.runtime_secret_files:
+            path = raw_path if raw_path.is_absolute() else self.base_dir / raw_path
+            rel_text = self._rel_to_base_text(path)
+            try:
+                resolved = path.resolve(strict=False)
+                if resolved != base and base not in resolved.parents:
+                    skipped.append({"path": str(path), "reason": "outside_base_dir"})
+                    continue
+                if not path.exists() and not path.is_symlink():
+                    continue
+                if path.is_dir():
+                    skipped.append({"path": rel_text, "reason": "is_directory"})
+                    continue
+                path.unlink()
+                removed.append(rel_text)
+            except Exception as exc:
+                skipped.append({"path": rel_text, "reason": str(exc)})
+        return {"removed": removed, "skipped": skipped}
+
     def _existing_resettable_tables(self, conn):
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -914,9 +945,12 @@ class SnapshotService:
                 reason=reason or "",
                 pre_reset_snapshot_id=pre.snapshot_id,
             )
+        secret_result = self._remove_runtime_secret_files()
         audit_detail = (
             f"actor_id={actor_id},pre_reset_snapshot={pre.snapshot_id},tables={','.join(cleared_tables)},"
             f"points_chain_reset={bool(points_result and points_result.get('ok'))},"
+            f"runtime_secret_files_removed={','.join(secret_result['removed'])},"
+            f"runtime_secret_files_skipped={json.dumps(secret_result['skipped'], ensure_ascii=False, sort_keys=True)},"
             f"management_only_settings={','.join(k for k, v in management_settings.items() if v)},"
             f"disabled_settings={','.join(k for k, v in management_settings.items() if not v)},"
             f"reason={reason or ''},reset_at={reset_at}"
@@ -940,6 +974,9 @@ class SnapshotService:
             "points_chain_reset": points_result,
             "audit_chain_reset": audit_result,
             "management_only_settings": management_settings,
+            "runtime_secret_files_removed": secret_result["removed"],
+            "runtime_secret_files_skipped": secret_result["skipped"],
+            "requires_restart": True,
             "reset_at": reset_at,
         }
 

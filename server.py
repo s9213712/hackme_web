@@ -852,6 +852,14 @@ snapshot_service = SnapshotService(
         os.path.join(BASE_DIR, "settings.json"),
         os.path.join(BASE_DIR, ".env"),
     ],
+    runtime_secret_files=[
+        os.path.join(BASE_DIR, ".chain_seed"),
+        os.path.join(BASE_DIR, ".csrfkey"),
+        os.path.join(BASE_DIR, ".fkey"),
+        os.path.join(BASE_DIR, ".fley"),
+        os.path.join(BASE_DIR, ".integrity_key"),
+        os.path.join(BASE_DIR, "integrity_manifest.json"),
+    ],
     reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
     reset_audit_chain=reset_audit_chain_with_event,
 )

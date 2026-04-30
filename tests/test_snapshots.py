@@ -52,7 +52,7 @@ def _init_db(path):
     conn.close()
 
 
-def _service(tmp_path, audit_log):
+def _service(tmp_path, audit_log, *, runtime_secret_files=None):
     base = tmp_path / "app"
     base.mkdir()
     db_path = base / "database.db"
@@ -73,6 +73,7 @@ def _service(tmp_path, audit_log):
         audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
         file_roots=[uploads],
         config_files=[],
+        runtime_secret_files=runtime_secret_files,
     )
     return service, db_path, uploads
 
@@ -442,6 +443,46 @@ def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_
     assert settings["feature_games_enabled"] == "False"
     assert settings["allow_register"] == "False"
     assert any(call[0][0] == "SYSTEM_RUNTIME_RESET" for call in audit_log)
+
+
+def test_runtime_reset_removes_generated_secret_files_but_keeps_tls_files(tmp_path):
+    audit_log = []
+    base = tmp_path / "app"
+    secret_names = [
+        ".chain_seed",
+        ".csrfkey",
+        ".fkey",
+        ".fley",
+        ".integrity_key",
+        "integrity_manifest.json",
+    ]
+    service, _db_path, _uploads = _service(
+        tmp_path,
+        audit_log,
+        runtime_secret_files=[base / name for name in secret_names],
+    )
+    for name in secret_names:
+        (base / name).write_text(f"{name}-value", encoding="utf-8")
+    (base / "cert.pem").write_text("deployment certificate", encoding="utf-8")
+    (base / "key.pem").write_text("deployment private key", encoding="utf-8")
+
+    result = service.reset_runtime_state(
+        actor={"id": 1, "username": "root"},
+        confirm="RESET_RUNTIME_STATE",
+        reason="rotate generated runtime secrets",
+    )
+
+    assert result["ok"] is True
+    assert result["requires_restart"] is True
+    assert sorted(result["runtime_secret_files_removed"]) == sorted(secret_names)
+    assert result["runtime_secret_files_skipped"] == []
+    for name in secret_names:
+        assert not (base / name).exists()
+    assert (base / "cert.pem").exists()
+    assert (base / "key.pem").exists()
+    reset_detail = next(call[1]["detail"] for call in audit_log if call[0][0] == "SYSTEM_RUNTIME_RESET")
+    assert "runtime_secret_files_removed=" in reset_detail
+    assert ".chain_seed" in reset_detail
 
 
 def test_runtime_reset_invokes_points_and_audit_chain_resets(tmp_path):
