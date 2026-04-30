@@ -1,7 +1,8 @@
 # Documentation Index
 
 This directory contains the project guides. The repository root keeps only the
-short [README](../README.md).
+short [README](../README.md) plus GitHub-required metadata such as
+[`SECURITY.md`](../SECURITY.md).
 
 ## Start Here
 

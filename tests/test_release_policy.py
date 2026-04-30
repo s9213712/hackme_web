@@ -33,7 +33,7 @@ def test_branching_policy_documents_numbered_branch_sequence():
 
 def test_root_keeps_only_readme_markdown_and_docs_has_index():
     root_markdown = sorted(path.name for path in ROOT.glob("*.md"))
-    assert root_markdown == ["README.md"]
+    assert root_markdown == ["README.md", "SECURITY.md"]
 
     docs_index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     expected_links = [
