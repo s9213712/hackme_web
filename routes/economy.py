@@ -116,6 +116,53 @@ def register_economy_routes(app, deps):
             return err
         return json_resp({"ok": True, "catalog": points_service.list_catalog()})
 
+    @app.route("/api/root/economy/catalog", methods=["GET"])
+    @require_csrf_safe
+    def root_economy_catalog():
+        actor, err = root_or_403()
+        if err:
+            return err
+        category = str(request.args.get("category") or "").strip() or None
+        return json_resp({
+            "ok": True,
+            "catalog": points_service.list_catalog(include_disabled=True, category=category),
+        })
+
+    @app.route("/api/root/economy/catalog", methods=["POST"])
+    @require_csrf
+    def root_economy_catalog_save():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        try:
+            item = points_service.upsert_catalog_item(
+                actor=actor,
+                item_key=data.get("item_key"),
+                item_name=data.get("item_name"),
+                category=data.get("category"),
+                base_price=data.get("base_price"),
+                dynamic_pricing=bool(data.get("dynamic_pricing")),
+                min_price=data.get("min_price"),
+                max_price=data.get("max_price"),
+                enabled=data.get("enabled", True),
+                metadata=metadata,
+            )
+            audit(
+                "ECONOMY_PRICE_CATALOG_CHANGED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"item_key={item.get('item_key')}, category={item.get('category')}, price={item.get('base_price')}, enabled={item.get('enabled')}",
+            )
+            return json_resp({"ok": True, "item": item, "catalog": points_service.list_catalog(include_disabled=True)})
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/points/rules", methods=["GET"])
     @require_csrf_safe
     def points_rules():

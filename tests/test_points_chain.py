@@ -130,6 +130,40 @@ def test_spend_points_uses_server_idempotency_when_client_omits_key(tmp_path):
     assert service.get_wallet(1)["points_balance"] == 99
 
 
+def test_root_can_upsert_service_price_catalog_items(tmp_path):
+    service = _service(tmp_path)
+    item = service.upsert_catalog_item(
+        actor={"id": 3, "username": "root", "role": "super_admin"},
+        item_key="comfyui_txt2img_custom",
+        item_name="ComfyUI 自定義生圖",
+        category="comfyui",
+        base_price=9,
+        min_price=1,
+        max_price=99,
+        enabled=True,
+        metadata={"note": "root configurable"},
+    )
+
+    assert item["item_key"] == "comfyui_txt2img_custom"
+    assert item["base_price"] == 9
+    catalog = service.list_catalog(include_disabled=True, category="comfyui")
+    assert any(row["item_key"] == "comfyui_txt2img_custom" for row in catalog)
+
+
+def test_cloud_drive_price_catalog_item_requires_storage_metadata(tmp_path):
+    service = _service(tmp_path)
+    with pytest.raises(ValueError, match="storage_bytes"):
+        service.upsert_catalog_item(
+            actor={"id": 3, "username": "root", "role": "super_admin"},
+            item_key="cloud_storage_custom_missing",
+            item_name="缺少容量資料",
+            category="cloud_drive",
+            base_price=10,
+            enabled=True,
+            metadata={},
+        )
+
+
 def test_ledger_metadata_has_hard_size_cap(tmp_path):
     service = _service(tmp_path)
 

@@ -24,6 +24,7 @@ function bindUiEvents() {
   const tabSettingsFeatures = $("tab-settings-features");
   const tabSettingsAppearance = $("tab-settings-appearance");
   const tabSettingsSystem = $("tab-settings-system");
+  const tabSettingsBilling = $("tab-settings-billing");
   const tabSettingsDrive = $("tab-settings-drive");
   const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
@@ -65,6 +66,9 @@ function bindUiEvents() {
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
+  const rootCatalogNew = $("root-catalog-new-btn");
+  const rootCatalogRefresh = $("root-catalog-refresh-btn");
+  const rootCatalogSave = $("root-catalog-save-btn");
   const rootStorageRefresh = $("root-storage-refresh-btn");
   const rootStorageSave = $("root-storage-save-btn");
   const rootStorageClear = $("root-storage-clear-btn");
@@ -203,6 +207,7 @@ function bindUiEvents() {
   if (tabSettingsFeatures) tabSettingsFeatures.addEventListener("click", () => switchSettingsSection("features"));
   if (tabSettingsAppearance) tabSettingsAppearance.addEventListener("click", () => switchSettingsSection("appearance"));
   if (tabSettingsSystem) tabSettingsSystem.addEventListener("click", () => switchSettingsSection("system"));
+  if (tabSettingsBilling) tabSettingsBilling.addEventListener("click", () => switchSettingsSection("billing"));
   if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
   if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
@@ -412,6 +417,9 @@ function bindUiEvents() {
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
+  if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
+  if (rootCatalogRefresh) rootCatalogRefresh.addEventListener("click", loadRootEconomyCatalog);
+  if (rootCatalogSave) rootCatalogSave.addEventListener("click", saveRootEconomyCatalogItem);
   if (rootStorageRefresh) rootStorageRefresh.addEventListener("click", loadRootStorageUsers);
   if (rootStorageSave) rootStorageSave.addEventListener("click", saveRootStorageOverride);
   if (rootStorageClear) rootStorageClear.addEventListener("click", clearRootStorageOverride);

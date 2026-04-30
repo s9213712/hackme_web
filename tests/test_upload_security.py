@@ -24,7 +24,9 @@ from services.points_chain import ensure_points_economy_schema
 from services.storage_quota_purchases import (
     ensure_storage_upgrade_price_catalog,
     enrich_storage_upgrade_catalog,
+    list_storage_upgrade_price_catalog,
     record_storage_quota_purchase,
+    storage_upgrade_product_from_catalog,
 )
 from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 
@@ -379,6 +381,33 @@ def test_storage_upgrade_price_catalog_backfills_missing_items():
         assert [item["item_key"] for item in catalog] == ["cloud_storage_10gb_30d", "cloud_storage_1gb_30d"]
         assert catalog[0]["storage_bytes"] == 10 * 1024 * 1024 * 1024
         assert catalog[1]["storage_bytes"] == 1024 * 1024 * 1024
+    finally:
+        conn.close()
+
+
+def test_storage_upgrade_catalog_supports_root_defined_plans():
+    conn = _conn()
+    try:
+        ensure_points_economy_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO economy_price_catalog (
+                item_key, item_name, category, currency_type, base_price,
+                dynamic_pricing, min_price, max_price, enabled, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, 'cloud_drive', 'soft', 25, 0, 10, 100, 1, ?, 'now', 'now')
+            """,
+            (
+                "cloud_storage_2gb_7d",
+                "雲端容量 2GB / 7 天",
+                '{"storage_bytes":2147483648,"duration_days":7,"label":"雲端容量 2GB / 7 天"}',
+            ),
+        )
+        rows = list_storage_upgrade_price_catalog(conn)
+        custom = next(row for row in rows if row["item_key"] == "cloud_storage_2gb_7d")
+        assert custom["storage_bytes"] == 2 * 1024 * 1024 * 1024
+        assert custom["duration_days"] == 7
+        assert storage_upgrade_product_from_catalog(conn, "cloud_storage_2gb_7d")["storage_bytes"] == 2 * 1024 * 1024 * 1024
     finally:
         conn.close()
 

@@ -79,10 +79,51 @@ def storage_upgrade_product(item_key):
     return STORAGE_UPGRADE_PRODUCTS.get(str(item_key or "").strip())
 
 
+def _metadata_from_item(item):
+    if not item:
+        return {}
+    if isinstance(item.get("metadata"), dict):
+        return item["metadata"]
+    try:
+        return json.loads(item.get("metadata_json") or "{}")
+    except Exception:
+        return {}
+
+
+def storage_upgrade_product_from_catalog_item(item):
+    if not item:
+        return None
+    static = storage_upgrade_product(item.get("item_key")) or {}
+    metadata = _metadata_from_item(item)
+    try:
+        storage_bytes = int(metadata.get("storage_bytes") or static.get("storage_bytes") or 0)
+        duration_days = int(metadata.get("duration_days") or static.get("duration_days") or 0)
+    except Exception:
+        return None
+    if storage_bytes < 1 or duration_days < 1:
+        return None
+    return {
+        "storage_bytes": storage_bytes,
+        "duration_days": duration_days,
+        "label": str(metadata.get("label") or item.get("item_name") or static.get("label") or item.get("item_key") or "雲端容量方案"),
+    }
+
+
+def storage_upgrade_product_from_catalog(conn, item_key):
+    try:
+        row = conn.execute(
+            "SELECT * FROM economy_price_catalog WHERE item_key=? AND category='cloud_drive' AND enabled=1",
+            (str(item_key or "").strip(),),
+        ).fetchone()
+    except Exception:
+        row = None
+    return storage_upgrade_product_from_catalog_item(dict(row)) if row else storage_upgrade_product(item_key)
+
+
 def enrich_storage_upgrade_catalog(items):
     catalog = []
     for item in items or []:
-        product = storage_upgrade_product(item.get("item_key"))
+        product = storage_upgrade_product_from_catalog_item(item)
         if not product:
             continue
         catalog.append({
@@ -110,7 +151,7 @@ def list_storage_upgrade_price_catalog(conn):
         """
         SELECT *
         FROM economy_price_catalog
-        WHERE item_key LIKE 'cloud_storage_%' AND enabled=1
+        WHERE category='cloud_drive' AND enabled=1
         ORDER BY base_price, item_key
         """
     ).fetchall()
@@ -155,7 +196,7 @@ def ensure_storage_upgrade_price_catalog(conn):
 
 def record_storage_quota_purchase(conn, *, user_id, item_key, quantity, points_spent, ledger_uuid=None):
     ensure_storage_quota_purchase_schema(conn)
-    product = storage_upgrade_product(item_key)
+    product = storage_upgrade_product_from_catalog(conn, item_key)
     if not product:
         raise ValueError("不支援的雲端容量商品")
     quantity = max(1, int(quantity or 1))

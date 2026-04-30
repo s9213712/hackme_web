@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260429-ui-polish" />
+    <link rel="stylesheet" href="/styles.css?v=20260430-root-billing" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1670,6 +1670,7 @@
             <button class="tab" type="button" id="tab-settings-features">功能</button>
             <button class="tab" type="button" id="tab-settings-appearance">外觀</button>
             <button class="tab" type="button" id="tab-settings-system">系統</button>
+            <button class="tab" type="button" id="tab-settings-billing">計費</button>
             <button class="tab" type="button" id="tab-settings-drive">雲端硬碟</button>
             <button class="tab" type="button" id="tab-settings-member-levels">會員等級</button>
           </div>
@@ -1772,43 +1773,45 @@
           </div>
           <div class="form-section" id="sec-settings-appearance">
             <div class="mini-title" style="margin-bottom:.8rem;">站點外觀設定</div>
-            <div class="field">
-              <label>背景色</label>
-              <input type="color" id="s-site-bg" />
-            </div>
-            <div class="field">
-              <label>面板色</label>
-              <input type="color" id="s-site-surface" />
-            </div>
-            <div class="field">
-              <label>主色</label>
-              <input type="color" id="s-site-accent" />
-            </div>
-            <div class="field">
-              <label>輔助色</label>
-              <input type="color" id="s-site-accent2" />
-            </div>
-            <div class="field">
-              <label>文字色</label>
-              <input type="color" id="s-site-text" />
-            </div>
-            <div class="field">
-              <label>次要文字色</label>
-              <input type="color" id="s-site-muted" />
-            </div>
-            <div class="field">
-              <label>介面配置</label>
-              <select id="s-site-layout-mode">
-                <option value="centered">置中版面</option>
-                <option value="wide">寬版管理台</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>介面密度</label>
-              <select id="s-site-density">
-                <option value="comfortable">舒適</option>
-                <option value="compact">緊湊</option>
-              </select>
+            <div class="settings-option-grid settings-appearance-grid">
+              <div class="field">
+                <label>背景色</label>
+                <input type="color" id="s-site-bg" />
+              </div>
+              <div class="field">
+                <label>面板色</label>
+                <input type="color" id="s-site-surface" />
+              </div>
+              <div class="field">
+                <label>主色</label>
+                <input type="color" id="s-site-accent" />
+              </div>
+              <div class="field">
+                <label>輔助色</label>
+                <input type="color" id="s-site-accent2" />
+              </div>
+              <div class="field">
+                <label>文字色</label>
+                <input type="color" id="s-site-text" />
+              </div>
+              <div class="field">
+                <label>次要文字色</label>
+                <input type="color" id="s-site-muted" />
+              </div>
+              <div class="field">
+                <label>介面配置</label>
+                <select id="s-site-layout-mode">
+                  <option value="centered">置中版面</option>
+                  <option value="wide">寬版管理台</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>介面密度</label>
+                <select id="s-site-density">
+                  <option value="comfortable">舒適</option>
+                  <option value="compact">緊湊</option>
+                </select>
+              </div>
             </div>
           </div>
           <div class="form-section" id="sec-settings-system">
@@ -1933,6 +1936,65 @@
                 <option value="super_admin">最高管理者</option>
               </select>
             </div>
+          </div>
+          <div class="form-section" id="sec-settings-billing">
+            <div class="mini-title" style="margin-bottom:.45rem;">服務扣點與容量商品</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">這裡直接管理 economy price catalog。ComfyUI、雲端容量、發文、遊戲等服務都從後端 catalog 讀取價格；root 不扣點，但可設定一般用戶的扣點規則。</div>
+            <div class="settings-option-grid billing-editor-grid">
+              <div class="field">
+                <label>項目 key</label>
+                <input type="text" id="root-catalog-item-key" placeholder="例如 comfyui_txt2img_basic" />
+              </div>
+              <div class="field">
+                <label>顯示名稱</label>
+                <input type="text" id="root-catalog-item-name" placeholder="例如 ComfyUI 基礎生圖一次" />
+              </div>
+              <div class="field">
+                <label>類別</label>
+                <select id="root-catalog-category">
+                  <option value="comfyui">ComfyUI</option>
+                  <option value="cloud_drive">雲端硬碟容量</option>
+                  <option value="forum">討論區</option>
+                  <option value="game">遊戲</option>
+                  <option value="account">帳號服務</option>
+                  <option value="server_rental">伺服器租用</option>
+                  <option value="custom">自定義</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>扣點單價</label>
+                <input type="number" id="root-catalog-base-price" min="1" value="1" />
+              </div>
+              <div class="field">
+                <label>最低價</label>
+                <input type="number" id="root-catalog-min-price" min="1" placeholder="選填" />
+              </div>
+              <div class="field">
+                <label>最高價</label>
+                <input type="number" id="root-catalog-max-price" min="1" placeholder="選填" />
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="root-catalog-dynamic-pricing" /> 預留動態計價</label>
+              </div>
+              <div class="field">
+                <label><input type="checkbox" id="root-catalog-enabled" checked /> 啟用此項目</label>
+              </div>
+              <div class="field">
+                <label>容量 GB（僅雲端容量）</label>
+                <input type="number" id="root-catalog-storage-gb" min="0" step="0.1" placeholder="例如 1" />
+              </div>
+              <div class="field">
+                <label>有效天數（僅雲端容量）</label>
+                <input type="number" id="root-catalog-duration-days" min="1" max="3650" placeholder="例如 30" />
+              </div>
+            </div>
+            <div class="admin-toolbar" style="margin-top:.55rem;">
+              <button class="btn" type="button" id="root-catalog-new-btn">清空新增</button>
+              <button class="btn" type="button" id="root-catalog-refresh-btn">重新整理項目</button>
+              <button class="btn btn-primary" type="button" id="root-catalog-save-btn">儲存扣點規則</button>
+            </div>
+            <div id="root-catalog-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+            <div id="root-catalog-list" class="drive-file-list billing-catalog-list" style="margin-top:.75rem;"></div>
           </div>
           <div class="form-section" id="sec-settings-drive">
             <div class="mini-title" style="margin-bottom:.8rem;">雲端硬碟儲存位置（需重啟生效）</div>
@@ -2354,8 +2416,8 @@
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260429-storage-capacity-audit" defer></script>
+<script src="/js/50-admin.js?v=20260430-root-billing" defer></script>
 <script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
-<script src="/js/90-bootstrap.js?v=20260429-root-storage-override" defer></script>
+<script src="/js/90-bootstrap.js?v=20260430-root-billing" defer></script>
 </body>
 </html>

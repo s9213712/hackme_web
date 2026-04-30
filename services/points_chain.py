@@ -28,6 +28,8 @@ DEFAULT_BACKUP_KEEP_RECENT = 5
 DEFAULT_BACKUP_KEEP_DAILY = 7
 DEFAULT_BACKUP_KEEP_WEEKLY = 4
 MAX_LEDGER_METADATA_JSON_BYTES = 4096
+PRICE_ITEM_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_:-]{1,79}$")
+PRICE_CATEGORY_RE = re.compile(r"^[a-z][a-z0-9_:-]{1,79}$")
 
 DEFAULT_RULES = (
     ("daily_login", "daily_login", "credit", "soft", 5, 5, 5, 24 * 60 * 60, 0, 0, 0, 1, 0, {"label": "每日登入"}),
@@ -2166,12 +2168,146 @@ class PointsLedgerService:
         finally:
             conn.close()
 
-    def list_catalog(self):
+    def list_catalog(self, *, include_disabled=False, category=None):
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            rows = conn.execute("SELECT * FROM economy_price_catalog WHERE enabled=1 ORDER BY category, base_price, item_key").fetchall()
+            clauses = []
+            params = []
+            if not include_disabled:
+                clauses.append("enabled=1")
+            if category:
+                clauses.append("category=?")
+                params.append(str(category))
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            rows = conn.execute(
+                f"SELECT * FROM economy_price_catalog{where} ORDER BY category, enabled DESC, base_price, item_key",
+                tuple(params),
+            ).fetchall()
             return [{**dict(row), "currency_type": DISPLAY_CURRENCY, "metadata": _json_loads(row["metadata_json"], {})} for row in rows]
+        finally:
+            conn.close()
+
+    def upsert_catalog_item(
+        self,
+        *,
+        actor,
+        item_key,
+        item_name,
+        category,
+        base_price,
+        dynamic_pricing=0,
+        min_price=None,
+        max_price=None,
+        enabled=True,
+        metadata=None,
+    ):
+        key = str(item_key or "").strip().lower()
+        if not PRICE_ITEM_KEY_RE.fullmatch(key):
+            raise ValueError("item_key must be 2-80 chars: lowercase letters, numbers, _, :, -")
+        item_name = str(item_name or "").strip()
+        if not item_name:
+            raise ValueError("item_name required")
+        category = str(category or "").strip().lower()
+        if not PRICE_CATEGORY_RE.fullmatch(category):
+            raise ValueError("category must be 2-80 chars: lowercase letters, numbers, _, :, -")
+        try:
+            base_price = int(base_price)
+        except Exception as exc:
+            raise ValueError("base_price must be an integer") from exc
+        if base_price < 1 or base_price > 1_000_000_000:
+            raise ValueError("base_price must be 1-1000000000")
+        dynamic_pricing = 1 if dynamic_pricing else 0
+        min_price = None if min_price in (None, "") else int(min_price)
+        max_price = None if max_price in (None, "") else int(max_price)
+        if min_price is not None and min_price < 1:
+            raise ValueError("min_price must be positive")
+        if max_price is not None and max_price < 1:
+            raise ValueError("max_price must be positive")
+        if min_price is not None and max_price is not None and min_price > max_price:
+            raise ValueError("min_price cannot exceed max_price")
+        if min_price is not None and base_price < min_price:
+            raise ValueError("base_price cannot be lower than min_price")
+        if max_price is not None and base_price > max_price:
+            raise ValueError("base_price cannot exceed max_price")
+
+        metadata = metadata if isinstance(metadata, dict) else {}
+        cleaned_metadata = {}
+        for meta_key, meta_value in metadata.items():
+            if isinstance(meta_key, str) and len(meta_key) <= 80:
+                cleaned_metadata[meta_key] = meta_value
+        if category == "cloud_drive":
+            try:
+                storage_bytes = int(cleaned_metadata.get("storage_bytes") or 0)
+                duration_days = int(cleaned_metadata.get("duration_days") or 0)
+            except Exception as exc:
+                raise ValueError("cloud_drive metadata requires integer storage_bytes and duration_days") from exc
+            if storage_bytes < 1:
+                raise ValueError("cloud_drive storage_bytes must be positive")
+            if duration_days < 1 or duration_days > 3650:
+                raise ValueError("cloud_drive duration_days must be 1-3650")
+            cleaned_metadata["storage_bytes"] = storage_bytes
+            cleaned_metadata["duration_days"] = duration_days
+            cleaned_metadata["label"] = str(cleaned_metadata.get("label") or item_name).strip()[:120]
+
+        now = utc_now()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO economy_price_catalog (
+                    item_key, item_name, category, currency_type, base_price,
+                    dynamic_pricing, min_price, max_price, enabled, metadata_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(item_key) DO UPDATE SET
+                    item_name=excluded.item_name,
+                    category=excluded.category,
+                    currency_type=excluded.currency_type,
+                    base_price=excluded.base_price,
+                    dynamic_pricing=excluded.dynamic_pricing,
+                    min_price=excluded.min_price,
+                    max_price=excluded.max_price,
+                    enabled=excluded.enabled,
+                    metadata_json=excluded.metadata_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    key,
+                    item_name,
+                    category,
+                    INTERNAL_CURRENCY,
+                    base_price,
+                    dynamic_pricing,
+                    min_price,
+                    max_price,
+                    1 if enabled else 0,
+                    _json_dumps(cleaned_metadata),
+                    now,
+                    now,
+                ),
+            )
+            self._audit_log(
+                conn,
+                "price_catalog_upsert",
+                "info",
+                f"updated price catalog item {key}",
+                actor=actor,
+                metadata={
+                    "item_key": key,
+                    "item_name": item_name,
+                    "category": category,
+                    "base_price": base_price,
+                    "enabled": bool(enabled),
+                },
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM economy_price_catalog WHERE item_key=?", (key,)).fetchone()
+            return {**dict(row), "currency_type": DISPLAY_CURRENCY, "metadata": _json_loads(row["metadata_json"], {})}
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

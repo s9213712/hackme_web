@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_root_points_page_is_chain_operations_console():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
@@ -49,7 +50,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "function renderEconomyRecovery" in economy_js
     assert 'fetchEconomyJson("/root/points/chain/backups"' in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' in economy_js
-    assert "/js/90-bootstrap.js?v=20260429-root-storage-override" in index_html
+    assert "/js/90-bootstrap.js?v=20260430-root-billing" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
     assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js
@@ -91,3 +92,12 @@ def test_root_points_page_is_chain_operations_console():
     assert 'async function rollbackEconomyLedger()' in economy_js
     assert "/rollback" in economy_js
     assert "bindEconomyInlineEvents" in bootstrap_js
+    assert 'id="tab-settings-billing"' in index_html
+    assert 'id="sec-settings-billing"' in index_html
+    assert 'id="root-catalog-item-key"' in index_html
+    assert 'id="root-catalog-storage-gb"' in index_html
+    assert 'id="root-catalog-save-btn"' in index_html
+    assert "function loadRootEconomyCatalog()" in admin_js
+    assert 'fetch(API + "/root/economy/catalog"' in admin_js
+    assert "saveRootEconomyCatalogItem" in admin_js
+    assert 'switchSettingsSection("billing")' in bootstrap_js

@@ -27,11 +27,11 @@ function switchServerTab(tab) {
 
 function switchSettingsSection(tab) {
   currentSettingsSection = tab;
-  ["security", "features", "appearance", "system", "drive", "member-levels"].forEach((name) => {
+  ["security", "features", "appearance", "system", "billing", "drive", "member-levels"].forEach((name) => {
     const sec = $("sec-settings-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system", "tab-settings-drive", "tab-settings-member-levels"].forEach((id) => {
+  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system", "tab-settings-billing", "tab-settings-drive", "tab-settings-member-levels"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-settings-" + tab);
@@ -40,6 +40,7 @@ function switchSettingsSection(tab) {
     loadCloudDriveAdminPolicy();
     loadRootStorageUsers();
   }
+  if (tab === "billing") loadRootEconomyCatalog();
   if (tab === "member-levels") loadEditableMemberLevelRules();
 }
 
@@ -882,6 +883,142 @@ async function clearRootStorageOverride() {
   const json = await res.json().catch(() => ({}));
   setRootStorageMsg(json.ok ? "root 直接設定已清除" : (json.msg || "清除失敗"), !!json.ok);
   if (json.ok) await loadRootStorageUsers();
+}
+
+let rootEconomyCatalogCache = [];
+
+function rootCatalogMsg(text, ok = true) {
+  const msg = $("root-catalog-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function rootCatalogStorageGbFromBytes(bytes) {
+  if (!bytes) return "";
+  return Math.round((Number(bytes || 0) / 1024 / 1024 / 1024) * 100) / 100;
+}
+
+function clearRootCatalogForm() {
+  if ($("root-catalog-item-key")) $("root-catalog-item-key").value = "";
+  if ($("root-catalog-item-name")) $("root-catalog-item-name").value = "";
+  if ($("root-catalog-category")) $("root-catalog-category").value = "comfyui";
+  if ($("root-catalog-base-price")) $("root-catalog-base-price").value = "1";
+  if ($("root-catalog-min-price")) $("root-catalog-min-price").value = "";
+  if ($("root-catalog-max-price")) $("root-catalog-max-price").value = "";
+  if ($("root-catalog-dynamic-pricing")) $("root-catalog-dynamic-pricing").checked = false;
+  if ($("root-catalog-enabled")) $("root-catalog-enabled").checked = true;
+  if ($("root-catalog-storage-gb")) $("root-catalog-storage-gb").value = "";
+  if ($("root-catalog-duration-days")) $("root-catalog-duration-days").value = "";
+  rootCatalogMsg("");
+}
+
+function fillRootCatalogForm(itemKey) {
+  const item = rootEconomyCatalogCache.find((row) => row.item_key === itemKey);
+  if (!item) return;
+  const metadata = item.metadata || {};
+  if ($("root-catalog-item-key")) $("root-catalog-item-key").value = item.item_key || "";
+  if ($("root-catalog-item-name")) $("root-catalog-item-name").value = item.item_name || "";
+  if ($("root-catalog-category")) $("root-catalog-category").value = item.category || "custom";
+  if ($("root-catalog-base-price")) $("root-catalog-base-price").value = item.base_price ?? 1;
+  if ($("root-catalog-min-price")) $("root-catalog-min-price").value = item.min_price ?? "";
+  if ($("root-catalog-max-price")) $("root-catalog-max-price").value = item.max_price ?? "";
+  if ($("root-catalog-dynamic-pricing")) $("root-catalog-dynamic-pricing").checked = !!item.dynamic_pricing;
+  if ($("root-catalog-enabled")) $("root-catalog-enabled").checked = item.enabled !== 0 && item.enabled !== false;
+  if ($("root-catalog-storage-gb")) $("root-catalog-storage-gb").value = rootCatalogStorageGbFromBytes(metadata.storage_bytes);
+  if ($("root-catalog-duration-days")) $("root-catalog-duration-days").value = metadata.duration_days || "";
+  rootCatalogMsg(`正在編輯 ${item.item_key}`);
+}
+
+function renderRootEconomyCatalog(items) {
+  const list = $("root-catalog-list");
+  if (!list) return;
+  if (!items || !items.length) {
+    list.innerHTML = `<div class="drive-empty">尚無計費項目</div>`;
+    return;
+  }
+  list.innerHTML = items.map((item) => {
+    const metadata = item.metadata || {};
+    const enabled = item.enabled !== 0 && item.enabled !== false;
+    const storageText = item.category === "cloud_drive"
+      ? ` · ${rootCatalogStorageGbFromBytes(metadata.storage_bytes)} GB / ${metadata.duration_days || "-"} 天`
+      : "";
+    return `<div class="drive-file-row billing-catalog-row">
+      <div>
+        <strong>${sanitize(item.item_name || item.item_key)}</strong>
+        <div class="drive-card-sub">${sanitize(item.item_key || "")}</div>
+        <div class="drive-card-sub">${sanitize(item.category || "-")} · ${Number(item.base_price || 0)} 點${storageText} · ${enabled ? "啟用" : "停用"}</div>
+      </div>
+      <button class="btn" type="button" data-root-catalog-edit="${sanitize(item.item_key || "")}">編輯</button>
+    </div>`;
+  }).join("");
+  list.querySelectorAll("[data-root-catalog-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => fillRootCatalogForm(btn.dataset.rootCatalogEdit || ""));
+  });
+}
+
+async function loadRootEconomyCatalog() {
+  if (currentUser !== "root" || !$("root-catalog-list")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/economy/catalog", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    rootCatalogMsg(json.msg || "計費項目讀取失敗", false);
+    return;
+  }
+  rootEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
+  renderRootEconomyCatalog(rootEconomyCatalogCache);
+}
+
+async function saveRootEconomyCatalogItem() {
+  if (currentUser !== "root") return;
+  const category = $("root-catalog-category")?.value || "custom";
+  const metadata = {};
+  if (category === "cloud_drive") {
+    const gb = Number($("root-catalog-storage-gb")?.value || 0);
+    const days = Number($("root-catalog-duration-days")?.value || 0);
+    metadata.storage_bytes = Math.round(gb * 1024 * 1024 * 1024);
+    metadata.duration_days = Math.round(days);
+    metadata.label = $("root-catalog-item-name")?.value || "";
+  }
+  const payload = {
+    item_key: ($("root-catalog-item-key")?.value || "").trim(),
+    item_name: ($("root-catalog-item-name")?.value || "").trim(),
+    category,
+    base_price: Number($("root-catalog-base-price")?.value || 0),
+    min_price: $("root-catalog-min-price")?.value || "",
+    max_price: $("root-catalog-max-price")?.value || "",
+    dynamic_pricing: !!$("root-catalog-dynamic-pricing")?.checked,
+    enabled: !!$("root-catalog-enabled")?.checked,
+    metadata,
+  };
+  if (!payload.item_key || !payload.item_name) {
+    rootCatalogMsg("請填項目 key 與顯示名稱", false);
+    return;
+  }
+  if (payload.category === "cloud_drive" && (!metadata.storage_bytes || !metadata.duration_days)) {
+    rootCatalogMsg("雲端容量商品必須填容量 GB 與有效天數", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await fetch(API + "/root/economy/catalog", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  rootCatalogMsg(json.ok ? "計費項目已儲存" : (json.msg || "儲存失敗"), !!json.ok);
+  if (json.ok) {
+    rootEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
+    renderRootEconomyCatalog(rootEconomyCatalogCache);
+    if (typeof loadEconomy === "function") loadEconomy();
+  }
 }
 
 async function loadEditableMemberLevelRules() {

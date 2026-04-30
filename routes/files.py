@@ -74,7 +74,6 @@ from services.storage_quota_purchases import (
     ensure_storage_upgrade_price_catalog,
     list_storage_upgrade_price_catalog,
     record_storage_quota_purchase,
-    storage_upgrade_product,
 )
 from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
 from flask import request, send_file
@@ -975,21 +974,19 @@ def register_file_routes(app, deps):
         if err:
             return err, status
         item_key = str(data.get("item_key") or "").strip()
-        product = storage_upgrade_product(item_key)
-        if not product:
-            return json_resp({"ok": False, "msg": "不支援的容量商品"}), 400
         try:
             quantity = int(data.get("quantity") or 1)
         except Exception:
             return json_resp({"ok": False, "msg": "購買數量必須是整數"}), 400
         if quantity < 1 or quantity > 20:
             return json_resp({"ok": False, "msg": "單次購買數量需介於 1 到 20"}), 400
-        additional_bytes = int(product["storage_bytes"]) * quantity
         conn = get_db()
         try:
             catalog = _storage_upgrade_catalog(conn)
-            if not any(item.get("item_key") == item_key for item in catalog):
+            product = next((item for item in catalog if item.get("item_key") == item_key), None)
+            if not product:
                 return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
+            additional_bytes = int(product["storage_bytes"]) * quantity
             capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
             if not capacity_ok:
                 return json_resp({

@@ -641,6 +641,26 @@
       margin-right: .35rem;
     }
 
+    .settings-appearance-grid .field,
+    .billing-editor-grid .field {
+      display: block;
+      min-width: 0;
+    }
+
+    .settings-appearance-grid input[type="color"] {
+      min-height: 42px;
+      padding: .25rem;
+    }
+
+    .billing-catalog-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+
+    .billing-catalog-row .drive-card-sub {
+      overflow-wrap: anywhere;
+    }
+
     .captcha-panel {
       display: grid;
       grid-template-columns: 1fr auto;

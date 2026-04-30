@@ -38,6 +38,13 @@ def test_points_spend_route_does_not_trust_client_ledger_provenance():
     assert "_stable_spend_key" in economy
 
 
+def test_root_economy_catalog_write_uses_single_use_csrf():
+    economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
+
+    assert '@app.route("/api/root/economy/catalog", methods=["GET"])\n    @require_csrf_safe' in economy
+    assert '@app.route("/api/root/economy/catalog", methods=["POST"])\n    @require_csrf' in economy
+
+
 def test_avatar_admin_endpoint_uses_role_rank():
     users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
 
