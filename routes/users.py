@@ -91,6 +91,8 @@ def register_user_routes(app, deps):
 
     def _sanction_label(data, target):
         parts = []
+        if "role" in data:
+            parts.append(f"角色 {target['role'] or '-'} -> {normalize_text(data.get('role')) or '-'}")
         if "sanction_status" in data:
             parts.append(f"處分狀態 {target['sanction_status'] or 'none'} -> {normalize_text(data.get('sanction_status')) or 'none'}")
         if data.get("sanction_until"):
@@ -117,32 +119,51 @@ def register_user_routes(app, deps):
             return True
         return False
 
-    def _send_admin_sanction_notice(conn, *, actor, actor_role, target, previous, data):
-        reason = normalize_text(data.get("level_update_reason") or data.get("reason") or "會員管理處分")
-        action_label = _sanction_label(data, target)
-        add_violation(
-            target["id"],
-            target["username"],
-            target["role"],
-            points=0,
-            reason=f"會員管理處分：{action_label}；原因：{reason}",
-            triggered_by=actor_role,
-            actor_username=actor["username"],
-        )
-        latest = conn.execute(
+    def _latest_violation_id(conn, user_id):
+        return conn.execute(
             "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
-            (target["id"],),
+            (user_id,),
         ).fetchone()
-        if not latest:
+
+    def _send_member_governance_notice(conn, *, actor, actor_role, target, previous, action_label, reason, points=0, existing_violation_id=None):
+        if not target or target["username"] == "root":
+            return
+        violation_id = existing_violation_id
+        if not violation_id:
+            add_violation(
+                target["id"],
+                target["username"],
+                target["role"],
+                points=points,
+                reason=f"會員權益變更：{action_label}；原因：{reason or '未填寫'}",
+                triggered_by=actor_role,
+                actor_username=actor["username"],
+            )
+            latest = _latest_violation_id(conn, target["id"])
+            violation_id = latest["id"] if latest else None
+        if not violation_id:
             return
         record_admin_sanction_notice(
             conn,
             actor=actor,
             target=target,
             previous=previous,
-            violation_id=latest["id"],
+            violation_id=violation_id,
             action_label=action_label,
             reason=reason,
+        )
+
+    def _send_admin_sanction_notice(conn, *, actor, actor_role, target, previous, data):
+        reason = normalize_text(data.get("level_update_reason") or data.get("reason") or "會員管理處分")
+        _send_member_governance_notice(
+            conn,
+            actor=actor,
+            actor_role=actor_role,
+            target=target,
+            previous=previous,
+            action_label=_sanction_label(data, target),
+            reason=reason,
+            points=0,
         )
 
     def ensure_avatar_user_columns(conn):
@@ -604,7 +625,7 @@ def register_user_routes(app, deps):
             revoke_sessions_needed = False
             level_changed = False
             previous_target = _row_snapshot(target)
-            sanction_notice_needed = False
+            governance_notice_needed = False
             updates = []
             params = []
             if "nickname" in data:
@@ -637,8 +658,7 @@ def register_user_routes(app, deps):
                 val = normalize_text(data["status"])
                 if val not in ACCOUNT_STATUSES:
                     return json_resp({"ok":False,"msg":"帳號狀態錯誤"}), 400
-                if _is_punitive_member_update({"status": val}, target):
-                    sanction_notice_needed = True
+                governance_notice_needed = True
                 updates.append("status=?")
                 params.append(val)
                 if val != "active":
@@ -671,8 +691,7 @@ def register_user_routes(app, deps):
                 if err:
                     return json_resp({"ok":False,"msg":err}), 400
                 level_changed = True
-                if _is_punitive_member_update(data, target):
-                    sanction_notice_needed = True
+                governance_notice_needed = True
             if "role" in data:
                 if is_self:
                     return json_resp({"ok":False,"msg":"不可自行變更角色"}), 403
@@ -689,6 +708,7 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":f"非 root 最高管理者已達上限（{MAX_EXTRA_SUPER_ADMINS} 人）"}), 409
                 updates.append("role=?")
                 params.append(val)
+                governance_notice_needed = True
             if "password" in data and isinstance(data["password"], str) and data["password"]:
                 action_name = "password_change" if is_self else "admin_password_reset"
                 limit = 5 if is_self else 20
@@ -754,14 +774,16 @@ def register_user_routes(app, deps):
                 conn.commit()
             elif level_changed:
                 conn.commit()
-            if sanction_notice_needed and target["username"] != "root" and not is_self:
-                _send_admin_sanction_notice(
+            if governance_notice_needed and target["username"] != "root" and not is_self:
+                _send_member_governance_notice(
                     conn,
                     actor=actor,
                     actor_role=actor_role,
                     target=target,
                     previous=previous_target,
-                    data=data,
+                    action_label=_sanction_label(data, target),
+                    reason=normalize_text(data.get("level_update_reason") or data.get("reason") or "會員權益變更"),
+                    points=0,
                 )
                 conn.commit()
             if revoke_sessions_needed:
@@ -893,7 +915,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, role FROM users WHERE id=?", (user_id,)
+                "SELECT id, username, role, status, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?", (user_id,)
             ).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
@@ -926,6 +948,17 @@ def register_user_routes(app, deps):
                           detail=f"target_id={user_id}, error={exc}")
             audit("USER_PROMOTED", get_client_ip(), user=actor["username"],
                   success=True, detail=f"user_id={user_id} {from_role}→{to_role}")
+            _send_member_governance_notice(
+                conn,
+                actor=actor,
+                actor_role=actor_role,
+                target=target,
+                previous=_row_snapshot(target),
+                action_label=f"角色 {from_role} -> {to_role}",
+                reason="root 晉升帳號",
+                points=0,
+            )
+            conn.commit()
             return json_resp({"ok":True,"msg":f"已升為 {ROLE_LABEL[to_role]}"})
         finally:
             conn.close()
@@ -952,7 +985,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, role FROM users WHERE id=?", (user_id,)
+                "SELECT id, username, role, status, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?", (user_id,)
             ).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
@@ -969,6 +1002,17 @@ def register_user_routes(app, deps):
                 revoke_user_sessions(user_id)
                 audit("USER_DEACTIVATED_BY_ADMIN", get_client_ip(), user=actor["username"],
                       detail=f"user_id={user_id} demoted to {target_status}")
+                _send_member_governance_notice(
+                    conn,
+                    actor=actor,
+                    actor_role=actor_role,
+                    target=target,
+                    previous=_row_snapshot(target),
+                    action_label=f"帳號狀態 {target['status'] or '-'} -> {target_status}",
+                    reason="root 降級帳號",
+                    points=0,
+                )
+                conn.commit()
                 return json_resp({"ok":True,"msg":f"帳號已降級為 {target_status}"})
             # 管理者 → 一般用戶
             conn.execute("UPDATE users SET role='user', violation_count=0, updated_at=? WHERE id=?",
@@ -976,6 +1020,17 @@ def register_user_routes(app, deps):
             conn.commit()
             audit("MANAGER_DEMOTED_BY_ADMIN", get_client_ip(), user=actor["username"],
                   detail=f"user_id={user_id} manager→user")
+            _send_member_governance_notice(
+                conn,
+                actor=actor,
+                actor_role=actor_role,
+                target=target,
+                previous=_row_snapshot(target),
+                action_label="角色 manager -> user",
+                reason="root 降級管理員",
+                points=0,
+            )
+            conn.commit()
             return json_resp({"ok":True,"msg":"已降級為一般用戶"})
         finally:
             conn.close()
@@ -1008,7 +1063,7 @@ def register_user_routes(app, deps):
         conn = get_db()
         try:
             target = conn.execute(
-                "SELECT id, username, role FROM users WHERE id=?", (user_id,)
+                "SELECT id, username, role, status, member_level, base_level, effective_level, sanction_status, sanction_until FROM users WHERE id=?", (user_id,)
             ).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
@@ -1024,6 +1079,19 @@ def register_user_routes(app, deps):
             )
             audit("VIOLATION_ADDED", get_client_ip(), user=actor["username"],
                   detail=f"target_id={user_id} action={action} points={points} reason={reason}")
+            latest = _latest_violation_id(conn, user_id)
+            _send_member_governance_notice(
+                conn,
+                actor=actor,
+                actor_role=actor_role,
+                target=target,
+                previous=_row_snapshot(target),
+                action_label=f"違規點數 +{points}",
+                reason=reason,
+                points=points,
+                existing_violation_id=latest["id"] if latest else None,
+            )
+            conn.commit()
             return json_resp({"ok":True,"msg":msg,"new_count":new_count})
         finally:
             conn.close()

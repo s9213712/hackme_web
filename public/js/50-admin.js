@@ -1248,6 +1248,7 @@ async function applyServerMode() {
     if ($("server-mode-confirm")) $("server-mode-confirm").value = "";
     await loadServerMode();
     await loadSecurityCenter();
+    await loadSettings();
   }
 }
 
@@ -1437,6 +1438,32 @@ function renderSecurityProfilePreview(selectId, previewId) {
     <div>安全開關：${sanitize(profileKeysSummary(profile, "settings"))}</div>
     <div>閾值：${sanitize(profileKeysSummary(profile, "thresholds"))}</div>
   `;
+}
+
+function applySecurityProfileToInputs(profileName, prefix = "sc") {
+  const profile = findSecurityProfile(profileName);
+  if (!profile) return;
+  const settings = profile.settings && typeof profile.settings === "object" ? profile.settings : {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(settings, key)) return;
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!settings[key];
+    else el.value = settings[key] ?? "";
+  });
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const source = Object.prototype.hasOwnProperty.call(settings, key)
+      ? settings
+      : (profile.thresholds && typeof profile.thresholds === "object" ? profile.thresholds : {});
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+    const el = $(securityInputId(prefix, key));
+    if (el) el.value = source[key] ?? 0;
+  });
+}
+
+function previewSecurityProfileSelection(selectId, previewId, inputPrefix = "") {
+  renderSecurityProfilePreview(selectId, previewId);
+  if (inputPrefix) applySecurityProfileToInputs($(selectId)?.value, inputPrefix);
 }
 
 function populateProfileSelect(selectId, profiles, selectedMode) {
@@ -1829,6 +1856,7 @@ async function applySecurityMode() {
     if ($("security-mode-confirm")) $("security-mode-confirm").value = "";
     await loadSecurityCenter();
     await loadServerMode();
+    await loadSettings();
   }
 }
 

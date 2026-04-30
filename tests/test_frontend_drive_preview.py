@@ -184,6 +184,11 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="server-mode-profile-preview"' in index_html
     assert "loadCurrentSecurityProfileDraft" in admin_js
     assert "renderSecurityProfilePreview" in admin_js
+    assert "function applySecurityProfileToInputs" in admin_js
+    assert "function previewSecurityProfileSelection" in admin_js
+    assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
+    assert 'previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s")' in bootstrap_js
+    assert "await loadSettings();" in admin_js
     assert "populateProfileSelect(\"server-mode-select\"" in admin_js
     assert 'confirm: "RESET_RUNTIME_STATE"' in admin_js
     assert '"RUN_RESET"' not in admin_js

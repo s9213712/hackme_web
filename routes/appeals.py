@@ -16,6 +16,7 @@ def register_appeal_routes(app, deps):
     normalize_text = deps["normalize_text"]
     parse_iso_to_datetime = deps["parse_iso_to_datetime"]
     parse_positive_int = deps["parse_positive_int"]
+    points_service = deps.get("points_service")
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps["role_rank"]
@@ -323,6 +324,7 @@ def register_appeal_routes(app, deps):
 
             final_status = "approved" if action == "approve" else "rejected"
             reviewed_at = datetime.now().isoformat()
+            points_ledger_uuid = None
 
             if action == "approve":
                 penalty_points = appeal["penalty_points"] or 0
@@ -332,6 +334,11 @@ def register_appeal_routes(app, deps):
                     user_id=appeal["user_id"],
                     violation_id=appeal["latest_violation_id"],
                 )
+                context = conn.execute(
+                    "SELECT points_ledger_uuid FROM admin_sanction_appeal_contexts WHERE violation_id=? AND user_id=?",
+                    (appeal["latest_violation_id"], appeal["user_id"]),
+                ).fetchone()
+                points_ledger_uuid = context["points_ledger_uuid"] if context and context["points_ledger_uuid"] else None
                 if restored_sanction:
                     conn.execute(
                         "UPDATE users SET violation_count=?, updated_at=? WHERE id=?",
@@ -352,8 +359,24 @@ def register_appeal_routes(app, deps):
                 (final_status, actor["username"], reviewed_at, note, appeal_id)
             )
             conn.commit()
+            points_rollback = None
+            if action == "approve" and points_ledger_uuid and points_service:
+                try:
+                    points_rollback = points_service.rollback_ledger(
+                        actor=actor,
+                        ledger_uuid=points_ledger_uuid,
+                        reason=f"appeal approved #{appeal_id}: {note or 'root approved'}",
+                    )
+                except Exception as exc:
+                    audit("VIOLATION_APPEAL_POINTS_ROLLBACK_FAILED", get_client_ip(), user=actor["username"], success=False,
+                          detail=f"appeal_id={appeal_id} ledger_uuid={points_ledger_uuid} error={exc}")
+                    return json_resp({
+                        "ok": False,
+                        "msg": "申覆已核准，但點數帳本 rollback 失敗，請到 root 積分管理手動處理",
+                        "points_ledger_uuid": points_ledger_uuid,
+                    }), 500
             audit("VIOLATION_APPEAL_REVIEWED", get_client_ip(), user=actor["username"],
                   detail=f"appeal_id={appeal_id} action={action}")
-            return json_resp({"ok":True,"msg": "已核准撤銷" if action == "approve" else "已維持原處分"})
+            return json_resp({"ok":True,"msg": "已核准撤銷" if action == "approve" else "已維持原處分", "points_rollback": points_rollback})
         finally:
             conn.close()
