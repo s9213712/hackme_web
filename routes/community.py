@@ -1,6 +1,7 @@
 import math
 import re
 from datetime import datetime, timedelta
+from functools import wraps
 
 from flask import request
 
@@ -28,6 +29,18 @@ def register_community_routes(app, deps):
     add_violation = deps.get("add_violation")
     detect_chat_violation = deps.get("detect_chat_violation")
     points_service = deps.get("points_service")
+
+    def require_csrf_by_method(fn):
+        safe = require_csrf_safe(fn)
+        strict = require_csrf(fn)
+
+        @wraps(fn)
+        def decorated(*args, **kwargs):
+            if request.method in {"GET", "HEAD", "OPTIONS"}:
+                return safe(*args, **kwargs)
+            return strict(*args, **kwargs)
+
+        return decorated
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -730,7 +743,7 @@ def register_community_routes(app, deps):
         }
 
     @app.route("/api/community/announcements", methods=["GET", "POST"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def community_announcements():
         actor = get_current_user_ctx()
         if not actor:
@@ -808,7 +821,7 @@ def register_community_routes(app, deps):
             conn.close()
 
     @app.route("/api/community/categories", methods=["GET", "POST"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def community_categories():
         actor = get_current_user_ctx()
         if not actor:
@@ -913,7 +926,7 @@ def register_community_routes(app, deps):
             conn.close()
 
     @app.route("/api/community/boards", methods=["GET", "POST"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def community_boards():
         actor = get_current_user_ctx()
         if not actor:
@@ -1130,7 +1143,7 @@ def register_community_routes(app, deps):
             conn.close()
 
     @app.route("/api/community/boards/<int:board_id>/moderators", methods=["GET", "POST"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def community_board_moderators(board_id):
         actor = get_current_user_ctx()
         if not actor:
@@ -1233,7 +1246,7 @@ def register_community_routes(app, deps):
             conn.close()
 
     @app.route("/api/community/boards/<int:board_id>/threads", methods=["GET", "POST"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def community_threads(board_id):
         actor = get_current_user_ctx()
         if not actor:
@@ -1481,7 +1494,7 @@ def register_community_routes(app, deps):
             conn.close()
 
     @app.route("/api/community/threads/<int:thread_id>", methods=["GET", "PUT", "DELETE"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def community_thread_detail(thread_id):
         actor = get_current_user_ctx()
         if not actor:
