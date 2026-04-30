@@ -46,3 +46,10 @@ def test_prelaunch_tests_include_stress_progress_and_logs():
     assert "drive-progress-fill" in admin_js
     assert "job.log_tail" in admin_js
     assert "securityStressStart" in bootstrap_js
+    assert 'securityTestMsg("滲透測試啟動中..."' in admin_js
+    assert 'securityTestMsg("全功能測試啟動中..."' in admin_js
+    assert 'securityTestMsg("壓力測試啟動中..."' in admin_js
+    assert 'msg show ${ok ? "ok" : "err"}' in admin_js
+    assert 'securityPentestStart.addEventListener("click", startSecurityPentest)' in bootstrap_js
+    assert 'securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke)' in bootstrap_js
+    assert 'securityStressStart.addEventListener("click", startSecurityStressTest)' in bootstrap_js
