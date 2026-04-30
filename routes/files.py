@@ -186,6 +186,37 @@ def register_file_routes(app, deps):
             status = 409
         return json_resp({"ok": False, "msg": msg}), status
 
+    def _refund_storage_upgrade_spend(spend, actor, *, reason):
+        ledger = (spend or {}).get("ledger") or {}
+        ledger_uuid = ledger.get("ledger_uuid")
+        if not ledger_uuid or not points_service or not hasattr(points_service, "rollback_ledger"):
+            return False
+        try:
+            points_service.rollback_ledger(
+                actor=actor,
+                ledger_uuid=ledger_uuid,
+                reason=reason,
+            )
+            audit(
+                "CLOUD_STORAGE_UPGRADE_REFUND",
+                get_client_ip(),
+                user=_actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"ledger_uuid={ledger_uuid},reason={reason[:200]}",
+            )
+            return True
+        except Exception as exc:
+            audit(
+                "CLOUD_STORAGE_UPGRADE_REFUND_FAILED",
+                get_client_ip(),
+                user=_actor_value(actor, "username"),
+                success=False,
+                ua=get_ua(),
+                detail=f"ledger_uuid={ledger_uuid},error={exc}",
+            )
+            return False
+
     def _storage_upgrade_catalog(conn):
         try:
             if hasattr(points_service, "ensure_schema"):
@@ -953,12 +984,12 @@ def register_file_routes(app, deps):
             return json_resp({"ok": False, "msg": "購買數量必須是整數"}), 400
         if quantity < 1 or quantity > 20:
             return json_resp({"ok": False, "msg": "單次購買數量需介於 1 到 20"}), 400
+        additional_bytes = int(product["storage_bytes"]) * quantity
         conn = get_db()
         try:
             catalog = _storage_upgrade_catalog(conn)
             if not any(item.get("item_key") == item_key for item in catalog):
                 return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
-            additional_bytes = int(product["storage_bytes"]) * quantity
             capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
             if not capacity_ok:
                 return json_resp({
@@ -977,7 +1008,7 @@ def register_file_routes(app, deps):
                 reference_id=item_key,
                 idempotency_key=f"cloud_storage_upgrade:{_actor_value(actor, 'id')}:{uuid.uuid4().hex}",
                 metadata={
-                    "storage_bytes": int(product["storage_bytes"]) * quantity,
+                    "storage_bytes": additional_bytes,
                     "duration_days": int(product["duration_days"]),
                 },
                 actor=actor,
@@ -986,7 +1017,23 @@ def register_file_routes(app, deps):
             return _points_error(exc)
 
         conn = get_db()
+        purchase_committed = False
         try:
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
+            if not capacity_ok:
+                conn.rollback()
+                _refund_storage_upgrade_spend(
+                    spend,
+                    actor,
+                    reason=f"storage allocation failed after debit: {capacity_msg}",
+                )
+                return json_resp({
+                    "ok": False,
+                    "msg": capacity_msg,
+                    "storage_capacity": capacity_audit,
+                }), 409
             ledger = spend.get("ledger") or {}
             purchase = record_storage_quota_purchase(
                 conn,
@@ -999,6 +1046,7 @@ def register_file_routes(app, deps):
             level = _actor_value(actor, "effective_level") or _actor_value(actor, "member_level") or "newbie"
             usage = get_user_cloud_drive_usage(conn, actor, member_rule=get_member_level_rule(conn, level), storage_root=storage_root)
             conn.commit()
+            purchase_committed = True
             audit(
                 "CLOUD_STORAGE_UPGRADE_PURCHASE",
                 get_client_ip(),
@@ -1008,6 +1056,18 @@ def register_file_routes(app, deps):
                 detail=f"item_key={item_key}, quantity={quantity}, bytes={purchase['purchased_bytes']}",
             )
             return json_resp({"ok": True, "purchase": purchase, "wallet": spend.get("wallet"), "usage": usage})
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if not purchase_committed:
+                _refund_storage_upgrade_spend(
+                    spend,
+                    actor,
+                    reason="storage upgrade allocation exception after debit",
+                )
+            raise
         finally:
             conn.close()
 

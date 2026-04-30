@@ -45,6 +45,33 @@ def test_avatar_admin_endpoint_uses_role_rank():
     assert 'actor_role not in {"admin", "super_admin"}' not in users
 
 
+def test_admin_users_post_uses_method_aware_csrf_guard():
+    users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+
+    assert "def require_csrf_by_method(fn):" in users
+    assert "strict = require_csrf(fn)" in users
+    assert 'if request.method in {"GET", "HEAD", "OPTIONS"}:' in users
+    assert '@app.route("/api/admin/users", methods=["GET","POST"])\n    @require_csrf_by_method' in users
+
+
+def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
+    files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
+
+    assert '_refund_storage_upgrade_spend' in files
+    assert 'conn.execute("BEGIN IMMEDIATE")' in files
+    assert "storage allocation failed after debit" in files
+    assert files.count("can_allocate_storage_bytes(conn, storage_root, additional_bytes)") >= 2
+
+
+def test_upload_records_do_not_store_client_controlled_public_mime():
+    upload_security = (ROOT / "services" / "upload_security.py").read_text(encoding="utf-8")
+
+    assert "def safe_public_mime_type(" in upload_security
+    assert "UNSAFE_PUBLIC_MIME_TYPES" in upload_security
+    assert "safe_public_mime_type(original_filename, mime_type)" in upload_security
+    assert "None if is_e2ee else (mime_type or None)" not in upload_security
+
+
 def test_secure_cookie_defaults_are_secure():
     server = (ROOT / "server.py").read_text(encoding="utf-8")
 

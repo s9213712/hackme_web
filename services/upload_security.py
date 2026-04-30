@@ -1,5 +1,6 @@
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -166,6 +167,30 @@ CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "yara_co
 ALLOWED_SCANNER_BACKENDS = {"disabled", "clamav"}
 ALLOWED_CLAMAV_COMMANDS = {"clamdscan", "clamscan"}
 ALLOWED_YARA_COMMANDS = {"yara"}
+
+SAFE_PUBLIC_MIME_TYPES = {
+    "application/octet-stream",
+    "application/pdf",
+    "application/zip",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "text/csv",
+    "text/plain",
+}
+
+UNSAFE_PUBLIC_MIME_TYPES = {
+    "application/javascript",
+    "application/json",
+    "application/xhtml+xml",
+    "application/xml",
+    "image/svg+xml",
+    "text/css",
+    "text/html",
+    "text/javascript",
+    "text/xml",
+}
 
 MIME_SIGNATURES = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -560,6 +585,20 @@ def safe_public_filename(filename):
     name = os.path.basename(str(filename or "")).strip()
     name = "".join(ch if ch.isalnum() or ch in "._- ()" else "_" for ch in name)
     return name[:160] or "upload.bin"
+
+
+def safe_public_mime_type(filename=None, declared_mime=None):
+    guessed = mimetypes.guess_type(str(filename or ""))[0] or ""
+    candidate = str(guessed or declared_mime or "").split(";", 1)[0].strip().lower()
+    if not candidate or candidate in UNSAFE_PUBLIC_MIME_TYPES:
+        return "application/octet-stream"
+    if candidate in SAFE_PUBLIC_MIME_TYPES:
+        return candidate
+    if candidate.startswith("image/"):
+        return "application/octet-stream"
+    if candidate.startswith("text/"):
+        return "text/plain"
+    return "application/octet-stream"
 
 
 def file_extension(filename):
@@ -1566,7 +1605,7 @@ def create_uploaded_file_record(
             encrypted_metadata if is_e2ee else None,
             None if is_e2ee else safe_public_filename(original_filename),
             encrypted_metadata if is_e2ee else None,
-            None if is_e2ee else (mime_type or None),
+            None if is_e2ee else safe_public_mime_type(original_filename, mime_type),
             int(size_bytes or 0),
             ciphertext_sha256,
             plaintext_sha256 if not is_e2ee else None,

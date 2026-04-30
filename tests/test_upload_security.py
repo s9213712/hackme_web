@@ -15,6 +15,7 @@ from services.upload_security import (
     get_user_cloud_drive_usage,
     reencode_image_strip_metadata,
     safe_public_filename,
+    safe_public_mime_type,
     scan_archive_members,
     update_cloud_drive_security_policy,
 )
@@ -179,6 +180,35 @@ def test_e2ee_record_does_not_store_plaintext_filename_or_file_key():
         assert row["plaintext_sha256"] is None
         assert key_row["encrypted_file_key"] == "sealed:file-key"
         assert "secret-tax.pdf" not in str(dict(row))
+    finally:
+        conn.close()
+
+
+def test_public_mime_type_uses_server_safe_guess_not_client_header():
+    assert safe_public_mime_type("photo.png", "text/html") == "image/png"
+    assert safe_public_mime_type("pwn.html", "text/html") == "application/octet-stream"
+    assert safe_public_mime_type("vector.svg", "image/svg+xml") == "application/octet-stream"
+    assert safe_public_mime_type("note.txt", "text/html") == "text/plain"
+
+
+def test_uploaded_file_record_stores_safe_public_mime_type():
+    conn = _conn()
+    try:
+        result = create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/public/blob",
+            privacy_mode="public_attachment",
+            size_bytes=10,
+            original_filename="pwn.html",
+            mime_type="text/html",
+            user={"effective_level": "vip"},
+        )
+        row = conn.execute(
+            "SELECT mime_type_plain_for_public FROM uploaded_files WHERE id=?",
+            (result["file_id"],),
+        ).fetchone()
+        assert row["mime_type_plain_for_public"] == "application/octet-stream"
     finally:
         conn.close()
 
