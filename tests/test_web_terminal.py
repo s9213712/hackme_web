@@ -34,7 +34,7 @@ class FakeTerminalManager:
             "image_available": False,
             "image": "hackme-web-terminal:ubuntu-24.04",
             "distribution": "ubuntu-24.04",
-            "limits": {"network": "bridge"},
+            "limits": {"network": "none"},
         }
 
 
@@ -74,7 +74,7 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
     assert command[:3] == ["docker", "run", "--rm"]
     assert "--user" in command
     assert f"{mount_path.stat().st_uid}:{mount_path.stat().st_gid}" in command
-    assert "--network bridge" in joined
+    assert "--network none" in joined
     assert "--cap-drop ALL" in joined
     assert "--security-opt no-new-privileges" in joined
     assert "--read-only" in command
@@ -93,8 +93,8 @@ def test_container_command_keeps_terminal_sandboxed(tmp_path):
 def test_web_terminal_network_modes_are_normalized():
     assert normalize_web_terminal_network_mode("none") == "none"
     assert normalize_web_terminal_network_mode("bridge") == "bridge"
-    assert normalize_web_terminal_network_mode("host") == "host"
-    assert normalize_web_terminal_network_mode("bad") == "bridge"
+    assert normalize_web_terminal_network_mode("host") == "none"
+    assert normalize_web_terminal_network_mode("bad") == "none"
 
 
 def test_web_terminal_distribution_selects_image():

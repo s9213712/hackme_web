@@ -33,8 +33,8 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 900
 DEFAULT_CPU_LIMIT = "0.5"
 DEFAULT_MEMORY_LIMIT = "256m"
 DEFAULT_PIDS_LIMIT = "128"
-DEFAULT_NETWORK_MODE = "bridge"
-ALLOWED_NETWORK_MODES = {"none", "bridge", "host"}
+DEFAULT_NETWORK_MODE = "none"
+ALLOWED_NETWORK_MODES = {"none", "bridge"}
 
 
 def normalize_web_terminal_network_mode(value):

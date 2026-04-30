@@ -15,6 +15,7 @@ from services.upload_security import (
     get_user_cloud_drive_usage,
     reencode_image_strip_metadata,
     safe_public_filename,
+    safe_public_mime_type,
     scan_archive_members,
     update_cloud_drive_security_policy,
 )
@@ -87,7 +88,7 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
                 "image_reencode_enabled": False,
                 "image_reencode_max_pixels": 12345,
                 "yara_enabled": True,
-                "yara_command": "/usr/bin/yara",
+                "yara_command": "yara",
                 "yara_rules_path": "/etc/yara/rules",
                 "max_daily_downloads": 40,
                 "notes": "root tuned policy",
@@ -103,7 +104,7 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         assert policy["image_reencode_enabled"] is False
         assert policy["image_reencode_max_pixels"] == 12345
         assert policy["yara_enabled"] is True
-        assert policy["yara_command"] == "/usr/bin/yara"
+        assert policy["yara_command"] == "yara"
         assert policy["yara_rules_path"] == "/etc/yara/rules"
         assert policy["max_daily_downloads"] == 40
         assert policy["notes"] == "root tuned policy"
@@ -115,6 +116,14 @@ def test_update_cloud_drive_security_policy_validates_and_serializes():
         policy, err = update_cloud_drive_security_policy(conn, {"scanner_backend": "cloud_api"})
         assert policy is None
         assert "scanner_backend" in err
+
+        policy, err = update_cloud_drive_security_policy(conn, {"scanner_command": "/bin/sh -c id"})
+        assert policy is None
+        assert "scanner_command" in err
+
+        policy, err = update_cloud_drive_security_policy(conn, {"yara_command": "/usr/bin/yara"})
+        assert policy is None
+        assert "yara_command" in err
     finally:
         conn.close()
 
@@ -173,6 +182,35 @@ def test_e2ee_record_does_not_store_plaintext_filename_or_file_key():
         assert row["plaintext_sha256"] is None
         assert key_row["encrypted_file_key"] == "sealed:file-key"
         assert "secret-tax.pdf" not in str(dict(row))
+    finally:
+        conn.close()
+
+
+def test_public_mime_type_uses_server_safe_guess_not_client_header():
+    assert safe_public_mime_type("photo.png", "text/html") == "image/png"
+    assert safe_public_mime_type("pwn.html", "text/html") == "application/octet-stream"
+    assert safe_public_mime_type("vector.svg", "image/svg+xml") == "application/octet-stream"
+    assert safe_public_mime_type("note.txt", "text/html") == "text/plain"
+
+
+def test_uploaded_file_record_stores_safe_public_mime_type():
+    conn = _conn()
+    try:
+        result = create_uploaded_file_record(
+            conn,
+            owner_user_id=1,
+            storage_path="storage/public/blob",
+            privacy_mode="public_attachment",
+            size_bytes=10,
+            original_filename="pwn.html",
+            mime_type="text/html",
+            user={"effective_level": "vip"},
+        )
+        row = conn.execute(
+            "SELECT mime_type_plain_for_public FROM uploaded_files WHERE id=?",
+            (result["file_id"],),
+        ).fetchone()
+        assert row["mime_type_plain_for_public"] == "application/octet-stream"
     finally:
         conn.close()
 

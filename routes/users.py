@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime, timedelta
+from functools import wraps
 from flask import request, send_file
 
 from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
@@ -50,6 +51,18 @@ def register_user_routes(app, deps):
     verify_password = deps["verify_password"]
     get_member_level_rule = deps.get("get_member_level_rule")
     storage_root = deps.get("STORAGE_DIR", ".")
+
+    def require_csrf_by_method(fn):
+        safe = require_csrf_safe(fn)
+        strict = require_csrf(fn)
+
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            if request.method in {"GET", "HEAD", "OPTIONS"}:
+                return safe(*args, **kwargs)
+            return strict(*args, **kwargs)
+
+        return wrapper
 
     def trim_password_history(conn, user_id):
         conn.execute(
@@ -243,7 +256,7 @@ def register_user_routes(app, deps):
             conn.close()
 
     @app.route("/api/admin/users", methods=["GET","POST"])
-    @require_csrf_safe
+    @require_csrf_by_method
     def admin_users():
         actor = get_current_user_ctx()
         if not actor:

@@ -1,7 +1,7 @@
 import hashlib
 import json
+import mimetypes
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -165,6 +165,32 @@ CLOUD_DRIVE_POLICY_INT_FIELDS = {
 CLOUD_DRIVE_POLICY_TEXT_FIELDS = {"scanner_backend", "scanner_command", "yara_command", "yara_rules_path", "notes"}
 
 ALLOWED_SCANNER_BACKENDS = {"disabled", "clamav"}
+ALLOWED_CLAMAV_COMMANDS = {"clamdscan", "clamscan"}
+ALLOWED_YARA_COMMANDS = {"yara"}
+
+SAFE_PUBLIC_MIME_TYPES = {
+    "application/octet-stream",
+    "application/pdf",
+    "application/zip",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "text/csv",
+    "text/plain",
+}
+
+UNSAFE_PUBLIC_MIME_TYPES = {
+    "application/javascript",
+    "application/json",
+    "application/xhtml+xml",
+    "application/xml",
+    "image/svg+xml",
+    "text/css",
+    "text/html",
+    "text/javascript",
+    "text/xml",
+}
 
 MIME_SIGNATURES = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
@@ -561,6 +587,20 @@ def safe_public_filename(filename):
     return name[:160] or "upload.bin"
 
 
+def safe_public_mime_type(filename=None, declared_mime=None):
+    guessed = mimetypes.guess_type(str(filename or ""))[0] or ""
+    candidate = str(guessed or declared_mime or "").split(";", 1)[0].strip().lower()
+    if not candidate or candidate in UNSAFE_PUBLIC_MIME_TYPES:
+        return "application/octet-stream"
+    if candidate in SAFE_PUBLIC_MIME_TYPES:
+        return candidate
+    if candidate.startswith("image/"):
+        return "application/octet-stream"
+    if candidate.startswith("text/"):
+        return "text/plain"
+    return "application/octet-stream"
+
+
 def file_extension(filename):
     return Path(str(filename or "")).suffix.lower()
 
@@ -700,11 +740,17 @@ def update_cloud_drive_security_policy(conn, data, scope="default"):
         updates.append("scanner_backend=?")
         params.append(value)
     if "scanner_command" in data:
+        scanner_command = str(data.get("scanner_command") or "").strip()
+        if scanner_command and scanner_command not in ALLOWED_CLAMAV_COMMANDS:
+            return None, "scanner_command 僅可為 clamdscan 或 clamscan，不能填路徑或參數"
         updates.append("scanner_command=?")
-        params.append(str(data.get("scanner_command") or "").strip()[:500])
+        params.append(scanner_command)
     if "yara_command" in data:
+        yara_command = str(data.get("yara_command") or "").strip()
+        if yara_command and yara_command not in ALLOWED_YARA_COMMANDS:
+            return None, "yara_command 僅可為 yara，不能填路徑或參數"
         updates.append("yara_command=?")
-        params.append(str(data.get("yara_command") or "").strip()[:500])
+        params.append(yara_command)
     if "yara_rules_path" in data:
         updates.append("yara_rules_path=?")
         params.append(str(data.get("yara_rules_path") or "").strip()[:500])
@@ -1145,11 +1191,21 @@ def _update_file_scan_state(conn, file_id, *, scan_status, risk_level=None):
     conn.execute(f"UPDATE uploaded_files SET {', '.join(fields)} WHERE id=?", tuple(params))
 
 
-def _resolve_clamav_command(policy):
-    configured = str(policy.get("scanner_command") or "").strip()
+def _resolve_named_binary(configured, allowed_names, fallback_names):
+    configured = str(configured or "").strip()
     if configured:
-        return configured
-    return shutil.which("clamdscan") or shutil.which("clamscan")
+        if configured not in allowed_names:
+            return None
+        return shutil.which(configured)
+    for name in fallback_names:
+        resolved = shutil.which(name)
+        if resolved:
+            return resolved
+    return None
+
+
+def _resolve_clamav_command(policy):
+    return _resolve_named_binary(policy.get("scanner_command"), ALLOWED_CLAMAV_COMMANDS, ("clamdscan", "clamscan"))
 
 
 def _parse_clamav_output(output):
@@ -1161,10 +1217,7 @@ def _parse_clamav_output(output):
 
 
 def _resolve_yara_command(policy):
-    configured = str(policy.get("yara_command") or "").strip()
-    if configured:
-        return configured
-    return shutil.which("yara")
+    return _resolve_named_binary(policy.get("yara_command"), ALLOWED_YARA_COMMANDS, ("yara",))
 
 
 def run_yara_scan(path, *, policy):
@@ -1178,12 +1231,11 @@ def run_yara_scan(path, *, policy):
         return {"result": "not_required", "malware_name": None, "details": {"reason": "yara_command_not_found"}}
     started_at = datetime.now().isoformat()
     timeout = int(policy.get("scanner_timeout_seconds") or 60)
-    command_parts = shlex.split(command)
-    if not command_parts:
+    if not command:
         return {"result": "not_required", "malware_name": None, "scan_started_at": started_at, "details": {"reason": "empty_yara_command"}}
     try:
         completed = subprocess.run(
-            [*command_parts, "-r", rules_path, str(path)],
+            [command, "-r", rules_path, str(path)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1194,12 +1246,12 @@ def run_yara_scan(path, *, policy):
             "result": "failed",
             "malware_name": None,
             "scan_started_at": started_at,
-            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command)},
         }
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     details = {
         "returncode": completed.returncode,
-        "command": os.path.basename(command_parts[0]),
+        "command": os.path.basename(command),
         "rules_path": rules_path,
         "output_tail": output[-1000:],
     }
@@ -1223,8 +1275,7 @@ def run_clamav_scan(path, *, policy):
         }
     started_at = datetime.now().isoformat()
     timeout = int(policy.get("scanner_timeout_seconds") or 60)
-    command_parts = shlex.split(command)
-    if not command_parts:
+    if not command:
         return {
             "result": "failed",
             "malware_name": None,
@@ -1233,7 +1284,7 @@ def run_clamav_scan(path, *, policy):
         }
     try:
         completed = subprocess.run(
-            [*command_parts, "--no-summary", str(path)],
+            [command, "--no-summary", str(path)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1244,12 +1295,12 @@ def run_clamav_scan(path, *, policy):
             "result": "failed",
             "malware_name": None,
             "scan_started_at": started_at,
-            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command_parts[0])},
+            "details": {"reason": "timeout", "timeout_seconds": timeout, "command": os.path.basename(command)},
         }
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     details = {
         "returncode": completed.returncode,
-        "command": os.path.basename(command_parts[0]),
+        "command": os.path.basename(command),
         "output_tail": output[-1000:],
     }
     if completed.returncode == 0:
@@ -1529,7 +1580,7 @@ def create_uploaded_file_record(
             encrypted_metadata if is_e2ee else None,
             None if is_e2ee else safe_public_filename(original_filename),
             encrypted_metadata if is_e2ee else None,
-            None if is_e2ee else (mime_type or None),
+            None if is_e2ee else safe_public_mime_type(original_filename, mime_type),
             int(size_bytes or 0),
             ciphertext_sha256,
             plaintext_sha256 if not is_e2ee else None,
