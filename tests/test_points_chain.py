@@ -275,6 +275,40 @@ def test_points_chain_safe_mode_blocks_writes_and_root_restore_rebuilds_wallets(
     assert service.verify_chain()["ok"] is True
 
 
+def test_points_chain_detects_wallet_tamper_and_restore_reports_success(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=45,
+        action_type="test_credit",
+    )
+    sealed = service.seal_block(actor=actor, limit=100)
+    backup_id = sealed["backup"]["backup_id"]
+
+    conn = service.get_db()
+    try:
+        conn.execute("UPDATE points_wallets SET soft_balance=999, total_soft_earned=999 WHERE user_id=1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    verification = service.verify_chain()
+    assert verification["ok"] is False
+    assert verification["errors"][0]["type"] == "wallet_ledger_mismatch"
+    assert service.safe_mode_status()["safe_mode"] is True
+
+    restored = service.restore_from_backup(actor=actor, backup_id=backup_id, confirm="RESTORE POINTSCHAIN")
+    assert restored["ok"] is True
+    assert restored["msg"] == "PointsChain restored and verified"
+    assert restored["wallet_rebuild"]["wallets_rebuilt"] >= 1
+    assert restored["verification"]["ok"] is True
+    assert restored["recovery"]["safe_mode"] is False
+    assert service.get_wallet(1)["points_balance"] == 45
+
+
 def test_tampered_ledger_cannot_be_rolled_back_from_dirty_row(tmp_path):
     service = _service(tmp_path)
     tx = service.record_transaction(
@@ -514,6 +548,33 @@ def test_points_chain_auto_seals_when_hybrid_count_threshold_is_met(tmp_path):
     assert sealed["sealed"] is True
     assert sealed["block"]["ledger_count"] == 10
     assert service.verify_chain()["counts"]["unsealed_entries"] == 0
+
+
+def test_points_chain_runtime_reset_clears_active_ledger_and_leaves_reset_audit(tmp_path):
+    service = _service(tmp_path)
+    actor = {"id": 3, "username": "root", "role": "super_admin"}
+    service.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=10,
+        action_type="test_credit",
+        idempotency_key="credit:reset-test",
+    )
+    sealed = service.seal_block(actor=actor)
+    assert sealed["sealed"] is True
+    assert service.verify_chain()["counts"]["ledger_entries"] == 1
+
+    reset = service.reset_runtime_chain(actor=actor, reason="server reset", pre_reset_snapshot_id="snap_test")
+
+    assert reset["ok"] is True
+    verification = service.verify_chain()
+    assert verification["ok"] is True
+    assert verification["counts"]["ledger_entries"] == 0
+    assert verification["counts"]["sealed_blocks"] == 0
+    assert service.get_wallet(1)["points_balance"] == 0
+    audit_events = service.list_chain_audit_logs(limit=5)
+    assert audit_events[0]["event_type"] == "POINTS_CHAIN_RESET"
 
 
 def test_high_risk_admin_adjust_forces_block(tmp_path):

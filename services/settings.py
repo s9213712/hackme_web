@@ -94,6 +94,25 @@ DEFAULT_SETTINGS = {
 }
 
 FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))
+MANAGEMENT_ONLY_FEATURE_FLAGS = frozenset({
+    "feature_accounts_enabled",
+    "feature_audit_log_enabled",
+    "feature_violation_center_enabled",
+    "feature_system_health_enabled",
+    "feature_identity_governance_enabled",
+    "feature_account_security_enabled",
+    "feature_member_governance_enabled",
+    "feature_server_modes_enabled",
+    "feature_snapshot_restore_enabled",
+    "feature_health_center_enabled",
+    "feature_advanced_security_enabled",
+})
+MANAGEMENT_ONLY_RESET_SETTINGS = {
+    **{key: key in MANAGEMENT_ONLY_FEATURE_FLAGS for key in FEATURE_FLAG_KEYS},
+    "allow_register": False,
+    "snapshot_daily_auto_enabled": False,
+    "storage_maintenance_auto_enabled": False,
+}
 
 _SETTINGS_LOCK = threading.Lock()
 _SYSTEM_SETTINGS = None

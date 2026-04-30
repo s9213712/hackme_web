@@ -1038,6 +1038,54 @@ class PointsLedgerService:
             )
         return {"wallets_rebuilt": len(user_ids), "source_ledger_rows": len(rows)}
 
+    def _verify_wallets_against_ledger(self, conn):
+        rows = conn.execute("SELECT * FROM points_ledger ORDER BY id ASC").fetchall()
+        totals = self._wallet_totals_from_ledger(rows)
+        wallet_rows = {
+            int(row["user_id"]): row
+            for row in conn.execute("SELECT * FROM points_wallets ORDER BY user_id ASC").fetchall()
+        }
+        user_ids = set(wallet_rows.keys())
+        user_ids.update(totals.keys())
+        errors = []
+        for user_id in sorted(user_ids):
+            wallet = wallet_rows.get(user_id)
+            expected = totals.get(user_id, {"balance": 0, "frozen": 0, "earned": 0, "spent": 0})
+            if not wallet:
+                if any(int(expected[key]) for key in ("balance", "frozen", "earned", "spent")):
+                    errors.append({
+                        "type": "wallet_missing",
+                        "severity": "critical",
+                        "message": f"wallet for user #{user_id} is missing but ledger has balance data",
+                        "user_id": user_id,
+                        "expected": expected,
+                    })
+                continue
+            comparisons = {
+                "soft_balance": int(expected["balance"]),
+                "soft_frozen": int(expected["frozen"]),
+                "total_soft_earned": int(expected["earned"]),
+                "total_soft_spent": int(expected["spent"]),
+                "hard_balance": 0,
+                "hard_frozen": 0,
+                "total_hard_earned": 0,
+                "total_hard_spent": 0,
+            }
+            mismatches = []
+            for column, expected_value in comparisons.items():
+                actual_value = int(wallet[column] or 0)
+                if actual_value != expected_value:
+                    mismatches.append({"field": column, "expected": expected_value, "actual": actual_value})
+            if mismatches:
+                errors.append({
+                    "type": "wallet_ledger_mismatch",
+                    "severity": "critical",
+                    "message": f"wallet for user #{user_id} does not match ledger replay",
+                    "user_id": user_id,
+                    "mismatches": mismatches,
+                })
+        return errors
+
     def restore_from_backup(self, *, actor, backup_id, confirm):
         if str(confirm or "") != "RESTORE POINTSCHAIN":
             raise ValueError("confirm must be RESTORE POINTSCHAIN")
@@ -1060,12 +1108,14 @@ class PointsLedgerService:
             conn.execute("DROP TRIGGER IF EXISTS trg_points_ledger_no_delete")
             conn.execute("DROP TRIGGER IF EXISTS trg_points_ledger_core_immutable")
             conn.execute("DELETE FROM points_chain_block_signatures")
-            conn.execute("DELETE FROM points_chain_blocks")
             conn.execute("DELETE FROM points_ledger")
+            conn.execute("DELETE FROM points_chain_blocks")
+            conn.execute("DELETE FROM points_chain_audit_logs")
 
             ledger_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_ledger)").fetchall()]
             block_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_chain_blocks)").fetchall()]
             sig_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_chain_block_signatures)").fetchall()]
+            audit_cols = [row["name"] for row in conn.execute("PRAGMA table_info(points_chain_audit_logs)").fetchall()]
 
             def insert_rows(table, cols, rows):
                 if not rows:
@@ -1081,6 +1131,7 @@ class PointsLedgerService:
             insert_rows("points_chain_blocks", block_cols, payload.get("points_chain_blocks") or [])
             insert_rows("points_ledger", ledger_cols, payload.get("points_ledger") or [])
             insert_rows("points_chain_block_signatures", sig_cols, payload.get("points_chain_block_signatures") or [])
+            insert_rows("points_chain_audit_logs", audit_cols, payload.get("points_chain_audit_logs") or [])
             conn.execute(
                 """
                 CREATE TRIGGER IF NOT EXISTS trg_points_ledger_no_delete
@@ -1096,13 +1147,22 @@ class PointsLedgerService:
             if not post["ok"]:
                 raise ValueError("restored chain verification failed")
             now = utc_now()
+            recovery_summary = {
+                "restored": True,
+                "restored_at": now,
+                "backup_id": backup_id,
+                "pre_restore_backup_id": abnormal.get("backup_id"),
+                "wallet_rebuild": rebuild,
+                "verification_ok": bool(post.get("ok")),
+                "verification_counts": post.get("counts", {}),
+            }
             conn.execute(
                 """
                 UPDATE points_chain_recovery_state
                 SET safe_mode=0, restored_at=?, updated_at=?, restore_plan_json=?
                 WHERE id=1
                 """,
-                (now, now, _json_dumps({**state.get("restore_plan", {}), "restored_backup_id": backup_id, "pre_restore_backup_id": abnormal.get("backup_id")})),
+                (now, now, _json_dumps({**state.get("restore_plan", {}), **recovery_summary})),
             )
             self._audit_log(
                 conn,
@@ -1118,7 +1178,15 @@ class PointsLedgerService:
                 },
             )
             conn.commit()
-            return {"ok": True, "backup_id": backup_id, "pre_restore_backup_id": abnormal.get("backup_id"), "wallet_rebuild": rebuild, "verification": post}
+            return {
+                "ok": True,
+                "msg": "PointsChain restored and verified",
+                "backup_id": backup_id,
+                "pre_restore_backup_id": abnormal.get("backup_id"),
+                "wallet_rebuild": rebuild,
+                "verification": post,
+                "recovery": self._safe_mode_status(conn),
+            }
         except Exception:
             conn.rollback()
             raise
@@ -1183,6 +1251,77 @@ class PointsLedgerService:
                 utc_now(),
             ),
         )
+
+    def reset_runtime_chain(self, *, actor=None, reason="", pre_reset_snapshot_id=""):
+        """Reset the live PointsChain runtime state after a full server reset.
+
+        The pre-reset server snapshot remains the recovery source. The active
+        ledger, blocks, wallets, pending rewards, disputes, recovery state, and
+        daily stats are cleared so the next startup can bootstrap a fresh
+        genesis allocation. A PointsChain audit entry is left as the first event
+        in the new chain audit log.
+        """
+        conn = self.get_db()
+        reset_tables = [
+            "points_chain_block_signatures",
+            "points_chain_blocks",
+            "points_disputes",
+            "points_ledger",
+            "points_wallets",
+            "points_pending_rewards",
+            "points_economy_daily_stats",
+            "points_chain_recovery_state",
+            "points_chain_audit_logs",
+        ]
+        try:
+            self.ensure_schema(conn)
+            before = self._chain_head_summary(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DROP TRIGGER IF EXISTS trg_points_ledger_no_delete")
+            conn.execute("DROP TRIGGER IF EXISTS trg_points_ledger_core_immutable")
+            for table in reset_tables:
+                conn.execute(f"DELETE FROM {table}")
+            try:
+                placeholders = ",".join("?" for _ in reset_tables)
+                conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", reset_tables)
+            except Exception:
+                pass
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_points_ledger_no_delete
+                BEFORE DELETE ON points_ledger
+                BEGIN
+                    SELECT RAISE(ABORT, 'points ledger is append-only');
+                END
+                """
+            )
+            create_points_ledger_immutable_trigger(conn)
+            self._audit_log(
+                conn,
+                "POINTS_CHAIN_RESET",
+                "warning",
+                "PointsChain reset during server runtime reset",
+                actor=actor,
+                metadata={
+                    "reason": reason or "",
+                    "pre_reset_snapshot_id": pre_reset_snapshot_id or "",
+                    "before": before,
+                    "reset_tables": reset_tables,
+                },
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "reset": True,
+                "before": before,
+                "cleared_tables": reset_tables,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def list_chain_audit_logs(self, *, limit=100):
         conn = self.get_db()
@@ -2282,11 +2421,14 @@ class PointsLedgerService:
                         "expected_public_key_fingerprint": self._node_fingerprint(),
                     })
                 previous_block = block["block_hash"]
+        if not errors:
+            errors.extend(self._verify_wallets_against_ledger(conn))
         counts = {
             "ledger_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()["c"],
             "sealed_blocks": conn.execute("SELECT COUNT(*) AS c FROM points_chain_blocks").fetchone()["c"],
             "unsealed_entries": conn.execute("SELECT COUNT(*) AS c FROM points_ledger WHERE chain_block_id IS NULL").fetchone()["c"],
             "audit_events": conn.execute("SELECT COUNT(*) AS c FROM points_chain_audit_logs").fetchone()["c"],
+            "wallets": conn.execute("SELECT COUNT(*) AS c FROM points_wallets").fetchone()["c"],
         }
         result = {"ok": not errors, "errors": errors[:100], "error_count": len(errors), "counts": counts}
         if mark_safe_mode and errors:

@@ -420,12 +420,52 @@ def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_
     post_count = conn.execute("SELECT COUNT(*) AS c FROM posts").fetchone()["c"]
     root_count = conn.execute("SELECT COUNT(*) AS c FROM users WHERE username='root'").fetchone()["c"]
     pre_reset = conn.execute("SELECT type, status FROM snapshots WHERE id=?", (result["pre_reset_snapshot_id"],)).fetchone()
+    settings = {
+        row["key"]: row["value"]
+        for row in conn.execute(
+            "SELECT key, value FROM system_settings WHERE key LIKE 'feature_%' OR key IN ('allow_register', 'snapshot_daily_auto_enabled', 'storage_maintenance_auto_enabled')"
+        ).fetchall()
+    }
     conn.close()
     assert post_count == 0
     assert root_count == 1
     assert pre_reset["type"] == "pre_reset"
     assert pre_reset["status"] == "ready"
+    assert settings["feature_accounts_enabled"] == "True"
+    assert settings["feature_audit_log_enabled"] == "True"
+    assert settings["feature_snapshot_restore_enabled"] == "True"
+    assert settings["feature_chat_enabled"] == "False"
+    assert settings["feature_community_enabled"] == "False"
+    assert settings["feature_storage_albums_enabled"] == "False"
+    assert settings["feature_comfyui_enabled"] == "False"
+    assert settings["feature_economy_enabled"] == "False"
+    assert settings["feature_games_enabled"] == "False"
+    assert settings["allow_register"] == "False"
     assert any(call[0][0] == "SYSTEM_RUNTIME_RESET" for call in audit_log)
+
+
+def test_runtime_reset_invokes_points_and_audit_chain_resets(tmp_path):
+    audit_log = []
+    service, _db_path, _uploads = _service(tmp_path, audit_log)
+    calls = {"points": [], "audit": []}
+    service.reset_points_chain = lambda **kwargs: calls["points"].append(kwargs) or {"ok": True, "reset": True}
+    service.reset_audit_chain = lambda *args, **kwargs: calls["audit"].append((args, kwargs)) or {"ok": True, "reset": True}
+
+    result = service.reset_runtime_state(
+        actor={"id": 1, "username": "root"},
+        confirm="RESET_RUNTIME_STATE",
+        reason="cleanup",
+    )
+
+    assert result["ok"] is True
+    assert result["points_chain_reset"]["reset"] is True
+    assert result["audit_chain_reset"]["reset"] is True
+    assert result["management_only_settings"]["feature_accounts_enabled"] is True
+    assert result["management_only_settings"]["feature_chat_enabled"] is False
+    assert calls["points"][0]["pre_reset_snapshot_id"] == result["pre_reset_snapshot_id"]
+    assert calls["points"][0]["reason"] == "cleanup"
+    assert calls["audit"][0][0][0] == "SYSTEM_RUNTIME_RESET"
+    assert "points_chain_reset=True" in calls["audit"][0][1]["detail"]
 
 
 def _json_resp(payload, status=200):

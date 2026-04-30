@@ -215,6 +215,42 @@ def test_password_reset_uses_generic_request_and_one_time_token(tmp_path):
     assert used_count == 1
 
 
+def test_root_password_reset_bypasses_password_policy(tmp_path):
+    db_path = tmp_path / "root-recovery.db"
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, email, status, role, email_verified) "
+            "VALUES (2, 'root', 'root@example.test', 'active', 'super_admin', 1)"
+        )
+        conn.execute(
+            "INSERT INTO user_passwords (user_id, password_hash, created_at) "
+            "VALUES (2, 'old-root-password', '2026-01-01T00:00:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _build_app(db_path).test_client()
+    requested = client.post("/api/password-reset/request", json={"username_or_email": "root@example.test"})
+    assert requested.status_code == 200
+
+    token = _latest_token(db_path, "password_reset")
+    confirmed = client.post(
+        "/api/password-reset/confirm",
+        json={"token": token, PASSWORD_FIELD: "x", PASSWORD_CONFIRM_FIELD: "x"},
+    )
+    assert confirmed.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    try:
+        latest_pw = conn.execute("SELECT password_hash FROM user_passwords WHERE user_id=2 ORDER BY id DESC LIMIT 1").fetchone()[0]
+    finally:
+        conn.close()
+    assert latest_pw == "x"
+
+
 def test_email_verification_unblocks_require_email_login(tmp_path):
     db_path = tmp_path / "recovery.db"
     _init_db(db_path)

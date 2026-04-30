@@ -176,6 +176,22 @@ function formatEconomyVerificationSummary(verification) {
   return `${state}：${Number(counts.ledger_entries || 0)} 筆 ledger，${Number(counts.sealed_blocks || 0)} 個封塊，${Number(counts.unsealed_entries || 0)} 筆未封，${Number(counts.audit_events || 0)} 筆審計事件`;
 }
 
+function formatEconomyRecoveryResult(result) {
+  const safe = result && typeof result === "object" ? result : {};
+  const rebuild = safe.wallet_rebuild && typeof safe.wallet_rebuild === "object" ? safe.wallet_rebuild : {};
+  const verification = safe.verification && typeof safe.verification === "object" ? safe.verification : {};
+  const counts = verification.counts && typeof verification.counts === "object" ? verification.counts : {};
+  if (safe.ok !== true) return safe.msg || "PointsChain 恢復失敗";
+  return [
+    "PointsChain 已恢復並完成驗證",
+    `備份：${safe.backup_id || "-"}`,
+    `錢包重建：${Number(rebuild.wallets_rebuilt || 0)} 個`,
+    `ledger：${Number(counts.ledger_entries || 0)} 筆`,
+    `封塊：${Number(counts.sealed_blocks || 0)} 個`,
+    `safe mode：${(safe.recovery || {}).safe_mode ? "仍啟用" : "已解除"}`,
+  ].join("；");
+}
+
 function renderEconomyRootReport(report) {
   const safeReport = report && typeof report === "object" ? report : {};
   const verification = safeReport.verification && typeof safeReport.verification === "object" ? safeReport.verification : {};
@@ -664,9 +680,11 @@ async function approvePointsChainRecovery() {
       method: "POST",
       body: JSON.stringify({ backup_id: backupId, confirm: confirmText }),
     });
-    economySetMsg(json.ok ? "PointsChain 已從健康備份恢復" : "恢復失敗", !!json.ok);
+    const resultMessage = formatEconomyRecoveryResult(json);
     if ($("economy-recovery-confirm")) $("economy-recovery-confirm").value = "";
     await loadEconomyDashboard();
+    economySetMsg(resultMessage, !!json.ok);
+    setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || {}), (json.verification || {}).ok !== false);
   } catch (err) {
     economySetMsg(err.message || "恢復失敗", false);
   }

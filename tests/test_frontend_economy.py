@@ -72,6 +72,10 @@ def test_root_points_page_is_chain_operations_console():
     assert "async function sanctionEconomyWallet()" in economy_js
     assert "renderEconomyAccountLookup" in economy_js
     assert "formatEconomyVerificationSummary" in economy_js
+    assert "formatEconomyRecoveryResult" in economy_js
+    assert "PointsChain 已恢復並完成驗證" in economy_js
+    assert "const resultMessage = formatEconomyRecoveryResult(json);" in economy_js
+    assert "await loadEconomyDashboard();\n    economySetMsg(resultMessage, !!json.ok);" in economy_js
     assert "setEconomyChainStatus" in economy_js
     assert "JSON.stringify(json.report?.verification" not in economy_js
     assert "JSON.stringify(json.verification" not in economy_js

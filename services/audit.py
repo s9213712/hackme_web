@@ -88,6 +88,51 @@ def _maybe_anchor_audit_head(audit_id, chain_hash, entry_hash, reason="interval"
     _last_audit_anchor_at = now
 
 
+def reset_audit_chain_with_event(action, ip, user="-", success=True, ua="-", detail="-"):
+    """Clear the audit runtime chain and write a fresh first event.
+
+    Server reset keeps a pre-reset snapshot for recovery, but the live runtime
+    audit chain should start from a new genesis-equivalent entry after reset.
+    """
+    global _last_audit_anchor_at
+    with _audit_db_lock:
+        conn = _STATE["get_db"]()
+        try:
+            conn.execute("DELETE FROM secure_audit")
+            try:
+                conn.execute("DELETE FROM sqlite_sequence WHERE name='secure_audit'")
+            except Exception:
+                pass
+            conn.commit()
+        finally:
+            conn.close()
+
+    with _audit_lock:
+        log_path = _STATE.get("audit_log_path")
+        if log_path:
+            log_dir = os.path.dirname(log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            with open(log_path, "w", encoding="utf-8"):
+                pass
+    with _anchor_lock:
+        _last_audit_anchor_at = 0.0
+        for path in (_STATE.get("audit_anchor_path"), _STATE.get("audit_anchor_latest_path")):
+            if not path:
+                continue
+            anchor_dir = os.path.dirname(path)
+            if anchor_dir:
+                os.makedirs(anchor_dir, exist_ok=True)
+            try:
+                with open(path, "w", encoding="utf-8"):
+                    pass
+            except Exception:
+                pass
+
+    audit(action, ip, user=user, success=success, ua=ua, detail=detail)
+    return {"ok": True, "reset": True, "event": action}
+
+
 def _verify_latest_audit_anchor(rows_by_id):
     latest_path = _STATE["audit_anchor_latest_path"]
     if not os.path.exists(latest_path):

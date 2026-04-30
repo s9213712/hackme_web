@@ -10,7 +10,13 @@ def _hash_token(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _build_app(db_path, actor_box, revoke_user_sessions=None):
+def _build_app(
+    db_path,
+    actor_box,
+    revoke_user_sessions=None,
+    validate_password=None,
+    enforce_password_strength=None,
+):
     app = Flask(__name__)
     app.testing = True
 
@@ -55,12 +61,12 @@ def _build_app(db_path, actor_box, revoke_user_sessions=None):
         "require_csrf_safe": lambda fn: fn,
         "SESSION_COOKIE_SAMESITE": "Lax",
         "SESSION_COOKIE_SECURE": False,
-        "enforce_password_strength": lambda value, min_score=3: (True, "OK", {"score": 4}),
+        "enforce_password_strength": enforce_password_strength or (lambda value, min_score=3: (True, "OK", {"score": 4})),
         "score_password_strength": lambda value: {"score": 4},
         "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
         "user_public_payload": lambda row, include_sensitive=False: dict(row),
         "validate_id_number": lambda value: True,
-        "validate_password": lambda value: (True, "OK"),
+        "validate_password": validate_password or (lambda value: (True, "OK")),
         "validate_phone": lambda value: True,
         "verify_password": lambda stored, provided: stored == provided,
     })
@@ -309,3 +315,159 @@ def test_password_change_rejects_same_as_current_password(tmp_path):
     passwords = conn.execute("SELECT COUNT(*) FROM user_passwords WHERE user_id=1").fetchone()[0]
     conn.close()
     assert passwords == 1
+
+
+def test_root_password_change_bypasses_password_policy(tmp_path):
+    db_path = tmp_path / "root-password-change.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT NOT NULL DEFAULT 'normal',
+            trust_score INTEGER NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL DEFAULT 0,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            password_strength_score INTEGER NOT NULL DEFAULT 0,
+            blocked_until TEXT,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            password_changed_at TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            is_default_password INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            device_info TEXT,
+            ip_country TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, must_change_password, is_default_password, updated_at) "
+        "VALUES (1, 'root', 'super_admin', 'active', 1, 1, '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, 'oldpass', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        validate_password=lambda value: (False, "密碼規則應被略過"),
+        enforce_password_strength=lambda value, min_score=3: (False, "強度規則應被略過", {"score": 0}),
+    ).test_client()
+    res = client.put(
+        "/api/admin/users/1",
+        json={"current_password": "oldpass", "password": "x", "password_confirm": "x"},
+    )
+
+    assert res.status_code == 200
+    conn = sqlite3.connect(db_path)
+    try:
+        latest_pw = conn.execute("SELECT password_hash FROM user_passwords ORDER BY id DESC LIMIT 1").fetchone()[0]
+        passwords = conn.execute("SELECT COUNT(*) FROM user_passwords WHERE user_id=1").fetchone()[0]
+    finally:
+        conn.close()
+    assert latest_pw == "x"
+    assert passwords == 2
+
+
+def test_non_root_password_change_still_follows_password_policy(tmp_path):
+    db_path = tmp_path / "user-password-change.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT NOT NULL DEFAULT 'normal',
+            trust_score INTEGER NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL DEFAULT 0,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            password_strength_score INTEGER NOT NULL DEFAULT 0,
+            blocked_until TEXT,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            password_changed_at TEXT,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            is_default_password INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            device_info TEXT,
+            ip_country TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, must_change_password, is_default_password, updated_at) "
+        "VALUES (1, 'alice', 'user', 'active', 1, 1, '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (1, 'oldpass', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "alice", "role": "user", "status": "active"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        validate_password=lambda value: (False, "密碼太弱"),
+    ).test_client()
+    res = client.put(
+        "/api/admin/users/1",
+        json={"current_password": "oldpass", "password": "x", "password_confirm": "x"},
+    )
+
+    assert res.status_code == 400
+    assert res.get_json()["msg"] == "密碼太弱"

@@ -170,6 +170,17 @@ def _seed_db(db_path):
             login_at TEXT NOT NULL,
             is_suspicious INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            ip_address TEXT,
+            user_agent TEXT,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00'
+        );
         """
     )
     conn.execute(
@@ -251,6 +262,109 @@ def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_pa
     assert bad_token.status_code == 403
     assert allowed.status_code == 200
     assert root_allowed.status_code == 200
+
+
+def test_production_mode_rejects_same_ip_using_different_account(tmp_path):
+    db_path = tmp_path / "production-ip-conflict.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO users (id, username, status, role) VALUES (2, 'bob', 'active', 'user');
+        INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (2, 'correct', '2026-01-01T00:00:00');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (2, 'bob-session', '10.0.0.1', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert denied.status_code == 403
+    assert "同一 IP" in denied.get_json()["msg"]
+
+
+def test_production_mode_rejects_same_account_from_different_ip(tmp_path):
+    db_path = tmp_path / "production-account-conflict.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (1, 'alice-session', '10.0.0.9', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert denied.status_code == 403
+    assert "不同 IP" in denied.get_json()["msg"]
+
+
+def test_production_mode_allows_same_account_same_ip(tmp_path):
+    db_path = tmp_path / "production-same-account-ip.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL,
+            previous_mode TEXT,
+            active_snapshot_id TEXT,
+            mode_changed_by INTEGER,
+            mode_changed_at TEXT,
+            notes TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (1, 'alice-session', '10.0.0.1', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    allowed = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert allowed.status_code == 200
 
 
 def test_successful_login_records_suspicious_new_location(tmp_path):
