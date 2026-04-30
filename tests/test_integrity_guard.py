@@ -37,6 +37,7 @@ def _write_project(base):
     (base / "public" / "js" / "50-admin.js").write_text("const admin = true;\n", encoding="utf-8")
     (base / "database" / "bootstrap.schema.sql").write_text("CREATE TABLE x(id);\n", encoding="utf-8")
     (base / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (base / "README.md").write_text("# test project\n", encoding="utf-8")
 
 
 def _guard(tmp_path, audit_log=None):
@@ -142,13 +143,13 @@ def test_preprod_mode_is_blocked_by_pending_high_risk_integrity_finding(tmp_path
     assert result["high_risk_count"] >= 1
 
 
-def test_pending_integrity_findings_auto_approve_after_one_day(tmp_path):
+def test_low_risk_integrity_findings_auto_approve_after_one_day(tmp_path):
     guard, base, audit_log = _guard(tmp_path)
     guard.scan(actor="system")
     old_manifest = (base / "integrity_manifest.json").read_text(encoding="utf-8")
-    (base / "server.py").write_text("print('expired warning')\n", encoding="utf-8")
+    (base / "README.md").write_text("# changed docs\n", encoding="utf-8")
     guard.scan(actor="system")
-    finding = next(item for item in guard.list_findings(status="pending") if item["file_path"] == "server.py")
+    finding = next(item for item in guard.list_findings(status="pending") if item["file_path"] == "README.md")
 
     old_detected_at = (datetime.now() - timedelta(days=1, minutes=1)).isoformat()
     conn = guard.get_db()
@@ -168,6 +169,34 @@ def test_pending_integrity_findings_auto_approve_after_one_day(tmp_path):
     assert "auto-approved after 24 hours" in approved["review_note"]
     assert (base / "integrity_manifest.json").read_text(encoding="utf-8") != old_manifest
     assert any("INTEGRITY_FINDING_AUTO_APPROVED" in args for args, _ in audit_log)
+
+
+def test_high_risk_integrity_findings_do_not_auto_approve_after_one_day(tmp_path):
+    guard, base, audit_log = _guard(tmp_path)
+    guard.scan(actor="system")
+    old_manifest = (base / "integrity_manifest.json").read_text(encoding="utf-8")
+    (base / "services" / "auth.py").write_text("AUTH = 'backdoor'\n", encoding="utf-8")
+    guard.scan(actor="system")
+    finding = next(item for item in guard.list_findings(status="pending") if item["file_path"] == "services/auth.py")
+
+    old_detected_at = (datetime.now() - timedelta(days=1, minutes=1)).isoformat()
+    conn = guard.get_db()
+    conn.execute("UPDATE integrity_findings SET detected_at=? WHERE id=?", (old_detected_at, finding["id"]))
+    conn.commit()
+    conn.close()
+
+    status = guard.status()
+    current = guard.get_finding(finding["id"])
+
+    assert status["summary"]["pending"] == 1
+    assert status["summary"]["high_risk_pending"] == 1
+    assert status["auto_approved_expired"]["approved"] == 0
+    assert status["auto_approved_expired"]["high_risk_skipped"] == 1
+    assert current["status"] == "pending"
+    assert current["reviewed_by"] is None
+    assert "manual review" in current["review_note"]
+    assert (base / "integrity_manifest.json").read_text(encoding="utf-8") == old_manifest
+    assert any("INTEGRITY_FINDING_AUTO_APPROVE_SKIPPED_HIGH_RISK" in args for args, _ in audit_log)
 
 
 def _admin_app(tmp_path, actor_box, guard, audit_log):
