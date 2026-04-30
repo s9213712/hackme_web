@@ -941,10 +941,9 @@ def register_user_routes(app, deps):
         if actor["username"] != "root":
             return json_resp({"ok":False,"msg":"只有 root 可降級帳號"}), 403
 
-        try:
-            data = request.get_json(force=True) or {}
-        except:
-            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
         target_status = str(data.get("target_status", "inactive")).strip()
         valid_statuses = {"restricted", "suspended", "inactive"}
         if target_status not in valid_statuses:
