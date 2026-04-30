@@ -250,6 +250,19 @@ function bindComfyuiDraftPersistence() {
   });
 }
 
+async function loadComfyuiLastSettings() {
+  const draft = readComfyuiDraft();
+  if (!Object.keys(draft).length) {
+    setComfyuiMessage("目前沒有保存過的 ComfyUI 設定", false);
+    return;
+  }
+  if (!comfyuiModelsLoaded && comfyuiServerAvailable !== false) {
+    await loadComfyuiModels();
+  }
+  restoreComfyuiDraft();
+  setComfyuiMessage("已載入上次 ComfyUI 設定", true);
+}
+
 async function loadComfyuiAlbums({ force = false } = {}) {
   const select = $("comfyui-album-select");
   if (!select) return [];

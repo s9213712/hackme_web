@@ -430,6 +430,40 @@ def test_comfyui_status_reports_offline_backend(tmp_path):
     assert body["comfyui_url"] == "http://fake-offline"
 
 
+def test_root_can_test_unsaved_comfyui_endpoint(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
+
+    tested = client.post("/api/root/comfyui/test-connection", json={"host": "192.168.1.20", "port": 8192})
+
+    assert tested.status_code == 200
+    body = tested.get_json()
+    assert body["ok"] is True
+    assert body["available"] is True
+    assert body["endpoint"] == {"host": "192.168.1.20", "port": 8192}
+
+
+def test_comfyui_connection_test_requires_root_and_valid_endpoint(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    user_client = _build_app(db_path, storage_root).test_client()
+
+    forbidden = user_client.post("/api/root/comfyui/test-connection", json={"host": "localhost", "port": 8192})
+    assert forbidden.status_code == 403
+
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    root_client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
+    invalid = root_client.post("/api/root/comfyui/test-connection", json={"host": "http://127.0.0.1/path", "port": 8192})
+    assert invalid.status_code == 400
+    assert "Host" in invalid.get_json()["msg"]
+
+
 def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -705,6 +739,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-model-select"' in index_html
     assert 'id="comfyui-generate-btn"' in index_html
     assert 'id="comfyui-interrupt-btn"' in index_html
+    assert 'id="comfyui-load-draft-btn"' in index_html
     assert 'id="comfyui-batch-size"' in index_html
     assert 'id="comfyui-save-btn"' in index_html
     assert 'id="comfyui-album-select"' in index_html
@@ -715,6 +750,8 @@ def test_comfyui_frontend_is_wired():
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
+    assert 'id="comfyui-test-connection-btn"' in index_html
+    assert 'id="comfyui-test-connection-status"' in index_html
     assert 'id="s-comfyui-max-batch-size"' in index_html
     assert 'tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none"' in core_js
     assert 'switchModuleTab("comfyui")' in bootstrap_js
@@ -726,6 +763,7 @@ def test_comfyui_frontend_is_wired():
     assert 'source_file_not_deleted' in comfyui_js
     assert 'fetch(API + "/comfyui/share"' in comfyui_js
     assert 'fetch(API + "/comfyui/status"' in comfyui_js
+    assert "function loadComfyuiLastSettings()" in comfyui_js
     assert 'let comfyuiMaxBatchSize = 1;' in comfyui_js
     assert 'let comfyuiBillingQuote = null;' in comfyui_js
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
@@ -749,7 +787,10 @@ def test_comfyui_frontend_is_wired():
     assert "comfyuiShareGenerationPayload" in comfyui_js
     assert "payload.seed = comfyuiCurrentImage.seed" in comfyui_js
     assert "interruptComfyuiGeneration" in bootstrap_js
+    assert 'if (comfyuiLoadDraftBtn) comfyuiLoadDraftBtn.addEventListener("click", loadComfyuiLastSettings);' in bootstrap_js
     assert "bindComfyuiDraftPersistence" in bootstrap_js
+    assert 'fetch(API + "/root/comfyui/test-connection"' in admin_js
+    assert 'if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);' in bootstrap_js
     assert 'shareComfyuiToCommunity' in bootstrap_js
     assert "comfyui-image:" in community_js
     assert "communityPreviewContentUrl" in community_js

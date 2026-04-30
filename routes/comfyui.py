@@ -21,6 +21,7 @@ SAFE_SCHEDULER_FALLBACK = "normal"
 DEFAULT_GENERATION_TIMEOUT_SECONDS = 600
 MAX_GENERATION_TIMEOUT_SECONDS = 1800
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
+COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
 class _MemoryFile:
@@ -62,6 +63,41 @@ def register_comfyui_routes(app, deps):
         except Exception:
             return actor.get(key, default) if hasattr(actor, "get") else default
 
+    def _root_or_403():
+        actor, err = _actor_or_401()
+        if err:
+            return None, err
+        if _actor_value(actor, "username") != "root":
+            return None, json_resp({"ok": False, "msg": "只有 root 可執行此操作"}, 403)
+        return actor, None
+
+    def _validate_comfyui_host(value):
+        host = str(value or "").strip().strip("[]")
+        if not host:
+            return None
+        if len(host) > 253:
+            return None
+        forbidden = ("://", "/", "\\", "@", "?", "#", "%", " ")
+        if any(part in host for part in forbidden):
+            return None
+        if not COMFYUI_HOST_RE.match(host):
+            return None
+        return host
+
+    def _parse_comfyui_endpoint(data):
+        default_url = urlparse(DEFAULT_COMFYUI_URL)
+        host = _validate_comfyui_host(data.get("host") or data.get("comfyui_api_host") or default_url.hostname or "localhost")
+        if host is None:
+            return None, None, "ComfyUI Host / IP 必須是主機名稱或 IP，不可包含 http://、路徑、帳密或特殊字元"
+        try:
+            port = int(data.get("port") or data.get("comfyui_api_port") or default_url.port or DEFAULT_COMFYUI_PORT)
+        except Exception:
+            return None, None, "ComfyUI Port 必須是 1-65535"
+        if port < 1 or port > 65535:
+            return None, None, "ComfyUI Port 必須是 1-65535"
+        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        return f"http://{display_host}:{port}", {"host": host, "port": port}, None
+
     def _configured_comfyui_url():
         settings = get_system_settings() or {}
         default_url = urlparse(DEFAULT_COMFYUI_URL)
@@ -83,6 +119,14 @@ def register_comfyui_routes(app, deps):
 
     def _client():
         return injected_client or ComfyUIClient(_configured_comfyui_url())
+
+    def _client_for_url(url):
+        if injected_client is not None:
+            return injected_client
+        factory = deps.get("comfyui_client_factory")
+        if factory:
+            return factory(url)
+        return ComfyUIClient(url)
 
     def _is_root(actor):
         return _actor_value(actor, "username") == "root"
@@ -473,6 +517,56 @@ def register_comfyui_routes(app, deps):
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "system": status.get("system") if isinstance(status, dict) else {},
         })
+
+    @app.route("/api/root/comfyui/test-connection", methods=["POST"])
+    @require_csrf
+    def root_comfyui_test_connection():
+        actor, err = _root_or_403()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        url, endpoint, msg = _parse_comfyui_endpoint(data)
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        active_client = _client_for_url(url)
+        try:
+            status = active_client.health_check(timeout=3) if hasattr(active_client, "health_check") else {"ok": True}
+            audit(
+                "COMFYUI_CONNECTION_TEST",
+                get_client_ip(),
+                user=_actor_value(actor, "username"),
+                success=True,
+                ua=get_ua(),
+                detail=f"url={url}",
+            )
+            return json_resp({
+                "ok": True,
+                "available": True,
+                "comfyui_url": getattr(active_client, "base_url", url),
+                "endpoint": endpoint,
+                "system": status.get("system") if isinstance(status, dict) else {},
+            })
+        except ComfyUIError as exc:
+            audit(
+                "COMFYUI_CONNECTION_TEST",
+                get_client_ip(),
+                user=_actor_value(actor, "username"),
+                success=False,
+                ua=get_ua(),
+                detail=f"url={url}, error={exc}",
+            )
+            return json_resp({
+                "ok": True,
+                "available": False,
+                "msg": str(exc),
+                "comfyui_url": getattr(active_client, "base_url", url),
+                "endpoint": endpoint,
+            })
 
     @app.route("/api/comfyui/models", methods=["GET"])
     @require_csrf_safe
