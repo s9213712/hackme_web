@@ -76,7 +76,6 @@ function switchModuleTab(tab) {
 
   currentModuleTab = normTab;
   const modChat = $("module-chat");
-  const modDm = $("module-dm");
   const modAnnouncements = $("module-announcements");
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
@@ -88,7 +87,6 @@ function switchModuleTab(tab) {
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
-  const mDm = $("tab-module-dm");
   const mAnnouncements = $("tab-module-announcements");
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
@@ -101,7 +99,6 @@ function switchModuleTab(tab) {
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
-  if (modDm) modDm.classList.toggle("active", normTab === "dm");
   if (modAnnouncements) modAnnouncements.classList.toggle("active", normTab === "announcements");
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
@@ -113,7 +110,6 @@ function switchModuleTab(tab) {
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
-  if (mDm) mDm.classList.toggle("active", normTab === "dm");
   if (mAnnouncements) mAnnouncements.classList.toggle("active", normTab === "announcements");
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
@@ -130,9 +126,6 @@ function switchModuleTab(tab) {
   }
   if (normTab === "announcements" && canAccessAnnouncements) {
     loadAnnouncements();
-  }
-  if (normTab === "dm" && canAccessDm && typeof loadDmThreads === "function") {
-    loadDmThreads();
   }
   if (normTab !== "server") stopServerOutputPoll();
   if (normTab === "server" && canAccessServer) {

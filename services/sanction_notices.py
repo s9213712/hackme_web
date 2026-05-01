@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from services.notifications import create_notification, ensure_notifications_schema
+
 
 def _value(row, key, default=None):
     if not row:
@@ -38,102 +40,9 @@ def ensure_admin_sanction_appeal_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at)")
 
 
-def ensure_dm_notification_schema(conn):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS dm_threads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            participant_a_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            participant_b_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(participant_a_id, participant_b_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS direct_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            thread_id INTEGER NOT NULL REFERENCES dm_threads(id) ON DELETE CASCADE,
-            sender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            body TEXT NOT NULL,
-            is_read INTEGER NOT NULL DEFAULT 0,
-            read_at TEXT,
-            sender_deleted_at TEXT,
-            recipient_deleted_at TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL,
-            link TEXT,
-            is_read INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            read_at TEXT
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_unread ON direct_messages(recipient_user_id, is_read)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at)")
-
-
-def _dm_pair(a, b):
-    a_id = int(a)
-    b_id = int(b)
-    return (a_id, b_id) if a_id < b_id else (b_id, a_id)
-
-
-def _create_dm(conn, *, sender_id, recipient_id, body):
-    ensure_dm_notification_schema(conn)
-    now = datetime.now().isoformat()
-    a_id, b_id = _dm_pair(sender_id, recipient_id)
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO dm_threads (
-            participant_a_id, participant_b_id, created_by_user_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-        (a_id, b_id, sender_id, now, now),
-    )
-    thread = conn.execute(
-        "SELECT * FROM dm_threads WHERE participant_a_id=? AND participant_b_id=?",
-        (a_id, b_id),
-    ).fetchone()
-    conn.execute(
-        """
-        INSERT INTO direct_messages (
-            thread_id, sender_user_id, recipient_user_id, body, is_read, created_at
-        ) VALUES (?, ?, ?, ?, 0, ?)
-        """,
-        (thread["id"], sender_id, recipient_id, body, now),
-    )
-    conn.execute("UPDATE dm_threads SET updated_at=? WHERE id=?", (now, thread["id"]))
-    return thread["id"]
-
-
-def _create_notification(conn, *, user_id, title, body, link=None, type="admin_sanction"):
-    ensure_dm_notification_schema(conn)
-    conn.execute(
-        """
-        INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
-        VALUES (?, ?, ?, ?, ?, 0, ?)
-        """,
-        (int(user_id), str(type or "admin_sanction")[:60], title[:120], body[:1000], link, datetime.now().isoformat()),
-    )
-
-
 def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id, action_label, reason, notice_title="會員權益變更通知", notification_type="member_governance", points_ledger_uuid=None):
     ensure_admin_sanction_appeal_schema(conn)
+    ensure_notifications_schema(conn)
     actor_username = _value(actor, "username", "admin")
     body = (
         f"你收到一筆會員權益變更通知。\n\n"
@@ -141,19 +50,13 @@ def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id,
         f"原因：{reason or '未填寫'}\n\n"
         "你可以到「申覆」分頁提出申覆。申覆時請補充理由、證據或相關脈絡；root 會依申覆紀錄審核是否撤銷或調整。"
     )
-    thread_id = _create_dm(
-        conn,
-        sender_id=int(_value(actor, "id")),
-        recipient_id=int(_value(target, "id")),
-        body=body,
-    )
-    _create_notification(
+    create_notification(
         conn,
         user_id=int(_value(target, "id")),
-        title=notice_title,
-        body="你收到一筆會員權益變更通知，可於申覆分頁提出申覆。",
-        link="/appeals",
         type=notification_type,
+        title=notice_title,
+        body=body,
+        link="/appeals",
     )
     conn.execute(
         """
@@ -180,7 +83,7 @@ def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id,
             datetime.now().isoformat(),
         ),
     )
-    return {"thread_id": thread_id, "notification": True}
+    return {"notification": True}
 
 
 def restore_admin_sanction_context(conn, *, user_id, violation_id):

@@ -6,6 +6,7 @@ from datetime import datetime
 SYSTEM_SETTINGS_TABLE = "system_settings"
 DEFAULT_SETTINGS = {
     "audit_chain_enabled": True,
+    "audit_chain_reseal_required": False,
     "ip_blocking_enabled": True,
     "max_login_fails_for_violation": 5,
     "login_violation_enabled": True,
@@ -71,8 +72,7 @@ DEFAULT_SETTINGS = {
     "feature_health_center_enabled": True,
     "feature_forum_core_enabled": False,
     "feature_ui_rebuild_enabled": False,
-    "feature_reports_notifications_enabled": False,
-    "feature_dm_enabled": False,
+    "feature_reports_notifications_enabled": True,
     "feature_attachments_enabled": False,
     "feature_storage_albums_enabled": False,
     "storage_maintenance_auto_enabled": False,
@@ -109,6 +109,7 @@ MANAGEMENT_ONLY_FEATURE_FLAGS = frozenset({
     "feature_snapshot_restore_enabled",
     "feature_health_center_enabled",
     "feature_advanced_security_enabled",
+    "feature_reports_notifications_enabled",
 })
 MANAGEMENT_ONLY_RESET_SETTINGS = {
     **{key: key in MANAGEMENT_ONLY_FEATURE_FLAGS for key in FEATURE_FLAG_KEYS},
@@ -235,10 +236,18 @@ def save_settings(data):
     updates = {}
     if not isinstance(data, dict):
         return {}
+    current_settings = get_system_settings()
     for key, value in data.items():
         if key not in DEFAULT_SETTINGS:
             continue
         updates[key] = _coerce_setting_value(key, value)
+    if (
+        "audit_chain_enabled" in updates
+        and bool(updates["audit_chain_enabled"])
+        and not bool(current_settings.get("audit_chain_enabled", False))
+        and "audit_chain_reseal_required" not in updates
+    ):
+        updates["audit_chain_reseal_required"] = True
     if not updates:
         return {}
 

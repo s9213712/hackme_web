@@ -497,11 +497,38 @@ def move_storage_file(conn, *, actor, storage_file_id, new_virtual_path):
     row = get_storage_file(conn, actor=actor, storage_file_id=storage_file_id)
     if not row or row.get("deleted_at") or int(row.get("is_trashed") or 0):
         return None, "找不到檔案或檔案已刪除"
+    owner_user_id = int(actor["id"])
+    requested_path = str(new_virtual_path or "").replace("\\", "/").strip()
     try:
-        normalized_path = normalize_virtual_path(new_virtual_path, row.get("display_name"))
+        filename = _display_name_from_path(row.get("display_name") or row.get("virtual_path"))
+        if requested_path in {"", "/"}:
+            normalized_path = normalize_virtual_path(f"/{filename}", filename)
+        else:
+            folder_candidate = _folder_prefix(requested_path)
+            is_existing_folder = bool(conn.execute(
+                """
+                SELECT 1 FROM storage_folders
+                WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL
+                LIMIT 1
+                """,
+                (owner_user_id, folder_candidate),
+            ).fetchone())
+            if not is_existing_folder:
+                is_existing_folder = bool(conn.execute(
+                    """
+                    SELECT 1 FROM storage_files
+                    WHERE owner_user_id=? AND deleted_at IS NULL AND COALESCE(is_trashed, 0)=0
+                          AND virtual_path LIKE ?
+                    LIMIT 1
+                    """,
+                    (owner_user_id, folder_candidate.rstrip("/") + "/%"),
+                ).fetchone())
+            if requested_path.endswith("/") or is_existing_folder:
+                normalized_path = normalize_virtual_path(f"{folder_candidate.rstrip('/')}/{filename}", filename)
+            else:
+                normalized_path = normalize_virtual_path(new_virtual_path, row.get("display_name"))
     except ValueError:
         return None, "storage path 不安全或格式錯誤"
-    owner_user_id = int(actor["id"])
     conflict = conn.execute(
         """
         SELECT id FROM storage_files
@@ -1143,6 +1170,135 @@ def create_album_from_storage_folder(conn, *, actor, path, title=None, descripti
     album = get_album(conn, actor=actor, album_id=album_id, include_files=True)
     album["source_folder"] = folder_path
     album["added_count"] = len(rows)
+    return album, None
+
+
+def ensure_output_album(conn, *, actor):
+    """Keep the ComfyUI /output folder and its backing album in sync."""
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    exact_output_file = conn.execute(
+        """
+        SELECT sf.id, sf.display_name, sf.virtual_path, f.original_filename_plain_for_public
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND COALESCE(sf.is_trashed, 0)=0
+              AND f.deleted_at IS NULL AND sf.virtual_path='/output'
+        LIMIT 1
+        """,
+        (owner_user_id,),
+    ).fetchone()
+    if exact_output_file:
+        filename = _display_name_from_path(
+            exact_output_file["original_filename_plain_for_public"]
+            or exact_output_file["display_name"]
+            or "output-file"
+        )
+        if filename == "output":
+            filename = "output-file"
+        repaired_path = _unique_storage_path(conn, owner_user_id, f"/output/{filename}", filename)
+        now = _now()
+        conn.execute(
+            "UPDATE storage_files SET virtual_path=?, display_name=?, updated_at=? WHERE id=?",
+            (repaired_path, _display_name_from_path(repaired_path), now, exact_output_file["id"]),
+        )
+    folder, msg = create_storage_folder(conn, actor=actor, path="/output")
+    if msg:
+        return None, msg
+    row = conn.execute(
+        """
+        SELECT id FROM albums
+        WHERE owner_user_id=? AND deleted_at IS NULL AND title=?
+        ORDER BY created_at ASC
+        LIMIT 1
+        """,
+        (owner_user_id, "output"),
+    ).fetchone()
+    if row:
+        album_id = row["id"]
+    else:
+        album, msg = create_album(
+            conn,
+            actor=actor,
+            title="output",
+            description="ComfyUI 預設輸出相簿",
+            visibility="private",
+        )
+        if msg:
+            return None, msg
+        album_id = album["id"]
+
+    output_rows = conn.execute(
+        """
+        SELECT sf.id AS storage_file_id, sf.file_id, sf.display_name, sf.virtual_path,
+               f.mime_type_plain_for_public, f.original_filename_plain_for_public
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND COALESCE(sf.is_trashed, 0)=0
+              AND f.deleted_at IS NULL AND sf.virtual_path LIKE '/output/%'
+        ORDER BY sf.virtual_path ASC
+        """,
+        (owner_user_id,),
+    ).fetchall()
+    media_rows = [row for row in output_rows if _is_album_media_storage_row(row)]
+    media_file_ids = {row["file_id"] for row in media_rows}
+    existing_rows = conn.execute(
+        """
+        SELECT id, file_id FROM album_files
+        WHERE album_id=? AND deleted_at IS NULL
+        """,
+        (album_id,),
+    ).fetchall()
+    existing_file_ids = {row["file_id"] for row in existing_rows}
+    now = _now()
+    added_count = 0
+    for index, row in enumerate(media_rows, start=1):
+        if row["file_id"] in existing_file_ids:
+            conn.execute(
+                """
+                UPDATE album_files
+                SET storage_file_id=?, sort_order=?
+                WHERE album_id=? AND file_id=? AND deleted_at IS NULL
+                """,
+                (row["storage_file_id"], index, album_id, row["file_id"]),
+            )
+            continue
+        conn.execute(
+            """
+            INSERT INTO album_files (
+                id, album_id, storage_file_id, file_id, sort_order, caption, added_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                album_id,
+                row["storage_file_id"],
+                row["file_id"],
+                index,
+                "ComfyUI output",
+                owner_user_id,
+                now,
+            ),
+        )
+        added_count += 1
+
+    removed_count = 0
+    for row in existing_rows:
+        if row["file_id"] in media_file_ids:
+            continue
+        conn.execute("UPDATE album_files SET deleted_at=? WHERE id=?", (now, row["id"]))
+        removed_count += 1
+
+    cover_file_id = media_rows[0]["file_id"] if media_rows else None
+    conn.execute(
+        "UPDATE albums SET cover_file_id=?, updated_at=? WHERE id=?",
+        (cover_file_id, now, album_id),
+    )
+    album = get_album(conn, actor=actor, album_id=album_id, include_files=True)
+    album["folder"] = folder
+    album["source_folder"] = "/output"
+    album["added_count"] = added_count
+    album["removed_count"] = removed_count
     return album, None
 
 

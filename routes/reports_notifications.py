@@ -7,38 +7,11 @@ from services.notifications import (
     ensure_notifications_schema,
     serialize_notification,
 )
-from routes.dm import ensure_dm_schema
 from services.permissions import require_member_action
 
 
 REPORT_TARGET_TYPES = {"chat_message", "forum_post", "forum_thread", "user", "other"}
 REPORT_STATUSES = {"pending", "approved", "rejected"}
-ADMIN_NOTICE_TEMPLATES = [
-    {
-        "key": "maintenance",
-        "label": "系統維護通知",
-        "title": "系統維護通知",
-        "body": "伺服器將進行維護。維護期間部分功能可能暫時無法使用，請先保存正在編輯的內容。",
-    },
-    {
-        "key": "policy",
-        "label": "規則更新通知",
-        "title": "站務規則更新",
-        "body": "站務規則已更新。請至公告或相關功能頁查看最新規則，後續操作將依新規則處理。",
-    },
-    {
-        "key": "account",
-        "label": "帳號狀態提醒",
-        "title": "帳號狀態提醒",
-        "body": "你的帳號狀態需要注意。請檢查通知、申覆與帳號資料；若有疑問，可透過申覆或 Bug 回報與管理員聯繫。",
-    },
-    {
-        "key": "security",
-        "label": "安全提醒",
-        "title": "安全提醒",
-        "body": "偵測到可能影響帳號安全的情況。請確認密碼強度、近期登入與個人資料是否正確。",
-    },
-]
 
 
 def register_reports_notification_routes(app, deps):
@@ -69,15 +42,16 @@ def register_reports_notification_routes(app, deps):
     def is_moderator(actor):
         return bool(actor) and role_rank(actor_role(actor)) >= role_rank("manager")
 
-    def normalized_pair(a, b):
-        a_id = int(a)
-        b_id = int(b)
-        return (a_id, b_id) if a_id < b_id else (b_id, a_id)
+    def can_send_admin_notification(actor):
+        return bool(actor) and role_rank(actor_role(actor)) >= role_rank("manager")
 
     def can_send_admin_notice(actor, target):
-        if not is_moderator(actor) or not target:
+        if not can_send_admin_notification(actor) or not target:
             return False
-        if int(actor_value(actor, "id", 0)) == int(target["id"]):
+        try:
+            if int(actor_value(actor, "id", 0)) == int(target["id"]):
+                return False
+        except Exception:
             return False
         if target["username"] == "root":
             return False
@@ -122,10 +96,109 @@ def register_reports_notification_routes(app, deps):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_claimed ON reports(claimed_by_user_id, status)")
         ensure_notifications_schema(conn)
 
+    @app.route("/api/admin/notification-templates", methods=["GET"])
+    @require_csrf_safe
+    def admin_notification_templates():
+        actor = get_current_user_ctx()
+        if not can_send_admin_notification(actor):
+            return json_resp({"ok": False, "msg": "需要管理員權限"}), 403
+        return json_resp({
+            "ok": True,
+            "templates": [
+                {"key": "maintenance", "title": "維護通知", "body": "伺服器將進行維護，期間部分功能可能暫停。"},
+                {"key": "account_action", "title": "帳號狀態通知", "body": "你的帳號狀態已更新，若有疑問可提出申覆。"},
+                {"key": "points_action", "title": "積分異動通知", "body": "你的積分有新的異動紀錄，請到積分錢包查看明細。"},
+                {"key": "policy_notice", "title": "站務通知", "body": "請留意最新站務規範與功能公告。"},
+            ],
+        })
+
+    @app.route("/api/admin/notifications/eligible-users", methods=["GET"])
+    @require_csrf_safe
+    def admin_notification_eligible_users():
+        actor = get_current_user_ctx()
+        if not can_send_admin_notification(actor):
+            return json_resp({"ok": False, "msg": "需要管理員權限"}), 403
+        conn = get_db()
+        try:
+            user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            level_expr = "effective_level" if "effective_level" in user_cols else "'' AS effective_level"
+            member_expr = "member_level" if "member_level" in user_cols else "'' AS member_level"
+            rows = conn.execute(
+                f"""
+                SELECT id, username, role, status, {member_expr}, {level_expr}
+                FROM users
+                WHERE status='active'
+                ORDER BY username COLLATE NOCASE ASC, id ASC
+                """
+            ).fetchall()
+            users = [admin_notice_target_payload(row) for row in rows if can_send_admin_notice(actor, row)]
+            return json_resp({"ok": True, "users": users})
+        finally:
+            conn.close()
+
     def user_exists(conn, user_id):
         if not user_id:
             return None
         return conn.execute("SELECT id, username, role FROM users WHERE id=?", (int(user_id),)).fetchone()
+
+    @app.route("/api/admin/notifications/send", methods=["POST"])
+    @require_csrf
+    def admin_send_notification():
+        actor = get_current_user_ctx()
+        if not can_send_admin_notification(actor):
+            return json_resp({"ok": False, "msg": "需要管理員權限"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        title = normalize_text(data.get("title"))[:120]
+        body = str(data.get("body") or "").strip()[:1000]
+        if not title or not body:
+            return json_resp({"ok": False, "msg": "請填寫通知標題與內容"}), 400
+        user_ids = data.get("user_ids")
+        if user_ids is None:
+            user_ids = [data.get("target_user_id") or data.get("user_id")]
+        explicit_single_target = len(user_ids) == 1
+        if not isinstance(user_ids, list):
+            user_ids = [user_ids]
+        target_ids = []
+        for value in user_ids:
+            try:
+                user_id = int(value)
+            except Exception:
+                continue
+            if user_id > 0 and user_id not in target_ids:
+                target_ids.append(user_id)
+        if not target_ids:
+            return json_resp({"ok": False, "msg": "請選擇通知對象"}), 400
+        conn = get_db()
+        try:
+            ensure_notifications_schema(conn)
+            sent = []
+            for user_id in target_ids[:100]:
+                target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (user_id,)).fetchone()
+                if not target:
+                    continue
+                if not can_send_admin_notice(actor, target):
+                    if explicit_single_target:
+                        return json_resp({"ok": False, "msg": "權限不足，無法通知此帳號"}), 403
+                    continue
+                create_notification(
+                    conn,
+                    user_id=target["id"],
+                    type="admin_notice",
+                    title=title,
+                    body=body,
+                    link=str(data.get("link") or "")[:240] or None,
+                )
+                sent.append(target["username"])
+            conn.commit()
+            audit("ADMIN_NOTIFICATION_SENT", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"sent={','.join(sent)},title={title}")
+            return json_resp({"ok": True, "msg": f"已發送 {len(sent)} 則通知", "sent": sent})
+        finally:
+            conn.close()
 
     def resolve_reported_user(conn, target_type, target_id, fallback_user_id=None):
         if target_type == "user":
@@ -353,114 +426,6 @@ def register_reports_notification_routes(app, deps):
             conn.commit()
             audit("REPORT_RESOLVED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"report_id={report_id}, action={action}")
             return json_resp({"ok": True, "msg": msg})
-        finally:
-            conn.close()
-
-    @app.route("/api/admin/notification-templates", methods=["GET"])
-    @require_csrf_safe
-    def admin_notification_templates():
-        actor = get_current_user_ctx()
-        if not is_moderator(actor):
-            return json_resp({"ok": False, "msg": "權限不足"}), 403
-        return json_resp({"ok": True, "templates": ADMIN_NOTICE_TEMPLATES})
-
-    @app.route("/api/admin/notifications/eligible-users", methods=["GET"])
-    @require_csrf_safe
-    def admin_notification_eligible_users():
-        actor = get_current_user_ctx()
-        if not is_moderator(actor):
-            return json_resp({"ok": False, "msg": "權限不足"}), 403
-        conn = get_db()
-        try:
-            rows = conn.execute(
-                """
-                SELECT id, username, role, status, member_level
-                FROM users
-                WHERE status='active'
-                ORDER BY username COLLATE NOCASE ASC, id ASC
-                """
-            ).fetchall()
-            users = [admin_notice_target_payload(row) for row in rows if can_send_admin_notice(actor, row)]
-            return json_resp({"ok": True, "users": users})
-        finally:
-            conn.close()
-
-    @app.route("/api/admin/notifications/send", methods=["POST"])
-    @require_csrf
-    def admin_send_notification():
-        actor = get_current_user_ctx()
-        if not is_moderator(actor):
-            return json_resp({"ok": False, "msg": "權限不足"}), 403
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
-        if not isinstance(data, dict):
-            return json_resp({"ok": False, "msg": "Invalid request"}), 400
-        target_user_id = parse_positive_int(data.get("target_user_id"), default=None, min_value=1)
-        title = normalize_text(data.get("title"))[:120]
-        body = str(data.get("body") or "").strip()[:1000]
-        if not target_user_id:
-            return json_resp({"ok": False, "msg": "請選擇收件會員"}), 400
-        if not title:
-            return json_resp({"ok": False, "msg": "請填寫通知標題"}), 400
-        if not body:
-            return json_resp({"ok": False, "msg": "請填寫通知內容"}), 400
-
-        conn = get_db()
-        try:
-            ensure_notifications_schema(conn)
-            ensure_dm_schema(conn)
-            target = conn.execute(
-                "SELECT id, username, role, status FROM users WHERE id=?",
-                (target_user_id,),
-            ).fetchone()
-            if not target or target["status"] != "active":
-                return json_resp({"ok": False, "msg": "找不到可通知的會員"}), 404
-            if not can_send_admin_notice(actor, target):
-                return json_resp({"ok": False, "msg": "權限不足，無法通知此帳號"}), 403
-            a_id, b_id = normalized_pair(actor["id"], target["id"])
-            now = datetime.now().isoformat()
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO dm_threads (
-                    participant_a_id, participant_b_id, created_by_user_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (a_id, b_id, actor["id"], now, now),
-            )
-            thread = conn.execute(
-                "SELECT id FROM dm_threads WHERE participant_a_id=? AND participant_b_id=?",
-                (a_id, b_id),
-            ).fetchone()
-            message_body = f"[管理通知] {title}\n\n{body}"
-            cur = conn.execute(
-                """
-                INSERT INTO direct_messages (
-                    thread_id, sender_user_id, recipient_user_id, body, is_read, created_at
-                ) VALUES (?, ?, ?, ?, 0, ?)
-                """,
-                (thread["id"], actor["id"], target["id"], message_body, now),
-            )
-            conn.execute("UPDATE dm_threads SET updated_at=? WHERE id=?", (now, thread["id"]))
-            create_notification(
-                conn,
-                user_id=target["id"],
-                type="admin_notice",
-                title=title,
-                body=body,
-                link=f"/dm/{thread['id']}",
-            )
-            conn.commit()
-            audit(
-                "ADMIN_NOTICE_SENT",
-                get_client_ip(),
-                user=actor["username"],
-                success=True,
-                ua=get_ua(),
-                detail=f"target={target['username']}, thread_id={thread['id']}, message_id={cur.lastrowid}",
-            )
-            return json_resp({"ok": True, "msg": "通知已送出", "thread_id": thread["id"], "message_id": cur.lastrowid})
         finally:
             conn.close()
 

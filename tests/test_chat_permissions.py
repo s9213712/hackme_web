@@ -223,6 +223,78 @@ def _seed_uploaded_file(db_path, file_id="file-1", owner_user_id=3):
     conn.close()
 
 
+def test_group_chat_create_invite_password_join_and_export(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    created = client.post(
+        "/api/chat/rooms",
+        json={"name": "group room", "invite_usernames": ["bob"], "join_password": "room-pass"},
+    )
+    assert created.status_code == 200
+    room_id = created.get_json()["room"]["id"]
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        members = {
+            row["user_id"]
+            for row in conn.execute("SELECT user_id FROM chat_room_members WHERE room_id=?", (room_id,)).fetchall()
+        }
+        assert members == {3, 4}
+        assert conn.execute("SELECT * FROM notifications WHERE user_id=4 AND type='chat_room_added'").fetchone() is not None
+    finally:
+        conn.close()
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}
+    denied = client.post(f"/api/chat/rooms/{room_id}/join", json={"password": "wrong"})
+    assert denied.status_code == 403
+    joined = client.post(f"/api/chat/rooms/{room_id}/join", json={"password": "room-pass"})
+    assert joined.status_code == 200
+
+    sent = client.post(f"/api/chat/rooms/{room_id}/messages", json={"content": "hello group"})
+    assert sent.status_code == 200
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        notes = conn.execute(
+            "SELECT user_id, type, title FROM notifications WHERE type='chat_group_message' ORDER BY user_id"
+        ).fetchall()
+        assert [(row["user_id"], row["title"]) for row in notes] == [(3, "群聊有新訊息"), (4, "群聊有新訊息")]
+    finally:
+        conn.close()
+    exported = client.get(f"/api/chat/rooms/{room_id}/export")
+    assert exported.status_code == 200
+    payload = exported.get_json()
+    assert payload["room"]["name"] == "group room"
+    assert payload["messages"][0]["content"] == "hello group"
+
+
+def test_chat_room_invite_creates_notification(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    created = client.post("/api/chat/rooms", json={"name": "invite room"})
+    assert created.status_code == 200
+    room_id = created.get_json()["room"]["id"]
+    invited = client.post(f"/api/chat/rooms/{room_id}/invites", json={"usernames": "bob"})
+    assert invited.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        invite = conn.execute("SELECT * FROM chat_room_invites WHERE room_id=? AND invitee_user_id=4", (room_id,)).fetchone()
+        assert invite is not None
+        note = conn.execute("SELECT * FROM notifications WHERE user_id=4 AND type='chat_room_invite'").fetchone()
+        assert note is not None
+    finally:
+        conn.close()
+
+
 def _room_active(db_path, room_id):
     conn = sqlite3.connect(db_path)
     row = conn.execute("SELECT is_active FROM chat_rooms WHERE id=?", (room_id,)).fetchone()

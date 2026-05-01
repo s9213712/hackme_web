@@ -534,6 +534,13 @@ def _ensure_dm_schema(conn):
 
 
 def _ensure_chat_social_schema(conn):
+    room_cols = _table_columns(conn, "chat_rooms")
+    for name, ddl in (
+        ("join_password_hash", "TEXT"),
+        ("join_password_required", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in room_cols:
+            conn.execute(f"ALTER TABLE chat_rooms ADD COLUMN {name} {ddl}")
     cols = _table_columns(conn, "chat_messages")
     for name, ddl in (
         ("message_type", "TEXT NOT NULL DEFAULT 'text'"),

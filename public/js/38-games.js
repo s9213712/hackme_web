@@ -25,6 +25,7 @@ const SUDOKU_PUZZLES = [
 ];
 let sudokuState = null;
 let minesweeperState = null;
+let oneA2BState = null;
 
 function formatSoloGameTime(ms) {
   const totalMs = Math.max(0, Number(ms || 0));
@@ -50,13 +51,15 @@ function ensureSoloGameTimer() {
   soloGameTimer = setInterval(() => {
     if (gameSelectedKey === "sudoku") updateSudokuStatus();
     if (gameSelectedKey === "minesweeper") updateMinesweeperStatus();
+    if (gameSelectedKey === "1a2b") updateOneA2BStatus();
   }, 250);
 }
 
 function stopSoloGameTimerIfIdle() {
   const sudokuActive = sudokuState && !sudokuState.completedAt;
   const minesActive = minesweeperState && minesweeperState.status === "active";
-  if (!sudokuActive && !minesActive && soloGameTimer) {
+  const oneA2BActive = oneA2BState && !oneA2BState.completedAt;
+  if (!sudokuActive && !minesActive && !oneA2BActive && soloGameTimer) {
     clearInterval(soloGameTimer);
     soloGameTimer = null;
   }
@@ -72,12 +75,14 @@ function setGameMsg(text, ok) {
 function gameIcon(key) {
   if (key === "sudoku") return "9";
   if (key === "minesweeper") return "!";
+  if (key === "1a2b") return "A";
   return "♟";
 }
 
 function gameSubtitle(game) {
   if (game.key === "sudoku") return "單人邏輯解題";
   if (game.key === "minesweeper") return "單人推理挑戰";
+  if (game.key === "1a2b") return "單人猜數字";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
 }
 
@@ -88,10 +93,12 @@ function switchGameView(key) {
   const chessPanel = $("chess-game-panel");
   const sudokuPanel = $("sudoku-game-panel");
   const minesPanel = $("minesweeper-game-panel");
+  const oneA2BPanel = $("onea2b-game-panel");
   if (chessLobby) chessLobby.style.display = isChess ? "" : "none";
   if (chessPanel) chessPanel.style.display = isChess ? "" : "none";
   if (sudokuPanel) sudokuPanel.style.display = gameSelectedKey === "sudoku" ? "" : "none";
   if (minesPanel) minesPanel.style.display = gameSelectedKey === "minesweeper" ? "" : "none";
+  if (oneA2BPanel) oneA2BPanel.style.display = gameSelectedKey === "1a2b" ? "" : "none";
   document.querySelectorAll("[data-game-key]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
   });
@@ -102,6 +109,10 @@ function switchGameView(key) {
   if (gameSelectedKey === "minesweeper" && !minesweeperState) {
     renderMinesweeperBoard();
     updateMinesweeperStatus();
+  }
+  if (gameSelectedKey === "1a2b" && !oneA2BState) {
+    renderOneA2BBoard();
+    updateOneA2BStatus();
   }
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
 }
@@ -301,6 +312,15 @@ function renderGameLeaderboard(data) {
     wrap.innerHTML = `<p style="color:var(--muted);">${data?.rank_mode === "time_asc" ? "本週尚無完成時間紀錄" : "本週尚無玩家對戰成績"}</p>`;
     return;
   }
+  if (data?.rank_mode === "guesses_then_time") {
+    wrap.innerHTML = rows.map((row) => `
+      <div class="drive-file-row game-list-row">
+        <div><strong>#${row.rank} ${sanitize(row.username || "-")}</strong><small>猜 ${row.guess_count || 0} 次 · 完成 ${row.attempts || 1} 次</small></div>
+        <strong>${formatSoloGameTime(row.elapsed_ms || 0)}</strong>
+      </div>
+    `).join("");
+    return;
+  }
   if (data?.rank_mode === "time_asc") {
     wrap.innerHTML = rows.map((row) => `
       <div class="drive-file-row game-list-row">
@@ -326,6 +346,8 @@ async function loadSelectedGameLeaderboard() {
   } else if (key === "minesweeper") {
     const difficulty = minesweeperConfig().difficulty;
     path = `/games/minesweeper/solo-leaderboard?difficulty=${encodeURIComponent(difficulty)}`;
+  } else if (key === "1a2b") {
+    path = "/games/1a2b/solo-leaderboard";
   }
   const data = await gameRequest(path);
   gameState.leaderboard = data.leaderboard || [];
@@ -349,6 +371,7 @@ async function submitSoloGameScore(gameKey, state) {
         elapsed_ms: elapsed,
         difficulty: state.difficulty || "standard",
         puzzle_id: state.puzzleId || "",
+        guess_count: Array.isArray(state.guesses) ? state.guesses.length : 0,
       },
     });
     await loadSelectedGameLeaderboard();
@@ -593,6 +616,129 @@ function updateMinesweeperStatus() {
   }
 }
 
+function generateOneA2BSecret() {
+  const digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+  const secret = [];
+  while (secret.length < 4) {
+    const index = Math.floor(Math.random() * digits.length);
+    const digit = digits[index];
+    if (!secret.length && digit === "0") continue;
+    secret.push(digits.splice(index, 1)[0]);
+  }
+  return secret.join("");
+}
+
+function scoreOneA2BGuess(secret, guess) {
+  let a = 0;
+  let b = 0;
+  for (let i = 0; i < 4; i += 1) {
+    if (guess[i] === secret[i]) a += 1;
+    else if (secret.includes(guess[i])) b += 1;
+  }
+  return { a, b };
+}
+
+function normalizeOneA2BGuess(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 4);
+}
+
+function isValidOneA2BGuess(value) {
+  return /^[1-9][0-9]{3}$/.test(value) && new Set(value.split("")).size === 4;
+}
+
+function startOneA2BGame() {
+  oneA2BState = {
+    secret: generateOneA2BSecret(),
+    startedAt: Date.now(),
+    completedAt: null,
+    penaltySeconds: 0,
+    scoreSubmitted: false,
+    difficulty: "standard",
+    puzzleId: "1a2b-4digits",
+    guesses: [],
+  };
+  const input = $("onea2b-guess-input");
+  if (input) {
+    input.value = "";
+    input.disabled = false;
+    input.focus();
+  }
+  renderOneA2BBoard();
+  ensureSoloGameTimer();
+  updateOneA2BStatus("計時開始。輸入 4 個不重複數字，首位不可為 0，例如 1234。");
+}
+
+function renderOneA2BBoard() {
+  const board = $("onea2b-history");
+  if (!board) return;
+  if (!oneA2BState) {
+    board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會產生題目並開始計時。</div>';
+    return;
+  }
+  if (!oneA2BState.guesses.length) {
+    board.innerHTML = '<div class="single-game-placeholder">尚未猜測。A 是位置正確，B 是數字正確但位置不同。</div>';
+    return;
+  }
+  board.innerHTML = oneA2BState.guesses.map((item, index) => `
+    <div class="onea2b-row ${item.a === 4 ? "solved" : ""}">
+      <strong>#${index + 1} ${sanitize(item.guess)}</strong>
+      <span>${Number(item.a)}A${Number(item.b)}B</span>
+    </div>
+  `).join("");
+}
+
+function updateOneA2BStatus(prefix = "") {
+  const status = $("onea2b-status");
+  if (!status) return;
+  if (!oneA2BState) {
+    status.textContent = "按開始後才會產生答案並開始計時。";
+    return;
+  }
+  const time = formatSoloGameTime(soloElapsedMs(oneA2BState));
+  if (oneA2BState.completedAt) {
+    status.textContent = `完成時間 ${time} · 共 ${oneA2BState.guesses.length} 次`;
+    return;
+  }
+  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time} · 已猜 ${oneA2BState.guesses.length} 次`;
+}
+
+function submitOneA2BGuess() {
+  if (!oneA2BState || oneA2BState.completedAt) return;
+  const input = $("onea2b-guess-input");
+  const guess = normalizeOneA2BGuess(input?.value || "");
+  if (input && input.value !== guess) input.value = guess;
+  if (!isValidOneA2BGuess(guess)) {
+    updateOneA2BStatus("請輸入 4 個不重複數字，首位不可為 0。");
+    return;
+  }
+  if (oneA2BState.guesses.some((item) => item.guess === guess)) {
+    updateOneA2BStatus("這組數字已猜過。");
+    return;
+  }
+  const result = scoreOneA2BGuess(oneA2BState.secret, guess);
+  oneA2BState.guesses.push({ guess, ...result });
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  renderOneA2BBoard();
+  if (result.a === 4) {
+    oneA2BState.completedAt = Date.now();
+    if (input) input.disabled = true;
+    updateOneA2BStatus();
+    stopSoloGameTimerIfIdle();
+    if (soloElapsedMs(oneA2BState) > 5 * 60 * 1000) {
+      oneA2BState.scoreSubmitted = true;
+      setGameMsg("1A2B 已完成，但超過 5 分鐘，不列入排行榜。", false);
+      return;
+    }
+    submitSoloGameScore("1a2b", oneA2BState);
+    setGameMsg(`1A2B 完成，成績 ${formatSoloGameTime(soloElapsedMs(oneA2BState))}`, true);
+    return;
+  }
+  updateOneA2BStatus(`${result.a}A${result.b}B`);
+}
+
 async function loadGameZone() {
   try {
     await fetchCsrfToken({ force: true });
@@ -759,6 +905,16 @@ document.addEventListener("click", (event) => {
     startMinesweeperGame();
     return;
   }
+  const oneA2BNewBtn = event.target?.closest?.("#onea2b-new-btn");
+  if (oneA2BNewBtn) {
+    startOneA2BGame();
+    return;
+  }
+  const oneA2BGuessBtn = event.target?.closest?.("#onea2b-guess-btn");
+  if (oneA2BGuessBtn) {
+    submitOneA2BGuess();
+    return;
+  }
   const mineBtn = event.target?.closest?.("[data-mine-index]");
   if (mineBtn) {
     revealMinesweeperCell(mineBtn.dataset.mineIndex);
@@ -789,8 +945,22 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("input", (event) => {
   const sudokuInput = event.target?.closest?.("[data-sudoku-index]");
-  if (!sudokuInput) return;
-  updateSudokuCell(Number(sudokuInput.dataset.sudokuIndex || 0), sudokuInput.value || "");
+  if (sudokuInput) {
+    updateSudokuCell(Number(sudokuInput.dataset.sudokuIndex || 0), sudokuInput.value || "");
+    return;
+  }
+  const oneA2BInput = event.target?.closest?.("#onea2b-guess-input");
+  if (oneA2BInput) {
+    oneA2BInput.value = normalizeOneA2BGuess(oneA2BInput.value || "");
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  const oneA2BInput = event.target?.closest?.("#onea2b-guess-input");
+  if (oneA2BInput && event.key === "Enter") {
+    event.preventDefault();
+    submitOneA2BGuess();
+  }
 });
 
 document.addEventListener("change", (event) => {

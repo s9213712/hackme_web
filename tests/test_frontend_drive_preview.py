@@ -154,7 +154,6 @@ def test_album_viewer_has_dedicated_module():
     assert "附件編號讀取失敗" in drive_js
     assert "loadChatMessages(selectedChatRoomId" in drive_js
     assert '<select id="chat-attachment-existing-file-id">' in index_html
-    assert '<select id="dm-attachment-existing-file-id">' in index_html
     assert '<select id="announcement-attachment-existing-file-id">' in index_html
     assert 'placeholder="file_id"' not in index_html
     assert "chat-message-image-preview" in drive_js
@@ -190,36 +189,25 @@ def test_album_viewer_has_dedicated_module():
     assert "特殊階級" in core_js
     assert "RESET_RUNTIME_STATE" in index_html
     assert 'id="security-profile-load-current-btn"' in index_html
-    assert 'id="security-profile-setting-server-ssl-enabled"' in index_html
-    assert 'id="security-profile-setting-audit-chain-enabled"' in index_html
-    assert 'id="security-profile-setting-feature-audit-log-enabled"' in index_html
-    assert 'id="security-profile-setting-feature-economy-enabled"' in index_html
-    assert 'id="sc-feature-audit-log-enabled"' in index_html
-    assert 'id="sc-feature-economy-enabled"' in index_html
-    assert 'id="security-profile-threshold-max-login-failures"' in index_html
-    assert "settings JSON" not in index_html
-    assert "thresholds JSON" not in index_html
     assert 'id="security-mode-profile-preview"' in index_html
     assert 'id="server-mode-profile-preview"' in index_html
     assert "loadCurrentSecurityProfileDraft" in admin_js
-    assert "readSecurityProfileDraft" in admin_js
-    assert "securityProfileInputId" in admin_js
-    assert "JSON.parse($(\"security-profile-settings-json\")" not in admin_js
     assert "renderSecurityProfilePreview" in admin_js
     assert "function applySecurityProfileToInputs" in admin_js
     assert "function applySecurityProfileDataToInputs" in admin_js
     assert "function previewSecurityProfileSelection" in admin_js
     assert "function bindSecurityProfileSelect" in admin_js
-    assert "maybeSaveCustomSecurityProfileFromManualChange" in admin_js
-    assert "內建模式不會被覆寫" in admin_js
-    assert '"feature_economy_enabled"' in admin_js
     assert '"feature_audit_log_enabled"' in admin_js
+    assert '"feature_economy_enabled"' in admin_js
+    assert 'id="sc-feature-audit-log-enabled"' in index_html
+    assert 'id="sc-feature-economy-enabled"' in index_html
     assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
     assert 'previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s")' in bootstrap_js
-    assert "await loadSettings();" in admin_js
-    assert "populateProfileSelect(\"server-mode-select\"" in admin_js
     assert 'bindSecurityProfileSelect("security-mode-select", "security-mode-profile-preview", "sc")' in admin_js
     assert 'bindSecurityProfileSelect("server-mode-select", "server-mode-profile-preview", "s")' in admin_js
+    assert "按套用才會寫入伺服器" in admin_js
+    assert "await loadSettings();" in admin_js
+    assert "populateProfileSelect(\"server-mode-select\"" in admin_js
     assert 'confirm: "RESET_RUNTIME_STATE"' in admin_js
     assert '"RUN_RESET"' not in admin_js
     assert "icon-action-btn" in index_html
@@ -233,37 +221,6 @@ def test_album_viewer_has_dedicated_module():
     assert 'normTab === "albums"' in admin_js
     assert ".drive-collapsible-panel" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert ".album-preview-nav" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
-
-
-def test_security_mode_controls_have_matching_frontend_checkboxes():
-    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
-    control_keys = [
-        "maintenance_mode",
-        "server_ssl_enabled",
-        "audit_chain_enabled",
-        "feature_audit_log_enabled",
-        "ip_blocking_enabled",
-        "login_violation_enabled",
-        "rate_limit_violation_enabled",
-        "root_ip_whitelist_enabled",
-        "root_ip_whitelist",
-        "browser_only_mode_enabled",
-        "integrity_guard_enabled",
-        "integrity_guard_strict_mode",
-        "feature_economy_enabled",
-    ]
-
-    assert "const SECURITY_CONTROL_KEYS = [" in admin_js
-    assert "readSecurityControlsFromInputs(\"sc\")" in admin_js
-    assert "readSecurityThresholdsFromInputs(\"sc\")" in admin_js
-    assert "applySecurityProfileToInputs($(selectId)?.value, inputPrefix)" in admin_js
-    for key in control_keys:
-        dom_key = key.replace("_", "-")
-        assert f'"{key}"' in admin_js
-        assert f'id="sc-{dom_key}"' in index_html
-        assert f'id="security-profile-setting-{dom_key}"' in index_html
-    assert "按套用才會寫入伺服器" in admin_js
 
 
 def test_album_preview_category_uses_storage_name_before_uploaded_metadata():

@@ -8,7 +8,15 @@ from routes.comfyui import register_comfyui_routes
 from services.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.comfyui_client import ComfyUIClient, ComfyUIImage
 from services.member_levels import ensure_member_level_rules_schema
-from services.storage_albums import create_album, ensure_storage_album_schema
+from services.storage_albums import (
+    create_album,
+    create_storage_file_entry,
+    create_storage_folder,
+    ensure_output_album,
+    ensure_storage_album_schema,
+    move_storage_file,
+)
+from services.upload_security import create_uploaded_file_record
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
 
 
@@ -522,6 +530,162 @@ def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
     assert list(storage_root.glob("users/1/*/hackme_web_00001_.png"))
 
 
+def test_comfyui_save_defaults_to_output_folder_and_album(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    saved = client.post(
+        "/api/comfyui/save",
+        json={
+            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+        },
+    )
+
+    assert saved.status_code == 200
+    body = saved.get_json()
+    assert body["storage_file"]["virtual_path"] == "/output/hackme_web_00001_.png"
+    assert body["album"]["title"] == "output"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    folder = conn.execute(
+        "SELECT * FROM storage_folders WHERE owner_user_id=1 AND virtual_path='/output' AND deleted_at IS NULL"
+    ).fetchone()
+    album_file = conn.execute(
+        "SELECT * FROM album_files WHERE album_id=? AND file_id=? AND deleted_at IS NULL",
+        (body["album"]["id"], body["file"]["file_id"]),
+    ).fetchone()
+    conn.close()
+    assert folder is not None
+    assert album_file["storage_file_id"] == body["storage_file"]["id"]
+
+
+def test_output_album_syncs_files_moved_into_output_folder(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor = _actor()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        create_storage_folder(conn, actor=actor, path="/output")
+        upload = create_uploaded_file_record(
+            conn,
+            owner_user_id=actor["id"],
+            storage_path="users/1/manual/external.png",
+            privacy_mode="private_scannable",
+            size_bytes=12,
+            original_filename="external.png",
+            mime_type="image/png",
+            user=actor,
+        )
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload["file_id"],)).fetchone()
+        storage_file, msg = create_storage_file_entry(
+            conn,
+            actor=actor,
+            file_row=file_row,
+            virtual_path="/imports/external.png",
+            display_name="external.png",
+            source="test",
+        )
+        assert msg is None
+
+        moved, msg = move_storage_file(conn, actor=actor, storage_file_id=storage_file["id"], new_virtual_path="/output")
+        assert msg is None
+        album, msg = ensure_output_album(conn, actor=actor)
+
+        assert msg is None
+        assert moved["virtual_path"] == "/output/external.png"
+        assert album["title"] == "output"
+        assert [file["virtual_path"] for file in album["files"]] == ["/output/external.png"]
+    finally:
+        conn.close()
+
+
+def test_output_album_repairs_file_record_stored_at_output_path(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor = _actor()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        upload = create_uploaded_file_record(
+            conn,
+            owner_user_id=actor["id"],
+            storage_path="users/1/manual/external.png",
+            privacy_mode="private_scannable",
+            size_bytes=12,
+            original_filename="external.png",
+            mime_type="image/png",
+            user=actor,
+        )
+        file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload["file_id"],)).fetchone()
+        storage_file, msg = create_storage_file_entry(
+            conn,
+            actor=actor,
+            file_row=file_row,
+            virtual_path="/output",
+            display_name="output",
+            source="test",
+        )
+        assert msg is None
+
+        album, msg = ensure_output_album(conn, actor=actor)
+        repaired = conn.execute("SELECT * FROM storage_files WHERE id=?", (storage_file["id"],)).fetchone()
+        folder = conn.execute(
+            "SELECT * FROM storage_folders WHERE owner_user_id=1 AND virtual_path='/output' AND deleted_at IS NULL"
+        ).fetchone()
+
+        assert msg is None
+        assert folder is not None
+        assert repaired["virtual_path"] == "/output/external.png"
+        assert [file["virtual_path"] for file in album["files"]] == ["/output/external.png"]
+    finally:
+        conn.close()
+
+
+def test_output_album_prunes_files_moved_out_of_output_folder(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    saved = client.post(
+        "/api/comfyui/save",
+        json={
+            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+        },
+    )
+    assert saved.status_code == 200
+    body = saved.get_json()
+
+    actor = _actor()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        moved, msg = move_storage_file(
+            conn,
+            actor=actor,
+            storage_file_id=body["storage_file"]["id"],
+            new_virtual_path="/imports/hackme_web_00001_.png",
+        )
+        assert msg is None
+        album, msg = ensure_output_album(conn, actor=actor)
+
+        assert moved["virtual_path"] == "/imports/hackme_web_00001_.png"
+        assert msg is None
+        assert album["files"] == []
+        assert album["removed_count"] == 1
+    finally:
+        conn.close()
+
+
 def test_comfyui_discard_deletes_original_comfyui_file(tmp_path):
     FakeComfyUIClient.discarded = []
     db_path = tmp_path / "comfyui.db"
@@ -811,6 +975,8 @@ def test_comfyui_frontend_is_wired():
     assert 'batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1)))' in comfyui_js
     assert "comfyuiGeneratedImages" in comfyui_js
     assert "renderComfyuiGeneratedImages" in comfyui_js
+    assert 'savePath.value = `/output/${comfyuiCurrentImage.image_ref.filename}`;' in comfyui_js
+    assert 'placeholder="/output/圖片.png"' in index_html
     assert "COMFYUI_DRAFT_FIELD_IDS" in comfyui_js
     assert "hackme_web:comfyui:draft" in comfyui_js
     assert "bindComfyuiDraftPersistence" in comfyui_js

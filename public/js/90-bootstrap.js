@@ -3,7 +3,6 @@ function bindUiEvents() {
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
-  const tabModuleDm = $("tab-module-dm");
   const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
@@ -115,18 +114,13 @@ function bindUiEvents() {
   const chatBackupRoomBtn = $("chat-backup-room-btn");
   const chatRestoreRoomBtn = $("chat-restore-room-btn");
   const chatRestoreFile = $("chat-restore-file");
+  const chatRoomInviteBtn = $("chat-room-invite-btn");
+  const chatRoomExportBtn = $("chat-room-export-btn");
   const chatSendBtn = $("chat-send-btn");
   const chatFriendAddBtn = $("chat-friend-add-btn");
   const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
   const chatAttachmentExistingBtn = $("chat-attachment-existing-btn");
   const chatInput = $("chat-message-input");
-  const dmCreateBtn = $("dm-create-thread-btn");
-  const dmRefreshBtn = $("dm-refresh-btn");
-  const dmSendBtn = $("dm-send-btn");
-  const dmAttachmentUploadBtn = $("dm-attachment-upload-btn");
-  const dmAttachmentExistingBtn = $("dm-attachment-existing-btn");
-  const dmInput = $("dm-message-input");
-  const dmBlockBtn = $("dm-block-user-btn");
   const communityAnnouncementBtn = $("community-announcement-submit");
   const communityAnnouncementOpenBtn = $("community-announcement-open-btn");
   const communityAnnouncementCancelBtn = $("community-announcement-cancel-btn");
@@ -201,7 +195,6 @@ function bindUiEvents() {
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
-  if (tabModuleDm) tabModuleDm.addEventListener("click", () => switchModuleTab("dm"));
   if (tabModuleAnnouncements) tabModuleAnnouncements.addEventListener("click", () => switchModuleTab("announcements"));
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
@@ -266,6 +259,8 @@ function bindUiEvents() {
   if (chatBackupRoomBtn) chatBackupRoomBtn.addEventListener("click", backupSelectedChatRoom);
   if (chatRestoreRoomBtn) chatRestoreRoomBtn.addEventListener("click", chooseChatRestoreFile);
   if (chatRestoreFile) chatRestoreFile.addEventListener("change", restoreChatRoomBackup);
+  if (chatRoomInviteBtn) chatRoomInviteBtn.addEventListener("click", inviteChatRoomMembers);
+  if (chatRoomExportBtn) chatRoomExportBtn.addEventListener("click", exportChatRoom);
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
   if (chatFriendAddBtn) chatFriendAddBtn.addEventListener("click", addChatFriend);
   document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
@@ -273,12 +268,6 @@ function bindUiEvents() {
   });
   if (chatAttachmentUploadBtn) chatAttachmentUploadBtn.addEventListener("click", uploadChatAttachment);
   if (chatAttachmentExistingBtn) chatAttachmentExistingBtn.addEventListener("click", attachExistingChatFile);
-  if (dmCreateBtn) dmCreateBtn.addEventListener("click", createDmThread);
-  if (dmRefreshBtn) dmRefreshBtn.addEventListener("click", loadDmThreads);
-  if (dmSendBtn) dmSendBtn.addEventListener("click", sendDmMessage);
-  if (dmAttachmentUploadBtn) dmAttachmentUploadBtn.addEventListener("click", uploadDmAttachment);
-  if (dmAttachmentExistingBtn) dmAttachmentExistingBtn.addEventListener("click", attachExistingDmFile);
-  if (dmBlockBtn) dmBlockBtn.addEventListener("click", blockSelectedDmUser);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
   if (communityAnnouncementOpenBtn) communityAnnouncementOpenBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(true));
   if (communityAnnouncementCancelBtn) communityAnnouncementCancelBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(false));
@@ -397,13 +386,6 @@ function bindUiEvents() {
       sendChatMessage();
     }
   });
-  if (dmInput) dmInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      sendDmMessage();
-    }
-  });
-
   // Audit pagination
   if (auditRefresh) auditRefresh.addEventListener("click", () => loadAudit(auditPage));
   if ($("audit-prev")) $("audit-prev").addEventListener("click", () => loadAudit(Math.max(0, auditPage - 1)));

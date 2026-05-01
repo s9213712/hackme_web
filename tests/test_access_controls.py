@@ -345,7 +345,7 @@ def test_invalid_comfyui_batch_limit_is_rejected():
     assert state["comfyui_max_batch_size"] == 1
 
 
-def test_admin_environment_exposes_paths_and_pid():
+def test_admin_environment_exposes_relative_paths_and_pid():
     app, _ = _admin_app()
     client = app.test_client()
 
@@ -355,6 +355,11 @@ def test_admin_environment_exposes_paths_and_pid():
     assert env["pid"] > 0
     assert env["base_dir"] == "."
     assert env["database_path"] == "missing.db"
+    assert env["log_dir"] == "."
+    assert env["chat_dir"] == "."
+    assert env["anchor_dir"] == "."
+    for key in ("base_dir", "database_path", "log_dir", "chat_dir", "anchor_dir"):
+        assert not str(env[key]).startswith("/")
 
 
 def test_admin_environment_uses_relative_paths_without_host_path_leak(tmp_path):
@@ -404,7 +409,7 @@ def test_admin_environment_redacts_external_runtime_paths(tmp_path):
     res = client.get("/api/admin/environment")
     assert res.status_code == 200
     database_path = res.get_json()["environment"]["database_path"]
-    assert database_path == "external/database.db"
+    assert database_path == "<outside>/database.db"
     assert str(tmp_path) not in database_path
     assert not database_path.startswith("/")
 

@@ -109,7 +109,6 @@ const SIDEBAR_ICON_PATHS = {
 };
 const SIDEBAR_MENU_CONFIG = [
   { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "chat", label: "聊天", group: "日常" },
-  { tabId: "tab-module-dm", module: "dm", tab: "dm", icon: "mail", label: "站內信", group: "日常" },
   { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "bell", label: "公告", group: "社群" },
   {
     tabId: "tab-module-community",
@@ -1098,7 +1097,6 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
-  const tabModuleDm = $("tab-module-dm");
   const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
@@ -1114,7 +1112,6 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
-  if (tabModuleDm) tabModuleDm.style.display = canAccessModule("dm") ? "" : "none";
   if (tabModuleAnnouncements) tabModuleAnnouncements.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
@@ -1188,7 +1185,6 @@ function resetAuthState() {
     welcomeMsg.textContent = "歡迎回來！";
   }
   const moduleChat = $("module-chat");
-  const moduleDm = $("module-dm");
   const moduleAnnouncements = $("module-announcements");
   const moduleCommunity = $("module-community");
   const moduleDrive = $("module-drive");
@@ -1200,7 +1196,6 @@ function resetAuthState() {
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
   if (moduleChat) moduleChat.classList.remove("active");
-  if (moduleDm) moduleDm.classList.remove("active");
   if (moduleAnnouncements) moduleAnnouncements.classList.remove("active");
   if (moduleCommunity) moduleCommunity.classList.remove("active");
   if (moduleDrive) moduleDrive.classList.remove("active");
@@ -1218,8 +1213,6 @@ function resetAuthState() {
   $("me-nickname").textContent = "-";
   selectedChatRoomId = null;
   chatRooms = [];
-  selectedDmThreadId = null;
-  dmThreads = [];
   const chatWarn = $("chat-room-warn");
   if (chatWarn) chatWarn.className = "msg";
   const chatRoomList = $("chat-room-list");

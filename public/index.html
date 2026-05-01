@@ -218,7 +218,6 @@
       </div>
       <nav class="tabs sidebar-nav" id="module-main-tabs">
         <button class="tab active" id="tab-module-chat">聊天</button>
-        <button class="tab" id="tab-module-dm" style="display:none;">站內信</button>
         <button class="tab" id="tab-module-announcements">公告</button>
         <button class="tab" id="tab-module-community">討論區</button>
         <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
@@ -260,12 +259,15 @@
       <div class="mini-title">💬 即時聊天室</div>
       <div class="chat-toolbar">
         <div class="chat-room-create">
-          <input type="text" id="chat-room-target-user" placeholder="指定對象（帳號）" maxlength="32" />
+          <input type="text" id="chat-room-target-user" placeholder="快速私聊對象（帳號，可留空）" maxlength="32" />
           <input type="text" id="chat-room-name" placeholder="聊天室名稱（最多 48 字）" maxlength="48" />
+          <input type="text" id="chat-room-invite-users" placeholder="建立時加入成員（逗號分隔）" maxlength="240" />
+          <input type="password" id="chat-room-password" placeholder="加入密碼（可留空）" maxlength="128" />
           <button class="btn btn-primary" id="chat-create-room-btn" type="button">建立聊天室</button>
         </div>
         <div class="chat-room-join">
           <input type="number" id="chat-join-room-id" placeholder="聊天室 ID" min="1" />
+          <input type="password" id="chat-join-password" placeholder="聊天室密碼（若有）" maxlength="128" />
           <button class="btn" id="chat-join-room-btn" type="button">加入聊天室</button>
         </div>
         <div class="chat-refresh-wrap">
@@ -290,6 +292,11 @@
           <div class="chat-room-header">
             <strong id="chat-room-title">請先建立或加入聊天室</strong>
             <span id="chat-room-member" style="font-size:.75rem;color:var(--muted);"></span>
+          </div>
+          <div class="chat-room-actions">
+            <input type="text" id="chat-room-invite-more-users" placeholder="邀請成員（帳號，逗號分隔）" maxlength="240" />
+            <button class="btn" id="chat-room-invite-btn" type="button">邀請</button>
+            <button class="btn" id="chat-room-export-btn" type="button">備份聊天記錄</button>
           </div>
           <div id="chat-room-messages" class="chat-room-messages"></div>
           <div id="chat-room-warn" class="msg" style="margin-top: .55rem;"></div>
@@ -909,7 +916,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、數獨與踩地雷。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
+          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷與 1A2B。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -955,6 +962,13 @@
         </section>
         <section class="game-board-panel">
           <div id="chess-game-panel">
+          <details class="drive-collapsible-panel game-rules-panel">
+            <summary>西洋棋玩法說明</summary>
+            <div class="drive-collapsible-body">
+              <p>白方先走，雙方輪流移動一枚棋子。所有移動必須符合西洋棋規則，不能讓自己的王處於被將軍狀態。</p>
+              <p>目標是將死對方的王。可和玩家對戰，也可選擇白方/黑方與電腦難度練習。</p>
+            </div>
+          </details>
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title" id="game-current-title">尚未選擇棋局</div>
@@ -966,6 +980,13 @@
           <div id="game-move-history" class="game-move-history"></div>
           </div>
           <div id="sudoku-game-panel" class="single-game-panel" style="display:none;">
+            <details class="drive-collapsible-panel game-rules-panel">
+              <summary>數獨玩法說明</summary>
+              <div class="drive-collapsible-body">
+                <p>按「開始」後才會出現題目並開始計時。每列、每欄、每個 3x3 宮格都必須填入 1 到 9，且不可重複。</p>
+                <p>按「檢查」若仍有錯誤會加時 10 秒；正確完成後依完成時間排行。</p>
+              </div>
+            </details>
             <div class="drive-card-heading">
               <div>
                 <div class="drive-card-title">數獨</div>
@@ -979,6 +1000,13 @@
             <div id="sudoku-board" class="sudoku-board" aria-label="數獨棋盤"></div>
           </div>
           <div id="minesweeper-game-panel" class="single-game-panel" style="display:none;">
+            <details class="drive-collapsible-panel game-rules-panel">
+              <summary>踩地雷玩法說明</summary>
+              <div class="drive-collapsible-body">
+                <p>按「開始」後才會產生盤面並開始計時。左鍵翻開格子，右鍵插旗標記地雷。</p>
+                <p>數字代表周圍八格的地雷數。翻開所有非地雷格即獲勝；踩到地雷本局結束。排行依完成時間計算。</p>
+              </div>
+            </details>
             <div class="drive-card-heading">
               <div>
                 <div class="drive-card-title">踩地雷</div>
@@ -994,6 +1022,35 @@
               </div>
             </div>
             <div id="minesweeper-board" class="minesweeper-board" aria-label="踩地雷棋盤"></div>
+          </div>
+          <div id="onea2b-game-panel" class="single-game-panel" style="display:none;">
+            <details class="drive-collapsible-panel game-rules-panel">
+              <summary>1A2B 玩法說明</summary>
+              <div class="drive-collapsible-body">
+                <p>按「開始」後系統會產生 4 位不重複數字，首位不會是 0。每次猜測也必須是 4 位不重複數字，且首位不可為 0，例如 1234。</p>
+                <p>A 代表數字與位置都正確，B 代表數字正確但位置不同。排行先比猜測次數，再比總猜測時間；超過 5 分鐘不列入排名。</p>
+              </div>
+            </details>
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">1A2B</div>
+                <div class="drive-card-sub" id="onea2b-status">按開始後才會產生答案並開始計時。</div>
+              </div>
+              <div class="drive-file-actions">
+                <button class="btn game-mini-btn" id="onea2b-new-btn" type="button">開始</button>
+              </div>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>猜測數字</label>
+                <input type="text" id="onea2b-guess-input" inputmode="numeric" maxlength="4" placeholder="例如 1234" disabled />
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary game-mini-btn" id="onea2b-guess-btn" type="button">送出</button>
+              </div>
+            </div>
+            <div id="onea2b-history" class="onea2b-history" aria-label="1A2B 猜測紀錄"></div>
           </div>
         </section>
         <section class="game-panel">
@@ -1047,7 +1104,7 @@
             <div class="field"><label>Seed（空白=隨機）</label><input type="number" id="comfyui-seed" min="0" placeholder="random" /></div>
             <div class="field"><label>Sampler</label><select id="comfyui-sampler"><option value="euler">euler</option></select></div>
             <div class="field"><label>Scheduler</label><select id="comfyui-scheduler"><option value="normal">normal</option></select></div>
-            <div class="field"><label>儲存到資料夾</label><input type="text" id="comfyui-save-path" placeholder="/ComfyUI/圖片.png" /></div>
+            <div class="field"><label>儲存到資料夾</label><input type="text" id="comfyui-save-path" placeholder="/output/圖片.png" /></div>
             <div class="field"><label>加入相簿</label><select id="comfyui-album-select"><option value="">不加入相簿</option></select></div>
           </div>
           <div class="comfyui-share-panel">
@@ -1251,45 +1308,6 @@
     </div>
   </div>
 
-  <div class="module-section" id="module-dm">
-    <div class="admin-tools" style="margin-top:.95rem;text-align:left;">
-      <div class="mini-title">✉️ 站內信</div>
-      <div class="chat-toolbar">
-        <input type="text" id="dm-target-user" maxlength="32" placeholder="收件人帳號" />
-        <button class="btn btn-primary" id="dm-create-thread-btn" type="button">開始私訊</button>
-        <button class="btn" id="dm-refresh-btn" type="button">重新整理</button>
-      </div>
-      <div class="chat-layout">
-        <div class="chat-room-list-wrap">
-          <div class="mini-title">私訊串</div>
-          <div id="dm-thread-list"></div>
-        </div>
-        <div class="chat-room-main">
-          <div class="chat-room-header">
-            <strong id="dm-thread-title">請先選擇或建立私訊串</strong>
-            <button class="btn" id="dm-block-user-btn" type="button" style="display:none;width:auto;padding:.4rem .7rem;">封鎖此人</button>
-          </div>
-          <div id="dm-message-list" class="chat-room-messages"></div>
-          <div id="dm-warn" class="msg" style="margin-top:.55rem;"></div>
-          <div class="chat-composer">
-            <textarea id="dm-message-input" rows="2" maxlength="1000" placeholder="輸入站內信，最多 1000 字"></textarea>
-            <button class="btn btn-primary" id="dm-send-btn" type="button">送出</button>
-          </div>
-          <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-title">站內信附件</div>
-            <div class="settings-option-grid">
-              <div class="field"><label>上傳新附件</label><input type="file" id="dm-attachment-file" /></div>
-              <div class="field"><label>選擇雲端檔案</label><select id="dm-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
-              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="dm-attachment-upload-btn" type="button">上傳附件</button></div>
-              <div class="field"><label>&nbsp;</label><button class="btn" id="dm-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
-            </div>
-            <div id="dm-attachment-list" class="drive-file-list"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <div class="module-section" id="module-accounts">
     <div class="admin-wrap" id="admin-wrap">
       <!-- Tabs -->
@@ -1320,7 +1338,7 @@
           <table class="user-table" id="user-table">
             <thead>
               <tr>
-                <th>選取</th><th>ID</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
+                <th>選取</th><th>ID</th><th>在線</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
                 <th>角色</th><th>會員等級</th><th>狀態</th><th>違規</th><th>行為</th>
               </tr>
             </thead>
@@ -2646,12 +2664,11 @@
 <script src="/js/25-community.js?v=20260430-board-members" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
-<script src="/js/33-dm.js?v=20260429-pm-image-preview" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
 <script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
-<script src="/js/38-games.js?v=20260501-solo-time-ranking" defer></script>
+<script src="/js/38-games.js?v=20260501-1a2b-rank" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-024" defer></script>
 <script src="/js/55-economy.js?v=20260501-024" defer></script>

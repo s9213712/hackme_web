@@ -63,6 +63,63 @@ def test_record_security_event_normalizes_event_types(tmp_path):
     assert rows[1][0] == "permission_denied"
 
 
+def test_root_security_event_creates_root_notification(tmp_path):
+    db_path = tmp_path / "events.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE security_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            ip_address TEXT NOT NULL,
+            target_user TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username) VALUES (1, 'root')")
+    conn.execute("INSERT INTO users (id, username) VALUES (2, 'alice')")
+    conn.commit()
+    conn.close()
+
+    original_state = dict(security_events._STATE)
+    original_cleanup_at = security_events._LAST_EVENT_CLEANUP_AT
+    try:
+        security_events._LAST_EVENT_CLEANUP_AT = 10**12
+        security_events.configure_security_events_service(
+            get_db=_get_db_factory(str(db_path)),
+            get_system_settings=lambda: {},
+            audit=lambda *args, **kwargs: None,
+            is_ip_blocking_enabled=lambda: False,
+        )
+
+        security_events.record_security_event(
+            "csrf_fail",
+            "10.0.0.5",
+            target_user="alice",
+            detail="POST /api/example",
+        )
+    finally:
+        security_events._STATE.clear()
+        security_events._STATE.update(original_state)
+        security_events._LAST_EVENT_CLEANUP_AT = original_cleanup_at
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        note = conn.execute("SELECT * FROM notifications WHERE user_id=1 AND type='root_security_alert'").fetchone()
+        assert note is not None
+        assert note["title"] == "安全警訊"
+        assert "csrf_fail" in note["body"]
+    finally:
+        conn.close()
+
+
 def test_rate_limit_block_records_security_event(tmp_path):
     db_path = tmp_path / "rate-limit.db"
     conn = sqlite3.connect(db_path)

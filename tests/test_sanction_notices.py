@@ -9,7 +9,7 @@ def _db(path):
     return conn
 
 
-def test_admin_sanction_notice_creates_dm_notification_and_restore_context(tmp_path):
+def test_admin_sanction_notice_creates_notification_and_restore_context(tmp_path):
     conn = _db(tmp_path / "sanction.db")
     conn.executescript(
         """
@@ -51,13 +51,14 @@ def test_admin_sanction_notice_creates_dm_notification_and_restore_context(tmp_p
     )
     conn.commit()
 
-    dm = conn.execute("SELECT sender_user_id, recipient_user_id, body FROM direct_messages").fetchone()
-    assert dm["sender_user_id"] == 1
-    assert dm["recipient_user_id"] == 2
-    assert "你可以到「申覆」分頁提出申覆" in dm["body"]
-
-    note = conn.execute("SELECT user_id, type, title, link FROM notifications").fetchone()
-    assert dict(note) == {"user_id": 2, "type": "member_governance", "title": "會員權益變更通知", "link": "/appeals"}
+    dm_table = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='direct_messages'").fetchone()
+    assert dm_table is None
+    note = conn.execute("SELECT user_id, type, title, body, link FROM notifications").fetchone()
+    assert note["user_id"] == 2
+    assert note["type"] == "member_governance"
+    assert note["title"] == "會員權益變更通知"
+    assert note["link"] == "/appeals"
+    assert "你可以到「申覆」分頁提出申覆" in note["body"]
     context = conn.execute("SELECT points_ledger_uuid FROM admin_sanction_appeal_contexts WHERE violation_id=7").fetchone()
     assert context["points_ledger_uuid"] is None
 

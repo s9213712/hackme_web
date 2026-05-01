@@ -137,6 +137,72 @@ def test_account_sessions_list_marks_current_and_revokes_remote(tmp_path):
     assert current == 0
 
 
+def test_admin_users_include_online_status_from_active_sessions(tmp_path):
+    db_path = tmp_path / "admin-users-online.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (1, 'admin', 'active', 'manager')")
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (2, 'test', 'active', 'user')")
+    conn.execute(
+        "INSERT INTO sessions (user_id, token_hash, expires_at, is_revoked, last_seen, created_at) VALUES (2, 'tok', '2999-01-01T00:00:00', 0, ?, ?)",
+        ("2999-01-01T00:00:00", "2999-01-01T00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "admin", "role": "manager", "status": "active"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.get("/api/admin/users")
+
+    assert res.status_code == 200
+    users = {row["username"]: row for row in res.get_json()["users"]}
+    assert users["test"]["is_online"] is True
+    assert users["test"]["online_status"] == "online"
+    assert users["test"]["active_session_count"] == 1
+    assert users["admin"]["is_online"] is False
+
+
 def test_account_sessions_logout_all_can_keep_current(tmp_path):
     db_path = tmp_path / "sessions.db"
     _seed_db(db_path)

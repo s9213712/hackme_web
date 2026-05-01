@@ -3,6 +3,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+from services.notifications import create_root_notification_if_enabled
+
 _STATE = {
     "get_db": None,
     "get_system_settings": None,
@@ -19,6 +21,16 @@ _EVENT_RETENTION_DAYS = 7
 _EVENT_CLEANUP_INTERVAL_SECONDS = 300
 SECURITY_EVENT_TYPES = {
     "login_fail",
+    "ip_block",
+    "rate_limit",
+    "403_access",
+    "feature_disabled",
+    "csrf_fail",
+    "permission_denied",
+    "session_revoked",
+    "login_location_suspicious",
+}
+ROOT_NOTIFICATION_EVENT_TYPES = {
     "ip_block",
     "rate_limit",
     "403_access",
@@ -104,18 +116,28 @@ def record_security_event(event_type, ip, target_user=None, detail="", created_a
     if not callable(_STATE.get("get_db")):
         return
     _maybe_cleanup_old_events()
+    normalized_type = normalize_security_event_type(event_type)
     conn = _STATE["get_db"]()
     try:
         conn.execute(
             "INSERT INTO security_events (event_type, ip_address, target_user, detail, created_at) VALUES (?, ?, ?, ?, ?)",
             (
-                normalize_security_event_type(event_type),
+                normalized_type,
                 ip or "-",
                 target_user,
                 detail or "",
                 created_at or datetime.now().isoformat(),
             ),
         )
+        if normalized_type in ROOT_NOTIFICATION_EVENT_TYPES:
+            create_root_notification_if_enabled(
+                conn,
+                type="root_security_alert",
+                title="安全警訊",
+                body=f"{normalized_type} · ip={ip or '-'} · target={target_user or '-'} · {detail or '-'}",
+                link="/security",
+                once=True,
+            )
         conn.commit()
     except sqlite3.OperationalError:
         pass
