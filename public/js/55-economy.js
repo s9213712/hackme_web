@@ -2,9 +2,26 @@ let economyLedgerOffset = 0;
 let economyBlockCountdownTimer = null;
 let economyBlockSchedule = null;
 let economyInlineEventsBound = false;
+let economyAutoRefreshTimer = null;
+let economyAutoRefreshBusy = false;
+const ECONOMY_PAGE_STORAGE_KEY = "hackme_web:economy:active_page";
+let economyActivePage = (() => {
+  try {
+    return localStorage.getItem(ECONOMY_PAGE_STORAGE_KEY) || "balance";
+  } catch (_) {
+    return "balance";
+  }
+})();
 
 function economySetMsg(text, ok = true) {
   const el = $("economy-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function auditChainActionMsg(text, ok = true) {
+  const el = $("audit-chain-action-status");
   if (!el) return;
   el.textContent = text || "";
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
@@ -37,6 +54,58 @@ function stopEconomyBlockCountdown() {
 
 function canManageEconomyPoints() {
   return currentUser === "root" || currentRole === "manager" || currentRole === "super_admin";
+}
+
+function setEconomyActivePage(page, options = {}) {
+  const rootMode = currentUser === "root";
+  const chainAllowed = canManageEconomyPoints();
+  const nextPage = page === "chain" && chainAllowed ? "chain" : "balance";
+  economyActivePage = nextPage;
+  if (options.persist !== false) {
+    try {
+      localStorage.setItem(ECONOMY_PAGE_STORAGE_KEY, nextPage);
+    } catch (_) {}
+  }
+  const balancePage = $("economy-balance-page");
+  const chainPage = $("economy-chain-page");
+  if (balancePage) balancePage.classList.toggle("active", nextPage === "balance");
+  if (chainPage) chainPage.classList.toggle("active", chainAllowed && nextPage === "chain");
+  const balanceTab = $("tab-economy-balance");
+  const chainTab = $("tab-economy-chain");
+  if (balanceTab) {
+    balanceTab.classList.toggle("active", nextPage === "balance");
+    balanceTab.setAttribute("aria-selected", nextPage === "balance" ? "true" : "false");
+  }
+  if (chainTab) {
+    chainTab.style.display = chainAllowed ? "" : "none";
+    chainTab.textContent = rootMode ? "積分私有鏈" : "審核";
+    chainTab.classList.toggle("active", chainAllowed && nextPage === "chain");
+    chainTab.setAttribute("aria-selected", chainAllowed && nextPage === "chain" ? "true" : "false");
+  }
+  const title = $("economy-page-title");
+  if (title) {
+    if (!rootMode) title.textContent = nextPage === "chain" ? "積分審核" : "積分錢包";
+    else title.textContent = nextPage === "chain" ? "積分私有鏈" : "積分餘額";
+  }
+}
+
+function syncEconomySubpages(rootMode) {
+  if (!canManageEconomyPoints() && economyActivePage === "chain") economyActivePage = "balance";
+  setEconomyActivePage(economyActivePage, { persist: false });
+}
+
+function setEconomyRootLayout(rootMode) {
+  const rootVirtualCard = $("economy-root-virtual-card");
+  if (rootVirtualCard) rootVirtualCard.style.display = rootMode ? "" : "none";
+  const manualAdjustDetails = $("economy-manual-adjust-details");
+  if (manualAdjustDetails) {
+    manualAdjustDetails.style.display = rootMode ? "" : "none";
+    if (manualAdjustDetails.dataset.economyFoldInitialized !== "1") {
+      if (rootMode) manualAdjustDetails.removeAttribute("open");
+      else manualAdjustDetails.setAttribute("open", "");
+      manualAdjustDetails.dataset.economyFoldInitialized = "1";
+    }
+  }
 }
 
 function updateEconomyBlockCountdown() {
@@ -353,9 +422,10 @@ async function loadEconomyDashboard() {
     const rootMode = currentUser === "root";
     const canManagePoints = canManageEconomyPoints();
     const adminCard = $("economy-admin-card");
-    if ($("economy-page-title")) $("economy-page-title").textContent = rootMode ? "積分系統" : "積分錢包";
+    syncEconomySubpages(rootMode);
     if ($("economy-user-summary-grid")) $("economy-user-summary-grid").style.display = rootMode ? "none" : "";
     if ($("economy-user-ledger-card")) $("economy-user-ledger-card").style.display = rootMode ? "none" : "";
+    setEconomyRootLayout(rootMode);
     if (adminCard) adminCard.style.display = canManagePoints ? "" : "none";
     if (rootMode) {
       if ($("economy-chain-ok")) $("economy-chain-ok").textContent = "讀取中";
@@ -427,6 +497,7 @@ async function loadEconomyAdmin() {
     const adminLedgerList = $("economy-admin-ledger-list");
     const adjustPanel = $("economy-adjust-panel");
     if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";
+    setEconomyRootLayout(rootMode);
     if (adminTitle) adminTitle.textContent = rootMode ? "手動加減分與待審核" : "待審核獎勵";
     if (adminSub) {
       adminSub.textContent = rootMode
@@ -721,6 +792,7 @@ async function autoHandlePointsChainRecovery() {
       btn.textContent = "處理中...";
     }
     economySetMsg("正在驗證 PointsChain 並準備處理異常...");
+    auditChainActionMsg("正在處理 PointsChain 異常...");
     const json = await fetchEconomyJson("/root/points/chain/recovery/auto-handle", {
       method: "POST",
       body: JSON.stringify({ confirm: "AUTO HANDLE POINTSCHAIN" }),
@@ -728,14 +800,19 @@ async function autoHandlePointsChainRecovery() {
     await loadEconomyDashboard();
     if (json.action === "verified_clean") {
       economySetMsg(json.msg || "PointsChain 驗證正常");
+      auditChainActionMsg(json.msg || "PointsChain 驗證正常");
       setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || {}), true);
+      if (typeof loadAudit === "function") await loadAudit(auditPage || 0);
       return;
     }
     const resultMessage = formatEconomyRecoveryResult(json);
     economySetMsg(json.msg || resultMessage || "異常鏈處理完成", !!json.ok);
+    auditChainActionMsg(json.msg || resultMessage || "異常鏈處理完成", !!json.ok);
     setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || json.initial_verification || {}), !!json.ok);
+    if (typeof loadAudit === "function") await loadAudit(auditPage || 0);
   } catch (err) {
     economySetMsg(err.message || "一鍵處理異常鏈失敗", false);
+    auditChainActionMsg(err.message || "一鍵處理異常鏈失敗", false);
     setEconomyChainStatus(err.message || "一鍵處理異常鏈失敗", false);
     await loadEconomyRootReport();
   } finally {
@@ -792,6 +869,23 @@ function bindEconomyInlineEvents() {
     el.dataset.economyInlineBound = "1";
     el.addEventListener("click", handler);
   });
+  document.querySelectorAll("[data-economy-page]").forEach((tab) => {
+    if (tab.dataset.economyPageBound === "1") return;
+    tab.dataset.economyPageBound = "1";
+    tab.addEventListener("click", () => setEconomyActivePage(tab.dataset.economyPage || "balance"));
+  });
+  syncEconomySubpages(currentUser === "root");
+  if (!economyAutoRefreshTimer) {
+    economyAutoRefreshTimer = setInterval(async () => {
+      if (!currentUser || currentModuleTab !== "economy" || economyAutoRefreshBusy) return;
+      economyAutoRefreshBusy = true;
+      try {
+        await loadEconomyDashboard();
+      } finally {
+        economyAutoRefreshBusy = false;
+      }
+    }, 30000);
+  }
 }
 
 if (document.readyState === "loading") {

@@ -333,7 +333,7 @@ def test_invalid_comfyui_batch_limit_is_rejected():
     assert state["comfyui_max_batch_size"] == 1
 
 
-def test_admin_environment_exposes_paths_and_pid():
+def test_admin_environment_exposes_relative_paths_and_pid():
     app, _ = _admin_app()
     client = app.test_client()
 
@@ -343,6 +343,11 @@ def test_admin_environment_exposes_paths_and_pid():
     assert env["pid"] > 0
     assert env["base_dir"] == "."
     assert env["database_path"] == "missing.db"
+    assert env["log_dir"] == "."
+    assert env["chat_dir"] == "."
+    assert env["anchor_dir"] == "."
+    for key in ("base_dir", "database_path", "log_dir", "chat_dir", "anchor_dir"):
+        assert not str(env[key]).startswith("/")
 
 
 def test_effective_server_bind_falls_back_to_environment():

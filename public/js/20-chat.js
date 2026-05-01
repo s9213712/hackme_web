@@ -218,7 +218,11 @@ async function openChatRoom(roomId, autoPoll = true) {
     roomTitle.textContent = `${lock}${target.name}（#${target.id}）`;
   }
   const member = $("chat-room-member");
-  if (member) member.textContent = `持有者：${target.owner_username || "未知"}`;
+  if (member) {
+    const passwordState = target.join_password_required ? " · 需密碼" : "";
+    const memberCount = target.member_count ? ` · ${target.member_count} 人` : "";
+    member.textContent = `持有者：${target.owner_username || "未知"}${memberCount}${passwordState}`;
+  }
   await loadChatMessages(id, false);
   if (typeof loadContextAttachments === "function") {
     await loadContextAttachments("group_chat", id, "chat-attachment-list");
@@ -250,6 +254,12 @@ async function loadChatMessages(roomId, silent = false) {
         const lock = json.room.is_private ? "🔒 " : "";
         title.textContent = `${lock}${json.room.name}（#${json.room.id}）`;
       }
+      const member = $("chat-room-member");
+      if (member) {
+        const passwordState = json.room.join_password_required ? " · 需密碼" : "";
+        const memberCount = json.room.member_count ? ` · ${json.room.member_count} 人` : "";
+        member.textContent = `${memberCount.replace(/^ · /, "")}${passwordState}`;
+      }
     }
     renderChatMessages(Array.isArray(json.messages) ? json.messages : []);
     const warn = $("chat-room-warn");
@@ -264,6 +274,8 @@ async function loadChatMessages(roomId, silent = false) {
 async function createChatRoom() {
   const name = ($("chat-room-name")?.value || "").trim();
   const targetUser = ($("chat-room-target-user")?.value || "").trim();
+  const inviteUsernames = ($("chat-room-invite-users")?.value || "").trim();
+  const joinPassword = ($("chat-room-password")?.value || "");
 
   if (!name && !targetUser) {
     setChatMsg("chat-room-warn", "請輸入聊天室名稱或指定對象", false);
@@ -280,7 +292,12 @@ async function createChatRoom() {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ name: name || null, target_user: targetUser || null })
+    body: JSON.stringify({
+      name: name || null,
+      target_user: targetUser || null,
+      invite_usernames: inviteUsernames || null,
+      join_password: joinPassword || null
+    })
   });
   const raw = await res.text().catch(() => "");
   const json = (() => {
@@ -289,6 +306,8 @@ async function createChatRoom() {
   if (res.ok && json && json.ok) {
     $("chat-room-name").value = "";
     if ($("chat-room-target-user")) $("chat-room-target-user").value = "";
+    if ($("chat-room-invite-users")) $("chat-room-invite-users").value = "";
+    if ($("chat-room-password")) $("chat-room-password").value = "";
     await loadChatRooms();
     if (json.room && json.room.id) {
       await openChatRoom(json.room.id, true);
@@ -304,6 +323,7 @@ async function createChatRoom() {
 
 async function joinChatRoom() {
   const roomId = Number(($("chat-join-room-id")?.value || "").trim());
+  const password = ($("chat-join-password")?.value || "");
   if (!Number.isFinite(roomId) || roomId <= 0) {
     setChatMsg("chat-room-warn", "請輸入有效的聊天室 ID", false);
     return;
@@ -313,7 +333,8 @@ async function joinChatRoom() {
   const res = await apiFetch(API + "/chat/rooms/" + roomId + "/join", {
     method: "POST",
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" }
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ password })
   });
   const raw = await res.text().catch(() => "");
   const json = (() => {
@@ -321,6 +342,7 @@ async function joinChatRoom() {
   })();
   if (res.ok && json && json.ok) {
     if ($("chat-join-room-id")) $("chat-join-room-id").value = "";
+    if ($("chat-join-password")) $("chat-join-password").value = "";
     const roomExists = chatRooms.find((r) => r.id === roomId);
     await loadChatRooms();
     if (roomExists) {
@@ -333,6 +355,44 @@ async function joinChatRoom() {
     const fallback = (raw || "").split("\n")[0].trim();
     setChatMsg("chat-room-warn", `${res.ok ? "加入聊天室失敗" : "加入聊天室失敗（" + res.status + "）"} ${json.msg || fallback || "請稍後再試"}`, false);
   }
+}
+
+async function inviteChatRoomMembers() {
+  if (!selectedChatRoomId) {
+    setChatMsg("chat-room-warn", "請先選擇聊天室", false);
+    return;
+  }
+  const input = $("chat-room-invite-more-users");
+  const usernames = (input?.value || "").trim();
+  if (!usernames) {
+    setChatMsg("chat-room-warn", "請輸入要邀請的帳號", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + `/chat/rooms/${selectedChatRoomId}/invites`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ usernames })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (json.ok) {
+    if (input) input.value = "";
+    const invited = Array.isArray(json.invited) ? json.invited.join(", ") : "";
+    const missing = Array.isArray(json.missing) && json.missing.length ? `；找不到：${json.missing.join(", ")}` : "";
+    setChatMsg("chat-room-warn", `${json.msg || "邀請已送出"}${invited ? `：${invited}` : ""}${missing}`, true);
+    return;
+  }
+  setChatMsg("chat-room-warn", json.msg || "邀請失敗", false);
+}
+
+function exportChatRoom() {
+  if (!selectedChatRoomId) {
+    setChatMsg("chat-room-warn", "請先選擇聊天室", false);
+    return;
+  }
+  window.location.href = API + `/chat/rooms/${encodeURIComponent(selectedChatRoomId)}/export`;
 }
 
 async function sendChatMessage() {
@@ -417,16 +477,8 @@ async function openPmWithUser(targetUsername) {
     return;
   }
 
-  if (canAccessModule("dm") && typeof createDmThread === "function") {
-    switchModuleTab("dm");
-    const dmTargetInput = $("dm-target-user");
-    if (dmTargetInput) dmTargetInput.value = target;
-    await createDmThread();
-    return;
-  }
-
   if (!canAccessModule("chat")) {
-    flash($("admin-users-msg") || $("dm-warn") || $("chat-room-warn"), "站內信或聊天功能目前未啟用，請先由 root 在安全中心開啟。", false);
+    flash($("admin-users-msg") || $("chat-room-warn"), "聊天功能目前未啟用，請先由 root 在安全中心開啟。", false);
     return;
   }
 

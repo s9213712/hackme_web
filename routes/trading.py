@@ -1,4 +1,23 @@
+import json
+import time
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
 from flask import request
+
+
+BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+USDT_TO_POINTS_RATE = 1
+REFERENCE_PRICE_MARKETS = {
+    "BTC/POINTS": "BTCUSDT",
+    "BTC/USDT": "BTCUSDT",
+    "ETH/POINTS": "ETHUSDT",
+    "ETH/USDT": "ETHUSDT",
+}
+REFERENCE_PRICE_INTERVALS = {"1s", "1m", "5m", "15m", "1h", "4h", "1d"}
+REFERENCE_PRICE_CACHE = {}
+REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
 
 
 def register_trading_routes(app, deps):
@@ -66,6 +85,12 @@ def register_trading_routes(app, deps):
             status = 403
         return json_resp({"ok": False, "msg": msg}), status
 
+    def price_to_points(value):
+        return round(float(value) * USDT_TO_POINTS_RATE, 8)
+
+    def display_market_symbol(symbol):
+        return str(symbol or "").upper().replace("/POINTS", "/USDT")
+
     @app.route("/api/trading/markets", methods=["GET"])
     @require_csrf_safe
     def trading_markets():
@@ -81,6 +106,84 @@ def register_trading_routes(app, deps):
         if err:
             return err
         return json_resp({"ok": True, "trading": trading_service.user_dashboard(user_id=actor["id"])})
+
+    @app.route("/api/trading/reference-prices", methods=["GET"])
+    @require_csrf_safe
+    def trading_reference_prices():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        market_symbol = str(request.args.get("market") or "BTC/USDT").strip().upper()
+        binance_symbol = REFERENCE_PRICE_MARKETS.get(market_symbol)
+        if not binance_symbol:
+            return json_resp({"ok": False, "msg": "不支援的參考價格市場"}), 400
+        interval = str(request.args.get("interval") or "1s").strip()
+        if interval not in REFERENCE_PRICE_INTERVALS:
+            return json_resp({"ok": False, "msg": "不支援的參考價格週期"}), 400
+        try:
+            limit = int(request.args.get("limit") or 60)
+        except Exception:
+            return json_resp({"ok": False, "msg": "參考價格筆數格式錯誤"}), 400
+        limit = max(12, min(limit, 96))
+        cache_key = (binance_symbol, interval, limit)
+        now = time.monotonic()
+        cached = REFERENCE_PRICE_CACHE.get(cache_key)
+        if cached and now - cached["cached_at"] <= REFERENCE_PRICE_CACHE_TTL_SECONDS:
+            return json_resp(cached["payload"])
+        query = urlencode({"symbol": binance_symbol, "interval": interval, "limit": limit})
+        req = Request(
+            f"{BINANCE_KLINES_URL}?{query}",
+            headers={"User-Agent": "hackme_web/1.0 reference-price-proxy"},
+        )
+        try:
+            with urlopen(req, timeout=6) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return json_resp({"ok": False, "msg": "Binance 參考價格讀取失敗"}), 502
+        if not isinstance(payload, list):
+            return json_resp({"ok": False, "msg": "Binance 參考價格格式錯誤"}), 502
+        candles = []
+        for item in payload:
+            try:
+                open_time = int(item[0])
+                open_price = float(item[1])
+                high_price = float(item[2])
+                low_price = float(item[3])
+                close_price = float(item[4])
+            except Exception:
+                continue
+            if min(open_price, high_price, low_price, close_price) <= 0:
+                continue
+            candle = {
+                "time": open_time,
+                "time_iso": datetime.fromtimestamp(open_time / 1000, tz=timezone.utc).isoformat(),
+                "open_usdt": open_price,
+                "high_usdt": high_price,
+                "low_usdt": low_price,
+                "close_usdt": close_price,
+                "open_points": price_to_points(open_price),
+                "high_points": price_to_points(high_price),
+                "low_points": price_to_points(low_price),
+                "close_points": price_to_points(close_price),
+                "price_usdt": close_price,
+                "price_points": price_to_points(close_price),
+            }
+            candles.append(candle)
+        if not candles:
+            return json_resp({"ok": False, "msg": "Binance 參考價格沒有可用資料"}), 502
+        result = {
+            "ok": True,
+            "source": "binance_public_api",
+            "market": market_symbol,
+            "display_market": display_market_symbol(market_symbol),
+            "symbol": binance_symbol,
+            "interval": interval,
+            "usdt_to_points_rate": USDT_TO_POINTS_RATE,
+            "candles": candles,
+            "points": candles,
+        }
+        REFERENCE_PRICE_CACHE[cache_key] = {"cached_at": now, "payload": result}
+        return json_resp(result)
 
     @app.route("/api/trading/orders", methods=["POST"])
     @require_csrf
@@ -99,6 +202,7 @@ def register_trading_routes(app, deps):
                 order_type=data.get("order_type"),
                 quantity=data.get("quantity"),
                 limit_price_points=data.get("limit_price_points"),
+                emergency_close=bool(data.get("emergency_close")),
             )
             audit(
                 "TRADING_ORDER_SUBMITTED",
@@ -182,6 +286,79 @@ def register_trading_routes(app, deps):
                 success=True,
                 ua=get_ua(),
                 detail=f"source_user_id={data.get('source_user_id')}, amount={data.get('amount_points')}, reason=ROOT_RESERVE_ALLOCATION",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/simulated-balance/reset", methods=["POST"])
+    @require_csrf
+    def root_trading_simulated_balance_reset():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.reset_root_simulated_balance(actor=actor)
+            audit(
+                "TRADING_ROOT_SIM_BALANCE_RESET",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=(
+                    f"balance={result.get('funding', {}).get('available_points')}, "
+                    f"deleted={result.get('deleted', {})}"
+                ),
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/contracts", methods=["POST"])
+    @require_csrf
+    def root_trading_contract_open():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.open_root_contract_position(
+                actor=actor,
+                market_symbol=data.get("market_symbol"),
+                side=data.get("side"),
+                quantity=data.get("quantity"),
+                leverage=data.get("leverage"),
+                margin_points=data.get("margin_points"),
+            )
+            audit(
+                "TRADING_ROOT_CONTRACT_OPENED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"position_uuid={result.get('position', {}).get('position_uuid')}, market={data.get('market_symbol')}, side={data.get('side')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/contracts/<position_uuid>/close", methods=["POST"])
+    @require_csrf
+    def root_trading_contract_close(position_uuid):
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            result = trading_service.close_root_contract_position(actor=actor, position_uuid=position_uuid)
+            audit(
+                "TRADING_ROOT_CONTRACT_CLOSED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"position_uuid={position_uuid}, pnl={result.get('pnl_points')}",
             )
             return json_resp(result)
         except Exception as exc:

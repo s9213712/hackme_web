@@ -184,6 +184,7 @@ def game_schema_sql():
         week_key TEXT NOT NULL,
         difficulty TEXT NOT NULL DEFAULT 'standard',
         puzzle_id TEXT,
+        guess_count INTEGER NOT NULL DEFAULT 0,
         raw_elapsed_ms INTEGER NOT NULL,
         penalty_seconds INTEGER NOT NULL DEFAULT 0,
         elapsed_ms INTEGER NOT NULL,
@@ -217,6 +218,7 @@ def ensure_game_schema(conn):
                 week_key TEXT NOT NULL,
                 difficulty TEXT NOT NULL DEFAULT 'standard',
                 puzzle_id TEXT,
+                guess_count INTEGER NOT NULL DEFAULT 0,
                 raw_elapsed_ms INTEGER NOT NULL,
                 penalty_seconds INTEGER NOT NULL DEFAULT 0,
                 elapsed_ms INTEGER NOT NULL,
@@ -228,15 +230,22 @@ def ensure_game_schema(conn):
             );
             INSERT INTO game_solo_scores (
                 id, game_key, user_id, week_key, difficulty, puzzle_id,
-                raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+                guess_count, raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
             )
             SELECT id, game_key, user_id, week_key, difficulty, puzzle_id,
-                   raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+                   0, raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
             FROM game_solo_scores_old;
             DROP TABLE game_solo_scores_old;
             CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
+            CREATE INDEX IF NOT EXISTS idx_game_solo_scores_guesses_rank ON game_solo_scores(game_key, week_key, difficulty, guess_count, elapsed_ms);
             """
         )
+    solo_cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_solo_scores)").fetchall()}
+    if "guess_count" not in solo_cols:
+        conn.execute("ALTER TABLE game_solo_scores ADD COLUMN guess_count INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_solo_scores_guesses_rank ON game_solo_scores(game_key, week_key, difficulty, guess_count, elapsed_ms)"
+    )
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN white_deleted_at TEXT")
@@ -246,6 +255,24 @@ def ensure_game_schema(conn):
         conn.execute("ALTER TABLE game_matches ADD COLUMN human_side TEXT NOT NULL DEFAULT 'white'")
     if "computer_difficulty" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN computer_difficulty TEXT NOT NULL DEFAULT 'easy'")
+
+
+def user_filter_columns(conn):
+    try:
+        return {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    except Exception:
+        return set()
+
+
+def active_user_where(conn, alias=""):
+    cols = user_filter_columns(conn)
+    prefix = f"{alias}." if alias else ""
+    clauses = []
+    if "status" in cols:
+        clauses.append(f"COALESCE({prefix}status, 'active')='active'")
+    if "deleted_at" in cols:
+        clauses.append(f"COALESCE({prefix}deleted_at, '')=''")
+    return " AND ".join(clauses) if clauses else "1=1"
 
 
 def serialize_match(row, actor_id=None):
@@ -501,11 +528,12 @@ def register_games_routes(app, deps):
         conn = get_db()
         try:
             ensure_game_schema(conn)
+            active_filter = active_user_where(conn)
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, username, role
                 FROM users
-                WHERE id<>? AND COALESCE(deleted_at, '')='' AND COALESCE(status, 'active')='active'
+                WHERE id<>? AND {active_filter}
                 ORDER BY username COLLATE NOCASE
                 LIMIT 200
                 """,
@@ -553,8 +581,9 @@ def register_games_routes(app, deps):
         conn = get_db()
         try:
             ensure_game_schema(conn)
+            active_filter = active_user_where(conn)
             opponent_row = conn.execute(
-                "SELECT id, username FROM users WHERE username=? AND COALESCE(status, 'active')='active' AND COALESCE(deleted_at, '')=''",
+                f"SELECT id, username FROM users WHERE username=? AND {active_filter}",
                 (username,),
             ).fetchone()
             if not opponent_row:
@@ -954,12 +983,13 @@ def register_games_routes(app, deps):
         conn = get_db()
         try:
             ensure_game_schema(conn)
+            rank_mode = "guesses_then_time" if game_key == "1a2b" else "time_asc"
             return json_resp({
                 "ok": True,
                 "game_key": game_key,
                 "week": week,
                 "difficulty": difficulty,
-                "rank_mode": "time_asc",
+                "rank_mode": rank_mode,
                 "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
             })
         finally:
@@ -994,6 +1024,22 @@ def register_games_routes(app, deps):
             return json_resp({"ok": False, "msg": "不支援的難度"}), 400
         if game_key in {"sudoku", "1a2b"}:
             difficulty = "standard"
+        try:
+            guess_count = int(data.get("guess_count") or 0)
+        except Exception:
+            return json_resp({"ok": False, "msg": "猜測次數格式錯誤"}), 400
+        if game_key == "1a2b":
+            if guess_count <= 0 or guess_count > 1000:
+                return json_resp({"ok": False, "msg": "猜測次數超出合理範圍"}), 400
+            if elapsed_ms > 5 * 60 * 1000:
+                return json_resp({
+                    "ok": True,
+                    "ranked": False,
+                    "msg": "1A2B 超過 5 分鐘完成，不列入排行榜",
+                    "leaderboard": [],
+                })
+        elif guess_count < 0:
+            return json_resp({"ok": False, "msg": "猜測次數格式錯誤"}), 400
         puzzle_id = str(data.get("puzzle_id") or "")[:64]
         week = current_week_key()
         now = utc_now()
@@ -1004,10 +1050,10 @@ def register_games_routes(app, deps):
                 """
                 INSERT INTO game_solo_scores (
                     game_key, user_id, week_key, difficulty, puzzle_id,
-                    raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    guess_count, raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (game_key, int(actor["id"]), week, difficulty, puzzle_id, raw_elapsed_ms, penalty_seconds, elapsed_ms, now),
+                (game_key, int(actor["id"]), week, difficulty, puzzle_id, guess_count, raw_elapsed_ms, penalty_seconds, elapsed_ms, now),
             )
             conn.commit()
             audit(
@@ -1016,7 +1062,7 @@ def register_games_routes(app, deps):
                 user=actor["username"],
                 success=True,
                 ua=get_ua(),
-                detail=f"game_key={game_key},score_id={cur.lastrowid},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds}",
+                detail=f"game_key={game_key},score_id={cur.lastrowid},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds},guess_count={guess_count}",
             )
             return json_resp({
                 "ok": True,
@@ -1071,13 +1117,19 @@ def leaderboard_rows(conn, week):
 
 
 def solo_leaderboard_rows(conn, game_key, week, difficulty):
+    best_order = "s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC"
+    final_order = "best.elapsed_ms ASC, attempts.attempts ASC, u.username COLLATE NOCASE ASC"
+    if game_key == "1a2b":
+        best_order = "CASE WHEN s2.guess_count > 0 THEN s2.guess_count ELSE 999999 END ASC, s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC"
+        final_order = "CASE WHEN best.guess_count > 0 THEN best.guess_count ELSE 999999 END ASC, best.elapsed_ms ASC, u.username COLLATE NOCASE ASC"
     rows = conn.execute(
-        """
+        f"""
         SELECT best.user_id,
                u.username,
                best.elapsed_ms,
                best.raw_elapsed_ms,
                best.penalty_seconds,
+               best.guess_count,
                attempts.attempts,
                best.created_at AS latest_at
         FROM game_solo_scores s
@@ -1088,7 +1140,7 @@ def solo_leaderboard_rows(conn, game_key, week, difficulty):
               AND s2.week_key=s.week_key
               AND s2.difficulty=s.difficulty
               AND s2.user_id=s.user_id
-            ORDER BY s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC
+            ORDER BY {best_order}
             LIMIT 1
         )
         JOIN (
@@ -1099,8 +1151,8 @@ def solo_leaderboard_rows(conn, game_key, week, difficulty):
         ) attempts ON attempts.user_id=best.user_id
         JOIN users u ON u.id=best.user_id
         WHERE s.game_key=? AND s.week_key=? AND s.difficulty=?
-        GROUP BY best.id, best.user_id, u.username, best.elapsed_ms, best.raw_elapsed_ms, best.penalty_seconds, attempts.attempts, best.created_at
-        ORDER BY best.elapsed_ms ASC, attempts.attempts ASC, u.username COLLATE NOCASE ASC
+        GROUP BY best.id, best.user_id, u.username, best.elapsed_ms, best.raw_elapsed_ms, best.penalty_seconds, best.guess_count, attempts.attempts, best.created_at
+        ORDER BY {final_order}
         LIMIT 50
         """,
         (game_key, week, difficulty, game_key, week, difficulty),

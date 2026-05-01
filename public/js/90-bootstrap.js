@@ -3,7 +3,6 @@ function bindUiEvents() {
   const tabLogin    = $("tab-login");
   const tabRegister = $("tab-register");
   const tabModuleChat = $("tab-module-chat");
-  const tabModuleDm = $("tab-module-dm");
   const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
@@ -32,6 +31,7 @@ function bindUiEvents() {
   const tabPasswordResets = $("tab-password-resets");
   const tabViol     = $("tab-violations");
   const tabGovernance = $("tab-governance");
+  const tabNotices = $("tab-notices");
   const tabAppeals  = $("tab-appeals");
   const tabReports  = $("tab-reports");
   const liBtn       = $("li-btn");
@@ -59,6 +59,8 @@ function bindUiEvents() {
   const violRefresh  = $("violations-refresh");
   const governanceRefresh = $("governance-refresh");
   const governanceCreate = $("governance-create-proposal");
+  const adminNoticeTemplate = $("admin-notice-template");
+  const adminNoticeSendBtn = $("admin-notice-send-btn");
   const passwordResetReviewRefresh = $("password-reset-review-refresh");
   const passwordResetReviewStatus = $("password-reset-review-status");
   const appealSubmit = $("appeal-submit-btn");
@@ -112,16 +114,11 @@ function bindUiEvents() {
   const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
   const chatSendBtn = $("chat-send-btn");
   const chatFriendAddBtn = $("chat-friend-add-btn");
+  const chatRoomInviteBtn = $("chat-room-invite-btn");
+  const chatRoomExportBtn = $("chat-room-export-btn");
   const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
   const chatAttachmentExistingBtn = $("chat-attachment-existing-btn");
   const chatInput = $("chat-message-input");
-  const dmCreateBtn = $("dm-create-thread-btn");
-  const dmRefreshBtn = $("dm-refresh-btn");
-  const dmSendBtn = $("dm-send-btn");
-  const dmAttachmentUploadBtn = $("dm-attachment-upload-btn");
-  const dmAttachmentExistingBtn = $("dm-attachment-existing-btn");
-  const dmInput = $("dm-message-input");
-  const dmBlockBtn = $("dm-block-user-btn");
   const communityAnnouncementBtn = $("community-announcement-submit");
   const communityAnnouncementOpenBtn = $("community-announcement-open-btn");
   const communityAnnouncementCancelBtn = $("community-announcement-cancel-btn");
@@ -193,7 +190,6 @@ function bindUiEvents() {
   if (tabLogin)    tabLogin.addEventListener("click",    () => showTab("login"));
   if (tabRegister) tabRegister.addEventListener("click", () => showTab("register"));
   if (tabModuleChat) tabModuleChat.addEventListener("click", () => switchModuleTab("chat"));
-  if (tabModuleDm) tabModuleDm.addEventListener("click", () => switchModuleTab("dm"));
   if (tabModuleAnnouncements) tabModuleAnnouncements.addEventListener("click", () => switchModuleTab("announcements"));
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
@@ -222,6 +218,7 @@ function bindUiEvents() {
   if (tabPasswordResets) tabPasswordResets.addEventListener("click", () => switchAdminTab("password-resets"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
   if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
+  if (tabNotices) tabNotices.addEventListener("click", () => switchAdminTab("notices"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
@@ -257,17 +254,13 @@ function bindUiEvents() {
   });
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
   if (chatFriendAddBtn) chatFriendAddBtn.addEventListener("click", addChatFriend);
+  if (chatRoomInviteBtn) chatRoomInviteBtn.addEventListener("click", inviteChatRoomMembers);
+  if (chatRoomExportBtn) chatRoomExportBtn.addEventListener("click", exportChatRoom);
   document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
     btn.addEventListener("click", () => sendChatSticker(btn.dataset.chatSticker || ""));
   });
   if (chatAttachmentUploadBtn) chatAttachmentUploadBtn.addEventListener("click", uploadChatAttachment);
   if (chatAttachmentExistingBtn) chatAttachmentExistingBtn.addEventListener("click", attachExistingChatFile);
-  if (dmCreateBtn) dmCreateBtn.addEventListener("click", createDmThread);
-  if (dmRefreshBtn) dmRefreshBtn.addEventListener("click", loadDmThreads);
-  if (dmSendBtn) dmSendBtn.addEventListener("click", sendDmMessage);
-  if (dmAttachmentUploadBtn) dmAttachmentUploadBtn.addEventListener("click", uploadDmAttachment);
-  if (dmAttachmentExistingBtn) dmAttachmentExistingBtn.addEventListener("click", attachExistingDmFile);
-  if (dmBlockBtn) dmBlockBtn.addEventListener("click", blockSelectedDmUser);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
   if (communityAnnouncementOpenBtn) communityAnnouncementOpenBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(true));
   if (communityAnnouncementCancelBtn) communityAnnouncementCancelBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(false));
@@ -383,13 +376,6 @@ function bindUiEvents() {
       sendChatMessage();
     }
   });
-  if (dmInput) dmInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      sendDmMessage();
-    }
-  });
-
   // Audit pagination
   if (auditRefresh) auditRefresh.addEventListener("click", () => loadAudit(auditPage));
   if ($("audit-prev")) $("audit-prev").addEventListener("click", () => loadAudit(Math.max(0, auditPage - 1)));
@@ -422,6 +408,8 @@ function bindUiEvents() {
   if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
   if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
   if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
+  if (adminNoticeTemplate) adminNoticeTemplate.addEventListener("change", applyAdminNoticeTemplate);
+  if (adminNoticeSendBtn) adminNoticeSendBtn.addEventListener("click", sendAdminNotice);
   if ($("governance-action-type")) $("governance-action-type").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-target-user-id")) $("governance-target-user-id").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);

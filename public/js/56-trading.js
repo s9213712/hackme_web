@@ -6,8 +6,18 @@ let tradingState = {
   orders: [],
   fills: [],
   rootReport: null,
+  referencePrices: null,
 };
 let tradingEventsBound = false;
+let tradingReferenceAbort = null;
+let tradingReferenceAutoTimer = null;
+let tradingReferenceAutoBusy = false;
+let tradingReferenceChartAutoTimer = null;
+let tradingReferenceChartAutoBusy = false;
+let tradingReferenceChartModel = null;
+let tradingReferenceHoverIndex = null;
+let tradingDashboardAutoTimer = null;
+let tradingDashboardAutoBusy = false;
 
 function tradingSetMsg(text, ok = true) {
   const msg = $("trading-msg");
@@ -34,13 +44,248 @@ function selectedTradingMarket() {
   return tradingState.markets.find((market) => market.symbol === symbol) || tradingState.markets[0] || null;
 }
 
+function tradingDisplaySymbol(symbol) {
+  return String(symbol || "").replace("/POINTS", "/USDT");
+}
+
+function formatTradingPointsValue(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "-";
+  return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function tradingNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function currentTradingPosition(marketSymbol) {
+  return tradingState.positions.find((row) => row.market_symbol === marketSymbol) || null;
+}
+
+function tradingOrderDraftEstimate() {
+  const market = selectedTradingMarket();
+  if (!market) return { ok: false, blocking: true, message: "沒有可用交易市場" };
+  const side = $("trading-side")?.value || "buy";
+  const orderType = $("trading-order-type")?.value || "market";
+  const quantity = tradingNumber($("trading-quantity")?.value, 0);
+  const limitPrice = tradingNumber($("trading-limit-price")?.value, 0);
+  const price = orderType === "limit" ? limitPrice : tradingNumber(market.manual_price_points, 0);
+  const feeRate = tradingNumber(market.fee_bps, 0) / 10000;
+  if (!quantity || quantity <= 0) {
+    return { ok: false, blocking: false, message: "輸入數量後顯示預估金額" };
+  }
+  if (!price || price <= 0) {
+    return { ok: false, blocking: true, message: orderType === "limit" ? "請輸入有效限價" : "目前市場價格不可用，暫停下單" };
+  }
+  const notional = quantity * price;
+  const fee = Math.max(0, notional * feeRate);
+  const funding = tradingState.funding || {};
+  const availablePoints = tradingNumber(funding.available_points, 0);
+  const position = currentTradingPosition(market.symbol);
+  const positionQuantity = tradingNumber(position?.quantity, 0);
+  const lockedQuantity = tradingNumber(position?.locked_quantity, 0);
+  const sellableQuantity = Math.max(0, positionQuantity - lockedQuantity);
+  if (side === "buy") {
+    const total = notional + fee;
+    return {
+      ok: total <= availablePoints,
+      blocking: total > availablePoints,
+      side,
+      quantity,
+      price,
+      notional,
+      fee,
+      total,
+      availablePoints,
+      message: total > availablePoints
+        ? `買入預估 ${formatTradingPointsValue(total)} 點（含手續費 ${formatTradingPointsValue(fee)}），超過可用 ${formatTradingPointsValue(availablePoints)} 點`
+        : `買入預估 ${formatTradingPointsValue(total)} 點（成交 ${formatTradingPointsValue(notional)} + 手續費 ${formatTradingPointsValue(fee)}）`,
+    };
+  }
+  const net = Math.max(0, notional - fee);
+  return {
+    ok: quantity <= sellableQuantity,
+    blocking: quantity > sellableQuantity,
+    side,
+    quantity,
+    price,
+    notional,
+    fee,
+    total: net,
+    sellableQuantity,
+    message: quantity > sellableQuantity
+      ? `賣出 ${formatTradingPointsValue(quantity)} 超過可賣現貨 ${formatTradingPointsValue(sellableQuantity)}`
+      : `賣出預估收入 ${formatTradingPointsValue(net)} 點（成交 ${formatTradingPointsValue(notional)} - 手續費 ${formatTradingPointsValue(fee)}）`,
+  };
+}
+
+function updateTradingOrderEstimate() {
+  const estimate = tradingOrderDraftEstimate();
+  const target = $("trading-order-estimate");
+  const submitBtn = $("trading-submit-order-btn");
+  if (target) {
+    target.textContent = estimate.message || "";
+    target.style.color = estimate.blocking ? "#ff6b7a" : "var(--muted)";
+  }
+  if (submitBtn) submitBtn.disabled = !!estimate.blocking;
+  return estimate;
+}
+
+function syncTradingOrderSideTheme() {
+  const side = $("trading-side")?.value === "sell" ? "sell" : "buy";
+  const form = $("trading-order-form");
+  const submitBtn = $("trading-submit-order-btn");
+  if (form) {
+    form.classList.toggle("trading-order-buy", side === "buy");
+    form.classList.toggle("trading-order-sell", side === "sell");
+  }
+  if (submitBtn) {
+    submitBtn.classList.toggle("trading-submit-buy", side === "buy");
+    submitBtn.classList.toggle("trading-submit-sell", side === "sell");
+    submitBtn.textContent = side === "buy" ? "買入下單" : "賣出下單";
+  }
+}
+
+function rootVirtualSpotValue(positions = [], markets = []) {
+  const marketMap = new Map(markets.map((market) => [market.symbol, Number(market.manual_price_points || 0)]));
+  return positions.reduce((total, row) => {
+    const quantity = Number(row.quantity || 0);
+    const price = marketMap.get(row.market_symbol) || 0;
+    if (!Number.isFinite(quantity) || !Number.isFinite(price)) return total;
+    return total + (quantity * price);
+  }, 0);
+}
+
+function tradingPositionLabel(row) {
+  return `${tradingDisplaySymbol(row.market_symbol)} ${formatTradingPointsValue(row.quantity || 0)}`;
+}
+
+function economySpotMarkets(markets = []) {
+  const desiredAssets = ["BTC", "ETH"];
+  return desiredAssets.map((asset) => (
+    markets.find((market) => String(market.base_asset || "").toUpperCase() === asset)
+    || markets.find((market) => String(market.symbol || "").toUpperCase().startsWith(`${asset}/`))
+    || { symbol: `${asset}/POINTS`, base_asset: asset, manual_price_points: 0, fee_bps: 0, price_source: "-" }
+  ));
+}
+
+function spotPositionNumber(position, key) {
+  return tradingNumber(position?.[key], 0);
+}
+
+function spotPositionTotalQuantity(position) {
+  return spotPositionNumber(position, "quantity") + spotPositionNumber(position, "locked_quantity");
+}
+
+function tradingSpotPnl(position, market) {
+  const quantity = spotPositionTotalQuantity(position);
+  const costBasis = tradingSpotCostBasis(position, market);
+  const currentValue = tradingSpotCurrentValue(position, market);
+  if (!quantity || !costBasis || !currentValue) return 0;
+  return currentValue - costBasis;
+}
+
+function tradingSpotFee(value, market, multiplier = 1) {
+  const feeRate = tradingNumber(market?.fee_bps, 0) * Number(multiplier || 1) / 10000;
+  return Math.max(0, Number(value || 0) * feeRate);
+}
+
+function tradingSpotCurrentValue(position, market) {
+  const quantity = spotPositionTotalQuantity(position);
+  const currentPrice = tradingNumber(market?.manual_price_points, 0);
+  return quantity > 0 && currentPrice > 0 ? quantity * currentPrice : 0;
+}
+
+function tradingSpotCostBasis(position, market) {
+  const quantity = spotPositionTotalQuantity(position);
+  const avgCost = spotPositionNumber(position, "avg_cost_points");
+  const currentValue = tradingSpotCurrentValue(position, market);
+  if (!quantity || !avgCost) return 0;
+  const buyNotional = quantity * avgCost;
+  const buyFeeEstimate = tradingSpotFee(buyNotional, market);
+  const sellFeeEstimate = tradingSpotFee(currentValue, market);
+  return buyNotional + buyFeeEstimate + sellFeeEstimate;
+}
+
+function economySpotRowForSymbol(symbol) {
+  return Array.from(document.querySelectorAll("[data-economy-spot-row]"))
+    .find((row) => row.dataset.economySpotRow === symbol) || null;
+}
+
+function renderEconomySpotPositionDetails(positions = [], markets = []) {
+  const list = $("economy-spot-position-detail-list");
+  if (!list) return;
+  const positionMap = new Map(positions.map((row) => [row.market_symbol, row]));
+  const rows = economySpotMarkets(markets);
+  list.innerHTML = rows.map((market) => {
+    const symbol = market.symbol;
+    const position = positionMap.get(symbol) || null;
+    const availableQuantity = spotPositionNumber(position, "quantity");
+    const locked = spotPositionNumber(position, "locked_quantity");
+    const quantity = availableQuantity + locked;
+    const sellable = Math.max(0, availableQuantity);
+    const currentPrice = tradingNumber(market.manual_price_points, 0);
+    const costBasis = tradingSpotCostBasis(position, market);
+    const currentValue = tradingSpotCurrentValue(position, market);
+    const pnl = tradingSpotPnl(position, market);
+    const pnlClass = pnl > 0 ? "positive" : (pnl < 0 ? "negative" : "");
+    return `
+      <div class="trading-spot-row" data-economy-spot-row="${sanitize(symbol)}" data-sellable="${sanitize(String(sellable))}">
+        <div>
+          <strong>${sanitize(tradingDisplaySymbol(symbol))}</strong>
+          <div class="drive-card-sub">${sanitize(market.price_source || "-")}</div>
+        </div>
+        <div class="trading-spot-metric">
+          <span>現貨數</span>
+          <b>${formatTradingPointsValue(quantity)}</b>
+          <small class="drive-card-sub">可賣 ${formatTradingPointsValue(sellable)}${locked ? ` · 鎖定 ${formatTradingPointsValue(locked)}` : ""}</small>
+        </div>
+        <div class="trading-spot-metric">
+          <span>成本價（總額）</span>
+          <b>${costBasis ? formatTradingPointsValue(costBasis) : "-"}</b>
+          <small class="drive-card-sub">含買入手續費與預估賣出手續費</small>
+        </div>
+        <div class="trading-spot-metric">
+          <span>目前部位價值</span>
+          <b>${currentValue ? formatTradingPointsValue(currentValue) : "-"}</b>
+          <small class="drive-card-sub">現價 ${currentPrice ? formatTradingPointsValue(currentPrice) : "-"}</small>
+        </div>
+        <div class="trading-spot-metric">
+          <span>盈虧</span>
+          <b class="trading-spot-pnl ${pnlClass}">${pnl >= 0 ? "+" : ""}${formatTradingPointsValue(pnl)} 點</b>
+        </div>
+        <div class="trading-spot-actions">
+          <div class="field">
+            <label>賣出數量</label>
+            <input type="number" min="0" step="0.00000001" placeholder="${sellable ? formatTradingPointsValue(sellable) : "0"}" data-economy-spot-qty="${sanitize(symbol)}" />
+          </div>
+          <div class="field">
+            <label>限價</label>
+            <input type="number" min="1" step="1" placeholder="${currentPrice ? formatTradingPointsValue(currentPrice) : "-"}" data-economy-spot-price="${sanitize(symbol)}" />
+          </div>
+          <button class="btn" type="button" data-economy-spot-limit="${sanitize(symbol)}" ${sellable <= 0 ? "disabled" : ""}>確認賣出</button>
+          <button class="btn btn-danger" type="button" data-economy-spot-market-close="${sanitize(symbol)}" ${sellable <= 0 ? "disabled" : ""}>市價平倉（2x費）</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  list.querySelectorAll("[data-economy-spot-limit]").forEach((btn) => {
+    btn.addEventListener("click", () => submitEconomySpotSell(btn.dataset.economySpotLimit || "", "limit"));
+  });
+  list.querySelectorAll("[data-economy-spot-market-close]").forEach((btn) => {
+    btn.addEventListener("click", () => submitEconomySpotSell(btn.dataset.economySpotMarketClose || "", "market"));
+  });
+}
+
 function renderTradingMarketOptions() {
   const select = $("trading-market-select");
   const rootSelect = $("trading-root-market-select");
+  const contractSelect = $("trading-contract-market-select");
   const options = tradingState.markets.length
-    ? tradingState.markets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(market.symbol)} · ${Number(market.manual_price_points || 0)} 點</option>`).join("")
+    ? tradingState.markets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(tradingDisplaySymbol(market.symbol))}</option>`).join("")
     : `<option value="">沒有可用市場</option>`;
-  [select, rootSelect].forEach((target) => {
+  [select, rootSelect, contractSelect].forEach((target) => {
     if (!target) return;
     const previous = target.value;
     target.innerHTML = options;
@@ -50,8 +295,27 @@ function renderTradingMarketOptions() {
 
 function renderTradingSummary() {
   const market = selectedTradingMarket();
+  const funding = tradingState.funding || {};
+  const orderForm = $("trading-order-form");
+  const submitBtn = $("trading-submit-order-btn");
+  const availabilityNote = $("trading-availability-note");
+  const contractCard = $("trading-root-contract-card");
+  if (orderForm) orderForm.style.display = "";
+  if (submitBtn) submitBtn.disabled = false;
+  if (contractCard) contractCard.style.display = currentUser === "root" ? "" : "none";
+  if (availabilityNote) {
+    availabilityNote.textContent = currentUser === "root"
+      ? "root 可使用現貨與合約模擬交易；root 以外用戶目前僅開放現貨。"
+      : "目前僅對 root 以外用戶開放 BTC/USDT、ETH/USDT 現貨。";
+  }
+  if ($("trading-funding-available")) $("trading-funding-available").textContent = funding.available_points != null ? String(Number(funding.available_points || 0)) : "-";
+  if ($("trading-funding-mode")) {
+    $("trading-funding-mode").textContent = funding.mode === "root_simulated"
+      ? `root 模擬資金 · 鎖定 ${Number(funding.locked_points || 0)}`
+      : `PointsChain 錢包 · 鎖定 ${Number(funding.locked_points || 0)}`;
+  }
   if ($("trading-current-price")) $("trading-current-price").textContent = market ? String(Number(market.manual_price_points || 0)) : "-";
-  if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${market.symbol} · ${market.price_source || "manual_root"}` : "-";
+  if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "manual_root"}` : "-";
   if ($("trading-fee-bps")) $("trading-fee-bps").textContent = market ? String(Number(market.fee_bps || 0)) : "-";
   const position = market ? tradingState.positions.find((row) => row.market_symbol === market.symbol) : null;
   if ($("trading-position-quantity")) $("trading-position-quantity").textContent = position ? sanitize(position.quantity || "0") : "0";
@@ -59,6 +323,252 @@ function renderTradingSummary() {
   const limit = $("trading-limit-price");
   if (limit && market && !$("trading-root-price")?.matches(":focus")) {
     limit.placeholder = `目前 ${Number(market.manual_price_points || 0)}`;
+  }
+  syncTradingOrderSideTheme();
+  updateTradingOrderEstimate();
+  loadTradingReferencePrices();
+}
+
+function tradingReferenceLabel(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return "-";
+  return number >= 1000
+    ? `$${number.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+    : `$${number.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function tradingReferenceTimeLabel(point, interval = "") {
+  const rawTime = Number(point?.time || 0);
+  const date = Number.isFinite(rawTime) && rawTime > 0
+    ? new Date(rawTime)
+    : new Date(point?.time_iso || Date.now());
+  if (Number.isNaN(date.getTime())) return "-";
+  return interval === "1d"
+    ? date.toLocaleDateString()
+    : date.toLocaleString();
+}
+
+function hideTradingReferenceTooltip() {
+  const tooltip = $("trading-reference-tooltip");
+  if (tooltip) {
+    tooltip.hidden = true;
+    tooltip.textContent = "";
+  }
+  if (tradingReferenceHoverIndex !== null) {
+    tradingReferenceHoverIndex = null;
+    if (tradingState.referencePrices) renderTradingReferenceChart(tradingState.referencePrices);
+  }
+}
+
+function renderTradingReferenceChart(payload, errorText = "") {
+  const canvas = $("trading-reference-chart");
+  const meta = $("trading-reference-price-meta");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(320, Math.floor(rect.width || canvas.width || 920));
+  const height = Math.max(180, Math.floor(rect.height || canvas.height || 240));
+  const ratio = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  const bg = ctx.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, "#111827");
+  bg.addColorStop(1, "#0b1120");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+  const candles = Array.isArray(payload?.candles) ? payload.candles : (Array.isArray(payload?.points) ? payload.points : []);
+  if (!candles.length) {
+    tradingReferenceChartModel = null;
+    hideTradingReferenceTooltip();
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "14px system-ui, sans-serif";
+    ctx.fillText(errorText || "參考價格讀取中", 18, 34);
+    if (meta) meta.textContent = errorText || "公開 API 蠟燭圖載入中；成交引擎會由後端重新取得即時價。";
+    return;
+  }
+  const prices = candles.flatMap((point) => [
+    Number(point.high_usdt || point.high_points || point.price_usdt || point.price_points || 0),
+    Number(point.low_usdt || point.low_points || point.price_usdt || point.price_points || 0),
+  ]).filter((value) => Number.isFinite(value) && value > 0);
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const spread = Math.max(1, maxPrice - minPrice);
+  const pad = { left: 58, right: 18, top: 22, bottom: 34 };
+  const chartW = width - pad.left - pad.right;
+  const chartH = height - pad.top - pad.bottom;
+  ctx.strokeStyle = "rgba(148, 163, 184, .22)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = pad.top + (chartH * i / 4);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    const label = tradingReferenceLabel(maxPrice - (spread * i / 4));
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText(label, 8, y + 4);
+  }
+  const slot = chartW / Math.max(candles.length, 1);
+  const bodyW = Math.max(5, Math.min(18, slot * 0.64));
+  const candleModels = candles.map((point, index) => {
+    const open = Number(point.open_usdt || point.price_usdt || 0);
+    const high = Number(point.high_usdt || open);
+    const low = Number(point.low_usdt || open);
+    const close = Number(point.close_usdt || point.price_usdt || open);
+    const x = pad.left + slot * index + slot / 2;
+    const yHigh = pad.top + chartH - ((high - minPrice) / spread) * chartH;
+    const yLow = pad.top + chartH - ((low - minPrice) / spread) * chartH;
+    const yOpen = pad.top + chartH - ((open - minPrice) / spread) * chartH;
+    const yClose = pad.top + chartH - ((close - minPrice) / spread) * chartH;
+    const up = close >= open;
+    const color = up ? "#22c55e" : "#ef4444";
+    const fillColor = up ? "rgba(34, 197, 94, .82)" : "rgba(239, 68, 68, .86)";
+    ctx.strokeStyle = color;
+    ctx.fillStyle = fillColor;
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(x, yHigh);
+    ctx.lineTo(x, yLow);
+    ctx.stroke();
+    const bodyTop = Math.min(yOpen, yClose);
+    const bodyH = Math.max(2, Math.abs(yOpen - yClose));
+    ctx.fillRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
+    ctx.strokeRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
+    return { ...point, index, open, high, low, close, x, yHigh, yLow, yOpen, yClose, bodyTop, bodyH };
+  });
+  tradingReferenceChartModel = { payload, candles: candleModels, pad, width, height, chartW, chartH, slot };
+  if (tradingReferenceHoverIndex !== null && candleModels[tradingReferenceHoverIndex]) {
+    const hover = candleModels[tradingReferenceHoverIndex];
+    ctx.save();
+    ctx.strokeStyle = "rgba(248, 250, 252, .72)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(hover.x, pad.top);
+    ctx.lineTo(hover.x, height - pad.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(248, 250, 252, .9)";
+    ctx.strokeRect(hover.x - bodyW / 2 - 2, hover.bodyTop - 2, bodyW + 4, hover.bodyH + 4);
+    ctx.restore();
+  }
+  const first = candles[0];
+  const last = candles[candles.length - 1];
+  const lastPrice = Number(last.close_usdt || last.price_usdt || 0);
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(`${payload.display_market || payload.symbol || ""} ${tradingReferenceLabel(lastPrice)}`, pad.left, 16);
+  ctx.fillStyle = "#94a3b8";
+  ctx.fillText(new Date(first.time || Date.now()).toLocaleDateString(), pad.left, height - 10);
+  ctx.textAlign = "right";
+  ctx.fillText(new Date(last.time || Date.now()).toLocaleDateString(), width - pad.right, height - 10);
+  ctx.textAlign = "left";
+  if (meta) {
+    const open = tradingReferenceLabel(last.open_usdt || last.price_usdt || lastPrice);
+    const high = tradingReferenceLabel(last.high_usdt || lastPrice);
+    const low = tradingReferenceLabel(last.low_usdt || lastPrice);
+    const close = tradingReferenceLabel(last.close_usdt || lastPrice);
+    meta.textContent = `${payload.display_market || payload.symbol || "-"} · ${payload.interval || "-"} · Binance 公開 API 蠟燭圖 · 最新 ${close} · O ${open} / H ${high} / L ${low} / C ${close}`;
+  }
+}
+
+function updateTradingReferenceTooltip(event) {
+  const model = tradingReferenceChartModel;
+  const canvas = $("trading-reference-chart");
+  const tooltip = $("trading-reference-tooltip");
+  if (!model || !canvas || !tooltip || !model.candles.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  if (x < model.pad.left || x > model.width - model.pad.right || y < model.pad.top || y > model.height - model.pad.bottom) {
+    hideTradingReferenceTooltip();
+    return;
+  }
+  const index = Math.max(0, Math.min(model.candles.length - 1, Math.floor((x - model.pad.left) / model.slot)));
+  const point = model.candles[index];
+  if (!point) {
+    hideTradingReferenceTooltip();
+    return;
+  }
+  if (tradingReferenceHoverIndex !== index) {
+    tradingReferenceHoverIndex = index;
+    renderTradingReferenceChart(model.payload);
+  }
+  tooltip.innerHTML = `
+    <strong>${sanitize(tradingReferenceTimeLabel(point, model.payload?.interval || ""))}</strong>
+    <span>開 ${sanitize(tradingReferenceLabel(point.open))} · 高 ${sanitize(tradingReferenceLabel(point.high))}</span>
+    <span>低 ${sanitize(tradingReferenceLabel(point.low))} · 收 ${sanitize(tradingReferenceLabel(point.close))}</span>
+  `;
+  tooltip.hidden = false;
+  const tooltipWidth = tooltip.offsetWidth || 180;
+  const tooltipHeight = tooltip.offsetHeight || 70;
+  const left = Math.min(Math.max(point.x + 12, 8), Math.max(8, rect.width - tooltipWidth - 8));
+  const top = Math.min(Math.max(y - tooltipHeight - 10, 8), Math.max(8, rect.height - tooltipHeight - 8));
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function tradingReferenceAutoRefreshMs() {
+  const interval = $("trading-reference-interval")?.value || "1s";
+  return interval === "1s" ? 1000 : 2000;
+}
+
+function restartTradingReferenceAutoRefresh() {
+  if (tradingReferenceAutoTimer) clearInterval(tradingReferenceAutoTimer);
+  if (tradingReferenceChartAutoTimer) clearInterval(tradingReferenceChartAutoTimer);
+  tradingReferenceAutoTimer = setInterval(async () => {
+    if (!currentUser || currentModuleTab !== "trading" || tradingReferenceAutoBusy) return;
+    tradingReferenceAutoBusy = true;
+    try {
+      await loadTradingReferencePrices({ silent: true, priceOnly: true });
+    } finally {
+      tradingReferenceAutoBusy = false;
+    }
+  }, tradingReferenceAutoRefreshMs());
+  tradingReferenceChartAutoTimer = setInterval(async () => {
+    if (!currentUser || currentModuleTab !== "trading" || tradingReferenceChartAutoBusy) return;
+    tradingReferenceChartAutoBusy = true;
+    try {
+      await loadTradingReferencePrices({ silent: true });
+    } finally {
+      tradingReferenceChartAutoBusy = false;
+    }
+  }, 5000);
+}
+
+async function loadTradingReferencePrices(options = {}) {
+  const market = selectedTradingMarket();
+  const canvas = $("trading-reference-chart");
+  if (!market || !canvas) return;
+  const interval = $("trading-reference-interval")?.value || "1s";
+  if (tradingReferenceAbort) tradingReferenceAbort.abort();
+  tradingReferenceAbort = new AbortController();
+  if (!options.silent) renderTradingReferenceChart(null, "參考價格讀取中");
+  try {
+    const limit = interval === "1d" ? 90 : 96;
+    const json = await fetchTradingJson(`/trading/reference-prices?market=${encodeURIComponent(market.symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`, {
+      signal: tradingReferenceAbort.signal,
+    });
+    if (!options.priceOnly) tradingState.referencePrices = json;
+    const last = Array.isArray(json.candles) ? json.candles[json.candles.length - 1] : null;
+    if (last && last.close_points) {
+      market.manual_price_points = Number(last.close_points || 0);
+      market.price_source = json.source || "binance_public_api";
+      if ($("trading-current-price")) $("trading-current-price").textContent = String(Number(market.manual_price_points || 0));
+      if ($("trading-current-market")) $("trading-current-market").textContent = `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "binance_public_api"}`;
+      updateTradingOrderEstimate();
+    }
+    if (!options.priceOnly) renderTradingReferenceChart(json);
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    if (!options.priceOnly) tradingState.referencePrices = null;
+    if (!options.silent && !options.priceOnly) renderTradingReferenceChart(null, err.message || "Binance 參考價格讀取失敗");
   }
 }
 
@@ -76,7 +586,7 @@ function renderTradingOrders(rows, targetId = "trading-order-list", allowCancel 
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(row.side)} · ${sanitize(row.order_type)} · ${sanitize(row.status)}</strong>
-          <div class="drive-card-sub">${sanitize(row.market_symbol)} · 數量 ${sanitize(row.quantity)} · 價格 ${sanitize(price || "-")} · 凍結 ${Number(row.frozen_points || 0)}</div>
+          <div class="drive-card-sub">${sanitize(tradingDisplaySymbol(row.market_symbol))} · 數量 ${sanitize(row.quantity)} · 價格 ${sanitize(price || "-")} · 凍結 ${Number(row.frozen_points || 0)}</div>
           <div class="economy-ledger-hash">${sanitize(row.order_uuid || "")}</div>
         </div>
         ${allowCancel && canCancel ? `<button class="btn" type="button" data-trading-cancel="${sanitize(row.order_uuid || "")}">取消</button>` : ""}
@@ -98,7 +608,7 @@ function renderTradingFills(rows, targetId = "trading-fill-list") {
   list.innerHTML = rows.map((row) => `
     <div class="drive-file-row">
       <div>
-        <strong>${sanitize(row.side)} · ${sanitize(row.market_symbol)} · ${sanitize(row.quantity)}</strong>
+        <strong>${sanitize(row.side)} · ${sanitize(tradingDisplaySymbol(row.market_symbol))} · ${sanitize(row.quantity)}</strong>
         <div class="drive-card-sub">價格 ${Number(row.price_points || 0)} · 成交 ${Number(row.notional_points || 0)} 點 · 手續費 ${Number(row.fee_points || 0)}</div>
         <div class="drive-card-sub">${sanitize(row.created_at || "")}</div>
       </div>
@@ -106,11 +616,36 @@ function renderTradingFills(rows, targetId = "trading-fill-list") {
   `).join("");
 }
 
+function renderTradingContracts(rows = []) {
+  const list = $("trading-contract-position-list");
+  if (!list) return;
+  const contracts = rows.filter((row) => row.status === "open");
+  if (!contracts.length) {
+    list.innerHTML = `<div class="drive-empty">尚無 root 合約持倉</div>`;
+    return;
+  }
+  list.innerHTML = contracts.map((row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.side || "-")} · ${sanitize(tradingDisplaySymbol(row.market_symbol || "-"))} · ${sanitize(row.quantity || "0")}</strong>
+        <div class="drive-card-sub">入場 ${Number(row.entry_price_points || 0)} 點 · 槓桿 ${Number(row.leverage || 1)}x · 保證金 ${Number(row.margin_points || 0)} 點</div>
+        <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
+      </div>
+      <button class="btn" type="button" data-contract-close="${sanitize(row.position_uuid || "")}">平倉</button>
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-contract-close]").forEach((btn) => {
+    btn.addEventListener("click", () => closeRootTradingContract(btn.dataset.contractClose || ""));
+  });
+}
+
 function renderTradingWalletSummary(payload = {}) {
   const positions = Array.isArray(payload.positions) ? payload.positions : [];
   const futuresPositions = Array.isArray(payload.futures_positions) ? payload.futures_positions : [];
   const orders = Array.isArray(payload.orders) ? payload.orders : [];
   const fills = Array.isArray(payload.fills) ? payload.fills : [];
+  const markets = Array.isArray(payload.markets) ? payload.markets : tradingState.markets;
+  const funding = payload.funding || tradingState.funding || {};
   const state = payload.state || {};
   const status = $("economy-trading-safe-mode");
   if (status) {
@@ -118,22 +653,41 @@ function renderTradingWalletSummary(payload = {}) {
     status.style.color = state.safe_mode ? "#ffb74d" : "var(--muted)";
   }
   const activePositions = positions.filter((row) => Number(row.quantity || 0) !== 0 || Number(row.locked_quantity || 0) !== 0);
-  const totalSpotQuantity = activePositions.reduce((total, row) => total + Number(row.quantity || 0), 0);
-  if ($("economy-spot-position-quantity")) $("economy-spot-position-quantity").textContent = String(Number.isFinite(totalSpotQuantity) ? totalSpotQuantity : 0);
+  if ($("economy-spot-position-quantity")) {
+    $("economy-spot-position-quantity").textContent = activePositions.length
+      ? activePositions.map((row) => tradingPositionLabel(row)).join(" / ")
+      : "尚無現貨";
+  }
   if ($("economy-spot-position-summary")) {
     $("economy-spot-position-summary").textContent = activePositions.length
-      ? activePositions.slice(0, 2).map((row) => `${row.market_symbol}: ${row.quantity || "0"}`).join(" / ")
-      : "尚無現貨";
+      ? "BTC、ETH 等交易對分開顯示"
+      : "各交易對分開計算";
   }
   const activeFuturesPositions = futuresPositions.filter((row) => row.status === "open" && Number(row.quantity || 0) !== 0);
   if ($("economy-contract-position-count")) $("economy-contract-position-count").textContent = String(activeFuturesPositions.length);
   if ($("economy-contract-position-summary")) {
     $("economy-contract-position-summary").textContent = activeFuturesPositions.length
-      ? activeFuturesPositions.slice(0, 2).map((row) => `${row.market_symbol}: ${row.side} ${row.quantity || "0"}`).join(" / ")
+      ? activeFuturesPositions.slice(0, 2).map((row) => `${tradingDisplaySymbol(row.market_symbol)}: ${row.side} ${row.quantity || "0"}`).join(" / ")
       : "未開放";
   }
   if ($("economy-trading-fill-count")) $("economy-trading-fill-count").textContent = String(fills.length);
   if ($("economy-trading-order-count")) $("economy-trading-order-count").textContent = `訂單 ${orders.length}`;
+  renderEconomySpotPositionDetails(positions, markets);
+  if (currentUser === "root") {
+    const spotValue = rootVirtualSpotValue(activePositions, markets);
+    const available = Number(funding.available_points || 0);
+    const locked = Number(funding.locked_points || 0);
+    const total = available + spotValue;
+    if ($("economy-root-virtual-total")) $("economy-root-virtual-total").textContent = `${formatTradingPointsValue(total)} 點`;
+    if ($("economy-root-virtual-available")) $("economy-root-virtual-available").textContent = `${formatTradingPointsValue(available)} 點`;
+    if ($("economy-root-virtual-locked")) $("economy-root-virtual-locked").textContent = `鎖定 ${formatTradingPointsValue(locked)} 點`;
+    if ($("economy-root-virtual-spot-value")) $("economy-root-virtual-spot-value").textContent = `${formatTradingPointsValue(spotValue)} 點`;
+    if ($("economy-root-virtual-spot-summary")) {
+      $("economy-root-virtual-spot-summary").textContent = activePositions.length
+        ? activePositions.slice(0, 3).map((row) => tradingPositionLabel(row)).join(" / ")
+        : "尚無現貨";
+    }
+  }
   renderTradingOrders(orders, "economy-trading-order-list", false);
   renderTradingFills(fills, "economy-trading-fill-list");
 }
@@ -146,6 +700,10 @@ function renderTradingRootReport(report) {
   if ($("trading-verification-status")) $("trading-verification-status").textContent = verification.ok === false ? "異常" : "正常";
   if ($("trading-verification-detail")) $("trading-verification-detail").textContent = `${Array.isArray(verification.errors) ? verification.errors.length : 0} 個問題`;
   if ($("trading-risk-flags")) $("trading-risk-flags").textContent = "futures=false / pvp=false";
+  if ($("trading-root-sim-balance")) {
+    const funding = tradingState.funding || {};
+    $("trading-root-sim-balance").textContent = funding.mode === "root_simulated" ? String(Number(funding.available_points || 0)) : "10000";
+  }
   const markets = Array.isArray(safe.markets) ? safe.markets : tradingState.markets;
   tradingState.markets = markets;
   renderTradingMarketOptions();
@@ -195,17 +753,20 @@ async function loadTradingDashboard() {
   const tradingEnabled = !siteConfig || siteConfig.feature_trading_enabled !== false;
   const card = $("trading-card");
   const summaryCard = $("economy-trading-summary-card");
+  const rootVirtualCard = $("economy-root-virtual-card");
   const rootCard = $("trading-root-card");
   if (card && !tradingEnabled) {
     card.style.display = "none";
   }
   if (summaryCard) summaryCard.style.display = tradingEnabled ? "" : "none";
+  if (rootVirtualCard) rootVirtualCard.style.display = tradingEnabled && currentUser === "root" ? "" : "none";
   if (rootCard) rootCard.style.display = tradingEnabled && currentUser === "root" ? "" : "none";
   if (!tradingEnabled) return;
   if (card) card.style.display = "";
   try {
     const json = await fetchTradingJson("/trading/dashboard");
     const payload = json.trading || {};
+    tradingState.funding = payload.funding || null;
     tradingState.markets = payload.markets || [];
     tradingState.positions = payload.positions || [];
     tradingState.orders = payload.orders || [];
@@ -220,8 +781,11 @@ async function loadTradingDashboard() {
     renderTradingSummary();
     renderTradingOrders(tradingState.orders);
     renderTradingFills(tradingState.fills);
+    renderTradingContracts(payload.futures_positions || []);
     renderTradingWalletSummary(payload);
-    if (currentUser === "root") await loadTradingRootReport();
+    if (currentUser === "root") {
+      await loadTradingRootReport();
+    }
   } catch (err) {
     const status = $("trading-safe-mode");
     if (status) {
@@ -248,6 +812,11 @@ async function submitTradingOrder() {
     tradingSetMsg("沒有可用交易市場", false);
     return;
   }
+  const estimate = updateTradingOrderEstimate();
+  if (estimate.blocking) {
+    tradingSetMsg(estimate.message || "下單資料超出可用資產", false);
+    return;
+  }
   const orderType = $("trading-order-type")?.value || "market";
   const payload = {
     market_symbol: market.symbol,
@@ -265,6 +834,98 @@ async function submitTradingOrder() {
     await loadEconomyDashboard();
   } catch (err) {
     tradingSetMsg(err.message || "下單失敗", false);
+  }
+}
+
+async function submitEconomySpotSell(symbol, orderType) {
+  const row = economySpotRowForSymbol(symbol);
+  const market = tradingState.markets.find((item) => item.symbol === symbol);
+  if (!row || !market) {
+    tradingSetMsg("找不到現貨市場資料", false);
+    return;
+  }
+  const sellable = tradingNumber(row.dataset.sellable, 0);
+  const quantityInput = row.querySelector("[data-economy-spot-qty]");
+  const priceInput = row.querySelector("[data-economy-spot-price]");
+  const quantity = orderType === "market"
+    ? sellable
+    : tradingNumber(quantityInput?.value, 0);
+  const limitPrice = tradingNumber(priceInput?.value, 0);
+  if (!quantity || quantity <= 0) {
+    tradingSetMsg("請輸入有效賣出數量", false);
+    return;
+  }
+  if (quantity > sellable) {
+    tradingSetMsg(`賣出 ${formatTradingPointsValue(quantity)} 超過可賣現貨 ${formatTradingPointsValue(sellable)}`, false);
+    return;
+  }
+  if (orderType === "limit" && (!limitPrice || limitPrice <= 0)) {
+    tradingSetMsg("限價賣出需要輸入有效價格", false);
+    return;
+  }
+  const displaySymbol = tradingDisplaySymbol(symbol);
+  if (orderType === "limit" && !confirm(`確認限價賣出 ${displaySymbol} ${formatTradingPointsValue(quantity)}，價格 ${formatTradingPointsValue(limitPrice)}？`)) return;
+  try {
+    const payload = {
+      market_symbol: symbol,
+      side: "sell",
+      order_type: orderType,
+      quantity: String(quantity),
+    };
+    if (orderType === "limit") payload.limit_price_points = limitPrice;
+    if (orderType === "market") payload.emergency_close = true;
+    await fetchTradingJson("/trading/orders", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    tradingSetMsg(orderType === "market" ? `${displaySymbol} 已直接市價平倉，手續費按平時 2 倍計算` : `${displaySymbol} 限價賣出已送出`);
+    await loadEconomyDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "現貨賣出失敗", false);
+  }
+}
+
+async function openRootTradingContract() {
+  if (currentUser !== "root") {
+    tradingSetMsg("只有 root 可以使用合約模擬交易", false);
+    return;
+  }
+  const symbol = $("trading-contract-market-select")?.value || selectedTradingMarket()?.symbol || "";
+  if (!symbol) {
+    tradingSetMsg("請先選擇合約市場", false);
+    return;
+  }
+  try {
+    const json = await fetchTradingJson("/root/trading/contracts", {
+      method: "POST",
+      body: JSON.stringify({
+        market_symbol: symbol,
+        side: $("trading-contract-side")?.value || "long",
+        quantity: $("trading-contract-quantity")?.value || "",
+        leverage: Number($("trading-contract-leverage")?.value || 1),
+        margin_points: Number($("trading-contract-margin")?.value || 0),
+      }),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    tradingSetMsg("root 合約模擬倉位已建立");
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "合約開倉失敗", false);
+  }
+}
+
+async function closeRootTradingContract(positionUuid) {
+  if (!positionUuid) return;
+  try {
+    const json = await fetchTradingJson(`/root/trading/contracts/${encodeURIComponent(positionUuid)}/close`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    tradingSetMsg(`合約已平倉，損益 ${Number(json.pnl_points || 0)} 點`);
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "合約平倉失敗", false);
   }
 }
 
@@ -334,6 +995,25 @@ async function allocateTradingReserve() {
   }
 }
 
+async function resetRootTradingSimulatedBalance() {
+  if (!confirm("確認重置 root 模擬交易？這會刪除 root 的模擬訂單、成交紀錄、現貨與合約持倉，並把虛擬積分回到 10000。")) return;
+  try {
+    const json = await fetchTradingJson("/root/trading/simulated-balance/reset", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    const deleted = json.deleted || {};
+    tradingSetMsg(
+      `root 模擬交易已重置為 ${Number(json.funding?.available_points || 10000)} 點；` +
+      `已清除訂單 ${Number(deleted.orders || 0)}、成交 ${Number(deleted.fills || 0)}、現貨 ${Number(deleted.spot_positions || 0)}。`
+    );
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "root 模擬資金重設失敗", false);
+  }
+}
+
 function openTradingModuleFromWallet() {
   if (typeof switchModuleTab === "function") switchModuleTab("trading");
 }
@@ -356,7 +1036,10 @@ function bindTradingEvents() {
     ["trading-root-refresh-btn", loadTradingRootReport],
     ["trading-root-save-market-btn", saveTradingRootMarket],
     ["trading-reserve-allocate-btn", allocateTradingReserve],
+    ["trading-root-reset-sim-btn", resetRootTradingSimulatedBalance],
+    ["trading-contract-open-btn", openRootTradingContract],
     ["economy-trading-open-btn", openTradingModuleFromWallet],
+    ["economy-root-virtual-open-btn", openTradingModuleFromWallet],
   ];
   bindings.forEach(([id, handler]) => {
     const el = $(id);
@@ -365,9 +1048,46 @@ function bindTradingEvents() {
   });
   const marketSelect = $("trading-market-select");
   if (marketSelect) marketSelect.addEventListener("change", renderTradingSummary);
+  ["trading-side", "trading-order-type", "trading-quantity", "trading-limit-price"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("input", () => {
+      syncTradingOrderSideTheme();
+      updateTradingOrderEstimate();
+    });
+    el.addEventListener("change", () => {
+      syncTradingOrderSideTheme();
+      updateTradingOrderEstimate();
+    });
+  });
+  const referenceInterval = $("trading-reference-interval");
+  if (referenceInterval) {
+    referenceInterval.addEventListener("change", () => {
+      hideTradingReferenceTooltip();
+      restartTradingReferenceAutoRefresh();
+      loadTradingReferencePrices();
+    });
+  }
+  const referenceChart = $("trading-reference-chart");
+  if (referenceChart) {
+    referenceChart.addEventListener("mousemove", updateTradingReferenceTooltip);
+    referenceChart.addEventListener("mouseleave", hideTradingReferenceTooltip);
+  }
   const rootMarketSelect = $("trading-root-market-select");
   if (rootMarketSelect) rootMarketSelect.addEventListener("change", populateTradingRootMarketForm);
   setInterval(syncTradingReserveUserOptions, 1500);
+  restartTradingReferenceAutoRefresh();
+  if (!tradingDashboardAutoTimer) {
+    tradingDashboardAutoTimer = setInterval(async () => {
+      if (!currentUser || currentModuleTab !== "trading" || tradingDashboardAutoBusy) return;
+      tradingDashboardAutoBusy = true;
+      try {
+        await loadTradingDashboard();
+      } finally {
+        tradingDashboardAutoBusy = false;
+      }
+    }, 5000);
+  }
 }
 
 if (document.readyState === "loading") {

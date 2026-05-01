@@ -51,7 +51,6 @@ function switchModuleTab(tab) {
   const canAccessCommunity = !!currentUser && canAccessModule("community");
   const canAccessAnnouncements = canAccessCommunity;
   const canAccessChat = !!currentUser && canAccessModule("chat");
-  const canAccessDm = !!currentUser && canAccessModule("dm");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
   const canAccessAlbums = canAccessDrive;
   const canAccessGames = !!currentUser && canAccessModule("games");
@@ -61,9 +60,9 @@ function switchModuleTab(tab) {
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessDm ? "dm" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
-  if (tab === "dm" && !canAccessDm) normTab = fallbackModule();
+  if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
   if (tab === "community" && !canAccessCommunity) normTab = fallbackModule();
   if (tab === "drive" && !canAccessDrive) normTab = fallbackModule();
@@ -78,7 +77,6 @@ function switchModuleTab(tab) {
 
   currentModuleTab = normTab;
   const modChat = $("module-chat");
-  const modDm = $("module-dm");
   const modAnnouncements = $("module-announcements");
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
@@ -91,7 +89,6 @@ function switchModuleTab(tab) {
   const modServer = $("module-server");
   const modAppeals = $("module-appeals");
   const mChat = $("tab-module-chat");
-  const mDm = $("tab-module-dm");
   const mAnnouncements = $("tab-module-announcements");
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
@@ -105,7 +102,6 @@ function switchModuleTab(tab) {
   const mAppeals = $("tab-module-appeals");
 
   if (modChat) modChat.classList.toggle("active", normTab === "chat");
-  if (modDm) modDm.classList.toggle("active", normTab === "dm");
   if (modAnnouncements) modAnnouncements.classList.toggle("active", normTab === "announcements");
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
@@ -118,7 +114,6 @@ function switchModuleTab(tab) {
   if (modServer) modServer.classList.toggle("active", normTab === "server");
   if (modAppeals) modAppeals.classList.toggle("active", normTab === "appeals");
   if (mChat) mChat.classList.toggle("active", normTab === "chat");
-  if (mDm) mDm.classList.toggle("active", normTab === "dm");
   if (mAnnouncements) mAnnouncements.classList.toggle("active", normTab === "announcements");
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
@@ -136,9 +131,6 @@ function switchModuleTab(tab) {
   }
   if (normTab === "announcements" && canAccessAnnouncements) {
     loadAnnouncements();
-  }
-  if (normTab === "dm" && canAccessDm && typeof loadDmThreads === "function") {
-    loadDmThreads();
   }
   if (normTab !== "server") stopServerOutputPoll();
   if (normTab === "server" && canAccessServer) {
@@ -173,20 +165,72 @@ function switchModuleTab(tab) {
 
 function switchAdminTab(tab) {
   currentAdminTab = tab;
-  ["users","password-resets","violations","governance","appeals","reports"].forEach(t => {
+  ["users","password-resets","violations","governance","notices","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-password-resets","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
+  ["tab-users","tab-password-resets","tab-violations","tab-governance","tab-notices","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
   if (tab === "password-resets") loadPasswordResetReviews();
   if (tab === "violations") loadViolations(0);
   if (tab === "governance") loadGovernanceDashboard();
+  if (tab === "notices") renderAdminNoticeTargetOptions();
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
   if (tab === "reports") loadAdminReports(0, adminReportStatus);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
+}
+
+const ADMIN_NOTICE_TEMPLATES = {
+  custom: { title: "", body: "" },
+  sanction: { title: "會員權益變更通知", body: "你的帳號權益已被調整，若有疑問請到申覆分頁提出申覆。" },
+  points: { title: "積分異動通知", body: "你的積分已發生異動，請到積分錢包查看明細。" },
+  account: { title: "帳號狀態通知", body: "你的帳號狀態已有更新，請確認個人資訊與系統通知。" },
+};
+
+function renderAdminNoticeTargetOptions() {
+  const select = $("admin-notice-user-id");
+  if (!select) return;
+  const selectable = (Array.isArray(users) ? users : []).filter((user) => {
+    if (!user || !user.id) return false;
+    if (currentUser !== "root" && clientRoleRank(user.role || "user") >= clientRoleRank(currentRole || "user")) return false;
+    return true;
+  });
+  select.innerHTML = selectable.length
+    ? selectable.map((user) => `<option value="${user.id}">${sanitize(user.username || "-")}（#${user.id}）</option>`).join("")
+    : `<option value="">沒有可發送通知的成員</option>`;
+}
+
+function applyAdminNoticeTemplate() {
+  const key = $("admin-notice-template")?.value || "custom";
+  const template = ADMIN_NOTICE_TEMPLATES[key] || ADMIN_NOTICE_TEMPLATES.custom;
+  const title = $("admin-notice-title");
+  const body = $("admin-notice-body");
+  if (title && template.title) title.value = template.title;
+  if (body && template.body) body.value = template.body;
+}
+
+async function sendAdminNotice() {
+  const userId = $("admin-notice-user-id")?.value || "";
+  const title = ($("admin-notice-title")?.value || "").trim();
+  const body = ($("admin-notice-body")?.value || "").trim();
+  const msg = $("admin-notice-msg");
+  if (!userId || !title || !body) {
+    flash(msg, "請選擇成員並填寫標題、內容", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/admin/notifications/send", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ user_id: userId, title, body })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash(msg, json.msg || (json.ok ? "通知已發送" : "通知發送失敗"), !!json.ok);
+  if (json.ok && $("admin-notice-body")) $("admin-notice-body").value = "";
 }
 
 // ── Audit log ───────────────────────────────────────────────
@@ -1483,7 +1527,6 @@ const FEATURE_SETTING_KEYS = [
   "feature_forum_core_enabled",
   "feature_ui_rebuild_enabled",
   "feature_reports_notifications_enabled",
-  "feature_dm_enabled",
   "feature_attachments_enabled",
   "feature_storage_albums_enabled",
   "feature_personalization_enabled",
@@ -1532,6 +1575,29 @@ const SECURITY_THRESHOLD_KEYS = [
   "security_unknown_encrypted_files_threshold",
   "security_log_tail_lines"
 ];
+const SECURITY_FIELD_LABELS = {
+  maintenance_mode: "維護模式",
+  server_ssl_enabled: "HTTPS / SSL",
+  audit_chain_enabled: "審計 hash chain",
+  feature_audit_log_enabled: "Audit log 查詢頁",
+  ip_blocking_enabled: "錯誤登入鎖 IP",
+  login_violation_enabled: "登入失敗寫入違規",
+  rate_limit_violation_enabled: "速率限制寫入違規",
+  root_ip_whitelist_enabled: "root IP 白名單",
+  root_ip_whitelist: "root IP 白名單內容",
+  browser_only_mode_enabled: "Browser-only 模式",
+  integrity_guard_enabled: "Integrity Guard",
+  integrity_guard_strict_mode: "Integrity strict mode",
+  feature_economy_enabled: "PointsChain / 積分私有鏈",
+  max_login_failures: "登入失敗鎖定次數",
+  block_duration_minutes: "封鎖時長（分鐘）",
+  security_pending_chat_reports_threshold: "待審聊天室檢舉警戒",
+  security_pending_appeals_threshold: "待審申覆警戒",
+  security_pending_moderation_proposals_threshold: "待審治理提案警戒",
+  security_quarantined_files_threshold: "隔離檔案警戒",
+  security_unknown_encrypted_files_threshold: "未知加密檔案警戒",
+  security_log_tail_lines: "log 顯示行數"
+};
 let securityProfiles = [];
 
 function securityInputId(prefix, key) {
@@ -1546,7 +1612,41 @@ function findSecurityProfile(name) {
 function profileKeysSummary(profile, key) {
   const data = profile && profile[key] && typeof profile[key] === "object" ? profile[key] : {};
   const keys = Object.keys(data);
-  return keys.length ? keys.map((item) => `${item}=${JSON.stringify(data[item])}`).join("，") : "未設定";
+  return keys.length
+    ? keys.map((item) => `${SECURITY_FIELD_LABELS[item] || item}=${data[item] === true ? "開" : data[item] === false ? "關" : JSON.stringify(data[item])}`).join("，")
+    : "未設定";
+}
+
+function collectSecurityProfileDraft(prefix = "security-profile") {
+  const settings = {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    settings[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  });
+  const thresholds = {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    const number = parseInt(el.value || "0", 10);
+    thresholds[key] = Number.isFinite(number) ? number : 0;
+  });
+  return { settings, thresholds };
+}
+
+function fillSecurityProfileDraft(settings = {}, thresholds = {}, prefix = "security-profile") {
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    const value = Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : "";
+    if (el.type === "checkbox") el.checked = !!value;
+    else el.value = value ?? "";
+  });
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    el.value = Object.prototype.hasOwnProperty.call(thresholds, key) ? thresholds[key] : 0;
+  });
 }
 
 function renderSecurityProfilePreview(selectId, previewId) {
@@ -2011,40 +2111,17 @@ async function applySecurityMode() {
 }
 
 function loadCurrentSecurityProfileDraft() {
-  const settings = {};
-  SECURITY_CONTROL_KEYS.forEach((key) => {
-    const el = $(securityInputId("sc", key));
-    if (!el) return;
-    settings[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
-  });
-  const thresholds = {};
-  SECURITY_THRESHOLD_KEYS.forEach((key) => {
-    const el = $(securityInputId("sc", key));
-    if (!el) return;
-    const number = parseInt(el.value || "0", 10);
-    thresholds[key] = Number.isFinite(number) ? number : 0;
-  });
-  const settingsBox = $("security-profile-settings-json");
-  const thresholdsBox = $("security-profile-thresholds-json");
-  if (settingsBox) settingsBox.value = JSON.stringify(settings, null, 2);
-  if (thresholdsBox) thresholdsBox.value = JSON.stringify(thresholds, null, 2);
+  const current = collectSecurityProfileDraft("sc");
+  fillSecurityProfileDraft(current.settings, current.thresholds, "security-profile");
   const msg = $("security-profile-msg");
   if (msg) {
-    msg.textContent = "已帶入目前安全開關與閾值，請填名稱後儲存。";
+    msg.textContent = "已帶入目前安全開關與閾值；請填名稱後用表單調整並儲存。";
     msg.style.color = "var(--muted)";
   }
 }
 
 async function saveSecurityProfile() {
-  let settings = {};
-  let thresholds = {};
-  try {
-    settings = JSON.parse($("security-profile-settings-json")?.value || "{}");
-    thresholds = JSON.parse($("security-profile-thresholds-json")?.value || "{}");
-  } catch (err) {
-    alert("settings JSON 或 thresholds JSON 格式錯誤");
-    return;
-  }
+  const { settings, thresholds } = collectSecurityProfileDraft("security-profile");
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const payload = {
@@ -2614,7 +2691,14 @@ async function loadServerEnv() {
       <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;">${sanitize(value)}</div>
     </div>
   `).join("");
-  details.innerHTML = `BASE_DIR：${sanitize(env.base_dir || "-")}<br>DB：${sanitize(env.database_path || "-")}<br>聊天檔數：${sanitize(String(env.chat_files || 0))}`;
+  details.innerHTML = [
+    `BASE_DIR：${sanitize(env.base_dir || ".")}`,
+    `DB：${sanitize(env.database_path || "-")}`,
+    `Log：${sanitize(env.log_dir || "-")}`,
+    `Chat：${sanitize(env.chat_dir || "-")}`,
+    `Anchor：${sanitize(env.anchor_dir || "-")}`,
+    `聊天檔數：${sanitize(String(env.chat_files || 0))}`,
+  ].join("<br>");
 }
 
 async function restartServer(event) {
@@ -3029,20 +3113,6 @@ async function loadPlatformStats() {
 
  // ── Bind all UI events ───────────────────────────────────────
 (function setupUIBindings() {
-  // Integrity Guard
-  const igRefresh = document.getElementById("integrity-refresh-btn");
-  if (igRefresh) igRefresh.addEventListener("click", refreshIntegrityGuard);
-  const igRescan = document.getElementById("integrity-rescan-btn");
-  if (igRescan) igRescan.addEventListener("click", rescanIntegrityGuard);
-  const igExport = document.getElementById("integrity-export-btn");
-  if (igExport) igExport.addEventListener("click", exportIntegrityGuard);
-  const igBulkApprove = document.getElementById("integrity-bulk-approve-btn");
-  if (igBulkApprove) igBulkApprove.addEventListener("click", () => reviewSelectedIntegrityFindings("approve"));
-  const igBulkReject = document.getElementById("integrity-bulk-reject-btn");
-  if (igBulkReject) igBulkReject.addEventListener("click", () => reviewSelectedIntegrityFindings("reject"));
-  const igBulkIgnore = document.getElementById("integrity-bulk-ignore-btn");
-  if (igBulkIgnore) igBulkIgnore.addEventListener("click", () => reviewSelectedIntegrityFindings("ignore"));
-
   // Snapshot / Reset
   const loadSnapBtn = document.getElementById("btn-load-snapshots");
   if (loadSnapBtn) loadSnapBtn.addEventListener("click", loadSnapshots);

@@ -20,6 +20,9 @@ def test_notification_ui_assets_are_wired():
     assert "notification-toggle" in bootstrap_js
     assert "notification-read-all" in bootstrap_js
 
+    assert "data-notification-read-all" in notifications_js
+    assert "一鍵全部已讀" in notifications_js
+    assert "readAll.disabled = n <= 0" in notifications_js
     assert 'apiFetch(API + "/notifications?limit=20"' in notifications_js
     assert 'apiFetch(API + `/notifications/${notificationId}/read`' in notifications_js
     assert 'apiFetch(API + "/notifications/read-all"' in notifications_js

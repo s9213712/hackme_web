@@ -186,6 +186,14 @@ function renderUsers() {
     actions.className = "action";
     actionButtons.forEach((btn) => actions.appendChild(btn));
     appendTextCell(u.id);
+    const onlineCell = document.createElement("td");
+    const onlineDot = document.createElement("span");
+    onlineDot.className = `online-dot ${u.is_online ? "online" : "offline"}`;
+    onlineDot.title = u.is_online
+      ? `在線 · ${u.active_session_count || 1} 個 session`
+      : (u.online_last_seen ? `離線 · 最後活動 ${u.online_last_seen}` : "離線");
+    onlineCell.appendChild(onlineDot);
+    tr.appendChild(onlineCell);
     const usernameCell = document.createElement("td");
     usernameCell.innerHTML = userIdentityMarkup(u.id, u.username || "", u.nickname || "", "user-table-identity");
     tr.appendChild(usernameCell);
@@ -268,5 +276,6 @@ async function loadUsers() {
     users = Array.isArray(json.users) ? json.users : [];
     canManageUsers = !!json.can_manage;
     renderUsers();
+    if (typeof renderAdminNoticeTargetOptions === "function") renderAdminNoticeTargetOptions();
   } catch (_) {}
 }

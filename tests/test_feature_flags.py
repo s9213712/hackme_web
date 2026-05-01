@@ -40,15 +40,15 @@ def test_feature_settings_roundtrip_and_ignore_unknown_keys(tmp_path):
 
         updates = settings.save_feature_settings({
             "feature_chat_enabled": False,
-            "feature_dm_enabled": True,
+            "feature_reports_notifications_enabled": True,
             "maintenance_mode": True,
             "unknown": True,
         })
         features = settings.get_feature_settings()
 
-        assert updates == {"feature_chat_enabled": False, "feature_dm_enabled": True}
+        assert updates == {"feature_chat_enabled": False, "feature_reports_notifications_enabled": True}
         assert features["feature_chat_enabled"] is False
-        assert features["feature_dm_enabled"] is True
+        assert features["feature_reports_notifications_enabled"] is True
         assert settings.get_system_settings()["maintenance_mode"] is False
     finally:
         settings._STATE.clear()
@@ -66,7 +66,6 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/reports") == "feature_reports_enabled"
     assert feature_gate_for_path("/api/admin/reports") == "feature_reports_enabled"
     assert feature_gate_for_path("/api/notifications") == "feature_reports_notifications_enabled"
-    assert feature_gate_for_path("/api/dm/threads") == "feature_dm_enabled"
     assert feature_gate_for_path("/api/files/upload") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/cloud-drive/upload") == "feature_privacy_uploads_enabled"
     assert feature_gate_for_path("/api/files/quota") == "feature_privacy_uploads_enabled"
@@ -78,6 +77,11 @@ def test_feature_gate_maps_existing_modules():
     assert feature_gate_for_path("/api/games/chess/practice") == "feature_games_enabled"
     assert feature_gate_for_path("/api/root/games/chess/weekly-rewards/award") == "feature_games_enabled"
     assert feature_gate_for_path("/api/admin/settings") is None
+
+
+def test_notifications_remain_enabled_after_management_only_reset():
+    assert settings.DEFAULT_SETTINGS["feature_reports_notifications_enabled"] is True
+    assert settings.MANAGEMENT_ONLY_RESET_SETTINGS["feature_reports_notifications_enabled"] is True
 
 
 def test_file_quota_endpoint_returns_user_usage(tmp_path):
@@ -134,7 +138,7 @@ def test_admin_features_endpoint_is_root_only():
     app = Flask(__name__)
     app.testing = True
     actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
-    feature_state = {"feature_chat_enabled": True, "feature_dm_enabled": False}
+    feature_state = {"feature_chat_enabled": True, "feature_reports_notifications_enabled": False}
     audit_log = []
 
     def save_feature_settings(data):

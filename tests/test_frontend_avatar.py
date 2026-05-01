@@ -9,7 +9,7 @@ def test_avatar_upload_ui_is_wired():
     core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")
     community_js = (ROOT / "public" / "js" / "25-community.js").read_text(encoding="utf-8")
-    dm_js = (ROOT / "public" / "js" / "33-dm.js").read_text(encoding="utf-8")
+    chat_js = (ROOT / "public" / "js" / "20-chat.js").read_text(encoding="utf-8")
     auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
@@ -29,7 +29,18 @@ def test_avatar_upload_ui_is_wired():
     assert "avatar.innerHTML = currentUser ? userAvatarInnerMarkup(currentUserId, currentUser)" in core_js
     assert "userAvatarMarkup(m.sender_id, m.sender" in core_js
     assert "usernameCell.innerHTML = userIdentityMarkup(u.id, u.username" in users_js
-    assert "userAvatarMarkup(thread.other_user_id, thread.other_username" in dm_js
-    assert "userAvatarMarkup(senderId, senderName" in dm_js
+    assert "openPmWithUser(u.username)" in users_js
+    assert "chat-message-image-preview" in core_js
     assert "userIdentityMarkup(thread.author_user_id, thread.author_username" in community_js
     assert "userIdentityMarkup(post.author_user_id, post.author_username" in community_js
+
+
+def test_admin_user_table_shows_online_light():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")
+    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+
+    assert "<th>在線</th>" in index_html
+    assert "online-dot" in users_js
+    assert "u.is_online" in users_js
+    assert ".online-dot.online" in css

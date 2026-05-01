@@ -13,7 +13,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260501-1a2b" in index_html
+    assert "/js/38-games.js?v=20260501-1a2b-rank" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="sudoku-game-panel"' in index_html
@@ -23,7 +23,16 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'id="minesweeper-difficulty"' in index_html
     assert 'id="onea2b-game-panel"' in index_html
     assert 'id="onea2b-guess-input"' in index_html
+    assert 'placeholder="例如 1234"' in index_html
+    assert 'placeholder="例如 0123"' not in index_html
     assert 'id="onea2b-history"' in index_html
+    assert 'class="drive-collapsible-panel game-rules-panel"' in index_html
+    assert "西洋棋玩法說明" in index_html
+    assert "數獨玩法說明" in index_html
+    assert "踩地雷玩法說明" in index_html
+    assert "1A2B 玩法說明" in index_html
+    assert "<details" in index_html
+    assert "<details class=\"drive-collapsible-panel game-rules-panel\" open" not in index_html
     assert 'module: "games"' in core_js
     assert 'switchModuleTab("games")' in bootstrap_js
     assert "/games/chess/practice" in games_js
@@ -49,7 +58,14 @@ def test_game_zone_frontend_assets_are_wired():
     assert "startOneA2BGame" in games_js
     assert "generateOneA2BSecret" in games_js
     assert "scoreOneA2BGuess" in games_js
+    assert 'digit === "0"' in games_js
+    assert "/^[1-9][0-9]{3}$/.test(value)" in games_js
+    assert "首位不可為 0，例如 1234" in games_js
+    assert "例如 0123" not in games_js
     assert 'submitSoloGameScore("1a2b", oneA2BState)' in games_js
+    assert "guesses_then_time" in games_js
+    assert "guess_count" in games_js
+    assert "超過 5 分鐘，不列入排行榜" in games_js
     assert "startedAt: Date.now()" in games_js
     assert "solo-leaderboard" in games_js
     assert "solo-scores" in games_js

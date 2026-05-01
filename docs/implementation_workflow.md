@@ -139,14 +139,14 @@
 - [x] Phase 9 通知 UI 靜態測試
 - [ ] Phase 9 realtime / email 對應測試
 
-## Phase 10：站內信
+## Phase 10：聊天室與通知
 
-- [x] direct_messages / dm_threads schema
-- [x] DM API：收發 / 已讀 / 軟刪除
-- [x] DM UI
-- [x] blocked_users 阻擋 DM
-- [x] Phase 10 後端測試：DM thread / send / read / soft delete / block
-- [x] Phase 10 DM UI 靜態測試
+- [x] 舊站內信模組停用，私訊與群聊統一由聊天室處理。
+- [x] 多人聊天室：建立時加入成員、後續邀請、密碼加入。
+- [x] 聊天備份：聊天室成員可匯出 JSON 聊天記錄。
+- [x] 通知中心：root/manager 可主動發送通知，系統事件可被動通知當事人。
+- [x] Phase 10 後端測試：群聊建立 / 邀請 / 密碼加入 / 匯出。
+- [x] Phase 10 前端測試：聊天群組控制與舊站內信入口移除。
 
 ## Phase 11：附件 / 頭像 / CAPTCHA
 

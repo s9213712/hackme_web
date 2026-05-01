@@ -8,6 +8,11 @@ function setNotificationBadge(count) {
   const n = Math.max(0, parseInt(count || 0, 10));
   badge.textContent = n > 99 ? "99+" : String(n);
   badge.style.display = n > 0 ? "inline-flex" : "none";
+  const readAll = $("notification-read-all");
+  if (readAll) {
+    readAll.disabled = n <= 0;
+    readAll.textContent = n > 0 ? `全部已讀 (${n})` : "全部已讀";
+  }
 }
 
 function renderNotifications(items, unreadCount) {
@@ -19,7 +24,11 @@ function renderNotifications(items, unreadCount) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有通知</p>";
     return;
   }
-  list.innerHTML = notifications.map((item) => {
+  const unread = Math.max(0, parseInt(unreadCount || 0, 10));
+  const bulkAction = unread > 0
+    ? `<div class="notification-list-actions"><button class="btn btn-primary" type="button" data-notification-read-all>一鍵全部已讀</button></div>`
+    : "";
+  list.innerHTML = bulkAction + notifications.map((item) => {
     const cls = item.is_read ? "notification-item" : "notification-item unread";
     const readAction = item.is_read
       ? ""
@@ -41,6 +50,9 @@ function renderNotifications(items, unreadCount) {
   }).join("");
   list.querySelectorAll("button[data-notification-read]").forEach((btn) => {
     btn.addEventListener("click", () => markNotificationRead(parseInt(btn.getAttribute("data-notification-read"), 10)));
+  });
+  list.querySelectorAll("button[data-notification-read-all]").forEach((btn) => {
+    btn.addEventListener("click", markAllNotificationsRead);
   });
 }
 

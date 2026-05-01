@@ -11,7 +11,13 @@ from flask import request
 
 from services.cloud_drive import attach_existing_file, ensure_cloud_drive_attachment_schema, store_cloud_upload
 from services.comfyui_client import ComfyUIClient, ComfyUIError
-from services.storage_albums import add_album_file, create_storage_file_entry, ensure_storage_album_schema
+from services.notifications import create_notification_if_enabled
+from services.storage_albums import (
+    add_album_file,
+    create_storage_file_entry,
+    ensure_output_album,
+    ensure_storage_album_schema,
+)
 
 
 DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
@@ -391,6 +397,9 @@ def register_comfyui_routes(app, deps):
             album = {"id": normalized_album_id, "already_exists": True}
         return album, None
 
+    def _find_or_create_output_album(conn, *, actor):
+        return ensure_output_album(conn, actor=actor)
+
     def _save_fetched_image(conn, *, actor, data, image):
         filename = _clean_filename(data.get("display_name") or image.filename)
         guessed_mime = mimetypes.guess_type(filename)[0] or image.mime_type or "image/png"
@@ -412,7 +421,12 @@ def register_comfyui_routes(app, deps):
         file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
         virtual_path = str(data.get("virtual_path") or "").strip()
         if not virtual_path:
-            virtual_path = f"/ComfyUI/{filename}"
+            virtual_path = f"/output/{filename}"
+        default_output_album = None
+        if virtual_path.replace("\\", "/").strip().lower().startswith("/output/"):
+            default_output_album, msg = _find_or_create_output_album(conn, actor=actor)
+            if msg:
+                return None, None, None, msg
         storage_file, msg = create_storage_file_entry(
             conn,
             actor=actor,
@@ -423,16 +437,31 @@ def register_comfyui_routes(app, deps):
         )
         if msg:
             return None, None, None, msg
-        album, msg = _maybe_add_to_album(
-            conn,
-            actor=actor,
-            album_id=data.get("album_id"),
-            storage_file_id=storage_file["id"],
-            file_id=upload_result["file_id"],
-            caption="ComfyUI 產圖",
-        )
-        if msg:
-            return None, None, None, msg
+        selected_album_id = str(data.get("album_id") or "").strip()
+        output_album_id = str((default_output_album or {}).get("id") or "").strip()
+        album = None
+        if output_album_id:
+            album, msg = _maybe_add_to_album(
+                conn,
+                actor=actor,
+                album_id=output_album_id,
+                storage_file_id=storage_file["id"],
+                file_id=upload_result["file_id"],
+                caption="ComfyUI 產圖",
+            )
+            if msg:
+                return None, None, None, msg
+        if selected_album_id and selected_album_id != output_album_id:
+            album, msg = _maybe_add_to_album(
+                conn,
+                actor=actor,
+                album_id=selected_album_id,
+                storage_file_id=storage_file["id"],
+                file_id=upload_result["file_id"],
+                caption="ComfyUI 產圖",
+            )
+            if msg:
+                return None, None, None, msg
         return upload_result, storage_file, album, None
 
     def _existing_saved_image(conn, *, actor, data):
@@ -678,6 +707,24 @@ def register_comfyui_routes(app, deps):
             })
         image = images[0]
         image_ref = result["image_ref"]
+        conn = get_db()
+        try:
+            create_notification_if_enabled(
+                conn,
+                user_id=_actor_value(actor, "id"),
+                type="comfyui_generation_completed",
+                title="ComfyUI 產圖完成",
+                body=f"你的 ComfyUI 產圖已完成，共產生 {len(images)} 張圖片。",
+                link="/comfyui",
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            conn.close()
         audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}, batch={len(images)}")
         return json_resp({
             "ok": True,

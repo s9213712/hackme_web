@@ -31,8 +31,6 @@ let selectedReportIds = new Set();
 let chatRooms = [];
 let selectedChatRoomId = null;
 let chatPollTimer = null;
-let dmThreads = [];
-let selectedDmThreadId = null;
 const CHAT_POLL_MS = 2500;
 const DEFAULT_INACTIVITY_LOGOUT_MS = 10 * 60 * 1000;
 const IDLE_TIMEOUT_LOGOUT_STORAGE_KEY = "hackme_web.idle_timeout_logout_pending";
@@ -88,7 +86,6 @@ const SIDEBAR_ICON_PATHS = {
 };
 const SIDEBAR_MENU_CONFIG = [
   { tabId: "tab-module-chat", module: "chat", tab: "chat", icon: "chat", label: "聊天", group: "日常" },
-  { tabId: "tab-module-dm", module: "dm", tab: "dm", icon: "mail", label: "站內信", group: "日常" },
   { tabId: "tab-module-announcements", module: "community", tab: "announcements", icon: "bell", label: "公告", group: "社群" },
   {
     tabId: "tab-module-community",
@@ -131,6 +128,7 @@ const SIDEBAR_MENU_CONFIG = [
       { label: "帳號", action: "admin:users" },
       { label: "違規計次", action: "admin:violations" },
       { label: "會員治理", action: "admin:governance" },
+      { label: "發放通知", action: "admin:notices" },
       { label: "申覆審核", action: "admin:appeals" },
       { label: "訊息檢舉", action: "admin:reports" },
     ],
@@ -784,8 +782,10 @@ function renderChatRooms() {
     btn.type = "button";
     btn.className = "chat-room-item" + (Number(prevId) === Number(r.id) ? " active" : "");
     const lock = r.is_private ? "🔒 " : "";
-    btn.textContent = `${lock}#${r.id} ${r.name}`;
-    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}`);
+    const password = r.join_password_required ? " · 密碼" : "";
+    const memberCount = r.member_count ? ` · ${r.member_count}人` : "";
+    btn.textContent = `${lock}#${r.id} ${r.name}${memberCount}${password}`;
+    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}${password}`);
     btn.addEventListener("click", () => openChatRoom(r.id, true));
     row.appendChild(btn);
     if (canDeleteChatRoom(r)) {
@@ -1077,7 +1077,6 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleAccounts = $("tab-module-accounts");
   const tabModuleServer = $("tab-module-server");
   const tabModuleChat = $("tab-module-chat");
-  const tabModuleDm = $("tab-module-dm");
   const tabModuleAnnouncements = $("tab-module-announcements");
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
@@ -1090,10 +1089,10 @@ function setAuthState(json, showLoginHero = false) {
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
   const governanceTab = $("tab-governance");
+  const noticesTab = $("tab-notices");
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
-  if (tabModuleDm) tabModuleDm.style.display = canAccessModule("dm") ? "" : "none";
   if (tabModuleAnnouncements) tabModuleAnnouncements.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
@@ -1110,6 +1109,7 @@ function setAuthState(json, showLoginHero = false) {
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (governanceTab) governanceTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
+  if (noticesTab) noticesTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
 
@@ -1137,9 +1137,7 @@ function setAuthState(json, showLoginHero = false) {
     ? "accounts"
     : canAccessModule("chat")
       ? "chat"
-      : canAccessModule("dm")
-        ? "dm"
-        : canAccessModule("community")
+      : canAccessModule("community")
           ? "community"
           : canAccessModule("privacy_uploads")
             ? "drive"
@@ -1182,7 +1180,6 @@ function resetAuthState() {
     welcomeMsg.textContent = "歡迎回來！";
   }
   const moduleChat = $("module-chat");
-  const moduleDm = $("module-dm");
   const moduleAnnouncements = $("module-announcements");
   const moduleCommunity = $("module-community");
   const moduleDrive = $("module-drive");
@@ -1195,7 +1192,6 @@ function resetAuthState() {
   const moduleServer = $("module-server");
   const moduleAppeals = $("module-appeals");
   if (moduleChat) moduleChat.classList.remove("active");
-  if (moduleDm) moduleDm.classList.remove("active");
   if (moduleAnnouncements) moduleAnnouncements.classList.remove("active");
   if (moduleCommunity) moduleCommunity.classList.remove("active");
   if (moduleDrive) moduleDrive.classList.remove("active");
@@ -1214,8 +1210,6 @@ function resetAuthState() {
   $("me-nickname").textContent = "-";
   selectedChatRoomId = null;
   chatRooms = [];
-  selectedDmThreadId = null;
-  dmThreads = [];
   const chatWarn = $("chat-room-warn");
   if (chatWarn) chatWarn.className = "msg";
   const chatRoomList = $("chat-room-list");

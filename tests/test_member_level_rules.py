@@ -268,7 +268,7 @@ def test_every_level_change_writes_audit_log(tmp_path):
         conn.close()
 
 
-def test_quota_reduction_level_change_warns_user_with_dm_and_notification(tmp_path):
+def test_quota_reduction_level_change_warns_user_with_notification(tmp_path):
     conn = _conn(tmp_path / "levels.db")
     try:
         _insert_user(conn, 1, "root", "vip", role="super_admin")
@@ -316,9 +316,7 @@ def test_quota_reduction_level_change_warns_user_with_dm_and_notification(tmp_pa
         assert "24 小時" in notice["notice_message"]
         notification = conn.execute("SELECT * FROM notifications WHERE user_id=9 AND type='storage_quota_reduced'").fetchone()
         assert notification is not None
-        dm = conn.execute("SELECT * FROM direct_messages WHERE recipient_user_id=9").fetchone()
-        assert dm is not None
-        assert "完成備份" in dm["body"]
+        assert "完成備份" in notification["body"]
     finally:
         conn.close()
 

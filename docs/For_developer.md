@@ -97,28 +97,19 @@ send `X-CSRF-Token`.
 
 - `GET /api/chat/rooms`
 - `POST /api/chat/rooms`
-- `POST /api/chat/rooms/join`
+- `POST /api/chat/rooms/{room_id}/join`
+- `POST /api/chat/rooms/{room_id}/invites`
+- `GET /api/chat/rooms/{room_id}/export`
 - `GET /api/chat/rooms/{room_id}/messages`
 - `POST /api/chat/rooms/{room_id}/messages`
 - message delete/report flows through chat and reports routes
-
-### Direct Messages
-
-- `GET /api/dm/threads`
-- `POST /api/dm/threads`
-- `GET /api/dm/threads/{id}/messages`
-- `POST /api/dm/threads/{id}/messages`
-- `POST /api/dm/threads/{id}/read`
-- `DELETE /api/dm/messages/{id}`
-- `GET /api/dm/blocks`
-- `POST /api/dm/blocks`
-- `DELETE /api/dm/blocks/{user_id}`
 
 ### Notifications and Reports
 
 - `GET /api/notifications`
 - `POST /api/notifications/{id}/read`
 - `POST /api/notifications/read-all`
+- `POST /api/admin/notifications/send`
 - `POST /api/reports`
 - `GET /api/admin/reports`
 - `POST /api/admin/reports/{id}/claim`
@@ -316,7 +307,6 @@ Root can change them from Security Center / server settings.
 | `feature_forum_core_enabled` | `true` |
 | `feature_ui_rebuild_enabled` | `false` |
 | `feature_reports_notifications_enabled` | `true` |
-| `feature_dm_enabled` | `true` |
 | `feature_attachments_enabled` | `true` |
 | `feature_storage_albums_enabled` | `true` |
 | `feature_personalization_enabled` | `false` |
@@ -361,7 +351,6 @@ Route modules:
 - `routes/chat.py`
 - `routes/users.py`
 - `routes/community.py`
-- `routes/dm.py`
 - `routes/files.py`
 - `routes/bug_reports.py`
 - `routes/appeals.py`
@@ -407,7 +396,6 @@ Frontend scripts:
 - `public/js/25-community.js`
 - `public/js/30-appeals.js`
 - `public/js/32-notifications.js`
-- `public/js/33-dm.js`
 - `public/js/34-markdown-editor.js`
 - `public/js/35-drive.js`
 - `public/js/36-comfyui.js`

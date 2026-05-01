@@ -89,6 +89,39 @@ def register_user_routes(app, deps):
         except Exception:
             return {}
 
+    def active_session_map(conn):
+        try:
+            session_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        except Exception:
+            return {}
+        if not {"user_id", "expires_at"}.issubset(session_cols):
+            return {}
+        last_seen_expr = "COALESCE(last_seen, created_at)" if "last_seen" in session_cols else "created_at"
+        revoked_filter = "AND COALESCE(is_revoked, 0)=0" if "is_revoked" in session_cols else ""
+        now_iso = datetime.now().isoformat()
+        online_cutoff = (datetime.now() - timedelta(minutes=5)).isoformat()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT user_id, MAX({last_seen_expr}) AS last_seen, COUNT(*) AS session_count
+                FROM sessions
+                WHERE expires_at>? {revoked_filter}
+                GROUP BY user_id
+                """,
+                (now_iso,),
+            ).fetchall()
+        except Exception:
+            return {}
+        result = {}
+        for row in rows:
+            last_seen = row["last_seen"]
+            result[int(row["user_id"])] = {
+                "last_seen": last_seen,
+                "session_count": int(row["session_count"] or 0),
+                "is_online": bool(last_seen and str(last_seen) >= online_cutoff),
+            }
+        return result
+
     def current_session_hash():
         tok = request.cookies.get("session_token")
         return hash_token(tok) if tok else ""
@@ -361,7 +394,16 @@ def register_user_routes(app, deps):
                     "password_strength_score, avatar_file_id, avatar_crop_json, blocked_until, violation_count "
                     "FROM users ORDER BY id ASC"
                 ).fetchall()
-                data = [user_public_payload(r, include_sensitive=False) for r in rows]
+                sessions_by_user = active_session_map(conn)
+                data = []
+                for r in rows:
+                    item = user_public_payload(r, include_sensitive=False)
+                    session_info = sessions_by_user.get(int(r["id"]), {})
+                    item["is_online"] = bool(session_info.get("is_online"))
+                    item["online_status"] = "online" if item["is_online"] else "offline"
+                    item["online_last_seen"] = session_info.get("last_seen") or ""
+                    item["active_session_count"] = int(session_info.get("session_count") or 0)
+                    data.append(item)
             finally:
                 conn.close()
             return json_resp({

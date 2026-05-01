@@ -331,7 +331,7 @@ function setComfyuiSelectedImage(index) {
   }
   const savePath = $("comfyui-save-path");
   if (savePath && comfyuiCurrentImage?.image_ref?.filename && (!savePath.value.trim() || savePath.dataset.comfyuiAutoPath === "1")) {
-    savePath.value = `/ComfyUI/${comfyuiCurrentImage.image_ref.filename}`;
+    savePath.value = `/output/${comfyuiCurrentImage.image_ref.filename}`;
     savePath.dataset.comfyuiAutoPath = "1";
     writeComfyuiDraft();
   }
@@ -623,9 +623,10 @@ async function saveComfyuiImageToDrive() {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `儲存失敗（HTTP ${res.status}）`);
     comfyuiSavedResult = json;
-    const albumText = json.album ? "，並加入指定相簿" : "";
+    const albumText = json.album ? "，並加入相簿" : "";
     setComfyuiMessage(`已存到雲端硬碟${albumText}：${json.storage_file?.virtual_path || json.file?.file_id || ""}`, true);
     if (typeof loadDriveDashboard === "function") await loadDriveDashboard();
+    await loadComfyuiAlbums({ force: true });
   } catch (err) {
     setComfyuiMessage(err.message || "儲存失敗", false);
   } finally {
@@ -735,6 +736,7 @@ async function shareComfyuiToCommunity() {
       if (typeof loadCommunityBoards === "function") loadCommunityBoards().catch(() => {});
     }
     if (typeof loadDriveDashboard === "function") await loadDriveDashboard();
+    await loadComfyuiAlbums({ force: true });
   } catch (err) {
     setComfyuiMessage(err.message || "分享失敗", false);
   } finally {

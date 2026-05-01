@@ -70,6 +70,15 @@ def register_economy_routes(app, deps):
             return None
         return number
 
+    def parse_required_user_id(value):
+        if value in (None, ""):
+            return None
+        try:
+            user_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        return user_id if user_id > 0 else None
+
     def _stable_spend_key(*, user_id, item_key, quantity):
         payload = json.dumps(
             {
@@ -408,10 +417,13 @@ def register_economy_routes(app, deps):
         reference_id = str(data.get("reference_id") or "").strip()[:120]
         metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
         metadata = {k: metadata[k] for k in ("reason", "source", "moderation_case_id") if k in metadata}
+        user_id = parse_required_user_id(data.get("user_id"))
+        if user_id is None:
+            return json_resp({"ok": False, "msg": "user_id required"}), 400
         try:
             reward = points_service.create_pending_reward(
                 actor=actor,
-                user_id=int(data.get("user_id")),
+                user_id=user_id,
                 currency_type=currency_type,
                 amount=amount,
                 action_type=action_type,

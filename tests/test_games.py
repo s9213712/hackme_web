@@ -54,6 +54,28 @@ def _seed_db(db_path):
     conn.close()
 
 
+def _seed_legacy_user_db(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL DEFAULT 'user',
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+        INSERT INTO users (id, username, role, status) VALUES
+          (1, 'root', 'super_admin', 'active'),
+          (2, 'alice', 'user', 'active'),
+          (3, 'bob', 'user', 'active');
+        """
+    )
+    ensure_game_schema(conn)
+    conn.commit()
+    conn.close()
+
+
 def test_game_catalog_includes_sudoku_minesweeper_and_1a2b(tmp_path):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
@@ -69,6 +91,86 @@ def test_game_catalog_includes_sudoku_minesweeper_and_1a2b(tmp_path):
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
+
+
+def test_games_users_and_invites_work_with_legacy_users_table_without_deleted_at(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_legacy_user_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    users = client.get("/api/games/users")
+    assert users.status_code == 200
+    payload = users.get_json()
+    assert payload["ok"] is True
+    assert [row["username"] for row in payload["users"]] == ["bob", "root"]
+
+    invite = client.post("/api/games/chess/invites", json={"opponent_username": "bob"})
+    assert invite.status_code == 200
+    assert invite.get_json()["ok"] is True
+
+
+def test_game_schema_migrates_existing_solo_scores_without_guess_count(tmp_path):
+    db_path = tmp_path / "games.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL DEFAULT 'user',
+            status TEXT NOT NULL DEFAULT 'active',
+            deleted_at TEXT
+        );
+        INSERT INTO users (id, username, role, status) VALUES
+          (1, 'root', 'super_admin', 'active'),
+          (2, 'alice', 'user', 'active');
+        CREATE TABLE game_solo_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_key TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            week_key TEXT NOT NULL,
+            difficulty TEXT NOT NULL DEFAULT 'standard',
+            puzzle_id TEXT,
+            raw_elapsed_ms INTEGER NOT NULL,
+            penalty_seconds INTEGER NOT NULL DEFAULT 0,
+            elapsed_ms INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (game_key IN ('sudoku', 'minesweeper')),
+            CHECK (elapsed_ms > 0),
+            CHECK (raw_elapsed_ms > 0),
+            CHECK (penalty_seconds >= 0)
+        );
+        INSERT INTO game_solo_scores (
+            game_key, user_id, week_key, difficulty, puzzle_id,
+            raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+        ) VALUES ('sudoku', 2, '2026-W18', 'standard', 'legacy', 50000, 0, 50000, '2026-05-01T00:00:00+00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    response = client.get("/api/games/users")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_solo_scores)").fetchall()}
+        assert "guess_count" in cols
+        migrated = conn.execute("SELECT game_key, guess_count FROM game_solo_scores WHERE puzzle_id='legacy'").fetchone()
+        assert migrated["game_key"] == "sudoku"
+        assert migrated["guess_count"] == 0
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_guesses_rank'").fetchone()
+    finally:
+        conn.close()
 
 
 def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
@@ -105,12 +207,34 @@ def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
 
     onea2b = client.post(
         "/api/games/1a2b/solo-scores",
-        json={"raw_elapsed_ms": 30000, "penalty_seconds": 0, "elapsed_ms": 30000, "puzzle_id": "1a2b-4digits"},
+        json={"raw_elapsed_ms": 30000, "penalty_seconds": 0, "elapsed_ms": 30000, "puzzle_id": "1a2b-4digits", "guess_count": 3},
     )
     assert onea2b.status_code == 200
+    better_guesses = client.post(
+        "/api/games/1a2b/solo-scores",
+        json={"raw_elapsed_ms": 60000, "penalty_seconds": 0, "elapsed_ms": 60000, "puzzle_id": "1a2b-4digits", "guess_count": 2},
+    )
+    assert better_guesses.status_code == 200
+    too_slow = client.post(
+        "/api/games/1a2b/solo-scores",
+        json={"raw_elapsed_ms": 301000, "penalty_seconds": 0, "elapsed_ms": 301000, "puzzle_id": "1a2b-4digits", "guess_count": 1},
+    )
+    assert too_slow.status_code == 200
+    assert too_slow.get_json()["ranked"] is False
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    fewest_guesses = client.post(
+        "/api/games/1a2b/solo-scores",
+        json={"raw_elapsed_ms": 100000, "penalty_seconds": 0, "elapsed_ms": 100000, "puzzle_id": "1a2b-4digits", "guess_count": 1},
+    )
+    assert fewest_guesses.status_code == 200
     onea2b_board = client.get("/api/games/1a2b/solo-leaderboard")
     assert onea2b_board.status_code == 200
-    assert onea2b_board.get_json()["leaderboard"][0]["elapsed_ms"] == 30000
+    onea2b_payload = onea2b_board.get_json()
+    assert onea2b_payload["rank_mode"] == "guesses_then_time"
+    assert [row["username"] for row in onea2b_payload["leaderboard"][:2]] == ["bob", "alice"]
+    assert onea2b_payload["leaderboard"][0]["guess_count"] == 1
+    assert onea2b_payload["leaderboard"][1]["guess_count"] == 2
+    assert onea2b_payload["leaderboard"][1]["elapsed_ms"] == 60000
 
 
 def test_chess_legal_move_validation_blocks_illegal_moves():

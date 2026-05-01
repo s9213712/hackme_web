@@ -312,6 +312,15 @@ function renderGameLeaderboard(data) {
     wrap.innerHTML = `<p style="color:var(--muted);">${data?.rank_mode === "time_asc" ? "本週尚無完成時間紀錄" : "本週尚無玩家對戰成績"}</p>`;
     return;
   }
+  if (data?.rank_mode === "guesses_then_time") {
+    wrap.innerHTML = rows.map((row) => `
+      <div class="drive-file-row game-list-row">
+        <div><strong>#${row.rank} ${sanitize(row.username || "-")}</strong><small>猜 ${row.guess_count || 0} 次 · 完成 ${row.attempts || 1} 次</small></div>
+        <strong>${formatSoloGameTime(row.elapsed_ms || 0)}</strong>
+      </div>
+    `).join("");
+    return;
+  }
   if (data?.rank_mode === "time_asc") {
     wrap.innerHTML = rows.map((row) => `
       <div class="drive-file-row game-list-row">
@@ -362,6 +371,7 @@ async function submitSoloGameScore(gameKey, state) {
         elapsed_ms: elapsed,
         difficulty: state.difficulty || "standard",
         puzzle_id: state.puzzleId || "",
+        guess_count: Array.isArray(state.guesses) ? state.guesses.length : 0,
       },
     });
     await loadSelectedGameLeaderboard();
@@ -611,6 +621,8 @@ function generateOneA2BSecret() {
   const secret = [];
   while (secret.length < 4) {
     const index = Math.floor(Math.random() * digits.length);
+    const digit = digits[index];
+    if (!secret.length && digit === "0") continue;
     secret.push(digits.splice(index, 1)[0]);
   }
   return secret.join("");
@@ -631,7 +643,7 @@ function normalizeOneA2BGuess(value) {
 }
 
 function isValidOneA2BGuess(value) {
-  return /^[0-9]{4}$/.test(value) && new Set(value.split("")).size === 4;
+  return /^[1-9][0-9]{3}$/.test(value) && new Set(value.split("")).size === 4;
 }
 
 function startOneA2BGame() {
@@ -653,7 +665,7 @@ function startOneA2BGame() {
   }
   renderOneA2BBoard();
   ensureSoloGameTimer();
-  updateOneA2BStatus("計時開始。輸入 4 個不重複數字，例如 0123。");
+  updateOneA2BStatus("計時開始。輸入 4 個不重複數字，首位不可為 0，例如 1234。");
 }
 
 function renderOneA2BBoard() {
@@ -696,7 +708,7 @@ function submitOneA2BGuess() {
   const guess = normalizeOneA2BGuess(input?.value || "");
   if (input && input.value !== guess) input.value = guess;
   if (!isValidOneA2BGuess(guess)) {
-    updateOneA2BStatus("請輸入 4 個不重複數字。");
+    updateOneA2BStatus("請輸入 4 個不重複數字，首位不可為 0。");
     return;
   }
   if (oneA2BState.guesses.some((item) => item.guess === guess)) {
@@ -715,6 +727,11 @@ function submitOneA2BGuess() {
     if (input) input.disabled = true;
     updateOneA2BStatus();
     stopSoloGameTimerIfIdle();
+    if (soloElapsedMs(oneA2BState) > 5 * 60 * 1000) {
+      oneA2BState.scoreSubmitted = true;
+      setGameMsg("1A2B 已完成，但超過 5 分鐘，不列入排行榜。", false);
+      return;
+    }
     submitSoloGameScore("1a2b", oneA2BState);
     setGameMsg(`1A2B 完成，成績 ${formatSoloGameTime(soloElapsedMs(oneA2BState))}`, true);
     return;

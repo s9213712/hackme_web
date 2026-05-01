@@ -133,6 +133,42 @@ handler. It is intended for safe-mode recovery: the button verifies the chain,
 uses the prepared healthy backup only when available, rebuilds wallets from the
 ledger, and reports manual-required when no trusted backup exists.
 
+### Points Exchange
+
+The Economy branch includes a first-stage spot exchange for `BTC/POINTS` and
+`ETH/POINTS`. Spot trading is open to normal users and root. Normal-user
+settlement uses the local PointsChain ledger, while root spot settlement uses a
+separate simulated trading balance. POINTS are treated as USDT-equivalent in the
+trading UI (`1 POINT = 1 USDT`) so market prices match the public quote unit.
+BTC/ETH spot execution uses the backend live Binance public price as the
+authoritative execution price. Root-set manual prices remain an administrative
+fallback/reference value and are overwritten by the latest live execution price
+when a supported market is traded.
+
+The exchange page also shows a Binance public API candlestick chart for BTC/USDT
+and ETH/USDT. The default timeframe is daily, with 15-minute, 1-hour, and
+4-hour options available. The chart is also used by the frontend to refresh the
+displayed current price; the backend still fetches its own price again before
+execution:
+
+- `BTC/POINTS` maps to Binance `BTCUSDT`.
+- `ETH/POINTS` maps to Binance `ETHUSDT`.
+- The fixed display conversion is `1 POINT = 1 USDT`.
+- If Binance is unavailable, live-price spot execution fails closed with a clear
+  error instead of silently using a stale manual price.
+
+Trading funds are separated by account type:
+
+- Normal users trade with the POINTS they actually own in their PointsChain
+  wallet.
+- `root` can use spot and contract simulation with a separate simulated trading
+  balance. It starts at 10000 POINTS and does not write to PointsChain or mutate
+  the root account wallet.
+- Root can reset this simulated trading balance back to 10000 POINTS from the
+  exchange control panel.
+- Contract/futures functionality is root-only at this stage. Root can open and
+  close simulated long/short positions; non-root users can only use spot.
+
 ## Account and Permission Model
 
 Roles:

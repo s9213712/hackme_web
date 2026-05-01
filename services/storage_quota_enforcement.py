@@ -81,75 +81,6 @@ def _format_bytes(value):
     return f"{size} B"
 
 
-def _ensure_dm_schema(conn):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS dm_threads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            participant_a_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            participant_b_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(participant_a_id, participant_b_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS direct_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            thread_id INTEGER NOT NULL REFERENCES dm_threads(id) ON DELETE CASCADE,
-            sender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            recipient_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            body TEXT NOT NULL,
-            is_read INTEGER NOT NULL DEFAULT 0,
-            read_at TEXT,
-            sender_deleted_at TEXT,
-            recipient_deleted_at TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_unread ON direct_messages(recipient_user_id, is_read)")
-
-
-def _dm_pair(a, b):
-    a_id = int(a)
-    b_id = int(b)
-    return (a_id, b_id) if a_id < b_id else (b_id, a_id)
-
-
-def _send_system_dm(conn, *, sender_id, recipient_id, body):
-    if not sender_id or int(sender_id) == int(recipient_id):
-        return None
-    _ensure_dm_schema(conn)
-    now = _now()
-    a_id, b_id = _dm_pair(sender_id, recipient_id)
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO dm_threads (
-            participant_a_id, participant_b_id, created_by_user_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-        (a_id, b_id, int(sender_id), now, now),
-    )
-    thread = conn.execute(
-        "SELECT * FROM dm_threads WHERE participant_a_id=? AND participant_b_id=?",
-        (a_id, b_id),
-    ).fetchone()
-    conn.execute(
-        """
-        INSERT INTO direct_messages (
-            thread_id, sender_user_id, recipient_user_id, body, is_read, created_at
-        ) VALUES (?, ?, ?, ?, 0, ?)
-        """,
-        (thread["id"], int(sender_id), int(recipient_id), body, now),
-    )
-    conn.execute("UPDATE dm_threads SET updated_at=? WHERE id=?", (now, thread["id"]))
-    return thread["id"]
-
-
 def maybe_create_quota_reduction_notice(
     conn,
     *,
@@ -223,8 +154,6 @@ def maybe_create_quota_reduction_notice(
         body=f"你的雲端硬碟目前使用 {_format_bytes(used_bytes)}，新上限為 {_format_bytes(new_quota)}。請在 24 小時內完成備份。",
         link="/drive",
     )
-    sender_id = _value(actor, "id")
-    _send_system_dm(conn, sender_id=sender_id, recipient_id=user_id, body=message)
     return {
         "created": True,
         "notice_id": notice_id,

@@ -3,11 +3,24 @@ import math
 import uuid
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from services.notifications import create_notification_if_enabled
 
 
 ASSET_SCALE = 100_000_000
+USDT_TO_POINTS_RATE = 1
+ROOT_SIMULATED_INITIAL_POINTS = 10_000
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
+BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
+LIVE_PRICE_MARKETS = {
+    "BTC/POINTS": "BTCUSDT",
+    "BTC/USDT": "BTCUSDT",
+    "ETH/POINTS": "ETHUSDT",
+    "ETH/USDT": "ETHUSDT",
+}
 
 
 def _now():
@@ -109,6 +122,7 @@ def ensure_trading_schema(conn):
             market_symbol TEXT NOT NULL REFERENCES trading_markets(symbol),
             side TEXT NOT NULL,
             order_type TEXT NOT NULL,
+            funding_mode TEXT NOT NULL DEFAULT 'points_chain',
             execution_mode TEXT NOT NULL DEFAULT 'house_counterparty',
             quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
             limit_price_points INTEGER,
@@ -136,6 +150,7 @@ def ensure_trading_schema(conn):
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             market_symbol TEXT NOT NULL,
             side TEXT NOT NULL,
+            funding_mode TEXT NOT NULL DEFAULT 'points_chain',
             quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
             price_points INTEGER NOT NULL CHECK (price_points > 0),
             notional_points INTEGER NOT NULL CHECK (notional_points >= 0),
@@ -144,6 +159,19 @@ def ensure_trading_schema(conn):
             points_ledger_uuids_json TEXT,
             created_at TEXT NOT NULL,
             CHECK (side IN ('buy', 'sell'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_sim_accounts (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            balance_points INTEGER NOT NULL DEFAULT 0 CHECK (balance_points >= 0),
+            locked_points INTEGER NOT NULL DEFAULT 0 CHECK (locked_points >= 0),
+            initial_balance_points INTEGER NOT NULL DEFAULT 10000,
+            updated_at TEXT NOT NULL,
+            reset_at TEXT,
+            reset_by INTEGER
         )
         """
     )
@@ -265,7 +293,7 @@ def ensure_trading_schema(conn):
         ("trading.enabled", "true"),
         ("trading.futures_enabled", "false"),
         ("trading.pvp_matching_enabled", "false"),
-        ("trading.price_source", "manual_root"),
+        ("trading.price_source", "binance_public_api"),
     ]
     for key, value in defaults:
         conn.execute(
@@ -280,17 +308,22 @@ def ensure_trading_schema(conn):
             """
             INSERT OR IGNORE INTO trading_markets (
                 symbol, base_asset, quote_currency, manual_price_points, updated_at, price_source
-            ) VALUES (?, ?, 'POINTS', ?, ?, 'manual_root')
+            ) VALUES (?, ?, 'POINTS', ?, ?, 'binance_public_api')
             """,
             (symbol, asset, price, now),
         )
+    for table in ("trading_orders", "trading_fills"):
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "funding_mode" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN funding_mode TEXT NOT NULL DEFAULT 'points_chain'")
 
 
 class TradingEngineService:
-    def __init__(self, *, get_db, points_service, audit=None):
+    def __init__(self, *, get_db, points_service, audit=None, live_price_provider=None):
         self.get_db = get_db
         self.points_service = points_service
         self.audit = audit or (lambda *args, **kwargs: None)
+        self.live_price_provider = live_price_provider
 
     def ensure_schema(self, conn):
         self.points_service.ensure_schema(conn)
@@ -301,6 +334,15 @@ class TradingEngineService:
             return int(actor.get("id") if hasattr(actor, "get") else actor["id"])
         except Exception:
             return None
+
+    def _actor_username(self, actor):
+        try:
+            return str(actor.get("username") if hasattr(actor, "get") else actor["username"])
+        except Exception:
+            return ""
+
+    def _is_root_actor(self, actor):
+        return self._actor_username(actor) == "root"
 
     def _audit_event(self, conn, event_type, message, *, actor=None, target_user_id=None, order_id=None, market_symbol=None, severity="info", metadata=None):
         conn.execute(
@@ -425,7 +467,95 @@ class TradingEngineService:
         item["pvp_matching_enabled"] = bool(item["pvp_matching_enabled"])
         item["enabled"] = bool(item["enabled"])
         item["spot_enabled"] = bool(item["spot_enabled"])
+        item["display_symbol"] = str(item["symbol"] or "").replace("/POINTS", "/USDT")
         return item
+
+    def _live_price_symbol(self, market_symbol):
+        return LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
+
+    def _fetch_live_price_points(self, market_symbol):
+        symbol = self._live_price_symbol(market_symbol)
+        if not symbol:
+            raise ValueError("live price is not supported for this market")
+        if self.live_price_provider:
+            price = self.live_price_provider(str(market_symbol or "").strip().upper())
+        else:
+            req = Request(
+                f"{BINANCE_TICKER_URL}?{urlencode({'symbol': symbol})}",
+                headers={"User-Agent": "hackme_web/1.0 trading-price"},
+            )
+            with urlopen(req, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            price = payload.get("price") if isinstance(payload, dict) else None
+        try:
+            price_points = int(round(float(price) * USDT_TO_POINTS_RATE))
+        except Exception as exc:
+            raise ValueError("live trading price format is invalid") from exc
+        if price_points <= 0:
+            raise ValueError("live trading price is invalid")
+        return price_points
+
+    def _current_market_price_points(self, conn, market):
+        symbol = market["symbol"]
+        if not self._live_price_symbol(symbol):
+            return int(market["manual_price_points"]), str(market["price_source"] or "manual_root")
+        try:
+            price = self._fetch_live_price_points(symbol)
+        except Exception as exc:
+            raise ValueError(f"live trading price unavailable for {symbol}: {exc}") from exc
+        now = _now()
+        conn.execute(
+            "UPDATE trading_markets SET manual_price_points=?, price_source='binance_public_api', updated_at=? WHERE symbol=?",
+            (price, now, symbol),
+        )
+        return price, "binance_public_api"
+
+    def _root_sim_account(self, conn, user_id, *, actor=None):
+        user_id = int(user_id)
+        now = _now()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO trading_sim_accounts (
+                user_id, balance_points, locked_points, initial_balance_points, updated_at
+            ) VALUES (?, ?, 0, ?, ?)
+            """,
+            (user_id, ROOT_SIMULATED_INITIAL_POINTS, ROOT_SIMULATED_INITIAL_POINTS, now),
+        )
+        return conn.execute("SELECT * FROM trading_sim_accounts WHERE user_id=?", (user_id,)).fetchone()
+
+    def _sim_delta(self, conn, user_id, *, balance_delta=0, locked_delta=0):
+        account = self._root_sim_account(conn, user_id)
+        next_balance = int(account["balance_points"] or 0) + int(balance_delta)
+        next_locked = int(account["locked_points"] or 0) + int(locked_delta)
+        if next_balance < 0:
+            raise ValueError("root simulated trading points are insufficient")
+        if next_locked < 0:
+            raise ValueError("root simulated locked points are inconsistent")
+        conn.execute(
+            "UPDATE trading_sim_accounts SET balance_points=?, locked_points=?, updated_at=? WHERE user_id=?",
+            (next_balance, next_locked, _now(), int(user_id)),
+        )
+        return conn.execute("SELECT * FROM trading_sim_accounts WHERE user_id=?", (int(user_id),)).fetchone()
+
+    def _funding_payload(self, conn, user_id):
+        user = conn.execute("SELECT username FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if user and user["username"] == "root":
+            account = self._root_sim_account(conn, user_id)
+            return {
+                "mode": "root_simulated",
+                "available_points": int(account["balance_points"] or 0),
+                "locked_points": int(account["locked_points"] or 0),
+                "initial_balance_points": int(account["initial_balance_points"] or ROOT_SIMULATED_INITIAL_POINTS),
+                "note": "root 模擬交易資金不寫入 PointsChain，也不影響帳戶積分",
+            }
+        wallet = self.points_service.ensure_wallet(conn, user_id)
+        payload = self.points_service.serialize_wallet(wallet)
+        return {
+            "mode": "points_chain",
+            "available_points": int(payload.get("points_balance") or 0),
+            "locked_points": int(payload.get("points_frozen") or 0),
+            "note": "一般用戶可用積分等於實際 PointsChain 錢包餘額",
+        }
 
     def _position_payload(self, row):
         item = dict(row)
@@ -443,6 +573,49 @@ class TradingEngineService:
         item["quantity"] = units_to_quantity(item["quantity_units"])
         item["points_ledger_uuids"] = _json_loads(item.get("points_ledger_uuids_json"), [])
         return item
+
+    def _notify_trade_filled(self, conn, fill):
+        try:
+            side_label = "買入" if fill["side"] == "buy" else "賣出"
+            quantity = units_to_quantity(fill["quantity_units"])
+            create_notification_if_enabled(
+                conn,
+                user_id=fill["user_id"],
+                type="trading_order_filled",
+                title="交易已成交",
+                body=(
+                    f"{fill['market_symbol']} {side_label} {quantity} 已成交，"
+                    f"成交價 {int(fill['price_points'])}，成交額 {int(fill['notional_points'])}，"
+                    f"手續費 {int(fill['fee_points'] or 0)}。"
+                ),
+                link="/trading",
+            )
+        except Exception:
+            pass
+
+    def _is_insufficient_error(self, exc):
+        lowered = str(exc or "").lower()
+        return any(term in lowered for term in ("insufficient", "餘額不足", "積分不足", "持倉不足"))
+
+    def _notify_insufficient_balance(self, *, user_id, market_symbol, side, order_type, quantity, error):
+        conn = self.get_db()
+        try:
+            create_notification_if_enabled(
+                conn,
+                user_id=user_id,
+                type="trading_balance_insufficient",
+                title="交易未成立：餘額不足",
+                body=(
+                    f"{market_symbol or '交易市場'} {side or '-'} {order_type or '-'} "
+                    f"數量 {quantity} 未成立：{str(error)[:180]}"
+                ),
+                link="/trading",
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
 
     def list_markets(self, *, include_disabled=False):
         conn = self.get_db()
@@ -476,12 +649,20 @@ class TradingEngineService:
                 self._fill_payload(row)
                 for row in conn.execute("SELECT * FROM trading_fills WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
-            return {"state": state, "markets": markets, "positions": positions, "futures_positions": futures_positions, "orders": orders, "fills": fills}
+            return {
+                "state": state,
+                "funding": self._funding_payload(conn, user_id),
+                "markets": markets,
+                "positions": positions,
+                "futures_positions": futures_positions,
+                "orders": orders,
+                "fills": fills,
+            }
         finally:
             conn.close()
 
-    def _is_executable(self, market, *, side, order_type, limit_price):
-        current_price = int(market["manual_price_points"])
+    def _is_executable(self, market, *, side, order_type, limit_price, current_price):
+        current_price = int(current_price)
         if order_type == "market":
             return True, current_price
         limit_price = int(limit_price or 0)
@@ -491,7 +672,7 @@ class TradingEngineService:
             return True, current_price
         return False, None
 
-    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None):
+    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False):
         user_id = self._actor_id(actor)
         if not user_id:
             raise ValueError("login required")
@@ -501,6 +682,9 @@ class TradingEngineService:
             raise ValueError("side must be buy or sell")
         if order_type not in {"market", "limit"}:
             raise ValueError("order_type must be market or limit")
+        emergency_close = bool(emergency_close)
+        if emergency_close and (side != "sell" or order_type != "market"):
+            raise ValueError("emergency close only supports market sell")
         quantity_units = quantity_to_units(quantity)
         conn = self.get_db()
         try:
@@ -513,13 +697,15 @@ class TradingEngineService:
                 raise ValueError("futures interface is reserved but not enabled in v1")
             if int(market["pvp_matching_enabled"] or 0):
                 raise ValueError("pvp matching interface is reserved but not enabled in v1")
+            current_price, price_source = self._current_market_price_points(conn, market)
             if order_type == "limit":
                 limit_price = _to_int(limit_price_points, name="limit_price_points", minimum=1)
             else:
                 limit_price = None
-            check_price = int(limit_price or market["manual_price_points"])
+            check_price = int(limit_price or current_price)
             estimated_notional = notional_points(quantity_units, check_price)
-            fee = fee_points(estimated_notional, market["fee_bps"])
+            effective_fee_bps = int(market["fee_bps"] or 0) * (2 if emergency_close else 1)
+            fee = fee_points(estimated_notional, effective_fee_bps)
             total_points = estimated_notional + fee
             if estimated_notional < int(market["min_order_points"]):
                 raise ValueError("order notional is below market minimum")
@@ -528,17 +714,25 @@ class TradingEngineService:
             if side == "sell" and estimated_notional - fee <= 0:
                 raise ValueError("sell notional after fee must be positive")
 
-            executable, execution_price = self._is_executable(market, side=side, order_type=order_type, limit_price=limit_price)
+            executable, execution_price = self._is_executable(
+                market,
+                side=side,
+                order_type=order_type,
+                limit_price=limit_price,
+                current_price=current_price,
+            )
             now = _now()
             order_uuid = str(uuid.uuid4())
+            funding_mode = "root_simulated" if self._is_root_actor(actor) else "points_chain"
             frozen_points = total_points if side == "buy" else 0
+            order_reason = "EMERGENCY_MARKET_CLOSE" if emergency_close else ""
             cur = conn.execute(
                 """
                 INSERT INTO trading_orders (
-                    order_uuid, user_id, market_symbol, side, order_type, execution_mode,
+                    order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
                     frozen_points, fee_points, filled_quantity_units, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, 0, '', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, 0, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -546,11 +740,13 @@ class TradingEngineService:
                     market["symbol"],
                     side,
                     order_type,
+                    funding_mode,
                     quantity_units,
                     limit_price,
                     execution_price,
                     frozen_points,
                     fee,
+                    order_reason,
                     now,
                     now,
                 ),
@@ -558,20 +754,23 @@ class TradingEngineService:
             order_id = cur.lastrowid
             ledger_rows = []
             if side == "buy":
-                ledger_rows.append(self._ledger(
-                    conn,
-                    user_id=user_id,
-                    currency_type="points",
-                    direction="freeze",
-                    amount=total_points,
-                    action_type="trading_freeze",
-                    reference_type="trading_order",
-                    reference_id=order_uuid,
-                    idempotency_key=f"trading:freeze:{order_uuid}",
-                    reason="TRADING_FREEZE",
-                    public_metadata={"order_id": order_id, "market": market["symbol"], "side": side, "order_type": order_type},
-                    actor=actor,
-                ))
+                if funding_mode == "root_simulated":
+                    self._sim_delta(conn, user_id, balance_delta=-total_points, locked_delta=total_points)
+                else:
+                    ledger_rows.append(self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="freeze",
+                        amount=total_points,
+                        action_type="trading_freeze",
+                        reference_type="trading_order",
+                        reference_id=order_uuid,
+                        idempotency_key=f"trading:freeze:{order_uuid}",
+                        reason="TRADING_FREEZE",
+                    public_metadata={"order_id": order_id, "market": market["symbol"], "side": side, "order_type": order_type, "price_source": price_source, "fee_bps": effective_fee_bps},
+                        actor=actor,
+                    ))
             else:
                 position = self._position(conn, user_id, market["symbol"])
                 if int(position["quantity_units"]) < quantity_units:
@@ -589,14 +788,26 @@ class TradingEngineService:
                 order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
                 fill = self._execute_order(conn, order, market, actor=actor)
                 order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
-                self._audit_event(conn, "TRADING_ORDER_FILLED", "spot order filled", actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], metadata={"fill_id": fill["id"]})
+                event_type = "TRADING_EMERGENCY_MARKET_CLOSE" if emergency_close else "TRADING_ORDER_FILLED"
+                message = "emergency market close filled" if emergency_close else "spot order filled"
+                self._audit_event(conn, event_type, message, actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], severity="warning" if emergency_close else "info", metadata={"fill_id": fill["id"], "price_source": price_source, "execution_price_points": execution_price, "fee_bps": effective_fee_bps})
+                self._notify_trade_filled(conn, fill)
             else:
                 order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
-                self._audit_event(conn, "TRADING_ORDER_OPEN", "limit order stored as open order", actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"])
+                self._audit_event(conn, "TRADING_ORDER_OPEN", "limit order stored as open order", actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], metadata={"price_source": price_source, "current_price_points": current_price})
             conn.commit()
             return {"ok": True, "order": self._order_payload(order), "executed": executable}
-        except Exception:
+        except Exception as exc:
             conn.rollback()
+            if self._is_insufficient_error(exc):
+                self._notify_insufficient_balance(
+                    user_id=user_id,
+                    market_symbol=market_symbol,
+                    side=side,
+                    order_type=order_type,
+                    quantity=quantity,
+                    error=exc,
+                )
             raise
         finally:
             conn.close()
@@ -607,54 +818,61 @@ class TradingEngineService:
         quantity_units = int(order["quantity_units"])
         price = int(order["execution_price_points"] or market["manual_price_points"])
         notional = notional_points(quantity_units, price)
-        fee = fee_points(notional, market["fee_bps"])
+        emergency_close = str(order["reason"] or "") == "EMERGENCY_MARKET_CLOSE"
+        effective_fee_bps = int(market["fee_bps"] or 0) * (2 if emergency_close else 1)
+        fee = fee_points(notional, effective_fee_bps)
         total = notional + fee
         ledger_uuids = []
+        funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
         if side == "buy":
             frozen_amount = int(order["frozen_points"] or total)
-            ledger_uuids.append(self._ledger(
-                conn,
-                user_id=user_id,
-                currency_type="points",
-                direction="unfreeze",
-                amount=frozen_amount,
-                action_type="trading_unfreeze",
-                reference_type="trading_order",
-                reference_id=order["order_uuid"],
-                idempotency_key=f"trading:unfreeze:settle:{order['order_uuid']}",
-                reason="TRADING_UNFREEZE_SETTLEMENT",
-                public_metadata={"order_id": order["id"], "market": market["symbol"], "side": side},
-                actor=actor,
-            )["ledger_uuid"])
-            ledger_uuids.append(self._ledger(
-                conn,
-                user_id=user_id,
-                currency_type="points",
-                direction="debit",
-                amount=notional,
-                action_type="trading_spot_buy",
-                reference_type="trading_order",
-                reference_id=order["order_uuid"],
-                idempotency_key=f"trading:spot_buy:{order['order_uuid']}",
-                reason="TRADING_SPOT_BUY",
-                public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
-                actor=actor,
-            )["ledger_uuid"])
-            if fee:
+            if funding_mode == "root_simulated":
+                refund = max(0, frozen_amount - total)
+                self._sim_delta(conn, user_id, balance_delta=refund, locked_delta=-frozen_amount)
+            else:
+                ledger_uuids.append(self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="unfreeze",
+                    amount=frozen_amount,
+                    action_type="trading_unfreeze",
+                    reference_type="trading_order",
+                    reference_id=order["order_uuid"],
+                    idempotency_key=f"trading:unfreeze:settle:{order['order_uuid']}",
+                    reason="TRADING_UNFREEZE_SETTLEMENT",
+                    public_metadata={"order_id": order["id"], "market": market["symbol"], "side": side},
+                    actor=actor,
+                )["ledger_uuid"])
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
                     currency_type="points",
                     direction="debit",
-                    amount=fee,
-                    action_type="trading_fee",
+                    amount=notional,
+                    action_type="trading_spot_buy",
                     reference_type="trading_order",
                     reference_id=order["order_uuid"],
-                    idempotency_key=f"trading:fee:{order['order_uuid']}",
-                    reason="TRADING_FEE",
-                    public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": int(market["fee_bps"])},
+                    idempotency_key=f"trading:spot_buy:{order['order_uuid']}",
+                    reason="TRADING_SPOT_BUY",
+                    public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
                     actor=actor,
                 )["ledger_uuid"])
+                if fee:
+                    ledger_uuids.append(self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="debit",
+                        amount=fee,
+                        action_type="trading_fee",
+                        reference_type="trading_order",
+                        reference_id=order["order_uuid"],
+                        idempotency_key=f"trading:fee:{order['order_uuid']}",
+                        reason="TRADING_FEE",
+                        public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": effective_fee_bps},
+                        actor=actor,
+                    )["ledger_uuid"])
             position = self._position(conn, user_id, market["symbol"])
             prev_qty = int(position["quantity_units"])
             prev_cost = int(position["avg_cost_points"] or 0)
@@ -668,45 +886,49 @@ class TradingEngineService:
                 """,
                 (next_qty, next_avg, _now(), user_id, market["symbol"]),
             )
-            reserve_delta = total
-            self._reserve_delta(conn, delta=reserve_delta, event_type="trade_buy_in", reason="TRADING_SPOT_BUY_AND_FEE", actor=actor, order_id=order["id"])
+            reserve_delta = 0 if funding_mode == "root_simulated" else total
+            if funding_mode != "root_simulated":
+                self._reserve_delta(conn, delta=reserve_delta, event_type="trade_buy_in", reason="TRADING_SPOT_BUY_AND_FEE", actor=actor, order_id=order["id"])
         else:
             if notional <= 0:
                 raise ValueError("sell notional is too small")
             net_credit = notional - fee
             if net_credit <= 0:
                 raise ValueError("sell notional is too small after fee")
-            self._reserve_delta(conn, delta=-notional, event_type="trade_sell_out", reason="TRADING_SPOT_SELL", actor=actor, order_id=order["id"])
-            ledger_uuids.append(self._ledger(
-                conn,
-                user_id=user_id,
-                currency_type="points",
-                direction="credit",
-                amount=notional,
-                action_type="trading_spot_sell",
-                reference_type="trading_order",
-                reference_id=order["order_uuid"],
-                idempotency_key=f"trading:spot_sell:{order['order_uuid']}",
-                reason="TRADING_SPOT_SELL",
-                public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
-                actor=actor,
-            )["ledger_uuid"])
-            if fee:
+            if funding_mode == "root_simulated":
+                self._sim_delta(conn, user_id, balance_delta=net_credit)
+            else:
+                self._reserve_delta(conn, delta=-notional, event_type="trade_sell_out", reason="TRADING_SPOT_SELL", actor=actor, order_id=order["id"])
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
                     currency_type="points",
-                    direction="debit",
-                    amount=fee,
-                    action_type="trading_fee",
+                    direction="credit",
+                    amount=notional,
+                    action_type="trading_spot_sell",
                     reference_type="trading_order",
                     reference_id=order["order_uuid"],
-                    idempotency_key=f"trading:fee:{order['order_uuid']}",
-                    reason="TRADING_FEE",
-                    public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": int(market["fee_bps"]), "side": side},
+                    idempotency_key=f"trading:spot_sell:{order['order_uuid']}",
+                    reason="TRADING_SPOT_SELL",
+                    public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
                     actor=actor,
                 )["ledger_uuid"])
-                self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
+                if fee:
+                    ledger_uuids.append(self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="debit",
+                        amount=fee,
+                        action_type="trading_fee",
+                        reference_type="trading_order",
+                        reference_id=order["order_uuid"],
+                        idempotency_key=f"trading:fee:{order['order_uuid']}",
+                        reason="TRADING_EMERGENCY_CLOSE_FEE" if emergency_close else "TRADING_FEE",
+                        public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": effective_fee_bps, "side": side, "emergency_close": emergency_close},
+                        actor=actor,
+                    )["ledger_uuid"])
+                    self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
             position = self._position(conn, user_id, market["symbol"])
             if int(position["locked_quantity_units"]) < quantity_units:
                 raise ValueError("insufficient locked spot position")
@@ -718,15 +940,15 @@ class TradingEngineService:
                 """,
                 (quantity_units, _now(), user_id, market["symbol"]),
             )
-            reserve_delta = -net_credit
+            reserve_delta = 0 if funding_mode == "root_simulated" else -net_credit
         fill_uuid = str(uuid.uuid4())
         cur = conn.execute(
             """
             INSERT INTO trading_fills (
-                fill_uuid, order_id, user_id, market_symbol, side, quantity_units,
+                fill_uuid, order_id, user_id, market_symbol, side, funding_mode, quantity_units,
                 price_points, notional_points, fee_points, reserve_delta_points,
                 points_ledger_uuids_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fill_uuid,
@@ -734,6 +956,7 @@ class TradingEngineService:
                 user_id,
                 market["symbol"],
                 side,
+                funding_mode,
                 quantity_units,
                 price,
                 notional,
@@ -768,21 +991,26 @@ class TradingEngineService:
                 raise ValueError("cannot cancel another user's order")
             if order["status"] not in OPEN_ORDER_STATUSES:
                 raise ValueError("order is not open")
+            funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
             if order["side"] == "buy" and int(order["frozen_points"] or 0) > 0:
-                self._ledger(
-                    conn,
-                    user_id=user_id,
-                    currency_type="points",
-                    direction="unfreeze",
-                    amount=int(order["frozen_points"]),
-                    action_type="trading_unfreeze",
-                    reference_type="trading_order",
-                    reference_id=order["order_uuid"],
-                    idempotency_key=f"trading:cancel_unfreeze:{order['order_uuid']}",
-                    reason="TRADING_ORDER_CANCELLED",
-                    public_metadata={"order_id": order["id"], "market": order["market_symbol"], "side": order["side"]},
-                    actor=actor,
-                )
+                if funding_mode == "root_simulated":
+                    frozen = int(order["frozen_points"] or 0)
+                    self._sim_delta(conn, user_id, balance_delta=frozen, locked_delta=-frozen)
+                else:
+                    self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="unfreeze",
+                        amount=int(order["frozen_points"]),
+                        action_type="trading_unfreeze",
+                        reference_type="trading_order",
+                        reference_id=order["order_uuid"],
+                        idempotency_key=f"trading:cancel_unfreeze:{order['order_uuid']}",
+                        reason="TRADING_ORDER_CANCELLED",
+                        public_metadata={"order_id": order["id"], "market": order["market_symbol"], "side": order["side"]},
+                        actor=actor,
+                    )
             if order["side"] == "sell":
                 cur = conn.execute(
                     """
@@ -893,6 +1121,188 @@ class TradingEngineService:
         finally:
             conn.close()
 
+    def open_root_contract_position(self, *, actor, market_symbol, side, quantity, leverage, margin_points):
+        if not self._is_root_actor(actor):
+            raise ValueError("only root can use contract trading")
+        user_id = self._actor_id(actor)
+        side = str(side or "").strip().lower()
+        if side not in {"long", "short"}:
+            raise ValueError("contract side must be long or short")
+        quantity_units = quantity_to_units(quantity)
+        leverage = _to_int(leverage, name="leverage", minimum=1, maximum=20)
+        margin_points = _to_int(margin_points, name="margin_points", minimum=1, maximum=ROOT_SIMULATED_INITIAL_POINTS)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            market = self._market(conn, market_symbol)
+            price, price_source = self._current_market_price_points(conn, market)
+            exposure = notional_points(quantity_units, price)
+            if exposure > margin_points * leverage:
+                raise ValueError("contract exposure exceeds margin and leverage")
+            self._sim_delta(conn, user_id, balance_delta=-margin_points)
+            position_uuid = str(uuid.uuid4())
+            now = _now()
+            liquidation_price = None
+            if side == "long":
+                liquidation_price = max(1, price - int(margin_points * ASSET_SCALE / quantity_units))
+            else:
+                liquidation_price = price + int(margin_points * ASSET_SCALE / quantity_units)
+            cur = conn.execute(
+                """
+                INSERT INTO trading_futures_positions (
+                    position_uuid, user_id, market_symbol, side, quantity_units,
+                    entry_price_points, leverage, margin_points, liquidation_price_points,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                """,
+                (
+                    position_uuid,
+                    user_id,
+                    market["symbol"],
+                    side,
+                    quantity_units,
+                    price,
+                    leverage,
+                    margin_points,
+                    liquidation_price,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_ROOT_CONTRACT_OPENED",
+                "root opened simulated contract position",
+                actor=actor,
+                market_symbol=market["symbol"],
+                severity="warning",
+                metadata={"position_id": cur.lastrowid, "side": side, "quantity": units_to_quantity(quantity_units), "entry_price_points": price, "price_source": price_source, "leverage": leverage, "margin_points": margin_points},
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM trading_futures_positions WHERE id=?", (cur.lastrowid,)).fetchone()
+            return {"ok": True, "position": self._futures_position_payload(row), "funding": self._funding_payload(conn, user_id)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def close_root_contract_position(self, *, actor, position_uuid):
+        if not self._is_root_actor(actor):
+            raise ValueError("only root can use contract trading")
+        user_id = self._actor_id(actor)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            position = conn.execute(
+                "SELECT * FROM trading_futures_positions WHERE position_uuid=?",
+                (str(position_uuid or ""),),
+            ).fetchone()
+            if not position:
+                raise ValueError("contract position not found")
+            if int(position["user_id"]) != int(user_id):
+                raise ValueError("cannot close another user's contract position")
+            if position["status"] != "open":
+                raise ValueError("contract position is not open")
+            market = self._market(conn, position["market_symbol"])
+            current_price, price_source = self._current_market_price_points(conn, market)
+            entry_price = int(position["entry_price_points"])
+            quantity_units = int(position["quantity_units"])
+            price_delta = notional_points(quantity_units, abs(current_price - entry_price))
+            pnl = price_delta if current_price >= entry_price else -price_delta
+            if position["side"] == "short":
+                pnl = -pnl
+            margin = int(position["margin_points"])
+            credit = max(0, margin + pnl)
+            self._sim_delta(conn, user_id, balance_delta=credit)
+            now = _now()
+            conn.execute(
+                "UPDATE trading_futures_positions SET status='closed', updated_at=? WHERE id=?",
+                (now, position["id"]),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_ROOT_CONTRACT_CLOSED",
+                "root closed simulated contract position",
+                actor=actor,
+                market_symbol=position["market_symbol"],
+                severity="warning",
+                metadata={"position_id": position["id"], "position_uuid": position["position_uuid"], "entry_price_points": entry_price, "exit_price_points": current_price, "price_source": price_source, "pnl_points": pnl, "credited_points": credit},
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM trading_futures_positions WHERE id=?", (position["id"],)).fetchone()
+            return {"ok": True, "position": self._futures_position_payload(row), "pnl_points": pnl, "credited_points": credit, "funding": self._funding_payload(conn, user_id)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def reset_root_simulated_balance(self, *, actor):
+        if not self._is_root_actor(actor):
+            raise ValueError("only root can reset simulated trading points")
+        user_id = self._actor_id(actor)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._root_sim_account(conn, user_id, actor=actor)
+            now = _now()
+            deleted_counts = {
+                "orders": int(conn.execute("SELECT COUNT(*) FROM trading_orders WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "fills": int(conn.execute("SELECT COUNT(*) FROM trading_fills WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "spot_positions": int(conn.execute("SELECT COUNT(*) FROM trading_spot_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "futures_positions": int(conn.execute("SELECT COUNT(*) FROM trading_futures_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "pending_profit": int(conn.execute("SELECT COUNT(*) FROM trading_pending_profit WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+            }
+            conn.execute("DELETE FROM trading_fills WHERE user_id=?", (user_id,))
+            conn.execute("DELETE FROM trading_orders WHERE user_id=?", (user_id,))
+            conn.execute("DELETE FROM trading_spot_positions WHERE user_id=?", (user_id,))
+            conn.execute("DELETE FROM trading_futures_positions WHERE user_id=?", (user_id,))
+            conn.execute("DELETE FROM trading_pending_profit WHERE user_id=?", (user_id,))
+            conn.execute(
+                """
+                UPDATE trading_sim_accounts
+                SET balance_points=?, locked_points=0, initial_balance_points=?, updated_at=?, reset_at=?, reset_by=?
+                WHERE user_id=?
+                """,
+                (ROOT_SIMULATED_INITIAL_POINTS, ROOT_SIMULATED_INITIAL_POINTS, now, now, user_id, user_id),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_ROOT_SIM_BALANCE_RESET",
+                "root reset simulated trading state",
+                actor=actor,
+                severity="warning",
+                metadata={"balance_points": ROOT_SIMULATED_INITIAL_POINTS, "deleted": deleted_counts},
+            )
+            conn.commit()
+            account = self._root_sim_account(conn, user_id)
+            return {
+                "ok": True,
+                "funding": {
+                    "mode": "root_simulated",
+                    "available_points": int(account["balance_points"] or 0),
+                    "locked_points": int(account["locked_points"] or 0),
+                    "initial_balance_points": int(account["initial_balance_points"] or ROOT_SIMULATED_INITIAL_POINTS),
+                },
+                "deleted": deleted_counts,
+                "cancelled_open_orders": deleted_counts["orders"],
+                "closed_open_contracts": deleted_counts["futures_positions"],
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _replay_positions(self, conn):
         totals = {}
         for row in conn.execute("SELECT market_symbol, user_id, side, quantity_units FROM trading_fills ORDER BY id ASC").fetchall():
@@ -933,6 +1343,9 @@ class TradingEngineService:
             ).fetchall()
         }
         for fill in fills:
+            funding_mode = fill["funding_mode"] if "funding_mode" in fill.keys() else "points_chain"
+            if funding_mode == "root_simulated":
+                continue
             ledger_uuids = _json_loads(fill["points_ledger_uuids_json"], [])
             if not isinstance(ledger_uuids, list) or not ledger_uuids:
                 errors.append({
@@ -1002,6 +1415,9 @@ class TradingEngineService:
                 ledger_net[reference_id] -= int(row["amount"])
         order_rows = conn.execute("SELECT * FROM trading_orders ORDER BY id ASC").fetchall()
         for order in order_rows:
+            funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
+            if funding_mode == "root_simulated":
+                continue
             expected = int(order["frozen_points"] or 0) if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES else 0
             actual = ledger_net.get(order["order_uuid"], 0)
             if expected != actual:
@@ -1113,6 +1529,38 @@ class TradingEngineService:
                 "allocation_delta_points": allocation_delta,
             })
 
+    def _verify_sim_accounts(self, conn, errors):
+        expected_locked = {}
+        for order in conn.execute(
+            """
+            SELECT user_id, frozen_points
+            FROM trading_orders
+            WHERE funding_mode='root_simulated'
+              AND side='buy'
+              AND status IN ('open', 'partially_filled')
+            """
+        ).fetchall():
+            user_id = int(order["user_id"])
+            expected_locked[user_id] = expected_locked.get(user_id, 0) + int(order["frozen_points"] or 0)
+        for account in conn.execute("SELECT * FROM trading_sim_accounts ORDER BY user_id").fetchall():
+            user_id = int(account["user_id"])
+            expected = expected_locked.pop(user_id, 0)
+            actual = int(account["locked_points"] or 0)
+            if expected != actual:
+                errors.append({
+                    "type": "root_simulated_locked_points_mismatch",
+                    "user_id": user_id,
+                    "expected_locked_points": expected,
+                    "actual_locked_points": actual,
+                })
+        for user_id, expected in expected_locked.items():
+            if expected:
+                errors.append({
+                    "type": "root_simulated_account_missing",
+                    "user_id": user_id,
+                    "expected_locked_points": expected,
+                })
+
     def _verify_state_on_conn(self, conn, *, enter_safe_mode=False):
         errors = []
         totals = self._replay_positions(conn)
@@ -1143,6 +1591,7 @@ class TradingEngineService:
         self._verify_open_order_locks(conn, errors)
         self._verify_fill_ledgers(conn, errors)
         self._verify_reserve_pool(conn, errors)
+        self._verify_sim_accounts(conn, errors)
         result = {"ok": not errors, "errors": errors, "checked_at": _now()}
         if errors and enter_safe_mode:
             conn.execute(

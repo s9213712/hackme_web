@@ -42,6 +42,9 @@ def register_reports_notification_routes(app, deps):
     def is_moderator(actor):
         return bool(actor) and role_rank(actor_role(actor)) >= role_rank("manager")
 
+    def can_send_admin_notification(actor):
+        return bool(actor) and role_rank(actor_role(actor)) >= role_rank("manager")
+
     def ensure_reports_schema(conn):
         conn.execute(
             """
@@ -73,6 +76,62 @@ def register_reports_notification_routes(app, deps):
         if not user_id:
             return None
         return conn.execute("SELECT id, username, role FROM users WHERE id=?", (int(user_id),)).fetchone()
+
+    @app.route("/api/admin/notifications/send", methods=["POST"])
+    @require_csrf
+    def admin_send_notification():
+        actor = get_current_user_ctx()
+        if not can_send_admin_notification(actor):
+            return json_resp({"ok": False, "msg": "需要管理員權限"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        title = normalize_text(data.get("title"))[:120]
+        body = str(data.get("body") or "").strip()[:1000]
+        if not title or not body:
+            return json_resp({"ok": False, "msg": "請填寫通知標題與內容"}), 400
+        user_ids = data.get("user_ids")
+        if user_ids is None:
+            user_ids = [data.get("user_id")]
+        if not isinstance(user_ids, list):
+            user_ids = [user_ids]
+        target_ids = []
+        for value in user_ids:
+            try:
+                user_id = int(value)
+            except Exception:
+                continue
+            if user_id > 0 and user_id not in target_ids:
+                target_ids.append(user_id)
+        if not target_ids:
+            return json_resp({"ok": False, "msg": "請選擇通知對象"}), 400
+        conn = get_db()
+        try:
+            ensure_notifications_schema(conn)
+            sent = []
+            for user_id in target_ids[:100]:
+                target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (user_id,)).fetchone()
+                if not target:
+                    continue
+                if actor_value(actor, "username") != "root" and role_rank(target["role"] or "user") >= role_rank(actor_role(actor)):
+                    continue
+                create_notification(
+                    conn,
+                    user_id=target["id"],
+                    type="admin_notice",
+                    title=title,
+                    body=body,
+                    link=str(data.get("link") or "")[:240] or None,
+                )
+                sent.append(target["username"])
+            conn.commit()
+            audit("ADMIN_NOTIFICATION_SENT", get_client_ip(), user=actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"sent={','.join(sent)},title={title}")
+            return json_resp({"ok": True, "msg": f"已發送 {len(sent)} 則通知", "sent": sent})
+        finally:
+            conn.close()
 
     def resolve_reported_user(conn, target_type, target_id, fallback_user_id=None):
         if target_type == "user":

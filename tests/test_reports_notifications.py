@@ -95,6 +95,25 @@ def _seed_db(db_path):
     conn.close()
 
 
+def test_admin_can_send_active_notification(tmp_path):
+    db_path = tmp_path / "reports.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, []).test_client()
+
+    sent = client.post(
+        "/api/admin/notifications/send",
+        json={"user_id": 3, "title": "系統通知", "body": "請確認帳號狀態"},
+    )
+    assert sent.status_code == 200
+    assert sent.get_json()["sent"] == ["alice"]
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}
+    notes = client.get("/api/notifications").get_json()
+    assert notes["notifications"][0]["type"] == "admin_notice"
+    assert notes["notifications"][0]["title"] == "系統通知"
+
+
 def test_user_report_claim_resolve_and_notifications(tmp_path):
     db_path = tmp_path / "reports.db"
     _seed_db(db_path)

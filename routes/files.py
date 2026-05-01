@@ -30,6 +30,7 @@ from services.cloud_drive import (
     store_cloud_upload,
 )
 from services.file_previews import build_preview_metadata, preview_category
+from services.notifications import create_notification_if_enabled
 from services.remote_downloads import RemoteDownloadError, download_remote_url, download_torrent_file_with_aria2, remote_download_capabilities, validate_remote_url
 from services.storage_albums import (
     add_album_file,
@@ -39,6 +40,7 @@ from services.storage_albums import (
     create_storage_folder,
     create_storage_file_entry,
     delete_album,
+    ensure_output_album,
     ensure_storage_album_schema,
     get_album,
     get_storage_file,
@@ -556,6 +558,15 @@ def register_file_routes(app, deps):
                     conn.rollback()
                     _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
                     return
+            source_label = "BT 下載" if source_type == "torrent_file" or str(task.get("url") or "").startswith("magnet:?") else "遠端下載"
+            create_notification_if_enabled(
+                conn,
+                user_id=owner_user_id,
+                type="cloud_drive_remote_download_completed",
+                title=f"{source_label}已完成",
+                body=f"{source_label}「{downloaded.filename}」已保存到你的雲端硬碟。",
+                link="/drive",
+            )
             conn.commit()
             audit("CLOUD_DRIVE_REMOTE_DOWNLOAD", task.get("ip") or "", user=actor["username"], success=True, ua=task.get("ua") or "", detail=f"file_id={upload_result['file_id']}")
             _task_update(
@@ -1119,6 +1130,7 @@ def register_file_routes(app, deps):
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
             if request.method == "GET":
+                ensure_output_album(conn, actor=actor)
                 include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
                 files = list_storage_files(conn, actor=actor, include_trashed=include_trashed, limit=100, offset=0)
                 summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="list", reason="storage_files_list")
@@ -1209,6 +1221,8 @@ def register_file_routes(app, deps):
         try:
             ensure_storage_album_schema(conn)
             if request.method == "GET":
+                ensure_output_album(conn, actor=actor)
+                conn.commit()
                 return json_resp({"ok": True, "folders": list_storage_folders(conn, actor=actor)})
             try:
                 data = request.get_json(force=True)
@@ -1308,6 +1322,7 @@ def register_file_routes(app, deps):
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
+            ensure_output_album(conn, actor=actor)
             conn.commit()
             audit("STORAGE_FILE_ORGANIZE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"storage_file_id={storage_file_id}, path={storage_file['virtual_path']}")
             return json_resp({"ok": True, "storage_file": storage_file})
@@ -1459,6 +1474,8 @@ def register_file_routes(app, deps):
         try:
             ensure_storage_album_schema(conn)
             if request.method == "GET":
+                ensure_output_album(conn, actor=actor)
+                conn.commit()
                 albums = list_albums(conn, actor=actor, limit=100, offset=0)
                 return json_resp({"ok": True, "albums": albums})
             try:
@@ -1492,6 +1509,8 @@ def register_file_routes(app, deps):
         try:
             ensure_storage_album_schema(conn)
             if request.method == "GET":
+                ensure_output_album(conn, actor=actor)
+                conn.commit()
                 album = get_album(conn, actor=actor, album_id=album_id, include_files=True)
                 if not album:
                     return json_resp({"ok": False, "msg": "找不到相簿"}), 404
@@ -1924,6 +1943,14 @@ def register_file_routes(app, deps):
                 if msg:
                     conn.rollback()
                     return json_resp({"ok": False, "msg": msg}), 400
+            create_notification_if_enabled(
+                conn,
+                user_id=_actor_value(actor, "id"),
+                type="cloud_drive_upload_completed",
+                title="雲端硬碟上傳完成",
+                body=f"檔案「{result.get('filename') or result.get('original_filename') or result.get('file_id') or 'upload'}」已上傳完成。",
+                link="/drive",
+            )
             conn.commit()
             audit("CLOUD_DRIVE_UPLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={result['file_id']}")
             return json_resp({"ok": True, "file": result, "attachment": attach_result})
@@ -2168,6 +2195,15 @@ def register_file_routes(app, deps):
                 if msg:
                     conn.rollback()
                     return json_resp({"ok": False, "msg": msg}), 400
+            source_label = "BT 下載" if url.startswith("magnet:?") else "遠端下載"
+            create_notification_if_enabled(
+                conn,
+                user_id=_actor_value(actor, "id"),
+                type="cloud_drive_remote_download_completed",
+                title=f"{source_label}已完成",
+                body=f"{source_label}「{downloaded.filename}」已保存到你的雲端硬碟。",
+                link="/drive",
+            )
             conn.commit()
             audit("CLOUD_DRIVE_REMOTE_DOWNLOAD", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={upload_result['file_id']}")
             payload = {"ok": True, "msg": "遠端下載已保存到雲端硬碟", "file": {**upload_result, "filename": downloaded.filename}}

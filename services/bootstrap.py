@@ -28,7 +28,7 @@ SCHEMA_MIGRATIONS = (
     (20, "cloud drive attachment references and grants schema"),
     (21, "cloud drive optional deep antivirus policy columns"),
     (22, "reports and notifications schema"),
-    (23, "direct messages schema"),
+    (23, "legacy direct messages retired"),
     (24, "storage files and albums schema"),
     (25, "storage share links schema"),
     (26, "points economy private chain schema"),
@@ -488,53 +488,14 @@ def _ensure_reports_notifications_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at)")
 
 
-def _ensure_dm_schema(conn):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS dm_threads (
-            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-            participant_a_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            participant_b_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            created_at         TEXT NOT NULL,
-            updated_at         TEXT NOT NULL,
-            UNIQUE(participant_a_id, participant_b_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS direct_messages (
-            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            thread_id            INTEGER NOT NULL REFERENCES dm_threads(id) ON DELETE CASCADE,
-            sender_user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            recipient_user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            body                 TEXT NOT NULL,
-            is_read              INTEGER NOT NULL DEFAULT 0,
-            read_at              TEXT,
-            sender_deleted_at    TEXT,
-            recipient_deleted_at TEXT,
-            created_at           TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS blocked_users (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            blocker_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            blocked_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            reason          TEXT,
-            created_at      TEXT NOT NULL,
-            UNIQUE(blocker_user_id, blocked_user_id)
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_dm_threads_a ON dm_threads(participant_a_id, updated_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_dm_threads_b ON dm_threads(participant_b_id, updated_at)")
-
-
 def _ensure_chat_social_schema(conn):
+    room_cols = _table_columns(conn, "chat_rooms")
+    for name, ddl in (
+        ("join_password_hash", "TEXT"),
+        ("join_password_required", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in room_cols:
+            conn.execute(f"ALTER TABLE chat_rooms ADD COLUMN {name} {ddl}")
     cols = _table_columns(conn, "chat_messages")
     for name, ddl in (
         ("message_type", "TEXT NOT NULL DEFAULT 'text'"),
@@ -562,9 +523,6 @@ def _ensure_chat_social_schema(conn):
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user_friends_user_status ON user_friends(user_id, status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_thread ON direct_messages(thread_id, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_unread ON direct_messages(recipient_user_id, is_read)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_blocked_users_pair ON blocked_users(blocker_user_id, blocked_user_id)")
 
 
 def apply_schema_migrations(
@@ -633,7 +591,7 @@ def apply_schema_migrations(
         elif version == 22:
             _ensure_reports_notifications_schema(conn)
         elif version == 23:
-            _ensure_dm_schema(conn)
+            _ensure_reports_notifications_schema(conn)
         elif version == 24:
             from services.storage_albums import ensure_storage_album_schema
 

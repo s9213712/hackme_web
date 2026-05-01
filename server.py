@@ -463,6 +463,23 @@ def get_ua(): return request.headers.get("User-Agent","-")[:200]
 def is_audit_chain_enabled():
     return bool(get_system_settings().get("audit_chain_enabled", False))
 
+def reseal_audit_chain_if_required_on_startup():
+    settings = get_system_settings()
+    if not bool(settings.get("audit_chain_enabled", False)):
+        return {"ok": True, "skipped": True, "reason": "audit_chain_disabled"}
+    if not bool(settings.get("audit_chain_reseal_required", False)):
+        return {"ok": True, "skipped": True, "reason": "not_required"}
+    result = repair_audit_chain(reason="startup_after_audit_chain_reenabled")
+    save_settings({"audit_chain_reseal_required": False})
+    audit(
+        "AUDIT_CHAIN_STARTUP_RESEALED",
+        "0.0.0.0",
+        user="system",
+        success=True,
+        detail=f"entries_resealed={result.get('entries_resealed')},head_id={result.get('head_id')}",
+    )
+    return {"ok": True, "skipped": False, "result": result}
+
 def is_ip_blocking_enabled():
     settings = get_system_settings()
     if "ip_blocking_enabled" in settings:
@@ -500,7 +517,6 @@ FEATURE_ROUTE_GATES = (
     ("feature_appeals_enabled", ("/api/appeals", "/api/admin/appeals")),
     ("feature_reports_enabled", ("/api/reports", "/api/admin/reports", "/api/admin/message-reports", "/api/admin/community-post-reports")),
     ("feature_reports_notifications_enabled", ("/api/notifications",)),
-    ("feature_dm_enabled", ("/api/dm",)),
     ("feature_audit_log_enabled", ("/api/admin/audit", "/api/audit")),
     ("feature_violation_center_enabled", ("/api/admin/violations", "/api/admin/users/")),
     ("feature_accounts_enabled", ("/api/admin/users",)),
@@ -1460,6 +1476,10 @@ if __name__ == "__main__":
         conn.commit()
     finally:
         conn.close()
+    try:
+        reseal_audit_chain_if_required_on_startup()
+    except Exception as exc:
+        audit("AUDIT_CHAIN_STARTUP_RESEAL_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
     if os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "").strip().lower() in {"1", "true", "yes", "on"}:
         try:
             system_actor = {"username": "system", "role": "system"}

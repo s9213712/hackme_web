@@ -26,6 +26,7 @@ from services.member_levels import (
     serialize_member_level_rule,
     update_member_level_rule,
 )
+from services.notifications import create_root_notification_if_enabled
 from services.server_bind import (
     server_bind_settings_payload,
     server_ssl_settings_payload,
@@ -47,6 +48,22 @@ SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
 COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
+def public_relative_path(path, base_dir):
+    if not path:
+        return "-"
+    try:
+        base = os.path.abspath(base_dir)
+        target = os.path.abspath(path)
+        rel = os.path.relpath(target, base)
+        if rel == ".":
+            return "."
+        if rel.startswith(".."):
+            return f"<outside>/{os.path.basename(target) or 'path'}"
+        return rel.replace("\\", "/")
+    except Exception:
+        return os.path.basename(str(path)) or "-"
 
 
 def validate_comfyui_api_host(value):
@@ -133,6 +150,28 @@ def register_system_admin_routes(app, deps):
     snapshot_service = deps.get("snapshot_service")
     integrity_guard = deps.get("integrity_guard")
     verify_audit_integrity = deps["verify_audit_integrity"]
+
+    def _notify_root(type, title, body, *, link="/security", once=False):
+        conn = get_db()
+        try:
+            created = create_root_notification_if_enabled(
+                conn,
+                type=type,
+                title=title,
+                body=body,
+                link=link,
+                once=once,
+            )
+            conn.commit()
+            return created
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return 0
+        finally:
+            conn.close()
 
     def default_schedule_server_restart(*, reason, delay_seconds=1.25):
         if app.testing:
@@ -599,6 +638,14 @@ def register_system_admin_routes(app, deps):
         for item in signals:
             if level_rank[item["level"]] > level_rank[status]:
                 status = item["level"]
+            if item["level"] in {"warning", "critical"}:
+                _notify_root(
+                    "root_security_alert",
+                    "安全警訊",
+                    f"{item['level'].upper()} · {item['name']}：目前值 {item['value']}，門檻 {item['threshold']}。{item.get('detail') or ''}",
+                    link="/security",
+                    once=True,
+                )
         return {"status": status, "signals": signals, "counts": counts, "errors": errors, "audit_integrity": audit_state}
 
     SECURITY_SETTING_KEYS = (
@@ -808,11 +855,11 @@ def register_system_admin_routes(app, deps):
                 "platform": platform.platform(),
                 "python_version": sys.version.split()[0],
                 "pid": os.getpid(),
-                "base_dir": BASE_DIR,
-                "database_path": DB_PATH,
-                "log_dir": LOG_DIR,
-                "chat_dir": CHAT_DIR,
-                "anchor_dir": ANCHOR_DIR,
+                "base_dir": ".",
+                "database_path": public_relative_path(DB_PATH, BASE_DIR),
+                "log_dir": public_relative_path(LOG_DIR, BASE_DIR),
+                "chat_dir": public_relative_path(CHAT_DIR, BASE_DIR),
+                "anchor_dir": public_relative_path(ANCHOR_DIR, BASE_DIR),
                 "database_bytes": db_size,
                 "log_files": len(log_files),
                 "chat_files": len(chat_files),
@@ -1840,6 +1887,13 @@ def register_system_admin_routes(app, deps):
         )
         if result.get("ok"):
             result["points_block"] = _force_points_block("server_mode_change", actor)
+            mode = (result.get("mode") or {}).get("current_mode") or data.get("mode") or "-"
+            _notify_root(
+                "root_server_mode_changed",
+                "伺服器模式已變更",
+                f"{actor['username']} 已將伺服器模式切換為 {mode}。",
+                link="/security",
+            )
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/server-mode/exit-superweak", methods=["POST"])
@@ -1864,6 +1918,13 @@ def register_system_admin_routes(app, deps):
         )
         if result.get("ok"):
             result["points_block"] = _force_points_block("superweak_exit", actor)
+            mode = (result.get("mode") or {}).get("current_mode") or "-"
+            _notify_root(
+                "root_server_mode_changed",
+                "伺服器模式已變更",
+                f"{actor['username']} 已離開 superweak 模式，目前模式為 {mode}。",
+                link="/security",
+            )
         return json_resp(result), (200 if result.get("ok") else 400)
 
     @app.route("/api/admin/integrity/repair", methods=["POST"])

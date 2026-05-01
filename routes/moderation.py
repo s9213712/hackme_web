@@ -478,20 +478,29 @@ def register_moderation_routes(app, deps):
         target = None
         try:
             ensure_moderation_proposals_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
             proposal = refresh_proposal_vote_counts(conn, proposal_id)
             if not proposal:
+                conn.rollback()
                 return json_resp({"ok":False,"msg":"找不到治理提案"}), 404
             if proposal["status"] != "approved":
-                conn.commit()
+                conn.rollback()
                 return json_resp({"ok":False,"msg":"提案通過後才可執行","status":proposal["status"]}), 409
             if proposal.get("risk_level") == "high" and actor["username"] != "root":
-                conn.commit()
+                conn.rollback()
                 return json_resp({"ok":False,"msg":"高風險治理提案通過後仍必須由 root 執行"}), 403
             if int(proposal.get("target_user_id") or 0) == int(actor["id"]):
-                conn.commit()
+                conn.rollback()
                 return json_resp({"ok":False,"msg":"治理對象不可執行自己的提案"}), 403
+            now = datetime.now().isoformat()
+            conn.execute("UPDATE moderation_proposals SET status='executing', updated_at=? WHERE id=?", (now, proposal_id))
+            conn.commit()
             target, err, revoke_target_sessions = execute_proposal_action(conn, proposal, actor)
             if err:
+                rollback_now = datetime.now().isoformat()
+                conn.execute("UPDATE moderation_proposals SET status='approved', updated_at=? WHERE id=?", (rollback_now, proposal_id))
+                conn.commit()
                 return json_resp({"ok":False,"msg":err}), 400
             now = datetime.now().isoformat()
             conn.execute("UPDATE moderation_proposals SET status='executed', executed_at=?, updated_at=? WHERE id=?", (now, now, proposal_id))

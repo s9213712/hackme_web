@@ -120,6 +120,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     chat_room_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_rooms)").fetchall()}
     chat_message_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
     friend_cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_friends)").fetchall()}
+    chat_invite_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chat_room_invites)").fetchall()}
     user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     login_location_cols = {row["name"] for row in conn.execute("PRAGMA table_info(login_locations)").fetchall()}
     member_rule_cols = {row["name"] for row in conn.execute("PRAGMA table_info(member_level_rules)").fetchall()}
@@ -148,9 +149,6 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     announcement_request_cols = {row["name"] for row in conn.execute("PRAGMA table_info(announcement_attachment_requests)").fetchall()}
     report_cols = {row["name"] for row in conn.execute("PRAGMA table_info(reports)").fetchall()}
     notification_cols = {row["name"] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
-    dm_thread_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dm_threads)").fetchall()}
-    dm_message_cols = {row["name"] for row in conn.execute("PRAGMA table_info(direct_messages)").fetchall()}
-    blocked_cols = {row["name"] for row in conn.execute("PRAGMA table_info(blocked_users)").fetchall()}
     captcha_cols = {row["name"] for row in conn.execute("PRAGMA table_info(captcha_challenges)").fetchall()}
     integrity_finding_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_findings)").fetchall()}
     integrity_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(integrity_scan_runs)").fetchall()}
@@ -182,9 +180,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     conn.close()
 
     assert {"is_revoked", "revoked_at", "last_seen", "device_info", "ip_country"} <= session_cols
-    assert "is_private" in chat_room_cols
+    assert {"is_private", "join_password_hash", "join_password_required"} <= chat_room_cols
     assert {"message_type", "sticker_key", "is_revoked", "revoked_at", "revoked_by"} <= chat_message_cols
     assert {"user_id", "friend_user_id", "status", "requested_by", "updated_at"} <= friend_cols
+    assert {"room_id", "inviter_user_id", "invitee_user_id", "status", "updated_at"} <= chat_invite_cols
     assert {
         "member_level", "base_level", "effective_level", "trust_score", "points", "reputation",
         "violation_score", "sanction_status", "sanction_until", "level_updated_at",
@@ -230,9 +229,6 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"file_id", "requested_by", "announcement_id", "status", "reviewed_by"} <= announcement_request_cols
     assert {"target_type", "reporter_user_id", "reported_user_id", "status", "claimed_by_user_id"} <= report_cols
     assert {"user_id", "type", "title", "body", "is_read", "read_at"} <= notification_cols
-    assert {"participant_a_id", "participant_b_id", "created_by_user_id", "updated_at"} <= dm_thread_cols
-    assert {"thread_id", "sender_user_id", "recipient_user_id", "is_read", "sender_deleted_at", "recipient_deleted_at"} <= dm_message_cols
-    assert {"blocker_user_id", "blocked_user_id", "reason"} <= blocked_cols
     assert {"id", "mode", "answer_hash", "expires_at", "used_at"} <= captcha_cols
     assert {"file_path", "old_hash", "new_hash", "change_type", "status", "reviewed_by"} <= integrity_finding_cols
     assert {"started_at", "finished_at", "files_checked", "manifest_signature_valid"} <= integrity_run_cols
