@@ -51,6 +51,7 @@ def audit_storage_capacity(conn, storage_root):
     disk = storage_disk_usage(storage_root)
     cloud_used = _cloud_used_bytes(conn)
     allocatable = int(cloud_used + disk["safe_free_bytes"])
+    available_capacity = int(disk["safe_free_bytes"])
 
     users = []
     committed_total = 0
@@ -84,6 +85,7 @@ def audit_storage_capacity(conn, storage_root):
             committed_remaining += int(remaining or 0)
 
     total_over_by = max(0, committed_total - allocatable)
+    total_over_available_by = max(0, committed_total - available_capacity)
     remaining_over_by = max(0, committed_remaining - disk["safe_free_bytes"])
     percent_committed = 0.0
     if allocatable > 0:
@@ -96,6 +98,9 @@ def audit_storage_capacity(conn, storage_root):
     if unbounded_users:
         status = "critical"
         reasons.append("non_root_unbounded_quota")
+    if total_over_available_by > 0:
+        status = "critical"
+        reasons.append("host_storage_total_commitment_exceeds_available")
     if total_over_by > 0 or remaining_over_by > 0:
         status = "critical"
         reasons.append("host_storage_overcommitted")
@@ -110,9 +115,11 @@ def audit_storage_capacity(conn, storage_root):
         "disk": disk,
         "cloud_used_bytes": cloud_used,
         "allocatable_cloud_capacity_bytes": allocatable,
+        "available_cloud_capacity_bytes": available_capacity,
         "committed_total_bytes": int(committed_total),
         "committed_remaining_bytes": int(committed_remaining),
         "total_overcommitted_by_bytes": int(total_over_by),
+        "total_commitment_over_available_by_bytes": int(total_over_available_by),
         "remaining_overcommitted_by_bytes": int(remaining_over_by),
         "percent_committed": percent_committed,
         "user_count": len(users),
@@ -126,10 +133,12 @@ def can_allocate_storage_bytes(conn, storage_root, additional_bytes):
     audit = audit_storage_capacity(conn, storage_root)
     projected_total = int(audit["committed_total_bytes"]) + additional
     projected_remaining = int(audit["committed_remaining_bytes"]) + additional
+    projected_available_over_by = max(0, projected_total - int(audit["available_cloud_capacity_bytes"]))
     total_over_by = max(0, projected_total - int(audit["allocatable_cloud_capacity_bytes"]))
     remaining_over_by = max(0, projected_remaining - int(audit["disk"]["safe_free_bytes"]))
     allowed = (
         not audit.get("unbounded_users")
+        and projected_available_over_by == 0
         and total_over_by == 0
         and remaining_over_by == 0
     )
@@ -137,6 +146,7 @@ def can_allocate_storage_bytes(conn, storage_root, additional_bytes):
         **audit,
         "projected_committed_total_bytes": projected_total,
         "projected_committed_remaining_bytes": projected_remaining,
+        "projected_total_commitment_over_available_by_bytes": projected_available_over_by,
         "projected_total_overcommitted_by_bytes": total_over_by,
         "projected_remaining_overcommitted_by_bytes": remaining_over_by,
     }

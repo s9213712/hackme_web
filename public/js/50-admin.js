@@ -2274,7 +2274,7 @@ async function loadServerHealth() {
     {
       label: "會員雲端容量審計",
       value: capacity.status === "critical" ? "超額" : capacity.status === "warning" ? "接近上限" : "正常",
-      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / Host 可承諾 ${formatBytes(capacity.allocatable_cloud_capacity_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
+      detail: `會員總配額 ${formatBytes(capacity.committed_total_bytes)} / Host 安全可用 ${formatBytes(capacity.available_cloud_capacity_bytes ?? capacity.disk?.safe_free_bytes)}，剩餘承諾 ${formatBytes(capacity.committed_remaining_bytes)} / 安全剩餘 ${formatBytes(capacity.disk?.safe_free_bytes)}`,
       color: capacity.status === "critical" ? "#ff4f6d" : capacity.status === "warning" ? "#ffb74d" : "#4caf50",
     },
     {

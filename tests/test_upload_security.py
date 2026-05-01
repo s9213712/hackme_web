@@ -483,6 +483,7 @@ def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
         audit = audit_storage_capacity(conn, tmp_path)
         assert audit["status"] == "ok"
         assert audit["allocatable_cloud_capacity_bytes"] == 450
+        assert audit["available_cloud_capacity_bytes"] == 450
 
         set_storage_quota_override(
             conn,
@@ -494,6 +495,8 @@ def test_storage_capacity_audit_detects_host_overcommit(tmp_path, monkeypatch):
         audit = audit_storage_capacity(conn, tmp_path)
         assert audit["status"] == "critical"
         assert audit["total_overcommitted_by_bytes"] > 0
+        assert audit["total_commitment_over_available_by_bytes"] > 0
+        assert "host_storage_total_commitment_exceeds_available" in audit["reasons"]
         assert "host_storage_overcommitted" in audit["reasons"]
     finally:
         conn.close()
@@ -511,6 +514,7 @@ def test_storage_capacity_guard_blocks_new_quota_when_host_is_full(tmp_path, mon
         ok, msg, projected = can_allocate_storage_bytes(conn, tmp_path, 200)
         assert ok is False
         assert "Host" in msg
+        assert projected["projected_total_commitment_over_available_by_bytes"] > 0
         assert projected["projected_total_overcommitted_by_bytes"] > 0
     finally:
         conn.close()
