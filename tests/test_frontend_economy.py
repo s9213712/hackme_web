@@ -188,8 +188,16 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-reference-chart"' in trading_section
     assert 'id="trading-reference-tooltip"' in trading_section
     assert 'id="trading-reference-interval"' in trading_section
-    assert '<option value="1s">1 秒</option>' in trading_section
+    assert '<option value="1s">1 秒</option>' not in trading_section
+    assert '<option value="1m">1 分</option>' not in trading_section
+    assert '<option value="5m">5 分</option>' in trading_section
     assert '<option value="15m" selected>15 分</option>' in trading_section
+    assert 'id="trading-indicator-ma5"' in trading_section
+    assert 'id="trading-indicator-ma20" checked' in trading_section
+    assert 'id="trading-indicator-ma60"' in trading_section
+    assert 'id="trading-indicator-ema12"' in trading_section
+    assert 'id="trading-indicator-ema26"' in trading_section
+    assert 'id="trading-indicator-bollinger"' in trading_section
     assert 'id="trading-btc-trade-card"' not in trading_section
     assert 'id="trading-btc-trade-path"' not in trading_section
     assert "Binance 參考價格" in trading_section
@@ -262,7 +270,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function loadTradingReferencePrices" in trading_js
     assert "function restartTradingReferenceAutoRefresh" in trading_js
     assert "function tradingReferenceAutoRefreshMs" in trading_js
-    assert 'interval === "1s" ? 1000 : 2000' in trading_js
+    assert "return 1000;" in trading_js
+    assert 'interval === "1s"' not in trading_js
     assert "loadTradingReferencePrices({ silent: true, priceOnly: true })" in trading_js
     assert "tradingReferenceChartAutoTimer" in trading_js
     assert "tradingReferenceChartAutoBusy" in trading_js
@@ -280,6 +289,12 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "tradingDashboardAutoTimer" in trading_js
     assert "function renderTradingReferenceChart" in trading_js
     assert "function updateTradingReferenceTooltip" in trading_js
+    assert "function tradingIndicatorSeries" in trading_js
+    assert "function tradingBollingerSeries" in trading_js
+    assert "function buildTradingReferenceIndicators" in trading_js
+    assert "drawTradingIndicatorLine" in trading_js
+    assert "trading-indicator-ma20" in trading_js
+    assert "布林線" in trading_section
     assert "function tradingReferenceTimeLabel" in trading_js
     assert "tradingReferenceChartModel" in trading_js
     assert "tradingReferenceHoverIndex" in trading_js

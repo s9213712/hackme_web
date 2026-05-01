@@ -112,12 +112,30 @@ def test_trading_reference_prices_uses_short_server_side_cache(monkeypatch):
     monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
     client = _app({"id": 1, "username": "alice", "role": "user"}).test_client()
 
-    first = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=1s")
-    second = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=1s")
+    first = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=5m")
+    second = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=5m")
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert calls["count"] == 1
+
+
+def test_trading_reference_prices_rejects_too_short_chart_intervals(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    called = {"value": False}
+
+    def fake_urlopen(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("network should not be called")
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    for interval in ("1s", "1m"):
+        response = client.get(f"/api/trading/reference-prices?market=BTC/USDT&interval={interval}")
+        assert response.status_code == 400
+        assert response.get_json()["ok"] is False
+    assert called["value"] is False
 
 
 def test_trading_reference_prices_latest_mode_fetches_one_candle(monkeypatch):

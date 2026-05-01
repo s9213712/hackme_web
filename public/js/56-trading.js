@@ -389,6 +389,109 @@ function hideTradingReferenceTooltip() {
   }
 }
 
+function tradingIndicatorEnabled(id) {
+  const el = $(id);
+  return !!el?.checked;
+}
+
+function tradingIndicatorSeries(candles, period, mode = "sma") {
+  const closes = candles.map((point) => Number(point.close_usdt || point.price_usdt || point.close || 0));
+  const values = Array(closes.length).fill(null);
+  if (!period || period < 1 || closes.length < period) return values;
+  if (mode === "ema") {
+    const alpha = 2 / (period + 1);
+    let ema = null;
+    closes.forEach((close, index) => {
+      if (!Number.isFinite(close) || close <= 0) return;
+      ema = ema == null ? close : close * alpha + ema * (1 - alpha);
+      values[index] = ema;
+    });
+    return values;
+  }
+  for (let index = period - 1; index < closes.length; index += 1) {
+    const windowValues = closes.slice(index - period + 1, index + 1).filter((value) => Number.isFinite(value) && value > 0);
+    if (windowValues.length !== period) continue;
+    values[index] = windowValues.reduce((sum, value) => sum + value, 0) / period;
+  }
+  return values;
+}
+
+function tradingBollingerSeries(candles, period = 20, multiplier = 2) {
+  const closes = candles.map((point) => Number(point.close_usdt || point.price_usdt || point.close || 0));
+  const upper = Array(closes.length).fill(null);
+  const middle = Array(closes.length).fill(null);
+  const lower = Array(closes.length).fill(null);
+  for (let index = period - 1; index < closes.length; index += 1) {
+    const windowValues = closes.slice(index - period + 1, index + 1).filter((value) => Number.isFinite(value) && value > 0);
+    if (windowValues.length !== period) continue;
+    const mean = windowValues.reduce((sum, value) => sum + value, 0) / period;
+    const variance = windowValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / period;
+    const stddev = Math.sqrt(variance);
+    upper[index] = mean + multiplier * stddev;
+    middle[index] = mean;
+    lower[index] = mean - multiplier * stddev;
+  }
+  return { upper, middle, lower };
+}
+
+function buildTradingReferenceIndicators(candles) {
+  const indicators = [];
+  if (tradingIndicatorEnabled("trading-indicator-ma5")) {
+    indicators.push({ key: "ma5", label: "MA5", color: "#f59e0b", values: tradingIndicatorSeries(candles, 5) });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ma20")) {
+    indicators.push({ key: "ma20", label: "MA20", color: "#38bdf8", values: tradingIndicatorSeries(candles, 20) });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ma60")) {
+    indicators.push({ key: "ma60", label: "MA60", color: "#a78bfa", values: tradingIndicatorSeries(candles, 60) });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ema12")) {
+    indicators.push({ key: "ema12", label: "EMA12", color: "#22d3ee", values: tradingIndicatorSeries(candles, 12, "ema") });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ema26")) {
+    indicators.push({ key: "ema26", label: "EMA26", color: "#fb7185", values: tradingIndicatorSeries(candles, 26, "ema") });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-bollinger")) {
+    const bands = tradingBollingerSeries(candles, 20, 2);
+    indicators.push({ key: "bb_upper", label: "BB上", color: "rgba(16, 185, 129, .82)", values: bands.upper, dash: [4, 4] });
+    indicators.push({ key: "bb_mid", label: "BB中", color: "rgba(16, 185, 129, .5)", values: bands.middle });
+    indicators.push({ key: "bb_lower", label: "BB下", color: "rgba(16, 185, 129, .82)", values: bands.lower, dash: [4, 4] });
+  }
+  return indicators;
+}
+
+function drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice) {
+  ctx.save();
+  ctx.strokeStyle = indicator.color;
+  ctx.lineWidth = 1.45;
+  if (indicator.dash) ctx.setLineDash(indicator.dash);
+  let drawing = false;
+  ctx.beginPath();
+  indicator.values.forEach((value, index) => {
+    if (!Number.isFinite(value) || value <= 0 || !candleModels[index]) {
+      drawing = false;
+      return;
+    }
+    const x = candleModels[index].x;
+    const y = yForPrice(value);
+    if (!drawing) {
+      ctx.moveTo(x, y);
+      drawing = true;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function tradingIndicatorLegend(indicators) {
+  const active = indicators
+    .filter((item) => item.values.some((value) => Number.isFinite(value) && value > 0))
+    .map((item) => item.label);
+  return active.length ? ` · 指標 ${active.join(" / ")}` : "";
+}
+
 function renderTradingReferenceChart(payload, errorText = "") {
   const canvas = $("trading-reference-chart");
   const meta = $("trading-reference-price-meta");
@@ -420,16 +523,18 @@ function renderTradingReferenceChart(payload, errorText = "") {
     if (meta) meta.textContent = errorText || "公開 API 蠟燭圖載入中；成交引擎會由後端重新取得即時價。";
     return;
   }
+  const indicators = buildTradingReferenceIndicators(candles);
   const prices = candles.flatMap((point) => [
     Number(point.high_usdt || point.high_points || point.price_usdt || point.price_points || 0),
     Number(point.low_usdt || point.low_points || point.price_usdt || point.price_points || 0),
-  ]).filter((value) => Number.isFinite(value) && value > 0);
+  ]).concat(indicators.flatMap((indicator) => indicator.values)).filter((value) => Number.isFinite(value) && value > 0);
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
   const spread = Math.max(1, maxPrice - minPrice);
   const pad = { left: 58, right: 18, top: 22, bottom: 34 };
   const chartW = width - pad.left - pad.right;
   const chartH = height - pad.top - pad.bottom;
+  const yForPrice = (price) => pad.top + chartH - ((price - minPrice) / spread) * chartH;
   ctx.strokeStyle = "rgba(148, 163, 184, .22)";
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
@@ -451,10 +556,10 @@ function renderTradingReferenceChart(payload, errorText = "") {
     const low = Number(point.low_usdt || open);
     const close = Number(point.close_usdt || point.price_usdt || open);
     const x = pad.left + slot * index + slot / 2;
-    const yHigh = pad.top + chartH - ((high - minPrice) / spread) * chartH;
-    const yLow = pad.top + chartH - ((low - minPrice) / spread) * chartH;
-    const yOpen = pad.top + chartH - ((open - minPrice) / spread) * chartH;
-    const yClose = pad.top + chartH - ((close - minPrice) / spread) * chartH;
+    const yHigh = yForPrice(high);
+    const yLow = yForPrice(low);
+    const yOpen = yForPrice(open);
+    const yClose = yForPrice(close);
     const up = close >= open;
     const color = up ? "#22c55e" : "#ef4444";
     const fillColor = up ? "rgba(34, 197, 94, .82)" : "rgba(239, 68, 68, .86)";
@@ -471,7 +576,8 @@ function renderTradingReferenceChart(payload, errorText = "") {
     ctx.strokeRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
     return { ...point, index, open, high, low, close, x, yHigh, yLow, yOpen, yClose, bodyTop, bodyH };
   });
-  tradingReferenceChartModel = { payload, candles: candleModels, pad, width, height, chartW, chartH, slot };
+  indicators.forEach((indicator) => drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice));
+  tradingReferenceChartModel = { payload, candles: candleModels, indicators, pad, width, height, chartW, chartH, slot };
   if (tradingReferenceHoverIndex !== null && candleModels[tradingReferenceHoverIndex]) {
     const hover = candleModels[tradingReferenceHoverIndex];
     ctx.save();
@@ -503,7 +609,7 @@ function renderTradingReferenceChart(payload, errorText = "") {
     const high = tradingReferenceLabel(last.high_usdt || lastPrice);
     const low = tradingReferenceLabel(last.low_usdt || lastPrice);
     const close = tradingReferenceLabel(last.close_usdt || lastPrice);
-    meta.textContent = `${payload.display_market || payload.symbol || "-"} · ${payload.interval || "-"} · Binance 公開 API 蠟燭圖 · 最新 ${close} · O ${open} / H ${high} / L ${low} / C ${close}`;
+    meta.textContent = `${payload.display_market || payload.symbol || "-"} · ${payload.interval || "-"} · Binance 公開 API 蠟燭圖 · 最新 ${close} · O ${open} / H ${high} / L ${low} / C ${close}${tradingIndicatorLegend(indicators)}`;
   }
 }
 
@@ -533,6 +639,12 @@ function updateTradingReferenceTooltip(event) {
     <strong>${sanitize(tradingReferenceTimeLabel(point, model.payload?.interval || ""))}</strong>
     <span>開 ${sanitize(tradingReferenceLabel(point.open))} · 高 ${sanitize(tradingReferenceLabel(point.high))}</span>
     <span>低 ${sanitize(tradingReferenceLabel(point.low))} · 收 ${sanitize(tradingReferenceLabel(point.close))}</span>
+    ${model.indicators?.map((indicator) => {
+      const value = indicator.values?.[index];
+      return Number.isFinite(value) && value > 0
+        ? `<span>${sanitize(indicator.label)} ${sanitize(tradingReferenceLabel(value))}</span>`
+        : "";
+    }).join("") || ""}
   `;
   tooltip.hidden = false;
   const tooltipWidth = tooltip.offsetWidth || 180;
@@ -544,8 +656,7 @@ function updateTradingReferenceTooltip(event) {
 }
 
 function tradingReferenceAutoRefreshMs() {
-  const interval = $("trading-reference-interval")?.value || "15m";
-  return interval === "1s" ? 1000 : 2000;
+  return 1000;
 }
 
 function tradingReferenceChartLimit(interval) {
@@ -1326,6 +1437,17 @@ function bindTradingEvents() {
       loadTradingReferencePrices();
     });
   }
+  [
+    "trading-indicator-ma5",
+    "trading-indicator-ma20",
+    "trading-indicator-ma60",
+    "trading-indicator-ema12",
+    "trading-indicator-ema26",
+    "trading-indicator-bollinger",
+  ].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("change", () => renderTradingReferenceChart(tradingState.referencePrices));
+  });
   const referenceChart = $("trading-reference-chart");
   if (referenceChart) {
     referenceChart.addEventListener("mousemove", updateTradingReferenceTooltip);

@@ -1423,14 +1423,20 @@
               <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖僅供參考，不會自動改變站內手動價格。</div>
             </div>
             <select id="trading-reference-interval" class="compact-select">
-              <option value="1s">1 秒</option>
-              <option value="1m">1 分</option>
               <option value="5m">5 分</option>
               <option value="15m" selected>15 分</option>
               <option value="1h">1 小時</option>
               <option value="4h">4 小時</option>
               <option value="1d">日線</option>
             </select>
+          </div>
+          <div class="trading-indicator-controls" aria-label="技術指標">
+            <label><input type="checkbox" id="trading-indicator-ma5"> MA5</label>
+            <label><input type="checkbox" id="trading-indicator-ma20" checked> MA20</label>
+            <label><input type="checkbox" id="trading-indicator-ma60"> MA60</label>
+            <label><input type="checkbox" id="trading-indicator-ema12"> EMA12</label>
+            <label><input type="checkbox" id="trading-indicator-ema26"> EMA26</label>
+            <label><input type="checkbox" id="trading-indicator-bollinger"> 布林線</label>
           </div>
           <div class="trading-reference-chart-wrap">
             <canvas id="trading-reference-chart" class="trading-reference-chart" width="920" height="260" aria-label="Binance 參考價格蠟燭圖"></canvas>
