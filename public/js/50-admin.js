@@ -1203,6 +1203,24 @@ function rootTradingSettingsMsg(text, ok = true) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+async function parseRootTradingSettingsResponse(res) {
+  const json = await res.clone().json().catch(() => null);
+  if (json && typeof json === "object") return json;
+  const text = await res.text().catch(() => "");
+  const fallback = text && text.length < 160 ? text.trim() : "";
+  return {
+    ok: false,
+    msg: fallback || `HTTP ${res.status}`,
+  };
+}
+
+function rootTradingSettingsHttpMessage(res, json, fallback) {
+  if (res.status === 404) {
+    return "交易所參數 API 找不到。請重新整理頁面，並確認目前啟動的是 03.Economy 版本伺服器。";
+  }
+  return json?.msg || fallback || `HTTP ${res.status}`;
+}
+
 function renderRootTradingSettings(payload) {
   const settings = payload?.settings || {};
   const markets = Array.isArray(payload?.markets) ? payload.markets : [];
@@ -1241,20 +1259,25 @@ function renderRootTradingSettings(payload) {
 
 async function loadRootTradingSettings() {
   if (currentUser !== "root" || !$("root-trading-market-settings")) return;
+  rootTradingSettingsMsg("交易所參數讀取中...");
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await apiFetch(API + "/root/trading/settings", {
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!json.ok) {
-    rootTradingSettingsMsg(json.msg || "交易所參數讀取失敗", false);
-    return;
+  try {
+    const res = await apiFetch(API + "/root/trading/settings", {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingSettingsMsg(rootTradingSettingsHttpMessage(res, json, "交易所參數讀取失敗"), false);
+      return;
+    }
+    rootTradingSettingsCache = json;
+    renderRootTradingSettings(json);
+    rootTradingSettingsMsg("");
+  } catch (err) {
+    rootTradingSettingsMsg(err.message || "交易所參數讀取請求失敗", false);
   }
-  rootTradingSettingsCache = json;
-  renderRootTradingSettings(json);
-  rootTradingSettingsMsg("");
 }
 
 function collectRootTradingMarketSettings() {
@@ -1271,6 +1294,9 @@ function collectRootTradingMarketSettings() {
 
 async function saveRootTradingSettings() {
   if (currentUser !== "root") return;
+  const saveBtn = $("root-trading-settings-save-btn");
+  if (saveBtn) saveBtn.disabled = true;
+  rootTradingSettingsMsg("交易所參數儲存中...");
   const payload = {
     settings: {
       enabled: !!$("root-trading-enabled")?.checked,
@@ -1285,20 +1311,29 @@ async function saveRootTradingSettings() {
     },
     markets: collectRootTradingMarketSettings(),
   };
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await apiFetch(API + "/root/trading/settings", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  rootTradingSettingsMsg(json.ok ? "交易所參數已儲存" : (json.msg || "交易所參數儲存失敗"), !!json.ok);
-  if (json.ok) {
-    rootTradingSettingsCache = json;
-    renderRootTradingSettings(json);
-    if (typeof loadTradingDashboard === "function") loadTradingDashboard();
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/root/trading/settings", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    rootTradingSettingsMsg(
+      res.ok && json.ok ? "交易所參數已儲存" : rootTradingSettingsHttpMessage(res, json, "交易所參數儲存失敗"),
+      !!(res.ok && json.ok)
+    );
+    if (res.ok && json.ok) {
+      rootTradingSettingsCache = json;
+      renderRootTradingSettings(json);
+      if (typeof loadTradingDashboard === "function") loadTradingDashboard();
+    }
+  } catch (err) {
+    rootTradingSettingsMsg(err.message || "交易所參數儲存請求失敗", false);
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
   }
 }
 

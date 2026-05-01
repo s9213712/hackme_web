@@ -286,6 +286,10 @@ def ensure_trading_schema(conn):
             opened_at TEXT NOT NULL,
             closed_at TEXT,
             updated_at TEXT NOT NULL,
+            collateral_trial_points INTEGER NOT NULL DEFAULT 0 CHECK (collateral_trial_points >= 0),
+            collateral_chain_points INTEGER NOT NULL DEFAULT 0 CHECK (collateral_chain_points >= 0),
+            open_fee_trial_points INTEGER NOT NULL DEFAULT 0 CHECK (open_fee_trial_points >= 0),
+            open_fee_chain_points INTEGER NOT NULL DEFAULT 0 CHECK (open_fee_chain_points >= 0),
             CHECK (position_type IN ('margin_long', 'short')),
             CHECK (status IN ('open', 'closed', 'liquidated'))
         )
@@ -376,7 +380,7 @@ def ensure_trading_schema(conn):
         ("trading.enabled", "true"),
         ("trading.futures_enabled", "false"),
         ("trading.pvp_matching_enabled", "false"),
-        ("trading.borrowing_enabled", "false"),
+        ("trading.borrowing_enabled", "true"),
         ("trading.borrow_interest_bps_daily", "10"),
         ("trading.margin_liquidation_enabled", "true"),
         ("trading.margin_maintenance_bps", "1500"),
@@ -414,6 +418,15 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_repaid_points INTEGER NOT NULL DEFAULT 0")
     if "trial_profit_points" not in fill_cols:
         conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_profit_points INTEGER NOT NULL DEFAULT 0")
+    margin_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_margin_positions)").fetchall()}
+    if "collateral_trial_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN collateral_trial_points INTEGER NOT NULL DEFAULT 0")
+    if "collateral_chain_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN collateral_chain_points INTEGER NOT NULL DEFAULT 0")
+    if "open_fee_trial_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_trial_points INTEGER NOT NULL DEFAULT 0")
+    if "open_fee_chain_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_chain_points INTEGER NOT NULL DEFAULT 0")
 
 
 class TradingEngineService:
@@ -575,7 +588,7 @@ class TradingEngineService:
             "enabled": str(raw.get("trading.enabled", "true")).lower() in {"true", "1", "yes"},
             "futures_enabled": str(raw.get("trading.futures_enabled", "false")).lower() in {"true", "1", "yes"},
             "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
-            "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "false")).lower() in {"true", "1", "yes"},
+            "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "true")).lower() in {"true", "1", "yes"},
             "borrow_interest_bps_daily": _to_int(raw.get("trading.borrow_interest_bps_daily", "10"), name="borrow_interest_bps_daily", minimum=0, maximum=10000),
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
             "margin_maintenance_bps": _to_int(raw.get("trading.margin_maintenance_bps", "1500"), name="margin_maintenance_bps", minimum=0, maximum=10000),
@@ -908,6 +921,26 @@ class TradingEngineService:
         if amount <= 0:
             return 0
         self._trial_delta(conn, user_id, available_delta=-amount, locked_delta=amount)
+        return amount
+
+    def _trial_spend(self, conn, user_id, amount):
+        row = self._ensure_trial_credit(conn, user_id)
+        if not row or row["status"] != "active":
+            return 0
+        amount = min(int(amount or 0), int(row["available_points"] or 0))
+        if amount <= 0:
+            return 0
+        self._trial_delta(conn, user_id, available_delta=-amount)
+        return amount
+
+    def _trial_deploy(self, conn, user_id, amount):
+        row = self._ensure_trial_credit(conn, user_id)
+        if not row or row["status"] != "active":
+            return 0
+        amount = min(int(amount or 0), int(row["available_points"] or 0))
+        if amount <= 0:
+            return 0
+        self._trial_delta(conn, user_id, available_delta=-amount, deployed_delta=amount)
         return amount
 
     def _trial_unlock(self, conn, user_id, amount):
@@ -2008,35 +2041,54 @@ class TradingEngineService:
             principal = max(0, notional - collateral) if position_type == "margin_long" else notional
             position_uuid = str(uuid.uuid4())
             ledger_uuids = []
-            ledger_uuids.append(self._ledger(
-                conn,
-                user_id=user_id,
-                currency_type="points",
-                direction="freeze",
-                amount=collateral,
-                action_type="trading_margin_collateral_freeze",
-                reference_type="trading_margin_position",
-                reference_id=position_uuid,
-                idempotency_key=f"trading:margin:collateral:{position_uuid}",
-                reason="TRADING_MARGIN_COLLATERAL",
-                public_metadata={"position_type": position_type, "market": market["symbol"], "quantity": units_to_quantity(quantity_units), "notional": notional},
-                actor=actor,
-            )["ledger_uuid"])
-            if fee:
+            trial_fee = self._trial_spend(conn, user_id, fee)
+            chain_fee = fee - trial_fee
+            trial_collateral = self._trial_deploy(conn, user_id, collateral)
+            chain_collateral = collateral - trial_collateral
+            if chain_collateral:
+                ledger_uuids.append(self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="freeze",
+                    amount=chain_collateral,
+                    action_type="trading_margin_collateral_freeze",
+                    reference_type="trading_margin_position",
+                    reference_id=position_uuid,
+                    idempotency_key=f"trading:margin:collateral:{position_uuid}",
+                    reason="TRADING_MARGIN_COLLATERAL",
+                    public_metadata={
+                        "position_type": position_type,
+                        "market": market["symbol"],
+                        "quantity": units_to_quantity(quantity_units),
+                        "notional": notional,
+                        "trial_collateral_points": trial_collateral,
+                        "chain_collateral_points": chain_collateral,
+                    },
+                    actor=actor,
+                )["ledger_uuid"])
+            if chain_fee:
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
                     currency_type="points",
                     direction="debit",
-                    amount=fee,
+                    amount=chain_fee,
                     action_type="trading_margin_open_fee",
                     reference_type="trading_margin_position",
                     reference_id=position_uuid,
                     idempotency_key=f"trading:margin:open_fee:{position_uuid}",
                     reason="TRADING_MARGIN_OPEN_FEE",
-                    public_metadata={"position_type": position_type, "market": market["symbol"], "fee_bps": int(market["fee_bps"] or 0)},
+                    public_metadata={
+                        "position_type": position_type,
+                        "market": market["symbol"],
+                        "fee_bps": int(market["fee_bps"] or 0),
+                        "trial_fee_points": trial_fee,
+                        "chain_fee_points": chain_fee,
+                    },
                     actor=actor,
                 )["ledger_uuid"])
+            if fee:
                 self._reserve_delta(conn, delta=fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_OPEN_FEE", actor=actor)
             now = _now()
             cur = conn.execute(
@@ -2044,8 +2096,9 @@ class TradingEngineService:
                 INSERT INTO trading_margin_positions (
                     position_uuid, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
-                    interest_bps_daily, status, opened_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                    interest_bps_daily, status, opened_at, updated_at,
+                    collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -2060,6 +2113,10 @@ class TradingEngineService:
                     int(borrow_settings["interest_bps_daily"]),
                     now,
                     now,
+                    trial_collateral,
+                    chain_collateral,
+                    trial_fee,
+                    chain_fee,
                 ),
             )
             self._audit_event(
@@ -2079,6 +2136,10 @@ class TradingEngineService:
                     "principal_points": principal,
                     "collateral_points": collateral,
                     "open_fee_points": fee,
+                    "trial_collateral_points": trial_collateral,
+                    "chain_collateral_points": chain_collateral,
+                    "trial_fee_points": trial_fee,
+                    "chain_fee_points": chain_fee,
                     "ledger_uuids": ledger_uuids,
                 },
             )
@@ -2119,23 +2180,33 @@ class TradingEngineService:
             close_fee = risk["close_fee_points"]
             interest = risk["interest_points"]
             collateral = int(position["collateral_points"] or 0)
+            collateral_trial = int(position["collateral_trial_points"] or 0) if "collateral_trial_points" in position.keys() else 0
+            collateral_chain = int(position["collateral_chain_points"] or 0) if "collateral_chain_points" in position.keys() else collateral
             delta = risk["delta_points"]
             ledger_uuids = []
-            ledger_uuids.append(self._ledger(
-                conn,
-                user_id=user_id,
-                currency_type="points",
-                direction="unfreeze",
-                amount=collateral,
-                action_type="trading_margin_collateral_unfreeze",
-                reference_type="trading_margin_position",
-                reference_id=position["position_uuid"],
-                idempotency_key=f"trading:margin:collateral_unfreeze:{position['position_uuid']}",
-                reason="TRADING_MARGIN_COLLATERAL_RELEASE",
-                public_metadata={"position_type": position["position_type"], "market": market["symbol"]},
-                actor=actor,
-            )["ledger_uuid"])
+            if collateral_chain:
+                ledger_uuids.append(self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="unfreeze",
+                    amount=collateral_chain,
+                    action_type="trading_margin_collateral_unfreeze",
+                    reference_type="trading_margin_position",
+                    reference_id=position["position_uuid"],
+                    idempotency_key=f"trading:margin:collateral_unfreeze:{position['position_uuid']}",
+                    reason="TRADING_MARGIN_COLLATERAL_RELEASE",
+                    public_metadata={
+                        "position_type": position["position_type"],
+                        "market": market["symbol"],
+                        "trial_collateral_points": collateral_trial,
+                        "chain_collateral_points": collateral_chain,
+                    },
+                    actor=actor,
+                )["ledger_uuid"])
             if delta > 0:
+                if collateral_trial:
+                    self._trial_delta(conn, user_id, available_delta=collateral_trial, deployed_delta=-collateral_trial)
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
@@ -2151,10 +2222,16 @@ class TradingEngineService:
                     actor=actor,
                 )["ledger_uuid"])
             elif delta < 0:
+                remaining_loss = abs(delta)
+                if collateral_trial:
+                    trial_loss = min(collateral_trial, remaining_loss)
+                    trial_return = collateral_trial - trial_loss
+                    self._trial_delta(conn, user_id, available_delta=trial_return, deployed_delta=-collateral_trial)
+                    remaining_loss -= trial_loss
                 wallet = self.points_service.ensure_wallet(conn, user_id)
                 wallet_balance = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
-                debit_amount = min(abs(delta), wallet_balance)
-                bad_debt = abs(delta) - debit_amount
+                debit_amount = min(remaining_loss, wallet_balance)
+                bad_debt = remaining_loss - debit_amount
                 if debit_amount:
                     ledger_uuids.append(self._ledger(
                         conn,
@@ -2181,6 +2258,8 @@ class TradingEngineService:
                         severity="critical",
                         metadata={"position_uuid": position["position_uuid"], "bad_debt_points": bad_debt, "risk": risk},
                     )
+            elif collateral_trial:
+                self._trial_delta(conn, user_id, available_delta=collateral_trial, deployed_delta=-collateral_trial)
             if close_fee:
                 self._reserve_delta(conn, delta=close_fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_CLOSE_FEE", actor=actor)
             if interest:

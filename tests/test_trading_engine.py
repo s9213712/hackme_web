@@ -502,10 +502,23 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
     assert report["audit_events"][0]["event_type"] in {"TRADING_MARKET_BILLING_UPDATED", "TRADING_SETTINGS_UPDATED"}
 
 
+def test_borrowing_trading_is_enabled_by_default(tmp_path):
+    _, trading = _services(tmp_path)
+
+    settings = trading.get_root_settings()["settings"]
+
+    assert settings["borrowing_enabled"] is True
+
+
 def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
 
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": False},
+        markets=[],
+    )
     with pytest.raises(ValueError, match="borrow trading is disabled"):
         trading.open_margin_position(
             actor=_actor(),
@@ -530,14 +543,20 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
 
     assert opened["position"]["position_type"] == "margin_long"
     assert opened["position"]["principal_points"] == 300
-    assert points.get_wallet(1)["points_balance"] == 798
-    assert points.get_wallet(1)["points_frozen"] == 200
+    assert opened["position"]["collateral_trial_points"] == 200
+    assert opened["position"]["open_fee_trial_points"] == 2
+    assert points.get_wallet(1)["points_balance"] == 1000
+    assert points.get_wallet(1)["points_frozen"] == 0
+    assert opened["funding"]["trial_credit"]["available_points"] == 798
+    assert opened["funding"]["trial_credit"]["deployed_points"] == 200
     assert trading.root_report()["reserve_pool"]["balance_points"] == 2
 
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
     assert closed["position"]["status"] == "closed"
     assert closed["delta_points"] == -2
     assert points.get_wallet(1)["points_frozen"] == 0
+    assert closed["funding"]["trial_credit"]["available_points"] == 996
+    assert closed["funding"]["trial_credit"]["deployed_points"] == 0
     assert trading.root_report()["reserve_pool"]["balance_points"] == 4
     assert trading.verify_state()["ok"] is True
 

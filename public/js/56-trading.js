@@ -283,8 +283,8 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
             <label>限價</label>
             <input type="number" min="1" step="1" placeholder="${currentPrice ? formatTradingPointsValue(currentPrice) : "-"}" data-economy-spot-price="${sanitize(symbol)}" />
           </div>
-          <button class="btn" type="button" data-economy-spot-limit="${sanitize(symbol)}" ${sellable <= 0 ? "disabled" : ""}>確認賣出</button>
-          <button class="btn btn-danger" type="button" data-economy-spot-market-close="${sanitize(symbol)}" ${sellable <= 0 ? "disabled" : ""}>市價平倉（2x費）</button>
+          <button class="btn" type="button" data-economy-spot-limit="${sanitize(symbol)}" ${sellable <= 0 ? "disabled" : ""}>確認</button>
+          <button class="btn btn-danger" type="button" data-economy-spot-market-close="${sanitize(symbol)}" ${sellable <= 0 ? "disabled" : ""}>市價平倉</button>
         </div>
       </div>
     `;

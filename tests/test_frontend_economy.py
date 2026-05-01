@@ -64,7 +64,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
-    assert "/js/56-trading.js?v=20260501-trading-latest-candle-settings" in index_html
+    assert "/js/56-trading.js?v=20260501-trading-margin-trial" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-auto-handle-btn"' in index_html
@@ -132,6 +132,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-catalog-save-btn"' in index_html
     assert 'id="root-trading-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled"' in index_html
+    assert 'id="root-trading-borrowing-enabled" checked' in index_html
     assert 'id="root-trading-borrow-interest-bps"' in index_html
     assert 'id="root-trading-price-source"' in index_html
     assert 'id="root-trading-max-price-staleness"' in index_html
@@ -148,6 +149,9 @@ def test_root_points_page_is_chain_operations_console():
     assert "function loadRootTradingSettings()" in admin_js
     assert "function saveRootTradingSettings()" in admin_js
     assert 'apiFetch(API + "/root/trading/settings"' in admin_js
+    assert "parseRootTradingSettingsResponse" in admin_js
+    assert "交易所參數 API 找不到" in admin_js
+    assert "交易所參數儲存中" in admin_js
     assert "borrow_interest_bps_daily" in admin_js
     assert "price_source" in admin_js
     assert "max_price_staleness_seconds" in admin_js
@@ -164,6 +168,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     economy_section = index_html.split('id="module-economy"', 1)[1].split('id="module-trading"', 1)[0]
     trading_section = index_html.split('id="module-trading"', 1)[1].split('id="module-accounts"', 1)[0]
 
@@ -233,6 +238,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function submitEconomySpotSell" in trading_js
     assert "data-economy-spot-limit" in trading_js
     assert "data-economy-spot-market-close" in trading_js
+    assert ">確認</button>" in trading_js
+    assert ">市價平倉</button>" in trading_js
+    assert "grid-template-columns: minmax(120px, .85fr) repeat(5" in styles
     assert "成本價（總額）" in trading_js
     assert "目前部位價值" in trading_js
     assert "盈虧" in trading_js

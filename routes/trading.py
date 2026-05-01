@@ -79,7 +79,10 @@ def register_trading_routes(app, deps):
             status = 409
         if "safe mode" in lowered:
             status = 423
-        if "not found" in lowered:
+        if lowered.startswith("market not found"):
+            msg = "交易市場不存在，請重新整理交易所參數後再試"
+            status = 400
+        elif "not found" in lowered:
             status = 404
         if "another user" in lowered:
             status = 403
