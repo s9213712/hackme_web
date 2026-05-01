@@ -162,6 +162,7 @@ def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     assert "storage allocation failed after debit" in files
     assert files.count("can_allocate_storage_bytes(conn, storage_root, additional_bytes)") >= 2
     assert "會員承諾容量已達或超過 Host 可用容量，目前停用容量購買" in files
+    assert '"host_storage_total_commitment_exceeds_available" in set(capacity_audit.get("reasons") or [])' in files
     assert '"host_storage_overcommitted" in set(capacity_audit.get("reasons") or [])' in files
 
 

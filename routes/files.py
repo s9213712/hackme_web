@@ -946,14 +946,17 @@ def register_file_routes(app, deps):
             capacity_audit = audit_storage_capacity(conn, storage_root)
             if can_purchase:
                 overcommitted = (
-                    int(capacity_audit["committed_total_bytes"]) >= int(capacity_audit["allocatable_cloud_capacity_bytes"])
+                    int(capacity_audit["committed_total_bytes"]) >= int(capacity_audit["available_cloud_capacity_bytes"])
+                    or int(capacity_audit["committed_total_bytes"]) >= int(capacity_audit["allocatable_cloud_capacity_bytes"])
                     or int(capacity_audit["committed_remaining_bytes"]) >= int(capacity_audit["disk"]["safe_free_bytes"])
+                    or "host_storage_total_commitment_exceeds_available" in set(capacity_audit.get("reasons") or [])
                     or "host_storage_overcommitted" in set(capacity_audit.get("reasons") or [])
                 )
                 if overcommitted:
                     can_purchase = False
                     message = "會員承諾容量已達或超過 Host 可用容量，目前停用容量購買"
                 headroom = min(
+                    max(0, int(capacity_audit["available_cloud_capacity_bytes"]) - int(capacity_audit["committed_total_bytes"])),
                     max(0, int(capacity_audit["allocatable_cloud_capacity_bytes"]) - int(capacity_audit["committed_total_bytes"])),
                     max(0, int(capacity_audit["disk"]["safe_free_bytes"]) - int(capacity_audit["committed_remaining_bytes"])),
                 )
