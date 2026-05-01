@@ -1375,6 +1375,7 @@ async function loadServerMode() {
     return;
   }
   const mode = json.mode || {};
+  currentSecurityModeName = mode.current_mode || "";
   populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "preprod");
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
@@ -1471,6 +1472,10 @@ async function applyServerMode() {
     status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {
+    if (json.profile) {
+      applySecurityProfileDataToInputs(json.profile, "s");
+      applySecurityProfileDataToInputs(json.profile, "sc");
+    }
     if ($("server-mode-confirm")) $("server-mode-confirm").value = "";
     await loadServerMode();
     await loadSecurityCenter();
@@ -1612,7 +1617,9 @@ function formatBytes(bytes) {
 
 const SECURITY_CONTROL_KEYS = [
   "maintenance_mode",
+  "server_ssl_enabled",
   "audit_chain_enabled",
+  "feature_audit_log_enabled",
   "ip_blocking_enabled",
   "login_violation_enabled",
   "rate_limit_violation_enabled",
@@ -1620,7 +1627,8 @@ const SECURITY_CONTROL_KEYS = [
   "root_ip_whitelist",
   "browser_only_mode_enabled",
   "integrity_guard_enabled",
-  "integrity_guard_strict_mode"
+  "integrity_guard_strict_mode",
+  "feature_economy_enabled"
 ];
 const SECURITY_THRESHOLD_KEYS = [
   "max_login_failures",
@@ -1633,6 +1641,7 @@ const SECURITY_THRESHOLD_KEYS = [
   "security_log_tail_lines"
 ];
 let securityProfiles = [];
+let currentSecurityModeName = "";
 
 function securityInputId(prefix, key) {
   return prefix + "-" + key.replaceAll("_", "-");
@@ -1651,6 +1660,61 @@ function profileKeysSummary(profile, key) {
   const data = profile && profile[key] && typeof profile[key] === "object" ? profile[key] : {};
   const keys = Object.keys(data);
   return keys.length ? keys.map((item) => `${item}=${JSON.stringify(data[item])}`).join("，") : "未設定";
+}
+
+function readSecurityControlsFromInputs(prefix = "sc") {
+  const payload = {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  });
+  return payload;
+}
+
+function readSecurityThresholdsFromInputs(prefix = "sc") {
+  const payload = {};
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    const value = parseInt(el.value || "0", 10);
+    payload[key] = Number.isFinite(value) ? value : 0;
+  });
+  return payload;
+}
+
+function profileDiffersFromPayload(profile, settings, thresholds) {
+  if (!profile) return false;
+  const profileSettings = profile.settings && typeof profile.settings === "object" ? profile.settings : {};
+  const profileThresholds = profile.thresholds && typeof profile.thresholds === "object" ? profile.thresholds : {};
+  return SECURITY_CONTROL_KEYS.some((key) => Object.prototype.hasOwnProperty.call(settings, key) && settings[key] !== profileSettings[key])
+    || SECURITY_THRESHOLD_KEYS.some((key) => Object.prototype.hasOwnProperty.call(thresholds, key) && Number(thresholds[key] || 0) !== Number(profileThresholds[key] || 0));
+}
+
+function applySecurityProfileDataToInputs(profile, prefix = "sc") {
+  if (!profile) return;
+  const settings = profile.settings && typeof profile.settings === "object" ? profile.settings : {};
+  SECURITY_CONTROL_KEYS.forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(settings, key)) return;
+    const el = $(securityInputId(prefix, key));
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!settings[key];
+    else el.value = settings[key] ?? "";
+  });
+  SECURITY_THRESHOLD_KEYS.forEach((key) => {
+    const source = Object.prototype.hasOwnProperty.call(settings, key)
+      ? settings
+      : (profile.thresholds && typeof profile.thresholds === "object" ? profile.thresholds : {});
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+    const el = $(securityInputId(prefix, key));
+    if (el) el.value = source[key] ?? 0;
+  });
+}
+
+function defaultCustomSecurityProfileName() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `custom_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
 }
 
 function renderSecurityProfilePreview(selectId, previewId) {
@@ -1674,28 +1738,24 @@ function renderSecurityProfilePreview(selectId, previewId) {
 
 function applySecurityProfileToInputs(profileName, prefix = "sc") {
   const profile = findSecurityProfile(profileName);
-  if (!profile) return;
-  const settings = profile.settings && typeof profile.settings === "object" ? profile.settings : {};
-  SECURITY_CONTROL_KEYS.forEach((key) => {
-    if (!Object.prototype.hasOwnProperty.call(settings, key)) return;
-    const el = $(securityInputId(prefix, key));
-    if (!el) return;
-    if (el.type === "checkbox") el.checked = !!settings[key];
-    else el.value = settings[key] ?? "";
-  });
-  SECURITY_THRESHOLD_KEYS.forEach((key) => {
-    const source = Object.prototype.hasOwnProperty.call(settings, key)
-      ? settings
-      : (profile.thresholds && typeof profile.thresholds === "object" ? profile.thresholds : {});
-    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
-    const el = $(securityInputId(prefix, key));
-    if (el) el.value = source[key] ?? 0;
-  });
+  applySecurityProfileDataToInputs(profile, prefix);
 }
 
 function previewSecurityProfileSelection(selectId, previewId, inputPrefix = "") {
   renderSecurityProfilePreview(selectId, previewId);
   if (inputPrefix) applySecurityProfileToInputs($(selectId)?.value, inputPrefix);
+  const profile = findSecurityProfile($(selectId)?.value);
+  const msg = selectId === "security-mode-select" ? $("security-controls-msg") : $("server-mode-status");
+  if (msg && profile) {
+    msg.textContent = `已預覽「${profile.label || profile.name}」的安全開關；按套用才會寫入伺服器。`;
+    msg.style.color = "var(--muted)";
+  }
+}
+
+function bindSecurityProfileSelect(selectId, previewId, inputPrefix = "") {
+  const select = $(selectId);
+  if (!select) return;
+  select.onchange = () => previewSecurityProfileSelection(selectId, previewId, inputPrefix);
 }
 
 function populateProfileSelect(selectId, profiles, selectedMode) {
@@ -1947,6 +2007,8 @@ function populateSecurityProfiles(profiles, selectedMode) {
   securityProfiles = Array.isArray(profiles) ? profiles : [];
   populateProfileSelect("security-mode-select", securityProfiles, selectedMode);
   populateProfileSelect("server-mode-select", securityProfiles, selectedMode);
+  bindSecurityProfileSelect("security-mode-select", "security-mode-profile-preview", "sc");
+  bindSecurityProfileSelect("server-mode-select", "server-mode-profile-preview", "s");
   renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview");
   renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview");
 }
@@ -1984,6 +2046,7 @@ async function loadSecurityCenter() {
     window.securityProfileDraftInitialized = true;
   }
   const mode = sc.mode || {};
+  currentSecurityModeName = mode.current_mode || "";
   populateSecurityProfiles(sc.profiles || [], mode.current_mode || "preprod");
   const modeStatus = $("security-mode-status");
   if (modeStatus) {
@@ -2015,15 +2078,81 @@ async function loadSecurityCenter() {
   startServerOutputPoll();
 }
 
-async function saveSecurityCenterControls() {
+async function saveSecurityProfilePayload(payload) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const payload = {};
-  SECURITY_CONTROL_KEYS.forEach((key) => {
-    const el = $(securityInputId("sc", key));
-    if (!el) return;
-    payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+  const res = await apiFetch(API + "/admin/security-center/profiles", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
   });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `自定義設定檔儲存失敗（HTTP ${res.status}）`);
+  return json.profile || {};
+}
+
+async function applySecurityModeByName(profileName, notes = "manual custom security profile") {
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/admin/server-mode", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ mode: profileName, confirm: "", notes })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.msg || `自定義模式套用失敗（HTTP ${res.status}）`);
+  return json;
+}
+
+async function maybeSaveCustomSecurityProfileFromManualChange() {
+  const profile = findSecurityProfile(currentSecurityModeName);
+  if (!profile || !profile.is_builtin) return null;
+  const settings = readSecurityControlsFromInputs("sc");
+  const thresholds = readSecurityThresholdsFromInputs("sc");
+  if (!profileDiffersFromPayload(profile, settings, thresholds)) return null;
+  const shouldSave = confirm("你已修改內建模式的安全細項。內建模式不會被覆寫，系統會另存為自定義模式並切換到該模式。是否繼續？");
+  if (!shouldSave) return false;
+  const suggestedName = defaultCustomSecurityProfileName();
+  const name = prompt("請輸入自定義模式名稱（小寫英數、底線或連字號）：", suggestedName) || "";
+  if (!name.trim()) return false;
+  const label = prompt("請輸入顯示名稱：", `自定義模式 ${name.trim()}`) || name.trim();
+  const msg = $("security-profile-msg") || $("security-controls-msg") || $("security-thresholds-msg");
+  try {
+    const profilePayload = {
+      name,
+      label,
+      description: `由 ${profile.label || profile.name} 手動調整後建立`,
+      settings,
+      thresholds
+    };
+    const savedProfile = await saveSecurityProfilePayload(profilePayload);
+    await applySecurityModeByName(savedProfile.name || name.trim(), "manual security detail changed");
+    if (msg) {
+      msg.textContent = `已另存並套用自定義模式：${savedProfile.label || label}`;
+      msg.style.color = "#4caf50";
+    }
+    await loadSecurityCenter();
+    await loadServerMode();
+    await loadSettings();
+    return true;
+  } catch (err) {
+    if (msg) {
+      msg.textContent = err.message || "自定義模式儲存或套用失敗";
+      msg.style.color = "#ff4f6d";
+    }
+    return false;
+  }
+}
+
+async function saveSecurityCenterControls() {
+  const customHandled = await maybeSaveCustomSecurityProfileFromManualChange();
+  if (customHandled === false) return;
+  if (customHandled === true) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const payload = readSecurityControlsFromInputs("sc");
   const res = await apiFetch(API + "/admin/security-center/controls", {
     method: "PUT",
     credentials: "same-origin",
@@ -2040,13 +2169,12 @@ async function saveSecurityCenterControls() {
 }
 
 async function saveSecurityThresholds() {
+  const customHandled = await maybeSaveCustomSecurityProfileFromManualChange();
+  if (customHandled === false) return;
+  if (customHandled === true) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const payload = {};
-  SECURITY_THRESHOLD_KEYS.forEach((key) => {
-    const el = $(securityInputId("sc", key));
-    if (el) payload[key] = parseInt(el.value || "0", 10);
-  });
+  const payload = readSecurityThresholdsFromInputs("sc");
   const res = await apiFetch(API + "/admin/security-center/thresholds", {
     method: "PUT",
     credentials: "same-origin",
@@ -2089,6 +2217,10 @@ async function applySecurityMode() {
     status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {
+    if (json.profile) {
+      applySecurityProfileDataToInputs(json.profile, "sc");
+      applySecurityProfileDataToInputs(json.profile, "s");
+    }
     if ($("security-mode-confirm")) $("security-mode-confirm").value = "";
     await loadSecurityCenter();
     await loadServerMode();

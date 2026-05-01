@@ -657,7 +657,7 @@ function renderCommunityThreads(board) {
   list.innerHTML = communityThreads.map((thread) => `
     <button class="community-thread-item${Number(selectedCommunityThreadId) === Number(thread.id) ? " active" : ""}" type="button" data-open-thread="${thread.id}">
       <strong>${thread.is_sticky ? "置頂 · " : ""}${sanitize(thread.title || "")}</strong>
-      <div class="community-meta">${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))}</div>
+      <div class="community-meta">${userIdentityMarkup(thread.author_user_id, thread.author_username || "", formatChatTime(thread.created_at || ""), "community-author-line")}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       <div class="community-body">${sanitize(communityPlainContent(thread.content || "").slice(0, 140))}${communityPlainContent(thread.content || "").length > 140 ? "..." : ""}</div>
       <div class="community-meta">回覆 ${thread.reply_count || 0}</div>
@@ -666,6 +666,7 @@ function renderCommunityThreads(board) {
   list.querySelectorAll("button[data-open-thread]").forEach((btn) => {
     btn.addEventListener("click", () => openCommunityThread(parseInt(btn.getAttribute("data-open-thread"), 10)));
   });
+  bindAvatarFallbacks(list);
   renderCommunityStage();
 }
 
@@ -701,7 +702,7 @@ function renderCommunityThreadDetail(thread, posts) {
     ? posts.map((post) => `
         <div class="community-card${post.is_hidden ? " community-hidden-post" : ""}">
           <div class="community-card-head">
-            <div class="community-meta">${post.is_pinned ? "置頂留言 · " : ""}${sanitize(post.author_username || "")} · ${sanitize(formatChatTime(post.created_at || ""))}${post.is_hidden ? ` · 已隱藏：${sanitize(post.hidden_reason || "")}` : ""}</div>
+            <div class="community-meta">${post.is_pinned ? "置頂留言 · " : ""}${userIdentityMarkup(post.author_user_id, post.author_username || "", `${formatChatTime(post.created_at || "")}${post.is_hidden ? ` · 已隱藏：${post.hidden_reason || ""}` : ""}`, "community-author-line")}</div>
             <div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">
               ${canModerateThread && canPinPost ? `<button class="btn community-mini-btn" type="button" data-pin-community-post="${post.id}" data-pinned="${post.is_pinned ? "1" : "0"}">${post.is_pinned ? "取消置頂" : "置頂留言"}</button>` : ""}
               ${(canModerateThread || canDeleteCommunityItem(post.author_user_id, thread.author_user_id)) ? `<button class="btn community-mini-btn" type="button" data-delete-community-post="${post.id}">刪除</button>` : ""}
@@ -718,7 +719,7 @@ function renderCommunityThreadDetail(thread, posts) {
     : "<p style='color:var(--muted);'>尚無留言</p>";
   detail.innerHTML = `
     <div class="community-card">
-      <div class="community-meta">${thread.is_sticky ? "置頂主題 · " : ""}${sanitize(thread.author_username || "")} · ${sanitize(formatChatTime(thread.created_at || ""))} · ${sanitize(thread.board_title || "")}${thread.is_locked ? " · 已鎖定" : ""}</div>
+      <div class="community-meta">${thread.is_sticky ? "置頂主題 · " : ""}${userIdentityMarkup(thread.author_user_id, thread.author_username || "", `${formatChatTime(thread.created_at || "")} · ${thread.board_title || ""}${thread.is_locked ? " · 已鎖定" : ""}`, "community-author-line")}</div>
       <div class="community-meta">${communityStatusLabel(thread.status)}${thread.review_note ? ` · ${sanitize(thread.review_note)}` : ""}</div>
       ${renderCommunityBody(thread.content || "")}
       <div class="community-actions" style="margin-top:.45rem;">
@@ -733,6 +734,7 @@ function renderCommunityThreadDetail(thread, posts) {
   detail.querySelectorAll("button[data-delete-community-post]").forEach((btn) => {
     btn.addEventListener("click", () => deleteCommunityPost(parseInt(btn.getAttribute("data-delete-community-post"), 10)));
   });
+  bindAvatarFallbacks(detail);
   detail.querySelectorAll("button[data-pin-community-post]").forEach((btn) => {
     btn.addEventListener("click", () => toggleCommunityPostPin(
       parseInt(btn.getAttribute("data-pin-community-post"), 10),

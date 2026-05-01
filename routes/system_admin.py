@@ -631,6 +631,7 @@ def register_system_admin_routes(app, deps):
         "maintenance_mode",
         "server_ssl_enabled",
         "audit_chain_enabled",
+        "feature_audit_log_enabled",
         "ip_blocking_enabled",
         "login_violation_enabled",
         "rate_limit_violation_enabled",
@@ -639,6 +640,7 @@ def register_system_admin_routes(app, deps):
         "browser_only_mode_enabled",
         "integrity_guard_enabled",
         "integrity_guard_strict_mode",
+        "feature_economy_enabled",
     )
     SECURITY_THRESHOLD_KEYS = (
         "max_login_failures",

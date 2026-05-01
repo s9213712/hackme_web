@@ -820,6 +820,10 @@
               </select>
             </div>
             <div class="field">
+              <label>分享密碼（選填）</label>
+              <input type="password" id="album-create-share-password" placeholder="持連結可看時生效" autocomplete="new-password" />
+            </div>
+            <div class="field">
               <label>&nbsp;</label>
               <button class="btn btn-primary" id="album-create-btn" type="button">建立</button>
             </div>
@@ -849,6 +853,15 @@
                   <option value="unlisted">不列出，持連結可看</option>
                   <option value="public">公開</option>
                 </select>
+              </div>
+              <div class="field">
+                <label>分享密碼</label>
+                <input type="password" id="album-edit-share-password" placeholder="留空不變，輸入新密碼可更新" autocomplete="new-password" />
+                <div class="drive-card-sub" id="album-edit-share-password-state">目前未設定分享密碼。</div>
+                <label class="inline-check">
+                  <input type="checkbox" id="album-edit-clear-share-password" />
+                  清除分享密碼
+                </label>
               </div>
               <div class="field">
                 <label>&nbsp;</label>
@@ -956,10 +969,10 @@
             <div class="drive-card-heading">
               <div>
                 <div class="drive-card-title">數獨</div>
-                <div class="drive-card-sub" id="sudoku-status">填入 1-9，完成後檢查答案。</div>
+                <div class="drive-card-sub" id="sudoku-status">按開始後才會出現題目並開始計時。</div>
               </div>
               <div class="drive-file-actions">
-                <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">新題目</button>
+                <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">開始</button>
                 <button class="btn btn-primary game-mini-btn" id="sudoku-check-btn" type="button">檢查</button>
               </div>
             </div>
@@ -969,7 +982,7 @@
             <div class="drive-card-heading">
               <div>
                 <div class="drive-card-title">踩地雷</div>
-                <div class="drive-card-sub" id="minesweeper-status">左鍵翻格，右鍵插旗。</div>
+                <div class="drive-card-sub" id="minesweeper-status">按開始後才會出現盤面並開始計時。</div>
               </div>
               <div class="drive-file-actions">
                 <select id="minesweeper-difficulty">
@@ -977,7 +990,7 @@
                   <option value="normal">普通 12x12 / 20 雷</option>
                   <option value="hard">困難 16x16 / 40 雷</option>
                 </select>
-                <button class="btn game-mini-btn" id="minesweeper-new-btn" type="button">新局</button>
+                <button class="btn game-mini-btn" id="minesweeper-new-btn" type="button">開始</button>
               </div>
             </div>
             <div id="minesweeper-board" class="minesweeper-board" aria-label="踩地雷棋盤"></div>
@@ -1616,7 +1629,9 @@
           <div class="drive-card-title">安全機制開關</div>
           <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="sc-maintenance-mode" /> 維護模式</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-server-ssl-enabled" /> HTTPS / SSL 設定</label></div>
             <div class="field"><label><input type="checkbox" id="sc-audit-chain-enabled" /> 審計 hash chain</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-feature-audit-log-enabled" /> Audit log 查詢頁</label></div>
             <div class="field"><label><input type="checkbox" id="sc-ip-blocking-enabled" /> 錯誤登入鎖 IP</label></div>
             <div class="field"><label><input type="checkbox" id="sc-login-violation-enabled" /> 登入失敗寫入違規</label></div>
             <div class="field"><label><input type="checkbox" id="sc-rate-limit-violation-enabled" /> 速率限制寫入違規</label></div>
@@ -1624,6 +1639,7 @@
             <div class="field"><label><input type="checkbox" id="sc-browser-only-mode-enabled" /> Browser-only 模式</label></div>
             <div class="field"><label><input type="checkbox" id="sc-integrity-guard-enabled" /> Integrity Guard</label></div>
             <div class="field"><label><input type="checkbox" id="sc-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-feature-economy-enabled" /> PointsChain / 積分私有鏈</label></div>
             <div class="field">
               <label>root IP 白名單</label>
               <textarea id="sc-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
@@ -1663,7 +1679,9 @@
           <div class="drive-card-sub" style="margin-top:.65rem;">安全開關</div>
           <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="security-profile-setting-maintenance-mode" /> 維護模式</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-server-ssl-enabled" /> HTTPS / SSL 設定</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-setting-audit-chain-enabled" /> 審計 hash chain</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-feature-audit-log-enabled" /> Audit log 查詢頁</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-setting-ip-blocking-enabled" /> 錯誤登入鎖 IP</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-setting-login-violation-enabled" /> 登入失敗寫入違規</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-setting-rate-limit-violation-enabled" /> 速率限制寫入違規</label></div>
@@ -1671,6 +1689,7 @@
             <div class="field"><label><input type="checkbox" id="security-profile-setting-browser-only-mode-enabled" /> Browser-only 模式</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-setting-integrity-guard-enabled" /> Integrity Guard</label></div>
             <div class="field"><label><input type="checkbox" id="security-profile-setting-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-feature-economy-enabled" /> PointsChain / 積分私有鏈</label></div>
             <div class="field">
               <label>root IP 白名單</label>
               <textarea id="security-profile-setting-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
@@ -2632,7 +2651,7 @@
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
 <script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
-<script src="/js/38-games.js?v=20260430-sudoku-minesweeper" defer></script>
+<script src="/js/38-games.js?v=20260501-solo-time-ranking" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-024" defer></script>
 <script src="/js/55-economy.js?v=20260501-024" defer></script>

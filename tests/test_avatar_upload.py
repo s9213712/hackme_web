@@ -91,6 +91,7 @@ def _seed_db(db_path):
     ensure_upload_security_schema(conn)
     update_cloud_drive_security_policy(conn, {"scanner_enabled": False, "scanner_backend": "disabled"})
     conn.execute("INSERT INTO users (id, username, role, member_level, effective_level) VALUES (1, 'alice', 'user', 'trusted', 'trusted')")
+    conn.execute("INSERT INTO users (id, username, role, member_level, effective_level) VALUES (2, 'bob', 'user', 'trusted', 'trusted')")
     conn.commit()
     conn.close()
 
@@ -129,3 +130,8 @@ def test_user_can_upload_avatar_and_crop_metadata(tmp_path):
     conn.close()
     assert user["avatar_file_id"] == payload["avatar_file_id"]
     assert file_row["scan_status"] in {"clean", "not_required"}
+
+    actor_box["actor"] = {"id": 2, "username": "bob", "role": "user", "member_level": "trusted", "effective_level": "trusted"}
+    avatar_res = client.get("/api/admin/users/1/avatar")
+    assert avatar_res.status_code == 200
+    assert avatar_res.mimetype == "image/jpeg"

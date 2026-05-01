@@ -15,8 +15,10 @@ from services.chess_game import (
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
+SOLO_GAME_KEYS = {"sudoku", "minesweeper"}
 WEEKLY_REWARDS = (300, 200, 100)
 COMPUTER_DIFFICULTIES = {"easy", "normal", "hard"}
+MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
     "p": 100,
     "n": 320,
@@ -175,10 +177,27 @@ def game_schema_sql():
         created_at TEXT NOT NULL,
         UNIQUE(game_key, week_key, user_id)
     );
+    CREATE TABLE IF NOT EXISTS game_solo_scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_key TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        week_key TEXT NOT NULL,
+        difficulty TEXT NOT NULL DEFAULT 'standard',
+        puzzle_id TEXT,
+        raw_elapsed_ms INTEGER NOT NULL,
+        penalty_seconds INTEGER NOT NULL DEFAULT 0,
+        elapsed_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (game_key IN ('sudoku', 'minesweeper')),
+        CHECK (elapsed_ms > 0),
+        CHECK (raw_elapsed_ms > 0),
+        CHECK (penalty_seconds >= 0)
+    );
     CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
     CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
+    CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
     """
 
 
@@ -877,6 +896,97 @@ def register_games_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/games/<game_key>/solo-leaderboard", methods=["GET"])
+    @require_csrf_safe
+    def solo_game_leaderboard(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = str(game_key or "").strip().lower()
+        if game_key not in SOLO_GAME_KEYS:
+            return json_resp({"ok": False, "msg": "不支援的單人遊戲"}), 404
+        week = str(request.args.get("week") or current_week_key()).strip()
+        difficulty = str(request.args.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
+        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+            return json_resp({"ok": False, "msg": "不支援的難度"}), 400
+        if game_key == "sudoku":
+            difficulty = "standard"
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            return json_resp({
+                "ok": True,
+                "game_key": game_key,
+                "week": week,
+                "difficulty": difficulty,
+                "rank_mode": "time_asc",
+                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/games/<game_key>/solo-scores", methods=["POST"])
+    @require_csrf
+    def submit_solo_game_score(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = str(game_key or "").strip().lower()
+        if game_key not in SOLO_GAME_KEYS:
+            return json_resp({"ok": False, "msg": "不支援的單人遊戲"}), 404
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        try:
+            raw_elapsed_ms = int(data.get("raw_elapsed_ms") or data.get("elapsed_ms") or 0)
+            penalty_seconds = int(data.get("penalty_seconds") or 0)
+            elapsed_ms = int(data.get("elapsed_ms") or 0)
+        except Exception:
+            return json_resp({"ok": False, "msg": "成績格式錯誤"}), 400
+        if raw_elapsed_ms <= 0 or elapsed_ms <= 0 or penalty_seconds < 0:
+            return json_resp({"ok": False, "msg": "成績時間不可小於等於 0"}), 400
+        if elapsed_ms < raw_elapsed_ms or elapsed_ms != raw_elapsed_ms + penalty_seconds * 1000:
+            return json_resp({"ok": False, "msg": "成績時間與加時不一致"}), 400
+        if elapsed_ms > 24 * 60 * 60 * 1000 or penalty_seconds > 3600:
+            return json_resp({"ok": False, "msg": "成績時間超出合理範圍"}), 400
+        difficulty = str(data.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
+        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+            return json_resp({"ok": False, "msg": "不支援的難度"}), 400
+        if game_key == "sudoku":
+            difficulty = "standard"
+        puzzle_id = str(data.get("puzzle_id") or "")[:64]
+        week = current_week_key()
+        now = utc_now()
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            cur = conn.execute(
+                """
+                INSERT INTO game_solo_scores (
+                    game_key, user_id, week_key, difficulty, puzzle_id,
+                    raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (game_key, int(actor["id"]), week, difficulty, puzzle_id, raw_elapsed_ms, penalty_seconds, elapsed_ms, now),
+            )
+            conn.commit()
+            audit(
+                "GAME_SOLO_SCORE_SUBMITTED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"game_key={game_key},score_id={cur.lastrowid},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds}",
+            )
+            return json_resp({
+                "ok": True,
+                "score_id": cur.lastrowid,
+                "week": week,
+                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+            })
+        finally:
+            conn.close()
+
     @app.route("/api/root/games/chess/weekly-rewards/award", methods=["POST"])
     @require_csrf
     def award_chess_weekly_rewards():
@@ -916,5 +1026,43 @@ def leaderboard_rows(conn, week):
         LIMIT 50
         """,
         (GAME_KEY, week),
+    ).fetchall()
+    return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]
+
+
+def solo_leaderboard_rows(conn, game_key, week, difficulty):
+    rows = conn.execute(
+        """
+        SELECT best.user_id,
+               u.username,
+               best.elapsed_ms,
+               best.raw_elapsed_ms,
+               best.penalty_seconds,
+               attempts.attempts,
+               best.created_at AS latest_at
+        FROM game_solo_scores s
+        JOIN game_solo_scores best ON best.id=(
+            SELECT s2.id
+            FROM game_solo_scores s2
+            WHERE s2.game_key=s.game_key
+              AND s2.week_key=s.week_key
+              AND s2.difficulty=s.difficulty
+              AND s2.user_id=s.user_id
+            ORDER BY s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC
+            LIMIT 1
+        )
+        JOIN (
+            SELECT user_id, COUNT(*) AS attempts
+            FROM game_solo_scores
+            WHERE game_key=? AND week_key=? AND difficulty=?
+            GROUP BY user_id
+        ) attempts ON attempts.user_id=best.user_id
+        JOIN users u ON u.id=best.user_id
+        WHERE s.game_key=? AND s.week_key=? AND s.difficulty=?
+        GROUP BY best.id, best.user_id, u.username, best.elapsed_ms, best.raw_elapsed_ms, best.penalty_seconds, attempts.attempts, best.created_at
+        ORDER BY best.elapsed_ms ASC, attempts.attempts ASC, u.username COLLATE NOCASE ASC
+        LIMIT 50
+        """,
+        (game_key, week, difficulty, game_key, week, difficulty),
     ).fetchall()
     return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]

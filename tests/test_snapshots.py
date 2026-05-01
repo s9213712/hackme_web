@@ -1,4 +1,5 @@
 import io
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes, restart_launcher_code
-from services.snapshots import ServerModeService, SnapshotService, ensure_snapshot_schema
+from services.snapshots import BUILTIN_SECURITY_PROFILES, ServerModeService, SnapshotService, ensure_snapshot_schema
 from services.upload_security import ensure_upload_security_schema
 
 
@@ -54,7 +55,7 @@ def _init_db(path):
 
 def _service(tmp_path, audit_log, *, runtime_secret_files=None):
     base = tmp_path / "app"
-    base.mkdir()
+    base.mkdir(parents=True)
     db_path = base / "database.db"
     uploads = base / "uploads"
     storage = base / "storage"
@@ -199,12 +200,22 @@ def test_checksum_mismatch_blocks_restore(tmp_path):
 def test_superweak_enter_and_exit_restore_rolls_back_dirty_state(tmp_path):
     audit_log = []
     service, db_path, uploads = _service(tmp_path, audit_log)
-    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    saved_settings = []
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        save_settings=lambda data: saved_settings.append(dict(data)) or dict(data),
+    )
     actor = {"id": 1, "username": "root"}
 
     entered = mode.enter_superweak(actor=actor, confirm="ENABLE_SUPERWEAK", notes="weak test")
     assert entered["ok"] is True
     assert entered["mode"]["current_mode"] == "superweak"
+    assert saved_settings[-1]["audit_chain_enabled"] is False
+    assert saved_settings[-1]["integrity_guard_enabled"] is False
+    assert saved_settings[-1]["ip_blocking_enabled"] is False
+    assert saved_settings[-1]["feature_economy_enabled"] is False
 
     conn = _db(db_path)
     conn.execute("INSERT INTO posts (id, title) VALUES (2, 'superweak dirty')")
@@ -271,6 +282,128 @@ def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
     assert saved_settings[-1]["ip_blocking_enabled"] is True
     assert saved_settings[-1]["security_pending_chat_reports_threshold"] == 3
     assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
+
+
+def test_builtin_security_profiles_are_complete_and_refreshed(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.execute(
+        "UPDATE security_profiles SET settings_json=? WHERE name='superweak'",
+        ('{"audit_chain_enabled": true, "integrity_guard_enabled": true}',),
+    )
+    conn.commit()
+    ensure_snapshot_schema(conn)
+    row = conn.execute("SELECT settings_json FROM security_profiles WHERE name='superweak'").fetchone()
+    conn.close()
+
+    refreshed = json.loads(row["settings_json"])
+    assert refreshed["audit_chain_enabled"] is False
+    assert refreshed["integrity_guard_enabled"] is False
+    assert refreshed["feature_economy_enabled"] is False
+    for name, profile in BUILTIN_SECURITY_PROFILES.items():
+        settings = profile["settings"]
+        assert "server_ssl_enabled" in settings
+        assert "audit_chain_enabled" in settings
+        assert "integrity_guard_enabled" in settings
+        assert "ip_blocking_enabled" in settings
+
+
+def test_builtin_server_modes_apply_expected_security_matrix(tmp_path):
+    expected = {
+        "production": {
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "feature_audit_log_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "browser_only_mode_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "feature_economy_enabled": True,
+            "captcha_mode": "math",
+        },
+        "preprod": {
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "feature_audit_log_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "browser_only_mode_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "feature_economy_enabled": True,
+        },
+        "internal_test": {
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "feature_audit_log_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "browser_only_mode_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "feature_economy_enabled": True,
+        },
+        "test": {
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "feature_audit_log_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": False,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "browser_only_mode_enabled": False,
+            "root_ip_whitelist_enabled": False,
+            "feature_economy_enabled": True,
+        },
+        "superweak": {
+            "server_ssl_enabled": False,
+            "audit_chain_enabled": False,
+            "feature_audit_log_enabled": False,
+            "integrity_guard_enabled": False,
+            "integrity_guard_strict_mode": False,
+            "ip_blocking_enabled": False,
+            "login_violation_enabled": False,
+            "rate_limit_violation_enabled": False,
+            "browser_only_mode_enabled": False,
+            "root_ip_whitelist_enabled": False,
+            "feature_economy_enabled": False,
+            "captcha_mode": "none",
+        },
+    }
+
+    for mode_name, expected_settings in expected.items():
+        audit_log = []
+        service, db_path, uploads = _service(tmp_path / mode_name, audit_log)
+        saved_settings = []
+        mode = ServerModeService(
+            snapshot_service=service,
+            get_db=lambda path=db_path: _db(path),
+            audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+            save_settings=lambda data: saved_settings.append(dict(data)) or dict(data),
+        )
+        confirm = "GO_LIVE" if mode_name == "production" else "ENABLE_SUPERWEAK" if mode_name == "superweak" else ""
+
+        result = mode.switch_mode(
+            target_mode=mode_name,
+            actor={"id": 1, "username": "root"},
+            confirm=confirm,
+            notes=f"matrix check {mode_name}",
+        )
+
+        assert result["ok"] is True, mode_name
+        assert result["mode"]["current_mode"] == mode_name
+        assert saved_settings, mode_name
+        for key, value in expected_settings.items():
+            assert saved_settings[-1][key] == value, f"{mode_name}.{key}"
 
 
 def test_production_mode_requires_confirmation_and_hardens_accounts(tmp_path):

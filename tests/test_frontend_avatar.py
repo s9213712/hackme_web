@@ -6,6 +6,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_avatar_upload_ui_is_wired():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")
+    community_js = (ROOT / "public" / "js" / "25-community.js").read_text(encoding="utf-8")
+    dm_js = (ROOT / "public" / "js" / "33-dm.js").read_text(encoding="utf-8")
     auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
@@ -18,4 +22,14 @@ def test_avatar_upload_ui_is_wired():
     assert "if (!Object.keys(payload).length && !avatarFile)" in auth_js
     assert "submitUserAvatarUpload({ reloadUsers: false })" in auth_js
     assert 'apiFetch(API + `/admin/users/${editingUserId}/avatar`' in auth_js
+    assert "markUserAvatarUpdated(editingUserId)" in auth_js
     assert 'avatarUploadBtn.addEventListener("click", uploadUserAvatar)' in bootstrap_js
+    assert "function avatarUrlForUser(userId)" in core_js
+    assert "function userAvatarMarkup(userId, username" in core_js
+    assert "avatar.innerHTML = currentUser ? userAvatarInnerMarkup(currentUserId, currentUser)" in core_js
+    assert "userAvatarMarkup(m.sender_id, m.sender" in core_js
+    assert "usernameCell.innerHTML = userIdentityMarkup(u.id, u.username" in users_js
+    assert "userAvatarMarkup(thread.other_user_id, thread.other_username" in dm_js
+    assert "userAvatarMarkup(senderId, senderName" in dm_js
+    assert "userIdentityMarkup(thread.author_user_id, thread.author_username" in community_js
+    assert "userIdentityMarkup(post.author_user_id, post.author_username" in community_js

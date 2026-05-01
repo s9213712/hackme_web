@@ -33,6 +33,8 @@ BUILTIN_SECURITY_PROFILES = {
             "ip_blocking_enabled": True,
             "login_violation_enabled": True,
             "rate_limit_violation_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "root_ip_whitelist": "",
             "browser_only_mode_enabled": True,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": True,
@@ -43,6 +45,7 @@ BUILTIN_SECURITY_PROFILES = {
             "feature_server_modes_enabled": True,
             "feature_snapshot_restore_enabled": True,
             "feature_audit_log_enabled": True,
+            "feature_economy_enabled": True,
             "feature_violation_center_enabled": True,
             "feature_health_center_enabled": True,
             "captcha_mode": "math",
@@ -59,11 +62,19 @@ BUILTIN_SECURITY_PROFILES = {
         "label": "preprod（準上線）",
         "description": "接近正式部署的安全設定檔，要求完整性檢查通過。",
         "settings": {
+            "maintenance_mode": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
             "ip_blocking_enabled": True,
             "login_violation_enabled": True,
             "rate_limit_violation_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "root_ip_whitelist": "",
+            "browser_only_mode_enabled": True,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": True,
+            "feature_audit_log_enabled": True,
+            "feature_economy_enabled": True,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 10,
@@ -79,15 +90,20 @@ BUILTIN_SECURITY_PROFILES = {
         "settings": {
             "maintenance_mode": False,
             "allow_register": False,
+            "server_ssl_enabled": True,
             "audit_chain_enabled": True,
             "ip_blocking_enabled": True,
             "login_violation_enabled": True,
             "rate_limit_violation_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "root_ip_whitelist": "",
+            "browser_only_mode_enabled": True,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": True,
             "feature_account_security_enabled": True,
             "feature_server_modes_enabled": True,
             "feature_audit_log_enabled": True,
+            "feature_economy_enabled": True,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 10,
@@ -101,11 +117,19 @@ BUILTIN_SECURITY_PROFILES = {
         "label": "test（測試）",
         "description": "一般測試設定檔，保留主要安全紀錄但降低啟動阻擋。",
         "settings": {
+            "maintenance_mode": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
             "ip_blocking_enabled": True,
             "login_violation_enabled": True,
             "rate_limit_violation_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "root_ip_whitelist": "",
+            "browser_only_mode_enabled": False,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": False,
+            "feature_audit_log_enabled": True,
+            "feature_economy_enabled": True,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 20,
@@ -117,12 +141,22 @@ BUILTIN_SECURITY_PROFILES = {
     },
     "superweak": {
         "label": "superweak（弱化測試）",
-        "description": "高風險弱化測試模式，進入前會建立 before_superweak snapshot。",
+        "description": "高風險弱化測試模式，進入前會建立 before_superweak snapshot，並關閉主要安全機制。",
         "settings": {
+            "maintenance_mode": False,
+            "server_ssl_enabled": False,
+            "audit_chain_enabled": False,
             "ip_blocking_enabled": False,
             "login_violation_enabled": False,
             "rate_limit_violation_enabled": False,
+            "root_ip_whitelist_enabled": False,
+            "root_ip_whitelist": "",
+            "browser_only_mode_enabled": False,
+            "integrity_guard_enabled": False,
             "integrity_guard_strict_mode": False,
+            "feature_audit_log_enabled": False,
+            "feature_economy_enabled": False,
+            "captcha_mode": "none",
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 50,
@@ -275,6 +309,26 @@ def ensure_snapshot_schema(conn):
                 json.dumps(profile["thresholds"], ensure_ascii=False, sort_keys=True),
                 now,
                 now,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE security_profiles
+            SET label=?,
+                description=?,
+                settings_json=?,
+                thresholds_json=?,
+                is_builtin=1,
+                updated_at=?
+            WHERE name=? AND is_builtin=1
+            """,
+            (
+                profile["label"],
+                profile["description"],
+                json.dumps(profile["settings"], ensure_ascii=False, sort_keys=True),
+                json.dumps(profile["thresholds"], ensure_ascii=False, sort_keys=True),
+                now,
+                name,
             ),
         )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_type_status ON snapshots(type, status, created_at)")
@@ -1367,6 +1421,15 @@ class ServerModeService:
         finally:
             conn.close()
 
+    def _apply_profile_settings(self, profile):
+        applied_settings = {}
+        if self.save_settings:
+            updates = {}
+            updates.update(profile.get("settings") or {})
+            updates.update(profile.get("thresholds") or {})
+            applied_settings = self.save_settings(updates) if updates else {}
+        return applied_settings
+
     def switch_mode(self, *, target_mode, actor, confirm, notes=None):
         target_mode = str(target_mode or "").strip().lower()
         profile = self.get_profile(target_mode)
@@ -1384,12 +1447,7 @@ class ServerModeService:
                 }
         if target_mode == "superweak":
             return self.enter_superweak(actor=actor, confirm=confirm, notes=notes)
-        applied_settings = {}
-        if self.save_settings:
-            updates = {}
-            updates.update(profile.get("settings") or {})
-            updates.update(profile.get("thresholds") or {})
-            applied_settings = self.save_settings(updates) if updates else {}
+        applied_settings = self._apply_profile_settings(profile)
         production_result = None
         if target_mode == "production":
             production_result = self._apply_production_hardening(actor=actor)
@@ -1421,6 +1479,8 @@ class ServerModeService:
         snap = self.snapshot_service.create_snapshot(snapshot_type="before_superweak", actor=actor, notes=notes or "Before enabling superweak")
         if not snap.ok:
             return {"ok": False, "msg": "before_superweak snapshot 建立失敗", "error": snap.error}
+        profile = self.get_profile("superweak") or BUILTIN_SECURITY_PROFILES["superweak"]
+        applied_settings = self._apply_profile_settings(profile)
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -1429,8 +1489,8 @@ class ServerModeService:
                 (current["current_mode"], snap.snapshot_id, int(actor["id"]), datetime.now().isoformat(), notes or ""),
             )
             conn.commit()
-            self.audit("SUPERWEAK_ENTER", "-", user=actor["username"], success=True, detail=f"snapshot_id={snap.snapshot_id},old_value={current['current_mode']},new_value=superweak")
-            return {"ok": True, "mode": self.get_current_mode(), "snapshot_id": snap.snapshot_id}
+            self.audit("SUPERWEAK_ENTER", "-", user=actor["username"], success=True, detail=f"snapshot_id={snap.snapshot_id},old_value={current['current_mode']},new_value=superweak,settings={applied_settings}")
+            return {"ok": True, "mode": self.get_current_mode(), "snapshot_id": snap.snapshot_id, "profile": profile, "applied_settings": applied_settings}
         finally:
             conn.close()
 

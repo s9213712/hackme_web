@@ -52,9 +52,11 @@ def test_root_economy_catalog_write_uses_single_use_csrf():
 
 def test_avatar_admin_endpoint_uses_role_rank():
     users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+    avatar_get = users.split('def user_avatar_get(user_id):', 1)[1].split('@app.route("/api/admin/users/<int:user_id>", methods=["PUT", "DELETE"])', 1)[0]
 
-    assert 'role_rank(actor_role) < role_rank("manager")' in users
-    assert 'actor_role not in {"admin", "super_admin"}' not in users
+    assert "Avatars are public identity assets inside authenticated areas" in avatar_get
+    assert 'role_rank(actor_role) < role_rank("manager")' not in avatar_get
+    assert 'actor_role not in {"admin", "super_admin"}' not in avatar_get
 
 
 def test_admin_users_post_uses_method_aware_csrf_guard():
@@ -105,6 +107,7 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
     appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
     notices = (ROOT / "services" / "sanction_notices.py").read_text(encoding="utf-8")
+    violations = (ROOT / "services" / "violations.py").read_text(encoding="utf-8")
 
     assert "def _send_member_governance_notice" in users
     assert "governance_notice_needed = True" in users
@@ -118,6 +121,11 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "points_service.rollback_ledger" in appeals
     assert 'link="/appeals"' in notices
     assert "你可以到「申覆」分頁提出申覆" in notices
+    assert "violation_id = cur.lastrowid" in violations
+    assert "return_violation_id=True" in users
+    assert "return_violation_id=True" in economy
+    assert "def _latest_violation_id" not in users
+    assert "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1" not in economy
 
 
 def test_appeal_approval_rolls_back_points_before_committing_review():

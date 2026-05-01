@@ -88,10 +88,11 @@ def secure_add_violation(user_id, username, role, points, reason, triggered_by, 
         ).fetchone()
         prev_hash = prev_row["entry_hash"] if prev_row else _STATE["chain_seed"]
         entry_hash = _violation_chain_hash(prev_hash, entry_json)
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO secure_violations (user_id, username, points, reason, triggered_by, actor_username, created_at, prev_hash, entry_hash) VALUES (?,?,?,?,?,?,?,?,?)",
             (user_id, username, points, reason, triggered_by, actor_username, ts, prev_hash, entry_hash)
         )
+        violation_id = cur.lastrowid
         if update_user_counter:
             row = conn.execute(
                 "UPDATE users SET violation_count = violation_count + ? WHERE id = ? RETURNING violation_count",
@@ -109,7 +110,7 @@ def secure_add_violation(user_id, username, role, points, reason, triggered_by, 
                 raise ValueError(f"user_id={user_id} not found")
             new_count = row["violation_count"]
         conn.commit()
-        return entry_hash, new_count
+        return entry_hash, new_count, violation_id
     except Exception:
         try:
             conn.rollback()
@@ -234,8 +235,8 @@ def check_and_apply_auto_violations(user_id, username, role, actor_username="sys
     return triggered, reason, None
 
 
-def add_violation(user_id, username, role, points=1, reason="手動計點", triggered_by="super_admin", actor_username="admin"):
-    entry_hash, new_count = secure_add_violation(
+def add_violation(user_id, username, role, points=1, reason="手動計點", triggered_by="super_admin", actor_username="admin", return_violation_id=False):
+    entry_hash, new_count, violation_id = secure_add_violation(
         user_id, username, role, points, reason, triggered_by, actor_username
     )
 
@@ -245,7 +246,8 @@ def add_violation(user_id, username, role, points=1, reason="手動計點", trig
         if username in NO_AUTO_PENALTY_USERS:
             _STATE["audit"]("VIOLATION_TEST_ACCOUNT_NO_PENALTY", _STATE["get_client_ip"](), user="system",
                             detail=f"user_id={user_id} username={username} count={new_count}/{threshold}")
-            return "test_counted", f"測試帳號違規計點 +{points}（{new_count}/{threshold}），不自動封鎖或降級", new_count
+            result = ("test_counted", f"測試帳號違規計點 +{points}（{new_count}/{threshold}），不自動封鎖或降級", new_count)
+            return (*result, violation_id) if return_violation_id else result
         if new_count >= threshold:
             conn.execute(
                 "UPDATE users SET status='inactive', violation_count=?, updated_at=? WHERE id=?",
@@ -254,8 +256,10 @@ def add_violation(user_id, username, role, points=1, reason="手動計點", trig
             conn.commit()
             _STATE["audit"]("USER_SUSPENDED_BY_VIOLATION", _STATE["get_client_ip"](), user="system",
                             detail=f"user_id={user_id} violated={new_count} (secure_violations hash={entry_hash[:16]}...)")
-            return "suspended", f"違規次數 {new_count}/{threshold}，帳號已暫停，請申覆", new_count
-        return "counted", f"違規計點 +{points}（{new_count}/{threshold}）", new_count
+            result = ("suspended", f"違規次數 {new_count}/{threshold}，帳號已暫停，請申覆", new_count)
+            return (*result, violation_id) if return_violation_id else result
+        result = ("counted", f"違規計點 +{points}（{new_count}/{threshold}）", new_count)
+        return (*result, violation_id) if return_violation_id else result
     finally:
         conn.close()
 

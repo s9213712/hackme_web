@@ -1,4 +1,5 @@
 import hashlib
+import gzip
 import json
 import mimetypes
 import os
@@ -215,6 +216,7 @@ MIME_SIGNATURES = (
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
     (b"%PDF-", "application/pdf"),
+    (b"\x1f\x8b", "application/gzip"),
     (b"PK\x03\x04", "application/zip"),
     (b"PK\x05\x06", "application/zip"),
     (b"PK\x07\x08", "application/zip"),
@@ -229,6 +231,7 @@ EXTENSION_MIME_PREFIXES = {
     ".gif": ("image/gif",),
     ".pdf": ("application/pdf",),
     ".zip": ("application/zip",),
+    ".gz": ("application/gzip", "application/x-gzip"),
 }
 
 HIGH_RISK_MAGIC_MIMES = {"application/x-dosexec", "application/x-elf"}
@@ -1028,6 +1031,7 @@ def sha256_file(path):
 
 def check_zip_archive_safety(path, *, max_files=200, max_uncompressed_bytes=50 * 1024 * 1024, recursive=False, max_depth=2):
     result = {"ok": True, "reason": "ok", "file_count": 0, "uncompressed_bytes": 0, "max_depth_seen": 0}
+    ext = file_extension(path)
 
     def walk_zip(blob, depth):
         with zipfile.ZipFile(blob) as archive:
@@ -1052,9 +1056,30 @@ def check_zip_archive_safety(path, *, max_files=200, max_uncompressed_bytes=50 *
                         return False, reason
         return True, "ok"
 
+    def walk_gzip(gzip_path):
+        total = 0
+        with gzip.open(gzip_path, "rb") as archive:
+            while True:
+                chunk = archive.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_uncompressed_bytes:
+                    return False, "gzip_bomb", total
+        return True, "ok", total
+
     try:
+        with open(path, "rb") as handle:
+            is_gzip_stream = handle.read(2) == b"\x1f\x8b"
+        if (ext == ".gz" or is_gzip_stream) and not str(path).lower().endswith((".tar.gz", ".tgz")):
+            ok, reason, total = walk_gzip(path)
+            result["file_count"] = 1
+            result["uncompressed_bytes"] = total
+            return {**result, "ok": ok, "reason": reason}
         ok, reason = walk_zip(path, 0)
         return {**result, "ok": ok, "reason": reason}
+    except gzip.BadGzipFile:
+        return {**result, "ok": False, "reason": "bad_gzip"}
     except zipfile.BadZipFile:
         return {**result, "ok": False, "reason": "bad_zip"}
 

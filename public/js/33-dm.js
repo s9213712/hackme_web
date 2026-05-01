@@ -62,11 +62,15 @@ function renderDmThreads() {
     btn.type = "button";
     btn.className = "chat-room-item" + (Number(thread.id) === Number(selectedDmThreadId) ? " active" : "");
     const unread = Number(thread.unread_count || 0);
-    btn.textContent = `${unread ? `(${unread}) ` : ""}${thread.other_username || "unknown"}`;
+    btn.innerHTML = `
+      ${userAvatarMarkup(thread.other_user_id, thread.other_username || "unknown", "user-avatar-sm")}
+      <span>${unread ? `<strong>(${unread})</strong> ` : ""}${sanitize(thread.other_username || "unknown")}</span>
+    `;
     btn.setAttribute("title", thread.last_message ? (thread.last_message.body || "") : "尚無訊息");
     btn.addEventListener("click", () => openDmThread(thread.id));
     wrap.appendChild(btn);
   });
+  bindAvatarFallbacks(wrap);
 }
 
 function renderDmMessages(messages) {
@@ -83,9 +87,14 @@ function renderDmMessages(messages) {
   }
   list.innerHTML = messages.map((m) => {
     const cls = "chat-msg" + (m.is_self ? " self" : "");
+    const senderId = m.sender_user_id || (m.is_self ? currentUserId : current?.other_user_id);
+    const senderName = m.is_self ? currentUser : (current?.other_username || "對方");
     return `
       <div class="${cls}">
-        <span class="meta">${sanitize(formatChatTime(m.created_at || ""))} · ${m.is_self ? "我" : sanitize(current?.other_username || "對方")}</span>
+        <div class="chat-msg-head">
+          ${userAvatarMarkup(senderId, senderName || "對方", "user-avatar-sm")}
+          <span class="meta"><strong>${m.is_self ? "我" : sanitize(senderName || "對方")}</strong><small>${sanitize(formatChatTime(m.created_at || ""))}</small></span>
+        </div>
         ${sanitize(m.body || "")}
         ${renderDmMessageAttachments(m.attachments)}
         <button class="chat-delete-btn" type="button" data-dm-delete="${m.id}">刪除</button>
@@ -95,6 +104,7 @@ function renderDmMessages(messages) {
   list.querySelectorAll("button[data-dm-delete]").forEach((btn) => {
     btn.addEventListener("click", () => deleteDmMessage(parseInt(btn.getAttribute("data-dm-delete"), 10)));
   });
+  bindAvatarFallbacks(list);
   list.scrollTop = list.scrollHeight;
 }
 

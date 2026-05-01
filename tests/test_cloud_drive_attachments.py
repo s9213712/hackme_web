@@ -1,3 +1,4 @@
+import gzip
 import io
 import sqlite3
 import time
@@ -519,6 +520,33 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     assert public_file.status_code == 200
     assert public_file.data == b"album image"
 
+    protected = client.post(
+        "/api/storage/albums",
+        json={"title": "Protected Trip", "visibility": "unlisted", "share_password": "AlbumPass123"},
+    )
+    assert protected.status_code == 200
+    protected_album = protected.get_json()["album"]
+    assert protected_album["share_link"]["password_required"] is True
+    protected_token = protected_album["share_url"].rsplit("/", 1)[-1]
+    protected_added = client.post(
+        f"/api/storage/albums/{protected_album['id']}/files",
+        json={"storage_file_id": storage_file_id},
+    )
+    assert protected_added.status_code == 200
+    assert client.get(f"/api/storage/shared/albums/{protected_token}").status_code == 401
+    assert client.get(
+        f"/api/storage/shared/albums/{protected_token}",
+        headers={"X-Album-Share-Password": "wrong"},
+    ).status_code == 403
+    protected_public = client.get(
+        f"/api/storage/shared/albums/{protected_token}",
+        headers={"X-Album-Share-Password": "AlbumPass123"},
+    )
+    assert protected_public.status_code == 200
+    protected_download = protected_public.get_json()["album"]["files"][0]["download_url"]
+    assert client.get(protected_download).status_code == 401
+    assert client.get(f"{protected_download}?password=AlbumPass123").status_code == 200
+
     updated = client.put(f"/api/storage/albums/{album['id']}", json={"title": "Trip 2", "visibility": "public"})
     assert updated.status_code == 200
     assert updated.get_json()["album"]["title"] == "Trip 2"
@@ -700,6 +728,75 @@ def test_cloud_drive_text_and_archive_preview(tmp_path):
     archive_body = archive_preview.get_json()["preview"]
     assert archive_body["render_mode"] == "archive"
     assert archive_body["entries"][0]["name"] == "docs/readme.txt"
+
+    gz_upload = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(gzip.compress(b"compressed preview")), "single.txt.gz"),
+            "privacy_mode": "private_scannable",
+        },
+        content_type="multipart/form-data",
+    )
+    assert gz_upload.status_code == 200
+    gz_file_id = gz_upload.get_json()["file"]["file_id"]
+    gz_preview = client.get(f"/api/cloud-drive/files/{gz_file_id}/preview")
+    assert gz_preview.status_code == 200
+    gz_body = gz_preview.get_json()["preview"]
+    assert gz_body["render_mode"] == "archive"
+    assert gz_body["entries"][0]["name"] == "single.txt"
+
+
+def test_cloud_drive_pdf_preview_content_and_e2ee_denied(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    pdf_bytes = b"%PDF-1.4\n% minimal preview fixture\n"
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(pdf_bytes), "manual.pdf"),
+            "privacy_mode": "private_scannable",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    metadata = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert metadata.status_code == 200
+    preview = metadata.get_json()["preview"]
+    assert preview["category"] == "pdf"
+    assert preview["render_mode"] == "media"
+
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.data == pdf_bytes
+    assert content.mimetype == "application/pdf"
+
+    encrypted = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(pdf_bytes), "sealed.pdf"),
+            "privacy_mode": "e2ee_vault",
+            "encrypted_metadata": "sealed:metadata",
+            "encrypted_file_key": "sealed:owner-key",
+            "wrapped_by": "browser_local_vault_key",
+            "ciphertext_sha256": "a" * 64,
+            "encryption_algorithm": "AES-GCM",
+            "encryption_version": "browser-local-v1",
+            "nonce": "nonce",
+        },
+        content_type="multipart/form-data",
+    )
+    assert encrypted.status_code == 200
+    encrypted_file_id = encrypted.get_json()["file"]["file_id"]
+    denied = client.get(f"/api/cloud-drive/files/{encrypted_file_id}/preview")
+    assert denied.status_code == 403
+    assert "E2EE" in denied.get_json()["msg"]
 
 
 def test_cloud_drive_text_file_can_be_edited_online(tmp_path):

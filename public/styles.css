@@ -448,6 +448,7 @@
       white-space: nowrap;
     }
 
+    .user-avatar,
     .sidebar-user-avatar {
       display: inline-grid;
       place-items: center;
@@ -458,6 +459,69 @@
       background: rgba(0,212,170,.13);
       color: var(--accent2);
       font-weight: 800;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12);
+    }
+
+    .user-avatar-sm {
+      flex-basis: 1.55rem;
+      width: 1.55rem;
+      height: 1.55rem;
+      font-size: .68rem;
+    }
+
+    .user-avatar-img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: rgba(0,0,0,.35);
+      z-index: 1;
+    }
+
+    .user-avatar-fallback {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      height: 100%;
+      line-height: 1;
+    }
+
+    .identity-with-avatar {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      min-width: 0;
+      max-width: 100%;
+      vertical-align: middle;
+    }
+
+    .identity-text {
+      display: inline-flex;
+      flex-direction: column;
+      gap: .04rem;
+      min-width: 0;
+      line-height: 1.15;
+    }
+
+    .identity-text strong,
+    .identity-text small {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .identity-text small {
+      color: var(--muted);
+      font-size: .68rem;
+      font-weight: 500;
+    }
+
+    .user-table-identity {
+      min-width: 8.5rem;
     }
 
     .sidebar-user-meta {
@@ -1174,6 +1238,20 @@
       gap: .35rem .5rem;
       margin-top: .35rem;
       overflow-wrap: anywhere;
+    }
+
+    .drive-share-password-note {
+      color: var(--warning, #b7791f);
+      font-size: .76rem;
+    }
+
+    .inline-check {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      margin-top: .35rem;
+      font-size: .78rem;
+      color: var(--muted);
     }
 
     .drive-quota-bar {
@@ -2224,6 +2302,15 @@
       margin-bottom: .35rem;
     }
 
+    .community-author-line {
+      color: var(--text);
+    }
+
+    .community-author-line .identity-text small {
+      color: var(--muted);
+      white-space: normal;
+    }
+
     .community-body {
       font-size: .86rem;
       line-height: 1.55;
@@ -2486,11 +2573,30 @@
     }
 
     .chat-msg .meta {
-      display: block;
+      display: inline-flex;
+      flex-direction: column;
+      gap: .04rem;
       color: var(--muted);
-      margin-bottom: .12rem;
       font-size: .68rem;
       letter-spacing: .01em;
+      line-height: 1.12;
+    }
+
+    .chat-msg .meta strong {
+      color: var(--text);
+      font-size: .76rem;
+    }
+
+    .chat-msg .meta small {
+      color: var(--muted);
+    }
+
+    .chat-msg-head {
+      display: flex;
+      align-items: center;
+      gap: .35rem;
+      margin-bottom: .18rem;
+      min-width: 0;
     }
 
     .chat-message-attachments {
@@ -3201,6 +3307,19 @@
       overflow: hidden;
       background: rgba(255,255,255,.14);
       margin: .65rem auto 0;
+    }
+    .single-game-placeholder {
+      grid-column: 1 / -1;
+      align-self: stretch;
+      min-height: 10rem;
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+      text-align: center;
+      color: var(--muted);
+      background: rgba(0,0,0,.18);
+      border: 1px dashed rgba(255,255,255,.2);
+      border-radius: 8px;
     }
     .sudoku-cell {
       min-width: 0;

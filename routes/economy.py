@@ -103,7 +103,7 @@ def register_economy_routes(app, deps):
             if not target or target["username"] == "root":
                 return
             actor_role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
-            add_violation(
+            _action, _msg, _new_count, violation_id = add_violation(
                 target["id"],
                 target["username"],
                 target["role"],
@@ -111,12 +111,9 @@ def register_economy_routes(app, deps):
                 reason=f"會員點數權益變更：{action_label}；原因：{reason or '未填寫'}",
                 triggered_by=actor_role,
                 actor_username=actor_value(actor, "username", "admin"),
+                return_violation_id=True,
             )
-            latest = conn.execute(
-                "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
-                (int(user_id),),
-            ).fetchone()
-            if not latest:
+            if not violation_id:
                 return
             previous = {key: target[key] for key in target.keys()}
             record_admin_sanction_notice(
@@ -124,7 +121,7 @@ def register_economy_routes(app, deps):
                 actor=actor,
                 target=target,
                 previous=previous,
-                violation_id=latest["id"],
+                violation_id=violation_id,
                 action_label=action_label,
                 reason=reason or "會員點數權益變更",
                 points_ledger_uuid=points_ledger_uuid,

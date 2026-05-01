@@ -14,6 +14,8 @@ short [README](../README.md) plus GitHub-required metadata such as
   abandoned WebTerminal notes
 - [Runtime Reset And Recovery](RUNTIME_RESET_AND_RECOVERY.md): reset,
   snapshot/restore, and PointsChain recovery boundaries
+- [Server Security Modes](SECURITY_MODES.md): production, preprod, internal
+  test, test, and superweak security defaults
 - [Deployment And Operations Scripts](DEPLOYMENT.md): one-command deployment,
   functional smoke, permission pentest, and stress test usage
 - [Release Layout](RELEASE_LAYOUT.md): tracked source, runtime data, generated
@@ -26,6 +28,8 @@ short [README](../README.md) plus GitHub-required metadata such as
 ## Security And Release
 
 - [Security Policy](SECURITY.md): current security controls and known limits
+- [Server Security Modes](SECURITY_MODES.md): built-in mode defaults and custom
+  security profile behavior
 - [Branching And Release](BRANCHING_AND_RELEASE.md): branch numbering and
   release ID policy
 - [Pre-release Checklist](security/PRE_RELEASE_CHECKLIST.md): blocking checks

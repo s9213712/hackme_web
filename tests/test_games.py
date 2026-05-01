@@ -70,6 +70,39 @@ def test_game_catalog_includes_sudoku_and_minesweeper(tmp_path):
     assert by_key["minesweeper"]["supports_computer"] is False
 
 
+def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    first = client.post(
+        "/api/games/sudoku/solo-scores",
+        json={"raw_elapsed_ms": 50000, "penalty_seconds": 10, "elapsed_ms": 60000, "puzzle_id": "p1"},
+    )
+    assert first.status_code == 200
+    second = client.post(
+        "/api/games/sudoku/solo-scores",
+        json={"raw_elapsed_ms": 45000, "penalty_seconds": 0, "elapsed_ms": 45000, "puzzle_id": "p1"},
+    )
+    assert second.status_code == 200
+
+    board = client.get("/api/games/sudoku/solo-leaderboard")
+    assert board.status_code == 200
+    payload = board.get_json()
+    assert payload["rank_mode"] == "time_asc"
+    assert payload["leaderboard"][0]["username"] == "alice"
+    assert payload["leaderboard"][0]["elapsed_ms"] == 45000
+    assert payload["leaderboard"][0]["attempts"] == 2
+
+    bad = client.post(
+        "/api/games/minesweeper/solo-scores",
+        json={"raw_elapsed_ms": 10000, "penalty_seconds": 10, "elapsed_ms": 10000, "difficulty": "easy"},
+    )
+    assert bad.status_code == 400
+
+
 def test_chess_legal_move_validation_blocks_illegal_moves():
     board = initial_board()
     assert any(move["from"] == "e2" and move["to"] == "e4" for move in legal_moves(board, "white"))

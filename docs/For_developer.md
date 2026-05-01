@@ -283,11 +283,20 @@ Server modes:
 
 - `test`: default mode for fresh deployment and server reset
 - `preprod`: normal hardened mode
+- `internal_test`: only root can log in directly; other users need an
+  internal-test token
+- `production`: online mode with strict account, upload, audit, and integrity
+  hardening
 - `superweak`: intentionally weakened mode for controlled testing
 
 Entering `superweak` requires root confirmation and creates a
-`before_superweak` snapshot. Reset creates a `pre_reset` snapshot before
-clearing resettable runtime state.
+`before_superweak` snapshot. It then disables audit chain, Integrity Guard,
+failed-login IP lock, Browser-only mode, and PointsChain/economy APIs. Reset
+creates a `pre_reset` snapshot before clearing resettable runtime state.
+
+The full built-in mode table is tracked in [Server Security Modes](SECURITY_MODES.md).
+Root may save changed mode details as a custom security profile; built-in
+profiles are refreshed from source and are not overwritten in place.
 
 Snapshot archives are downloadable and can be uploaded for restore on another
 host.

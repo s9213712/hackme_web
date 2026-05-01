@@ -1407,6 +1407,9 @@ def start_points_chain_block_worker():
         actor = {"username": "system", "role": "system"}
         while True:
             try:
+                if not get_system_settings().get("feature_economy_enabled", False):
+                    time.sleep(check_interval)
+                    continue
                 backup_result = points_service.create_scheduled_backup_if_due()
                 if backup_result.get("created"):
                     audit("POINTS_SCHEDULED_BACKUP_CREATED", "0.0.0.0", user="system", success=bool(backup_result.get("ok")), detail=backup_result.get("backup_id"))

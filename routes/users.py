@@ -131,18 +131,12 @@ def register_user_routes(app, deps):
             return True
         return False
 
-    def _latest_violation_id(conn, user_id):
-        return conn.execute(
-            "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-
     def _send_member_governance_notice(conn, *, actor, actor_role, target, previous, action_label, reason, points=0, existing_violation_id=None, points_ledger_uuid=None):
         if not target or target["username"] == "root":
             return
         violation_id = existing_violation_id
         if not violation_id:
-            add_violation(
+            _action, _msg, _new_count, violation_id = add_violation(
                 target["id"],
                 target["username"],
                 target["role"],
@@ -150,9 +144,8 @@ def register_user_routes(app, deps):
                 reason=f"會員權益變更：{action_label}；原因：{reason or '未填寫'}",
                 triggered_by=actor_role,
                 actor_username=actor["username"],
+                return_violation_id=True,
             )
-            latest = _latest_violation_id(conn, target["id"])
-            violation_id = latest["id"] if latest else None
         if not violation_id:
             return
         record_admin_sanction_notice(
@@ -615,10 +608,8 @@ def register_user_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
-        # Authorization: only self or manager-and-above can view this avatar.
-        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
-        if actor["id"] != user_id and role_rank(actor_role) < role_rank("manager"):
-            return json_resp({"ok": False, "msg": "權限不足"}), 403
+        # Avatars are public identity assets inside authenticated areas such as
+        # chat, DM, and forums. Anonymous users are still blocked above.
         conn = get_db()
         try:
             ensure_member_level_user_columns(conn)
@@ -637,7 +628,7 @@ def register_user_routes(app, deps):
                 return json_resp({"ok": False, "msg": "尚未設定頭像"}), 404
             if not row["privacy_mode"].startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
                 return json_resp({"ok": False, "msg": "頭像尚未通過安全掃描"}), 403
-            path = resolve_file_storage_path(storage_root, row["storage_path"])
+            path = resolve_file_storage_path(storage_root, row)
             if not path.exists() or not path.is_file():
                 return json_resp({"ok": False, "msg": "頭像檔案不存在"}), 404
             return send_file(path, mimetype=row["mime_type_plain_for_public"] or "application/octet-stream")
@@ -1286,14 +1277,14 @@ def register_user_routes(app, deps):
             if actor_role == "manager" and target["role"] != "user":
                 return json_resp({"ok":False,"msg":"無權對此角色計點"}), 403
 
-            action, msg, new_count = add_violation(
+            action, msg, new_count, violation_id = add_violation(
                 user_id, target["username"], target["role"],
                 points=points, reason=reason,
-                triggered_by=triggered_by, actor_username=actor["username"]
+                triggered_by=triggered_by, actor_username=actor["username"],
+                return_violation_id=True,
             )
             audit("VIOLATION_ADDED", get_client_ip(), user=actor["username"],
                   detail=f"target_id={user_id} action={action} points={points} reason={reason}")
-            latest = _latest_violation_id(conn, user_id)
             _send_member_governance_notice(
                 conn,
                 actor=actor,
@@ -1303,7 +1294,7 @@ def register_user_routes(app, deps):
                 action_label=f"違規點數 +{points}",
                 reason=reason,
                 points=points,
-                existing_violation_id=latest["id"] if latest else None,
+                existing_violation_id=violation_id,
             )
             conn.commit()
             return json_resp({"ok":True,"msg":msg,"new_count":new_count})

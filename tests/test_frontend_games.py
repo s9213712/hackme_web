@@ -13,7 +13,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260430-sudoku-minesweeper" in index_html
+    assert "/js/38-games.js?v=20260501-solo-time-ranking" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="sudoku-game-panel"' in index_html
@@ -31,7 +31,7 @@ def test_game_zone_frontend_assets_are_wired():
     assert "fetchCsrfToken({ force: true })" in games_js
     assert "gameRequestNeedsFreshCsrf" in games_js
     assert "const mutates = upperMethod !== \"GET\"" in games_js
-    assert "_csrfToken = null" in games_js
+    assert "setCsrfToken(null)" in games_js
     assert "refreshGameZoneAfterMutation" in games_js
     assert 'cache: "no-store"' in games_js
     assert "data-chess-square" in games_js
@@ -39,8 +39,15 @@ def test_game_zone_frontend_assets_are_wired():
     assert "data-game-key" in games_js
     assert "SUDOKU_PUZZLES" in games_js
     assert "startSudokuGame" in games_js
+    assert "按「開始」後才會出現題目並開始計時" in games_js
+    assert "sudokuState.penaltySeconds += 10" in games_js
     assert "data-sudoku-index" in games_js
     assert "startMinesweeperGame" in games_js
+    assert "startedAt: Date.now()" in games_js
+    assert "solo-leaderboard" in games_js
+    assert "solo-scores" in games_js
+    assert "rank_mode === \"time_asc\"" in games_js
+    assert "#minesweeper-difficulty" in games_js
     assert "data-mine-index" in games_js
     assert "contextmenu" in games_js
     assert "async function deleteFinishedGame" in games_js

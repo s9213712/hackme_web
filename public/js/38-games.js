@@ -4,6 +4,7 @@ let gameSelectedMatchId = null;
 let gameSelectedSquare = null;
 let gameSelectedKey = "chess";
 let gameState = { matches: [], invites: [], leaderboard: [] };
+let soloGameTimer = null;
 const CHESS_PIECES = {
   K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
   k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
@@ -24,6 +25,42 @@ const SUDOKU_PUZZLES = [
 ];
 let sudokuState = null;
 let minesweeperState = null;
+
+function formatSoloGameTime(ms) {
+  const totalMs = Math.max(0, Number(ms || 0));
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const tenths = Math.floor((totalMs % 1000) / 100);
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths}`;
+}
+
+function soloRawElapsedMs(state) {
+  if (!state?.startedAt) return 0;
+  const end = state.completedAt || Date.now();
+  return Math.max(1, Math.floor(end - state.startedAt));
+}
+
+function soloElapsedMs(state) {
+  return soloRawElapsedMs(state) + Number(state?.penaltySeconds || 0) * 1000;
+}
+
+function ensureSoloGameTimer() {
+  if (soloGameTimer) return;
+  soloGameTimer = setInterval(() => {
+    if (gameSelectedKey === "sudoku") updateSudokuStatus();
+    if (gameSelectedKey === "minesweeper") updateMinesweeperStatus();
+  }, 250);
+}
+
+function stopSoloGameTimerIfIdle() {
+  const sudokuActive = sudokuState && !sudokuState.completedAt;
+  const minesActive = minesweeperState && minesweeperState.status === "active";
+  if (!sudokuActive && !minesActive && soloGameTimer) {
+    clearInterval(soloGameTimer);
+    soloGameTimer = null;
+  }
+}
 
 function setGameMsg(text, ok) {
   const el = $("game-msg");
@@ -58,8 +95,15 @@ function switchGameView(key) {
   document.querySelectorAll("[data-game-key]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
   });
-  if (gameSelectedKey === "sudoku" && !sudokuState) startSudokuGame();
-  if (gameSelectedKey === "minesweeper" && !minesweeperState) startMinesweeperGame();
+  if (gameSelectedKey === "sudoku" && !sudokuState) {
+    renderSudokuBoard();
+    updateSudokuStatus();
+  }
+  if (gameSelectedKey === "minesweeper" && !minesweeperState) {
+    renderMinesweeperBoard();
+    updateMinesweeperStatus();
+  }
+  loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
 }
 
 function gameRequestNeedsFreshCsrf(json, res) {
@@ -254,7 +298,16 @@ function renderGameLeaderboard(data) {
   if (!wrap) return;
   const rows = Array.isArray(data?.leaderboard) ? data.leaderboard : [];
   if (!rows.length) {
-    wrap.innerHTML = "<p style=\"color:var(--muted);\">本週尚無玩家對戰成績</p>";
+    wrap.innerHTML = `<p style="color:var(--muted);">${data?.rank_mode === "time_asc" ? "本週尚無完成時間紀錄" : "本週尚無玩家對戰成績"}</p>`;
+    return;
+  }
+  if (data?.rank_mode === "time_asc") {
+    wrap.innerHTML = rows.map((row) => `
+      <div class="drive-file-row game-list-row">
+        <div><strong>#${row.rank} ${sanitize(row.username || "-")}</strong><small>${sanitize(data.difficulty || "standard")} · ${row.attempts || 1} 次完成${row.penalty_seconds ? ` · 加時 ${row.penalty_seconds} 秒` : ""}</small></div>
+        <strong>${formatSoloGameTime(row.elapsed_ms || 0)}</strong>
+      </div>
+    `).join("");
     return;
   }
   wrap.innerHTML = rows.map((row) => `
@@ -265,22 +318,73 @@ function renderGameLeaderboard(data) {
   `).join("");
 }
 
+async function loadSelectedGameLeaderboard() {
+  const key = gameSelectedKey || "chess";
+  let path = "/games/chess/leaderboard";
+  if (key === "sudoku") {
+    path = "/games/sudoku/solo-leaderboard";
+  } else if (key === "minesweeper") {
+    const difficulty = minesweeperConfig().difficulty;
+    path = `/games/minesweeper/solo-leaderboard?difficulty=${encodeURIComponent(difficulty)}`;
+  }
+  const data = await gameRequest(path);
+  gameState.leaderboard = data.leaderboard || [];
+  renderGameLeaderboard(data);
+  const awardBtn = $("game-award-btn");
+  if (awardBtn) awardBtn.style.display = currentUser === "root" && key === "chess" ? "" : "none";
+  return data;
+}
+
+async function submitSoloGameScore(gameKey, state) {
+  if (!state || state.scoreSubmitted) return;
+  state.scoreSubmitted = true;
+  const rawElapsed = soloRawElapsedMs(state);
+  const elapsed = soloElapsedMs(state);
+  try {
+    await gameRequest(`/games/${encodeURIComponent(gameKey)}/solo-scores`, {
+      method: "POST",
+      body: {
+        raw_elapsed_ms: rawElapsed,
+        penalty_seconds: Number(state.penaltySeconds || 0),
+        elapsed_ms: elapsed,
+        difficulty: state.difficulty || "standard",
+        puzzle_id: state.puzzleId || "",
+      },
+    });
+    await loadSelectedGameLeaderboard();
+  } catch (err) {
+    state.scoreSubmitted = false;
+    setGameMsg(err.message || "成績送出失敗", false);
+  }
+}
+
 function startSudokuGame() {
-  const item = SUDOKU_PUZZLES[Math.floor(Math.random() * SUDOKU_PUZZLES.length)];
+  const puzzleIndex = Math.floor(Math.random() * SUDOKU_PUZZLES.length);
+  const item = SUDOKU_PUZZLES[puzzleIndex];
   sudokuState = {
+    puzzleId: `builtin-${puzzleIndex + 1}`,
     puzzle: item.puzzle,
     solution: item.solution,
     values: item.puzzle.split("").map((value) => value === "0" ? "" : value),
     fixed: item.puzzle.split("").map((value) => value !== "0"),
+    startedAt: Date.now(),
+    completedAt: null,
+    penaltySeconds: 0,
+    scoreSubmitted: false,
+    difficulty: "standard",
   };
   renderSudokuBoard();
-  const status = $("sudoku-status");
-  if (status) status.textContent = "填入 1-9，完成後檢查答案。";
+  ensureSoloGameTimer();
+  updateSudokuStatus("計時開始。填入 1-9，完成後檢查答案。");
 }
 
 function renderSudokuBoard() {
   const board = $("sudoku-board");
-  if (!board || !sudokuState) return;
+  if (!board) return;
+  if (!sudokuState) {
+    board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會出現題目並開始計時。</div>';
+    return;
+  }
   board.innerHTML = sudokuState.values.map((value, index) => {
     const fixed = sudokuState.fixed[index];
     const row = Math.floor(index / 9);
@@ -288,34 +392,62 @@ function renderSudokuBoard() {
     return `
       <input class="sudoku-cell ${fixed ? "fixed" : ""}" inputmode="numeric" maxlength="1"
              aria-label="數獨第 ${row + 1} 列第 ${col + 1} 欄"
-             data-sudoku-index="${index}" value="${sanitize(value || "")}" ${fixed ? "readonly" : ""} />
+             data-sudoku-index="${index}" value="${sanitize(value || "")}" ${fixed || sudokuState.completedAt ? "readonly" : ""} />
     `;
   }).join("");
 }
 
 function updateSudokuCell(index, value) {
-  if (!sudokuState || sudokuState.fixed[index]) return;
+  if (!sudokuState || sudokuState.fixed[index] || sudokuState.completedAt) return;
   const normalized = /^[1-9]$/.test(value || "") ? value : "";
   sudokuState.values[index] = normalized;
   const input = document.querySelector(`[data-sudoku-index="${index}"]`);
   if (input && input.value !== normalized) input.value = normalized;
 }
 
+function updateSudokuStatus(prefix = "") {
+  const status = $("sudoku-status");
+  if (!status) return;
+  if (!sudokuState) {
+    status.textContent = "按開始後才會出現題目並開始計時。";
+    return;
+  }
+  const time = formatSoloGameTime(soloElapsedMs(sudokuState));
+  const penalty = Number(sudokuState.penaltySeconds || 0);
+  if (sudokuState.completedAt) {
+    status.textContent = `完成時間 ${time}${penalty ? `（含加時 ${penalty} 秒）` : ""}`;
+    return;
+  }
+  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time}${penalty ? ` · 加時 ${penalty} 秒` : ""}`;
+}
+
 function checkSudokuGame() {
   const status = $("sudoku-status");
   if (!sudokuState) return;
   const current = sudokuState.values.join("");
+  let wrongCount = 0;
   document.querySelectorAll("[data-sudoku-index]").forEach((input) => {
     const index = Number(input.getAttribute("data-sudoku-index") || 0);
-    input.classList.toggle("wrong", !!sudokuState.values[index] && sudokuState.values[index] !== sudokuState.solution[index]);
+    const wrong = !!sudokuState.values[index] && sudokuState.values[index] !== sudokuState.solution[index];
+    if (wrong) wrongCount += 1;
+    input.classList.toggle("wrong", wrong);
   });
+  if (wrongCount > 0) {
+    sudokuState.penaltySeconds += 10;
+    updateSudokuStatus(`發現 ${wrongCount} 格錯誤，已加時 10 秒。`);
+    return;
+  }
   if (sudokuState.values.some((value) => !value)) {
-    if (status) status.textContent = "尚未填完。紅色格子代表目前填錯。";
+    updateSudokuStatus("尚未填完，目前填入的格子沒有錯。");
     return;
   }
   if (current === sudokuState.solution) {
-    if (status) status.textContent = "完成，答案正確。";
-    setGameMsg("數獨完成", true);
+    sudokuState.completedAt = Date.now();
+    renderSudokuBoard();
+    updateSudokuStatus();
+    stopSoloGameTimerIfIdle();
+    submitSoloGameScore("sudoku", sudokuState);
+    setGameMsg(`數獨完成，成績 ${formatSoloGameTime(soloElapsedMs(sudokuState))}`, true);
   } else if (status) {
     status.textContent = "還有錯誤，請檢查紅色格子。";
   }
@@ -333,11 +465,17 @@ function startMinesweeperGame() {
   const total = config.rows * config.cols;
   minesweeperState = {
     ...config,
-    status: "ready",
+    status: "active",
     firstMove: true,
+    startedAt: Date.now(),
+    completedAt: null,
+    penaltySeconds: 0,
+    scoreSubmitted: false,
+    puzzleId: `${config.difficulty}-${config.rows}x${config.cols}-${config.mines}`,
     cells: Array.from({ length: total }, () => ({ mine: false, revealed: false, flagged: false, count: 0 })),
   };
   renderMinesweeperBoard();
+  ensureSoloGameTimer();
   updateMinesweeperStatus();
 }
 
@@ -355,7 +493,6 @@ function placeMinesweeperMines(safeIndex) {
     cell.count = cell.mine ? 0 : minesweeperNeighbors(index).filter((neighbor) => state.cells[neighbor].mine).length;
   });
   state.firstMove = false;
-  state.status = "active";
 }
 
 function minesweeperNeighbors(index) {
@@ -387,9 +524,11 @@ function revealMinesweeperCell(index) {
   cell.revealed = true;
   if (cell.mine) {
     state.status = "lost";
+    state.completedAt = Date.now();
     state.cells.forEach((item) => { if (item.mine) item.revealed = true; });
     renderMinesweeperBoard();
     updateMinesweeperStatus();
+    stopSoloGameTimerIfIdle();
     return;
   }
   if (cell.count === 0) {
@@ -399,8 +538,11 @@ function revealMinesweeperCell(index) {
   }
   if (state.cells.every((item) => item.mine || item.revealed)) {
     state.status = "won";
+    state.completedAt = Date.now();
     state.cells.forEach((item) => { if (item.mine) item.flagged = true; });
-    setGameMsg("踩地雷完成", true);
+    submitSoloGameScore("minesweeper", state);
+    setGameMsg(`踩地雷完成，成績 ${formatSoloGameTime(soloElapsedMs(state))}`, true);
+    stopSoloGameTimerIfIdle();
   }
   renderMinesweeperBoard();
   updateMinesweeperStatus();
@@ -420,7 +562,11 @@ function toggleMinesweeperFlag(index) {
 function renderMinesweeperBoard() {
   const board = $("minesweeper-board");
   const state = minesweeperState;
-  if (!board || !state) return;
+  if (!board) return;
+  if (!state) {
+    board.innerHTML = '<div class="single-game-placeholder">按「開始」後才會出現盤面並開始計時。</div>';
+    return;
+  }
   board.style.setProperty("--mine-cols", String(state.cols));
   board.innerHTML = state.cells.map((cell, index) => {
     const label = cell.revealed ? (cell.mine ? "*" : (cell.count || "")) : (cell.flagged ? "⚑" : "");
@@ -431,39 +577,41 @@ function renderMinesweeperBoard() {
 
 function updateMinesweeperStatus() {
   const status = $("minesweeper-status");
-  if (!status || !minesweeperState) return;
+  if (!status) return;
+  if (!minesweeperState) {
+    status.textContent = "按開始後才會出現盤面並開始計時。";
+    return;
+  }
   const flagged = minesweeperState.cells.filter((cell) => cell.flagged).length;
+  const elapsed = formatSoloGameTime(soloElapsedMs(minesweeperState));
   if (minesweeperState.status === "won") {
-    status.textContent = "完成，所有安全格都已翻開。";
+    status.textContent = `完成，所有安全格都已翻開。成績 ${elapsed}`;
   } else if (minesweeperState.status === "lost") {
-    status.textContent = "踩到地雷，請重開一局。";
+    status.textContent = `踩到地雷，請重開一局。本局時間 ${elapsed}`;
   } else {
-    status.textContent = `地雷 ${minesweeperState.mines} · 已插旗 ${flagged} · 左鍵翻格，右鍵插旗。`;
+    status.textContent = `時間 ${elapsed} · 地雷 ${minesweeperState.mines} · 已插旗 ${flagged} · 左鍵翻格，右鍵插旗。`;
   }
 }
 
 async function loadGameZone() {
   try {
     await fetchCsrfToken({ force: true });
-    const [catalog, usersJson, invitesJson, matchesJson, leaderboardJson] = await Promise.all([
+    const [catalog, usersJson, invitesJson, matchesJson] = await Promise.all([
       gameRequest("/games/catalog"),
       gameRequest("/games/users"),
       gameRequest("/games/chess/invites"),
       gameRequest("/games/chess/matches"),
-      gameRequest("/games/chess/leaderboard"),
     ]);
     gameState = {
       matches: matchesJson.matches || [],
       invites: invitesJson.invites || [],
-      leaderboard: leaderboardJson.leaderboard || [],
+      leaderboard: [],
     };
     renderGameCatalog(catalog.games || []);
     renderGameUsers(usersJson.users || []);
     renderGameInvites(invitesJson.invites || []);
     renderGameMatches(matchesJson.matches || []);
-    renderGameLeaderboard(leaderboardJson);
-    const awardBtn = $("game-award-btn");
-    if (awardBtn) awardBtn.style.display = currentUser === "root" ? "" : "none";
+    await loadSelectedGameLeaderboard();
     setGameMsg("", true);
   } catch (err) {
     setGameMsg(err.message || "遊戲區讀取失敗", false);
@@ -643,6 +791,14 @@ document.addEventListener("input", (event) => {
   const sudokuInput = event.target?.closest?.("[data-sudoku-index]");
   if (!sudokuInput) return;
   updateSudokuCell(Number(sudokuInput.dataset.sudokuIndex || 0), sudokuInput.value || "");
+});
+
+document.addEventListener("change", (event) => {
+  const difficulty = event.target?.closest?.("#minesweeper-difficulty");
+  if (!difficulty) return;
+  if (gameSelectedKey === "minesweeper") {
+    loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
+  }
 });
 
 document.addEventListener("contextmenu", (event) => {
