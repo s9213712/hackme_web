@@ -47,6 +47,14 @@ def test_game_zone_frontend_assets_are_wired():
     assert "refreshGameZoneAfterMutation" in games_js
     assert 'cache: "no-store"' in games_js
     assert "data-chess-square" in games_js
+    assert "let chessMoveInFlight = false" in games_js
+    assert "if (chessMoveInFlight) return;" in games_js
+    assert "const from = gameSelectedSquare;" in games_js
+    assert "gameSelectedSquare = null;" in games_js
+    assert "chessMoveInFlight = true;" in games_js
+    assert "chessMoveInFlight = false;" in games_js
+    assert "const isOwnPiece = piece &&" in games_js
+    assert "isOwnPiece && myTurn" in games_js
     assert "data-game-delete-match" in games_js
     assert "data-game-key" in games_js
     assert "SUDOKU_PUZZLES" in games_js

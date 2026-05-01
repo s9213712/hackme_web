@@ -3,6 +3,7 @@
 let gameSelectedMatchId = null;
 let gameSelectedSquare = null;
 let gameSelectedKey = "chess";
+let chessMoveInFlight = false;
 let gameState = { matches: [], invites: [], leaderboard: [] };
 let soloGameTimer = null;
 const CHESS_PIECES = {
@@ -276,6 +277,7 @@ function renderChessBoard(match) {
     }
   }
   if (resign) resign.style.display = match.status === "active" ? "" : "none";
+  if (gameSelectedSquare && !boardMap[gameSelectedSquare]) gameSelectedSquare = null;
   const legalTargets = new Set((match.legal_moves || [])
     .filter((move) => move.from === gameSelectedSquare)
     .map((move) => move.to));
@@ -285,10 +287,10 @@ function renderChessBoard(match) {
       const square = file + rank;
       const piece = boardMap[square] || "";
       const isDark = (file.charCodeAt(0) + rank) % 2 === 0;
-      const selectable = match.status === "active" && piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
+      const selectable = myTurn && piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
       squares.push(`
         <button class="chess-square ${isDark ? "dark" : "light"} ${square === gameSelectedSquare ? "selected" : ""} ${legalTargets.has(square) ? "target" : ""}"
-                type="button" data-chess-square="${square}" ${match.status !== "active" ? "disabled" : ""}>
+                type="button" data-chess-square="${square}" ${match.status !== "active" || chessMoveInFlight ? "disabled" : ""}>
           <span>${sanitize(CHESS_PIECES[piece] || "")}</span>
           <small>${selectable || legalTargets.has(square) ? sanitize(square) : ""}</small>
         </button>
@@ -816,29 +818,47 @@ async function createPracticeGame() {
 }
 
 async function selectChessSquare(square) {
+  if (chessMoveInFlight) return;
   const match = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
   if (!match || match.status !== "active") return;
   const piece = match.board?.[square] || "";
+  const selectedPiece = gameSelectedSquare ? (match.board?.[gameSelectedSquare] || "") : "";
+  const myTurn = match.my_side === match.current_turn;
+  const isOwnPiece = piece && ((match.my_side === "white" && piece === piece.toUpperCase()) || (match.my_side === "black" && piece === piece.toLowerCase()));
   const legal = (match.legal_moves || []).some((move) => move.from === gameSelectedSquare && move.to === square);
-  if (gameSelectedSquare && legal) {
+  if (gameSelectedSquare && !selectedPiece) {
+    gameSelectedSquare = null;
+    renderChessBoard(match);
+    return;
+  }
+  if (gameSelectedSquare && legal && selectedPiece) {
+    const from = gameSelectedSquare;
+    gameSelectedSquare = null;
+    chessMoveInFlight = true;
+    renderChessBoard(match);
     try {
       const json = await gameRequest(`/games/chess/matches/${encodeURIComponent(gameSelectedMatchId)}/move`, {
         method: "POST",
-        body: { from: gameSelectedSquare, to: square },
+        body: { from, to: square },
       });
-      gameSelectedSquare = null;
       const updated = json.match;
       gameState.matches = gameState.matches.map((item) => item.id === updated.id ? updated : item);
       renderGameMatches(gameState.matches);
       await loadGameZone();
     } catch (err) {
       setGameMsg(err.message || "走棋失敗", false);
+    } finally {
+      chessMoveInFlight = false;
+      const latest = (gameState.matches || []).find((item) => item.id === gameSelectedMatchId);
+      if (latest) renderChessBoard(latest);
     }
     return;
   }
-  if (piece) {
+  if (isOwnPiece && myTurn) {
     gameSelectedSquare = square;
     renderChessBoard(match);
+  } else if (piece && !myTurn) {
+    setGameMsg("還沒輪到你", false);
   }
 }
 
