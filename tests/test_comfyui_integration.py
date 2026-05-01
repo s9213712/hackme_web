@@ -943,7 +943,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
     assert "/js/36-comfyui.js?v=20260429-root-billing-exempt" in index_html
-    assert "/styles.css?v=20260501-024" in index_html
+    assert "/styles.css?v=20260501-mobile-polish" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
@@ -1005,7 +1005,7 @@ def test_comfyui_frontend_is_wired():
     assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in community_js
     assert "/js/25-community.js?v=20260429-moderator-user-select" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
-    assert '"feature_comfyui_enabled": True' in settings_py
+    assert '"feature_comfyui_enabled": False' in settings_py
     assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py
     assert '"comfyui_max_batch_size": 1' in settings_py

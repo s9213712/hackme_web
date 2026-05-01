@@ -1844,12 +1844,14 @@ def register_community_routes(app, deps):
             if thread["is_deleted"]:
                 return json_resp({"ok": False, "msg": "主題已刪除，不能留言"}), 404
             manageable = can_moderate_board(conn, thread["board_id"], actor)
-            if not bool(thread["board_is_active"]) and not manageable:
-                return json_resp({"ok": False, "msg": "此討論區已停用留言"}), 403
-            if thread["board_visibility"] != "public" and not manageable and thread["owner_user_id"] != actor["id"]:
+            board_open = (
+                bool(thread["board_is_active"])
+                and thread["board_status"] == "approved"
+                and thread["board_visibility"] == "public"
+            )
+            accessible = manageable or board_open or thread["owner_user_id"] == actor["id"]
+            if not accessible:
                 return json_resp({"ok": False, "msg": "此討論區不開放留言"}), 403
-            if thread["board_status"] != "approved" and not manageable:
-                return json_resp({"ok": False, "msg": "此討論區尚未開放留言"}), 403
             if thread["status"] != "approved":
                 return json_resp({"ok": False, "msg": "此主題尚未公開留言"}), 403
             if bool(thread["is_locked"]):

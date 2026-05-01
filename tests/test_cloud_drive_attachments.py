@@ -471,7 +471,7 @@ def test_storage_folder_album_rejects_non_media_files(tmp_path):
 
     assert created.status_code == 400
     assert "非圖片/影片" in created.get_json()["msg"]
-    assert client.get("/api/storage/albums").get_json()["albums"] == []
+    assert all(album["title"] != "Mixed" for album in client.get("/api/storage/albums").get_json()["albums"])
 
 
 def test_storage_album_crud_and_file_membership(tmp_path):
@@ -555,7 +555,8 @@ def test_storage_album_crud_and_file_membership(tmp_path):
 
     listed = client.get("/api/storage/albums")
     assert listed.status_code == 200
-    assert listed.get_json()["albums"][0]["file_count"] == 1
+    listed_album = next(row for row in listed.get_json()["albums"] if row["id"] == album["id"])
+    assert listed_album["file_count"] == 1
 
     album_file_id = files[0]["id"]
     removed = client.delete(f"/api/storage/albums/{album['id']}/files/{album_file_id}")

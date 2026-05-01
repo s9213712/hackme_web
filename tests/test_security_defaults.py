@@ -21,6 +21,7 @@ def test_initial_deploy_defaults_only_enable_management_and_security_modules():
         "feature_server_modes_enabled",
         "feature_snapshot_restore_enabled",
         "feature_health_center_enabled",
+        "feature_reports_notifications_enabled",
     }
     assert DEFAULT_SETTINGS["feature_forum_core_enabled"] is False
     assert DEFAULT_SETTINGS["feature_comfyui_enabled"] is False

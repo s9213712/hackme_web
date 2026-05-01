@@ -124,7 +124,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
     assert '/js/35-drive.js?v=20260429-storage-purchase-feedback' in index_html
-    assert '/styles.css?v=20260501-024' in index_html
+    assert '/styles.css?v=20260501-mobile-polish' in index_html
     assert '/js/00-core.js?v=20260430-trading-page-split' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
     assert 'src="/js/50-admin.js' in index_html
@@ -154,7 +154,7 @@ def test_album_viewer_has_dedicated_module():
     assert "附件編號讀取失敗" in drive_js
     assert "loadChatMessages(selectedChatRoomId" in drive_js
     assert '<select id="chat-attachment-existing-file-id">' in index_html
-    assert '<select id="dm-attachment-existing-file-id">' in index_html
+    assert "dm-attachment-existing-file-id" in drive_js
     assert '<select id="announcement-attachment-existing-file-id">' in index_html
     assert 'placeholder="file_id"' not in index_html
     assert "chat-message-image-preview" in drive_js

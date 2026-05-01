@@ -51,7 +51,7 @@ def test_login_recovery_uses_human_facing_verification_wording():
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
 
-    assert "寄送重設密碼驗證碼" in index
+    assert "送出重設密碼審核" in index
     assert "寄送 Email 驗證碼" in index
     assert "重設密碼 token" not in index
     assert "Email 驗證 token" not in index

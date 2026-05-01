@@ -3252,8 +3252,9 @@ class TradingEngineService:
         if not actor_user_id:
             raise ValueError("login required")
         amount = _to_int(amount_points, name="collateral_points", minimum=1, maximum=10**12)
+        fallback_key = idempotency_key or f"{position_uuid}:{amount}:{int(datetime.now().timestamp() // 60)}"
         operation_key = _client_idempotency_key(
-            idempotency_key,
+            fallback_key,
             prefix=f"margin_collateral_add:{actor_user_id}:{position_uuid}",
         )
         conn = self.get_db()
@@ -3322,7 +3323,7 @@ class TradingEngineService:
                         action_type="trading_margin_collateral_freeze",
                         reference_type="trading_margin_position",
                         reference_id=position["position_uuid"],
-                        idempotency_key=operation_key or f"trading:margin:collateral_add:{position['position_uuid']}:{uuid.uuid4()}",
+                        idempotency_key=f"trading:margin:collateral_add:{operation_key}",
                         reason="TRADING_MARGIN_COLLATERAL_ADD",
                         public_metadata={
                             "position_type": position["position_type"],

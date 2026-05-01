@@ -30,7 +30,7 @@
           <div class="tool-group">
             <div class="tool-title">策略分支</div>
             <div class="tool-grid">
-              <button data-add-branch type="button"><b>新增分支</b><span>例如進場、減倉、強制止損</span></button>
+              <button data-add="branch" data-add-branch type="button"><b>新增分支</b><span>例如進場、減倉、強制止損</span></button>
               <button data-template="breakout" type="button"><b>突破範例</b><span>MA + RSI + 分批買入</span></button>
               <button data-template="risk" type="button"><b>風控範例</b><span>止盈、止損、全部平倉</span></button>
             </div>
@@ -38,24 +38,24 @@
           <div class="tool-group">
             <div class="tool-title">條件節點</div>
             <div class="tool-grid">
-              <button data-add-node="condition:price_below" type="button"><b>價格低於</b><span>price <= 指定價格</span></button>
-              <button data-add-node="condition:price_above" type="button"><b>價格高於</b><span>price >= 指定價格</span></button>
-              <button data-add-node="condition:rsi_below" type="button"><b>RSI 低於</b><span>超賣或回檔條件</span></button>
-              <button data-add-node="condition:rsi_above" type="button"><b>RSI 高於</b><span>強勢或過熱條件</span></button>
-              <button data-add-node="condition:kd_above" type="button"><b>KD 高於</b><span>動能確認</span></button>
-              <button data-add-node="condition:ma_position" type="button"><b>均線位置</b><span>價格在 MA 上下方</span></button>
-              <button data-add-node="condition:bb_position" type="button"><b>布林位置</b><span>中線、上軌、下軌</span></button>
-              <button data-add-node="condition:has_position" type="button"><b>持倉狀態</b><span>有倉位或無倉位</span></button>
+              <button data-add="condition" data-add-node="condition:price_below" type="button"><b>價格低於</b><span>price <= 指定價格</span></button>
+              <button data-add="condition" data-add-node="condition:price_above" type="button"><b>價格高於</b><span>price >= 指定價格</span></button>
+              <button data-add="condition" data-add-node="condition:rsi_below" type="button"><b>RSI 低於</b><span>超賣或回檔條件</span></button>
+              <button data-add="condition" data-add-node="condition:rsi_above" type="button"><b>RSI 高於</b><span>強勢或過熱條件</span></button>
+              <button data-add="condition" data-add-node="condition:kd_above" type="button"><b>KD 高於</b><span>動能確認</span></button>
+              <button data-add="condition" data-add-node="condition:ma_position" type="button"><b>均線位置</b><span>價格在 MA 上下方</span></button>
+              <button data-add="condition" data-add-node="condition:bb_position" type="button"><b>布林位置</b><span>中線、上軌、下軌</span></button>
+              <button data-add="condition" data-add-node="condition:has_position" type="button"><b>持倉狀態</b><span>有倉位或無倉位</span></button>
             </div>
           </div>
           <div class="tool-group">
             <div class="tool-title">行為節點</div>
             <div class="tool-grid">
-              <button data-add-node="action:buy_percent" type="button"><b>買入百分比</b><span>使用可用資金的一部分</span></button>
-              <button data-add-node="action:buy_amount" type="button"><b>固定金額買入</b><span>使用指定點數</span></button>
-              <button data-add-node="action:sell_percent" type="button"><b>賣出百分比</b><span>賣出持倉的一部分</span></button>
-              <button data-add-node="action:close_all" type="button"><b>全部平倉</b><span>風險優先的緊急動作</span></button>
-              <button data-add-node="action:hold" type="button"><b>不動作</b><span>條件成立但只記錄掃描</span></button>
+              <button data-add="action" data-add-node="action:buy_percent" type="button"><b>買入百分比</b><span>使用可用資金的一部分</span></button>
+              <button data-add="action" data-add-node="action:buy_amount" type="button"><b>固定金額買入</b><span>使用指定點數</span></button>
+              <button data-add="action" data-add-node="action:sell_percent" type="button"><b>賣出百分比</b><span>賣出持倉的一部分</span></button>
+              <button data-add="action" data-add-node="action:close_all" type="button"><b>全部平倉</b><span>風險優先的緊急動作</span></button>
+              <button data-add="action" data-add-node="action:hold" type="button"><b>不動作</b><span>條件成立但只記錄掃描</span></button>
             </div>
           </div>
           <div class="tool-group">

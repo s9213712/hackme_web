@@ -34,6 +34,30 @@ def test_community_combo_mutation_routes_dispatch_to_single_use_csrf():
     assert '@app.route("/api/community/threads/<int:thread_id>", methods=["GET", "PUT", "DELETE"])\n    @require_csrf_by_method' in community
 
 
+def test_community_numeric_bounds_and_unlisted_reply_access_are_guarded():
+    community = (ROOT / "routes" / "community.py").read_text(encoding="utf-8")
+    reward_route = community.split("def community_thread_reward", 1)[1].split("def community_thread_reply", 1)[0]
+    reply_route = community.split("def community_thread_reply", 1)[1].split("def community_thread_pin", 1)[0]
+    penalty_route = community.split("def community_post_penalty", 1)[1].split("def community_post_report", 1)[0]
+
+    assert 'if points is None:' in reward_route
+    assert "獎勵點數必須介於 1 到 50" in reward_route
+    assert 'if points is None:' in penalty_route
+    assert "違規點數必須介於 1 到 10" in penalty_route
+    assert "board_open = (" in reply_route
+    assert "accessible = manageable or board_open or thread[\"owner_user_id\"] == actor[\"id\"]" in reply_route
+    assert "此討論區不開放留言" in reply_route
+
+
+def test_margin_collateral_without_client_key_uses_stable_retry_key():
+    trading = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
+    collateral_route = trading.split("def add_margin_collateral", 1)[1].split("def close_margin_position", 1)[0]
+
+    assert 'fallback_key = idempotency_key or f"{position_uuid}:{amount}:{int(datetime.now().timestamp() // 60)}"' in collateral_route
+    assert "uuid.uuid4()" not in collateral_route
+    assert 'idempotency_key=f"trading:margin:collateral_add:{operation_key}"' in collateral_route
+
+
 def test_points_spend_route_does_not_trust_client_ledger_provenance():
     economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
 
