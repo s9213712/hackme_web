@@ -423,3 +423,15 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'renderTradingOrders(orders, "economy-trading-order-list", false)' in trading_js
     assert '["economy-trading-open-btn", openTradingModuleFromWallet]' in trading_js
     assert '["economy-root-virtual-open-btn", openTradingModuleFromWallet]' in trading_js
+
+    workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
+    assert 'data-add="branch"' in workflow_editor
+    assert 'data-add="condition"' in workflow_editor
+    assert 'data-add="action"' in workflow_editor
+    assert 'data-drop-kind="condition"' in workflow_editor
+    assert 'data-drop-kind="action"' in workflow_editor
+    assert 'draggable="true"' in workflow_editor
+    assert "function handleClick" in workflow_editor
+    assert "function handleDrop" in workflow_editor
+    assert "function handleInput" in workflow_editor
+    assert "HackmeTradingWorkflowEditor" in workflow_editor

@@ -5,61 +5,89 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trading Workflow Editor</title>
   <style>
-    :root { color-scheme: dark; --bg:#0f172a; --panel:#111827; --line:#334155; --text:#e5e7eb; --muted:#94a3b8; --accent:#38bdf8; --ok:#22c55e; --warn:#f59e0b; --danger:#fb7185; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-    header { display:flex; justify-content:space-between; gap:1rem; align-items:center; padding:1rem 1.25rem; border-bottom:1px solid var(--line); background:#020617; position:sticky; top:0; z-index:2; }
-    h1 { font-size:1.1rem; margin:0; }
-    main { display:grid; grid-template-columns: 220px minmax(360px, 1fr) 380px; min-height:calc(100vh - 65px); }
+    :root {
+      color-scheme: dark;
+      --bg:#0f172a; --panel:#111827; --panel-2:#0b1220; --line:#334155;
+      --text:#e5e7eb; --muted:#94a3b8; --accent:#38bdf8; --ok:#22c55e;
+      --warn:#f59e0b; --danger:#fb7185; --shadow:0 18px 40px rgba(0,0,0,.28);
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+    header { display:flex; justify-content:space-between; gap:1rem; align-items:center; padding:1rem 1.25rem; border-bottom:1px solid var(--line); background:#020617; position:sticky; top:0; z-index:10; }
+    h1 { font-size:1.08rem; margin:0; }
+    main { display:grid; grid-template-columns:230px minmax(420px,1fr) 390px; min-height:calc(100vh - 66px); }
     button, select, input, textarea { border:1px solid var(--line); border-radius:7px; background:#0b1220; color:var(--text); padding:.55rem .65rem; font:inherit; }
-    button { cursor:pointer; }
+    button { cursor:pointer; transition:border-color .12s, background .12s, transform .12s; }
+    button:hover { border-color:#60a5fa; }
+    button:active { transform:translateY(1px); }
     button.primary { background:#075985; border-color:#0ea5e9; }
     button.good { background:#166534; border-color:#22c55e; }
     button.danger { background:#7f1d1d; border-color:#ef4444; }
-    .toolbox, .inspector { padding:1rem; background:var(--panel); border-right:1px solid var(--line); }
-    .inspector { border-right:0; border-left:1px solid var(--line); overflow:auto; }
+    button.ghost { background:transparent; }
+    .toolbox, .inspector { padding:1rem; background:var(--panel); border-right:1px solid var(--line); overflow:auto; }
+    .inspector { border-right:0; border-left:1px solid var(--line); }
     .toolbox button { width:100%; margin:.35rem 0; text-align:left; }
     .canvas { padding:1rem; overflow:auto; }
-    .branch { border:1px solid var(--line); border-radius:8px; background:#0b1220; margin-bottom:1rem; overflow:hidden; }
+    .branch { border:1px solid var(--line); border-radius:8px; background:var(--panel-2); margin-bottom:1rem; overflow:hidden; box-shadow:var(--shadow); }
+    .branch.selected { border-color:var(--accent); }
     .branch-head { display:flex; justify-content:space-between; align-items:center; gap:.75rem; padding:.75rem; border-bottom:1px solid var(--line); background:#111c2f; }
     .branch-title { font-weight:700; }
-    .node-row { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; padding:.75rem; }
-    .node { min-width:150px; border:1px solid var(--line); border-radius:8px; padding:.65rem; background:#152034; cursor:pointer; }
+    .branch-meta { color:var(--muted); font-size:.85rem; }
+    .lane-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; padding:.75rem; }
+    .lane { min-height:112px; border:1px dashed #334155; border-radius:8px; padding:.65rem; background:rgba(15,23,42,.72); }
+    .lane.drag-over { border-color:var(--accent); background:rgba(14,116,144,.22); }
+    .lane-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:.55rem; color:var(--muted); font-size:.88rem; }
+    .node-list { display:flex; flex-wrap:wrap; gap:.5rem; align-items:stretch; min-height:54px; }
+    .node { min-width:160px; max-width:240px; border:1px solid var(--line); border-radius:8px; padding:.62rem; background:#152034; cursor:grab; user-select:none; }
+    .node:active { cursor:grabbing; }
     .node.selected { outline:2px solid var(--accent); }
     .node.condition { border-color:#38bdf8; }
     .node.action { border-color:#22c55e; }
     .node.control { border-color:#f59e0b; }
-    .arrow { color:var(--muted); }
+    .node-top { display:flex; justify-content:space-between; gap:.5rem; align-items:center; }
+    .node-kind { color:var(--muted); font-size:.82rem; }
+    .node-label { margin-top:.35rem; line-height:1.35; overflow-wrap:anywhere; }
+    .node-tools { display:flex; gap:.25rem; }
+    .node-tools button { padding:.18rem .38rem; border-radius:5px; font-size:.78rem; }
+    .empty { color:var(--muted); font-size:.88rem; padding:.65rem; }
     .muted { color:var(--muted); font-size:.88rem; }
     .grid { display:grid; gap:.65rem; }
     .field { display:grid; gap:.35rem; margin-bottom:.7rem; }
-    textarea { width:100%; min-height:260px; resize:vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    textarea { width:100%; min-height:250px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1.42; }
     .actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
-    .status { color:var(--muted); }
-    @media (max-width: 980px) { main { grid-template-columns:1fr; } .toolbox, .inspector { border:0; border-bottom:1px solid var(--line); } }
+    .status { color:var(--muted); min-height:1.4rem; margin-top:.55rem; }
+    .pill { display:inline-flex; align-items:center; gap:.35rem; border:1px solid var(--line); border-radius:999px; padding:.18rem .5rem; color:var(--muted); font-size:.8rem; }
+    .inspector-card { border:1px solid var(--line); border-radius:8px; padding:.75rem; background:rgba(15,23,42,.72); }
+    .small-row { display:grid; grid-template-columns:1fr 1fr; gap:.55rem; }
+    @media (max-width: 1080px) {
+      main { grid-template-columns:1fr; }
+      .toolbox, .inspector { border:0; border-bottom:1px solid var(--line); }
+      .lane-grid { grid-template-columns:1fr; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>Workflow Node Editor</h1>
-      <div class="muted">繪製策略流程，產生可讀 JSON 給交易機器人使用。</div>
+      <div class="muted">用節點建立策略，產生交易機器人可讀的 JSON。</div>
     </div>
     <div class="actions">
-      <button id="templateBtn">載入範例</button>
-      <button class="primary" id="saveBtn">儲存到瀏覽器</button>
-      <button class="good" id="copyBtn">複製 JSON</button>
+      <button id="templateBtn" type="button">載入範例</button>
+      <button id="importBtn" type="button">套用 JSON</button>
+      <button class="primary" id="saveBtn" type="button">儲存到瀏覽器</button>
+      <button class="good" id="copyBtn" type="button">複製 JSON</button>
     </div>
   </header>
   <main>
     <aside class="toolbox">
       <div class="branch-title">Node 工具箱</div>
-      <button data-add="branch">+ 邏輯分支</button>
-      <button data-add="condition">+ 條件節點</button>
-      <button data-add="action">+ 行為節點</button>
-      <button data-add="control">+ 控制節點</button>
-      <p class="muted">點選節點後，在右側設定條件值、比例、冷卻與優先權。</p>
-      <p class="muted">拖拉式連線第一版以「分支內由左到右」表示流程，避免使用者寫程式碼。</p>
+      <button data-add="branch" type="button">+ 新增策略分支</button>
+      <button data-add="condition" type="button">+ 新增條件節點</button>
+      <button data-add="action" type="button">+ 新增行為節點</button>
+      <button data-add="control" type="button">+ 設定控制節點</button>
+      <p class="muted">點節點可編輯；拖曳節點可排序或移到同類 lane。分支優先權越高越先判斷。</p>
+      <p class="muted">控制節點會寫到分支的冷卻秒數與最大執行次數。</p>
     </aside>
     <section class="canvas">
       <div id="canvas"></div>
@@ -76,33 +104,113 @@
   <script>
     const STORAGE_KEY = "hackme_trading_workflow_json";
     const $ = (id) => document.getElementById(id);
-    let selected = { branchId: "entry", kind: "branch", nodeId: "" };
-    let workflow = {
-      version: 1,
-      strategy_kind: "workflow",
-      branches: [{
-        id: "entry",
-        name: "進場策略",
-        priority: 10,
-        logic: "AND",
-        cooldown_seconds: 3600,
-        max_runs: 100,
-        conditions: [{ type: "price_below", value: 100000 }, { type: "kd_above", value: 50 }, { type: "bb_position", position: "above_mid" }, { type: "ma_position", period: 50, position: "above" }],
-        actions: [{ type: "buy_percent", percent: 10, step: 1 }, { type: "buy_percent", percent: 20, step: 2 }]
-      }]
-    };
-    function uid(prefix) { return `${prefix}_${Math.random().toString(36).slice(2, 8)}`; }
-    function branchById(id) { return workflow.branches.find((row) => row.id === id) || workflow.branches[0]; }
+    const CONDITION_TYPES = ["price_below","price_above","rsi_above","rsi_below","kd_above","kd_below","ma_position","bb_position","has_position","change_percent_up","change_percent_down","take_profit_percent","stop_loss_percent"];
+    const ACTION_TYPES = ["buy_percent","buy_amount","sell_percent","close_all","hold"];
+    let selected = { branchId: "entry", kind: "branch", index: -1 };
+    let dragRef = null;
+    let workflow = templateWorkflow();
+
+    function templateWorkflow() {
+      return {
+        version: 1,
+        strategy_kind: "workflow",
+        source: "workflow_editor",
+        branches: [
+          {
+            id: "entry",
+            name: "進場策略",
+            priority: 10,
+            logic: "AND",
+            cooldown_seconds: 3600,
+            max_runs: 100,
+            conditions: [
+              { type: "price_below", value: 100000 },
+              { type: "kd_above", value: 50 },
+              { type: "bb_position", position: "above_mid" },
+              { type: "ma_position", period: 50, position: "above" }
+            ],
+            actions: [
+              { type: "buy_percent", percent: 10, step: 1, order_type: "market" },
+              { type: "buy_percent", percent: 20, step: 2, order_type: "market" }
+            ]
+          },
+          {
+            id: "reduce",
+            name: "風險減倉",
+            priority: 50,
+            logic: "AND",
+            cooldown_seconds: 300,
+            max_runs: 100,
+            conditions: [
+              { type: "has_position", value: true },
+              { type: "price_below", value: 80000 }
+            ],
+            actions: [
+              { type: "sell_percent", percent: 50, step: 1, order_type: "market" },
+              { type: "sell_percent", percent: 100, step: 2, order_type: "market" }
+            ]
+          },
+          {
+            id: "stop",
+            name: "強制止損",
+            priority: 100,
+            logic: "AND",
+            cooldown_seconds: 0,
+            max_runs: 100,
+            conditions: [{ type: "price_below", value: 50000 }],
+            actions: [{ type: "close_all", step: 1, order_type: "market" }]
+          }
+        ]
+      };
+    }
+
+    function html(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
+    }
+
+    function uid(prefix) {
+      return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function branchById(id) {
+      return workflow.branches.find((row) => row.id === id) || workflow.branches[0];
+    }
+
+    function normalizeWorkflow(input) {
+      const next = input && typeof input === "object" ? input : templateWorkflow();
+      const branches = Array.isArray(next.branches) && next.branches.length ? next.branches : templateWorkflow().branches;
+      return {
+        version: 1,
+        strategy_kind: "workflow",
+        source: String(next.source || "workflow_editor"),
+        branches: branches.slice(0, 20).map((branch, index) => ({
+          id: String(branch.id || uid("branch")).slice(0, 80),
+          name: String(branch.name || `策略分支 ${index + 1}`).slice(0, 80),
+          priority: Number(branch.priority || 0),
+          logic: String(branch.logic || "AND").toUpperCase() === "OR" ? "OR" : "AND",
+          cooldown_seconds: Math.max(0, Number(branch.cooldown_seconds || 0)),
+          max_runs: Math.max(1, Number(branch.max_runs || 100)),
+          conditions: Array.isArray(branch.conditions) && branch.conditions.length ? branch.conditions.slice(0, 20) : [{ type: "price_below", value: 100000 }],
+          actions: Array.isArray(branch.actions) && branch.actions.length ? branch.actions.slice(0, 20) : [{ type: "hold", step: 1, order_type: "market" }]
+        }))
+      };
+    }
+
     function nodeLabel(node) {
-      if (node.type === "price_below") return `價格 <= ${node.value || 0}`;
-      if (node.type === "price_above") return `價格 >= ${node.value || 0}`;
-      if (node.type === "rsi_above") return `RSI >= ${node.value || 0}`;
-      if (node.type === "rsi_below") return `RSI <= ${node.value || 0}`;
-      if (node.type === "kd_above") return `KD >= ${node.value || 0}`;
-      if (node.type === "kd_below") return `KD <= ${node.value || 0}`;
+      const value = node.value ?? node.percent ?? node.amount_points ?? "";
+      if (node.type === "price_below") return `價格 <= ${value || 0}`;
+      if (node.type === "price_above") return `價格 >= ${value || 0}`;
+      if (node.type === "rsi_above") return `RSI >= ${value || 0}`;
+      if (node.type === "rsi_below") return `RSI <= ${value || 0}`;
+      if (node.type === "kd_above") return `KD >= ${value || 0}`;
+      if (node.type === "kd_below") return `KD <= ${value || 0}`;
       if (node.type === "ma_position") return `價格在 MA${node.period || 50} ${node.position === "below" ? "下方" : "上方"}`;
       if (node.type === "bb_position") return `布林 ${node.position || "above_mid"}`;
       if (node.type === "has_position") return node.value === false ? "沒有持倉" : "持倉存在";
+      if (node.type === "change_percent_up") return `漲幅 >= ${value || 0}%`;
+      if (node.type === "change_percent_down") return `跌幅 >= ${value || 0}%`;
+      if (node.type === "take_profit_percent") return `止盈 ${value || 0}%`;
+      if (node.type === "stop_loss_percent") return `止損 ${value || 0}%`;
       if (node.type === "buy_percent") return `買入可用資金 ${node.percent || 0}%`;
       if (node.type === "buy_amount") return `買入 ${node.amount_points || 0} 點`;
       if (node.type === "sell_percent") return `賣出持倉 ${node.percent || 0}%`;
@@ -110,89 +218,362 @@
       if (node.type === "hold") return "不動作";
       return node.type || "-";
     }
+
+    function selectedNodeRef() {
+      const branch = branchById(selected.branchId);
+      if (!branch || selected.kind === "branch") return { branch, list: null, node: null };
+      const list = selected.kind === "condition" ? branch.conditions : branch.actions;
+      return { branch, list, node: list?.[selected.index] || null };
+    }
+
+    function nodeCard(branch, kind, node, index) {
+      const selectedClass = selected.branchId === branch.id && selected.kind === kind && selected.index === index ? "selected" : "";
+      const nodeType = kind === "condition" ? "condition" : "action";
+      return `
+        <article class="node ${nodeType} ${selectedClass}" draggable="true" data-node-ref="${kind}:${html(branch.id)}:${index}" role="button" tabindex="0">
+          <div class="node-top">
+            <span class="node-kind">${kind === "condition" ? "條件" : `行為 step ${node.step || index + 1}`}</span>
+            <span class="node-tools">
+              <button type="button" data-move-node="${kind}:${html(branch.id)}:${index}:left" title="往左">‹</button>
+              <button type="button" data-move-node="${kind}:${html(branch.id)}:${index}:right" title="往右">›</button>
+              <button type="button" data-delete-node="${kind}:${html(branch.id)}:${index}" title="刪除">×</button>
+            </span>
+          </div>
+          <div class="node-label">${html(nodeLabel(node))}</div>
+        </article>`;
+    }
+
     function render() {
-      $("canvas").innerHTML = workflow.branches.map((branch) => `
-        <div class="branch">
+      const canvas = $("canvas");
+      canvas.innerHTML = workflow.branches.map((branch) => `
+        <section class="branch ${selected.branchId === branch.id ? "selected" : ""}" data-branch="${html(branch.id)}">
           <div class="branch-head">
             <div>
-              <div class="branch-title">${branch.name}</div>
-              <div class="muted">priority ${branch.priority} · ${branch.logic} · cooldown ${branch.cooldown_seconds}s</div>
+              <div class="branch-title">${html(branch.name)}</div>
+              <div class="branch-meta">
+                <span class="pill">priority ${Number(branch.priority || 0)}</span>
+                <span class="pill">${html(branch.logic || "AND")}</span>
+                <span class="pill">cooldown ${Number(branch.cooldown_seconds || 0)}s</span>
+                <span class="pill">max ${Number(branch.max_runs || 0)}</span>
+              </div>
             </div>
-            <button data-select-branch="${branch.id}">設定分支</button>
+            <div class="actions">
+              <button type="button" data-select-branch="${html(branch.id)}">設定分支</button>
+              <button type="button" data-duplicate-branch="${html(branch.id)}">複製</button>
+              <button class="danger" type="button" data-delete-branch="${html(branch.id)}">刪除</button>
+            </div>
           </div>
-          <div class="node-row">
-            ${(branch.conditions || []).map((node, index) => `<div class="node condition ${selected.nodeId === `c:${branch.id}:${index}` ? "selected" : ""}" data-select-node="c:${branch.id}:${index}"><b>條件</b><br>${nodeLabel(node)}</div><span class="arrow">${index < branch.conditions.length - 1 ? branch.logic : "→"}</span>`).join("")}
-            ${(branch.actions || []).map((node, index) => `<div class="node action ${selected.nodeId === `a:${branch.id}:${index}` ? "selected" : ""}" data-select-node="a:${branch.id}:${index}"><b>行為 step ${node.step || index + 1}</b><br>${nodeLabel(node)}</div>`).join('<span class="arrow">→</span>')}
+          <div class="lane-grid">
+            <div class="lane" data-drop-kind="condition" data-drop-branch="${html(branch.id)}">
+              <div class="lane-head"><b>條件</b><span>${html(branch.logic || "AND")} 組合</span></div>
+              <div class="node-list">
+                ${(branch.conditions || []).map((node, index) => nodeCard(branch, "condition", node, index)).join("") || '<div class="empty">拖入或新增條件節點</div>'}
+              </div>
+            </div>
+            <div class="lane" data-drop-kind="action" data-drop-branch="${html(branch.id)}">
+              <div class="lane-head"><b>行為</b><span>由左到右執行 step</span></div>
+              <div class="node-list">
+                ${(branch.actions || []).map((node, index) => nodeCard(branch, "action", node, index)).join("") || '<div class="empty">拖入或新增行為節點</div>'}
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
       `).join("");
-      document.querySelectorAll("[data-select-branch]").forEach((btn) => btn.onclick = () => { selected = { branchId: btn.dataset.selectBranch, kind: "branch", nodeId: "" }; render(); });
-      document.querySelectorAll("[data-select-node]").forEach((node) => node.onclick = () => { const parts = node.dataset.selectNode.split(":"); selected = { branchId: parts[1], kind: parts[0] === "c" ? "condition" : "action", nodeId: node.dataset.selectNode, index: Number(parts[2]) }; render(); });
       renderInspector();
+      syncJson();
+    }
+
+    function syncJson() {
       $("jsonOut").value = JSON.stringify(workflow, null, 2);
     }
+
+    function setStatus(message, good = true) {
+      const el = $("status");
+      el.textContent = message || "";
+      el.style.color = good ? "var(--muted)" : "var(--danger)";
+    }
+
     function renderInspector() {
-      const branch = branchById(selected.branchId);
-      if (selected.kind === "branch") {
+      const { branch, node } = selectedNodeRef();
+      if (!branch) return;
+      if (selected.kind === "branch" || !node) {
         $("inspector").innerHTML = `
-          <label class="field">分支名稱<input id="iName" value="${branch.name || ""}"></label>
-          <label class="field">邏輯<select id="iLogic"><option value="AND">AND</option><option value="OR">OR</option></select></label>
-          <label class="field">優先權<input id="iPriority" type="number" value="${branch.priority || 0}"></label>
-          <label class="field">冷卻秒數<input id="iCooldown" type="number" min="0" value="${branch.cooldown_seconds || 0}"></label>
-          <label class="field">最大執行次數<input id="iMaxRuns" type="number" min="1" value="${branch.max_runs || 100}"></label>
-          <button class="danger" id="deleteBranch">刪除此分支</button>`;
+          <div class="inspector-card">
+            <label class="field">分支名稱<input id="iName" data-bind-branch="name" value="${html(branch.name || "")}"></label>
+            <div class="small-row">
+              <label class="field">邏輯<select id="iLogic" data-bind-branch="logic"><option value="AND">AND</option><option value="OR">OR</option></select></label>
+              <label class="field">優先權<input data-bind-branch="priority" type="number" value="${Number(branch.priority || 0)}"></label>
+            </div>
+            <div class="small-row">
+              <label class="field">冷卻秒數<input data-bind-branch="cooldown_seconds" type="number" min="0" value="${Number(branch.cooldown_seconds || 0)}"></label>
+              <label class="field">最大執行次數<input data-bind-branch="max_runs" type="number" min="1" value="${Number(branch.max_runs || 100)}"></label>
+            </div>
+          </div>`;
         $("iLogic").value = branch.logic || "AND";
-        ["iName","iLogic","iPriority","iCooldown","iMaxRuns"].forEach((id) => $(id).oninput = () => {
-          branch.name = $("iName").value; branch.logic = $("iLogic").value; branch.priority = Number($("iPriority").value || 0);
-          branch.cooldown_seconds = Number($("iCooldown").value || 0); branch.max_runs = Number($("iMaxRuns").value || 1); render();
-        });
-        $("deleteBranch").onclick = () => { if (workflow.branches.length > 1) workflow.branches = workflow.branches.filter((row) => row.id !== branch.id); selected = { branchId: workflow.branches[0].id, kind: "branch", nodeId: "" }; render(); };
         return;
       }
-      const list = selected.kind === "condition" ? branch.conditions : branch.actions;
-      const node = list[selected.index];
-      const conditionOptions = ["price_below","price_above","rsi_above","rsi_below","kd_above","kd_below","ma_position","bb_position","has_position"];
-      const actionOptions = ["buy_percent","buy_amount","sell_percent","close_all","hold"];
+      const isCondition = selected.kind === "condition";
       $("inspector").innerHTML = `
-        <label class="field">節點類型<select id="iType">${(selected.kind === "condition" ? conditionOptions : actionOptions).map((item) => `<option value="${item}">${item}</option>`).join("")}</select></label>
-        <label class="field">數值 / 百分比<input id="iValue" type="number" step="0.01" value="${node.value ?? node.percent ?? node.amount_points ?? ""}"></label>
-        <label class="field">週期（MA）<input id="iPeriod" type="number" min="1" value="${node.period || 50}"></label>
-        <label class="field">位置<select id="iPosition"><option value="above">MA 上方</option><option value="below">MA 下方</option><option value="above_mid">BB 中線上方</option><option value="below_mid">BB 中線下方</option><option value="above_upper">BB 上軌上方</option><option value="below_lower">BB 下軌下方</option></select></label>
-        <label class="field">Step<input id="iStep" type="number" min="1" value="${node.step || 1}"></label>
-        <button class="danger" id="deleteNode">刪除此節點</button>`;
+        <div class="inspector-card">
+          <label class="field">節點類型<select id="iType" data-bind-node="type">${(isCondition ? CONDITION_TYPES : ACTION_TYPES).map((item) => `<option value="${item}">${item}</option>`).join("")}</select></label>
+          <div class="small-row">
+            <label class="field">數值 / 百分比<input data-bind-node="value" type="number" step="0.01" value="${html(node.value ?? node.percent ?? node.amount_points ?? "")}"></label>
+            <label class="field">Step<input data-bind-node="step" type="number" min="1" value="${Number(node.step || 1)}"></label>
+          </div>
+          <div class="small-row">
+            <label class="field">週期（MA）<input data-bind-node="period" type="number" min="1" value="${Number(node.period || 50)}"></label>
+            <label class="field">委託型態<select data-bind-node="order_type"><option value="market">市價</option><option value="limit">限價</option></select></label>
+          </div>
+          <label class="field">位置<select data-bind-node="position">
+            <option value="above">MA 上方</option>
+            <option value="below">MA 下方</option>
+            <option value="above_mid">BB 中線上方</option>
+            <option value="below_mid">BB 中線下方</option>
+            <option value="above_upper">BB 上軌上方</option>
+            <option value="below_lower">BB 下軌下方</option>
+          </select></label>
+          <label class="field">限價價格<input data-bind-node="limit_price_points" type="number" min="0" value="${html(node.limit_price_points ?? "")}"></label>
+        </div>`;
       $("iType").value = node.type;
-      $("iPosition").value = node.position || "above";
-      ["iType","iValue","iPeriod","iPosition","iStep"].forEach((id) => $(id).oninput = () => {
-        node.type = $("iType").value;
-        if (selected.kind === "condition") node.value = Number($("iValue").value || 0);
-        if (selected.kind === "action") {
-          if (node.type === "buy_amount") node.amount_points = Number($("iValue").value || 0);
-          else node.percent = Number($("iValue").value || 0);
-        }
-        node.period = Number($("iPeriod").value || 50); node.position = $("iPosition").value; node.step = Number($("iStep").value || 1);
-        render();
-      });
-      $("deleteNode").onclick = () => { list.splice(selected.index, 1); selected = { branchId: branch.id, kind: "branch", nodeId: "" }; render(); };
+      const positionSelect = document.querySelector('[data-bind-node="position"]');
+      const orderTypeSelect = document.querySelector('[data-bind-node="order_type"]');
+      if (positionSelect) positionSelect.value = node.position || "above";
+      if (orderTypeSelect) orderTypeSelect.value = node.order_type || "market";
     }
-    document.querySelectorAll("[data-add]").forEach((btn) => btn.onclick = () => {
+
+    function addNode(kind) {
       const branch = branchById(selected.branchId);
-      if (btn.dataset.add === "branch") workflow.branches.push({ id: uid("branch"), name: "新策略分支", priority: 0, logic: "AND", cooldown_seconds: 300, max_runs: 100, conditions: [{ type: "price_below", value: 100000 }], actions: [{ type: "buy_percent", percent: 10, step: 1 }] });
-      if (btn.dataset.add === "condition") branch.conditions.push({ type: "price_below", value: 100000 });
-      if (btn.dataset.add === "action") branch.actions.push({ type: "buy_percent", percent: 10, step: branch.actions.length + 1 });
-      if (btn.dataset.add === "control") branch.cooldown_seconds = Math.max(Number(branch.cooldown_seconds || 0), 300);
+      if (kind === "condition") {
+        branch.conditions.push({ type: "price_below", value: 100000 });
+        selected = { branchId: branch.id, kind: "condition", index: branch.conditions.length - 1 };
+      } else {
+        branch.actions.push({ type: "buy_percent", percent: 10, step: branch.actions.length + 1, order_type: "market" });
+        selected = { branchId: branch.id, kind: "action", index: branch.actions.length - 1 };
+      }
       render();
-    });
-    $("templateBtn").onclick = () => { workflow = {
-      version: 1, strategy_kind: "workflow", branches: [
-        { id:"entry", name:"進場策略", priority:10, logic:"AND", cooldown_seconds:3600, max_runs:100, conditions:[{type:"price_below",value:100000},{type:"kd_above",value:50},{type:"bb_position",position:"above_mid"},{type:"ma_position",period:50,position:"above"}], actions:[{type:"buy_percent",percent:10,step:1},{type:"buy_percent",percent:20,step:2}] },
-        { id:"reduce", name:"風險減倉", priority:50, logic:"AND", cooldown_seconds:300, max_runs:100, conditions:[{type:"has_position",value:true},{type:"price_below",value:80000}], actions:[{type:"sell_percent",percent:50,step:1},{type:"sell_percent",percent:100,step:2}] },
-        { id:"stop", name:"強制止損", priority:100, logic:"AND", cooldown_seconds:0, max_runs:100, conditions:[{type:"price_below",value:50000}], actions:[{type:"close_all",step:1}] }
-      ]}; selected = { branchId:"entry", kind:"branch", nodeId:"" }; render(); };
-    $("saveBtn").onclick = () => { localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow, null, 2)); $("status").textContent = "已儲存，回交易頁按「載入編輯器結果」。"; };
-    $("copyBtn").onclick = async () => { await navigator.clipboard.writeText(JSON.stringify(workflow, null, 2)); $("status").textContent = "已複製 JSON。"; };
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) { try { workflow = JSON.parse(saved); selected.branchId = workflow.branches?.[0]?.id || "entry"; } catch (_) {} }
-    render();
+    }
+
+    function moveNode(ref, direction) {
+      const [kind, branchId, indexText] = ref.split(":");
+      const branch = branchById(branchId);
+      const list = kind === "condition" ? branch.conditions : branch.actions;
+      const index = Number(indexText);
+      const target = direction === "left" ? index - 1 : index + 1;
+      if (target < 0 || target >= list.length) return;
+      const [item] = list.splice(index, 1);
+      list.splice(target, 0, item);
+      selected = { branchId: branch.id, kind, index: target };
+      render();
+    }
+
+    function handleClick(event) {
+      const add = event.target.closest("[data-add]");
+      if (add) {
+        const type = add.dataset.add;
+        if (type === "branch") {
+          const branch = { id: uid("branch"), name: "新策略分支", priority: 0, logic: "AND", cooldown_seconds: 300, max_runs: 100, conditions: [{ type: "price_below", value: 100000 }], actions: [{ type: "buy_percent", percent: 10, step: 1, order_type: "market" }] };
+          workflow.branches.push(branch);
+          selected = { branchId: branch.id, kind: "branch", index: -1 };
+        } else if (type === "control") {
+          const branch = branchById(selected.branchId);
+          branch.cooldown_seconds = Math.max(Number(branch.cooldown_seconds || 0), 300);
+          branch.max_runs = Math.max(Number(branch.max_runs || 0), 100);
+          selected = { branchId: branch.id, kind: "branch", index: -1 };
+        } else {
+          addNode(type);
+          return;
+        }
+        render();
+        return;
+      }
+      const nodeCardEl = event.target.closest("[data-node-ref]");
+      if (nodeCardEl && !event.target.closest(".node-tools")) {
+        const [kind, branchId, indexText] = nodeCardEl.dataset.nodeRef.split(":");
+        selected = { branchId, kind, index: Number(indexText) };
+        render();
+        return;
+      }
+      const selectBranch = event.target.closest("[data-select-branch]");
+      if (selectBranch) {
+        selected = { branchId: selectBranch.dataset.selectBranch, kind: "branch", index: -1 };
+        render();
+        return;
+      }
+      const duplicateBranch = event.target.closest("[data-duplicate-branch]");
+      if (duplicateBranch) {
+        const source = branchById(duplicateBranch.dataset.duplicateBranch);
+        const copy = JSON.parse(JSON.stringify(source));
+        copy.id = uid("branch");
+        copy.name = `${copy.name} 副本`;
+        workflow.branches.push(copy);
+        selected = { branchId: copy.id, kind: "branch", index: -1 };
+        render();
+        return;
+      }
+      const deleteBranch = event.target.closest("[data-delete-branch]");
+      if (deleteBranch && workflow.branches.length > 1) {
+        workflow.branches = workflow.branches.filter((branch) => branch.id !== deleteBranch.dataset.deleteBranch);
+        selected = { branchId: workflow.branches[0].id, kind: "branch", index: -1 };
+        render();
+        return;
+      }
+      const deleteNode = event.target.closest("[data-delete-node]");
+      if (deleteNode) {
+        const [kind, branchId, indexText] = deleteNode.dataset.deleteNode.split(":");
+        const branch = branchById(branchId);
+        const list = kind === "condition" ? branch.conditions : branch.actions;
+        list.splice(Number(indexText), 1);
+        selected = { branchId, kind: "branch", index: -1 };
+        render();
+        return;
+      }
+      const move = event.target.closest("[data-move-node]");
+      if (move) {
+        const parts = move.dataset.moveNode.split(":");
+        moveNode(parts.slice(0, 3).join(":"), parts[3]);
+      }
+    }
+
+    function handleInput(event) {
+      const branchKey = event.target.dataset.bindBranch;
+      const nodeKey = event.target.dataset.bindNode;
+      if (!branchKey && !nodeKey) return;
+      const { branch, node } = selectedNodeRef();
+      if (branchKey) {
+        const numeric = ["priority", "cooldown_seconds", "max_runs"].includes(branchKey);
+        branch[branchKey] = numeric ? Number(event.target.value || 0) : event.target.value;
+      }
+      if (node && nodeKey) {
+        if (nodeKey === "value") {
+          const value = Number(event.target.value || 0);
+          if (selected.kind === "action") {
+            delete node.value;
+            if (node.type === "buy_amount") node.amount_points = value;
+            else node.percent = value;
+          } else {
+            node.value = node.type === "has_position" ? Boolean(value) : value;
+          }
+        } else if (["period", "step", "limit_price_points"].includes(nodeKey)) {
+          const value = Number(event.target.value || 0);
+          if (nodeKey === "limit_price_points" && value <= 0) delete node.limit_price_points;
+          else node[nodeKey] = value;
+        } else {
+          node[nodeKey] = event.target.value;
+          if (nodeKey === "type" && selected.kind === "action") {
+            if (node.type === "buy_amount" && node.amount_points == null) node.amount_points = node.percent || 100;
+            if (node.type !== "buy_amount" && node.percent == null) node.percent = node.amount_points || 10;
+          }
+          if (nodeKey === "type" && selected.kind === "condition" && node.type === "has_position") node.value = true;
+        }
+      }
+      if (event.type === "change") render();
+      else syncJson();
+    }
+
+    function handleDragStart(event) {
+      const card = event.target.closest("[data-node-ref]");
+      if (!card) return;
+      dragRef = card.dataset.nodeRef;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", dragRef);
+    }
+
+    function handleDragOver(event) {
+      const lane = event.target.closest("[data-drop-kind]");
+      if (!lane || !dragRef) return;
+      const [kind] = dragRef.split(":");
+      if (kind !== lane.dataset.dropKind) return;
+      event.preventDefault();
+      lane.classList.add("drag-over");
+    }
+
+    function handleDragLeave(event) {
+      const lane = event.target.closest("[data-drop-kind]");
+      if (lane) lane.classList.remove("drag-over");
+    }
+
+    function handleDrop(event) {
+      const lane = event.target.closest("[data-drop-kind]");
+      if (!lane || !dragRef) return;
+      const [kind, fromBranchId, fromIndexText] = dragRef.split(":");
+      if (kind !== lane.dataset.dropKind) return;
+      event.preventDefault();
+      lane.classList.remove("drag-over");
+      const toBranch = branchById(lane.dataset.dropBranch);
+      const fromBranch = branchById(fromBranchId);
+      const fromList = kind === "condition" ? fromBranch.conditions : fromBranch.actions;
+      const toList = kind === "condition" ? toBranch.conditions : toBranch.actions;
+      const fromIndex = Number(fromIndexText);
+      const [node] = fromList.splice(fromIndex, 1);
+      let toIndex = toList.length;
+      const targetCard = event.target.closest("[data-node-ref]");
+      if (targetCard) {
+        const [, targetBranchId, targetIndexText] = targetCard.dataset.nodeRef.split(":");
+        if (targetBranchId === toBranch.id) toIndex = Number(targetIndexText);
+      }
+      if (fromList === toList && fromIndex < toIndex) toIndex -= 1;
+      toList.splice(Math.max(0, toIndex), 0, node);
+      selected = { branchId: toBranch.id, kind, index: Math.max(0, toIndex) };
+      dragRef = null;
+      render();
+    }
+
+    function importJson() {
+      try {
+        workflow = normalizeWorkflow(JSON.parse($("jsonOut").value || "{}"));
+        selected = { branchId: workflow.branches[0].id, kind: "branch", index: -1 };
+        render();
+        setStatus("已套用 JSON。");
+      } catch (error) {
+        setStatus(`JSON 格式錯誤：${error.message}`, false);
+      }
+    }
+
+    function saveWorkflow() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow, null, 2));
+      setStatus("已儲存，回交易頁按「載入編輯器結果」。");
+    }
+
+    async function copyWorkflow() {
+      const text = JSON.stringify(workflow, null, 2);
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("已複製 JSON。");
+      } catch (_) {
+        $("jsonOut").focus();
+        $("jsonOut").select();
+        document.execCommand("copy");
+        setStatus("已選取 JSON，可直接複製。");
+      }
+    }
+
+    function bindEvents() {
+      document.addEventListener("click", handleClick);
+      document.addEventListener("input", handleInput);
+      document.addEventListener("change", handleInput);
+      document.addEventListener("dragstart", handleDragStart);
+      document.addEventListener("dragover", handleDragOver);
+      document.addEventListener("dragleave", handleDragLeave);
+      document.addEventListener("drop", handleDrop);
+      $("templateBtn").addEventListener("click", () => { workflow = templateWorkflow(); selected = { branchId: "entry", kind: "branch", index: -1 }; render(); });
+      $("importBtn").addEventListener("click", importJson);
+      $("saveBtn").addEventListener("click", saveWorkflow);
+      $("copyBtn").addEventListener("click", copyWorkflow);
+      $("jsonOut").addEventListener("input", () => setStatus("JSON 已修改，按「套用 JSON」才會更新畫布。"));
+    }
+
+    function boot() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try { workflow = normalizeWorkflow(JSON.parse(saved)); } catch (_) { workflow = templateWorkflow(); }
+      }
+      selected = { branchId: workflow.branches[0]?.id || "entry", kind: "branch", index: -1 };
+      bindEvents();
+      render();
+      window.HackmeTradingWorkflowEditor = { getWorkflow: () => workflow, setWorkflow: (value) => { workflow = normalizeWorkflow(value); render(); } };
+    }
+
+    boot();
   </script>
 </body>
 </html>
