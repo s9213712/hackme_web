@@ -1798,9 +1798,10 @@ async function addTradingMarginCollateral(positionUuid, scope = "trading") {
     return;
   }
   try {
+    const idempotencyKey = `margin-collateral:${positionUuid}:${amount}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     const json = await fetchTradingJson(`/trading/margin/${encodeURIComponent(positionUuid)}/collateral`, {
       method: "POST",
-      body: JSON.stringify({ amount_points: amount }),
+      body: JSON.stringify({ amount_points: amount, idempotency_key: idempotencyKey }),
     });
     if (json.funding) tradingState.funding = json.funding;
     tradingSetMsg(`已補入 ${formatTradingPointsValue(amount)} 點保證金`);

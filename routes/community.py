@@ -1771,6 +1771,8 @@ def register_community_routes(app, deps):
         except Exception:
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         points = parse_positive_int(data.get("points", 1), default=1, min_value=1, max_value=50)
+        if points is None:
+            return json_resp({"ok": False, "msg": "獎勵點數必須介於 1 到 50"}), 400
         reason = normalize_text(data.get("reason"))[:160] or "優質主題貢獻"
 
         conn = get_db()
@@ -1841,12 +1843,12 @@ def register_community_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到主題"}), 404
             if thread["is_deleted"]:
                 return json_resp({"ok": False, "msg": "主題已刪除，不能留言"}), 404
-            manageable = can_manage_community(actor)
+            manageable = can_moderate_board(conn, thread["board_id"], actor)
             if not bool(thread["board_is_active"]) and not manageable:
                 return json_resp({"ok": False, "msg": "此討論區已停用留言"}), 403
-            if thread["board_visibility"] == "private" and not manageable and thread["owner_user_id"] != actor["id"]:
+            if thread["board_visibility"] != "public" and not manageable and thread["owner_user_id"] != actor["id"]:
                 return json_resp({"ok": False, "msg": "此討論區不開放留言"}), 403
-            if thread["board_status"] != "approved":
+            if thread["board_status"] != "approved" and not manageable:
                 return json_resp({"ok": False, "msg": "此討論區尚未開放留言"}), 403
             if thread["status"] != "approved":
                 return json_resp({"ok": False, "msg": "此主題尚未公開留言"}), 403
@@ -2039,6 +2041,8 @@ def register_community_routes(app, deps):
         except Exception:
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         points = parse_positive_int(data.get("points", 1), default=1, min_value=1, max_value=10)
+        if points is None:
+            return json_resp({"ok": False, "msg": "違規點數必須介於 1 到 10"}), 400
         reason = normalize_text(data.get("reason"))[:200] or "討論區違規留言"
 
         conn = get_db()

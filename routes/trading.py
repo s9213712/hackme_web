@@ -410,6 +410,7 @@ def register_trading_routes(app, deps):
                 actor=actor,
                 position_uuid=position_uuid,
                 amount_points=data.get("amount_points"),
+                idempotency_key=data.get("idempotency_key"),
             )
             audit(
                 "TRADING_MARGIN_COLLATERAL_ADDED",

@@ -301,6 +301,20 @@ def test_backtest_trading_bot_does_not_create_orders(tmp_path):
     assert dashboard["fills"] == []
 
 
+def test_backtest_trading_bot_rejects_excessive_candle_count(tmp_path):
+    _, trading = _services(tmp_path)
+
+    with pytest.raises(ValueError, match="candles length"):
+        trading.backtest_trading_bot(
+            actor=_actor(),
+            payload={
+                "market_symbol": "ETH/POINTS",
+                "strategy": "dca",
+                "candles": [{"time": index, "close_points": 5000} for index in range(5001)],
+            },
+        )
+
+
 def test_insufficient_trading_balance_creates_notification(tmp_path):
     _, trading = _services(tmp_path)
 
@@ -384,6 +398,42 @@ def test_trial_credit_expiry_reclaims_principal_but_keeps_profit(tmp_path):
     audit_types = [row["event_type"] for row in report["audit_events"]]
     assert "TRADING_TRIAL_CREDIT_FORCED_SELL" in audit_types
     assert "TRADING_TRIAL_CREDIT_RECLAIMED" in audit_types
+
+
+def test_trial_credit_expiry_cancels_open_sell_orders_before_reclaim(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
+    sell = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="sell",
+        order_type="limit",
+        quantity="0.1",
+        limit_price_points=9000,
+    )["order"]
+    assert sell["status"] == "open"
+    assert trading.user_dashboard(user_id=1)["positions"][0]["locked_quantity_units"] == 10000000
+
+    conn = trading.get_db()
+    conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
+    conn.commit()
+    conn.close()
+
+    dashboard = trading.user_dashboard(user_id=1)
+
+    assert dashboard["funding"]["trial_credit"]["status"] == "expired"
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 0
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 0
+    assert dashboard["positions"][0]["quantity"] == "0"
+    orders = {row["order_uuid"]: row for row in dashboard["orders"]}
+    assert orders[sell["order_uuid"]]["status"] == "cancelled"
+    audit_types = [row["event_type"] for row in trading.root_report()["audit_events"]]
+    assert "TRADING_TRIAL_CREDIT_SELL_ORDER_CANCELLED" in audit_types
+    assert "TRADING_TRIAL_CREDIT_FORCED_SELL" in audit_types
+    assert trading.verify_state()["ok"] is True
 
 
 def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
@@ -764,6 +814,65 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert closed["funding"]["trial_credit"]["available_points"] == 996
     assert closed["funding"]["trial_credit"]["deployed_points"] == 0
     assert trading.root_report()["reserve_pool"]["balance_points"] == 4
+    assert trading.verify_state()["ok"] is True
+
+
+def test_margin_collateral_add_is_idempotent_with_client_key(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    first = trading.add_margin_collateral(
+        actor=_actor(),
+        position_uuid=opened["position"]["position_uuid"],
+        amount_points=100,
+        idempotency_key="same-click-key",
+    )
+    second = trading.add_margin_collateral(
+        actor=_actor(),
+        position_uuid=opened["position"]["position_uuid"],
+        amount_points=100,
+        idempotency_key="same-click-key",
+    )
+
+    assert first["position"]["collateral_points"] == 300
+    assert second["position"]["collateral_points"] == 300
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["margin_positions"][0]["collateral_points"] == 300
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 300
+
+
+def test_expired_trial_margin_collateral_can_be_closed_without_negative_accounting(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    conn = trading.get_db()
+    conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
+    conn.commit()
+    conn.close()
+
+    expired = trading.user_dashboard(user_id=1)["funding"]["trial_credit"]
+    assert expired["status"] == "expired"
+    assert expired["available_points"] == 0
+    assert expired["deployed_points"] == 200
+    closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
+
+    assert closed["position"]["status"] == "closed"
+    assert closed["funding"]["trial_credit"]["status"] == "expired"
+    assert closed["funding"]["trial_credit"]["available_points"] == 0
+    assert closed["funding"]["trial_credit"]["deployed_points"] == 0
     assert trading.verify_state()["ok"] is True
 
 

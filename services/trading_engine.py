@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import uuid
@@ -20,6 +21,7 @@ SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liqui
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
 TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
 TRADING_BOT_TYPES = {"conditional", "dca"}
+MAX_BACKTEST_CANDLES = 5000
 WORKFLOW_CONDITION_TYPES = {
     "price_below",
     "price_above",
@@ -60,6 +62,14 @@ def _json_loads(value, default=None):
         return json.loads(value)
     except Exception:
         return default if default is not None else {}
+
+
+def _client_idempotency_key(value, *, prefix):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
 
 
 def _to_int(value, *, name, minimum=0, maximum=10**12):
@@ -249,6 +259,19 @@ def ensure_trading_schema(conn):
             trial_cost_points INTEGER NOT NULL DEFAULT 0 CHECK (trial_cost_points >= 0),
             updated_at TEXT NOT NULL,
             PRIMARY KEY (user_id, market_symbol)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_operation_idempotency (
+            idempotency_key TEXT PRIMARY KEY,
+            operation TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            reference_uuid TEXT,
+            response_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         """
     )
@@ -1126,6 +1149,67 @@ class TradingEngineService:
             "wallet_credit_points": wallet_credit,
         }
 
+    def _cancel_trial_reclaim_sell_orders(self, conn, user_id, *, actor, reason):
+        orders = conn.execute(
+            """
+            SELECT o.*
+            FROM trading_orders o
+            JOIN trading_trial_position_costs t
+              ON t.user_id=o.user_id AND t.market_symbol=o.market_symbol
+            WHERE o.user_id=?
+              AND o.side='sell'
+              AND o.status IN ('open', 'partially_filled')
+              AND t.quantity_units > 0
+            ORDER BY o.id ASC
+            """,
+            (int(user_id),),
+        ).fetchall()
+        for order in orders:
+            remaining_units = max(0, int(order["quantity_units"] or 0) - int(order["filled_quantity_units"] or 0))
+            if remaining_units:
+                conn.execute(
+                    """
+                    UPDATE trading_spot_positions
+                    SET quantity_units=quantity_units+?,
+                        locked_quantity_units=MAX(locked_quantity_units-?, 0),
+                        updated_at=?
+                    WHERE user_id=? AND market_symbol=?
+                    """,
+                    (remaining_units, remaining_units, _now(), int(user_id), order["market_symbol"]),
+                )
+            conn.execute(
+                """
+                UPDATE trading_orders
+                SET status='cancelled', reason=?, updated_at=?
+                WHERE id=?
+                """,
+                (f"{reason}: trial credit reclaim unlocked sell order", _now(), order["id"]),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_TRIAL_CREDIT_SELL_ORDER_CANCELLED",
+                "open sell order cancelled so expired trial credit positions can be reclaimed",
+                actor=actor,
+                target_user_id=int(user_id),
+                order_id=order["id"],
+                market_symbol=order["market_symbol"],
+                severity="warning",
+                metadata={"reason": reason, "released_quantity_units": remaining_units},
+            )
+
+    def _release_trial_margin_collateral(self, conn, user_id, *, collateral_trial, available_delta_if_active=0):
+        collateral_trial = int(collateral_trial or 0)
+        if collateral_trial <= 0:
+            return
+        row = self._trial_credit_row(conn, user_id)
+        if not row:
+            return
+        deployed_release = min(collateral_trial, int(row["deployed_points"] or 0))
+        if deployed_release <= 0:
+            return
+        available_delta = int(available_delta_if_active or 0) if row["status"] == "active" else 0
+        self._trial_delta(conn, user_id, available_delta=available_delta, deployed_delta=-deployed_release)
+
     def _reclaim_trial_credit(self, conn, user_id, *, actor=None, reason="TRIAL_CREDIT_RECLAIM"):
         row = self._trial_credit_row(conn, user_id)
         if not row or row["status"] != "active":
@@ -1180,6 +1264,7 @@ class TradingEngineService:
                 severity="warning",
                 metadata={"reason": reason, "trial_frozen_points": trial_frozen, "chain_frozen_points": chain_frozen},
             )
+        self._cancel_trial_reclaim_sell_orders(conn, user_id, actor=actor, reason=reason)
         for trial_pos in conn.execute(
             "SELECT * FROM trading_trial_position_costs WHERE user_id=? AND quantity_units>0 ORDER BY market_symbol",
             (int(user_id),),
@@ -1227,15 +1312,25 @@ class TradingEngineService:
             )
         final = self._trial_credit_row(conn, user_id)
         reclaimed_after_sell = int(final["available_points"] or 0)
-        lost_points = int(final["deployed_points"] or 0)
+        open_margin_trial = int(conn.execute(
+            """
+            SELECT COALESCE(SUM(collateral_trial_points), 0)
+            FROM trading_margin_positions
+            WHERE user_id=? AND status='open' AND collateral_trial_points > 0
+            """,
+            (int(user_id),),
+        ).fetchone()[0] or 0)
+        final_deployed = int(final["deployed_points"] or 0)
+        open_margin_trial = min(open_margin_trial, final_deployed)
+        lost_points = max(0, final_deployed - open_margin_trial)
         conn.execute(
             """
             UPDATE trading_trial_credits
-            SET available_points=0, locked_points=0, deployed_points=0, status='expired',
+            SET available_points=0, locked_points=0, deployed_points=?, status='expired',
                 reclaimed_at=?, updated_at=?
             WHERE user_id=?
             """,
-            (_now(), _now(), int(user_id)),
+            (open_margin_trial, _now(), _now(), int(user_id)),
         )
         conn.execute(
             "UPDATE trading_trial_position_costs SET quantity_units=0, trial_cost_points=0, updated_at=? WHERE user_id=?",
@@ -2300,6 +2395,8 @@ class TradingEngineService:
         candles = payload.get("candles") or []
         if not isinstance(candles, list) or len(candles) < 2:
             raise ValueError("candles are required for backtest")
+        if len(candles) > MAX_BACKTEST_CANDLES:
+            raise ValueError(f"candles length must be <= {MAX_BACKTEST_CANDLES}")
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -3150,17 +3247,51 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def add_margin_collateral(self, *, actor, position_uuid, amount_points):
+    def add_margin_collateral(self, *, actor, position_uuid, amount_points, idempotency_key=None):
         actor_user_id = self._actor_id(actor)
         if not actor_user_id:
             raise ValueError("login required")
         amount = _to_int(amount_points, name="collateral_points", minimum=1, maximum=10**12)
+        operation_key = _client_idempotency_key(
+            idempotency_key,
+            prefix=f"margin_collateral_add:{actor_user_id}:{position_uuid}",
+        )
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
+            if operation_key:
+                existing_operation = conn.execute(
+                    """
+                    SELECT response_json FROM trading_operation_idempotency
+                    WHERE idempotency_key=? AND operation='margin_collateral_add'
+                    """,
+                    (operation_key,),
+                ).fetchone()
+                if existing_operation and existing_operation["response_json"]:
+                    result = _json_loads(existing_operation["response_json"], {"ok": True})
+                    conn.rollback()
+                    return result
+                insert_cur = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO trading_operation_idempotency (
+                        idempotency_key, operation, user_id, reference_uuid, response_json, created_at, updated_at
+                    ) VALUES (?, 'margin_collateral_add', ?, ?, '', ?, ?)
+                    """,
+                    (operation_key, int(actor_user_id), str(position_uuid or ""), _now(), _now()),
+                )
+                if insert_cur.rowcount == 0:
+                    existing_operation = conn.execute(
+                        "SELECT response_json FROM trading_operation_idempotency WHERE idempotency_key=?",
+                        (operation_key,),
+                    ).fetchone()
+                    if existing_operation and existing_operation["response_json"]:
+                        result = _json_loads(existing_operation["response_json"], {"ok": True})
+                        conn.rollback()
+                        return result
+                    raise ValueError("duplicate margin collateral request is still processing")
             position = conn.execute(
                 "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
                 (str(position_uuid or ""),),
@@ -3191,7 +3322,7 @@ class TradingEngineService:
                         action_type="trading_margin_collateral_freeze",
                         reference_type="trading_margin_position",
                         reference_id=position["position_uuid"],
-                        idempotency_key=f"trading:margin:collateral_add:{position['position_uuid']}:{uuid.uuid4()}",
+                        idempotency_key=operation_key or f"trading:margin:collateral_add:{position['position_uuid']}:{uuid.uuid4()}",
                         reason="TRADING_MARGIN_COLLATERAL_ADD",
                         public_metadata={
                             "position_type": position["position_type"],
@@ -3230,13 +3361,23 @@ class TradingEngineService:
                     "ledger_uuids": ledger_uuids,
                 },
             )
-            conn.commit()
             row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
-            return {
+            result = {
                 "ok": True,
                 "position": self._margin_position_payload_with_risk(conn, row),
                 "funding": self._funding_payload(conn, user_id),
             }
+            if operation_key:
+                conn.execute(
+                    """
+                    UPDATE trading_operation_idempotency
+                    SET response_json=?, updated_at=?
+                    WHERE idempotency_key=?
+                    """,
+                    (_json_dumps(result), _now(), operation_key),
+                )
+            conn.commit()
+            return result
         except Exception:
             conn.rollback()
             raise
@@ -3314,7 +3455,12 @@ class TradingEngineService:
                 pass
             elif delta > 0:
                 if collateral_trial:
-                    self._trial_delta(conn, user_id, available_delta=collateral_trial, deployed_delta=-collateral_trial)
+                    self._release_trial_margin_collateral(
+                        conn,
+                        user_id,
+                        collateral_trial=collateral_trial,
+                        available_delta_if_active=collateral_trial,
+                    )
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
@@ -3334,7 +3480,12 @@ class TradingEngineService:
                 if collateral_trial:
                     trial_loss = min(collateral_trial, remaining_loss)
                     trial_return = collateral_trial - trial_loss
-                    self._trial_delta(conn, user_id, available_delta=trial_return, deployed_delta=-collateral_trial)
+                    self._release_trial_margin_collateral(
+                        conn,
+                        user_id,
+                        collateral_trial=collateral_trial,
+                        available_delta_if_active=trial_return,
+                    )
                     remaining_loss -= trial_loss
                 wallet = self.points_service.ensure_wallet(conn, user_id)
                 wallet_balance = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
@@ -3367,7 +3518,12 @@ class TradingEngineService:
                         metadata={"position_uuid": position["position_uuid"], "bad_debt_points": bad_debt, "risk": risk},
                     )
             elif collateral_trial:
-                self._trial_delta(conn, user_id, available_delta=collateral_trial, deployed_delta=-collateral_trial)
+                self._release_trial_margin_collateral(
+                    conn,
+                    user_id,
+                    collateral_trial=collateral_trial,
+                    available_delta_if_active=collateral_trial,
+                )
             if close_fee and not is_root_simulated:
                 self._reserve_delta(conn, delta=close_fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_CLOSE_FEE", actor=actor)
             if interest and not is_root_simulated:

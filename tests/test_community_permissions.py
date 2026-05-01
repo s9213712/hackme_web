@@ -17,7 +17,7 @@ def _parse_positive_int(value, default=None, min_value=None, max_value=None):
     if min_value is not None and parsed < min_value:
         return default
     if max_value is not None and parsed > max_value:
-        return default
+        return None
     return parsed
 
 
@@ -852,6 +852,44 @@ def test_moderator_can_reward_thread_author_and_penalize_post_author(tmp_path):
     assert alice["violation_count"] == 2
     assert ("reward_thread_author", "forum_thread") in [(row["action_type"], row["target_type"]) for row in actions]
     assert ("penalize_post_author", "forum_post") in [(row["action_type"], row["target_type"]) for row in actions]
+
+
+def test_reward_and_penalty_reject_out_of_range_points(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    reward = client.post(f"/api/community/threads/{ids['thread']}/reward", json={"points": 999})
+    penalty = client.post(f"/api/community/posts/{ids['post']}/penalty", json={"points": 999})
+
+    assert reward.status_code == 400
+    assert penalty.status_code == 400
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    alice = conn.execute("SELECT reputation, violation_count FROM users WHERE id=3").fetchone()
+    conn.close()
+    assert alice["reputation"] == 0
+    assert alice["violation_count"] == 0
+
+
+def test_unlisted_board_reply_requires_owner_or_moderator(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    conn = sqlite3.connect(db_path)
+    board_id = conn.execute("SELECT board_id FROM forum_threads WHERE id=?", (ids["thread"],)).fetchone()[0]
+    conn.execute("UPDATE forum_boards SET visibility='unlisted' WHERE id=?", (board_id,))
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    denied = client.post(f"/api/community/threads/{ids['thread']}/posts", json={"content": "should not enter"})
+    assert denied.status_code == 403
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    manager_reply = client.post(f"/api/community/threads/{ids['thread']}/posts", json={"content": "manager can still reply"})
+    assert manager_reply.status_code == 200
 
 
 def test_dislike_auto_hide_threshold_scales_with_active_users(tmp_path):
