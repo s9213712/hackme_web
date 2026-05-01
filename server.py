@@ -1025,6 +1025,34 @@ def api_not_found(error):
         return json_resp({"ok": False, "msg": "Not found"}), 404
     return error
 
+
+@app.before_request
+def protect_sensitive_static_pages():
+    if request.method == "OPTIONS" or request.path != "/trading-workflow-editor.html":
+        return None
+    actor = get_current_user_ctx()
+    if not actor:
+        audit(
+            "STATIC_PAGE_UNAUTH_DENIED",
+            get_client_ip(),
+            user="-",
+            ua=get_ua(),
+            success=False,
+            detail="path=/trading-workflow-editor.html",
+        )
+        resp = make_response("", 302)
+        resp.headers["Location"] = "/"
+        return resp
+    if not is_feature_enabled("feature_trading_enabled"):
+        record_security_event(
+            "feature_disabled",
+            get_client_ip(),
+            target_user=actor["username"],
+            detail="path=/trading-workflow-editor.html,feature=feature_trading_enabled",
+        )
+        return make_response("Trading workflow editor is disabled", 503)
+    return None
+
 # ── CORS (tightly scoped — no wildcard) ────────────────────────────────────────
 @app.before_request
 def enforce_root_ip_whitelist():
