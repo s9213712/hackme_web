@@ -20,10 +20,13 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert "<script>" not in html
     assert "<style>" not in html
     assert 'style="' not in html
-    assert 'class="logic-node"' in js
+    assert "workflow_graph" in js
+    assert "data-port-node" in js
+    assert "TRUE/FALSE branch" in js
+    assert "Nested AND" in js
     assert "validateWorkflow" in js
-    assert "renderConditionInspector" in js
-    assert "renderActionInspector" in js
+    assert "renderInspector" in js
+    assert "applyGraphNodePositions" in js
     assert "window.HackmeTradingWorkflowEditor" in js
     assert 'style="' not in js
 

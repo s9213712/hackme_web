@@ -8,6 +8,8 @@ short [README](../README.md) plus GitHub-required metadata such as
 
 - [Traditional Chinese README](README.zh-TW.md): concise Chinese entry point
 - [Web UI Guide](WEB.md): user-facing pages and feature behavior
+- [Trading System And Bots](TRADING.md): spot exchange, borrow trading,
+  trading bots, workflow editor, backtesting, and validation scripts
 - [Developer Guide](For_developer.md): API, deployment, runtime state, and
   operator notes
 - [Version Story](VERSION_STORY.md): project history, branch decisions, and
@@ -43,4 +45,4 @@ short [README](../README.md) plus GitHub-required metadata such as
 - [Deployment And Operations Scripts](DEPLOYMENT.md): includes functional smoke,
   permission pentest, traffic stress test, and pre-push validation commands
 - [Trading Stress Pentest](security/TRADING_STRESS_PENTEST.md): controlled spot
-  trading stress and security validation
+  and borrow-trading stress/security validation

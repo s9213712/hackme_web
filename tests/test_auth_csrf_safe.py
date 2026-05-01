@@ -94,6 +94,7 @@ def test_require_csrf_accepts_form_field_for_public_post(monkeypatch):
 
     monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
     monkeypatch.setattr(auth, "verify_csrf_token", lambda token, username: token == "form-token" and username == "__public__")
+    monkeypatch.setattr(auth, "consume_csrf_token", lambda token, username: True)
 
     @app.route("/public-form", methods=["POST"])
     @auth.require_csrf
@@ -104,6 +105,51 @@ def test_require_csrf_accepts_form_field_for_public_post(monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
+
+
+def test_require_csrf_consumes_public_token_but_keeps_session_tokens(tmp_path, monkeypatch):
+    db_path = tmp_path / "csrf.sqlite"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS csrf_tokens (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires_at TEXT NOT NULL)"
+        )
+        return conn
+
+    auth.configure_auth_service(get_db=get_db, get_user_by_username=lambda username: None, fernet=None)
+    monkeypatch.setattr(auth, "db_get_user_from_token", lambda token: None)
+    auth.store_csrf_token("public-token", "__public__")
+    app = Flask(__name__)
+    app.testing = True
+
+    @app.route("/public-form", methods=["POST"])
+    @auth.require_csrf
+    def public_form():
+        return auth.json_resp({"ok": True})
+
+    response = app.test_client().post("/public-form", headers={"X-CSRF-Token": "public-token"})
+
+    assert response.status_code == 200
+    assert auth.verify_csrf_token("public-token", "__public__") is False
+
+
+def test_csrf_failure_ip_uses_configured_client_ip_not_spoofed_xff(monkeypatch):
+    seen = {}
+
+    monkeypatch.setattr(auth, "record_security_event", lambda event_type, ip, **kwargs: seen.update({"event_type": event_type, "ip": ip, **kwargs}))
+    auth.configure_auth_service(get_db=lambda: None, get_user_by_username=lambda username: None, fernet=None, get_client_ip=lambda: "127.0.0.1")
+    app = Flask(__name__)
+    app.testing = True
+
+    with app.test_request_context("/mutate", headers={"X-Forwarded-For": "8.8.8.8"}):
+        response, status = auth.csrf_invalid_response("test", "alice")
+
+    assert status == 403
+    assert response.get_json()["error"] == "csrf_invalid"
+    assert seen["event_type"] == "csrf_fail"
+    assert seen["ip"] == "127.0.0.1"
 
 
 def test_delete_csrf_tokens_for_username_invalidates_old_session_token(tmp_path):

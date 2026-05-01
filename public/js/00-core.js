@@ -213,6 +213,8 @@ function setSidebarCollapsed(collapsed) {
   if (toggle) {
     toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
     toggle.setAttribute("aria-label", collapsed ? "展開側邊欄" : "收合側邊欄");
+    const isMobile = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
+    toggle.textContent = isMobile ? (collapsed ? "☰" : "×") : "‹";
   }
   try {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
@@ -221,11 +223,18 @@ function setSidebarCollapsed(collapsed) {
 }
 
 function restoreSidebarState() {
-  let collapsed = false;
+  let collapsed = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
   try {
-    collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+    const stored = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (stored !== null) collapsed = stored === "1";
   } catch (err) {}
   setSidebarCollapsed(collapsed);
+}
+
+function collapseSidebarAfterMobileNavigation() {
+  if (typeof window === "undefined" || !window.matchMedia) return;
+  if (!window.matchMedia("(max-width: 860px)").matches) return;
+  setSidebarCollapsed(true);
 }
 
 function syncSidebarMenuVisibility() {

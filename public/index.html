@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260501-mobile-polish" />
+    <link rel="stylesheet" href="/styles.css?v=20260501-mobile-sidebar" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -121,20 +121,16 @@
       <input type="email" id="reg-email" placeholder="name@example.com" autocomplete="email" />
     </div>
     <div class="field">
-      <label>真實姓名</label>
-      <input type="text" id="reg-realname" placeholder="請輸入真實姓名" autocomplete="off" />
+      <label>真實姓名（選填）</label>
+      <input type="text" id="reg-realname" placeholder="可留空" autocomplete="off" />
     </div>
     <div class="field">
-      <label>身分證</label>
-      <input type="text" id="reg-idno" placeholder="請輸入身分證" autocomplete="off" />
-    </div>
-    <div class="field">
-      <label>生日</label>
+      <label>生日（選填）</label>
       <input type="date" id="reg-birthdate" />
     </div>
     <div class="field">
-      <label>電話</label>
-      <input type="tel" id="reg-phone" placeholder="09xx-xxx-xxx" autocomplete="tel" />
+      <label>電話（選填）</label>
+      <input type="tel" id="reg-phone" placeholder="09xx-xxx-xxx，可留空" autocomplete="tel" />
     </div>
     <div class="field captcha-box" id="captcha-field" style="display:none;">
       <label id="captcha-label">驗證碼</label>
@@ -1077,6 +1073,7 @@
             <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
             <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
             <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在安全中心調整" /></div>
+            <div class="field"><label>執行次數</label><input type="number" id="comfyui-run-count" min="1" max="10" value="1" title="連續送出幾次產圖工作；結果會合併顯示" /></div>
             <div class="field"><label>Seed（空白=隨機）</label><input type="number" id="comfyui-seed" min="0" placeholder="random" /></div>
             <div class="field"><label>Sampler</label><select id="comfyui-sampler"><option value="euler">euler</option></select></div>
             <div class="field"><label>Scheduler</label><select id="comfyui-scheduler"><option value="normal">normal</option></select></div>
@@ -1400,7 +1397,7 @@
           <div><span class="drive-card-sub">交易所體驗金</span><strong id="trading-trial-credit-available">-</strong><small id="trading-trial-credit-note">root 不適用</small></div>
           <div><span class="drive-card-sub">目前價格</span><strong id="trading-current-price">-</strong><small id="trading-current-market">-</small></div>
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
-          <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-bps">-</strong><small>%</small></div>
+          <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
         </div>
         <details class="drive-collapsible-panel" id="trading-bot-card" style="margin-top:.75rem;">
           <summary>
@@ -1545,7 +1542,7 @@
           <div class="drive-card-heading compact-heading">
             <div>
               <div class="drive-card-title">Binance 參考價格</div>
-              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖僅供參考，不會自動改變站內手動價格。</div>
+              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖會作為交易參考；API 故障時使用最後健康快取。</div>
             </div>
             <select id="trading-reference-interval" class="compact-select">
               <option value="5m">5 分</option>
@@ -1617,13 +1614,12 @@
         </div>
         <div class="settings-option-grid" style="margin-top:.75rem;">
           <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
-          <div class="field"><label>手動價格</label><input type="number" id="trading-root-price" min="1" step="1" /></div>
-          <div class="field"><label>最大跳動百分比</label><input type="number" id="trading-root-jump-bps" min="0" step="0.01" /></div>
-          <div class="field"><label>手續費百分比</label><input type="number" id="trading-root-fee-bps" min="0" max="50" step="0.01" /></div>
+          <div class="field"><label>最後快取價格</label><input type="number" id="trading-root-price" min="1" step="1" readonly /></div>
+          <div class="field"><label>最大跳動百分比</label><input type="number" id="trading-root-jump-percent" min="0" step="0.01" /></div>
+          <div class="field"><label>手續費百分比</label><input type="number" id="trading-root-fee-percent" min="0" max="50" step="0.01" /></div>
           <div class="field"><label>單筆最小點數</label><input type="number" id="trading-root-min-order" min="1" step="1" /></div>
           <div class="field"><label>單筆最大點數</label><input type="number" id="trading-root-max-order" min="1" step="1" /></div>
           <div class="field"><label><input type="checkbox" id="trading-root-enabled" /> 啟用市場</label></div>
-          <div class="field"><label><input type="checkbox" id="trading-root-confirm-jump" /> 確認超額價格跳動</label></div>
           <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-root-save-market-btn" type="button">儲存市場</button></div>
         </div>
         <div class="settings-option-grid" style="margin-top:.75rem;">
@@ -2775,26 +2771,25 @@
                   </div>
                   <div class="field">
                     <label>借貸日利息百分比</label>
-                    <input type="number" id="root-trading-borrow-interest-bps" min="0" max="100" step="0.01" value="0.1" />
+                    <input type="number" id="root-trading-borrow-interest-percent" min="0" max="100" step="0.01" value="0.1" />
                     <div class="field-hint">例如 1% 代表每日利息 1%。借貸利息會記入交易儲備池統計。</div>
                   </div>
                   <div class="field">
                     <label>融資可貸比例（%）</label>
-                    <input type="number" id="root-trading-margin-long-financing-bps" min="0" max="100" step="0.01" value="90" />
+                    <input type="number" id="root-trading-margin-long-financing-percent" min="0" max="100" step="0.01" value="90" />
                     <div class="field-hint">預設 90% = 融資九成；最低自備保證金為剩餘比例。</div>
                   </div>
                   <div class="field">
                     <label>借券原始保證金比例（%）</label>
-                    <input type="number" id="root-trading-short-collateral-bps" min="0" max="100" step="0.01" value="60" />
+                    <input type="number" id="root-trading-short-collateral-percent" min="0" max="100" step="0.01" value="60" />
                     <div class="field-hint">預設 60% = 借券六成，用於借券放空最低保證金。</div>
                   </div>
                   <div class="field">
                     <label>價格來源</label>
                     <select id="root-trading-price-source">
                       <option value="binance_public_api">Binance 公開 API</option>
-                      <option value="manual_root">root 手動價格</option>
                     </select>
-                    <div class="field-hint">交易執行會使用此價格來源；手動模式適合離線測試與壓測。</div>
+                    <div class="field-hint">交易執行使用 Binance 公開 API；故障時只可使用最後健康快取，不提供 root 任意改價。</div>
                   </div>
                   <div class="field">
                     <label>即時價格備援秒數</label>
@@ -2807,7 +2802,7 @@
                   </div>
                   <div class="field">
                     <label>維持保證金比例（%）</label>
-                    <input type="number" id="root-trading-maintenance-bps" min="0" max="100" step="0.01" value="15" />
+                    <input type="number" id="root-trading-maintenance-percent" min="0" max="100" step="0.01" value="15" />
                     <div class="field-hint">預設 15%。倉位淨值低於此比例時會列入清算。</div>
                   </div>
                   <div class="field">
@@ -3300,7 +3295,7 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
-<script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
+<script src="/js/36-comfyui.js?v=20260502-run-count" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260501-1a2b-rank" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>

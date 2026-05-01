@@ -8,7 +8,7 @@ def test_main_app_has_mobile_responsive_overrides():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/styles.css?v=20260501-mobile-polish" in index_html
+    assert "/styles.css?v=20260501-mobile-sidebar" in index_html
     assert "Mobile ergonomics pass" in css
     assert "@media (max-width: 860px)" in css
     assert "@media (max-width: 720px)" in css
@@ -17,6 +17,10 @@ def test_main_app_has_mobile_responsive_overrides():
     assert "right: .45rem;" in css
     assert ".sidebar-nav.tabs" in css
     assert "overflow-x: auto;" in css
+    assert "Mobile uses the same config-driven sidebar as desktop" in css
+    assert "body.sidebar-collapsed .app-sidebar" in css
+    assert "width: calc(100vw - 3.55rem);" in css
+    assert "collapseSidebarAfterMobileNavigation" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     assert ".settings-option-grid" in css
     assert "grid-template-columns: 1fr !important;" in css
     assert ".drive-file-row" in css

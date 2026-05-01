@@ -24,6 +24,7 @@ const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-steps",
   "comfyui-cfg",
   "comfyui-batch-size",
+  "comfyui-run-count",
   "comfyui-seed",
   "comfyui-sampler",
   "comfyui-scheduler",
@@ -463,6 +464,10 @@ function comfyuiPayload() {
   };
 }
 
+function comfyuiRunCount() {
+  return Math.max(1, Math.min(10, Math.floor(comfyuiNumberValue("comfyui-run-count", 1))));
+}
+
 function comfyuiShareGenerationPayload() {
   const payload = comfyuiPayload();
   if (comfyuiCurrentImage && comfyuiCurrentImage.seed !== undefined && comfyuiCurrentImage.seed !== null) {
@@ -479,12 +484,14 @@ function confirmComfyuiBilling(payload) {
   if (!comfyuiBillingQuote?.unit_price) return { confirmed: true, required: false };
   const unitPrice = Number(comfyuiBillingQuote.unit_price || 0);
   const batchSize = Math.max(1, Math.min(comfyuiMaxBatchSize, Number(payload?.batch_size || 1)));
-  const totalPrice = unitPrice * batchSize;
+  const runCount = comfyuiRunCount();
+  const totalImages = batchSize * runCount;
+  const totalPrice = unitPrice * totalImages;
   const confirmed = window.confirm(
-    `本次成功產圖將扣 ${totalPrice} 點（${unitPrice} 點 x ${batchSize} 張）。\n` +
+    `本次成功產圖最多將扣 ${totalPrice} 點（${unitPrice} 點 x ${batchSize} 張 x ${runCount} 次）。\n` +
     "產圖失敗不扣點；丟棄預覽不退款。\n\n是否確認送出？"
   );
-  return { confirmed, required: true, totalPrice, unitPrice, batchSize };
+  return { confirmed, required: true, totalPrice, unitPrice, batchSize, runCount, totalImages };
 }
 
 async function generateComfyuiImage() {
@@ -497,6 +504,7 @@ async function generateComfyuiImage() {
   }
   if (!comfyuiModelsLoaded) return;
   const payload = comfyuiPayload();
+  const runCount = comfyuiRunCount();
   const billingConfirmation = confirmComfyuiBilling(payload);
   if (!billingConfirmation.confirmed) {
     setComfyuiMessage("已取消產圖扣點確認", false);
@@ -512,39 +520,50 @@ async function generateComfyuiImage() {
   comfyuiSavedResult = null;
   updateComfyuiResultButtons(false);
   setComfyuiBusy(true);
-  startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS);
   setComfyuiMessage("");
   const controller = new AbortController();
   comfyuiGenerateAbortController = controller;
   try {
     await fetchCsrfToken({ force: true });
-    const res = await apiFetch(API + "/comfyui/generate", {
-      method: "POST",
-      credentials: "same-origin",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": getCsrfToken() || ""
-      },
-      body: JSON.stringify({
-        ...payload,
-        confirm_billing: billingConfirmation.required,
-        timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS
-      })
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) throw new Error(json.msg || `產圖失敗（HTTP ${res.status}）`);
-    comfyuiGeneratedImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
+    startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS * runCount);
+    let totalCharged = 0;
+    const generated = [];
+    for (let runIndex = 0; runIndex < runCount; runIndex += 1) {
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      setComfyuiMessage(`正在執行第 ${runIndex + 1} / ${runCount} 次產圖...`, true);
+      const res = await apiFetch(API + "/comfyui/generate", {
+        method: "POST",
+        credentials: "same-origin",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": getCsrfToken() || ""
+        },
+        body: JSON.stringify({
+          ...payload,
+          confirm_billing: billingConfirmation.required,
+          timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS
+        })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.msg || `第 ${runIndex + 1} 次產圖失敗（HTTP ${res.status}）`);
+      const runImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
+      runImages.forEach((image) => {
+        generated.push({ ...image, run_index: runIndex, run_count: runCount });
+      });
+      if (json.billing?.charged) totalCharged += Number(json.billing.total_price || 0);
+    }
+    comfyuiGeneratedImages = generated;
     comfyuiCurrentImage = comfyuiGeneratedImages[0] || null;
     if (!comfyuiCurrentImage?.data_url) throw new Error("ComfyUI 未回傳圖片");
     renderComfyuiGeneratedImages(comfyuiGeneratedImages);
     setComfyuiSelectedImage(0);
     stopComfyuiProgress({ complete: true });
     updateComfyuiResultButtons(true);
-    const billingText = json.billing?.charged
-      ? `已扣 ${json.billing.total_price} 點。`
+    const billingText = totalCharged > 0
+      ? `已扣 ${totalCharged} 點。`
       : "";
-    setComfyuiMessage(`已產生 ${comfyuiGeneratedImages.length} 張圖片；${billingText}請選擇要儲存或分享的圖片。`, true);
+    setComfyuiMessage(`已執行 ${runCount} 次，共產生 ${comfyuiGeneratedImages.length} 張圖片；${billingText}請選擇要儲存或分享的圖片。`, true);
   } catch (err) {
     const interrupted = err?.name === "AbortError";
     const message = interrupted ? "已中斷產圖" : (err.message || "產圖失敗");

@@ -1,681 +1,722 @@
-    const STORAGE_KEY = "hackme_trading_workflow_json";
-    const $ = (id) => document.getElementById(id);
-    const CONDITION_TYPES = [
-      "price_below", "price_above", "rsi_above", "rsi_below", "kd_above", "kd_below",
-      "ma_position", "bb_position", "has_position", "change_percent_up", "change_percent_down",
-      "take_profit_percent", "stop_loss_percent"
-    ];
-    const ACTION_TYPES = ["buy_percent", "buy_amount", "sell_percent", "close_all", "hold"];
-    const CONDITION_LABELS = {
-      price_below: "價格低於", price_above: "價格高於", rsi_above: "RSI 高於", rsi_below: "RSI 低於",
-      kd_above: "KD 高於", kd_below: "KD 低於", ma_position: "均線位置", bb_position: "布林位置",
-      has_position: "持倉狀態", change_percent_up: "漲幅達到", change_percent_down: "跌幅達到",
-      take_profit_percent: "止盈比例", stop_loss_percent: "止損比例"
+'use strict';
+
+(function () {
+  const STORAGE_KEY = "hackme_trading_workflow_json";
+  const $ = (id) => document.getElementById(id);
+  const NODE_TYPES = ["start", "condition", "logic", "control", "action"];
+  const CONDITION_TYPES = ["always", "price_below", "price_above", "rsi_above", "rsi_below", "kd_above", "kd_below", "ma_position", "bb_position", "has_position"];
+  const ACTION_TYPES = ["buy_percent", "buy_amount", "sell_percent", "close_all", "hold"];
+  const CONDITION_LABELS = {
+    always: "永遠成立",
+    price_below: "價格低於",
+    price_above: "價格高於",
+    rsi_above: "RSI 高於",
+    rsi_below: "RSI 低於",
+    kd_above: "KD 高於",
+    kd_below: "KD 低於",
+    ma_position: "均線位置",
+    bb_position: "布林位置",
+    has_position: "持倉狀態",
+  };
+  const ACTION_LABELS = {
+    buy_percent: "買入百分比",
+    buy_amount: "固定金額買入",
+    sell_percent: "賣出百分比",
+    close_all: "全部平倉",
+    hold: "不動作",
+  };
+  const PORTS = {
+    start: { inputs: [], outputs: ["out"] },
+    condition: { inputs: ["in"], outputs: ["true", "false"] },
+    logic: { inputs: ["in"], outputs: ["true", "false"] },
+    control: { inputs: ["in"], outputs: ["then", "wait"] },
+    action: { inputs: ["in"], outputs: ["out"] },
+  };
+
+  let selectedNodeId = "start";
+  let pendingConnection = null;
+  let dragNode = null;
+  let workflow = normalizeWorkflow(loadInitialWorkflow());
+
+  function uid(prefix) {
+    return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  function html(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+  }
+
+  function numberValue(value, fallback = 0) {
+    const next = Number(value);
+    return Number.isFinite(next) ? next : fallback;
+  }
+
+  function loadInitialWorkflow() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (err) {
+      // keep default
+    }
+    return templateWorkflow();
+  }
+
+  function templateWorkflow() {
+    return {
+      version: 2,
+      strategy_kind: "workflow_graph",
+      source: "workflow_editor",
+      name: "BTC 多層決策策略",
+      description: "強制止損優先，其次風險減倉，再做多條件分批進場。",
+      start_node_id: "start",
+      nodes: [
+        node("start", "start", 40, 210),
+        node("condition", "stop_price", 250, 60, { label: "價格 < 50000", condition: { type: "price_below", value: 50000 }, priority: 100 }),
+        node("action", "close_all", 500, 60, { label: "立即全平", action: { type: "close_all", step: 1, order_type: "market" }, priority: 100 }),
+        node("condition", "has_position", 250, 210, { label: "已有持倉", condition: { type: "has_position", value: true }, priority: 50 }),
+        node("condition", "risk_price", 250, 360, { label: "價格 < 80000", condition: { type: "price_below", value: 80000 }, priority: 50 }),
+        node("logic", "risk_and", 500, 285, { label: "減倉條件 AND", operator: "AND", priority: 50 }),
+        node("action", "reduce_50", 750, 285, { label: "賣出 50%", action: { type: "sell_percent", percent: 50, step: 1, order_type: "market" }, priority: 50 }),
+        node("condition", "entry_price", 250, 540, { label: "價格 < 100000", condition: { type: "price_below", value: 100000 }, priority: 10 }),
+        node("condition", "entry_kd", 250, 690, { label: "KD > 50", condition: { type: "kd_above", value: 50 }, priority: 10 }),
+        node("logic", "entry_or", 500, 615, { label: "KD 或 RSI", operator: "OR", priority: 10 }),
+        node("condition", "entry_ma", 250, 840, { label: "MA50 上方", condition: { type: "ma_position", period: 50, position: "above" }, priority: 10 }),
+        node("logic", "entry_and", 750, 615, { label: "進場條件 AND", operator: "AND", priority: 10 }),
+        node("control", "entry_cooldown", 1000, 615, { label: "每小時檢查", cooldown_seconds: 3600, max_runs: 100, priority: 10 }),
+        node("action", "buy_10", 1250, 555, { label: "買入 10%", action: { type: "buy_percent", percent: 10, step: 1, order_type: "market" }, priority: 10 }),
+        node("action", "buy_20", 1250, 705, { label: "買入 20%", action: { type: "buy_percent", percent: 20, step: 2, order_type: "market" }, priority: 10 }),
+      ],
+      edges: [
+        edge("start", "out", "stop_price", "in"),
+        edge("stop_price", "true", "close_all", "in"),
+        edge("start", "out", "has_position", "in"),
+        edge("start", "out", "risk_price", "in"),
+        edge("has_position", "true", "risk_and", "in"),
+        edge("risk_price", "true", "risk_and", "in"),
+        edge("risk_and", "true", "reduce_50", "in"),
+        edge("start", "out", "entry_price", "in"),
+        edge("start", "out", "entry_kd", "in"),
+        edge("entry_kd", "true", "entry_or", "in"),
+        edge("entry_price", "true", "entry_and", "in"),
+        edge("entry_or", "true", "entry_and", "in"),
+        edge("entry_ma", "true", "entry_and", "in"),
+        edge("start", "out", "entry_ma", "in"),
+        edge("entry_and", "true", "entry_cooldown", "in"),
+        edge("entry_cooldown", "then", "buy_10", "in"),
+        edge("entry_cooldown", "then", "buy_20", "in"),
+      ],
     };
-    const ACTION_LABELS = {
-      buy_percent: "買入百分比", buy_amount: "固定金額買入", sell_percent: "賣出百分比",
-      close_all: "全部平倉", hold: "不動作"
+  }
+
+  function node(type, id, x, y, extra = {}) {
+    const spec = PORTS[type] || PORTS.condition;
+    return {
+      id,
+      type,
+      label: extra.label || `${type} node`,
+      x,
+      y,
+      inputs: spec.inputs.slice(),
+      outputs: spec.outputs.slice(),
+      priority: numberValue(extra.priority, 0),
+      ...(type === "condition" ? { condition: cleanCondition(extra.condition || { type: "price_below", value: 100000 }) } : {}),
+      ...(type === "logic" ? { operator: String(extra.operator || "AND").toUpperCase() } : {}),
+      ...(type === "control" ? { cooldown_seconds: numberValue(extra.cooldown_seconds, 300), max_runs: Math.max(1, numberValue(extra.max_runs, 100)) } : {}),
+      ...(type === "action" ? { action: cleanAction(extra.action || { type: "buy_percent", percent: 10, step: 1, order_type: "market" }) } : {}),
     };
-    let selected = { branchId: "entry", kind: "branch", index: -1 };
-    let dragRef = null;
-    let workflow = templateWorkflow();
+  }
 
-    function templateWorkflow() {
-      return {
-        version: 1,
-        strategy_kind: "workflow",
-        source: "workflow_editor",
-        name: "BTC 分批進出場策略",
-        description: "以價格、KD、布林中線與 MA50 判斷進場，並保留風控分支。",
-        branches: [
-          {
-            id: "entry",
-            name: "進場策略",
-            priority: 10,
-            logic: "AND",
-            cooldown_seconds: 3600,
-            max_runs: 100,
-            conditions: [
-              { type: "price_below", value: 100000 },
-              { type: "kd_above", value: 50 },
-              { type: "bb_position", position: "above_mid" },
-              { type: "ma_position", period: 50, position: "above" }
-            ],
-            actions: [
-              { type: "buy_percent", percent: 10, step: 1, order_type: "market" },
-              { type: "buy_percent", percent: 20, step: 2, order_type: "market" }
-            ]
-          },
-          {
-            id: "reduce",
-            name: "風險減倉",
-            priority: 50,
-            logic: "AND",
-            cooldown_seconds: 300,
-            max_runs: 100,
-            conditions: [
-              { type: "has_position", value: true },
-              { type: "price_below", value: 80000 }
-            ],
-            actions: [
-              { type: "sell_percent", percent: 50, step: 1, order_type: "market" },
-              { type: "sell_percent", percent: 100, step: 2, order_type: "market" }
-            ]
-          },
-          {
-            id: "stop",
-            name: "強制止損",
-            priority: 100,
-            logic: "AND",
-            cooldown_seconds: 0,
-            max_runs: 100,
-            conditions: [{ type: "price_below", value: 50000 }],
-            actions: [{ type: "close_all", step: 1, order_type: "market" }]
-          }
-        ]
-      };
-    }
+  function edge(from, fromPort, to, toPort) {
+    return { id: uid("edge"), from, from_port: fromPort, to, to_port: toPort };
+  }
 
-    function uid(prefix) {
-      return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
-    }
-
-    function html(value) {
-      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
-    }
-
-    function branchById(id) {
-      return workflow.branches.find((row) => row.id === id) || workflow.branches[0];
-    }
-
-    function clampNumber(value, fallback = 0) {
-      const next = Number(value);
-      return Number.isFinite(next) ? next : fallback;
-    }
-
-    function normalizeWorkflow(input) {
-      const base = input && typeof input === "object" ? input : templateWorkflow();
-      const fallback = templateWorkflow();
-      const branches = Array.isArray(base.branches) && base.branches.length ? base.branches : fallback.branches;
-      return {
-        version: 1,
-        strategy_kind: "workflow",
-        source: String(base.source || "workflow_editor").slice(0, 80),
-        name: String(base.name || fallback.name).slice(0, 80),
-        description: String(base.description || "").slice(0, 160),
-        branches: branches.slice(0, 20).map((branch, index) => ({
-          id: String(branch.id || uid("branch")).slice(0, 80),
-          name: String(branch.name || `策略分支 ${index + 1}`).slice(0, 80),
-          priority: clampNumber(branch.priority, 0),
-          logic: String(branch.logic || "AND").toUpperCase() === "OR" ? "OR" : "AND",
-          cooldown_seconds: Math.max(0, clampNumber(branch.cooldown_seconds, 0)),
-          max_runs: Math.max(1, clampNumber(branch.max_runs, 100)),
-          conditions: Array.isArray(branch.conditions) && branch.conditions.length ? branch.conditions.slice(0, 20).map(cleanCondition) : [cleanCondition({ type: "price_below", value: 100000 })],
-          actions: Array.isArray(branch.actions) && branch.actions.length ? branch.actions.slice(0, 20).map(cleanAction) : [cleanAction({ type: "hold", step: 1, order_type: "market" })]
-        }))
-      };
-    }
-
-    function cleanCondition(node) {
-      const type = CONDITION_TYPES.includes(node?.type) ? node.type : "price_below";
-      const clean = { type };
-      if (["ma_position"].includes(type)) {
-        clean.period = Math.max(1, clampNumber(node.period, 50));
-        clean.position = ["above", "below"].includes(node.position) ? node.position : "above";
-      } else if (type === "bb_position") {
-        clean.position = ["above_mid", "below_mid", "above_upper", "below_lower"].includes(node.position) ? node.position : "above_mid";
-      } else if (type === "has_position") {
-        clean.value = node.value === false ? false : true;
-      } else {
-        clean.value = clampNumber(node.value, 0);
-      }
-      return clean;
-    }
-
-    function cleanAction(node) {
-      const type = ACTION_TYPES.includes(node?.type) ? node.type : "buy_percent";
-      const clean = {
-        type,
-        step: Math.max(1, clampNumber(node.step, 1)),
-        order_type: String(node.order_type || "market") === "limit" ? "limit" : "market"
-      };
-      if (type === "buy_amount") clean.amount_points = Math.max(0, clampNumber(node.amount_points ?? node.value, 100));
-      if (type === "buy_percent" || type === "sell_percent") clean.percent = Math.max(0, Math.min(100, clampNumber(node.percent ?? node.value, 10)));
-      if (node.limit_price_points != null && clampNumber(node.limit_price_points, 0) > 0) clean.limit_price_points = clampNumber(node.limit_price_points, 0);
-      return clean;
-    }
-
-    function defaultCondition(type) {
-      return cleanCondition({ type, value: type.includes("rsi") || type.includes("kd") ? 50 : 100000 });
-    }
-
-    function defaultAction(type) {
-      if (type === "buy_amount") return cleanAction({ type, amount_points: 100, step: 1 });
-      if (type === "sell_percent") return cleanAction({ type, percent: 50, step: 1 });
-      return cleanAction({ type, percent: 10, step: 1 });
-    }
-
-    function selectedNodeRef() {
-      const branch = branchById(selected.branchId);
-      if (!branch || selected.kind === "branch") return { branch, list: null, node: null };
-      const list = selected.kind === "condition" ? branch.conditions : branch.actions;
-      return { branch, list, node: list?.[selected.index] || null };
-    }
-
-    function nodeLabel(node) {
-      const label = CONDITION_LABELS[node.type] || ACTION_LABELS[node.type] || node.type || "-";
-      if (node.type === "price_below") return `${label} ${node.value || 0}`;
-      if (node.type === "price_above") return `${label} ${node.value || 0}`;
-      if (node.type === "rsi_above" || node.type === "rsi_below" || node.type === "kd_above" || node.type === "kd_below") return `${label} ${node.value || 0}`;
-      if (node.type === "change_percent_up" || node.type === "change_percent_down" || node.type === "take_profit_percent" || node.type === "stop_loss_percent") return `${label} ${node.value || 0}%`;
-      if (node.type === "ma_position") return `價格在 MA${node.period || 50} ${node.position === "below" ? "下方" : "上方"}`;
-      if (node.type === "bb_position") return `布林 ${bbText(node.position)}`;
-      if (node.type === "has_position") return node.value === false ? "沒有持倉" : "持倉存在";
-      if (node.type === "buy_percent") return `買入可用資金 ${node.percent || 0}%`;
-      if (node.type === "buy_amount") return `買入 ${node.amount_points || 0} 點`;
-      if (node.type === "sell_percent") return `賣出持倉 ${node.percent || 0}%`;
-      if (node.type === "close_all") return "全部平倉";
-      if (node.type === "hold") return "不動作";
-      return label;
-    }
-
-    function bbText(value) {
-      return {
-        above_mid: "中線上方",
-        below_mid: "中線下方",
-        above_upper: "上軌上方",
-        below_lower: "下軌下方"
-      }[value] || "中線上方";
-    }
-
-    function renderSummary() {
-      const branches = workflow.branches.length;
-      const conditions = workflow.branches.reduce((sum, row) => sum + row.conditions.length, 0);
-      const actions = workflow.branches.reduce((sum, row) => sum + row.actions.length, 0);
-      $("summaryBadges").innerHTML = `
-        <span class="badge ok">${branches} 分支</span>
-        <span class="badge">${conditions} 條件</span>
-        <span class="badge">${actions} 行為</span>
-      `;
-    }
-
-    function renderTabs() {
-      $("branchTabs").innerHTML = workflow.branches.map((branch) => `
-        <button type="button" class="branch-tab ${selected.branchId === branch.id ? "active" : ""}" data-select-branch="${html(branch.id)}">
-          ${html(branch.name || branch.id)}
-        </button>
-      `).join("");
-    }
-
-    function nodeCard(branch, kind, node, index) {
-      const selectedClass = selected.branchId === branch.id && selected.kind === kind && selected.index === index ? "selected" : "";
-      const kindText = kind === "condition" ? "條件" : `行為 step ${node.step || index + 1}`;
-      return `
-        <article class="node ${kind} ${selectedClass}" draggable="true" data-node-ref="${kind}:${html(branch.id)}:${index}" role="button" tabindex="0">
-          <div class="node-top">
-            <span class="node-kind">${html(kindText)}</span>
-            <span class="node-tools">
-              <button type="button" data-move-node="${kind}:${html(branch.id)}:${index}:left" title="往前">‹</button>
-              <button type="button" data-move-node="${kind}:${html(branch.id)}:${index}:right" title="往後">›</button>
-              <button type="button" data-delete-node="${kind}:${html(branch.id)}:${index}" title="刪除">×</button>
-            </span>
-          </div>
-          <div class="node-label">${html(nodeLabel(node))}</div>
-        </article>`;
-    }
-
-    function renderCanvas() {
-      $("canvas").innerHTML = workflow.branches.map((branch) => `
-        <section class="panel branch ${selected.branchId === branch.id ? "selected" : ""}" data-branch="${html(branch.id)}">
-          <div class="branch-head">
-            <div>
-              <div class="branch-name">${html(branch.name)}</div>
-              <div class="badges branch-badges">
-                <span class="badge">priority ${Number(branch.priority || 0)}</span>
-                <span class="badge">${html(branch.logic || "AND")}</span>
-                <span class="badge">cooldown ${Number(branch.cooldown_seconds || 0)}s</span>
-                <span class="badge">max ${Number(branch.max_runs || 0)}</span>
-              </div>
-            </div>
-            <div class="row-actions">
-              <button type="button" data-select-branch="${html(branch.id)}">設定</button>
-              <button type="button" data-duplicate-branch="${html(branch.id)}">複製</button>
-              <button class="danger" type="button" data-delete-branch="${html(branch.id)}">刪除</button>
-            </div>
-          </div>
-          <div class="flow">
-            <div class="lane" data-drop-kind="condition" data-drop-branch="${html(branch.id)}">
-              <div class="lane-head"><b>條件</b><span>由上到下判斷</span></div>
-              <div class="node-list">
-                ${(branch.conditions || []).map((node, index) => nodeCard(branch, "condition", node, index)).join("") || '<div class="empty">從左側加入條件節點</div>'}
-              </div>
-            </div>
-            <button class="logic-node" type="button" data-select-branch="${html(branch.id)}" title="點擊可在右側修改 AND / OR">
-              ${html(branch.logic || "AND")}
-              <span>邏輯組合</span>
-            </button>
-            <div class="lane" data-drop-kind="action" data-drop-branch="${html(branch.id)}">
-              <div class="lane-head"><b>行為</b><span>依 step 順序執行</span></div>
-              <div class="node-list">
-                ${(branch.actions || []).map((node, index) => nodeCard(branch, "action", node, index)).join("") || '<div class="empty">從左側加入行為節點</div>'}
-              </div>
-            </div>
-          </div>
-        </section>
-      `).join("");
-    }
-
-    function renderInspector() {
-      const { branch, node } = selectedNodeRef();
-      if (!branch) return;
-      $("selectedBadge").textContent = selected.kind === "branch" || !node ? "分支" : (selected.kind === "condition" ? "條件節點" : "行為節點");
-      if (selected.kind === "branch" || !node) {
-        $("inspector").innerHTML = `
-          <div class="inspector-card">
-            <label class="field">分支名稱<input data-bind-branch="name" value="${html(branch.name || "")}"></label>
-            <div class="two-col">
-              <label class="field">邏輯<select data-bind-branch="logic"><option value="AND">AND：全部成立</option><option value="OR">OR：任一成立</option></select></label>
-              <label class="field">優先權<input data-bind-branch="priority" type="number" value="${Number(branch.priority || 0)}"></label>
-            </div>
-            <div class="two-col">
-              <label class="field">冷卻秒數<input data-bind-branch="cooldown_seconds" type="number" min="0" value="${Number(branch.cooldown_seconds || 0)}"></label>
-              <label class="field">最大執行次數<input data-bind-branch="max_runs" type="number" min="1" value="${Number(branch.max_runs || 100)}"></label>
-            </div>
-            <div class="hint">同時符合多個分支時，優先權較高的分支會先執行。冷卻時間可避免短時間重複下單。</div>
-          </div>`;
-        document.querySelector('[data-bind-branch="logic"]').value = branch.logic || "AND";
-        return;
-      }
-      if (selected.kind === "condition") renderConditionInspector(node);
-      else renderActionInspector(node);
-    }
-
-    function renderConditionInspector(node) {
-      const needsValue = !["ma_position", "bb_position", "has_position"].includes(node.type);
-      $("inspector").innerHTML = `
-        <div class="inspector-card">
-          <label class="field">條件類型
-            <select data-bind-node="type">
-              ${CONDITION_TYPES.map((item) => `<option value="${item}">${html(CONDITION_LABELS[item] || item)}</option>`).join("")}
-            </select>
-          </label>
-          ${needsValue ? `<label class="field">判斷數值<input data-bind-node="value" type="number" step="0.01" value="${html(node.value ?? "")}"></label>` : ""}
-          ${node.type === "ma_position" ? `
-            <div class="two-col">
-              <label class="field">MA 週期<input data-bind-node="period" type="number" min="1" value="${Number(node.period || 50)}"></label>
-              <label class="field">位置<select data-bind-node="position"><option value="above">上方</option><option value="below">下方</option></select></label>
-            </div>` : ""}
-          ${node.type === "bb_position" ? `
-            <label class="field">布林位置<select data-bind-node="position">
-              <option value="above_mid">中線上方</option>
-              <option value="below_mid">中線下方</option>
-              <option value="above_upper">上軌上方</option>
-              <option value="below_lower">下軌下方</option>
-            </select></label>` : ""}
-          ${node.type === "has_position" ? `
-            <label class="field">持倉條件<select data-bind-node="value_bool"><option value="true">有持倉</option><option value="false">沒有持倉</option></select></label>` : ""}
-        </div>`;
-      document.querySelector('[data-bind-node="type"]').value = node.type;
-      const position = document.querySelector('[data-bind-node="position"]');
-      if (position) position.value = node.position || (node.type === "bb_position" ? "above_mid" : "above");
-      const boolField = document.querySelector('[data-bind-node="value_bool"]');
-      if (boolField) boolField.value = node.value === false ? "false" : "true";
-    }
-
-    function renderActionInspector(node) {
-      const percentAction = ["buy_percent", "sell_percent"].includes(node.type);
-      const amountAction = node.type === "buy_amount";
-      const tradableAction = !["close_all", "hold"].includes(node.type);
-      $("inspector").innerHTML = `
-        <div class="inspector-card">
-          <label class="field">行為類型
-            <select data-bind-node="type">
-              ${ACTION_TYPES.map((item) => `<option value="${item}">${html(ACTION_LABELS[item] || item)}</option>`).join("")}
-            </select>
-          </label>
-          <div class="two-col">
-            <label class="field">Step<input data-bind-node="step" type="number" min="1" value="${Number(node.step || 1)}"></label>
-            <label class="field">委託型態<select data-bind-node="order_type"><option value="market">市價</option><option value="limit">限價</option></select></label>
-          </div>
-          ${percentAction ? `<label class="field">百分比<input data-bind-node="percent" type="number" step="0.01" min="0" max="100" value="${html(node.percent ?? 10)}"></label>` : ""}
-          ${amountAction ? `<label class="field">買入點數<input data-bind-node="amount_points" type="number" step="1" min="0" value="${html(node.amount_points ?? 100)}"></label>` : ""}
-          ${tradableAction ? `<label class="field">限價價格<input data-bind-node="limit_price_points" type="number" step="0.01" min="0" value="${html(node.limit_price_points ?? "")}" placeholder="市價單可留空"></label>` : ""}
-          <div class="hint">相同分支的行為會依 step 由小到大執行；分批買賣請使用不同 step。</div>
-        </div>`;
-      document.querySelector('[data-bind-node="type"]').value = node.type;
-      document.querySelector('[data-bind-node="order_type"]').value = node.order_type || "market";
-    }
-
-    function validateWorkflow() {
-      const issues = [];
-      if (!workflow.branches.length) issues.push({ level: "err", text: "至少需要一個策略分支。" });
-      workflow.branches.forEach((branch) => {
-        if (!branch.conditions.length) issues.push({ level: "err", text: `${branch.name} 沒有條件節點。` });
-        if (!branch.actions.length) issues.push({ level: "err", text: `${branch.name} 沒有行為節點。` });
-        branch.actions.forEach((action) => {
-          if (["buy_percent", "sell_percent"].includes(action.type) && (action.percent <= 0 || action.percent > 100)) {
-            issues.push({ level: "err", text: `${branch.name} 的百分比行為必須在 0 到 100 之間。` });
-          }
-          if (action.type === "buy_amount" && action.amount_points <= 0) {
-            issues.push({ level: "err", text: `${branch.name} 的固定買入點數必須大於 0。` });
-          }
-        });
-        if (!branch.cooldown_seconds) issues.push({ level: "warn", text: `${branch.name} 沒有冷卻時間，可能頻繁觸發。` });
+  function legacyBranchesToGraph(input) {
+    const base = templateWorkflow();
+    const branches = Array.isArray(input?.branches) ? input.branches : [];
+    if (!branches.length) return base;
+    const graph = {
+      version: 2,
+      strategy_kind: "workflow_graph",
+      source: "workflow_editor_legacy_import",
+      name: input.name || "Legacy Workflow Import",
+      description: input.description || "",
+      start_node_id: "start",
+      nodes: [node("start", "start", 40, 180)],
+      edges: [],
+    };
+    branches.slice(0, 20).forEach((branch, branchIndex) => {
+      const y = 80 + branchIndex * 260;
+      const logicId = uid("logic");
+      const controlId = uid("control");
+      graph.nodes.push(node("logic", logicId, 520, y + 50, { label: branch.name || `分支 ${branchIndex + 1}`, operator: branch.logic || "AND", priority: branch.priority || 0 }));
+      graph.nodes.push(node("control", controlId, 760, y + 50, { label: "分支控制", cooldown_seconds: branch.cooldown_seconds || 0, max_runs: branch.max_runs || 100, priority: branch.priority || 0 }));
+      (branch.conditions || [{ type: "always" }]).slice(0, 20).forEach((condition, index) => {
+        const conditionId = uid("condition");
+        graph.nodes.push(node("condition", conditionId, 260, y + index * 80, { label: conditionLabel(cleanCondition(condition)), condition, priority: branch.priority || 0 }));
+        graph.edges.push(edge("start", "out", conditionId, "in"), edge(conditionId, "true", logicId, "in"));
       });
-      return issues;
-    }
+      graph.edges.push(edge(logicId, "true", controlId, "in"));
+      (branch.actions || [{ type: "hold" }]).slice(0, 20).forEach((action, index) => {
+        const actionId = uid("action");
+        graph.nodes.push(node("action", actionId, 1000, y + index * 90, { label: actionLabel(cleanAction(action)), action, priority: branch.priority || 0 }));
+        graph.edges.push(edge(controlId, "then", actionId, "in"));
+      });
+    });
+    return graph;
+  }
 
-    function renderValidation() {
-      const issues = validateWorkflow();
-      const badge = $("validationBadge");
-      const list = $("validationList");
-      if (!issues.length) {
-        badge.className = "badge ok";
-        badge.textContent = "可儲存";
-        list.innerHTML = '<li>目前未偵測到格式問題。</li>';
-        return;
-      }
-      const hasError = issues.some((item) => item.level === "err");
-      badge.className = `badge ${hasError ? "err" : "warn"}`;
-      badge.textContent = hasError ? "需修正" : "有提醒";
-      list.innerHTML = issues.map((item) => `<li class="${item.level}">${html(item.text)}</li>`).join("");
-    }
+  function normalizeWorkflow(input) {
+    let base = input && typeof input === "object" ? input : templateWorkflow();
+    if (!Array.isArray(base.nodes) && Array.isArray(base.branches)) base = legacyBranchesToGraph(base);
+    const fallback = templateWorkflow();
+    const cleanNodes = (Array.isArray(base.nodes) && base.nodes.length ? base.nodes : fallback.nodes).slice(0, 100).map((raw, index) => {
+      const type = NODE_TYPES.includes(raw.type) ? raw.type : "condition";
+      const clean = node(type, String(raw.id || uid(type)).slice(0, 80), numberValue(raw.x, index * 180), numberValue(raw.y, 120), raw);
+      clean.label = String(raw.label || raw.name || clean.label || clean.id).slice(0, 80);
+      return clean;
+    });
+    if (!cleanNodes.some((item) => item.type === "start")) cleanNodes.unshift(node("start", "start", 40, 120));
+    const ids = new Set(cleanNodes.map((item) => item.id));
+    const cleanEdges = (Array.isArray(base.edges) ? base.edges : []).slice(0, 200).filter((raw) => (
+      ids.has(raw.from || raw.source) && ids.has(raw.to || raw.target)
+    )).map((raw) => ({
+      id: String(raw.id || uid("edge")).slice(0, 80),
+      from: String(raw.from || raw.source).slice(0, 80),
+      from_port: String(raw.from_port || raw.source_port || "out").toLowerCase(),
+      to: String(raw.to || raw.target).slice(0, 80),
+      to_port: String(raw.to_port || raw.target_port || "in").toLowerCase(),
+    })).filter((item) => {
+      const source = cleanNodes.find((nodeItem) => nodeItem.id === item.from);
+      const target = cleanNodes.find((nodeItem) => nodeItem.id === item.to);
+      return source && target && source.outputs.includes(item.from_port) && target.inputs.includes(item.to_port);
+    });
+    return {
+      version: 2,
+      strategy_kind: "workflow_graph",
+      source: String(base.source || "workflow_editor").slice(0, 80),
+      name: String(base.name || fallback.name).slice(0, 80),
+      description: String(base.description || "").slice(0, 160),
+      start_node_id: String(base.start_node_id || cleanNodes.find((item) => item.type === "start")?.id || cleanNodes[0].id).slice(0, 80),
+      nodes: cleanNodes,
+      edges: cleanEdges,
+    };
+  }
 
-    function syncJson() {
-      $("jsonOut").value = JSON.stringify(workflow, null, 2);
+  function cleanCondition(raw) {
+    if (raw?.AND || raw?.OR || raw?.NOT) return raw;
+    const type = CONDITION_TYPES.includes(raw?.type) ? raw.type : "price_below";
+    const clean = { type };
+    if (type === "ma_position") {
+      clean.period = Math.max(1, numberValue(raw.period, 50));
+      clean.position = raw.position === "below" ? "below" : "above";
+    } else if (type === "bb_position") {
+      clean.position = ["above_mid", "below_mid", "above_upper", "below_lower"].includes(raw.position) ? raw.position : "above_mid";
+    } else if (type === "has_position") {
+      clean.value = raw.value === false ? false : true;
+    } else if (type !== "always") {
+      clean.value = numberValue(raw.value, type.includes("rsi") || type.includes("kd") ? 50 : 100000);
     }
+    return clean;
+  }
 
-    function setStatus(message, good = true) {
-      const el = $("status");
-      el.textContent = message || "";
-      el.style.color = good ? "var(--muted)" : "var(--red)";
+  function cleanAction(raw) {
+    const type = ACTION_TYPES.includes(raw?.type) ? raw.type : "buy_percent";
+    const clean = {
+      type,
+      step: Math.max(1, numberValue(raw.step, 1)),
+      order_type: raw.order_type === "limit" ? "limit" : "market",
+    };
+    if (type === "buy_amount") clean.amount_points = Math.max(1, numberValue(raw.amount_points ?? raw.value, 100));
+    if (type === "buy_percent" || type === "sell_percent") clean.percent = Math.max(0, Math.min(100, numberValue(raw.percent ?? raw.value, 10)));
+    if (numberValue(raw.limit_price_points, 0) > 0) clean.limit_price_points = numberValue(raw.limit_price_points, 0);
+    return clean;
+  }
+
+  function conditionLabel(condition) {
+    if (condition.AND) return "Nested AND";
+    if (condition.OR) return "Nested OR";
+    if (condition.NOT) return "Nested NOT";
+    if (condition.type === "price_below") return `價格 < ${condition.value}`;
+    if (condition.type === "price_above") return `價格 > ${condition.value}`;
+    if (condition.type === "rsi_above" || condition.type === "rsi_below" || condition.type === "kd_above" || condition.type === "kd_below") return `${CONDITION_LABELS[condition.type]} ${condition.value}`;
+    if (condition.type === "ma_position") return `價格在 MA${condition.period || 50} ${condition.position === "below" ? "下方" : "上方"}`;
+    if (condition.type === "bb_position") return `布林 ${condition.position || "above_mid"}`;
+    if (condition.type === "has_position") return condition.value === false ? "沒有持倉" : "已有持倉";
+    return CONDITION_LABELS[condition.type] || condition.type || "條件";
+  }
+
+  function actionLabel(action) {
+    if (action.type === "buy_percent") return `買入 ${action.percent}%`;
+    if (action.type === "buy_amount") return `買入 ${action.amount_points} 點`;
+    if (action.type === "sell_percent") return `賣出 ${action.percent}%`;
+    if (action.type === "close_all") return "全部平倉";
+    return ACTION_LABELS[action.type] || action.type || "行為";
+  }
+
+  function selectedNode() {
+    return workflow.nodes.find((item) => item.id === selectedNodeId) || workflow.nodes[0];
+  }
+
+  function nodeTitle(item) {
+    if (item.type === "condition") return conditionLabel(item.condition || {});
+    if (item.type === "action") return actionLabel(item.action || {});
+    if (item.type === "logic") return `${item.operator || "AND"} 邏輯`;
+    if (item.type === "control") return `冷卻 ${Number(item.cooldown_seconds || 0)} 秒`;
+    return "Start";
+  }
+
+  function renderSummary() {
+    const badges = $("summaryBadges");
+    if (!badges) return;
+    badges.innerHTML = `
+      <span class="badge ok">${workflow.nodes.length} nodes</span>
+      <span class="badge">${workflow.edges.length} edges</span>
+      <span class="badge">input/output ports</span>
+      <span class="badge">TRUE/FALSE branch</span>
+    `;
+  }
+
+  function renderTabs() {
+    const target = $("branchTabs");
+    if (!target) return;
+    target.innerHTML = `
+      <button class="branch-tab active" type="button">Node Graph</button>
+      <button class="branch-tab" type="button" data-add-node="logic:AND">新增 AND</button>
+      <button class="branch-tab" type="button" data-add-node="logic:OR">新增 OR</button>
+      <button class="branch-tab" type="button" data-add-node="control:cooldown">新增控制</button>
+      <button class="branch-tab" type="button" data-auto-layout>自動整理</button>
+    `;
+  }
+
+  function portButton(item, port, direction) {
+    return `<button class="port ${direction} ${port}" type="button" data-port-node="${html(item.id)}" data-port-name="${html(port)}" data-port-direction="${direction}" title="${direction === "out" ? "輸出" : "輸入"} ${html(port)}">${html(port.toUpperCase())}</button>`;
+  }
+
+  function renderNode(item) {
+    const selected = item.id === selectedNodeId ? "selected" : "";
+    return `
+      <article class="node graph-node ${html(item.type)} ${selected}" data-node-id="${html(item.id)}" data-x="${Number(item.x || 0)}" data-y="${Number(item.y || 0)}" draggable="true">
+        <div class="node-top">
+          <span class="node-kind">${html(item.type)}</span>
+          <span class="node-tools">
+            <button type="button" data-duplicate-node="${html(item.id)}" title="複製">⧉</button>
+            ${item.type !== "start" ? `<button type="button" data-delete-node="${html(item.id)}" title="刪除">×</button>` : ""}
+          </span>
+        </div>
+        <div class="node-label">${html(item.label || nodeTitle(item))}</div>
+        <div class="node-sub">${html(nodeTitle(item))}</div>
+        <div class="ports">
+          <div>${(item.inputs || []).map((port) => portButton(item, port, "in")).join("")}</div>
+          <div>${(item.outputs || []).map((port) => portButton(item, port, "out")).join("")}</div>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderEdges() {
+    return `
+      <div class="graph-edges">
+        <h3>Edges</h3>
+        ${workflow.edges.length ? workflow.edges.map((item) => `
+          <div class="edge-row">
+            <span>${html(item.from)}.${html(item.from_port)} → ${html(item.to)}.${html(item.to_port)}</span>
+            <button type="button" data-delete-edge="${html(item.id)}">刪除</button>
+          </div>
+        `).join("") : '<div class="empty">尚未建立連線。點輸出 port，再點輸入 port。</div>'}
+      </div>`;
+  }
+
+  function renderCanvas() {
+    const canvas = $("canvas");
+    if (!canvas) return;
+    canvas.innerHTML = `
+      <section class="panel graph-panel">
+        <div class="branch-head">
+          <div>
+            <div class="branch-name">Node Graph Canvas</div>
+            <div class="drive-card-sub">點擊輸出 port 後再點擊輸入 port 建立連線；condition / logic 的 TRUE/FALSE port 會決定決策分支。</div>
+          </div>
+          <div class="row-actions">
+            <button type="button" data-clear-connection>取消連線</button>
+          </div>
+        </div>
+        <div class="graph-canvas" data-graph-canvas>
+          ${workflow.nodes.map(renderNode).join("")}
+        </div>
+        ${renderEdges()}
+      </section>
+    `;
+  }
+
+  function applyGraphNodePositions() {
+    document.querySelectorAll("[data-node-id][data-x][data-y]").forEach((el) => {
+      el.style.left = `${Number(el.dataset.x || 0)}px`;
+      el.style.top = `${Number(el.dataset.y || 0)}px`;
+    });
+  }
+
+  function renderInspector() {
+    const item = selectedNode();
+    const inspector = $("inspector");
+    const badge = $("selectedBadge");
+    if (!item || !inspector) return;
+    if (badge) badge.textContent = `${item.type} · ${item.id}`;
+    const common = `
+      <label class="field">節點名稱<input data-node-field="label" value="${html(item.label || "")}"></label>
+      <div class="two-col">
+        <label class="field">X<input data-node-field="x" type="number" value="${Number(item.x || 0)}"></label>
+        <label class="field">Y<input data-node-field="y" type="number" value="${Number(item.y || 0)}"></label>
+      </div>
+      <label class="field">優先權<input data-node-field="priority" type="number" value="${Number(item.priority || 0)}"></label>
+    `;
+    if (item.type === "condition") {
+      const condition = item.condition || {};
+      inspector.innerHTML = `
+        <div class="inspector-card">
+          ${common}
+          <label class="field">條件類型<select data-condition-field="type">${CONDITION_TYPES.map((type) => `<option value="${type}">${html(CONDITION_LABELS[type] || type)}</option>`).join("")}</select></label>
+          ${condition.type && !["always", "ma_position", "bb_position", "has_position"].includes(condition.type) ? `<label class="field">數值<input data-condition-field="value" type="number" step="0.01" value="${html(condition.value ?? "")}"></label>` : ""}
+          ${condition.type === "ma_position" ? `<div class="two-col"><label class="field">MA 週期<input data-condition-field="period" type="number" min="1" value="${Number(condition.period || 50)}"></label><label class="field">位置<select data-condition-field="position"><option value="above">上方</option><option value="below">下方</option></select></label></div>` : ""}
+          ${condition.type === "bb_position" ? `<label class="field">布林位置<select data-condition-field="position"><option value="above_mid">中線上方</option><option value="below_mid">中線下方</option><option value="above_upper">上軌上方</option><option value="below_lower">下軌下方</option></select></label>` : ""}
+          ${condition.type === "has_position" ? `<label class="field">持倉條件<select data-condition-field="value_bool"><option value="true">有持倉</option><option value="false">沒有持倉</option></select></label>` : ""}
+        </div>`;
+      const typeField = document.querySelector('[data-condition-field="type"]');
+      if (typeField) typeField.value = condition.type || "always";
+      const position = document.querySelector('[data-condition-field="position"]');
+      if (position) position.value = condition.position || "above";
+      const boolField = document.querySelector('[data-condition-field="value_bool"]');
+      if (boolField) boolField.value = condition.value === false ? "false" : "true";
+      return;
     }
-
-    function render() {
-      workflow = normalizeWorkflow(workflow);
-      if (!branchById(selected.branchId)) selected = { branchId: workflow.branches[0]?.id || "entry", kind: "branch", index: -1 };
-      $("strategyName").value = workflow.name || "";
-      $("strategyDescription").value = workflow.description || "";
-      renderSummary();
-      renderTabs();
-      renderCanvas();
-      renderInspector();
-      renderValidation();
-      syncJson();
+    if (item.type === "logic") {
+      inspector.innerHTML = `
+        <div class="inspector-card">
+          ${common}
+          <label class="field">邏輯<select data-node-field="operator"><option value="AND">AND：全部成立</option><option value="OR">OR：任一成立</option><option value="NOT">NOT：反向</option></select></label>
+          <div class="hint">Logic node 可串接多個 condition 或 logic，因此能形成 nested AND/OR 決策樹。</div>
+        </div>`;
+      document.querySelector('[data-node-field="operator"]').value = item.operator || "AND";
+      return;
     }
+    if (item.type === "control") {
+      inspector.innerHTML = `
+        <div class="inspector-card">
+          ${common}
+          <div class="two-col">
+            <label class="field">冷卻秒數<input data-node-field="cooldown_seconds" type="number" min="0" value="${Number(item.cooldown_seconds || 0)}"></label>
+            <label class="field">最大執行次數<input data-node-field="max_runs" type="number" min="1" value="${Number(item.max_runs || 100)}"></label>
+          </div>
+        </div>`;
+      return;
+    }
+    if (item.type === "action") {
+      const action = item.action || {};
+      inspector.innerHTML = `
+        <div class="inspector-card">
+          ${common}
+          <label class="field">行為類型<select data-action-field="type">${ACTION_TYPES.map((type) => `<option value="${type}">${html(ACTION_LABELS[type] || type)}</option>`).join("")}</select></label>
+          <div class="two-col">
+            <label class="field">Step<input data-action-field="step" type="number" min="1" value="${Number(action.step || 1)}"></label>
+            <label class="field">委託型態<select data-action-field="order_type"><option value="market">市價</option><option value="limit">限價</option></select></label>
+          </div>
+          ${["buy_percent", "sell_percent"].includes(action.type) ? `<label class="field">百分比<input data-action-field="percent" type="number" min="0" max="100" step="0.01" value="${html(action.percent ?? 10)}"></label>` : ""}
+          ${action.type === "buy_amount" ? `<label class="field">買入點數<input data-action-field="amount_points" type="number" min="1" step="1" value="${html(action.amount_points ?? 100)}"></label>` : ""}
+          ${!["close_all", "hold"].includes(action.type) ? `<label class="field">限價價格<input data-action-field="limit_price_points" type="number" min="0" step="0.01" value="${html(action.limit_price_points ?? "")}" placeholder="市價可留空"></label>` : ""}
+          <div class="hint">相同路徑的分批買賣依 step 由小到大執行；已執行的 step 不會重複觸發。</div>
+        </div>`;
+      document.querySelector('[data-action-field="type"]').value = action.type || "hold";
+      document.querySelector('[data-action-field="order_type"]').value = action.order_type || "market";
+      return;
+    }
+    inspector.innerHTML = `<div class="inspector-card">${common}<div class="hint">Start node 是 graph execution order 的入口。</div></div>`;
+  }
 
-    function addBranch(template) {
-      let branch;
-      if (template === "breakout") {
-        branch = {
-          id: uid("branch"), name: "突破追蹤", priority: 30, logic: "AND", cooldown_seconds: 1800, max_runs: 20,
-          conditions: [{ type: "price_above", value: 100000 }, { type: "rsi_above", value: 55 }, { type: "ma_position", period: 20, position: "above" }],
-          actions: [{ type: "buy_percent", percent: 15, step: 1, order_type: "market" }]
-        };
-      } else if (template === "risk") {
-        branch = {
-          id: uid("branch"), name: "風控平倉", priority: 90, logic: "OR", cooldown_seconds: 60, max_runs: 100,
-          conditions: [{ type: "stop_loss_percent", value: 8 }, { type: "take_profit_percent", value: 18 }],
-          actions: [{ type: "close_all", step: 1, order_type: "market" }]
-        };
-      } else {
-        branch = {
-          id: uid("branch"), name: "新策略分支", priority: 0, logic: "AND", cooldown_seconds: 300, max_runs: 100,
-          conditions: [defaultCondition("price_below")],
-          actions: [defaultAction("buy_percent")]
-        };
-      }
-      workflow.branches.push(branch);
-      selected = { branchId: branch.id, kind: "branch", index: -1 };
+  function validateWorkflow() {
+    const issues = [];
+    const ids = new Set(workflow.nodes.map((item) => item.id));
+    const start = workflow.nodes.filter((item) => item.type === "start");
+    if (start.length !== 1) issues.push({ level: "err", text: "必須剛好有一個 Start node。" });
+    if (!workflow.nodes.some((item) => item.type === "action")) issues.push({ level: "err", text: "至少需要一個 Action node。" });
+    workflow.edges.forEach((item) => {
+      const source = workflow.nodes.find((nodeItem) => nodeItem.id === item.from);
+      const target = workflow.nodes.find((nodeItem) => nodeItem.id === item.to);
+      if (!source || !target) issues.push({ level: "err", text: `Edge ${item.id} 指向不存在的 node。` });
+      else if (!source.outputs.includes(item.from_port) || !target.inputs.includes(item.to_port)) issues.push({ level: "err", text: `Edge ${item.id} 使用了不合法的 port。` });
+    });
+    workflow.nodes.filter((item) => item.type !== "start").forEach((item) => {
+      if (!workflow.edges.some((edgeItem) => edgeItem.to === item.id)) issues.push({ level: item.type === "action" ? "err" : "warn", text: `${item.label || item.id} 沒有 input edge。` });
+      if (item.type !== "action" && item.type !== "control" && !workflow.edges.some((edgeItem) => edgeItem.from === item.id)) issues.push({ level: "warn", text: `${item.label || item.id} 沒有 output edge。` });
+    });
+    const actionSteps = {};
+    workflow.nodes.filter((item) => item.type === "action").forEach((item) => {
+      const action = item.action || {};
+      const key = `${action.type}:${action.step}`;
+      actionSteps[key] = (actionSteps[key] || 0) + 1;
+      if (["buy_percent", "sell_percent"].includes(action.type) && (numberValue(action.percent, 0) <= 0 || numberValue(action.percent, 0) > 100)) issues.push({ level: "err", text: `${item.label} 百分比必須在 0 到 100。` });
+    });
+    Object.entries(actionSteps).forEach(([key, count]) => {
+      if (count > 1) issues.push({ level: "warn", text: `偵測到重複 action step：${key}，確認是否刻意分支共用。` });
+    });
+    if (!ids.has(workflow.start_node_id)) issues.push({ level: "err", text: "start_node_id 指向不存在的 node。" });
+    return issues;
+  }
+
+  function renderValidation() {
+    const issues = validateWorkflow();
+    const badge = $("validationBadge");
+    const list = $("validationList");
+    if (!badge || !list) return;
+    const hasError = issues.some((item) => item.level === "err");
+    badge.className = `badge ${issues.length ? (hasError ? "err" : "warn") : "ok"}`;
+    badge.textContent = issues.length ? (hasError ? "需修正" : "有提醒") : "可儲存";
+    list.innerHTML = issues.length ? issues.map((item) => `<li class="${item.level}">${html(item.text)}</li>`).join("") : "<li>Graph validation passed。節點、edge、port 目前可執行。</li>";
+  }
+
+  function syncJson() {
+    const out = $("jsonOut");
+    if (out) out.value = JSON.stringify(workflow, null, 2);
+  }
+
+  function setStatus(message, good = true) {
+    const el = $("status");
+    if (!el) return;
+    el.textContent = message || "";
+    el.style.color = good ? "var(--muted)" : "var(--red)";
+  }
+
+  function render() {
+    workflow = normalizeWorkflow(workflow);
+    if (!workflow.nodes.some((item) => item.id === selectedNodeId)) selectedNodeId = workflow.start_node_id;
+    if ($("strategyName")) $("strategyName").value = workflow.name || "";
+    if ($("strategyDescription")) $("strategyDescription").value = workflow.description || "";
+    renderSummary();
+    renderTabs();
+    renderCanvas();
+    applyGraphNodePositions();
+    renderInspector();
+    renderValidation();
+    syncJson();
+  }
+
+  function addNode(type, subtype) {
+    const x = 180 + workflow.nodes.length * 30;
+    const y = 140 + workflow.nodes.length * 20;
+    let item;
+    if (type === "condition") item = node("condition", uid("condition"), x, y, { label: CONDITION_LABELS[subtype] || "條件", condition: { type: subtype || "price_below", value: subtype?.includes("rsi") || subtype?.includes("kd") ? 50 : 100000 } });
+    else if (type === "action") item = node("action", uid("action"), x, y, { label: ACTION_LABELS[subtype] || "行為", action: { type: subtype || "buy_percent", percent: subtype === "sell_percent" ? 50 : 10, step: 1, order_type: "market" } });
+    else if (type === "logic") item = node("logic", uid("logic"), x, y, { label: `${subtype || "AND"} 邏輯`, operator: subtype || "AND" });
+    else if (type === "control") item = node("control", uid("control"), x, y, { label: "冷卻控制", cooldown_seconds: 300, max_runs: 100 });
+    else item = node("condition", uid("condition"), x, y);
+    workflow.nodes.push(item);
+    selectedNodeId = item.id;
+    render();
+  }
+
+  function addEdgeFromPorts(sourceId, sourcePort, targetId, targetPort) {
+    if (sourceId === targetId) {
+      setStatus("不能把 node 連到自己。", false);
+      return;
+    }
+    const source = workflow.nodes.find((item) => item.id === sourceId);
+    const target = workflow.nodes.find((item) => item.id === targetId);
+    if (!source || !target || !source.outputs.includes(sourcePort) || !target.inputs.includes(targetPort)) {
+      setStatus("Port 不相容，請從 output 連到 input。", false);
+      return;
+    }
+    const exists = workflow.edges.some((item) => item.from === sourceId && item.from_port === sourcePort && item.to === targetId && item.to_port === targetPort);
+    if (!exists) workflow.edges.push(edge(sourceId, sourcePort, targetId, targetPort));
+    pendingConnection = null;
+    setStatus("Edge 已建立。");
+    render();
+  }
+
+  function handleClick(event) {
+    const templateBtn = event.target.closest("#templateBtn");
+    if (templateBtn) {
+      workflow = templateWorkflow();
+      selectedNodeId = "start";
+      pendingConnection = null;
       render();
+      setStatus("範例 graph 已載入。");
+      return;
     }
-
-    function addNode(kind, type) {
-      const branch = branchById(selected.branchId);
-      if (!branch) return;
-      if (kind === "condition") {
-        branch.conditions.push(defaultCondition(type));
-        selected = { branchId: branch.id, kind: "condition", index: branch.conditions.length - 1 };
-      } else {
-        const action = defaultAction(type);
-        action.step = branch.actions.length + 1;
-        branch.actions.push(action);
-        selected = { branchId: branch.id, kind: "action", index: branch.actions.length - 1 };
-      }
-      render();
-    }
-
-    function moveNode(ref, direction) {
-      const [kind, branchId, indexText] = ref.split(":");
-      const branch = branchById(branchId);
-      const list = kind === "condition" ? branch.conditions : branch.actions;
-      const index = Number(indexText);
-      const target = direction === "left" ? index - 1 : index + 1;
-      if (!list || target < 0 || target >= list.length) return;
-      const [item] = list.splice(index, 1);
-      list.splice(target, 0, item);
-      selected = { branchId: branch.id, kind, index: target };
-      render();
-    }
-
-    function handleClick(event) {
-      const branchBtn = event.target.closest("[data-add-branch]");
-      if (branchBtn) return addBranch();
-      const templateBtn = event.target.closest("[data-template]");
-      if (templateBtn) return addBranch(templateBtn.dataset.template);
-      const nodeBtn = event.target.closest("[data-add-node]");
-      if (nodeBtn) {
-        const [kind, type] = nodeBtn.dataset.addNode.split(":");
-        return addNode(kind, type);
-      }
-      const controlBtn = event.target.closest("[data-control]");
-      if (controlBtn) {
-        const branch = branchById(selected.branchId);
-        if (!branch) return;
-        if (controlBtn.dataset.control === "cooldown300") branch.cooldown_seconds = 300;
-        if (controlBtn.dataset.control === "cooldown3600") branch.cooldown_seconds = 3600;
-        if (controlBtn.dataset.control === "once") branch.max_runs = 1;
-        selected = { branchId: branch.id, kind: "branch", index: -1 };
-        render();
-        return;
-      }
-      const nodeCardEl = event.target.closest("[data-node-ref]");
-      if (nodeCardEl && !event.target.closest(".node-tools")) {
-        const [kind, branchId, indexText] = nodeCardEl.dataset.nodeRef.split(":");
-        selected = { branchId, kind, index: Number(indexText) };
-        render();
-        return;
-      }
-      const selectBranch = event.target.closest("[data-select-branch]");
-      if (selectBranch) {
-        selected = { branchId: selectBranch.dataset.selectBranch, kind: "branch", index: -1 };
-        render();
-        return;
-      }
-      const duplicateBranch = event.target.closest("[data-duplicate-branch]");
-      if (duplicateBranch) {
-        const source = branchById(duplicateBranch.dataset.duplicateBranch);
-        const copy = JSON.parse(JSON.stringify(source));
-        copy.id = uid("branch");
-        copy.name = `${copy.name} 副本`;
-        workflow.branches.push(copy);
-        selected = { branchId: copy.id, kind: "branch", index: -1 };
-        render();
-        return;
-      }
-      const deleteBranch = event.target.closest("[data-delete-branch]");
-      if (deleteBranch && workflow.branches.length > 1) {
-        workflow.branches = workflow.branches.filter((branch) => branch.id !== deleteBranch.dataset.deleteBranch);
-        selected = { branchId: workflow.branches[0].id, kind: "branch", index: -1 };
-        render();
-        return;
-      }
-      const deleteNode = event.target.closest("[data-delete-node]");
-      if (deleteNode) {
-        const [kind, branchId, indexText] = deleteNode.dataset.deleteNode.split(":");
-        const branch = branchById(branchId);
-        const list = kind === "condition" ? branch.conditions : branch.actions;
-        list.splice(Number(indexText), 1);
-        selected = { branchId, kind: "branch", index: -1 };
-        render();
-        return;
-      }
-      const move = event.target.closest("[data-move-node]");
-      if (move) {
-        const parts = move.dataset.moveNode.split(":");
-        moveNode(parts.slice(0, 3).join(":"), parts[3]);
-      }
-    }
-
-    function handleInput(event) {
-      const branchKey = event.target.dataset.bindBranch;
-      const nodeKey = event.target.dataset.bindNode;
-      if (event.target.id === "strategyName") {
-        workflow.name = event.target.value.slice(0, 80);
-        syncJson();
-        return renderSummary();
-      }
-      if (event.target.id === "strategyDescription") {
-        workflow.description = event.target.value.slice(0, 160);
-        return syncJson();
-      }
-      if (!branchKey && !nodeKey) return;
-      const { branch, node } = selectedNodeRef();
-      if (branchKey) {
-        branch[branchKey] = ["priority", "cooldown_seconds", "max_runs"].includes(branchKey)
-          ? clampNumber(event.target.value, 0)
-          : event.target.value;
-      }
-      if (node && nodeKey) {
-        if (nodeKey === "type") {
-          const oldStep = node.step || 1;
-          const replacement = selected.kind === "condition" ? defaultCondition(event.target.value) : defaultAction(event.target.value);
-          if (selected.kind === "action") replacement.step = oldStep;
-          Object.keys(node).forEach((key) => delete node[key]);
-          Object.assign(node, replacement);
-        } else if (nodeKey === "value_bool") {
-          node.value = event.target.value === "true";
-        } else if (["value", "period", "step", "percent", "amount_points", "limit_price_points"].includes(nodeKey)) {
-          const value = clampNumber(event.target.value, 0);
-          if (nodeKey === "limit_price_points" && value <= 0) delete node.limit_price_points;
-          else node[nodeKey] = value;
-        } else {
-          node[nodeKey] = event.target.value;
-        }
-      }
-      render();
-    }
-
-    function handleDragStart(event) {
-      const card = event.target.closest("[data-node-ref]");
-      if (!card) return;
-      dragRef = card.dataset.nodeRef;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", dragRef);
-    }
-
-    function handleDragOver(event) {
-      const lane = event.target.closest("[data-drop-kind]");
-      if (!lane || !dragRef) return;
-      const [kind] = dragRef.split(":");
-      if (kind !== lane.dataset.dropKind) return;
-      event.preventDefault();
-      lane.classList.add("drag-over");
-    }
-
-    function handleDragLeave(event) {
-      const lane = event.target.closest("[data-drop-kind]");
-      if (lane) lane.classList.remove("drag-over");
-    }
-
-    function handleDrop(event) {
-      const lane = event.target.closest("[data-drop-kind]");
-      if (!lane || !dragRef) return;
-      const [kind, fromBranchId, fromIndexText] = dragRef.split(":");
-      if (kind !== lane.dataset.dropKind) return;
-      event.preventDefault();
-      lane.classList.remove("drag-over");
-      const toBranch = branchById(lane.dataset.dropBranch);
-      const fromBranch = branchById(fromBranchId);
-      const fromList = kind === "condition" ? fromBranch.conditions : fromBranch.actions;
-      const toList = kind === "condition" ? toBranch.conditions : toBranch.actions;
-      const fromIndex = Number(fromIndexText);
-      const [node] = fromList.splice(fromIndex, 1);
-      let toIndex = toList.length;
-      const targetCard = event.target.closest("[data-node-ref]");
-      if (targetCard) {
-        const [, targetBranchId, targetIndexText] = targetCard.dataset.nodeRef.split(":");
-        if (targetBranchId === toBranch.id) toIndex = Number(targetIndexText);
-      }
-      if (fromList === toList && fromIndex < toIndex) toIndex -= 1;
-      toList.splice(Math.max(0, toIndex), 0, node);
-      selected = { branchId: toBranch.id, kind, index: Math.max(0, toIndex) };
-      dragRef = null;
-      render();
-    }
-
-    function importJson() {
+    const importBtn = event.target.closest("#importBtn");
+    if (importBtn) {
       try {
         workflow = normalizeWorkflow(JSON.parse($("jsonOut").value || "{}"));
-        selected = { branchId: workflow.branches[0].id, kind: "branch", index: -1 };
+        selectedNodeId = workflow.start_node_id;
         render();
-        setStatus("已套用 JSON。");
-      } catch (error) {
-        setStatus(`JSON 格式錯誤：${error.message}`, false);
+        setStatus("JSON 已套用。");
+      } catch (err) {
+        setStatus(err.message || "JSON 格式錯誤", false);
       }
+      return;
     }
-
-    function saveWorkflow() {
-      workflow = normalizeWorkflow(workflow);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow, null, 2));
-      setStatus("已儲存。回交易頁按「載入編輯器結果」即可使用。");
-    }
-
-    async function copyWorkflow() {
-      const text = JSON.stringify(normalizeWorkflow(workflow), null, 2);
-      try {
-        await navigator.clipboard.writeText(text);
-        setStatus("已複製 JSON。");
-      } catch (_) {
-        $("jsonOut").focus();
-        $("jsonOut").select();
-        document.execCommand("copy");
-        setStatus("已選取 JSON，可直接複製。");
+    const saveBtn = event.target.closest("#saveBtn");
+    if (saveBtn) {
+      const errors = validateWorkflow().filter((item) => item.level === "err");
+      if (errors.length) {
+        setStatus("Graph validation 未通過，請先修正紅色項目。", false);
+        return;
       }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(workflow));
+      setStatus("Workflow 已儲存，交易頁可載入這份設定。");
+      return;
     }
-
-    function bindEvents() {
-      document.addEventListener("click", handleClick);
-      document.addEventListener("input", handleInput);
-      document.addEventListener("change", handleInput);
-      document.addEventListener("dragstart", handleDragStart);
-      document.addEventListener("dragover", handleDragOver);
-      document.addEventListener("dragleave", handleDragLeave);
-      document.addEventListener("drop", handleDrop);
-      $("templateBtn").addEventListener("click", () => {
-        workflow = templateWorkflow();
-        selected = { branchId: "entry", kind: "branch", index: -1 };
-        render();
-        setStatus("已載入標準範例。");
-      });
-      $("importBtn").addEventListener("click", importJson);
-      $("saveBtn").addEventListener("click", saveWorkflow);
-      $("copyBtn").addEventListener("click", copyWorkflow);
-      $("jsonOut").addEventListener("input", () => setStatus("JSON 已修改，按「套用 JSON」才會更新畫布。"));
+    const copyBtn = event.target.closest("#copyBtn");
+    if (copyBtn) {
+      navigator.clipboard?.writeText(JSON.stringify(workflow, null, 2));
+      setStatus("JSON 已複製。");
+      return;
     }
-
-    function boot() {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try { workflow = normalizeWorkflow(JSON.parse(saved)); } catch (_) { workflow = templateWorkflow(); }
-      }
-      selected = { branchId: workflow.branches[0]?.id || "entry", kind: "branch", index: -1 };
-      bindEvents();
+    const add = event.target.closest("[data-add-node]");
+    if (add) {
+      const [type, subtype] = String(add.dataset.addNode || "").split(":");
+      addNode(type, subtype);
+      return;
+    }
+    const autoLayout = event.target.closest("[data-auto-layout]");
+    if (autoLayout) {
+      autoLayoutGraph();
       render();
-      window.HackmeTradingWorkflowEditor = {
-        getWorkflow: () => normalizeWorkflow(workflow),
-        setWorkflow: (value) => { workflow = normalizeWorkflow(value); render(); }
-      };
+      return;
     }
+    const nodeEl = event.target.closest("[data-node-id]");
+    if (nodeEl && !event.target.closest(".node-tools") && !event.target.closest("[data-port-node]")) {
+      selectedNodeId = nodeEl.dataset.nodeId;
+      render();
+      return;
+    }
+    const port = event.target.closest("[data-port-node]");
+    if (port) {
+      const nodeId = port.dataset.portNode;
+      const portName = port.dataset.portName;
+      const direction = port.dataset.portDirection;
+      if (direction === "out") {
+        pendingConnection = { nodeId, portName };
+        setStatus(`已選擇輸出 ${nodeId}.${portName}，請點目標 input port。`);
+      } else if (pendingConnection) {
+        addEdgeFromPorts(pendingConnection.nodeId, pendingConnection.portName, nodeId, portName);
+      } else {
+        setStatus("請先點 output port，再點 input port。", false);
+      }
+      return;
+    }
+    const clearConnection = event.target.closest("[data-clear-connection]");
+    if (clearConnection) {
+      pendingConnection = null;
+      setStatus("已取消連線選取。");
+      return;
+    }
+    const deleteEdge = event.target.closest("[data-delete-edge]");
+    if (deleteEdge) {
+      workflow.edges = workflow.edges.filter((item) => item.id !== deleteEdge.dataset.deleteEdge);
+      render();
+      return;
+    }
+    const deleteNode = event.target.closest("[data-delete-node]");
+    if (deleteNode) {
+      const id = deleteNode.dataset.deleteNode;
+      workflow.nodes = workflow.nodes.filter((item) => item.id !== id);
+      workflow.edges = workflow.edges.filter((item) => item.from !== id && item.to !== id);
+      selectedNodeId = workflow.start_node_id;
+      render();
+      return;
+    }
+    const duplicateNode = event.target.closest("[data-duplicate-node]");
+    if (duplicateNode) {
+      const source = workflow.nodes.find((item) => item.id === duplicateNode.dataset.duplicateNode);
+      if (!source) return;
+      const copy = JSON.parse(JSON.stringify(source));
+      copy.id = uid(copy.type);
+      copy.label = `${copy.label || source.type} 副本`;
+      copy.x = Number(copy.x || 0) + 40;
+      copy.y = Number(copy.y || 0) + 40;
+      workflow.nodes.push(copy);
+      selectedNodeId = copy.id;
+      render();
+    }
+  }
 
-    boot();
+  function handleInput(event) {
+    if (event.target.id === "strategyName") workflow.name = event.target.value.slice(0, 80);
+    if (event.target.id === "strategyDescription") workflow.description = event.target.value.slice(0, 160);
+    const item = selectedNode();
+    if (!item) return render();
+    const nodeField = event.target.dataset.nodeField;
+    const conditionField = event.target.dataset.conditionField;
+    const actionField = event.target.dataset.actionField;
+    if (nodeField) {
+      if (["x", "y", "priority", "cooldown_seconds", "max_runs"].includes(nodeField)) item[nodeField] = numberValue(event.target.value, item[nodeField] || 0);
+      else item[nodeField] = event.target.value;
+    }
+    if (conditionField) {
+      item.condition = item.condition || { type: "always" };
+      if (conditionField === "value_bool") item.condition.value = event.target.value === "true";
+      else if (["value", "period"].includes(conditionField)) item.condition[conditionField] = numberValue(event.target.value, item.condition[conditionField] || 0);
+      else item.condition[conditionField] = event.target.value;
+      item.condition = cleanCondition(item.condition);
+      item.label = conditionLabel(item.condition);
+    }
+    if (actionField) {
+      item.action = item.action || { type: "hold", step: 1, order_type: "market" };
+      if (["step", "percent", "amount_points", "limit_price_points"].includes(actionField)) item.action[actionField] = numberValue(event.target.value, item.action[actionField] || 0);
+      else item.action[actionField] = event.target.value;
+      item.action = cleanAction(item.action);
+      item.label = actionLabel(item.action);
+    }
+    render();
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    if (!dragNode) return;
+    const canvas = document.querySelector("[data-graph-canvas]");
+    const rect = canvas?.getBoundingClientRect();
+    const item = workflow.nodes.find((nodeItem) => nodeItem.id === dragNode.id);
+    if (item && rect) {
+      item.x = Math.max(0, Math.round(event.clientX - rect.left - dragNode.dx));
+      item.y = Math.max(0, Math.round(event.clientY - rect.top - dragNode.dy));
+      render();
+    }
+    dragNode = null;
+  }
+
+  function autoLayoutGraph() {
+    const columns = { start: 0, condition: 1, logic: 2, control: 3, action: 4 };
+    const counters = {};
+    workflow.nodes.forEach((item) => {
+      const column = columns[item.type] ?? 1;
+      const row = counters[column] || 0;
+      counters[column] = row + 1;
+      item.x = 40 + column * 250;
+      item.y = 60 + row * 130;
+    });
+  }
+
+  document.addEventListener("click", handleClick);
+  document.addEventListener("input", handleInput);
+  document.addEventListener("dragstart", (event) => {
+    const target = event.target.closest("[data-node-id]");
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    dragNode = { id: target.dataset.nodeId, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+  });
+  document.addEventListener("dragover", (event) => {
+    if (event.target.closest("[data-graph-canvas]")) event.preventDefault();
+  });
+  document.addEventListener("drop", handleDrop);
+
+  window.HackmeTradingWorkflowEditor = {
+    getWorkflow: () => normalizeWorkflow(workflow),
+    setWorkflow: (next) => {
+      workflow = normalizeWorkflow(next);
+      selectedNodeId = workflow.start_node_id;
+      render();
+    },
+    templateWorkflow,
+    validateWorkflow,
+  };
+
+  render();
+}());

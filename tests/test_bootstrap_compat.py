@@ -244,7 +244,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"order_uuid", "user_id", "market_symbol", "side", "order_type", "status", "frozen_points"} <= trading_order_cols
     assert {"fill_uuid", "order_id", "notional_points", "fee_points", "points_ledger_uuids_json"} <= trading_fill_cols
     assert {"user_id", "market_symbol", "quantity_units", "locked_quantity_units"} <= trading_position_cols
-    assert {"position_uuid", "position_type", "principal_points", "collateral_points", "interest_bps_daily"} <= trading_margin_position_cols
+    assert {"position_uuid", "position_type", "principal_points", "collateral_points", "interest_percent_daily"} <= trading_margin_position_cols
     assert {"id", "balance_points", "updated_at"} <= trading_reserve_cols
     assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
     assert set(default_users) == {"root", "admin", "test"}

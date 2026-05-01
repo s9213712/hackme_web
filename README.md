@@ -15,7 +15,9 @@ hardening in a compact single-node deployment.
 
 Release `2026.05.01-037` adds a root-only one-click PointsChain anomaly handler,
 refreshes the server health dashboard layout, and updates the smoke, permission
-pentest, stress, and pre-push validation scripts for the current control plane.
+pentest, stress, trading, and pre-push validation scripts for the current
+control plane. The Economy line also includes the spot trading MVP, borrow
+trading experiments, DCA bots, node-graph workflow bots, and workflow backtests.
 
 This README is intentionally short. Server features, default settings, and API
 details have been moved out of README.
@@ -23,8 +25,8 @@ details have been moved out of README.
 ## Documents
 
 All guides live under [docs/](docs/README.md). Start there for the web UI guide,
-developer/API notes, security policy, testing scripts, release policy, and
-project status.
+the [trading system and bot guide](docs/TRADING.md), developer/API notes,
+security policy, testing scripts, release policy, and project status.
 
 ## Fast Start
 

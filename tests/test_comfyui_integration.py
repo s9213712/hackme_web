@@ -938,12 +938,13 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-interrupt-btn"' in index_html
     assert 'id="comfyui-load-draft-btn"' in index_html
     assert 'id="comfyui-batch-size"' in index_html
+    assert 'id="comfyui-run-count"' in index_html
     assert 'id="comfyui-save-btn"' in index_html
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
-    assert "/js/36-comfyui.js?v=20260429-root-billing-exempt" in index_html
-    assert "/styles.css?v=20260501-mobile-polish" in index_html
+    assert "/js/36-comfyui.js?v=20260502-run-count" in index_html
+    assert "/styles.css?v=20260501-mobile-sidebar" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
@@ -966,8 +967,11 @@ def test_comfyui_frontend_is_wired():
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
     assert "非 root 帳號成功產圖後每張扣" in comfyui_js
     assert "function confirmComfyuiBilling(payload)" in comfyui_js
+    assert "function comfyuiRunCount()" in comfyui_js
     assert 'if (currentUser === "root") return { confirmed: true, required: false };' in comfyui_js
     assert "window.confirm" in comfyui_js
+    assert "batchSize * runCount" in comfyui_js
+    assert "for (let runIndex = 0; runIndex < runCount; runIndex += 1)" in comfyui_js
     assert "confirm_billing: billingConfirmation.required" in comfyui_js
     assert "json.billing?.charged" in comfyui_js
     assert 'batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1)))' in comfyui_js
@@ -980,7 +984,7 @@ def test_comfyui_frontend_is_wired():
     assert "bindComfyuiDraftPersistence" in comfyui_js
     assert "restoreComfyuiDraft()" in comfyui_js
     assert 'album_id: selectedComfyuiAlbumId()' in comfyui_js
-    assert "startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS)" in comfyui_js
+    assert "startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS * runCount)" in comfyui_js
     assert "stopComfyuiProgress({ complete: true })" in comfyui_js
     assert "comfyuiGenerateAbortController.abort()" in comfyui_js
     assert "comfyuiShareGenerationPayload" in comfyui_js

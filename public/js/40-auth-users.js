@@ -113,7 +113,6 @@ async function doRegister() {
   const nickname = $("reg-nickname").value.trim();
   const email = $("reg-email")?.value.trim() || "";
   const realName = $("reg-realname").value.trim();
-  const idNo = $("reg-idno").value.trim();
   const birth = $("reg-birthdate").value;
   const phone = $("reg-phone").value.trim();
 
@@ -123,10 +122,6 @@ async function doRegister() {
   if (!pwConfirm) { flash($("reg-msg"), "請再次輸入密碼", false); return; }
   if (pw !== pwConfirm) { flash($("reg-msg"), "兩次密碼輸入不一致", false); return; }
   if (!nickname) { flash($("reg-msg"), "暱稱不可為空", false); return; }
-  if (!realName) { flash($("reg-msg"), "真實姓名不可為空", false); return; }
-  if (!idNo) { flash($("reg-msg"), "身分證不可為空", false); return; }
-  if (!birth) { flash($("reg-msg"), "請填寫生日", false); return; }
-  if (!phone) { flash($("reg-msg"), "請填寫電話", false); return; }
 
   if (!/^[a-zA-Z0-9_\-]+$/.test(user)) {
     flash($("reg-msg"), "帳號只能包含英文、數字、底線、減號", false);
@@ -155,7 +150,6 @@ async function doRegister() {
         nickname,
         email,
         real_name: realName,
-        id_number: idNo,
         birthdate: birth,
         phone,
         captcha_id: $("captcha-id")?.value || "",
@@ -313,6 +307,29 @@ async function confirmEmailVerification() {
     setRecoveryMsg("網路錯誤，請稍後再試", false);
   }
 }
+
+function bindAuthRecoveryControls() {
+  const bindings = [
+    ["recovery-toggle", toggleRecoveryPanel],
+    ["reset-request-btn", requestPasswordReset],
+    ["reset-confirm-btn", confirmPasswordReset],
+    ["verify-request-btn", requestEmailVerification],
+    ["verify-confirm-btn", confirmEmailVerification],
+  ];
+  bindings.forEach(([id, handler]) => {
+    const el = $(id);
+    if (!el || el.dataset.authRecoveryBound === "1") return;
+    el.dataset.authRecoveryBound = "1";
+    el.addEventListener("click", handler);
+  });
+  if (typeof setupPwToggle === "function") {
+    setupPwToggle("reset-new-pw", "reset-new-pw-toggle");
+    setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
+  }
+  updateRecoveryModeUi();
+}
+
+bindAuthRecoveryControls();
 
 async function doLogout(options = {}) {
   const immediate = !!(options && options.immediate === true);

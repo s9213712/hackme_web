@@ -858,6 +858,7 @@ configure_auth_service(
     get_db=get_db,
     get_user_by_username=get_user_by_username,
     fernet=fernet,
+    get_client_ip=get_client_ip,
     session_ttl=SESSION_TTL,
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT_SECONDS,

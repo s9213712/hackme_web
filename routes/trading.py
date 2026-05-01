@@ -8,6 +8,11 @@ from flask import request
 
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
+COINBASE_CANDLES_URL_TEMPLATE = "https://api.exchange.coinbase.com/products/{product_id}/candles"
+KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"
+GEMINI_CANDLES_URL_TEMPLATE = "https://api.gemini.com/v2/candles/{symbol}/{timeframe}"
+BITSTAMP_OHLC_URL_TEMPLATE = "https://www.bitstamp.net/api/v2/ohlc/{pair}/"
 USDT_TO_POINTS_RATE = 1
 REFERENCE_PRICE_MARKETS = {
     "BTC/POINTS": "BTCUSDT",
@@ -15,7 +20,42 @@ REFERENCE_PRICE_MARKETS = {
     "ETH/POINTS": "ETHUSDT",
     "ETH/USDT": "ETHUSDT",
 }
+COINBASE_REFERENCE_PRODUCTS = {
+    "BTC/POINTS": "BTC-USD",
+    "BTC/USDT": "BTC-USD",
+    "ETH/POINTS": "ETH-USD",
+    "ETH/USDT": "ETH-USD",
+}
+OKX_REFERENCE_INSTRUMENTS = {
+    "BTC/POINTS": "BTC-USDT",
+    "BTC/USDT": "BTC-USDT",
+    "ETH/POINTS": "ETH-USDT",
+    "ETH/USDT": "ETH-USDT",
+}
+KRAKEN_REFERENCE_PAIRS = {
+    "BTC/POINTS": "XBTUSD",
+    "BTC/USDT": "XBTUSD",
+    "ETH/POINTS": "ETHUSD",
+    "ETH/USDT": "ETHUSD",
+}
+GEMINI_REFERENCE_SYMBOLS = {
+    "BTC/POINTS": "btcusd",
+    "BTC/USDT": "btcusd",
+    "ETH/POINTS": "ethusd",
+    "ETH/USDT": "ethusd",
+}
+BITSTAMP_REFERENCE_PAIRS = {
+    "BTC/POINTS": "btcusd",
+    "BTC/USDT": "btcusd",
+    "ETH/POINTS": "ethusd",
+    "ETH/USDT": "ethusd",
+}
 REFERENCE_PRICE_INTERVALS = {"5m", "15m", "1h", "4h", "1d"}
+OKX_BAR_INTERVALS = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}
+COINBASE_GRANULARITY_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "1d": 86400}
+KRAKEN_INTERVAL_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+GEMINI_TIMEFRAMES = {"5m": "5m", "15m": "15m", "1h": "1hr", "1d": "1day"}
+BITSTAMP_STEP_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
 
@@ -28,6 +68,7 @@ def register_trading_routes(app, deps):
     json_resp = deps["json_resp"]
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
+    check_user_rate_limit = deps.get("check_user_rate_limit", lambda *args, **kwargs: (False, {}))
     audit = deps.get("audit", lambda *args, **kwargs: None)
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
 
@@ -75,10 +116,17 @@ def register_trading_routes(app, deps):
         msg = str(exc) or exc.__class__.__name__
         status = 400
         lowered = msg.lower()
-        if "insufficient" in lowered:
+        if "spot position" in lowered or "持倉不足" in lowered:
             status = 409
-            if "root simulated trading points" in lowered:
+            msg = "現貨持倉不足，請降低賣出數量或確認可賣現貨。"
+        elif "insufficient" in lowered or "不足" in lowered:
+            status = 409
+            if msg.startswith("root 模擬交易資金不足"):
+                msg = msg
+            elif "root simulated trading points" in lowered:
                 msg = "root 模擬交易資金不足，請降低保證金/數量，或在交易所重置 root 模擬資金"
+            elif msg.startswith("交易資金不足"):
+                msg = msg
             else:
                 msg = "交易資金不足，請降低數量或補足可用積分"
         if "safe mode" in lowered:
@@ -89,6 +137,9 @@ def register_trading_routes(app, deps):
             status = 400
         elif lowered.startswith("borrow trading is disabled"):
             msg = "進階交易尚未啟用，請由 root 到設定 > 計費 > 交易所參數開啟借貸交易"
+            status = 403
+        elif lowered.startswith("contract trading is disabled"):
+            msg = "合約交易尚未啟用，請由 root 到設定 > 計費 > 交易所參數開啟 futures_enabled"
             status = 403
         elif lowered.startswith("position_type must be"):
             msg = "進階交易類型錯誤，請選擇融資買入或借券放空"
@@ -114,6 +165,266 @@ def register_trading_routes(app, deps):
     def display_market_symbol(symbol):
         return str(symbol or "").upper().replace("/POINTS", "/USDT")
 
+    def fetch_json_url(url, *, timeout=6, user_agent="hackme_web/1.0 reference-price-proxy"):
+        req = Request(url, headers={"User-Agent": user_agent})
+        with urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def candle_payload(open_time_ms, open_price, high_price, low_price, close_price):
+        open_price = float(open_price)
+        high_price = float(high_price)
+        low_price = float(low_price)
+        close_price = float(close_price)
+        if min(open_price, high_price, low_price, close_price) <= 0:
+            return None
+        return {
+            "time": int(open_time_ms),
+            "time_iso": datetime.fromtimestamp(int(open_time_ms) / 1000, tz=timezone.utc).isoformat(),
+            "open_usdt": open_price,
+            "high_usdt": high_price,
+            "low_usdt": low_price,
+            "close_usdt": close_price,
+            "open_points": price_to_points(open_price),
+            "high_points": price_to_points(high_price),
+            "low_points": price_to_points(low_price),
+            "close_points": price_to_points(close_price),
+            "price_usdt": close_price,
+            "price_points": price_to_points(close_price),
+        }
+
+    def fetch_binance_reference_candles(binance_symbol, interval, limit):
+        query = urlencode({"symbol": binance_symbol, "interval": interval, "limit": limit})
+        payload = fetch_json_url(f"{BINANCE_KLINES_URL}?{query}")
+        if not isinstance(payload, list):
+            raise ValueError("Binance 參考價格格式錯誤")
+        candles = []
+        for item in payload:
+            try:
+                candle = candle_payload(int(item[0]), item[1], item[2], item[3], item[4])
+            except Exception:
+                continue
+            if candle:
+                candles.append(candle)
+        return {"source": "binance_public_api", "symbol": binance_symbol, "candles": candles}
+
+    def fetch_okx_reference_candles(instrument, interval, limit):
+        bar = OKX_BAR_INTERVALS.get(interval)
+        if not instrument or not bar:
+            raise ValueError("OKX 不支援此市場或週期")
+        query = urlencode({"instId": instrument, "bar": bar, "limit": limit})
+        payload = fetch_json_url(
+            f"{OKX_CANDLES_URL}?{query}",
+            user_agent="hackme_web/1.0 reference-price-proxy okx",
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            raise ValueError("OKX 參考價格格式錯誤")
+        candles = []
+        for item in sorted(data, key=lambda row: int(float(row[0])) if isinstance(row, list) and row else 0)[-limit:]:
+            try:
+                candle = candle_payload(int(float(item[0])), item[1], item[2], item[3], item[4])
+            except Exception:
+                continue
+            if candle:
+                candles.append(candle)
+        return {"source": "okx_public_api", "symbol": instrument, "candles": candles}
+
+    def fetch_coinbase_reference_candles(product_id, interval, limit):
+        granularity = COINBASE_GRANULARITY_SECONDS.get(interval)
+        if not product_id or not granularity:
+            raise ValueError("Coinbase 不支援此市場或週期")
+        query = urlencode({"granularity": granularity})
+        payload = fetch_json_url(
+            f"{COINBASE_CANDLES_URL_TEMPLATE.format(product_id=product_id)}?{query}",
+            user_agent="hackme_web/1.0 reference-price-proxy coinbase",
+        )
+        if not isinstance(payload, list):
+            raise ValueError("Coinbase 參考價格格式錯誤")
+        candles = []
+        for item in sorted(payload, key=lambda row: int(float(row[0])) if isinstance(row, list) and row else 0)[-limit:]:
+            try:
+                candle = candle_payload(int(float(item[0])) * 1000, item[3], item[2], item[1], item[4])
+            except Exception:
+                continue
+            if candle:
+                candles.append(candle)
+        return {"source": "coinbase_exchange", "symbol": product_id, "candles": candles}
+
+    def fetch_kraken_reference_candles(pair, interval, limit):
+        minutes = KRAKEN_INTERVAL_MINUTES.get(interval)
+        if not pair or not minutes:
+            raise ValueError("Kraken 不支援此市場或週期")
+        query = urlencode({"pair": pair, "interval": minutes})
+        payload = fetch_json_url(
+            f"{KRAKEN_OHLC_URL}?{query}",
+            user_agent="hackme_web/1.0 reference-price-proxy kraken",
+        )
+        if not isinstance(payload, dict) or payload.get("error"):
+            raise ValueError(f"Kraken 參考價格錯誤：{payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        ohlc = []
+        provider_symbol = pair
+        for key, value in result.items():
+            if key == "last":
+                continue
+            provider_symbol = key
+            ohlc = value if isinstance(value, list) else []
+            break
+        candles = []
+        for item in ohlc[-limit:]:
+            try:
+                candle = candle_payload(int(float(item[0])) * 1000, item[1], item[2], item[3], item[4])
+            except Exception:
+                continue
+            if candle:
+                candles.append(candle)
+        return {"source": "kraken_public_api", "symbol": provider_symbol, "candles": candles}
+
+    def fetch_gemini_reference_candles(symbol, interval, limit):
+        timeframe = GEMINI_TIMEFRAMES.get(interval)
+        if not symbol or not timeframe:
+            raise ValueError("Gemini 不支援此市場或週期")
+        payload = fetch_json_url(
+            GEMINI_CANDLES_URL_TEMPLATE.format(symbol=symbol, timeframe=timeframe),
+            user_agent="hackme_web/1.0 reference-price-proxy gemini",
+        )
+        if not isinstance(payload, list):
+            raise ValueError("Gemini 參考價格格式錯誤")
+        candles = []
+        for item in sorted(payload, key=lambda row: int(float(row[0])) if isinstance(row, list) and row else 0)[-limit:]:
+            try:
+                candle = candle_payload(int(float(item[0])), item[1], item[2], item[3], item[4])
+            except Exception:
+                continue
+            if candle:
+                candles.append(candle)
+        return {"source": "gemini_public_api", "symbol": symbol, "candles": candles}
+
+    def fetch_bitstamp_reference_candles(pair, interval, limit):
+        step = BITSTAMP_STEP_SECONDS.get(interval)
+        if not pair or not step:
+            raise ValueError("Bitstamp 不支援此市場或週期")
+        query = urlencode({"step": step, "limit": limit})
+        payload = fetch_json_url(
+            f"{BITSTAMP_OHLC_URL_TEMPLATE.format(pair=pair)}?{query}",
+            user_agent="hackme_web/1.0 reference-price-proxy bitstamp",
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        ohlc = data.get("ohlc") if isinstance(data, dict) else None
+        if not isinstance(ohlc, list):
+            raise ValueError("Bitstamp 參考價格格式錯誤")
+        candles = []
+        for item in sorted(ohlc, key=lambda row: int(float(row.get("timestamp", 0))) if isinstance(row, dict) else 0)[-limit:]:
+            try:
+                candle = candle_payload(int(float(item["timestamp"])) * 1000, item["open"], item["high"], item["low"], item["close"])
+            except Exception:
+                continue
+            if candle:
+                candles.append(candle)
+        return {"source": "bitstamp_public_api", "symbol": pair, "candles": candles}
+
+    def fetch_reference_candles_with_fallback(market_symbol, interval, limit):
+        providers = (
+            lambda: fetch_binance_reference_candles(REFERENCE_PRICE_MARKETS.get(market_symbol), interval, limit),
+            lambda: fetch_okx_reference_candles(OKX_REFERENCE_INSTRUMENTS.get(market_symbol), interval, limit),
+            lambda: fetch_coinbase_reference_candles(COINBASE_REFERENCE_PRODUCTS.get(market_symbol), interval, limit),
+            lambda: fetch_kraken_reference_candles(KRAKEN_REFERENCE_PAIRS.get(market_symbol), interval, limit),
+            lambda: fetch_gemini_reference_candles(GEMINI_REFERENCE_SYMBOLS.get(market_symbol), interval, limit),
+            lambda: fetch_bitstamp_reference_candles(BITSTAMP_REFERENCE_PAIRS.get(market_symbol), interval, limit),
+        )
+        errors = []
+        for provider in providers:
+            try:
+                result = provider()
+                if result.get("candles"):
+                    return result
+                errors.append(f"{result.get('source', 'provider')}: no candles")
+            except Exception as exc:
+                errors.append(str(exc)[:160])
+        raise ValueError("; ".join(errors) or "all reference price providers failed")
+
+    def parse_time_ms(value):
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            number = int(float(text))
+            return number if number > 10_000_000_000 else number * 1000
+        except Exception:
+            pass
+        try:
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp() * 1000)
+        except Exception:
+            raise ValueError("backtest time must be ISO datetime or unix timestamp")
+
+    def fetch_reference_candles_for_backtest(data):
+        market_symbol = str(data.get("market_symbol") or data.get("market") or "BTC/USDT").strip().upper()
+        binance_symbol = REFERENCE_PRICE_MARKETS.get(market_symbol)
+        if not binance_symbol:
+            raise ValueError("unsupported backtest market")
+        interval = str(data.get("timeframe") or data.get("interval") or "15m").strip()
+        if interval not in REFERENCE_PRICE_INTERVALS:
+            raise ValueError("unsupported backtest interval")
+        try:
+            limit = int(data.get("limit") or data.get("candle_limit") or 500)
+        except Exception:
+            raise ValueError("backtest candle limit is invalid")
+        query = {
+            "symbol": binance_symbol,
+            "interval": interval,
+            "limit": max(2, min(limit, 1000)),
+        }
+        start_ms = parse_time_ms(data.get("start_time"))
+        end_ms = parse_time_ms(data.get("end_time"))
+        if start_ms is not None:
+            query["startTime"] = start_ms
+        if end_ms is not None:
+            query["endTime"] = end_ms
+        req = Request(
+            f"{BINANCE_KLINES_URL}?{urlencode(query)}",
+            headers={"User-Agent": "hackme_web/1.0 trading-backtest"},
+        )
+        with urlopen(req, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError("backtest price provider returned invalid data")
+        candles = []
+        for item in payload:
+            try:
+                open_time = int(item[0])
+                open_price = float(item[1])
+                high_price = float(item[2])
+                low_price = float(item[3])
+                close_price = float(item[4])
+            except Exception:
+                continue
+            if min(open_price, high_price, low_price, close_price) <= 0:
+                continue
+            candles.append({
+                "time": open_time,
+                "time_iso": datetime.fromtimestamp(open_time / 1000, tz=timezone.utc).isoformat(),
+                "open_usdt": open_price,
+                "high_usdt": high_price,
+                "low_usdt": low_price,
+                "close_usdt": close_price,
+                "open_points": price_to_points(open_price),
+                "high_points": price_to_points(high_price),
+                "low_points": price_to_points(low_price),
+                "close_points": price_to_points(close_price),
+                "price_usdt": close_price,
+                "price_points": price_to_points(close_price),
+            })
+        if len(candles) < 2:
+            raise ValueError("backtest price provider returned too few candles")
+        return candles
+
     @app.route("/api/trading/markets", methods=["GET"])
     @require_csrf_safe
     def trading_markets():
@@ -136,6 +447,14 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
+        blocked, info = check_user_rate_limit(actor_value(actor, "id", 0), "trading_reference_prices", max_req=120, window_sec=60)
+        if blocked:
+            retry_after = int(info.get("retry_after", 60)) if isinstance(info, dict) else 60
+            return json_resp({
+                "ok": False,
+                "msg": "參考價格查詢過於頻繁，請稍後再試",
+                "retry_after": retry_after,
+            }), 429
         market_symbol = str(request.args.get("market") or "BTC/USDT").strip().upper()
         binance_symbol = REFERENCE_PRICE_MARKETS.get(market_symbol)
         if not binance_symbol:
@@ -154,53 +473,24 @@ def register_trading_routes(app, deps):
         cached = REFERENCE_PRICE_CACHE.get(cache_key)
         if cached and now - cached["cached_at"] <= REFERENCE_PRICE_CACHE_TTL_SECONDS:
             return json_resp(cached["payload"])
-        query = urlencode({"symbol": binance_symbol, "interval": interval, "limit": limit})
-        req = Request(
-            f"{BINANCE_KLINES_URL}?{query}",
-            headers={"User-Agent": "hackme_web/1.0 reference-price-proxy"},
-        )
         try:
-            with urlopen(req, timeout=6) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except Exception:
-            return json_resp({"ok": False, "msg": "Binance 參考價格讀取失敗"}), 502
-        if not isinstance(payload, list):
-            return json_resp({"ok": False, "msg": "Binance 參考價格格式錯誤"}), 502
-        candles = []
-        for item in payload:
-            try:
-                open_time = int(item[0])
-                open_price = float(item[1])
-                high_price = float(item[2])
-                low_price = float(item[3])
-                close_price = float(item[4])
-            except Exception:
-                continue
-            if min(open_price, high_price, low_price, close_price) <= 0:
-                continue
-            candle = {
-                "time": open_time,
-                "time_iso": datetime.fromtimestamp(open_time / 1000, tz=timezone.utc).isoformat(),
-                "open_usdt": open_price,
-                "high_usdt": high_price,
-                "low_usdt": low_price,
-                "close_usdt": close_price,
-                "open_points": price_to_points(open_price),
-                "high_points": price_to_points(high_price),
-                "low_points": price_to_points(low_price),
-                "close_points": price_to_points(close_price),
-                "price_usdt": close_price,
-                "price_points": price_to_points(close_price),
-            }
-            candles.append(candle)
-        if not candles:
-            return json_resp({"ok": False, "msg": "Binance 參考價格沒有可用資料"}), 502
+            provider_result = fetch_reference_candles_with_fallback(market_symbol, interval, limit)
+        except Exception as exc:
+            if cached:
+                fallback = dict(cached["payload"])
+                fallback["source"] = f"{fallback.get('source') or 'reference_price'}_cached"
+                fallback["stale"] = True
+                fallback["msg"] = "參考價格來源暫時無法讀取，已使用最後可用快取"
+                fallback["cache_age_seconds"] = round(now - cached["cached_at"], 3)
+                return json_resp(fallback)
+            return json_resp({"ok": False, "msg": "參考價格讀取失敗", "detail": str(exc)[:240]}), 502
+        candles = provider_result["candles"]
         result = {
             "ok": True,
-            "source": "binance_public_api",
+            "source": provider_result["source"],
             "market": market_symbol,
             "display_market": display_market_symbol(market_symbol),
-            "symbol": binance_symbol,
+            "symbol": provider_result["symbol"],
             "interval": interval,
             "latest_only": latest_only,
             "usdt_to_points_rate": USDT_TO_POINTS_RATE,
@@ -291,6 +581,8 @@ def register_trading_routes(app, deps):
         if err:
             return err
         try:
+            if not isinstance(data.get("candles"), list):
+                data["candles"] = fetch_reference_candles_for_backtest(data)
             result = trading_service.backtest_trading_bot(actor=actor, payload=data)
             audit(
                 "TRADING_BOT_BACKTEST",
@@ -449,10 +741,13 @@ def register_trading_routes(app, deps):
         data, err = parse_json_body()
         if err:
             return err
+        settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+        if settings.get("price_source") == "manual_root":
+            return json_resp({"ok": False, "msg": "交易價格來源不可切換為 root 手動價格，請使用 Binance 與最後健康快取"}), 400
         try:
             result = trading_service.update_root_settings(
                 actor=actor,
-                settings=data.get("settings") if isinstance(data.get("settings"), dict) else {},
+                settings=settings,
                 markets=data.get("markets") if isinstance(data.get("markets"), list) else [],
             )
             audit("TRADING_SETTINGS_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail="root billing settings")
@@ -535,13 +830,15 @@ def register_trading_routes(app, deps):
         data, err = parse_json_body()
         if err:
             return err
+        if data.get("manual_price_points") is not None:
+            return json_resp({"ok": False, "msg": "不允許 root 手動改價；交易價格只能來自 Binance 或最後健康快取"}), 400
         try:
             result = trading_service.update_market(
                 actor=actor,
                 symbol=symbol,
                 manual_price_points=data.get("manual_price_points"),
-                max_price_jump_bps=data.get("max_price_jump_bps"),
-                fee_bps=data.get("fee_bps"),
+                max_price_jump_percent=data.get("max_price_jump_percent"),
+                fee_rate_percent=data.get("fee_rate_percent"),
                 min_order_points=data.get("min_order_points"),
                 max_order_points=data.get("max_order_points"),
                 enabled=data.get("enabled") if "enabled" in data else None,

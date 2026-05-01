@@ -50,6 +50,7 @@ def test_internal_test_login_token_is_hidden_outside_internal_test_mode():
 def test_login_recovery_uses_human_facing_verification_wording():
     index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
 
     assert "送出重設密碼審核" in index
     assert "寄送 Email 驗證碼" in index
@@ -57,3 +58,8 @@ def test_login_recovery_uses_human_facing_verification_wording():
     assert "Email 驗證 token" not in index
     assert "無法取得 CSRF token" not in auth
     assert "安全驗證狀態失效" in auth
+    assert "function bindAuthRecoveryControls()" in auth
+    assert '["reset-request-btn", requestPasswordReset]' in auth
+    assert '["recovery-toggle", toggleRecoveryPanel]' in auth
+    assert 'el.dataset.authRecoveryBound = "1";' in auth
+    assert 'if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();' in bootstrap

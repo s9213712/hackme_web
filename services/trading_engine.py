@@ -15,8 +15,8 @@ USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
 TRIAL_CREDIT_INITIAL_POINTS = 1_000
 TRIAL_CREDIT_DAYS = 7
-MARGIN_LONG_FINANCING_BPS = 9000
-SHORT_COLLATERAL_BPS = 6000
+MARGIN_LONG_FINANCING_RATE_PERCENT = 90.0
+SHORT_COLLATERAL_RATE_PERCENT = 60.0
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
 TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
@@ -38,12 +38,66 @@ WORKFLOW_CONDITION_TYPES = {
     "stop_loss_percent",
 }
 WORKFLOW_ACTION_TYPES = {"buy_percent", "buy_amount", "sell_percent", "close_all", "hold"}
+WORKFLOW_NODE_TYPES = {"start", "condition", "logic", "action", "control"}
+WORKFLOW_PORTS = {"in", "out", "true", "false", "then", "wait"}
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
+OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
+COINBASE_TICKER_URL_TEMPLATE = "https://api.exchange.coinbase.com/products/{product_id}/ticker"
+KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker"
+GEMINI_TICKER_URL_TEMPLATE = "https://api.gemini.com/v2/ticker/{symbol}"
+BITSTAMP_TICKER_URL_TEMPLATE = "https://www.bitstamp.net/api/v2/ticker/{pair}/"
+COINGECKO_SIMPLE_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+LIVE_PRICE_SOURCE_NAMES = {
+    "binance_public_api",
+    "okx_public_api",
+    "coinbase_exchange",
+    "kraken_public_api",
+    "gemini_public_api",
+    "bitstamp_public_api",
+    "coingecko_simple_price",
+    "test_live_price_provider",
+}
 LIVE_PRICE_MARKETS = {
     "BTC/POINTS": "BTCUSDT",
     "BTC/USDT": "BTCUSDT",
     "ETH/POINTS": "ETHUSDT",
     "ETH/USDT": "ETHUSDT",
+}
+COINBASE_PRICE_PRODUCTS = {
+    "BTC/POINTS": "BTC-USD",
+    "BTC/USDT": "BTC-USD",
+    "ETH/POINTS": "ETH-USD",
+    "ETH/USDT": "ETH-USD",
+}
+OKX_PRICE_INSTRUMENTS = {
+    "BTC/POINTS": "BTC-USDT",
+    "BTC/USDT": "BTC-USDT",
+    "ETH/POINTS": "ETH-USDT",
+    "ETH/USDT": "ETH-USDT",
+}
+KRAKEN_PRICE_PAIRS = {
+    "BTC/POINTS": "XBTUSD",
+    "BTC/USDT": "XBTUSD",
+    "ETH/POINTS": "ETHUSD",
+    "ETH/USDT": "ETHUSD",
+}
+GEMINI_PRICE_SYMBOLS = {
+    "BTC/POINTS": "btcusd",
+    "BTC/USDT": "btcusd",
+    "ETH/POINTS": "ethusd",
+    "ETH/USDT": "ethusd",
+}
+BITSTAMP_PRICE_PAIRS = {
+    "BTC/POINTS": "btcusd",
+    "BTC/USDT": "btcusd",
+    "ETH/POINTS": "ethusd",
+    "ETH/USDT": "ethusd",
+}
+COINGECKO_PRICE_IDS = {
+    "BTC/POINTS": "bitcoin",
+    "BTC/USDT": "bitcoin",
+    "ETH/POINTS": "ethereum",
+    "ETH/USDT": "ethereum",
 }
 
 
@@ -82,6 +136,16 @@ def _to_int(value, *, name, minimum=0, maximum=10**12):
     return number
 
 
+def _to_float(value, *, name, minimum=0.0, maximum=10**12):
+    try:
+        number = float(value)
+    except Exception as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if number < minimum or number > maximum:
+        raise ValueError(f"{name} out of range")
+    return number
+
+
 def quantity_to_units(value):
     try:
         dec = Decimal(str(value or "")).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
@@ -107,8 +171,8 @@ def notional_points(quantity_units, price_points):
     return int(math.ceil((quantity_units * price_points) / ASSET_SCALE))
 
 
-def fee_points(notional, fee_bps):
-    return int(math.ceil((int(notional) * int(fee_bps or 0)) / 10_000))
+def fee_points(notional, fee_rate_percent):
+    return int(math.ceil((int(notional) * float(fee_rate_percent or 0)) / 100))
 
 
 def ensure_trading_schema(conn):
@@ -134,10 +198,10 @@ def ensure_trading_schema(conn):
             pvp_matching_enabled INTEGER NOT NULL DEFAULT 0,
             execution_mode TEXT NOT NULL DEFAULT 'house_counterparty',
             manual_price_points INTEGER NOT NULL CHECK (manual_price_points > 0),
-            max_price_jump_bps INTEGER NOT NULL DEFAULT 1000,
+            max_price_jump_percent REAL NOT NULL DEFAULT 10,
             min_order_points INTEGER NOT NULL DEFAULT 1,
             max_order_points INTEGER NOT NULL DEFAULT 100000,
-            fee_bps INTEGER NOT NULL DEFAULT 30,
+            fee_rate_percent REAL NOT NULL DEFAULT 0.3,
             updated_at TEXT NOT NULL,
             updated_by INTEGER,
             price_source TEXT NOT NULL DEFAULT 'manual_root',
@@ -322,7 +386,7 @@ def ensure_trading_schema(conn):
             collateral_points INTEGER NOT NULL CHECK (collateral_points > 0),
             open_fee_points INTEGER NOT NULL DEFAULT 0,
             close_fee_points INTEGER NOT NULL DEFAULT 0,
-            interest_bps_daily INTEGER NOT NULL DEFAULT 0,
+            interest_percent_daily REAL NOT NULL DEFAULT 0,
             interest_points INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'open',
             opened_at TEXT NOT NULL,
@@ -431,6 +495,7 @@ def ensure_trading_schema(conn):
             interval_hours INTEGER NOT NULL DEFAULT 24,
             budget_points INTEGER NOT NULL DEFAULT 0,
             workflow_json TEXT,
+            execution_state_json TEXT,
             last_run_at TEXT,
             last_error TEXT,
             created_at TEXT NOT NULL,
@@ -475,16 +540,34 @@ def ensure_trading_schema(conn):
         "INSERT OR IGNORE INTO trading_state (id, safe_mode, reason, verification_json, updated_at) VALUES (1, 0, '', '{}', ?)",
         (now,),
     )
+    legacy_unit = "b" + "ps"
+    market_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_markets)").fetchall()}
+    legacy_fee_col = f"fee_{legacy_unit}"
+    legacy_jump_col = f"max_price_jump_{legacy_unit}"
+    if "fee_rate_percent" not in market_cols:
+        conn.execute("ALTER TABLE trading_markets ADD COLUMN fee_rate_percent REAL NOT NULL DEFAULT 0.3")
+        if legacy_fee_col in market_cols:
+            conn.execute(f"UPDATE trading_markets SET fee_rate_percent=CAST({legacy_fee_col} AS REAL) / 100.0")
+    if "max_price_jump_percent" not in market_cols:
+        conn.execute("ALTER TABLE trading_markets ADD COLUMN max_price_jump_percent REAL NOT NULL DEFAULT 10")
+        if legacy_jump_col in market_cols:
+            conn.execute(f"UPDATE trading_markets SET max_price_jump_percent=CAST({legacy_jump_col} AS REAL) / 100.0")
+    margin_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_margin_positions)").fetchall()}
+    legacy_interest_col = f"interest_{legacy_unit}_daily"
+    if "interest_percent_daily" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_percent_daily REAL NOT NULL DEFAULT 0")
+        if legacy_interest_col in margin_cols:
+            conn.execute(f"UPDATE trading_margin_positions SET interest_percent_daily=CAST({legacy_interest_col} AS REAL) / 100.0")
     defaults = [
         ("trading.enabled", "true"),
         ("trading.futures_enabled", "false"),
         ("trading.pvp_matching_enabled", "false"),
         ("trading.borrowing_enabled", "true"),
-        ("trading.borrow_interest_bps_daily", "10"),
-        ("trading.margin_long_financing_bps", str(MARGIN_LONG_FINANCING_BPS)),
-        ("trading.short_collateral_bps", str(SHORT_COLLATERAL_BPS)),
+        ("trading.borrow_interest_percent_daily", "0.1"),
+        ("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)),
+        ("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)),
         ("trading.margin_liquidation_enabled", "true"),
-        ("trading.margin_maintenance_bps", "1500"),
+        ("trading.margin_maintenance_percent", "15"),
         ("trading.max_price_staleness_seconds", "900"),
         ("trading.price_source", "binance_public_api"),
     ]
@@ -537,14 +620,17 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_bots ADD COLUMN budget_points INTEGER NOT NULL DEFAULT 0")
     if "workflow_json" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN workflow_json TEXT")
+    if "execution_state_json" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN execution_state_json TEXT")
 
 
 class TradingEngineService:
-    def __init__(self, *, get_db, points_service, audit=None, live_price_provider=None):
+    def __init__(self, *, get_db, points_service, audit=None, live_price_provider=None, historical_candles_provider=None):
         self.get_db = get_db
         self.points_service = points_service
         self.audit = audit or (lambda *args, **kwargs: None)
         self.live_price_provider = live_price_provider
+        self.historical_candles_provider = historical_candles_provider
 
     def ensure_schema(self, conn):
         self.points_service.ensure_schema(conn)
@@ -603,6 +689,13 @@ class TradingEngineService:
         state = self._state(conn)
         if state["safe_mode"]:
             raise ValueError(f"Trading safe mode active: {state['reason'] or 'verification failed'}")
+        try:
+            points_state = self.points_service._safe_mode_status(conn)
+        except Exception:
+            points_state = self.points_service.safe_mode_status()
+        if points_state.get("safe_mode"):
+            reason = points_state.get("reason") or "points chain verification failed"
+            raise ValueError(f"PointsChain safe mode active: {reason}; trading is paused")
         enabled = conn.execute("SELECT value FROM trading_settings WHERE key='trading.enabled'").fetchone()
         if enabled and str(enabled["value"]).lower() not in {"true", "1", "yes"}:
             raise ValueError("trading is disabled")
@@ -689,6 +782,7 @@ class TradingEngineService:
         item["display_symbol"] = str(item["market_symbol"] or "").replace("/POINTS", "/USDT")
         item["bot_type_label"] = "定投機器人" if item.get("bot_type") == "dca" else "條件機器人"
         item["workflow"] = _json_loads(item.get("workflow_json"), None)
+        item["execution_state"] = _json_loads(item.get("execution_state_json"), {}) if "execution_state_json" in row.keys() else {}
         return item
 
     def _bot_run_payload(self, row):
@@ -696,6 +790,9 @@ class TradingEngineService:
 
     def _market_payload(self, row):
         item = dict(row)
+        legacy_unit = "b" + "ps"
+        item.pop(f"fee_{legacy_unit}", None)
+        item.pop(f"max_price_jump_{legacy_unit}", None)
         item["futures_enabled"] = bool(item["futures_enabled"])
         item["pvp_matching_enabled"] = bool(item["pvp_matching_enabled"])
         item["enabled"] = bool(item["enabled"])
@@ -711,11 +808,11 @@ class TradingEngineService:
             "futures_enabled": str(raw.get("trading.futures_enabled", "false")).lower() in {"true", "1", "yes"},
             "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
             "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "true")).lower() in {"true", "1", "yes"},
-            "borrow_interest_bps_daily": _to_int(raw.get("trading.borrow_interest_bps_daily", "10"), name="borrow_interest_bps_daily", minimum=0, maximum=10000),
-            "margin_long_financing_bps": _to_int(raw.get("trading.margin_long_financing_bps", str(MARGIN_LONG_FINANCING_BPS)), name="margin_long_financing_bps", minimum=0, maximum=10000),
-            "short_collateral_bps": _to_int(raw.get("trading.short_collateral_bps", str(SHORT_COLLATERAL_BPS)), name="short_collateral_bps", minimum=0, maximum=10000),
+            "borrow_interest_percent_daily": _to_float(raw.get("trading.borrow_interest_percent_daily", "0.1"), name="borrow_interest_percent_daily", minimum=0, maximum=100),
+            "margin_long_financing_percent": _to_float(raw.get("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)), name="margin_long_financing_percent", minimum=0, maximum=100),
+            "short_collateral_percent": _to_float(raw.get("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)), name="short_collateral_percent", minimum=0, maximum=100),
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
-            "margin_maintenance_bps": _to_int(raw.get("trading.margin_maintenance_bps", "1500"), name="margin_maintenance_bps", minimum=0, maximum=10000),
+            "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
             "price_source": raw.get("trading.price_source", "binance_public_api"),
             "raw": raw,
@@ -758,31 +855,31 @@ class TradingEngineService:
                         (storage_key, value, now, self._actor_id(actor)),
                     )
                     setting_changes[storage_key] = value
-            if "borrow_interest_bps_daily" in settings:
-                value = str(_to_int(settings.get("borrow_interest_bps_daily"), name="borrow_interest_bps_daily", minimum=0, maximum=10000))
+            if "borrow_interest_percent_daily" in settings:
+                value = str(_to_float(settings.get("borrow_interest_percent_daily"), name="borrow_interest_percent_daily", minimum=0, maximum=100))
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-                    ("trading.borrow_interest_bps_daily", value, now, self._actor_id(actor)),
+                    ("trading.borrow_interest_percent_daily", value, now, self._actor_id(actor)),
                 )
-                setting_changes["trading.borrow_interest_bps_daily"] = value
+                setting_changes["trading.borrow_interest_percent_daily"] = value
             for input_key, storage_key in (
-                ("margin_long_financing_bps", "trading.margin_long_financing_bps"),
-                ("short_collateral_bps", "trading.short_collateral_bps"),
+                ("margin_long_financing_percent", "trading.margin_long_financing_percent"),
+                ("short_collateral_percent", "trading.short_collateral_percent"),
             ):
                 if input_key in settings:
-                    value = str(_to_int(settings.get(input_key), name=input_key, minimum=0, maximum=10000))
+                    value = str(_to_float(settings.get(input_key), name=input_key, minimum=0, maximum=100))
                     conn.execute(
                         "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                         (storage_key, value, now, self._actor_id(actor)),
                     )
                     setting_changes[storage_key] = value
-            if "margin_maintenance_bps" in settings:
-                value = str(_to_int(settings.get("margin_maintenance_bps"), name="margin_maintenance_bps", minimum=0, maximum=10000))
+            if "margin_maintenance_percent" in settings:
+                value = str(_to_float(settings.get("margin_maintenance_percent"), name="margin_maintenance_percent", minimum=0, maximum=100))
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-                    ("trading.margin_maintenance_bps", value, now, self._actor_id(actor)),
+                    ("trading.margin_maintenance_percent", value, now, self._actor_id(actor)),
                 )
-                setting_changes["trading.margin_maintenance_bps"] = value
+                setting_changes["trading.margin_maintenance_percent"] = value
             if "max_price_staleness_seconds" in settings:
                 value = str(_to_int(settings.get("max_price_staleness_seconds"), name="max_price_staleness_seconds", minimum=0, maximum=86400))
                 conn.execute(
@@ -809,14 +906,20 @@ class TradingEngineService:
                     raise ValueError(f"market not found: {symbol}")
                 updates = {}
                 for key, max_value in (
-                    ("fee_bps", 5000),
+                    ("fee_rate_percent", 50.0),
                     ("min_order_points", 10**9),
                     ("max_order_points", 10**12),
                 ):
                     if key in row:
-                        updates[key] = _to_int(row.get(key), name=key, minimum=0 if key != "max_order_points" else 1, maximum=max_value)
+                        if key == "fee_rate_percent":
+                            updates[key] = _to_float(row.get(key), name=key, minimum=0, maximum=max_value)
+                        else:
+                            updates[key] = _to_int(row.get(key), name=key, minimum=0 if key != "max_order_points" else 1, maximum=max_value)
                 if "enabled" in row:
                     updates["enabled"] = 1 if bool(row.get("enabled")) else 0
+                for flag_key in ("spot_enabled", "futures_enabled", "pvp_matching_enabled"):
+                    if flag_key in row:
+                        updates[flag_key] = 1 if bool(row.get(flag_key)) else 0
                 if not updates:
                     continue
                 if "min_order_points" in updates and "max_order_points" in updates and updates["min_order_points"] > updates["max_order_points"]:
@@ -847,27 +950,187 @@ class TradingEngineService:
     def _live_price_symbol(self, market_symbol):
         return LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
 
-    def _fetch_live_price_points(self, market_symbol):
-        symbol = self._live_price_symbol(market_symbol)
-        if not symbol:
-            raise ValueError("live price is not supported for this market")
-        if self.live_price_provider:
-            price = self.live_price_provider(str(market_symbol or "").strip().upper())
-        else:
-            req = Request(
-                f"{BINANCE_TICKER_URL}?{urlencode({'symbol': symbol})}",
-                headers={"User-Agent": "hackme_web/1.0 trading-price"},
-            )
-            with urlopen(req, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            price = payload.get("price") if isinstance(payload, dict) else None
+    def _fetch_json_url(self, url, *, timeout=5, user_agent="hackme_web/1.0 trading-price"):
+        req = Request(url, headers={"User-Agent": user_agent})
+        with urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _price_points_from_float(self, price, *, source):
         try:
             price_points = int(round(float(price) * USDT_TO_POINTS_RATE))
         except Exception as exc:
-            raise ValueError("live trading price format is invalid") from exc
+            raise ValueError(f"{source} price format is invalid") from exc
         if price_points <= 0:
-            raise ValueError("live trading price is invalid")
+            raise ValueError(f"{source} price is invalid")
         return price_points
+
+    def _fetch_binance_price_points(self, market_symbol):
+        symbol = LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
+        if not symbol:
+            raise ValueError("binance price is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{BINANCE_TICKER_URL}?{urlencode({'symbol': symbol})}",
+            timeout=5,
+        )
+        price = payload.get("price") if isinstance(payload, dict) else None
+        return self._price_points_from_float(price, source="binance_public_api")
+
+    def _fetch_okx_price_points(self, market_symbol):
+        instrument = OKX_PRICE_INSTRUMENTS.get(str(market_symbol or "").strip().upper())
+        if not instrument:
+            raise ValueError("okx price is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{OKX_TICKER_URL}?{urlencode({'instId': instrument})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-price okx",
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        ticker = data[0] if isinstance(data, list) and data else None
+        price = ticker.get("last") if isinstance(ticker, dict) else None
+        return self._price_points_from_float(price, source="okx_public_api")
+
+    def _fetch_coinbase_price_points(self, market_symbol):
+        product_id = COINBASE_PRICE_PRODUCTS.get(str(market_symbol or "").strip().upper())
+        if not product_id:
+            raise ValueError("coinbase price is not supported for this market")
+        payload = self._fetch_json_url(
+            COINBASE_TICKER_URL_TEMPLATE.format(product_id=product_id),
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-price coinbase",
+        )
+        price = payload.get("price") if isinstance(payload, dict) else None
+        return self._price_points_from_float(price, source="coinbase_exchange")
+
+    def _fetch_kraken_price_points(self, market_symbol):
+        pair = KRAKEN_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        if not pair:
+            raise ValueError("kraken price is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{KRAKEN_TICKER_URL}?{urlencode({'pair': pair})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-price kraken",
+        )
+        if not isinstance(payload, dict) or payload.get("error"):
+            raise ValueError(f"kraken ticker error: {payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        ticker = next(iter(result.values()), None)
+        close = ticker.get("c", [None])[0] if isinstance(ticker, dict) else None
+        return self._price_points_from_float(close, source="kraken_public_api")
+
+    def _fetch_gemini_price_points(self, market_symbol):
+        symbol = GEMINI_PRICE_SYMBOLS.get(str(market_symbol or "").strip().upper())
+        if not symbol:
+            raise ValueError("gemini price is not supported for this market")
+        payload = self._fetch_json_url(
+            GEMINI_TICKER_URL_TEMPLATE.format(symbol=symbol),
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-price gemini",
+        )
+        price = payload.get("close") or payload.get("last") if isinstance(payload, dict) else None
+        return self._price_points_from_float(price, source="gemini_public_api")
+
+    def _fetch_bitstamp_price_points(self, market_symbol):
+        pair = BITSTAMP_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        if not pair:
+            raise ValueError("bitstamp price is not supported for this market")
+        payload = self._fetch_json_url(
+            BITSTAMP_TICKER_URL_TEMPLATE.format(pair=pair),
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-price bitstamp",
+        )
+        price = payload.get("last") if isinstance(payload, dict) else None
+        return self._price_points_from_float(price, source="bitstamp_public_api")
+
+    def _fetch_coingecko_price_points(self, market_symbol):
+        coin_id = COINGECKO_PRICE_IDS.get(str(market_symbol or "").strip().upper())
+        if not coin_id:
+            raise ValueError("coingecko price is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{COINGECKO_SIMPLE_PRICE_URL}?{urlencode({'ids': coin_id, 'vs_currencies': 'usd', 'include_last_updated_at': 'true'})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-price coingecko",
+        )
+        coin = payload.get(coin_id) if isinstance(payload, dict) else None
+        price = coin.get("usd") if isinstance(coin, dict) else None
+        return self._price_points_from_float(price, source="coingecko_simple_price")
+
+    def _fetch_live_price_points(self, market_symbol):
+        market_symbol = str(market_symbol or "").strip().upper()
+        if not self._live_price_symbol(market_symbol):
+            raise ValueError("live price is not supported for this market")
+        if self.live_price_provider:
+            price = self.live_price_provider(str(market_symbol or "").strip().upper())
+            return self._price_points_from_float(price, source="test_live_price_provider"), "test_live_price_provider"
+        errors = []
+        providers = (
+            ("binance_public_api", self._fetch_binance_price_points),
+            ("okx_public_api", self._fetch_okx_price_points),
+            ("coinbase_exchange", self._fetch_coinbase_price_points),
+            ("kraken_public_api", self._fetch_kraken_price_points),
+            ("gemini_public_api", self._fetch_gemini_price_points),
+            ("bitstamp_public_api", self._fetch_bitstamp_price_points),
+            ("coingecko_simple_price", self._fetch_coingecko_price_points),
+        )
+        for source, fetcher in providers:
+            try:
+                return fetcher(market_symbol), source
+            except Exception as exc:
+                errors.append(f"{source}: {str(exc)[:120]}")
+        raise ValueError("; ".join(errors) or "all live price providers failed")
+
+    def _fetch_indicator_candles(self, market_symbol, *, limit=240, interval="15m"):
+        symbol = self._live_price_symbol(market_symbol)
+        if not symbol:
+            return []
+        if self.historical_candles_provider:
+            candles = self.historical_candles_provider(str(market_symbol or "").strip().upper(), interval, limit)
+            return candles if isinstance(candles, list) else []
+        query = urlencode({"symbol": symbol, "interval": interval, "limit": max(2, min(int(limit or 240), 1000))})
+        req = Request(
+            f"https://api.binance.com/api/v3/klines?{query}",
+            headers={"User-Agent": "hackme_web/1.0 trading-bot-indicators"},
+        )
+        with urlopen(req, timeout=6) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        candles = []
+        for item in payload if isinstance(payload, list) else []:
+            try:
+                candles.append({
+                    "open_points": float(item[1]) * USDT_TO_POINTS_RATE,
+                    "high_points": float(item[2]) * USDT_TO_POINTS_RATE,
+                    "low_points": float(item[3]) * USDT_TO_POINTS_RATE,
+                    "close_points": float(item[4]) * USDT_TO_POINTS_RATE,
+                })
+            except Exception:
+                continue
+        return candles
+
+    def _workflow_live_context(self, conn, *, market, user_id, observed_price):
+        position = self._position(conn, int(user_id), market["symbol"])
+        context = {
+            "price": observed_price,
+            "has_position": int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0),
+        }
+        try:
+            candles = self._fetch_indicator_candles(market["symbol"])
+            if candles:
+                latest = dict(candles[-1])
+                latest["close_points"] = observed_price
+                candles = [*candles[:-1], latest]
+                context.update(self._workflow_indicator_context(candles, len(candles) - 1))
+                context["price"] = observed_price
+                context["has_position"] = int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0)
+        except Exception as exc:
+            self._audit_event(
+                conn,
+                "TRADING_BOT_INDICATOR_CONTEXT_UNAVAILABLE",
+                "trading bot indicator context unavailable; price-only context used",
+                target_user_id=int(user_id),
+                market_symbol=market["symbol"],
+                severity="warning",
+                metadata={"error": str(exc)[:200]},
+            )
+        return context
 
     def _current_market_price_points(self, conn, market):
         symbol = market["symbol"]
@@ -878,7 +1141,7 @@ class TradingEngineService:
         old_price = int(market["manual_price_points"] or 0)
         old_source = str(market["price_source"] or "")
         try:
-            price = self._fetch_live_price_points(symbol)
+            price, live_source = self._fetch_live_price_points(symbol)
         except Exception as exc:
             max_stale = int(settings.get("max_price_staleness_seconds") or 0)
             try:
@@ -886,7 +1149,8 @@ class TradingEngineService:
                 stale_seconds = int((datetime.now() - updated_at).total_seconds())
             except Exception:
                 stale_seconds = max_stale + 1
-            if old_price > 0 and max_stale > 0 and stale_seconds <= max_stale and old_source in {"binance_public_api", "binance_public_api_cached"}:
+            cached_source = old_source[:-7] if old_source.endswith("_cached") else old_source
+            if old_price > 0 and max_stale > 0 and stale_seconds <= max_stale and cached_source in LIVE_PRICE_SOURCE_NAMES:
                 self._audit_event(
                     conn,
                     "TRADING_PRICE_FALLBACK_USED",
@@ -895,7 +1159,7 @@ class TradingEngineService:
                     severity="warning",
                     metadata={"error": str(exc), "cached_price_points": old_price, "stale_seconds": stale_seconds, "max_stale_seconds": max_stale},
                 )
-                return old_price, "binance_public_api_cached"
+                return old_price, f"{cached_source}_cached"
             raise ValueError(f"live trading price unavailable for {symbol}: {exc}") from exc
         has_live_history = bool(conn.execute(
             """
@@ -910,27 +1174,25 @@ class TradingEngineService:
             """,
             (symbol, symbol, symbol),
         ).fetchone())
-        if old_price > 0 and old_source == "binance_public_api" and has_live_history:
-            jump_bps = int(abs(price - old_price) * 10_000 / old_price) if old_price else 0
-            allowed_bps = int(market["max_price_jump_bps"] or 0)
-            if allowed_bps and jump_bps > allowed_bps:
+        if old_price > 0 and old_source in LIVE_PRICE_SOURCE_NAMES and has_live_history:
+            jump_percent = float(abs(price - old_price) * 100 / old_price) if old_price else 0.0
+            allowed_percent = float(market["max_price_jump_percent"] or 0)
+            if allowed_percent and jump_percent > allowed_percent:
                 self._audit_event(
                     conn,
                     "TRADING_PRICE_CIRCUIT_BREAKER",
                     "live trading price jump exceeded market threshold",
                     market_symbol=symbol,
                     severity="critical",
-                    metadata={"old_price_points": old_price, "new_price_points": price, "jump_bps": jump_bps, "allowed_bps": allowed_bps},
+                    metadata={"old_price_points": old_price, "new_price_points": price, "jump_percent": jump_percent, "allowed_percent": allowed_percent},
                 )
-                raise ValueError(
-                    f"live trading price jump {jump_bps / 100:.2f}% exceeds max {allowed_bps / 100:.2f}% for {symbol}"
-                )
+                raise ValueError(f"live trading price jump {jump_percent:.2f}% exceeds max {allowed_percent:.2f}% for {symbol}")
         now = _now()
         conn.execute(
-            "UPDATE trading_markets SET manual_price_points=?, price_source='binance_public_api', updated_at=? WHERE symbol=?",
-            (price, now, symbol),
+            "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
+            (price, live_source, now, symbol),
         )
-        return price, "binance_public_api"
+        return price, live_source
 
     def _root_sim_account(self, conn, user_id, *, actor=None):
         user_id = int(user_id)
@@ -1404,11 +1666,11 @@ class TradingEngineService:
         quantity_units = int(item["quantity_units"] or 0) + int(item["locked_quantity_units"] or 0)
         avg_cost = int(item["avg_cost_points"] or 0)
         current_price = int((market or {}).get("manual_price_points") or 0)
-        fee_bps = int((market or {}).get("fee_bps") or 0)
+        fee_rate_percent = float((market or {}).get("fee_rate_percent") or 0)
         gross_cost = notional_points(quantity_units, avg_cost) if quantity_units and avg_cost else 0
         current_value = notional_points(quantity_units, current_price) if quantity_units and current_price else 0
-        estimated_buy_fee = fee_points(gross_cost, fee_bps) if gross_cost else 0
-        estimated_exit_fee = fee_points(current_value, fee_bps) if current_value else 0
+        estimated_buy_fee = fee_points(gross_cost, fee_rate_percent) if gross_cost else 0
+        estimated_exit_fee = fee_points(current_value, fee_rate_percent) if current_value else 0
         cost_basis = gross_cost + estimated_buy_fee + estimated_exit_fee
         unrealized = current_value - cost_basis if quantity_units else 0
         item.update({
@@ -1444,7 +1706,7 @@ class TradingEngineService:
         settings = self._settings_payload(conn)
         return {
             "enabled": bool(settings.get("borrowing_enabled")),
-            "interest_bps_daily": int(settings.get("borrow_interest_bps_daily") or 0),
+            "interest_percent_daily": float(settings.get("borrow_interest_percent_daily") or 0),
         }
 
     def _assert_borrowing_enabled(self, conn):
@@ -1457,15 +1719,15 @@ class TradingEngineService:
         settings = self._settings_payload(conn)
         notional = int(notional or 0)
         if position_type == "margin_long":
-            financing_bps = int(settings.get("margin_long_financing_bps") or MARGIN_LONG_FINANCING_BPS)
-            return int(math.ceil(notional * max(0, 10_000 - financing_bps) / 10_000))
-        short_bps = int(settings.get("short_collateral_bps") or SHORT_COLLATERAL_BPS)
-        return int(math.ceil(notional * short_bps / 10_000))
+            financing_percent = float(settings.get("margin_long_financing_percent") or MARGIN_LONG_FINANCING_RATE_PERCENT)
+            return int(math.ceil(notional * max(0.0, 100.0 - financing_percent) / 100.0))
+        short_percent = float(settings.get("short_collateral_percent") or SHORT_COLLATERAL_RATE_PERCENT)
+        return int(math.ceil(notional * short_percent / 100.0))
 
     def _margin_interest_points(self, row, now_text=None):
         principal = int(row["principal_points"] or 0)
-        bps = int(row["interest_bps_daily"] or 0)
-        if principal <= 0 or bps <= 0:
+        rate_percent = float(row["interest_percent_daily"] or 0)
+        if principal <= 0 or rate_percent <= 0:
             return 0
         try:
             opened_at = datetime.fromisoformat(str(row["opened_at"]))
@@ -1476,20 +1738,20 @@ class TradingEngineService:
         days = int(seconds // 86400)
         if days <= 0:
             return 0
-        return int(math.ceil(principal * bps * days / 10_000))
+        return int(math.ceil(principal * rate_percent * days / 100.0))
 
     def _margin_risk_payload(self, conn, position, market=None, *, now_text=None):
         market = market or self._market(conn, position["market_symbol"])
         price, price_source = self._current_market_price_points(conn, market)
         quantity_units = int(position["quantity_units"])
         exit_notional = notional_points(quantity_units, price)
-        close_fee = fee_points(exit_notional, int(market["fee_bps"] or 0))
+        close_fee = fee_points(exit_notional, float(market["fee_rate_percent"] or 0))
         interest = self._margin_interest_points(position, now_text=now_text)
         collateral = int(position["collateral_points"] or 0)
         principal = int(position["principal_points"] or 0)
         entry_price = int(position["entry_price_points"] or price)
         entry_notional = notional_points(quantity_units, entry_price)
-        initial_margin_bps = int(math.floor((collateral * 10_000) / entry_notional)) if entry_notional > 0 else 0
+        initial_margin_percent = round((collateral * 100.0) / entry_notional, 4) if entry_notional > 0 else 0.0
         if position["position_type"] == "margin_long":
             equity_after = exit_notional - principal - interest - close_fee
             delta = equity_after - collateral
@@ -1497,28 +1759,28 @@ class TradingEngineService:
             delta = principal - exit_notional - interest - close_fee
             equity_after = collateral + delta
         settings = self._settings_payload(conn)
-        maintenance_bps = int(settings.get("margin_maintenance_bps") or 0)
-        maintenance_points = int(math.ceil(exit_notional * maintenance_bps / 10_000))
-        fee_bps = int(market["fee_bps"] or 0)
-        denominator_bps = None
+        maintenance_percent = float(settings.get("margin_maintenance_percent") or 0)
+        maintenance_points = int(math.ceil(exit_notional * maintenance_percent / 100.0))
+        fee_rate_percent = float(market["fee_rate_percent"] or 0)
+        denominator_percent = None
         liquidation_notional = None
         if position["position_type"] == "margin_long":
-            denominator_bps = 10_000 - fee_bps - maintenance_bps
-            if denominator_bps > 0:
-                liquidation_notional = int(math.ceil((principal + interest) * 10_000 / denominator_bps))
+            denominator_percent = 100.0 - fee_rate_percent - maintenance_percent
+            if denominator_percent > 0:
+                liquidation_notional = int(math.ceil((principal + interest) * 100.0 / denominator_percent))
         else:
-            denominator_bps = 10_000 + fee_bps + maintenance_bps
+            denominator_percent = 100.0 + fee_rate_percent + maintenance_percent
             liquidation_base = collateral + principal - interest
-            if denominator_bps > 0 and liquidation_base > 0:
-                liquidation_notional = int(math.ceil(liquidation_base * 10_000 / denominator_bps))
+            if denominator_percent > 0 and liquidation_base > 0:
+                liquidation_notional = int(math.ceil(liquidation_base * 100.0 / denominator_percent))
         liquidation_price_points = None
         if liquidation_notional is not None and quantity_units > 0:
             liquidation_price_points = int(math.ceil((liquidation_notional * ASSET_SCALE) / quantity_units))
-        maintenance_ratio_bps = int(math.floor((equity_after * 10_000) / maintenance_points)) if maintenance_points > 0 else 0
+        maintenance_ratio_percent = round((equity_after * 100.0) / maintenance_points, 2) if maintenance_points > 0 else 0.0
         if equity_after <= maintenance_points:
             risk_status = "liquidation"
             risk_reason = "權益已低於維持保證金，會被列入強制平倉"
-        elif maintenance_ratio_bps < 15_000:
+        elif maintenance_ratio_percent < 150.0:
             risk_status = "warning"
             risk_reason = "整體維持率偏低，建議補保證金或降低倉位"
         elif position["position_type"] == "short":
@@ -1536,20 +1798,19 @@ class TradingEngineService:
             "collateral_points": collateral,
             "initial_margin_points": collateral,
             "original_margin_points": collateral,
-            "initial_margin_bps": initial_margin_bps,
+            "initial_margin_percent": initial_margin_percent,
             "entry_notional_points": entry_notional,
             "principal_points": principal,
             "delta_points": delta,
             "unrealized_pnl_points": delta,
             "equity_after_points": equity_after,
-            "maintenance_bps": maintenance_bps,
+            "maintenance_percent": maintenance_percent,
             "maintenance_points": maintenance_points,
-            "maintenance_margin_bps": maintenance_bps,
+            "maintenance_margin_percent": maintenance_percent,
             "maintenance_margin_points": maintenance_points,
             "liquidation_notional_points": liquidation_notional,
             "liquidation_price_points": liquidation_price_points,
-            "maintenance_ratio_bps": maintenance_ratio_bps,
-            "maintenance_ratio_percent": round(maintenance_ratio_bps / 100, 2),
+            "maintenance_ratio_percent": maintenance_ratio_percent,
             "risk_status": risk_status,
             "risk_reason": risk_reason,
             "liquidation_required": equity_after <= maintenance_points,
@@ -1572,10 +1833,10 @@ class TradingEngineService:
         item["equity_after_points"] = risk.get("equity_after_points")
         item["maintenance_points"] = risk.get("maintenance_points")
         item["maintenance_margin_points"] = risk.get("maintenance_margin_points")
-        item["maintenance_margin_bps"] = risk.get("maintenance_margin_bps")
+        item["maintenance_margin_percent"] = risk.get("maintenance_margin_percent")
         item["initial_margin_points"] = risk.get("initial_margin_points")
         item["original_margin_points"] = risk.get("original_margin_points")
-        item["initial_margin_bps"] = risk.get("initial_margin_bps")
+        item["initial_margin_percent"] = risk.get("initial_margin_percent")
         item["entry_notional_points"] = risk.get("entry_notional_points")
         item["current_price_points"] = risk.get("price_points")
         item["unrealized_pnl_points"] = risk.get("unrealized_pnl_points")
@@ -1689,7 +1950,7 @@ class TradingEngineService:
 
     def _is_insufficient_error(self, exc):
         lowered = str(exc or "").lower()
-        return any(term in lowered for term in ("insufficient", "餘額不足", "積分不足", "持倉不足"))
+        return any(term in lowered for term in ("insufficient", "餘額不足", "積分不足", "資金不足", "持倉不足"))
 
     def _notify_insufficient_balance(self, *, user_id, market_symbol, side, order_type, quantity, error):
         conn = self.get_db()
@@ -1860,6 +2121,10 @@ class TradingEngineService:
             workflow = value
         else:
             raise ValueError("workflow_json must be an object")
+        nodes = workflow.get("nodes")
+        edges = workflow.get("edges")
+        if isinstance(nodes, list) or isinstance(edges, list):
+            return self._validate_workflow_graph(workflow)
         branches = workflow.get("branches")
         if not isinstance(branches, list) or not branches:
             raise ValueError("workflow must contain at least one branch")
@@ -1919,6 +2184,133 @@ class TradingEngineService:
             clean["source"] = str(workflow.get("source"))[:80]
         return clean
 
+    def _validate_workflow_graph(self, workflow):
+        nodes = workflow.get("nodes")
+        edges = workflow.get("edges")
+        if not isinstance(nodes, list) or not nodes:
+            raise ValueError("workflow graph must contain nodes")
+        if not isinstance(edges, list):
+            raise ValueError("workflow graph edges must be an array")
+        clean_nodes = []
+        node_ids = set()
+        start_count = 0
+        for index, node in enumerate(nodes[:100], start=1):
+            if not isinstance(node, dict):
+                raise ValueError("workflow graph node must be an object")
+            node_id = str(node.get("id") or f"node_{index}")[:80]
+            if not node_id or node_id in node_ids:
+                raise ValueError("workflow graph node ids must be unique")
+            node_ids.add(node_id)
+            node_type = str(node.get("type") or "condition").strip().lower()
+            if node_type not in WORKFLOW_NODE_TYPES:
+                raise ValueError(f"unsupported workflow node type: {node_type}")
+            clean = {
+                "id": node_id,
+                "type": node_type,
+                "label": str(node.get("label") or node.get("name") or node_id)[:80],
+                "x": _to_int(node.get("x", index * 120), name="node x", minimum=-100000, maximum=100000),
+                "y": _to_int(node.get("y", 120), name="node y", minimum=-100000, maximum=100000),
+                "inputs": [str(port)[:24] for port in (node.get("inputs") or ["in"]) if str(port) in WORKFLOW_PORTS],
+                "outputs": [str(port)[:24] for port in (node.get("outputs") or ["out"]) if str(port) in WORKFLOW_PORTS],
+                "priority": _to_int(node.get("priority", 0), name="node priority", minimum=-1000, maximum=1000),
+            }
+            if node_type == "start":
+                start_count += 1
+                clean["inputs"] = []
+                clean["outputs"] = ["out"]
+            elif node_type == "condition":
+                condition = node.get("condition") if isinstance(node.get("condition"), dict) else node
+                ctype = str(condition.get("type") or "always").strip()
+                if ctype != "always" and ctype not in WORKFLOW_CONDITION_TYPES and not any(key in condition for key in ("AND", "OR", "NOT")):
+                    raise ValueError(f"unsupported workflow condition: {ctype}")
+                clean["condition"] = condition
+                clean["outputs"] = ["true", "false"]
+            elif node_type == "logic":
+                operator = str(node.get("operator") or node.get("logic") or "AND").strip().upper()
+                if operator not in {"AND", "OR", "NOT"}:
+                    raise ValueError("workflow logic node must be AND, OR, or NOT")
+                clean["operator"] = operator
+                clean["outputs"] = ["true", "false"]
+            elif node_type == "action":
+                action = node.get("action") if isinstance(node.get("action"), dict) else node
+                atype = str(action.get("type") or "hold").strip()
+                if atype not in WORKFLOW_ACTION_TYPES:
+                    raise ValueError(f"unsupported workflow action: {atype}")
+                clean_action = {
+                    "type": atype,
+                    "step": _to_int(action.get("step", 1), name="workflow action step", minimum=1, maximum=1000),
+                    "order_type": str(action.get("order_type") or "market").strip().lower(),
+                }
+                if clean_action["order_type"] not in {"market", "limit"}:
+                    raise ValueError("workflow action order_type must be market or limit")
+                for key in ("percent", "amount_points", "limit_price_points"):
+                    if key in action and action.get(key) not in (None, ""):
+                        clean_action[key] = float(action.get(key))
+                clean["action"] = clean_action
+                clean["outputs"] = ["out"]
+            elif node_type == "control":
+                clean["cooldown_seconds"] = _to_int(node.get("cooldown_seconds", 0), name="node cooldown_seconds", minimum=0, maximum=86400)
+                clean["max_runs"] = _to_int(node.get("max_runs", 1000), name="node max_runs", minimum=1, maximum=1000)
+                clean["outputs"] = ["then", "wait"]
+            clean_nodes.append(clean)
+        if start_count > 1:
+            raise ValueError("workflow graph can contain at most one start node")
+        clean_edges = []
+        seen_edges = set()
+        for index, edge in enumerate(edges[:200], start=1):
+            if not isinstance(edge, dict):
+                raise ValueError("workflow graph edge must be an object")
+            source = str(edge.get("from") or edge.get("source") or "")[:80]
+            target = str(edge.get("to") or edge.get("target") or "")[:80]
+            if source not in node_ids or target not in node_ids:
+                raise ValueError("workflow graph edge references unknown node")
+            from_port = str(edge.get("from_port") or edge.get("source_port") or "out").strip().lower()
+            to_port = str(edge.get("to_port") or edge.get("target_port") or "in").strip().lower()
+            if from_port not in WORKFLOW_PORTS or to_port not in WORKFLOW_PORTS:
+                raise ValueError("workflow graph edge port is invalid")
+            source_node = next((node for node in clean_nodes if node["id"] == source), None)
+            target_node = next((node for node in clean_nodes if node["id"] == target), None)
+            if source_node and from_port not in set(source_node.get("outputs") or []):
+                raise ValueError("workflow graph edge uses unavailable source port")
+            if target_node and to_port not in set(target_node.get("inputs") or ["in"]):
+                raise ValueError("workflow graph edge uses unavailable target port")
+            edge_id = str(edge.get("id") or f"edge_{index}")[:80]
+            edge_key = (source, from_port, target, to_port)
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            clean_edges.append({"id": edge_id, "from": source, "from_port": from_port, "to": target, "to_port": to_port})
+        action_ids = {node["id"] for node in clean_nodes if node["type"] == "action"}
+        if not action_ids:
+            raise ValueError("workflow graph must contain at least one action node")
+        start_node_id = str(workflow.get("start_node_id") or next((node["id"] for node in clean_nodes if node["type"] == "start"), clean_nodes[0]["id"]))[:80]
+        if start_node_id not in node_ids:
+            raise ValueError("workflow graph start_node_id references unknown node")
+        outgoing = {}
+        for edge in clean_edges:
+            outgoing.setdefault(edge["from"], []).append(edge["to"])
+        reachable = set()
+        stack = [start_node_id]
+        while stack:
+            node_id = stack.pop()
+            if node_id in reachable:
+                continue
+            reachable.add(node_id)
+            stack.extend(outgoing.get(node_id, []))
+        if not action_ids & reachable:
+            raise ValueError("workflow graph action nodes must be reachable from start")
+        clean = {
+            "version": 2,
+            "strategy_kind": "workflow_graph",
+            "source": str(workflow.get("source") or "workflow_editor")[:80],
+            "name": str(workflow.get("name") or "Workflow Strategy")[:80],
+            "description": str(workflow.get("description") or "")[:160],
+            "start_node_id": start_node_id,
+            "nodes": clean_nodes,
+            "edges": clean_edges,
+        }
+        return clean
+
     def _validate_bot_payload(self, conn, payload):
         payload = payload or {}
         market = self._market(conn, payload.get("market_symbol"))
@@ -1927,7 +2319,8 @@ class TradingEngineService:
             raise ValueError("bot_type must be conditional or dca")
         side = str(payload.get("side") or "").strip().lower()
         order_type = str(payload.get("order_type") or "").strip().lower()
-        trigger_type = str(payload.get("trigger_type") or "").strip().lower()
+        has_workflow_payload = payload.get("workflow_json") is not None or payload.get("workflow") is not None
+        trigger_type = str(payload.get("trigger_type") or ("always" if has_workflow_payload else "")).strip().lower()
         if bot_type == "dca":
             side = "buy"
             order_type = "market"
@@ -2033,7 +2426,7 @@ class TradingEngineService:
                     SET bot_type=?, name=?, market_symbol=?, side=?, order_type=?, quantity_text=?,
                         limit_price_points=?, trigger_type=?, trigger_price_points=?,
                         enabled=?, max_runs=?, cooldown_seconds=?, interval_hours=?, budget_points=?,
-                        workflow_json=?, last_error='', updated_at=?
+                        workflow_json=?, execution_state_json='{}', last_error='', updated_at=?
                     WHERE id=?
                     """,
                     (
@@ -2052,8 +2445,8 @@ class TradingEngineService:
                     INSERT INTO trading_bots (
                         bot_uuid, user_id, bot_type, name, market_symbol, side, order_type, quantity_text,
                         limit_price_points, trigger_type, trigger_price_points, enabled,
-                        max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                        max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, execution_state_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, '{}', ?, ?)
                     """,
                     (
                         str(uuid.uuid4()), user_id, data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"],
@@ -2185,6 +2578,17 @@ class TradingEngineService:
         }
 
     def _workflow_condition_hit(self, condition, context):
+        if not isinstance(condition, dict):
+            return False
+        if "AND" in condition:
+            items = condition.get("AND") if isinstance(condition.get("AND"), list) else []
+            return bool(items) and all(self._workflow_condition_hit(item, context) for item in items)
+        if "OR" in condition:
+            items = condition.get("OR") if isinstance(condition.get("OR"), list) else []
+            return bool(items) and any(self._workflow_condition_hit(item, context) for item in items)
+        if "NOT" in condition:
+            target = condition.get("NOT")
+            return not self._workflow_condition_hit(target if isinstance(target, dict) else {"type": str(target)}, context)
         ctype = str(condition.get("type") or "always")
         price = float(context.get("price") or 0)
         value = float(condition.get("value") or 0)
@@ -2221,10 +2625,90 @@ class TradingEngineService:
                 return context.get("bb_lower") is not None and price <= float(context["bb_lower"])
         return False
 
-    def _workflow_decision(self, workflow, *, context, run_count=0, last_run_at=None):
+    def _workflow_graph_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
+        nodes = {node["id"]: node for node in workflow.get("nodes") or []}
+        incoming = {}
+        outgoing = {}
+        for edge in workflow.get("edges") or []:
+            incoming.setdefault(edge["to"], []).append(edge)
+            outgoing.setdefault(edge["from"], []).append(edge)
+        memo = {}
+        visiting = set()
+
+        def node_value(node_id):
+            if node_id in memo:
+                return memo[node_id]
+            if node_id in visiting:
+                raise ValueError("workflow graph contains a cycle")
+            node = nodes.get(node_id)
+            if not node:
+                return False
+            visiting.add(node_id)
+            ntype = node.get("type")
+            if ntype == "start":
+                result = True
+            elif ntype == "condition":
+                result = self._workflow_condition_hit(node.get("condition") or {}, context)
+            elif ntype == "logic":
+                values = [edge_value(edge) for edge in incoming.get(node_id, [])]
+                operator = str(node.get("operator") or "AND").upper()
+                if operator == "OR":
+                    result = any(values)
+                elif operator == "NOT":
+                    result = not (values[0] if values else False)
+                else:
+                    result = bool(values) and all(values)
+            elif ntype == "control":
+                cooldown = int(node.get("cooldown_seconds") or 0)
+                max_runs = int(node.get("max_runs") or 1000)
+                result = int(run_count or 0) < max_runs
+                if result and cooldown and last_run_at:
+                    try:
+                        result = (datetime.now() - datetime.fromisoformat(str(last_run_at))).total_seconds() >= cooldown
+                    except Exception:
+                        result = True
+                if result:
+                    result = all(edge_value(edge) for edge in incoming.get(node_id, [])) if incoming.get(node_id) else True
+            else:
+                result = all(edge_value(edge) for edge in incoming.get(node_id, [])) if incoming.get(node_id) else False
+            visiting.remove(node_id)
+            memo[node_id] = bool(result)
+            return memo[node_id]
+
+        def edge_value(edge):
+            value = node_value(edge["from"])
+            if edge.get("from_port") == "false":
+                return not value
+            if edge.get("from_port") in {"true", "then", "out"}:
+                return value
+            return value
+
+        executed = set((execution_state or {}).get("executed_action_ids") or [])
+        branch_counts = (execution_state or {}).get("branch_step_counts") or {}
+        actions = sorted(
+            (node for node in nodes.values() if node.get("type") == "action"),
+            key=lambda node: (-int(node.get("priority") or 0), int((node.get("action") or {}).get("step") or 1)),
+        )
+        for node in actions:
+            action = node.get("action") or {"type": "hold", "step": 1}
+            action_id = node["id"]
+            if action.get("type") != "close_all" and action_id in executed:
+                continue
+            if action.get("type") != "close_all" and int(action.get("step") or 1) <= int(branch_counts.get(action_id, run_count or 0)):
+                continue
+            gates = incoming.get(action_id) or []
+            matched = all(edge_value(edge) for edge in gates) if gates else False
+            if matched:
+                return {"branch": node, "action": action, "reason": node.get("label") or action_id, "action_id": action_id}
+        return None
+
+    def _workflow_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
         workflow = self._validate_workflow(workflow)
+        if workflow.get("strategy_kind") == "workflow_graph":
+            return self._workflow_graph_decision(workflow, context=context, run_count=run_count, last_run_at=last_run_at, execution_state=execution_state)
         branches = sorted(workflow["branches"], key=lambda row: int(row.get("priority") or 0), reverse=True)
         now_dt = datetime.now()
+        branch_counts = (execution_state or {}).get("branch_step_counts") or {}
         for branch in branches:
             cooldown = int(branch.get("cooldown_seconds") or 0)
             if cooldown and last_run_at:
@@ -2238,9 +2722,12 @@ class TradingEngineService:
             matched = all(hits) if branch.get("logic") == "AND" else any(hits)
             if not matched:
                 continue
-            step = int(run_count or 0) + 1
+            fallback_count = int(run_count or 0) if workflow.get("source") == "legacy_condition" else 0
+            step = int(branch_counts.get(branch.get("id"), fallback_count)) + 1
             actions = sorted(branch.get("actions") or [], key=lambda row: int(row.get("step") or 1))
-            action = next((row for row in actions if int(row.get("step") or 1) >= step), actions[-1] if actions else {"type": "hold"})
+            action = next((row for row in actions if int(row.get("step") or 1) >= step), None)
+            if not action:
+                continue
             return {"branch": branch, "action": action, "reason": branch.get("name") or branch.get("id") or "workflow"}
         return None
 
@@ -2258,7 +2745,7 @@ class TradingEngineService:
             amount = int(float(action.get("amount_points") or 0))
             if atype == "buy_percent":
                 amount = int(available * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
-            fee_rate = int(market["fee_bps"] or 0) / 10000
+            fee_rate = float(market["fee_rate_percent"] or 0) / 100.0
             spend = max(0, min(amount, available))
             if spend <= 0:
                 raise ValueError("workflow buy action has no available funds")
@@ -2304,6 +2791,12 @@ class TradingEngineService:
         for row in rows:
             scanned += 1
             now_dt = datetime.now()
+            workflow_state = _json_loads(row["execution_state_json"], {}) if "execution_state_json" in row.keys() else {}
+            if not isinstance(workflow_state, dict):
+                workflow_state = {}
+            workflow_state.setdefault("executed_action_ids", [])
+            workflow_state.setdefault("branch_step_counts", {})
+            decision = None
             if row["last_run_at"]:
                 try:
                     last_run = datetime.fromisoformat(str(row["last_run_at"]))
@@ -2321,12 +2814,19 @@ class TradingEngineService:
                 workflow = _json_loads(row["workflow_json"], None) if "workflow_json" in row.keys() else None
                 order_payload = None
                 if workflow and str(row["bot_type"] or "conditional") == "conditional":
-                    position = self._position(price_conn, int(row["user_id"]), row["market_symbol"])
-                    context = {
-                        "price": observed_price,
-                        "has_position": int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0),
-                    }
-                    decision = self._workflow_decision(workflow, context=context, run_count=int(row["run_count"] or 0), last_run_at=row["last_run_at"])
+                    context = self._workflow_live_context(
+                        price_conn,
+                        market=market,
+                        user_id=int(row["user_id"]),
+                        observed_price=observed_price,
+                    )
+                    decision = self._workflow_decision(
+                        workflow,
+                        context=context,
+                        run_count=int(row["run_count"] or 0),
+                        last_run_at=row["last_run_at"],
+                        execution_state=workflow_state,
+                    )
                     if not decision:
                         skipped_reason = "condition_not_met" if workflow.get("source") == "legacy_condition" else "workflow_not_matched"
                         price_conn.close()
@@ -2376,7 +2876,17 @@ class TradingEngineService:
                     limit_price_points=limit_price_points,
                 )
                 order_uuid = (result.get("order") or {}).get("order_uuid")
-                self._record_bot_run(row, status="triggered", observed_price=observed_price, order_uuid=order_uuid)
+                if workflow and decision:
+                    action = decision.get("action") or {}
+                    action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
+                    if action_id:
+                        counts = workflow_state.setdefault("branch_step_counts", {})
+                        counts[action_id] = int(counts.get(action_id, 0)) + 1
+                        if action.get("type") != "close_all":
+                            executed = workflow_state.setdefault("executed_action_ids", [])
+                            if action_id not in executed:
+                                executed.append(action_id)
+                self._record_bot_run(row, status="triggered", observed_price=observed_price, order_uuid=order_uuid, execution_state=workflow_state)
                 triggered.append({"bot_uuid": row["bot_uuid"], "order_uuid": order_uuid, "observed_price_points": observed_price, "executed": bool(result.get("executed"))})
             except Exception as exc:
                 if "price_conn" in locals():
@@ -2392,16 +2902,33 @@ class TradingEngineService:
         if not self._actor_id(actor):
             raise ValueError("login required")
         payload = payload or {}
+        bot_config = payload.get("bot_config") if isinstance(payload.get("bot_config"), dict) else {}
+        if bot_config:
+            payload = {**bot_config, **payload}
         candles = payload.get("candles") or []
         if not isinstance(candles, list) or len(candles) < 2:
             raise ValueError("candles are required for backtest")
         if len(candles) > MAX_BACKTEST_CANDLES:
             raise ValueError(f"candles length must be <= {MAX_BACKTEST_CANDLES}")
+        start_time = str(payload.get("start_time") or "").strip()
+        end_time = str(payload.get("end_time") or "").strip()
+        if start_time or end_time:
+            filtered = []
+            for candle in candles:
+                stamp = str(candle.get("time_iso") or candle.get("time") or "")
+                if start_time and stamp < start_time:
+                    continue
+                if end_time and stamp > end_time:
+                    continue
+                filtered.append(candle)
+            candles = filtered
+            if len(candles) < 2:
+                raise ValueError("candles are required for selected backtest range")
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             market = self._market(conn, payload.get("market_symbol"))
-            fee_bps = int(market["fee_bps"] or 0)
+            fee_rate_percent = float(market["fee_rate_percent"] or 0)
         finally:
             conn.close()
         strategy = str(payload.get("strategy") or payload.get("bot_type") or "conditional").strip().lower()
@@ -2420,6 +2947,12 @@ class TradingEngineService:
         initial_cash = cash
         units = 0
         trades = []
+        equity_curve = []
+        peak_value = initial_cash
+        max_drawdown_percent = 0.0
+        wins = 0
+        sells = 0
+        workflow_state = {"executed_action_ids": set(), "branch_step_counts": {}}
         for index, candle in enumerate(candles):
             try:
                 price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
@@ -2437,7 +2970,7 @@ class TradingEngineService:
                 context = self._workflow_indicator_context(candles, index)
                 context["price"] = price
                 context["has_position"] = units > 0
-                decision = self._workflow_decision(workflow, context=context, run_count=len(trades), last_run_at=None)
+                decision = self._workflow_decision(workflow, context=context, run_count=len(trades), last_run_at=None, execution_state=workflow_state)
                 action = (decision or {}).get("action") or {}
                 atype = str(action.get("type") or "hold")
                 if atype in {"buy_percent", "buy_amount"}:
@@ -2458,7 +2991,7 @@ class TradingEngineService:
                 sell_units = int(units * workflow_sell_percent / 100)
                 if sell_units > 0:
                     gross = notional_points(sell_units, price)
-                    fee = fee_points(gross, fee_bps)
+                    fee = fee_points(gross, fee_rate_percent)
                     cash += max(0, gross - fee)
                     units -= sell_units
                     trades.append({
@@ -2468,13 +3001,34 @@ class TradingEngineService:
                         "price_points": price,
                         "spend_points": 0,
                         "fee_points": fee,
+                        "pnl_points": max(0, gross - fee),
                         "quantity": units_to_quantity(sell_units),
                     })
+                    sells += 1
+                    if gross - fee > 0:
+                        wins += 1
+                    if strategy == "workflow" and decision:
+                        action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
+                        if action_id:
+                            workflow_state["executed_action_ids"].add(action_id)
+                        branch_id = (decision.get("branch") or {}).get("id")
+                        if branch_id:
+                            workflow_state["branch_step_counts"][branch_id] = int(workflow_state["branch_step_counts"].get(branch_id, 0)) + 1
+                    equity = cash + notional_points(units, price)
+                    peak_value = max(peak_value, equity)
+                    if peak_value > 0:
+                        max_drawdown_percent = max(max_drawdown_percent, round((peak_value - equity) * 100 / peak_value, 4))
+                    equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
                 continue
             if not should_buy or cash <= 0:
+                equity = cash + notional_points(units, price)
+                peak_value = max(peak_value, equity)
+                if peak_value > 0:
+                    max_drawdown_percent = max(max_drawdown_percent, round((peak_value - equity) * 100 / peak_value, 4))
+                equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
                 continue
             spend = min(workflow_spend, cash)
-            fee = fee_points(spend, fee_bps)
+            fee = fee_points(spend, fee_rate_percent)
             net_spend = max(0, spend - fee)
             buy_units = int((net_spend * ASSET_SCALE) // price)
             if buy_units <= 0:
@@ -2490,6 +3044,18 @@ class TradingEngineService:
                 "fee_points": fee,
                 "quantity": units_to_quantity(buy_units),
             })
+            if strategy == "workflow" and decision:
+                action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
+                if action_id:
+                    workflow_state["executed_action_ids"].add(action_id)
+                branch_id = (decision.get("branch") or {}).get("id")
+                if branch_id:
+                    workflow_state["branch_step_counts"][branch_id] = int(workflow_state["branch_step_counts"].get(branch_id, 0)) + 1
+            equity = cash + notional_points(units, price)
+            peak_value = max(peak_value, equity)
+            if peak_value > 0:
+                max_drawdown_percent = max(max_drawdown_percent, round((peak_value - equity) * 100 / peak_value, 4))
+            equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
         last_price = 0
         for candle in reversed(candles):
             try:
@@ -2511,11 +3077,16 @@ class TradingEngineService:
             "final_value_points": final_value,
             "pnl_points": final_value - initial_cash,
             "return_percent": round(((final_value - initial_cash) * 100) / initial_cash, 4),
+            "max_drawdown_percent": max_drawdown_percent,
+            "win_rate_percent": round((wins * 100 / sells), 4) if sells else 0.0,
             "trade_count": len(trades),
-            "trades": trades[-50:],
+            "trades": trades,
+            "equity_curve": equity_curve,
+            "start_time": start_time,
+            "end_time": end_time,
         }
 
-    def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error=""):
+    def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error="", execution_state=None):
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -2544,10 +3115,16 @@ class TradingEngineService:
                 ),
             )
             if status == "triggered":
-                conn.execute(
-                    "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error='', updated_at=? WHERE id=?",
-                    (now, now, int(bot["id"])),
-                )
+                if execution_state is not None:
+                    conn.execute(
+                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, execution_state_json=?, last_error='', updated_at=? WHERE id=?",
+                        (now, _json_dumps(execution_state), now, int(bot["id"])),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error='', updated_at=? WHERE id=?",
+                        (now, now, int(bot["id"])),
+                    )
             elif status == "failed":
                 conn.execute(
                     "UPDATE trading_bots SET last_error=?, updated_at=? WHERE id=?",
@@ -2602,8 +3179,8 @@ class TradingEngineService:
                 limit_price = None
             check_price = int(limit_price or current_price)
             estimated_notional = notional_points(quantity_units, check_price)
-            effective_fee_bps = int(market["fee_bps"] or 0) * (2 if emergency_close else 1)
-            fee = fee_points(estimated_notional, effective_fee_bps)
+            effective_fee_rate_percent = float(market["fee_rate_percent"] or 0) * (2 if emergency_close else 1)
+            fee = fee_points(estimated_notional, effective_fee_rate_percent)
             total_points = estimated_notional + fee
             if estimated_notional < int(market["min_order_points"]):
                 raise ValueError("order notional is below market minimum")
@@ -2624,7 +3201,23 @@ class TradingEngineService:
             funding_mode = "root_simulated" if self._is_root_actor(actor) else "points_chain"
             trial_frozen = 0
             chain_frozen = 0
-            if side == "buy" and funding_mode != "root_simulated":
+            if side == "buy" and funding_mode == "root_simulated":
+                account = self._root_sim_account(conn, user_id)
+                root_available = int(account["balance_points"] or 0)
+                if total_points > root_available:
+                    raise ValueError(f"root 模擬交易資金不足：需要 {total_points} 點，目前可用 {root_available} 點")
+            elif side == "buy" and funding_mode != "root_simulated":
+                trial = self._ensure_trial_credit(conn, user_id)
+                trial_available = int(trial["available_points"] or 0) if trial and trial["status"] == "active" else 0
+                wallet = self.points_service.ensure_wallet(conn, user_id)
+                wallet_payload = self.points_service.serialize_wallet(wallet)
+                wallet_available = int(wallet_payload.get("points_balance") or 0)
+                total_available = trial_available + wallet_available
+                if total_points > total_available:
+                    raise ValueError(
+                        f"交易資金不足：需要 {total_points} 點，目前可用 {total_available} 點"
+                        f"（體驗金 {trial_available} + 真實積分 {wallet_available}）"
+                    )
                 trial_frozen = self._trial_lock_for_buy(conn, user_id, total_points)
                 chain_frozen = total_points - trial_frozen
                 funding_mode = "trial_mixed" if trial_frozen else "points_chain"
@@ -2685,7 +3278,7 @@ class TradingEngineService:
                             "side": side,
                             "order_type": order_type,
                             "price_source": price_source,
-                            "fee_bps": effective_fee_bps,
+                            "fee_rate_percent": effective_fee_rate_percent,
                             "trial_frozen_points": trial_frozen,
                             "chain_frozen_points": chain_frozen,
                         },
@@ -2710,7 +3303,7 @@ class TradingEngineService:
                 order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
                 event_type = "TRADING_EMERGENCY_MARKET_CLOSE" if emergency_close else "TRADING_ORDER_FILLED"
                 message = "emergency market close filled" if emergency_close else "spot order filled"
-                self._audit_event(conn, event_type, message, actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], severity="warning" if emergency_close else "info", metadata={"fill_id": fill["id"], "price_source": price_source, "execution_price_points": execution_price, "fee_bps": effective_fee_bps})
+                self._audit_event(conn, event_type, message, actor=actor, target_user_id=user_id, order_id=order_id, market_symbol=market["symbol"], severity="warning" if emergency_close else "info", metadata={"fill_id": fill["id"], "price_source": price_source, "execution_price_points": execution_price, "fee_rate_percent": effective_fee_rate_percent})
                 self._notify_trade_filled(conn, fill)
             else:
                 order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order_id,)).fetchone()
@@ -2820,8 +3413,8 @@ class TradingEngineService:
         price = int(order["execution_price_points"] or market["manual_price_points"])
         notional = notional_points(quantity_units, price)
         emergency_close = str(order["reason"] or "") == "EMERGENCY_MARKET_CLOSE"
-        effective_fee_bps = int(market["fee_bps"] or 0) * (2 if emergency_close else 1)
-        fee = fee_points(notional, effective_fee_bps)
+        effective_fee_rate_percent = float(market["fee_rate_percent"] or 0) * (2 if emergency_close else 1)
+        fee = fee_points(notional, effective_fee_rate_percent)
         total = notional + fee
         ledger_uuids = []
         funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
@@ -2956,7 +3549,7 @@ class TradingEngineService:
                 raise ValueError("insufficient locked spot position")
             avg_cost = int(position["avg_cost_points"] or 0)
             gross_cost = notional_points(quantity_units, avg_cost) if avg_cost else 0
-            buy_fee_estimate = fee_points(gross_cost, int(market["fee_bps"] or 0)) if gross_cost else 0
+            buy_fee_estimate = fee_points(gross_cost, float(market["fee_rate_percent"] or 0)) if gross_cost else 0
             net_pnl = net_credit - gross_cost - buy_fee_estimate
             sell_pnl_data = {
                 "avg_cost_points": avg_cost,
@@ -3123,7 +3716,7 @@ class TradingEngineService:
             min_collateral = self._minimum_margin_collateral_points(conn, position_type=position_type, notional=notional)
             if collateral < min_collateral:
                 raise ValueError(f"collateral below minimum {min_collateral}")
-            fee = fee_points(notional, int(market["fee_bps"] or 0))
+            fee = fee_points(notional, float(market["fee_rate_percent"] or 0))
             principal = max(0, notional - collateral) if position_type == "margin_long" else notional
             position_uuid = str(uuid.uuid4())
             ledger_uuids = []
@@ -3176,7 +3769,7 @@ class TradingEngineService:
                     public_metadata={
                         "position_type": position_type,
                         "market": market["symbol"],
-                        "fee_bps": int(market["fee_bps"] or 0),
+                        "fee_rate_percent": float(market["fee_rate_percent"] or 0),
                         "trial_fee_points": trial_fee,
                         "chain_fee_points": chain_fee,
                     },
@@ -3190,7 +3783,7 @@ class TradingEngineService:
                 INSERT INTO trading_margin_positions (
                     position_uuid, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
-                    interest_bps_daily, status, opened_at, updated_at,
+                    interest_percent_daily, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
@@ -3204,7 +3797,7 @@ class TradingEngineService:
                     principal,
                     collateral,
                     fee,
-                    int(borrow_settings["interest_bps_daily"]),
+                    float(borrow_settings["interest_percent_daily"]),
                     now,
                     now,
                     trial_collateral,
@@ -3655,7 +4248,7 @@ class TradingEngineService:
             "errors": errors,
         }
 
-    def update_market(self, *, actor, symbol, manual_price_points=None, max_price_jump_bps=None, fee_bps=None, min_order_points=None, max_order_points=None, enabled=None, confirm_jump=False):
+    def update_market(self, *, actor, symbol, manual_price_points=None, max_price_jump_percent=None, fee_rate_percent=None, min_order_points=None, max_order_points=None, enabled=None, confirm_jump=False):
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -3668,22 +4261,23 @@ class TradingEngineService:
             if manual_price_points is not None:
                 new_price = _to_int(manual_price_points, name="manual_price_points", minimum=1)
                 old_price = int(market["manual_price_points"])
-                jump_bps = int(abs(new_price - old_price) * 10_000 / old_price) if old_price else 0
-                allowed_bps = int(market["max_price_jump_bps"] or 0)
-                if jump_bps > allowed_bps and not confirm_jump:
-                    raise ValueError(
-                        f"price jump {jump_bps / 100:.2f}% exceeds max {allowed_bps / 100:.2f}%; confirmation required"
-                    )
+                jump_percent = float(abs(new_price - old_price) * 100 / old_price) if old_price else 0.0
+                allowed_percent = float(market["max_price_jump_percent"] or 0)
+                if jump_percent > allowed_percent and not confirm_jump:
+                    raise ValueError(f"price jump {jump_percent:.2f}% exceeds max {allowed_percent:.2f}%; confirmation required")
                 updates["manual_price_points"] = new_price
                 updates["price_source"] = "manual_root"
             for key, value, max_value in (
-                ("max_price_jump_bps", max_price_jump_bps, 100_000),
-                ("fee_bps", fee_bps, 5000),
+                ("max_price_jump_percent", max_price_jump_percent, 1000.0),
+                ("fee_rate_percent", fee_rate_percent, 50.0),
                 ("min_order_points", min_order_points, 10**9),
                 ("max_order_points", max_order_points, 10**12),
             ):
                 if value is not None:
-                    updates[key] = _to_int(value, name=key, minimum=0 if key != "max_order_points" else 1, maximum=max_value)
+                    if key in {"max_price_jump_percent", "fee_rate_percent"}:
+                        updates[key] = _to_float(value, name=key, minimum=0, maximum=max_value)
+                    else:
+                        updates[key] = _to_int(value, name=key, minimum=0 if key != "max_order_points" else 1, maximum=max_value)
             if enabled is not None:
                 updates["enabled"] = 1 if bool(enabled) else 0
             if not updates:
@@ -3763,6 +4357,9 @@ class TradingEngineService:
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
             market = self._market(conn, market_symbol)
+            settings = self._settings_payload(conn)
+            if not settings.get("futures_enabled") or not int(market["futures_enabled"] or 0):
+                raise ValueError("contract trading is disabled")
             price, price_source = self._current_market_price_points(conn, market)
             exposure = notional_points(quantity_units, price)
             if exposure > margin_points * leverage:
@@ -4228,6 +4825,10 @@ class TradingEngineService:
                 })
 
     def _verify_margin_position_locks(self, conn, errors):
+        root_user_ids = {
+            int(row["id"])
+            for row in conn.execute("SELECT id FROM users WHERE username='root'").fetchall()
+        }
         ledger_net = {}
         for row in conn.execute(
             """
@@ -4248,11 +4849,13 @@ class TradingEngineService:
                 ledger_net[reference_id] -= int(row["amount"] or 0)
         for position in conn.execute("SELECT * FROM trading_margin_positions ORDER BY id ASC").fetchall():
             position_uuid = position["position_uuid"]
+            user_id = int(position["user_id"])
+            is_root_simulated = user_id in root_user_ids
             collateral_points = int(position["collateral_points"] or 0)
             collateral_trial = int(position["collateral_trial_points"] or 0) if "collateral_trial_points" in position.keys() else 0
             collateral_chain = int(position["collateral_chain_points"] or 0) if "collateral_chain_points" in position.keys() else collateral_points
             split_total = collateral_trial + collateral_chain
-            if collateral_points != split_total:
+            if not is_root_simulated and collateral_points != split_total:
                 errors.append({
                     "type": "margin_collateral_lock_mismatch",
                     "position_id": position["id"],
@@ -4261,7 +4864,7 @@ class TradingEngineService:
                     "expected_collateral_points": split_total,
                     "actual_collateral_points": collateral_points,
                 })
-            expected = int(position["collateral_chain_points"] or 0) if position["status"] == "open" else 0
+            expected = 0 if is_root_simulated else (int(position["collateral_chain_points"] or 0) if position["status"] == "open" else 0)
             actual = ledger_net.pop(position_uuid, 0)
             if expected != actual:
                 errors.append({

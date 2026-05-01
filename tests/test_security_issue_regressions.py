@@ -15,7 +15,8 @@ def test_admin_mutation_routes_use_session_scoped_csrf_guards():
     assert '@app.route("/api/admin/security-center/thresholds", methods=["PUT"])\n    @require_csrf' in system_admin
     assert '@app.route("/api/admin/security-center/controls", methods=["PUT"])\n    @require_csrf' in system_admin
     assert 'CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}' in auth
-    assert "delete_csrf_token(csrf_tok)" not in auth
+    assert "if not user and csrf_tok:" in auth
+    assert "consume_csrf_token(csrf_tok, csrf_owner)" in auth
     assert '"error": "csrf_invalid"' in auth
 
 
@@ -323,7 +324,8 @@ def test_root_margin_trading_uses_simulated_funds_not_pointschain():
     assert "TRADING_ROOT_SIM_MARGIN_BAD_DEBT" in close_margin
     assert "FROM trading_margin_positions p" in sim_verify
     assert "u.username='root'" in sim_verify
-    assert 'expected = int(position["collateral_chain_points"] or 0)' in margin_verify
+    assert "is_root_simulated = user_id in root_user_ids" in margin_verify
+    assert 'expected = 0 if is_root_simulated else (int(position["collateral_chain_points"] or 0)' in margin_verify
 
 
 def test_trading_margin_errors_are_user_readable():
@@ -343,8 +345,8 @@ def test_margin_collateral_and_account_maintenance_are_supported():
     assert "maintenance_ratio_percent" in trading_engine
     assert "liquidation_price_points" in trading_engine
     assert "unrealized_pnl_points" in trading_engine
-    assert "margin_long_financing_bps" in trading_engine
-    assert "short_collateral_bps" in trading_engine
+    assert "margin_long_financing_percent" in trading_engine
+    assert "short_collateral_percent" in trading_engine
     assert "def _minimum_margin_collateral_points" in trading_engine
     assert "risk_reason" in trading_engine
     assert "借券放空在價格上漲時會虧損" in trading_engine

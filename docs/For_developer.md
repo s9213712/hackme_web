@@ -234,6 +234,53 @@ healthy ledger backup only when PointsChain is already in safe mode. Wallets are
 rebuilt from ledger replay; current wallet balances are never trusted as the
 source of truth.
 
+### Trading System
+
+User trading APIs:
+
+- `GET /api/trading/markets`
+- `GET /api/trading/dashboard`
+- `GET /api/trading/reference-prices`
+- `POST /api/trading/orders`
+- `POST /api/trading/orders/{order_uuid}/cancel`
+- `GET /api/trading/bots`
+- `POST /api/trading/bots`
+- `PUT /api/trading/bots/{bot_uuid}`
+- `DELETE /api/trading/bots/{bot_uuid}`
+- `POST /api/trading/bots/scan`
+- `POST /api/trading/bots/backtest`
+- `POST /api/trading/margin/open`
+- `POST /api/trading/margin/{position_uuid}/collateral`
+- `POST /api/trading/margin/{position_uuid}/close`
+
+Root/admin trading APIs:
+
+- `GET /api/admin/trading/report`
+- `GET /api/root/trading/settings`
+- `POST /api/root/trading/settings`
+- `POST /api/root/trading/markets/{symbol}`
+- `POST /api/root/trading/orders/match`
+- `POST /api/root/trading/liquidations/scan`
+- `POST /api/root/trading/reserve/allocate`
+- `POST /api/root/trading/simulated-balance/reset`
+- root contract simulation endpoints under `/api/root/trading/contracts`
+
+Trading API notes:
+
+- Public UI pairs are displayed as `BTC/USDT` and `ETH/USDT`; internal symbols
+  remain `BTC/POINTS` and `ETH/POINTS`.
+- Trading uses `1 POINT = 1 USDT`.
+- User funds must flow through PointsChain. Do not directly update wallet
+  balances for trading.
+- Percent API fields use human percent values directly: `0.3` means `0.3%`,
+  `15` means `15%`.
+- Workflow bots use `workflow_json` with `nodes` and `edges`; legacy branch
+  workflow JSON is normalized on save/import.
+- Backtests can accept frontend-supplied candles or fetch Binance historical
+  K-lines from `start_time`, `end_time`, and `timeframe`.
+
+Detailed usage is documented in [TRADING.md](TRADING.md).
+
 ### Security Center and Operations
 
 - `GET /api/admin/health/readiness`
@@ -358,6 +405,7 @@ Route modules:
 - `routes/moderation.py`
 - `routes/system_admin.py`
 - `routes/operations.py`
+- `routes/trading.py`
 
 Service modules:
 
@@ -385,6 +433,7 @@ Service modules:
 - `services/storage_albums.py`
 - `services/storage_maintenance.py`
 - `services/storage_paths.py`
+- `services/trading_engine.py`
 - `services/upload_security.py`
 - `services/violations.py`
 
@@ -402,7 +451,9 @@ Frontend scripts:
 - `public/js/37-bug-report.js`
 - `public/js/40-auth-users.js`
 - `public/js/50-admin.js`
+- `public/js/56-trading.js`
 - `public/js/90-bootstrap.js`
+- `public/js/trading-workflow-editor.js`
 
 ## Security Tooling
 

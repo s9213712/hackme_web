@@ -20,7 +20,7 @@ class _FakeBinanceResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def _app(actor):
+def _app(actor, check_user_rate_limit=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -37,6 +37,7 @@ def _app(actor):
         "json_resp": json_resp,
         "require_csrf": passthrough,
         "require_csrf_safe": passthrough,
+        "check_user_rate_limit": check_user_rate_limit or (lambda *args, **kwargs: (False, {})),
     })
     return app
 
@@ -120,6 +121,124 @@ def test_trading_reference_prices_uses_short_server_side_cache(monkeypatch):
     assert calls["count"] == 1
 
 
+def test_trading_reference_prices_falls_back_to_last_good_cache(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    clock = {"value": 100.0}
+
+    def fake_monotonic():
+        return clock["value"]
+
+    def ok_urlopen(request, timeout=0):
+        return _FakeBinanceResponse([
+            [1714500000000, "60000", "61000", "59000", "60500.5"],
+        ])
+
+    monkeypatch.setattr(trading_routes.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(trading_routes, "urlopen", ok_urlopen)
+    client = _app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    first = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=15m&limit=24")
+    assert first.status_code == 200
+    assert first.get_json()["source"] == "binance_public_api"
+
+    clock["value"] = 200.0
+
+    def failing_urlopen(*args, **kwargs):
+        raise OSError("binance down")
+
+    monkeypatch.setattr(trading_routes, "urlopen", failing_urlopen)
+    second = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=15m&limit=24")
+
+    assert second.status_code == 200
+    payload = second.get_json()
+    assert payload["ok"] is True
+    assert payload["source"] == "binance_public_api_cached"
+    assert payload["stale"] is True
+    assert payload["candles"][0]["close_points"] == 60500.5
+
+
+def test_trading_reference_prices_falls_back_to_coinbase_candles(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    urls = []
+
+    def fake_urlopen(request, timeout=0):
+        urls.append(request.full_url)
+        if "api.binance.com" in request.full_url:
+            raise OSError("binance down")
+        return _FakeBinanceResponse([
+            [1714503600, 60400, 62000, 60500, 61800.25, 12.5],
+            [1714500000, 59000, 61000, 60000, 60500.5, 10.5],
+        ])
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=15m&limit=24")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["source"] == "coinbase_exchange"
+    assert payload["symbol"] == "BTC-USD"
+    assert payload["candles"][0]["open_usdt"] == 60000
+    assert payload["candles"][0]["close_points"] == 60500.5
+    assert any("api.binance.com" in url for url in urls)
+    assert any("api.exchange.coinbase.com/products/BTC-USD/candles" in url for url in urls)
+
+
+def test_trading_reference_prices_walks_public_fallback_chain_to_bitstamp(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    urls = []
+
+    def fake_urlopen(request, timeout=0):
+        urls.append(request.full_url)
+        if "bitstamp.net" in request.full_url:
+            return _FakeBinanceResponse({
+                "data": {
+                    "ohlc": [
+                        {
+                            "timestamp": "1714500000",
+                            "open": "60000",
+                            "high": "61000",
+                            "low": "59000",
+                            "close": "60500.5",
+                        },
+                        {
+                            "timestamp": "1714500900",
+                            "open": "60500",
+                            "high": "62000",
+                            "low": "60400",
+                            "close": "61800.25",
+                        },
+                    ]
+                }
+            })
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=15m&limit=24")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["source"] == "bitstamp_public_api"
+    assert payload["symbol"] == "btcusd"
+    assert payload["candles"][0]["open_usdt"] == 60000
+    assert payload["candles"][1]["close_points"] == 61800.25
+    expected_hosts = (
+        "api.binance.com",
+        "okx.com",
+        "api.exchange.coinbase.com",
+        "api.kraken.com",
+        "api.gemini.com",
+        "bitstamp.net",
+    )
+    seen_hosts = [host for host in expected_hosts if any(host in url for url in urls)]
+    assert seen_hosts == list(expected_hosts)
+
+
 def test_trading_reference_prices_rejects_too_short_chart_intervals(monkeypatch):
     trading_routes.REFERENCE_PRICE_CACHE.clear()
     called = {"value": False}
@@ -178,3 +297,66 @@ def test_trading_reference_prices_rejects_unsupported_market_without_network(mon
     assert response.status_code == 400
     assert response.get_json()["ok"] is False
     assert called["value"] is False
+
+
+def test_trading_reference_prices_rate_limits_before_binance_proxy(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    called = {"value": False}
+
+    def fake_urlopen(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("network should not be called after rate limit")
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    seen = {}
+
+    def fake_rate_limit(user_id, action, max_req, window_sec):
+        seen.update({"user_id": user_id, "action": action, "max_req": max_req, "window_sec": window_sec})
+        return True, {"retry_after": 17}
+
+    client = _app({"id": 7, "username": "alice", "role": "user"}, check_user_rate_limit=fake_rate_limit).test_client()
+
+    response = client.get("/api/trading/reference-prices?market=BTC/USDT")
+
+    assert response.status_code == 429
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["retry_after"] == 17
+    assert seen == {"user_id": 7, "action": "trading_reference_prices", "max_req": 120, "window_sec": 60}
+    assert called["value"] is False
+
+
+def test_root_trading_routes_reject_manual_price_cheat_controls():
+    class FakeTradingService:
+        def update_root_settings(self, **kwargs):
+            raise AssertionError("manual price source should be rejected before service call")
+
+        def update_market(self, **kwargs):
+            raise AssertionError("manual market price should be rejected before service call")
+
+    app = Flask(__name__)
+    app.testing = True
+
+    def passthrough(fn):
+        return fn
+
+    def json_resp(payload, status=None):
+        response = jsonify(payload)
+        return (response, status) if status else response
+
+    register_trading_routes(app, {
+        "trading_service": FakeTradingService(),
+        "get_current_user_ctx": lambda: {"id": 1, "username": "root", "role": "super_admin"},
+        "json_resp": json_resp,
+        "require_csrf": passthrough,
+        "require_csrf_safe": passthrough,
+    })
+    client = app.test_client()
+
+    source_response = client.post("/api/root/trading/settings", json={"settings": {"price_source": "manual_root"}})
+    price_response = client.post("/api/root/trading/markets/BTC%2FPOINTS", json={"manual_price_points": 1})
+
+    assert source_response.status_code == 400
+    assert source_response.get_json()["ok"] is False
+    assert price_response.status_code == 400
+    assert price_response.get_json()["ok"] is False

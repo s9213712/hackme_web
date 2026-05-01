@@ -228,6 +228,85 @@
     .node.selected { outline: 2px solid var(--blue); }
     .node.condition { border-color: rgba(56,189,248,.55); }
     .node.action { border-color: rgba(54,211,153,.55); }
+    .node.logic { border-color: rgba(167,139,250,.65); }
+    .node.control { border-color: rgba(251,191,36,.58); }
+    .graph-panel { overflow: hidden; }
+    .graph-canvas {
+      position: relative;
+      min-width: 1450px;
+      min-height: 980px;
+      margin: .8rem;
+      border: 1px dashed var(--line-strong);
+      border-radius: 8px;
+      background:
+        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+        rgba(15, 23, 42, .62);
+      background-size: 24px 24px;
+      overflow: auto;
+    }
+    .graph-node {
+      position: absolute;
+      width: 210px;
+      min-height: 118px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.22);
+    }
+    .node-sub {
+      margin-top: .22rem;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .ports {
+      display: flex;
+      justify-content: space-between;
+      gap: .45rem;
+      margin-top: .55rem;
+    }
+    .ports > div {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .24rem;
+    }
+    .port {
+      min-height: 24px;
+      padding: .08rem .34rem;
+      border-radius: 999px;
+      font-size: .68rem;
+      line-height: 1;
+    }
+    .port.in { border-color: rgba(148, 163, 184, .65); }
+    .port.out { border-color: rgba(56, 189, 248, .65); }
+    .port.true, .port.then { color: #bbf7d0; border-color: rgba(34,197,94,.7); }
+    .port.false, .port.wait { color: #fecdd3; border-color: rgba(244,63,94,.65); }
+    .graph-edges {
+      margin: .8rem;
+      border-top: 1px solid var(--line);
+      padding-top: .7rem;
+    }
+    .graph-edges h3 {
+      margin: 0 0 .55rem;
+      font-size: .9rem;
+    }
+    .edge-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: .5rem;
+      align-items: center;
+      padding: .42rem .5rem;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: rgba(15,23,42,.65);
+      margin-bottom: .38rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .8rem;
+    }
+    .edge-row span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .node-top { display: flex; justify-content: space-between; gap: .45rem; align-items: center; }
     .node-kind { color: var(--muted); font-size: .76rem; }
     .node-label { margin-top: .28rem; line-height: 1.35; overflow-wrap: anywhere; }
@@ -368,6 +447,15 @@
 
       .node {
         padding: .52rem;
+      }
+      .graph-canvas {
+        min-width: 980px;
+        min-height: 760px;
+        margin: .62rem;
+      }
+
+      .graph-node {
+        width: 190px;
       }
 
       .node-tools button {

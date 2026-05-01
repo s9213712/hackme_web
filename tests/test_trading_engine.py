@@ -1,9 +1,14 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 
+import services.trading_engine as trading_engine_module
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
 from services.trading_engine import TradingEngineService, ensure_trading_schema
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _db(tmp_path):
@@ -57,6 +62,43 @@ def _notifications(trading, user_id):
         ]
     finally:
         conn.close()
+
+
+class _FakePriceResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        import json
+
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_legacy_rate_unit_label_removed_from_repository_text():
+    needle = "b" + "ps"
+    ignored_dirs = {".git", "__pycache__", ".pytest_cache", "node_modules", "storage", "reports", "secure_backups"}
+    ignored_prefixes = {Path("security/reports")}
+    ignored_suffixes = {".pyc", ".db", ".sqlite", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip", ".gz"}
+    offenders = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or ignored_dirs & set(path.parts) or path.suffix.lower() in ignored_suffixes:
+            continue
+        relative = path.relative_to(ROOT)
+        if any(relative == prefix or prefix in relative.parents for prefix in ignored_prefixes):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if needle in text.lower():
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
 
 
 def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp_path):
@@ -232,6 +274,63 @@ def test_workflow_bot_uses_branch_priority_and_percent_action(tmp_path):
     assert dashboard["orders"][0]["status"] == "filled"
 
 
+def test_node_graph_bot_live_scan_uses_indicator_context_and_steps(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.historical_candles_provider = lambda symbol, interval, limit: [
+        {"close_points": 4000, "high_points": 4100, "low_points": 3900}
+        for _ in range(60)
+    ]
+    workflow = {
+        "version": 2,
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start", "label": "Start"},
+            {"id": "price", "type": "condition", "label": "價格低於", "condition": {"type": "price_below", "value": 6000}},
+            {"id": "ma", "type": "condition", "label": "MA20 上方", "condition": {"type": "ma_position", "period": 20, "position": "above"}},
+            {"id": "logic", "type": "logic", "label": "進場 AND", "operator": "AND", "priority": 10},
+            {"id": "buy_1", "type": "action", "label": "第一段", "action": {"type": "buy_percent", "percent": 10, "step": 1}, "priority": 10},
+            {"id": "buy_2", "type": "action", "label": "第二段", "action": {"type": "buy_percent", "percent": 20, "step": 2}, "priority": 10},
+        ],
+        "edges": [
+            {"from": "start", "from_port": "out", "to": "price", "to_port": "in"},
+            {"from": "start", "from_port": "out", "to": "ma", "to_port": "in"},
+            {"from": "price", "from_port": "true", "to": "logic", "to_port": "in"},
+            {"from": "ma", "from_port": "true", "to": "logic", "to_port": "in"},
+            {"from": "logic", "from_port": "true", "to": "buy_1", "to_port": "in"},
+            {"from": "logic", "from_port": "true", "to": "buy_2", "to_port": "in"},
+        ],
+    }
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "Graph live indicator buyer",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "max_runs": 2,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    first = trading.run_trading_bots(actor=_actor(), limit=10)
+    second = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert len(first["triggered"]) == 1
+    assert len(second["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["bots"][0]["run_count"] == 2
+    assert [row["status"] for row in dashboard["orders"]] == ["filled", "filled"]
+    assert len(dashboard["fills"]) == 2
+
+
 def test_workflow_backtest_can_sell_without_mutating_orders(tmp_path):
     _, trading = _services(tmp_path)
     result = trading.backtest_trading_bot(
@@ -275,6 +374,52 @@ def test_workflow_backtest_can_sell_without_mutating_orders(tmp_path):
     assert dashboard["fills"] == []
 
 
+def test_workflow_graph_backtest_supports_nested_logic_priority_and_steps(tmp_path):
+    _, trading = _services(tmp_path)
+    workflow = {
+        "version": 2,
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start", "label": "Start"},
+                {"id": "entry_price", "type": "condition", "label": "Nested AND/OR", "condition": {"AND": [{"type": "price_below", "value": 5000}, {"OR": [{"type": "always"}, {"type": "rsi_below", "value": 60}]}]}},
+                {"id": "entry_logic", "type": "logic", "label": "巢狀進場", "operator": "AND", "priority": 10},
+            {"id": "buy_1", "type": "action", "label": "第一段買入", "action": {"type": "buy_percent", "percent": 40, "step": 1}, "priority": 10},
+            {"id": "buy_2", "type": "action", "label": "第二段買入", "action": {"type": "buy_percent", "percent": 40, "step": 2}, "priority": 10},
+            {"id": "stop", "type": "condition", "label": "強制止損", "condition": {"type": "price_below", "value": 3000}},
+            {"id": "close", "type": "action", "label": "全部平倉", "action": {"type": "close_all", "step": 1}, "priority": 100},
+        ],
+        "edges": [
+            {"from": "start", "from_port": "out", "to": "entry_price", "to_port": "in"},
+            {"from": "entry_price", "from_port": "true", "to": "entry_logic", "to_port": "in"},
+            {"from": "entry_logic", "from_port": "true", "to": "buy_1", "to_port": "in"},
+            {"from": "entry_logic", "from_port": "true", "to": "buy_2", "to_port": "in"},
+            {"from": "start", "from_port": "out", "to": "stop", "to_port": "in"},
+            {"from": "stop", "from_port": "true", "to": "close", "to_port": "in"},
+        ],
+    }
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "workflow",
+            "initial_cash_points": 1000,
+            "workflow_json": workflow,
+            "candles": [
+                {"time": 1, "close_points": 4900},
+                {"time": 2, "close_points": 4800},
+                {"time": 3, "close_points": 2900},
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    assert [row["side"] for row in result["trades"]] == ["buy", "buy", "sell"]
+    assert result["trade_count"] == 3
+    assert result["max_drawdown_percent"] >= 0
+    assert len(result["equity_curve"]) >= 3
+
+
 def test_backtest_trading_bot_does_not_create_orders(tmp_path):
     _, trading = _services(tmp_path)
     result = trading.backtest_trading_bot(
@@ -301,6 +446,32 @@ def test_backtest_trading_bot_does_not_create_orders(tmp_path):
     assert dashboard["fills"] == []
 
 
+def test_dca_backtest_reports_metrics_and_equity_curve(tmp_path):
+    _, trading = _services(tmp_path)
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "dca",
+            "bot_config": {"order_points": 100, "interval_candles": 2},
+            "initial_cash_points": 1000,
+            "candles": [
+                {"time": "2026-01-01T00:00:00+00:00", "close_points": 5000},
+                {"time": "2026-01-01T00:15:00+00:00", "close_points": 5100},
+                {"time": "2026-01-01T00:30:00+00:00", "close_points": 5200},
+                {"time": "2026-01-01T00:45:00+00:00", "close_points": 5300},
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["strategy"] == "dca"
+    assert result["trade_count"] == 2
+    assert len(result["equity_curve"]) == 4
+    assert "return_percent" in result
+    assert "win_rate_percent" in result
+
+
 def test_backtest_trading_bot_rejects_excessive_candle_count(tmp_path):
     _, trading = _services(tmp_path)
 
@@ -318,7 +489,7 @@ def test_backtest_trading_bot_rejects_excessive_candle_count(tmp_path):
 def test_insufficient_trading_balance_creates_notification(tmp_path):
     _, trading = _services(tmp_path)
 
-    with pytest.raises(ValueError, match="insufficient"):
+    with pytest.raises(ValueError, match="交易資金不足"):
         trading.place_order(
             actor=_actor(),
             market_symbol="ETH/POINTS",
@@ -331,6 +502,8 @@ def test_insufficient_trading_balance_creates_notification(tmp_path):
     assert notes[-1]["type"] == "trading_balance_insufficient"
     assert notes[-1]["title"] == "交易未成立：餘額不足"
     assert "ETH/POINTS buy market 數量 0.3 未成立" in notes[-1]["body"]
+    assert "需要" in notes[-1]["body"]
+    assert "目前可用" in notes[-1]["body"]
 
 
 def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
@@ -522,6 +695,79 @@ def test_live_price_failure_uses_recent_last_good_price(tmp_path):
     assert trading.verify_state()["ok"] is True
 
 
+def test_live_price_provider_falls_back_to_coinbase_when_binance_is_down(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    urls = []
+
+    def fake_urlopen(request, timeout=0):
+        urls.append(request.full_url)
+        if "api.binance.com" in request.full_url:
+            raise OSError("binance down")
+        if "api.exchange.coinbase.com" in request.full_url:
+            return _FakePriceResponse({"price": "5100"})
+        raise AssertionError(f"unexpected fallback URL: {request.full_url}")
+
+    monkeypatch.setattr(trading_engine_module, "urlopen", fake_urlopen)
+
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.01",
+    )
+
+    assert result["order"]["status"] == "filled"
+    assert result["order"]["execution_price_points"] == 5100
+    market = trading.list_markets()[1]
+    assert market["symbol"] == "ETH/POINTS"
+    assert market["price_source"] == "coinbase_exchange"
+    assert any("api.binance.com" in url for url in urls)
+    assert any("api.exchange.coinbase.com/products/ETH-USD/ticker" in url for url in urls)
+
+
+def test_live_price_provider_walks_public_fallback_chain_to_bitstamp(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    urls = []
+
+    def fake_urlopen(request, timeout=0):
+        urls.append(request.full_url)
+        if "bitstamp.net" in request.full_url:
+            return _FakePriceResponse({"last": "5100"})
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading_engine_module, "urlopen", fake_urlopen)
+
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.01",
+    )
+
+    assert result["order"]["status"] == "filled"
+    assert result["order"]["execution_price_points"] == 5100
+    market = trading.list_markets()[1]
+    assert market["price_source"] == "bitstamp_public_api"
+    expected_hosts = (
+        "api.binance.com",
+        "okx.com",
+        "api.exchange.coinbase.com",
+        "api.kraken.com",
+        "api.gemini.com",
+        "bitstamp.net",
+    )
+    seen_hosts = [host for host in expected_hosts if any(host in url for url in urls)]
+    assert seen_hosts == list(expected_hosts)
+
+
 def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_path):
     points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
@@ -549,6 +795,11 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
         conn.close()
     assert trading.verify_state()["ok"] is True
 
+    trading.update_root_settings(
+        actor=root,
+        settings={"futures_enabled": True},
+        markets=[{"symbol": "ETH/POINTS", "futures_enabled": True}],
+    )
     contract = trading.open_root_contract_position(
         actor=root,
         market_symbol="ETH/POINTS",
@@ -568,6 +819,18 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
     assert closed["position"]["status"] == "closed"
     assert closed["credited_points"] == 25
 
+    margin = trading.open_margin_position(
+        actor=root,
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=300,
+    )
+    assert margin["position"]["status"] == "open"
+    assert margin["position"]["collateral_trial_points"] == 0
+    assert margin["position"]["collateral_chain_points"] == 0
+    assert trading.verify_state()["ok"] is True
+
     with pytest.raises(ValueError, match="only root"):
         trading.open_root_contract_position(
             actor=_actor(1, "alice", "user"),
@@ -585,6 +848,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
     assert reset["deleted"]["fills"] >= 1
     assert reset["deleted"]["spot_positions"] >= 1
     assert reset["deleted"]["futures_positions"] >= 1
+    assert reset["deleted"]["margin_positions"] >= 1
     dashboard_after_reset = trading.user_dashboard(user_id=3)
     assert dashboard_after_reset["funding"]["mode"] == "root_simulated"
     assert dashboard_after_reset["funding"]["available_points"] == 10000
@@ -602,6 +866,32 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
         assert conn.execute("SELECT COUNT(*) FROM trading_futures_positions WHERE user_id=3").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_root_contract_open_respects_futures_enabled(tmp_path):
+    _points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+
+    with pytest.raises(ValueError, match="contract trading is disabled"):
+        trading.open_root_contract_position(
+            actor=root,
+            market_symbol="ETH/POINTS",
+            side="long",
+            quantity="0.01",
+            leverage=2,
+            margin_points=25,
+        )
+
+    trading.update_root_settings(actor=root, settings={"futures_enabled": True}, markets=[{"symbol": "ETH/POINTS", "futures_enabled": False}])
+    with pytest.raises(ValueError, match="contract trading is disabled"):
+        trading.open_root_contract_position(
+            actor=root,
+            market_symbol="ETH/POINTS",
+            side="long",
+            quantity="0.01",
+            leverage=2,
+            margin_points=25,
+        )
 
 
 def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
@@ -728,9 +1018,9 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
         settings={
             "enabled": True,
             "borrowing_enabled": True,
-            "borrow_interest_bps_daily": 25,
+            "borrow_interest_percent_daily": 0.25,
             "margin_liquidation_enabled": True,
-            "margin_maintenance_bps": 1200,
+            "margin_maintenance_percent": 12,
             "futures_enabled": False,
             "pvp_matching_enabled": False,
         },
@@ -738,7 +1028,7 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
             {
                 "symbol": "ETH/POINTS",
                 "enabled": True,
-                "fee_bps": 45,
+                "fee_rate_percent": 0.45,
                 "min_order_points": 10,
                 "max_order_points": 500000,
             }
@@ -746,11 +1036,11 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
     )
 
     assert updated["settings"]["borrowing_enabled"] is True
-    assert updated["settings"]["borrow_interest_bps_daily"] == 25
+    assert updated["settings"]["borrow_interest_percent_daily"] == 0.25
     assert updated["settings"]["margin_liquidation_enabled"] is True
-    assert updated["settings"]["margin_maintenance_bps"] == 1200
+    assert updated["settings"]["margin_maintenance_percent"] == 12
     market = next(row for row in updated["markets"] if row["symbol"] == "ETH/POINTS")
-    assert market["fee_bps"] == 45
+    assert market["fee_rate_percent"] == 0.45
     assert market["min_order_points"] == 10
     assert market["max_order_points"] == 500000
     report = trading.root_report()
@@ -786,7 +1076,7 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
 
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
-        settings={"borrowing_enabled": True, "borrow_interest_bps_daily": 10},
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 10},
         markets=[],
     )
     opened = trading.open_margin_position(
@@ -910,7 +1200,7 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
-        settings={"borrowing_enabled": True, "borrow_interest_bps_daily": 100, "price_source": "manual_root"},
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 1, "price_source": "manual_root"},
         markets=[],
     )
     opened = trading.open_margin_position(
@@ -947,9 +1237,9 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
         actor=_actor(3, "root", "super_admin"),
         settings={
             "borrowing_enabled": True,
-            "borrow_interest_bps_daily": 0,
+            "borrow_interest_percent_daily": 0,
             "margin_liquidation_enabled": True,
-            "margin_maintenance_bps": 1500,
+            "margin_maintenance_percent": 15,
             "price_source": "manual_root",
         },
         markets=[],
@@ -983,7 +1273,7 @@ def test_force_liquidation_rechecks_recovered_position(tmp_path):
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
-        settings={"borrowing_enabled": True, "margin_liquidation_enabled": True, "margin_maintenance_bps": 1500},
+        settings={"borrowing_enabled": True, "margin_liquidation_enabled": True, "margin_maintenance_percent": 15},
         markets=[],
     )
     opened = trading.open_margin_position(
@@ -1084,7 +1374,7 @@ def test_sell_order_rejects_zero_net_credit_before_locking_position(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.00000001")
-    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", fee_bps=5000)
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", fee_rate_percent=50)
 
     with pytest.raises(ValueError, match="sell notional after fee"):
         trading.place_order(
@@ -1098,3 +1388,100 @@ def test_sell_order_rejects_zero_net_credit_before_locking_position(tmp_path):
 
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["positions"][0]["locked_quantity_units"] == 0
+
+
+def test_trading_writes_stop_when_pointschain_enters_safe_mode(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+
+    conn = trading.get_db()
+    points.ensure_schema(conn)
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO points_chain_recovery_state (
+            id, safe_mode, reason, verification_json, forensic_bundle_id,
+            restore_plan_json, created_at, updated_at
+        ) VALUES (1, 1, 'chain_verification_failed', '{}', 'bundle-test', '{}', '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(ValueError, match="PointsChain safe mode active"):
+        trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.01")
+
+
+def test_workflow_branch_steps_are_persisted_and_do_not_repeat(tmp_path):
+    _, trading = _services(tmp_path)
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [{
+            "id": "entry",
+            "name": "分批進場",
+            "priority": 10,
+            "logic": "AND",
+            "cooldown_seconds": 0,
+            "conditions": [{"type": "price_below", "value": 6000}],
+            "actions": [
+                {"type": "buy_amount", "amount_points": 50, "step": 1},
+                {"type": "buy_amount", "amount_points": 60, "step": 2},
+            ],
+        }],
+    }
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "two step workflow",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 3,
+            "cooldown_seconds": 0,
+            "workflow_json": workflow,
+            "enabled": True,
+        },
+    )
+
+    first = trading.run_trading_bots(actor=_actor(), limit=10)
+    second = trading.run_trading_bots(actor=_actor(), limit=10)
+    third = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert len(first["triggered"]) == 1
+    assert len(second["triggered"]) == 1
+    assert third["triggered"] == []
+    assert third["skipped"][0]["reason"] == "workflow_not_matched"
+    dashboard = trading.user_dashboard(user_id=1)
+    assert len(dashboard["orders"]) == 2
+    assert dashboard["bots"][0]["run_count"] == 2
+    assert dashboard["bots"][0]["execution_state"]["branch_step_counts"]["entry"] == 2
+
+
+def test_workflow_graph_rejects_action_unreachable_from_start(tmp_path):
+    _, trading = _services(tmp_path)
+    workflow = {
+        "version": 2,
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start", "outputs": ["out"]},
+            {"id": "gate", "type": "condition", "condition": {"type": "price_below", "value": 6000}, "outputs": ["true", "false"]},
+            {"id": "buy", "type": "action", "action": {"type": "buy_amount", "amount_points": 50, "step": 1}},
+        ],
+        "edges": [{"from": "gate", "from_port": "true", "to": "buy", "to_port": "in"}],
+    }
+
+    with pytest.raises(ValueError, match="reachable from start"):
+        trading.save_trading_bot(
+            actor=_actor(),
+            payload={
+                "name": "unreachable action",
+                "market_symbol": "ETH/POINTS",
+                "side": "buy",
+                "order_type": "market",
+                "quantity": "0.01",
+                "workflow_json": workflow,
+                "enabled": True,
+            },
+        )

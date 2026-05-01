@@ -28,11 +28,11 @@
         </div>
         <div class="panel-body">
           <div class="tool-group">
-            <div class="tool-title">策略分支</div>
+            <div class="tool-title">Graph 節點</div>
             <div class="tool-grid">
-              <button data-add="branch" data-add-branch type="button"><b>新增分支</b><span>例如進場、減倉、強制止損</span></button>
-              <button data-template="breakout" type="button"><b>突破範例</b><span>MA + RSI + 分批買入</span></button>
-              <button data-template="risk" type="button"><b>風控範例</b><span>止盈、止損、全部平倉</span></button>
+              <button data-add="logic" data-add-node="logic:AND" type="button"><b>AND 節點</b><span>多個 input 全部成立才走 TRUE</span></button>
+              <button data-add="logic" data-add-node="logic:OR" type="button"><b>OR 節點</b><span>任一 input 成立就走 TRUE</span></button>
+              <button data-add="logic" data-add-node="logic:NOT" type="button"><b>NOT 節點</b><span>反向條件，可做排除規則</span></button>
             </div>
           </div>
           <div class="tool-group">
@@ -59,11 +59,9 @@
             </div>
           </div>
           <div class="tool-group">
-            <div class="tool-title">控制</div>
+            <div class="tool-title">控制節點</div>
             <div class="tool-grid">
-              <button data-control="cooldown300" type="button"><b>冷卻 5 分鐘</b><span>避免連續觸發</span></button>
-              <button data-control="cooldown3600" type="button"><b>冷卻 1 小時</b><span>適合中長週期策略</span></button>
-              <button data-control="once" type="button"><b>只執行一次</b><span>將最大執行次數設為 1</span></button>
+              <button data-add="control" data-add-node="control:cooldown" type="button"><b>冷卻 / 次數</b><span>設定每 X 秒、最大執行次數</span></button>
             </div>
           </div>
         </div>

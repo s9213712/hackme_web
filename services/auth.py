@@ -23,6 +23,7 @@ _STATE = {
     "get_db": None,
     "get_user_by_username": None,
     "fernet": None,
+    "get_client_ip": None,
     "session_ttl": SESSION_TTL,
     "csrf_token_ttl": CSRF_TOKEN_TTL,
     "session_idle_timeout": SESSION_IDLE_TIMEOUT,
@@ -37,6 +38,7 @@ def configure_auth_service(
     get_db,
     get_user_by_username,
     fernet,
+    get_client_ip=None,
     session_ttl=SESSION_TTL,
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT,
@@ -45,6 +47,7 @@ def configure_auth_service(
         "get_db": get_db,
         "get_user_by_username": get_user_by_username,
         "fernet": fernet,
+        "get_client_ip": get_client_ip,
         "session_ttl": session_ttl,
         "csrf_token_ttl": csrf_token_ttl,
         "session_idle_timeout": session_idle_timeout,
@@ -61,9 +64,13 @@ def json_resp(data, status=200):
 def _request_ip():
     if not has_request_context():
         return "-"
-    return (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or request.remote_addr
-            or "-")
+    get_client_ip = _STATE.get("get_client_ip")
+    if callable(get_client_ip):
+        try:
+            return get_client_ip() or "-"
+        except Exception:
+            pass
+    return request.remote_addr or "-"
 
 
 def _record_csrf_failure(reason, username="-"):
@@ -103,12 +110,13 @@ def verify_csrf_double_submit(body_token):
         now = datetime.now().isoformat()
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT 1 FROM csrf_tokens WHERE token_hash=? AND expires_at>?",
+            "SELECT username FROM csrf_tokens WHERE token_hash=? AND expires_at>?",
             (tok_hash, now)
         ).fetchone()
         if not row:
             conn.rollback()
             return False
+        conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (tok_hash,))
         conn.commit()
         return True
     except Exception:
@@ -219,6 +227,37 @@ def verify_csrf_token(token, username):
         conn.close()
 
 
+def consume_csrf_token(token, username):
+    if not isinstance(token, str) or not token:
+        return False
+    if not isinstance(username, str) or not username:
+        return False
+    conn = _STATE["get_db"]()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT 1 FROM csrf_tokens WHERE token_hash=? AND username=? AND expires_at>?",
+            (hashlib.sha256(token.encode()).hexdigest(), username, datetime.now().isoformat())
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        conn.execute(
+            "DELETE FROM csrf_tokens WHERE token_hash=? AND username=?",
+            (hashlib.sha256(token.encode()).hexdigest(), username),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        conn.close()
+
+
 def delete_csrf_token(token):
     if not token:
         return
@@ -267,12 +306,17 @@ def require_csrf(f):
             # Unauthenticated: token stored under "__public__" OR under body_username
             if not csrf_tok:
                 return csrf_invalid_response("missing_public", body_username or "-")
-            if not verify_csrf_token(csrf_tok, "__public__"):
+            csrf_owner = "__public__"
+            if not verify_csrf_token(csrf_tok, csrf_owner):
                 # Also accept token stored under body_username (e.g. login request)
                 if not body_username or not verify_csrf_token(csrf_tok, body_username):
                     return csrf_invalid_response("invalid_public", body_username or "-")
+                csrf_owner = body_username
 
-        return f(*args, **kwargs)
+        response = f(*args, **kwargs)
+        if not user and csrf_tok:
+            consume_csrf_token(csrf_tok, csrf_owner)
+        return response
     return decorated
 
 

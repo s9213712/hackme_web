@@ -4,6 +4,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_public_registration_only_requires_account_password_and_nickname():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    auth_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+    register_section = index_html.split('id="sec-register"', 1)[1].split('id="captcha-field"', 1)[0]
+
+    assert 'id="reg-user"' in register_section
+    assert 'id="reg-pw"' in register_section
+    assert 'id="reg-pw-confirm"' in register_section
+    assert 'id="reg-nickname"' in register_section
+    assert 'id="reg-idno"' not in register_section
+    assert "身分證不可為空" not in auth_js
+    assert "真實姓名不可為空" not in auth_js
+    assert "請填寫生日" not in auth_js
+    assert "請填寫電話" not in auth_js
+    assert "id_number: idNo" not in auth_js
+
+
 def test_root_points_page_is_chain_operations_console():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
@@ -134,9 +151,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled" checked' in index_html
-    assert 'id="root-trading-borrow-interest-bps"' in index_html
-    assert 'id="root-trading-margin-long-financing-bps"' in index_html
-    assert 'id="root-trading-short-collateral-bps"' in index_html
+    assert 'id="root-trading-borrow-interest-percent"' in index_html
+    assert 'id="root-trading-margin-long-financing-percent"' in index_html
+    assert 'id="root-trading-short-collateral-percent"' in index_html
     assert "融資九成" in index_html
     assert "借券六成" in index_html
     assert "融資可貸比例（%）" in index_html
@@ -145,7 +162,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-price-source"' in index_html
     assert 'id="root-trading-max-price-staleness"' in index_html
     assert 'id="root-trading-liquidation-enabled"' in index_html
-    assert 'id="root-trading-maintenance-bps"' in index_html
+    assert 'id="root-trading-maintenance-percent"' in index_html
     assert 'id="root-trading-futures-enabled"' in index_html
     assert 'id="root-trading-pvp-enabled"' in index_html
     assert 'id="root-trading-reserve-pool"' in index_html
@@ -156,19 +173,19 @@ def test_root_points_page_is_chain_operations_console():
     assert "saveRootEconomyCatalogItem" in admin_js
     assert "function loadRootTradingSettings()" in admin_js
     assert "function saveRootTradingSettings()" in admin_js
-    assert "adminPercentToBps" in admin_js
-    assert "adminFormatPercentFromBps" in admin_js
+    assert "adminInputPercent" in admin_js
+    assert "adminFormatPercent" in admin_js
     assert 'apiFetch(API + "/root/trading/settings"' in admin_js
     assert "parseRootTradingSettingsResponse" in admin_js
     assert "交易所參數 API 找不到" in admin_js
     assert "交易所參數儲存中" in admin_js
-    assert "borrow_interest_bps_daily" in admin_js
-    assert "margin_long_financing_bps" in admin_js
-    assert "short_collateral_bps" in admin_js
+    assert "borrow_interest_percent_daily" in admin_js
+    assert "margin_long_financing_percent" in admin_js
+    assert "short_collateral_percent" in admin_js
     assert "price_source" in admin_js
     assert "max_price_staleness_seconds" in admin_js
     assert "margin_liquidation_enabled" in admin_js
-    assert "margin_maintenance_bps" in admin_js
+    assert "margin_maintenance_percent" in admin_js
     assert "collectRootTradingMarketSettings" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js
     assert "loadRootTradingSettings" in bootstrap_js
@@ -331,11 +348,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"/root/trading/orders/match"' in trading_js
     assert "borrowing_enabled" in trading_js
     assert "margin_liquidation_enabled" in trading_js
-    assert "margin_maintenance_bps" in trading_js
-    assert "margin_long_financing_bps" in trading_js
-    assert "short_collateral_bps" in trading_js
-    assert "tradingPercentToBps" in trading_js
-    assert "formatTradingPercentFromBps" in trading_js
+    assert "margin_maintenance_percent" in trading_js
+    assert "margin_long_financing_percent" in trading_js
+    assert "short_collateral_percent" in trading_js
+    assert "tradingInputPercent" in trading_js
+    assert "formatTradingPercent" in trading_js
     assert "initial_margin_points" in trading_js
     assert "maintenance_margin_points" in trading_js
     assert "融資可貸比例" in trading_js
@@ -427,11 +444,19 @@ def test_trading_exchange_is_separate_from_wallet_page():
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
     workflow_editor_js = (ROOT / "public" / "js" / "trading-workflow-editor.js").read_text(encoding="utf-8")
     workflow_editor_surface = workflow_editor + workflow_editor_js
-    assert 'data-add="branch"' in workflow_editor_surface
+    assert "workflow_graph" in workflow_editor_surface
+    assert "nodes" in workflow_editor_surface
+    assert "edges" in workflow_editor_surface
+    assert "input/output ports" in workflow_editor_surface
+    assert "TRUE/FALSE branch" in workflow_editor_surface
+    assert "start_node_id" in workflow_editor_surface
+    assert "nested AND/OR" in workflow_editor_surface or "Nested AND" in workflow_editor_surface
+    assert 'data-add="logic"' in workflow_editor_surface
     assert 'data-add="condition"' in workflow_editor_surface
     assert 'data-add="action"' in workflow_editor_surface
-    assert 'data-drop-kind="condition"' in workflow_editor_surface
-    assert 'data-drop-kind="action"' in workflow_editor_surface
+    assert 'data-add="control"' in workflow_editor_surface
+    assert "data-port-node" in workflow_editor_surface
+    assert "data-graph-canvas" in workflow_editor_surface
     assert 'draggable="true"' in workflow_editor_surface
     assert "function handleClick" in workflow_editor_surface
     assert "function handleDrop" in workflow_editor_surface

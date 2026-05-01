@@ -60,19 +60,19 @@ function formatTradingPointsValue(value) {
   return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-function tradingBpsToPercent(value, fallback = 0) {
+function tradingPercentValue(value, fallback = 0) {
   const number = Number(value);
-  return Number.isFinite(number) ? number / 100 : fallback;
+  return Number.isFinite(number) ? number : fallback;
 }
 
-function tradingPercentToBps(value, fallback = 0) {
+function tradingInputPercent(value, fallback = 0) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
-  return Math.round(number * 100);
+  return Math.round(number * 10000) / 10000;
 }
 
-function formatTradingPercentFromBps(value, fallback = 0) {
-  return formatTradingPointsValue(tradingBpsToPercent(value, fallback));
+function formatTradingPercent(value, fallback = 0) {
+  return formatTradingPointsValue(tradingPercentValue(value, fallback));
 }
 
 function formatTradingDuration(ms) {
@@ -130,7 +130,7 @@ function tradingOrderDraftEstimate() {
   const quantity = tradingNumber($("trading-quantity")?.value, 0);
   const limitPrice = tradingNumber($("trading-limit-price")?.value, 0);
   const price = orderType === "limit" ? limitPrice : tradingNumber(market.manual_price_points, 0);
-  const feeRate = tradingNumber(market.fee_bps, 0) / 10000;
+  const feeRate = tradingNumber(market.fee_rate_percent, 0) / 100;
   if (!quantity || quantity <= 0) {
     return { ok: false, blocking: false, message: "輸入數量後顯示預估金額" };
   }
@@ -225,7 +225,7 @@ function economySpotMarkets(markets = []) {
   return desiredAssets.map((asset) => (
     markets.find((market) => String(market.base_asset || "").toUpperCase() === asset)
     || markets.find((market) => String(market.symbol || "").toUpperCase().startsWith(`${asset}/`))
-    || { symbol: `${asset}/POINTS`, base_asset: asset, manual_price_points: 0, fee_bps: 0, price_source: "-" }
+    || { symbol: `${asset}/POINTS`, base_asset: asset, manual_price_points: 0, fee_rate_percent: 0, price_source: "-" }
   ));
 }
 
@@ -249,7 +249,7 @@ function tradingSpotPnl(position, market) {
 }
 
 function tradingSpotFee(value, market, multiplier = 1) {
-  const feeRate = tradingNumber(market?.fee_bps, 0) * Number(multiplier || 1) / 10000;
+  const feeRate = tradingNumber(market?.fee_rate_percent, 0) * Number(multiplier || 1) / 100;
   return Math.max(0, Number(value || 0) * feeRate);
 }
 
@@ -394,8 +394,8 @@ function tradingMarginPositionRow(row, scope = "trading") {
   const currentPrice = tradingNumber(row.risk?.price_points ?? row.current_price_points, 0);
   const equity = tradingNumber(row.risk?.equity_after_points ?? row.equity_after_points, 0);
   const maintenance = tradingNumber(row.risk?.maintenance_margin_points ?? row.risk?.maintenance_points ?? row.maintenance_margin_points ?? row.maintenance_points, 0);
-  const initialMarginBps = tradingNumber(row.risk?.initial_margin_bps ?? row.initial_margin_bps, 0);
-  const maintenanceBps = tradingNumber(row.risk?.maintenance_margin_bps ?? row.risk?.maintenance_bps ?? row.maintenance_margin_bps, 0);
+  const initialMarginRatePercent = tradingNumber(row.risk?.initial_margin_percent ?? row.initial_margin_percent, 0);
+  const maintenanceRatePercent = tradingNumber(row.risk?.maintenance_margin_percent ?? row.risk?.maintenance_percent ?? row.maintenance_margin_percent, 0);
   const unrealizedPnl = tradingNumber(row.risk?.unrealized_pnl_points ?? row.unrealized_pnl_points, 0);
   const liquidationPrice = tradingNumber(row.risk?.liquidation_price_points ?? row.liquidation_price_points, 0);
   const pnlClass = unrealizedPnl > 0 ? "positive" : (unrealizedPnl < 0 ? "negative" : "");
@@ -410,13 +410,13 @@ function tradingMarginPositionRow(row, scope = "trading") {
           入場 ${formatTradingPointsValue(entry)} · 現價 ${currentPrice ? formatTradingPointsValue(currentPrice) : "-"} · 本金 ${formatTradingPointsValue(principal)} · 原始保證金 ${formatTradingPointsValue(collateral)}
         </div>
         <div class="drive-card-sub">
-          原始保證金率 ${formatTradingPointsValue(initialMarginBps / 100)}% · 維持率 ${sanitize(riskText.ratioText)} · 權益 ${formatTradingPointsValue(equity)} · 維持保證金 ${formatTradingPointsValue(maintenance)}（${formatTradingPointsValue(maintenanceBps / 100)}%） · ${sanitize(riskText.statusLabel)}
+          原始保證金率 ${formatTradingPointsValue(initialMarginRatePercent)}% · 維持率 ${sanitize(riskText.ratioText)} · 權益 ${formatTradingPointsValue(equity)} · 維持保證金 ${formatTradingPointsValue(maintenance)}（${formatTradingPointsValue(maintenanceRatePercent)}%） · ${sanitize(riskText.statusLabel)}
         </div>
         <div class="drive-card-sub">
           未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 強平價格 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
         </div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
-        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercentFromBps(row.interest_bps_daily || 0)}% · 已計利息 ${formatTradingPointsValue(interest)} · ${sanitize(leverageHint)}</div>
+        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercent(row.interest_percent_daily || 0)}% · 已計利息 ${formatTradingPointsValue(interest)} · ${sanitize(leverageHint)}</div>
         <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
       </div>
       <div class="trading-spot-actions">
@@ -473,8 +473,8 @@ function renderTradingSummary() {
   if ($("trading-margin-note")) {
     $("trading-margin-note").textContent = borrowingEnabled
       ? (currentUser === "root"
-        ? `root 可用模擬資金進行融資 / 借券，日息 ${formatTradingPercentFromBps(tradingState.settings?.borrow_interest_bps_daily || 0)}%；不寫入 PointsChain。`
-        : `已開啟，日息 ${formatTradingPercentFromBps(tradingState.settings?.borrow_interest_bps_daily || 0)}%；手續費與利息計入儲備池統計。`)
+        ? `root 可用模擬資金進行融資 / 借券，日息 ${formatTradingPercent(tradingState.settings?.borrow_interest_percent_daily || 0)}%；不寫入 PointsChain。`
+        : `已開啟，日息 ${formatTradingPercent(tradingState.settings?.borrow_interest_percent_daily || 0)}%；手續費與利息計入儲備池統計。`)
       : "root 尚未開啟借貸交易，目前僅可查看此區。";
   }
   if (availabilityNote) {
@@ -498,8 +498,8 @@ function renderTradingSummary() {
   }
   updateTradingTrialCountdown();
   if ($("trading-current-price")) $("trading-current-price").textContent = market ? String(Number(market.manual_price_points || 0)) : "-";
-  if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "manual_root"}` : "-";
-  if ($("trading-fee-bps")) $("trading-fee-bps").textContent = market ? formatTradingPercentFromBps(market.fee_bps || 0) : "-";
+  if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "last_good_cache"}` : "-";
+  if ($("trading-fee-rate-percent")) $("trading-fee-rate-percent").textContent = market ? formatTradingPercent(market.fee_rate_percent || 0) : "-";
   const position = market ? tradingState.positions.find((row) => row.market_symbol === market.symbol) : null;
   if ($("trading-position-quantity")) $("trading-position-quantity").textContent = position ? sanitize(position.quantity || "0") : "0";
   if ($("trading-position-locked")) $("trading-position-locked").textContent = `鎖定 ${position ? sanitize(position.locked_quantity || "0") : "0"}`;
@@ -1035,12 +1035,12 @@ function updateTradingMarginEstimate() {
   const price = tradingNumber(market.manual_price_points, 0);
   const notional = quantity > 0 && price > 0 ? Math.ceil(quantity * price) : 0;
   const positionType = $("trading-margin-type")?.value || "margin_long";
-  const marginLongFinancingBps = tradingNumber(tradingState.settings?.margin_long_financing_bps, 9000);
-  const shortCollateralBps = tradingNumber(tradingState.settings?.short_collateral_bps, 6000);
+  const marginLongFinancingRatePercent = tradingNumber(tradingState.settings?.margin_long_financing_percent, 90);
+  const shortCollateralRatePercent = tradingNumber(tradingState.settings?.short_collateral_percent, 60);
   const minCollateral = positionType === "short"
-    ? Math.ceil(notional * shortCollateralBps / 10000)
-    : Math.ceil(notional * Math.max(0, 10000 - marginLongFinancingBps) / 10000);
-  const fee = Math.ceil(notional * tradingNumber(market.fee_bps, 0) / 10000);
+    ? Math.ceil(notional * shortCollateralRatePercent / 100)
+    : Math.ceil(notional * Math.max(0, 100 - marginLongFinancingRatePercent) / 100);
+  const fee = Math.ceil(notional * tradingNumber(market.fee_rate_percent, 0) / 100);
   const available = tradingNumber(tradingState.funding?.available_points, 0);
   const typeLabel = positionType === "short" ? "借券放空" : "融資買入";
   if (!quantity || !collateral || !notional) {
@@ -1051,9 +1051,9 @@ function updateTradingMarginEstimate() {
   }
   let message = `${typeLabel} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
   if (positionType === "short") {
-    message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercentFromBps(shortCollateralBps)}%`;
+    message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercent(shortCollateralRatePercent)}%`;
   } else {
-    message = `${message}；融資可貸比例 ${formatTradingPercentFromBps(marginLongFinancingBps)}%`;
+    message = `${message}；融資可貸比例 ${formatTradingPercent(marginLongFinancingRatePercent)}%`;
   }
   let blocking = false;
   if (collateral < minCollateral) {
@@ -1278,7 +1278,7 @@ function renderTradingRootReport(report) {
   if ($("trading-risk-flags")) $("trading-risk-flags").textContent = `borrow=${settings.borrowing_enabled ? "true" : "false"} / liquidation=${settings.margin_liquidation_enabled ? "true" : "false"} / futures=${settings.futures_enabled ? "true" : "false"} / pvp=${settings.pvp_matching_enabled ? "true" : "false"}`;
   if ($("trading-liquidation-status")) {
     $("trading-liquidation-status").textContent = settings.margin_liquidation_enabled
-      ? `自動清算排程：啟用，維持保證金 ${formatTradingPercentFromBps(settings.margin_maintenance_bps || 0)}%`
+      ? `自動清算排程：啟用，維持保證金 ${formatTradingPercent(settings.margin_maintenance_percent || 0)}%`
       : "自動清算排程：停用";
   }
   if ($("trading-root-sim-balance")) {
@@ -1322,8 +1322,8 @@ function populateTradingRootMarketForm() {
   if (!market) return;
   if ($("trading-root-market-select")) $("trading-root-market-select").value = market.symbol;
   if ($("trading-root-price")) $("trading-root-price").value = Number(market.manual_price_points || 0);
-  if ($("trading-root-jump-bps")) $("trading-root-jump-bps").value = formatTradingPercentFromBps(market.max_price_jump_bps || 0);
-  if ($("trading-root-fee-bps")) $("trading-root-fee-bps").value = formatTradingPercentFromBps(market.fee_bps || 0);
+  if ($("trading-root-jump-percent")) $("trading-root-jump-percent").value = formatTradingPercent(market.max_price_jump_percent || 0);
+  if ($("trading-root-fee-percent")) $("trading-root-fee-percent").value = formatTradingPercent(market.fee_rate_percent || 0);
   if ($("trading-root-min-order")) $("trading-root-min-order").value = Number(market.min_order_points || 1);
   if ($("trading-root-max-order")) $("trading-root-max-order").value = Number(market.max_order_points || 1);
   if ($("trading-root-enabled")) $("trading-root-enabled").checked = !!market.enabled;
@@ -1836,16 +1836,13 @@ async function saveTradingRootMarket() {
     await fetchTradingJson(`/root/trading/markets/${encodeURIComponent(symbol)}`, {
       method: "POST",
       body: JSON.stringify({
-        manual_price_points: Number($("trading-root-price")?.value || 0),
-        max_price_jump_bps: tradingPercentToBps($("trading-root-jump-bps")?.value || 0),
-        fee_bps: tradingPercentToBps($("trading-root-fee-bps")?.value || 0),
+        max_price_jump_percent: tradingInputPercent($("trading-root-jump-percent")?.value || 0),
+        fee_rate_percent: tradingInputPercent($("trading-root-fee-percent")?.value || 0),
         min_order_points: Number($("trading-root-min-order")?.value || 0),
         max_order_points: Number($("trading-root-max-order")?.value || 0),
         enabled: !!$("trading-root-enabled")?.checked,
-        confirm_jump: !!$("trading-root-confirm-jump")?.checked,
       }),
     });
-    if ($("trading-root-confirm-jump")) $("trading-root-confirm-jump").checked = false;
     tradingSetMsg("交易市場設定已儲存");
     await loadTradingDashboard();
   } catch (err) {

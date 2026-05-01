@@ -384,13 +384,11 @@ def register_public_routes(app, deps):
             return json_resp({"ok":False,"msg":"帳號只能包含英文、數字、底線、減號"}), 400
         if not nickname:
             return json_resp({"ok":False,"msg":"暱稱不可為空"}), 400
-        if not real_name:
-            return json_resp({"ok":False,"msg":"真實姓名不可為空"}), 400
-        if not validate_id_number(id_number):
+        if id_number and not validate_id_number(id_number):
             return json_resp({"ok":False,"msg":"身分證格式錯誤"}), 400
-        if not birthdate:
+        if data.get("birthdate") and not birthdate:
             return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
-        if not validate_phone(phone):
+        if phone and not validate_phone(phone):
             return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
         if password != password_confirm:
             return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400

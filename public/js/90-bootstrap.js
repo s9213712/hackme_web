@@ -228,11 +228,14 @@ function bindUiEvents() {
   if (tabReports)  tabReports.addEventListener("click",   () => switchAdminTab("reports"));
   if (liBtn)       liBtn.addEventListener("click",        doLogin);
   if (regBtn)      regBtn.addEventListener("click",       doRegister);
-  if (recoveryToggle) recoveryToggle.addEventListener("click", toggleRecoveryPanel);
-  if (resetRequestBtn) resetRequestBtn.addEventListener("click", requestPasswordReset);
-  if (resetConfirmBtn) resetConfirmBtn.addEventListener("click", confirmPasswordReset);
-  if (verifyRequestBtn) verifyRequestBtn.addEventListener("click", requestEmailVerification);
-  if (verifyConfirmBtn) verifyConfirmBtn.addEventListener("click", confirmEmailVerification);
+  if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();
+  else {
+    if (recoveryToggle) recoveryToggle.addEventListener("click", toggleRecoveryPanel);
+    if (resetRequestBtn) resetRequestBtn.addEventListener("click", requestPasswordReset);
+    if (resetConfirmBtn) resetConfirmBtn.addEventListener("click", confirmPasswordReset);
+    if (verifyRequestBtn) verifyRequestBtn.addEventListener("click", requestEmailVerification);
+    if (verifyConfirmBtn) verifyConfirmBtn.addEventListener("click", confirmEmailVerification);
+  }
   if (captchaRefresh) captchaRefresh.addEventListener("click", loadCaptchaChallenge);
   if (logoutBtn)  logoutBtn.addEventListener("click",    doLogout);
   if (bugReportOpenBtn) bugReportOpenBtn.addEventListener("click", showBugReportDialog);
@@ -472,8 +475,7 @@ $("li-pw").addEventListener("keydown", (e) => {
 $("reg-pw").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doRegister();
 });
-setupPwToggle("reset-new-pw", "reset-new-pw-toggle");
-setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
+if (typeof bindAuthRecoveryControls === "function") bindAuthRecoveryControls();
 
 (async function init() {
   await loadSiteConfig();

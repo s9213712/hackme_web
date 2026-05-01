@@ -423,6 +423,25 @@ create_smoke_user() {
   fi
 }
 
+enable_smoke_feature_flags() {
+  request "admin enable smoke feature flags" "PUT" "/api/admin/features" "200" '{
+    "feature_chat_enabled": true,
+    "feature_community_enabled": true,
+    "feature_appeals_enabled": true,
+    "feature_reports_enabled": true,
+    "feature_forum_core_enabled": true,
+    "feature_attachments_enabled": true,
+    "feature_storage_albums_enabled": true,
+    "feature_privacy_uploads_enabled": true,
+    "feature_comfyui_enabled": true,
+    "feature_economy_enabled": true,
+    "feature_trading_enabled": true,
+    "feature_games_enabled": true,
+    "feature_account_security_enabled": true
+  }'
+  request "admin verify smoke feature flags" "GET" "/api/admin/features" "200"
+}
+
 create_forum_post_flow() {
   local prefix="$1"
   local category_var="$2"
@@ -517,6 +536,7 @@ run_checks() {
     request "auth me after password change" "GET" "/api/me" "200"
   fi
 
+  enable_smoke_feature_flags || return 1
   create_forum_post_flow "baseline" BASELINE_CATEGORY_ID BASELINE_BOARD_ID BASELINE_THREAD_ID || return 1
   create_app_snapshot_checkpoint || return 1
 
@@ -560,7 +580,7 @@ run_checks() {
     request "points chain backup manual" "POST" "/api/root/points/chain/backups" "200" '{}'
     request "points economy stats" "GET" "/api/admin/points/economy/stats" "200"
     request "trading root report" "GET" "/api/admin/trading/report" "200"
-    request "trading root update manual price" "POST" "/api/root/trading/markets/ETH%2FPOINTS" "200" '{"manual_price_points":5000,"max_price_jump_bps":1000,"fee_bps":30,"min_order_points":1,"max_order_points":100000,"enabled":true}'
+    request "trading root manual price rejected" "POST" "/api/root/trading/markets/ETH%2FPOINTS" "400" '{"manual_price_points":5000,"max_price_jump_percent":10,"fee_rate_percent":0.3,"min_order_points":1,"max_order_points":100000,"enabled":true}'
     login_smoke_user || return 1
     request "trading user dashboard" "GET" "/api/trading/dashboard" "200"
     request "trading market buy" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"market","quantity":"0.01"}'
@@ -595,13 +615,13 @@ run_checks() {
   fi
 
   if [[ -n "${SMOKE_USER_ID:-}" ]]; then
-    request "dm create thread" "POST" "/api/dm/threads" "200" '{"target_username":"smokeuser"}'
-    DM_THREAD_ID="$(json_expr 'data["thread"]["id"]' "$(latest_raw "dm create thread")" || true)"
-    if [[ -n "${DM_THREAD_ID:-}" ]]; then
-      request "dm send message" "POST" "/api/dm/threads/${DM_THREAD_ID}/messages" "200" '{"body":"functional smoke dm"}'
-      request "dm list messages" "GET" "/api/dm/threads/${DM_THREAD_ID}/messages" "200"
+    request "dm create private chat room" "POST" "/api/chat/rooms" "200" '{"target_user":"smokeuser"}'
+    DM_ROOM_ID="$(json_expr 'data["room"]["id"]' "$(latest_raw "dm create private chat room")" || true)"
+    if [[ -n "${DM_ROOM_ID:-}" ]]; then
+      request "dm send message" "POST" "/api/chat/rooms/${DM_ROOM_ID}/messages" "200" '{"content":"functional smoke dm"}'
+      request "dm list messages" "GET" "/api/chat/rooms/${DM_ROOM_ID}/messages" "200"
     else
-      skip "dm message flow" "dm thread id not found"
+      skip "dm message flow" "private chat room id not found"
     fi
   fi
 
