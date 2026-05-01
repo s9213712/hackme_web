@@ -165,6 +165,28 @@ def ensure_trading_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS trading_spot_realized_pnl (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pnl_uuid TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            market_symbol TEXT NOT NULL,
+            order_id INTEGER NOT NULL REFERENCES trading_orders(id) ON DELETE CASCADE,
+            fill_id INTEGER NOT NULL UNIQUE REFERENCES trading_fills(id) ON DELETE CASCADE,
+            funding_mode TEXT NOT NULL DEFAULT 'points_chain',
+            quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
+            avg_cost_points INTEGER NOT NULL DEFAULT 0,
+            sell_price_points INTEGER NOT NULL CHECK (sell_price_points > 0),
+            gross_cost_points INTEGER NOT NULL DEFAULT 0,
+            gross_proceeds_points INTEGER NOT NULL DEFAULT 0,
+            buy_fee_estimate_points INTEGER NOT NULL DEFAULT 0,
+            sell_fee_points INTEGER NOT NULL DEFAULT 0,
+            net_pnl_points INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS trading_sim_accounts (
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             balance_points INTEGER NOT NULL DEFAULT 0 CHECK (balance_points >= 0),
@@ -768,6 +790,36 @@ class TradingEngineService:
         item["locked_quantity"] = units_to_quantity(item["locked_quantity_units"])
         return item
 
+    def _position_payload_with_metrics(self, row, *, market=None, realized_points=0, total_fees=0):
+        item = self._position_payload(row)
+        quantity_units = int(item["quantity_units"] or 0) + int(item["locked_quantity_units"] or 0)
+        avg_cost = int(item["avg_cost_points"] or 0)
+        current_price = int((market or {}).get("manual_price_points") or 0)
+        fee_bps = int((market or {}).get("fee_bps") or 0)
+        gross_cost = notional_points(quantity_units, avg_cost) if quantity_units and avg_cost else 0
+        current_value = notional_points(quantity_units, current_price) if quantity_units and current_price else 0
+        estimated_buy_fee = fee_points(gross_cost, fee_bps) if gross_cost else 0
+        estimated_exit_fee = fee_points(current_value, fee_bps) if current_value else 0
+        cost_basis = gross_cost + estimated_buy_fee + estimated_exit_fee
+        unrealized = current_value - cost_basis if quantity_units else 0
+        item.update({
+            "available_quantity_units": int(item["quantity_units"] or 0),
+            "total_quantity_units": quantity_units,
+            "total_quantity": units_to_quantity(quantity_units),
+            "current_price_points": current_price,
+            "gross_cost_points": gross_cost,
+            "current_value_points": current_value,
+            "estimated_buy_fee_points": estimated_buy_fee,
+            "estimated_exit_fee_points": estimated_exit_fee,
+            "cost_basis_points": cost_basis,
+            "unrealized_pnl_points": unrealized,
+            "realized_pnl_points": int(realized_points or 0),
+            "total_pnl_points": int(realized_points or 0) + unrealized,
+            "total_fee_points": int(total_fees or 0),
+        })
+        item["pnl_percent"] = round((unrealized / cost_basis) * 100, 4) if cost_basis else 0
+        return item
+
     def _futures_position_payload(self, row):
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
@@ -841,11 +893,53 @@ class TradingEngineService:
             "liquidation_required": equity_after <= maintenance_points,
         }
 
-    def _fill_payload(self, row):
+    def _fill_payload(self, row, realized=None):
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
         item["points_ledger_uuids"] = _json_loads(item.get("points_ledger_uuids_json"), [])
+        if realized is not None:
+            item["realized_pnl_points"] = int(realized["net_pnl_points"] or 0)
+            item["gross_cost_points"] = int(realized["gross_cost_points"] or 0)
+            item["buy_fee_estimate_points"] = int(realized["buy_fee_estimate_points"] or 0)
         return item
+
+    def _spot_realized_map(self, conn, user_id):
+        return {
+            row["market_symbol"]: int(row["realized_pnl_points"] or 0)
+            for row in conn.execute(
+                """
+                SELECT market_symbol, COALESCE(SUM(net_pnl_points), 0) AS realized_pnl_points
+                FROM trading_spot_realized_pnl
+                WHERE user_id=?
+                GROUP BY market_symbol
+                """,
+                (int(user_id),),
+            ).fetchall()
+        }
+
+    def _spot_fee_map(self, conn, user_id):
+        return {
+            row["market_symbol"]: int(row["total_fee_points"] or 0)
+            for row in conn.execute(
+                """
+                SELECT market_symbol, COALESCE(SUM(fee_points), 0) AS total_fee_points
+                FROM trading_fills
+                WHERE user_id=?
+                GROUP BY market_symbol
+                """,
+                (int(user_id),),
+            ).fetchall()
+        }
+
+    def _spot_summary_payload(self, positions):
+        return {
+            "current_value_points": sum(int(row.get("current_value_points") or 0) for row in positions),
+            "cost_basis_points": sum(int(row.get("cost_basis_points") or 0) for row in positions),
+            "unrealized_pnl_points": sum(int(row.get("unrealized_pnl_points") or 0) for row in positions),
+            "realized_pnl_points": sum(int(row.get("realized_pnl_points") or 0) for row in positions),
+            "total_pnl_points": sum(int(row.get("total_pnl_points") or 0) for row in positions),
+            "total_fee_points": sum(int(row.get("total_fee_points") or 0) for row in positions),
+        }
 
     def _notify_trade_filled(self, conn, fill):
         try:
@@ -923,8 +1017,16 @@ class TradingEngineService:
             self.ensure_schema(conn)
             state = self._state(conn)
             markets = [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1 ORDER BY symbol").fetchall()]
+            market_map = {row["symbol"]: row for row in markets}
+            realized_map = self._spot_realized_map(conn, user_id)
+            fee_map = self._spot_fee_map(conn, user_id)
             positions = [
-                self._position_payload(row)
+                self._position_payload_with_metrics(
+                    row,
+                    market=market_map.get(row["market_symbol"]),
+                    realized_points=realized_map.get(row["market_symbol"], 0),
+                    total_fees=fee_map.get(row["market_symbol"], 0),
+                )
                 for row in conn.execute("SELECT * FROM trading_spot_positions WHERE user_id=? ORDER BY market_symbol", (int(user_id),)).fetchall()
             ]
             futures_positions = [
@@ -939,16 +1041,28 @@ class TradingEngineService:
                 self._order_payload(row)
                 for row in conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
-            fills = [
-                self._fill_payload(row)
-                for row in conn.execute("SELECT * FROM trading_fills WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
-            ]
+            fill_rows = conn.execute("SELECT * FROM trading_fills WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            pnl_by_fill = {
+                row["fill_id"]: row
+                for row in conn.execute(
+                    """
+                    SELECT *
+                    FROM trading_spot_realized_pnl
+                    WHERE user_id=? AND fill_id IN (
+                        SELECT id FROM trading_fills WHERE user_id=? ORDER BY id DESC LIMIT 50
+                    )
+                    """,
+                    (int(user_id), int(user_id)),
+                ).fetchall()
+            }
+            fills = [self._fill_payload(row, realized=pnl_by_fill.get(row["id"])) for row in fill_rows]
             return {
                 "state": state,
                 "settings": self._settings_payload(conn),
                 "funding": self._funding_payload(conn, user_id),
                 "markets": markets,
                 "positions": positions,
+                "spot_summary": self._spot_summary_payload(positions),
                 "futures_positions": futures_positions,
                 "margin_positions": margin_positions,
                 "orders": orders,
@@ -1201,6 +1315,7 @@ class TradingEngineService:
         total = notional + fee
         ledger_uuids = []
         funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
+        sell_pnl_data = None
         if side == "buy":
             frozen_amount = int(order["frozen_points"] or total)
             if funding_mode == "root_simulated":
@@ -1308,13 +1423,25 @@ class TradingEngineService:
             position = self._position(conn, user_id, market["symbol"])
             if int(position["locked_quantity_units"]) < quantity_units:
                 raise ValueError("insufficient locked spot position")
+            avg_cost = int(position["avg_cost_points"] or 0)
+            gross_cost = notional_points(quantity_units, avg_cost) if avg_cost else 0
+            buy_fee_estimate = fee_points(gross_cost, int(market["fee_bps"] or 0)) if gross_cost else 0
+            net_pnl = net_credit - gross_cost - buy_fee_estimate
+            sell_pnl_data = {
+                "avg_cost_points": avg_cost,
+                "gross_cost_points": gross_cost,
+                "buy_fee_estimate_points": buy_fee_estimate,
+                "net_pnl_points": net_pnl,
+            }
+            next_total_units = int(position["quantity_units"] or 0) + int(position["locked_quantity_units"] or 0) - quantity_units
+            next_avg_cost = avg_cost if next_total_units > 0 else 0
             conn.execute(
                 """
                 UPDATE trading_spot_positions
-                SET locked_quantity_units=locked_quantity_units-?, updated_at=?
+                SET locked_quantity_units=locked_quantity_units-?, avg_cost_points=?, updated_at=?
                 WHERE user_id=? AND market_symbol=?
                 """,
-                (quantity_units, _now(), user_id, market["symbol"]),
+                (quantity_units, next_avg_cost, _now(), user_id, market["symbol"]),
             )
             reserve_delta = 0 if funding_mode == "root_simulated" else fee
         fill_uuid = str(uuid.uuid4())
@@ -1342,6 +1469,35 @@ class TradingEngineService:
                 _now(),
             ),
         )
+        fill_id = cur.lastrowid
+        if sell_pnl_data is not None:
+            conn.execute(
+                """
+                INSERT INTO trading_spot_realized_pnl (
+                    pnl_uuid, user_id, market_symbol, order_id, fill_id, funding_mode,
+                    quantity_units, avg_cost_points, sell_price_points, gross_cost_points,
+                    gross_proceeds_points, buy_fee_estimate_points, sell_fee_points,
+                    net_pnl_points, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    user_id,
+                    market["symbol"],
+                    order["id"],
+                    fill_id,
+                    funding_mode,
+                    quantity_units,
+                    sell_pnl_data["avg_cost_points"],
+                    price,
+                    sell_pnl_data["gross_cost_points"],
+                    notional,
+                    sell_pnl_data["buy_fee_estimate_points"],
+                    fee,
+                    sell_pnl_data["net_pnl_points"],
+                    _now(),
+                ),
+            )
         conn.execute(
             """
             UPDATE trading_orders
@@ -1350,7 +1506,7 @@ class TradingEngineService:
             """,
             (price, fee, quantity_units, _now(), order["id"]),
         )
-        return conn.execute("SELECT * FROM trading_fills WHERE id=?", (cur.lastrowid,)).fetchone()
+        return conn.execute("SELECT * FROM trading_fills WHERE id=?", (fill_id,)).fetchone()
 
     def cancel_order(self, *, actor, order_uuid):
         user_id = self._actor_id(actor)
@@ -1966,7 +2122,9 @@ class TradingEngineService:
                 "futures_positions": int(conn.execute("SELECT COUNT(*) FROM trading_futures_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "margin_positions": int(conn.execute("SELECT COUNT(*) FROM trading_margin_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "pending_profit": int(conn.execute("SELECT COUNT(*) FROM trading_pending_profit WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "spot_realized_pnl": int(conn.execute("SELECT COUNT(*) FROM trading_spot_realized_pnl WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
             }
+            conn.execute("DELETE FROM trading_spot_realized_pnl WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_fills WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_orders WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_spot_positions WHERE user_id=?", (user_id,))
@@ -2315,6 +2473,48 @@ class TradingEngineService:
                     "actual_frozen_points": actual,
                 })
 
+    def _verify_spot_realized_pnl(self, conn, errors):
+        seen_fills = set()
+        rows = conn.execute(
+            """
+            SELECT p.*, f.side, f.quantity_units AS fill_quantity_units,
+                   f.price_points, f.notional_points, f.fee_points AS fill_fee_points
+            FROM trading_spot_realized_pnl p
+            LEFT JOIN trading_fills f ON f.id=p.fill_id
+            ORDER BY p.id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            fill_id = row["fill_id"]
+            if fill_id in seen_fills:
+                errors.append({"type": "spot_realized_pnl_duplicate_fill", "fill_id": fill_id, "pnl_id": row["id"]})
+            seen_fills.add(fill_id)
+            if row["side"] != "sell":
+                errors.append({"type": "spot_realized_pnl_fill_not_sell", "fill_id": fill_id, "pnl_id": row["id"], "side": row["side"]})
+                continue
+            if int(row["quantity_units"] or 0) != int(row["fill_quantity_units"] or 0):
+                errors.append({"type": "spot_realized_pnl_quantity_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
+            if int(row["sell_price_points"] or 0) != int(row["price_points"] or 0):
+                errors.append({"type": "spot_realized_pnl_price_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
+            if int(row["gross_proceeds_points"] or 0) != int(row["notional_points"] or 0):
+                errors.append({"type": "spot_realized_pnl_proceeds_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
+            if int(row["sell_fee_points"] or 0) != int(row["fill_fee_points"] or 0):
+                errors.append({"type": "spot_realized_pnl_sell_fee_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
+            expected = (
+                int(row["gross_proceeds_points"] or 0)
+                - int(row["sell_fee_points"] or 0)
+                - int(row["gross_cost_points"] or 0)
+                - int(row["buy_fee_estimate_points"] or 0)
+            )
+            if int(row["net_pnl_points"] or 0) != expected:
+                errors.append({
+                    "type": "spot_realized_pnl_replay_mismatch",
+                    "fill_id": fill_id,
+                    "pnl_id": row["id"],
+                    "expected_net_pnl_points": expected,
+                    "actual_net_pnl_points": int(row["net_pnl_points"] or 0),
+                })
+
     def _verify_state_on_conn(self, conn, *, enter_safe_mode=False):
         errors = []
         totals = self._replay_positions(conn)
@@ -2347,6 +2547,7 @@ class TradingEngineService:
         self._verify_reserve_pool(conn, errors)
         self._verify_sim_accounts(conn, errors)
         self._verify_margin_position_locks(conn, errors)
+        self._verify_spot_realized_pnl(conn, errors)
         result = {"ok": not errors, "errors": errors, "checked_at": _now()}
         if errors and enter_safe_mode:
             conn.execute(

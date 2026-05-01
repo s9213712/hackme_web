@@ -226,6 +226,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "成本價（總額）" in trading_js
     assert "目前部位價值" in trading_js
     assert "盈虧" in trading_js
+    assert "已實現盈虧" in trading_js
+    assert "realized_pnl_points" in trading_js
+    assert "unrealized_pnl_points" in trading_js
     assert "tradingSpotCostBasis" in trading_js
     assert "payload.emergency_close = true" in trading_js
     assert "手續費按平時 2 倍計算" in trading_js

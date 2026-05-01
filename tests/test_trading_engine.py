@@ -153,6 +153,44 @@ def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
         )
 
 
+def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
+
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=6000, confirm_jump=True)
+    dashboard_after_buy = trading.user_dashboard(user_id=1)
+    position = dashboard_after_buy["positions"][0]
+    assert position["quantity"] == "0.1"
+    assert position["gross_cost_points"] == 500
+    assert position["current_value_points"] == 600
+    assert position["estimated_buy_fee_points"] == 2
+    assert position["estimated_exit_fee_points"] == 2
+    assert position["cost_basis_points"] == 504
+    assert position["unrealized_pnl_points"] == 96
+    assert dashboard_after_buy["spot_summary"]["unrealized_pnl_points"] == 96
+
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.04")
+
+    dashboard_after_sell = trading.user_dashboard(user_id=1)
+    position_after_sell = dashboard_after_sell["positions"][0]
+    assert position_after_sell["quantity"] == "0.06"
+    assert position_after_sell["gross_cost_points"] == 300
+    assert position_after_sell["current_value_points"] == 360
+    assert position_after_sell["estimated_buy_fee_points"] == 1
+    assert position_after_sell["estimated_exit_fee_points"] == 2
+    assert position_after_sell["cost_basis_points"] == 303
+    assert position_after_sell["unrealized_pnl_points"] == 57
+    assert position_after_sell["realized_pnl_points"] == 38
+    assert position_after_sell["total_fee_points"] == 3
+    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 38
+    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 38
+    assert trading.verify_state()["ok"] is True
+
+
 def test_market_order_uses_live_price_instead_of_stale_manual_price(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=500, action_type="test_funding")

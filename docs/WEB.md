@@ -161,6 +161,11 @@ execution:
   fails closed with a clear error.
 - Open limit orders are scanned by the trading maintenance worker and are
   filled when the current execution price reaches the limit.
+- Spot positions expose backend-calculated cost basis, current value,
+  unrealized PnL, realized PnL, and cumulative fees. Cost basis includes the
+  remaining spot cost, an estimated entry fee, and the estimated exit fee at the
+  current market price. Realized PnL is recorded on each sell fill and is
+  replay-verified by the trading state checker.
 
 Trading funds are separated by account type:
 

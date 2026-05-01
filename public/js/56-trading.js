@@ -179,6 +179,9 @@ function spotPositionTotalQuantity(position) {
 }
 
 function tradingSpotPnl(position, market) {
+  if (position && position.unrealized_pnl_points !== undefined) {
+    return tradingNumber(position.unrealized_pnl_points, 0);
+  }
   const quantity = spotPositionTotalQuantity(position);
   const costBasis = tradingSpotCostBasis(position, market);
   const currentValue = tradingSpotCurrentValue(position, market);
@@ -192,12 +195,18 @@ function tradingSpotFee(value, market, multiplier = 1) {
 }
 
 function tradingSpotCurrentValue(position, market) {
+  if (position && position.current_value_points !== undefined) {
+    return tradingNumber(position.current_value_points, 0);
+  }
   const quantity = spotPositionTotalQuantity(position);
   const currentPrice = tradingNumber(market?.manual_price_points, 0);
   return quantity > 0 && currentPrice > 0 ? quantity * currentPrice : 0;
 }
 
 function tradingSpotCostBasis(position, market) {
+  if (position && position.cost_basis_points !== undefined) {
+    return tradingNumber(position.cost_basis_points, 0);
+  }
   const quantity = spotPositionTotalQuantity(position);
   const avgCost = spotPositionNumber(position, "avg_cost_points");
   const currentValue = tradingSpotCurrentValue(position, market);
@@ -229,7 +238,10 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
     const costBasis = tradingSpotCostBasis(position, market);
     const currentValue = tradingSpotCurrentValue(position, market);
     const pnl = tradingSpotPnl(position, market);
+    const realizedPnl = tradingNumber(position?.realized_pnl_points, 0);
+    const totalFee = tradingNumber(position?.total_fee_points, 0);
     const pnlClass = pnl > 0 ? "positive" : (pnl < 0 ? "negative" : "");
+    const realizedClass = realizedPnl > 0 ? "positive" : (realizedPnl < 0 ? "negative" : "");
     return `
       <div class="trading-spot-row" data-economy-spot-row="${sanitize(symbol)}" data-sellable="${sanitize(String(sellable))}">
         <div>
@@ -254,6 +266,12 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
         <div class="trading-spot-metric">
           <span>盈虧</span>
           <b class="trading-spot-pnl ${pnlClass}">${pnl >= 0 ? "+" : ""}${formatTradingPointsValue(pnl)} 點</b>
+          <small class="drive-card-sub">未實現</small>
+        </div>
+        <div class="trading-spot-metric">
+          <span>已實現盈虧</span>
+          <b class="trading-spot-pnl ${realizedClass}">${realizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(realizedPnl)} 點</b>
+          <small class="drive-card-sub">累計手續費 ${formatTradingPointsValue(totalFee)}</small>
         </div>
         <div class="trading-spot-actions">
           <div class="field">
