@@ -269,9 +269,13 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "}, 5000)" in trading_js
     assert "function tradingReferenceChartLimit" in trading_js
     assert "function mergeTradingReferenceLatestPayload" in trading_js
+    assert "function tradingReferencePayloadHasCandles" in trading_js
     assert "loadTradingReferencePrices({ silent: true, latestOnly: true })" in trading_js
     assert 'const latestParam = latestOnly ? "&latest=1" : "";' in trading_js
-    assert "renderTradingReferenceChart(tradingState.referencePrices || json)" in trading_js
+    assert "tradingReferencePriceAbort" in trading_js
+    assert "tradingReferenceChartAbort" in trading_js
+    assert "保留上一張蠟燭圖" in trading_js
+    assert "tradingState.referencePrices = null" not in trading_js
     assert 'currentModuleTab !== "trading"' in trading_js
     assert "tradingDashboardAutoTimer" in trading_js
     assert "function renderTradingReferenceChart" in trading_js

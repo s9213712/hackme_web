@@ -9,7 +9,8 @@ let tradingState = {
   referencePrices: null,
 };
 let tradingEventsBound = false;
-let tradingReferenceAbort = null;
+let tradingReferencePriceAbort = null;
+let tradingReferenceChartAbort = null;
 let tradingReferenceAutoTimer = null;
 let tradingReferenceAutoBusy = false;
 let tradingReferenceChartAutoTimer = null;
@@ -551,14 +552,20 @@ function tradingReferenceChartLimit(interval) {
   return interval === "1d" ? 90 : 96;
 }
 
+function tradingReferenceCandles(payload) {
+  return Array.isArray(payload?.candles)
+    ? payload.candles
+    : (Array.isArray(payload?.points) ? payload.points : []);
+}
+
+function tradingReferencePayloadHasCandles(payload) {
+  return tradingReferenceCandles(payload).length > 0;
+}
+
 function mergeTradingReferenceLatestPayload(currentPayload, latestPayload, maxCandles) {
-  const latestCandles = Array.isArray(latestPayload?.candles)
-    ? latestPayload.candles
-    : (Array.isArray(latestPayload?.points) ? latestPayload.points : []);
-  if (!latestCandles.length) return currentPayload || latestPayload;
-  const existingCandles = Array.isArray(currentPayload?.candles)
-    ? currentPayload.candles
-    : (Array.isArray(currentPayload?.points) ? currentPayload.points : []);
+  const latestCandles = tradingReferenceCandles(latestPayload);
+  if (!latestCandles.length) return currentPayload || null;
+  const existingCandles = tradingReferenceCandles(currentPayload);
   const mergedCandles = existingCandles.slice();
   latestCandles.forEach((candle) => {
     const candleTime = Number(candle?.time || 0);
@@ -613,29 +620,53 @@ async function loadTradingReferencePrices(options = {}) {
   const canvas = $("trading-reference-chart");
   if (!market || !canvas) return;
   const interval = $("trading-reference-interval")?.value || "15m";
-  if (tradingReferenceAbort) tradingReferenceAbort.abort();
-  tradingReferenceAbort = new AbortController();
-  if (!options.silent) renderTradingReferenceChart(null, "參考價格讀取中");
+  const isPriceOnly = !!options.priceOnly;
+  const abortKey = isPriceOnly ? "price" : "chart";
+  if (abortKey === "price") {
+    if (tradingReferencePriceAbort) tradingReferencePriceAbort.abort();
+    tradingReferencePriceAbort = new AbortController();
+  } else {
+    if (tradingReferenceChartAbort) tradingReferenceChartAbort.abort();
+    tradingReferenceChartAbort = new AbortController();
+  }
+  const signal = abortKey === "price" ? tradingReferencePriceAbort.signal : tradingReferenceChartAbort.signal;
+  const hasReusableChart = !!(
+    tradingReferencePayloadHasCandles(tradingState.referencePrices)
+    && tradingState.referencePrices.market === market.symbol
+    && tradingState.referencePrices.interval === interval
+  );
+  if (!options.silent && !hasReusableChart) {
+    renderTradingReferenceChart(null, "參考價格讀取中");
+  } else if (!options.silent && hasReusableChart && $("trading-reference-price-meta")) {
+    $("trading-reference-price-meta").textContent = "正在更新參考價格，保留上一張蠟燭圖。";
+  }
   try {
     const maxCandles = tradingReferenceChartLimit(interval);
     const canPatchLatest = !!(
       options.latestOnly
-      && tradingState.referencePrices
+      && tradingReferencePayloadHasCandles(tradingState.referencePrices)
       && tradingState.referencePrices.market === market.symbol
       && tradingState.referencePrices.interval === interval
     );
-    const latestOnly = !!(options.priceOnly || canPatchLatest);
+    const latestOnly = !!(isPriceOnly || canPatchLatest);
     const limit = latestOnly ? 1 : maxCandles;
     const latestParam = latestOnly ? "&latest=1" : "";
     const json = await fetchTradingJson(`/trading/reference-prices?market=${encodeURIComponent(market.symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}${latestParam}`, {
-      signal: tradingReferenceAbort.signal,
+      signal,
     });
-    if (!options.priceOnly) {
-      tradingState.referencePrices = latestOnly
+    const responseCandles = tradingReferenceCandles(json);
+    let nextPayload = null;
+    if (!isPriceOnly) {
+      nextPayload = latestOnly
         ? mergeTradingReferenceLatestPayload(tradingState.referencePrices, json, maxCandles)
         : json;
+      if (tradingReferencePayloadHasCandles(nextPayload)) {
+        tradingState.referencePrices = nextPayload;
+      } else if (!hasReusableChart) {
+        renderTradingReferenceChart(null, "Binance 參考價格暫無有效資料");
+      }
     }
-    const last = Array.isArray(json.candles) ? json.candles[json.candles.length - 1] : null;
+    const last = responseCandles[responseCandles.length - 1] || null;
     if (last && last.close_points) {
       market.manual_price_points = Number(last.close_points || 0);
       market.price_source = json.source || "binance_public_api";
@@ -643,11 +674,21 @@ async function loadTradingReferencePrices(options = {}) {
       if ($("trading-current-market")) $("trading-current-market").textContent = `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "binance_public_api"}`;
       updateTradingOrderEstimate();
     }
-    if (!options.priceOnly) renderTradingReferenceChart(tradingState.referencePrices || json);
+    if (!isPriceOnly && tradingReferencePayloadHasCandles(tradingState.referencePrices)) {
+      renderTradingReferenceChart(tradingState.referencePrices);
+    }
   } catch (err) {
     if (err.name === "AbortError") return;
-    if (!options.priceOnly) tradingState.referencePrices = null;
-    if (!options.silent && !options.priceOnly) renderTradingReferenceChart(null, err.message || "Binance 參考價格讀取失敗");
+    if (!isPriceOnly && !options.silent) {
+      if (tradingReferencePayloadHasCandles(tradingState.referencePrices)) {
+        renderTradingReferenceChart(tradingState.referencePrices);
+        if ($("trading-reference-price-meta")) {
+          $("trading-reference-price-meta").textContent = `參考價格更新失敗，已保留上一張蠟燭圖：${err.message || "Binance 參考價格讀取失敗"}`;
+        }
+      } else {
+        renderTradingReferenceChart(null, err.message || "Binance 參考價格讀取失敗");
+      }
+    }
   }
 }
 
