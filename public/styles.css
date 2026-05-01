@@ -4195,4 +4195,337 @@
         grid-template-columns: 1fr !important;
       }
     }
+
+    /* ── Mobile ergonomics pass ──────────────────────────── */
+    @media (max-width: 860px) {
+      html,
+      body {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+      }
+
+      body.app-authenticated #success-screen {
+        min-height: 100dvh;
+      }
+
+      .app-action-bar {
+        top: .38rem;
+        left: .45rem;
+        right: .45rem;
+        justify-content: flex-end;
+        min-height: 2.55rem;
+        border-radius: 8px;
+      }
+
+      .session-countdown {
+        margin-right: auto;
+        max-width: 38vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        border-right: 0;
+        padding-inline: .35rem;
+      }
+
+      .icon-action-btn,
+      .app-action-bar .notification-toggle,
+      #logout-btn.icon-action-btn {
+        width: 2.15rem;
+        height: 2.15rem;
+        min-width: 2.15rem;
+      }
+
+      .notification-badge {
+        position: absolute;
+        top: -.38rem;
+        right: -.42rem;
+        margin: 0;
+      }
+
+      .notification-panel {
+        position: fixed;
+        top: 3.15rem;
+        left: .5rem;
+        right: .5rem;
+        width: auto;
+        max-width: none;
+      }
+
+      .app-shell,
+      body.sidebar-collapsed .app-shell {
+        display: block;
+        padding-top: 3.25rem;
+      }
+
+      .app-sidebar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        max-height: 42dvh;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        padding: .48rem;
+        overflow: hidden;
+      }
+
+      .sidebar-head {
+        margin-bottom: .42rem;
+      }
+
+      .sidebar-nav.tabs {
+        display: flex;
+        grid-template-columns: none;
+        gap: .35rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: .25rem .1rem .42rem;
+        scroll-snap-type: x proximity;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .sidebar-nav .tab {
+        flex: 0 0 auto;
+        min-width: 4.65rem;
+        min-height: 2.35rem;
+        padding: .42rem .52rem;
+        scroll-snap-align: start;
+      }
+
+      .sidebar-footer {
+        margin-top: .45rem;
+      }
+
+      .sidebar-user-card,
+      .sidebar-server-state {
+        min-height: 2rem;
+        padding: .38rem .45rem;
+      }
+
+      .app-main {
+        padding: .75rem .55rem .9rem;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .card {
+        width: min(100% - 1rem, 420px);
+        padding: 1.25rem 1rem;
+      }
+
+      .module-section > .admin-tools > .mini-title:first-child,
+      .admin-wrap > .tabs + .form-section .admin-tools > .mini-title:first-child,
+      #module-server > .admin-tools > .mini-title:first-child {
+        font-size: .98rem;
+        margin-bottom: .65rem;
+      }
+
+      .drive-card,
+      .community-panel,
+      .game-panel,
+      .game-board-panel,
+      .trading-reference-panel,
+      .trading-bot-panel,
+      .drive-collapsible-body {
+        padding: .68rem;
+      }
+
+      .drive-card-heading,
+      .compact-heading,
+      .community-panel-head,
+      .game-board-panel .drive-card-heading {
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: stretch;
+        gap: .55rem;
+      }
+
+      .settings-option-grid,
+      .economy-wallet-grid,
+      .billing-market-grid,
+      .root-trading-market-row,
+      .platform-chart-row,
+      #platform-stats {
+        grid-template-columns: 1fr !important;
+      }
+
+      .settings-option-grid .field {
+        display: block;
+        min-height: 0;
+      }
+
+      .settings-option-grid label {
+        margin-bottom: .32rem;
+      }
+
+      input,
+      select,
+      textarea,
+      .readonly-field {
+        min-height: 2.45rem;
+        font-size: 1rem;
+      }
+
+      .btn {
+        min-height: 2.35rem;
+        padding: .52rem .72rem;
+      }
+
+      .drive-file-actions,
+      .community-actions,
+      .chat-composer-actions,
+      .row-actions {
+        justify-content: stretch;
+        width: 100%;
+      }
+
+      .drive-file-actions .btn,
+      .community-actions .btn,
+      .chat-composer-actions .btn,
+      .drive-card-heading .btn,
+      .compact-heading .btn,
+      .compact-heading .compact-select {
+        width: 100%;
+      }
+
+      .drive-file-row,
+      .game-match-row,
+      .chat-room-item,
+      .chat-message-attachment,
+      .chat-pending-attachment {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: .5rem;
+        align-items: stretch;
+      }
+
+      .drive-file-row > *,
+      .game-match-row > *,
+      .chat-room-item > * {
+        min-width: 0;
+      }
+
+      .drive-toolbar,
+      .admin-toolbar,
+      .chat-toolbar {
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+
+      .tabs:not(.sidebar-nav) {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .tabs:not(.sidebar-nav) .tab {
+        flex: 0 0 auto;
+        min-width: 7.4rem;
+        white-space: nowrap;
+      }
+
+      .chat-layout,
+      .chat-toolbar,
+      .chat-room-create,
+      .chat-room-join,
+      .chat-composer,
+      .chat-friend-add,
+      .drive-file-preview-layout,
+      .game-layout,
+      .comfyui-layout {
+        grid-template-columns: 1fr !important;
+      }
+
+      .chat-room-messages {
+        height: min(58dvh, 520px);
+        min-height: 320px;
+      }
+
+      .chat-msg {
+        max-width: 100%;
+      }
+
+      .drive-preview-card {
+        position: static;
+        max-height: none;
+      }
+
+      .trading-reference-chart {
+        height: 230px;
+      }
+
+      .trading-indicator-controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .trading-indicator-controls label {
+        justify-content: center;
+      }
+
+      .trading-bot-tabs {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .trading-bot-tabs button {
+        min-width: 0;
+        padding-inline: .45rem;
+      }
+
+      .trading-workflow-json-panel textarea,
+      #trading-auto-workflow-json {
+        min-height: 170px;
+      }
+
+      .user-table {
+        min-width: 760px;
+      }
+
+      .security-log-box {
+        height: 240px;
+      }
+
+      .chess-board,
+      .sudoku-board,
+      .minesweeper-board {
+        width: min(100%, calc(100vw - 1.5rem));
+      }
+    }
+
+    @media (max-width: 480px) {
+      .app-action-bar {
+        gap: .22rem;
+        padding: .22rem;
+      }
+
+      .session-countdown {
+        max-width: 31vw;
+        font-size: .68rem;
+      }
+
+      .sidebar-nav .tab {
+        min-width: 4.15rem;
+        font-size: .72rem;
+      }
+
+      .drive-card-title,
+      .mini-title {
+        font-size: .86rem;
+      }
+
+      .drive-card-sub,
+      .field-hint {
+        font-size: .72rem;
+      }
+
+      .trading-indicator-controls,
+      .trading-bot-tabs {
+        grid-template-columns: 1fr;
+      }
+
+      .trading-reference-tooltip {
+        white-space: normal;
+      }
+    }
   

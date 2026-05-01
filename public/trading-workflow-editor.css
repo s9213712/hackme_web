@@ -281,3 +281,113 @@
       .branch-head { grid-template-columns: 1fr; }
       .two-col, .three-col { grid-template-columns: 1fr; }
     }
+
+    @media (max-width: 720px) {
+      body {
+        overflow-x: hidden;
+      }
+
+      .topbar {
+        position: sticky;
+        padding: .7rem .65rem;
+      }
+
+      h1 {
+        font-size: 1rem;
+      }
+
+      .subtitle {
+        font-size: .78rem;
+        line-height: 1.35;
+      }
+
+      .top-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+      }
+
+      .top-actions button {
+        width: 100%;
+        padding-inline: .45rem;
+      }
+
+      .palette,
+      .workspace,
+      .inspector {
+        padding: .65rem;
+      }
+
+      .palette {
+        max-height: 40dvh;
+      }
+
+      .tool-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .tool-grid button {
+        padding: .5rem;
+      }
+
+      .tool-grid span {
+        display: none;
+      }
+
+      .strategy-bar,
+      .flow {
+        gap: .55rem;
+      }
+
+      .panel-body,
+      .branch-head,
+      .flow {
+        padding: .62rem;
+      }
+
+      .branch-tabs {
+        padding-bottom: .55rem;
+      }
+
+      .branch-tab {
+        min-width: 8rem;
+      }
+
+      .row-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .row-actions button {
+        width: 100%;
+      }
+
+      .logic-node {
+        min-height: 56px;
+      }
+
+      .node {
+        padding: .52rem;
+      }
+
+      .node-tools button {
+        min-width: 1.8rem;
+      }
+
+      textarea {
+        min-height: 180px;
+        font-size: .82rem;
+      }
+    }
+
+    @media (max-width: 460px) {
+      .top-actions,
+      .tool-grid,
+      .row-actions {
+        grid-template-columns: 1fr;
+      }
+
+      .palette {
+        max-height: 46dvh;
+      }
+    }
