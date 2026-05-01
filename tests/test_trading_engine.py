@@ -59,7 +59,7 @@ def _notifications(trading, user_id):
         conn.close()
 
 
-def test_spot_buy_uses_points_chain_and_updates_position(tmp_path):
+def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(
         user_id=1,
@@ -79,17 +79,16 @@ def test_spot_buy_uses_points_chain_and_updates_position(tmp_path):
 
     assert result["order"]["status"] == "filled"
     wallet = points.get_wallet(1)
-    assert wallet["points_balance"] == 1498
+    assert wallet["points_balance"] == 2000
     dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 498
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 502
     assert dashboard["positions"][0]["market_symbol"] == "ETH/POINTS"
     assert dashboard["positions"][0]["quantity"] == "0.1"
     assert dashboard["futures_positions"] == []
     ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
-    assert "trading_freeze" in ledger_actions
-    assert "trading_unfreeze" in ledger_actions
-    assert "trading_spot_buy" in ledger_actions
-    assert "trading_fee" in ledger_actions
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 2
+    assert "trading_spot_buy" not in ledger_actions
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 0
     notes = _notifications(trading, 1)
     assert notes[-1]["type"] == "trading_order_filled"
     assert notes[-1]["title"] == "交易已成交"
@@ -105,13 +104,13 @@ def test_insufficient_trading_balance_creates_notification(tmp_path):
             market_symbol="ETH/POINTS",
             side="buy",
             order_type="market",
-            quantity="0.1",
+            quantity="0.3",
         )
 
     notes = _notifications(trading, 1)
     assert notes[-1]["type"] == "trading_balance_insufficient"
     assert notes[-1]["title"] == "交易未成立：餘額不足"
-    assert "ETH/POINTS buy market 數量 0.1 未成立" in notes[-1]["body"]
+    assert "ETH/POINTS buy market 數量 0.3 未成立" in notes[-1]["body"]
 
 
 def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
@@ -140,7 +139,9 @@ def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["positions"][0]["quantity"] == "0"
     assert dashboard["fills"][0]["fee_points"] == 3
-    assert points.get_wallet(1)["points_balance"] == 1995
+    assert points.get_wallet(1)["points_balance"] == 2000
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 995
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 0
     with pytest.raises(ValueError, match="emergency close only supports market sell"):
         trading.place_order(
             actor=_actor(),
@@ -151,6 +152,32 @@ def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
             limit_price_points=5000,
             emergency_close=True,
         )
+
+
+def test_trial_credit_expiry_reclaims_principal_but_keeps_profit(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.1")
+
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=6000, confirm_jump=True)
+    conn = trading.get_db()
+    conn.execute("UPDATE trading_trial_credits SET expires_at='2000-01-01T00:00:00' WHERE user_id=1")
+    conn.commit()
+    conn.close()
+
+    dashboard = trading.user_dashboard(user_id=1)
+
+    assert dashboard["funding"]["trial_credit"]["status"] == "expired"
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 0
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 0
+    assert dashboard["positions"][0]["quantity"] == "0"
+    assert points.get_wallet(1)["points_balance"] == 96
+    report = trading.root_report()
+    audit_types = [row["event_type"] for row in report["audit_events"]]
+    assert "TRADING_TRIAL_CREDIT_FORCED_SELL" in audit_types
+    assert "TRADING_TRIAL_CREDIT_RECLAIMED" in audit_types
 
 
 def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
@@ -207,7 +234,7 @@ def test_market_order_uses_live_price_instead_of_stale_manual_price(tmp_path):
     assert result["order"]["execution_price_points"] == 77059
     fills = trading.user_dashboard(user_id=1)["fills"]
     assert fills[0]["price_points"] == 77059
-    assert points.get_wallet(1)["points_balance"] == 421
+    assert points.get_wallet(1)["points_balance"] == 500
 
 
 def test_live_price_failure_uses_recent_last_good_price(tmp_path):
@@ -334,7 +361,8 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
         limit_price_points=4000,
     )["order"]
     assert order["status"] == "open"
-    assert points.get_wallet(1)["points_frozen"] == 402
+    assert points.get_wallet(1)["points_frozen"] == 0
+    assert order["trial_frozen_points"] == 402
 
     cancelled = trading.cancel_order(actor=_actor(), order_uuid=order["order_uuid"])
     assert cancelled["status"] == "cancelled"
@@ -359,7 +387,8 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
         limit_price_points=4000,
     )["order"]
     assert order["status"] == "open"
-    assert points.get_wallet(1)["points_frozen"] == 402
+    assert points.get_wallet(1)["points_frozen"] == 0
+    assert order["trial_frozen_points"] == 402
 
     trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=3900, confirm_jump=True)
     matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
@@ -390,7 +419,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
 
     high_price_sell = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert high_price_sell["order"]["status"] == "filled"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 5
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 3
 
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000
@@ -400,7 +429,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
     sold = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert sold["order"]["status"] == "filled"
     ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
-    assert ledger_actions.count("trading_fee") == 4
+    assert ledger_actions.count("trading_spot_sell") >= 1
     assert trading.verify_state()["ok"] is True
 
 
@@ -685,7 +714,7 @@ def test_open_order_frozen_tampering_enters_trading_safe_mode(tmp_path):
 
     verification = trading.verify_state()
     assert verification["ok"] is False
-    assert any(error["type"] == "open_order_frozen_points_mismatch" for error in verification["errors"])
+    assert any(error["type"] == "open_order_total_frozen_points_mismatch" for error in verification["errors"])
 
 
 def test_sell_order_rejects_zero_net_credit_before_locking_position(tmp_path):

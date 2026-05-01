@@ -1,7 +1,7 @@
 import json
 import math
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -12,6 +12,8 @@ from services.notifications import create_notification_if_enabled
 ASSET_SCALE = 100_000_000
 USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
+TRIAL_CREDIT_INITIAL_POINTS = 1_000
+TRIAL_CREDIT_DAYS = 7
 MARGIN_MIN_COLLATERAL_BPS = 3000
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
@@ -130,6 +132,8 @@ def ensure_trading_schema(conn):
             execution_price_points INTEGER,
             status TEXT NOT NULL DEFAULT 'open',
             frozen_points INTEGER NOT NULL DEFAULT 0,
+            trial_frozen_points INTEGER NOT NULL DEFAULT 0 CHECK (trial_frozen_points >= 0),
+            chain_frozen_points INTEGER NOT NULL DEFAULT 0 CHECK (chain_frozen_points >= 0),
             fee_points INTEGER NOT NULL DEFAULT 0,
             filled_quantity_units INTEGER NOT NULL DEFAULT 0,
             reason TEXT,
@@ -157,6 +161,8 @@ def ensure_trading_schema(conn):
             notional_points INTEGER NOT NULL CHECK (notional_points >= 0),
             fee_points INTEGER NOT NULL DEFAULT 0,
             reserve_delta_points INTEGER NOT NULL DEFAULT 0,
+            trial_repaid_points INTEGER NOT NULL DEFAULT 0 CHECK (trial_repaid_points >= 0),
+            trial_profit_points INTEGER NOT NULL DEFAULT 0 CHECK (trial_profit_points >= 0),
             points_ledger_uuids_json TEXT,
             created_at TEXT NOT NULL,
             CHECK (side IN ('buy', 'sell'))
@@ -195,6 +201,35 @@ def ensure_trading_schema(conn):
             updated_at TEXT NOT NULL,
             reset_at TEXT,
             reset_by INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_trial_credits (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            initial_points INTEGER NOT NULL DEFAULT 1000 CHECK (initial_points >= 0),
+            available_points INTEGER NOT NULL DEFAULT 0 CHECK (available_points >= 0),
+            locked_points INTEGER NOT NULL DEFAULT 0 CHECK (locked_points >= 0),
+            deployed_points INTEGER NOT NULL DEFAULT 0 CHECK (deployed_points >= 0),
+            status TEXT NOT NULL DEFAULT 'active',
+            activated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            reclaimed_at TEXT,
+            updated_at TEXT NOT NULL,
+            CHECK (status IN ('active', 'expired', 'depleted', 'reclaimed'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_trial_position_costs (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            market_symbol TEXT NOT NULL REFERENCES trading_markets(symbol),
+            quantity_units INTEGER NOT NULL DEFAULT 0 CHECK (quantity_units >= 0),
+            trial_cost_points INTEGER NOT NULL DEFAULT 0 CHECK (trial_cost_points >= 0),
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, market_symbol)
         )
         """
     )
@@ -369,6 +404,16 @@ def ensure_trading_schema(conn):
         cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if "funding_mode" not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN funding_mode TEXT NOT NULL DEFAULT 'points_chain'")
+    order_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_orders)").fetchall()}
+    if "trial_frozen_points" not in order_cols:
+        conn.execute("ALTER TABLE trading_orders ADD COLUMN trial_frozen_points INTEGER NOT NULL DEFAULT 0")
+    if "chain_frozen_points" not in order_cols:
+        conn.execute("ALTER TABLE trading_orders ADD COLUMN chain_frozen_points INTEGER NOT NULL DEFAULT 0")
+    fill_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_fills)").fetchall()}
+    if "trial_repaid_points" not in fill_cols:
+        conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_repaid_points INTEGER NOT NULL DEFAULT 0")
+    if "trial_profit_points" not in fill_cols:
+        conn.execute("ALTER TABLE trading_fills ADD COLUMN trial_profit_points INTEGER NOT NULL DEFAULT 0")
 
 
 class TradingEngineService:
@@ -764,6 +809,309 @@ class TradingEngineService:
         )
         return conn.execute("SELECT * FROM trading_sim_accounts WHERE user_id=?", (int(user_id),)).fetchone()
 
+    def _is_root_user_id(self, conn, user_id):
+        row = conn.execute("SELECT username FROM users WHERE id=?", (int(user_id),)).fetchone()
+        return bool(row and row["username"] == "root")
+
+    def _system_actor(self):
+        return {"username": "system", "role": "system"}
+
+    def _trial_credit_row(self, conn, user_id):
+        return conn.execute("SELECT * FROM trading_trial_credits WHERE user_id=?", (int(user_id),)).fetchone()
+
+    def _ensure_trial_credit(self, conn, user_id, *, actor=None, allow_reclaim=True):
+        user_id = int(user_id)
+        if self._is_root_user_id(conn, user_id):
+            return None
+        row = self._trial_credit_row(conn, user_id)
+        now = _now()
+        if not row:
+            expires_at = (datetime.fromisoformat(now) + timedelta(days=TRIAL_CREDIT_DAYS)).isoformat()
+            conn.execute(
+                """
+                INSERT INTO trading_trial_credits (
+                    user_id, initial_points, available_points, locked_points, deployed_points,
+                    status, activated_at, expires_at, updated_at
+                ) VALUES (?, ?, ?, 0, 0, 'active', ?, ?, ?)
+                """,
+                (user_id, TRIAL_CREDIT_INITIAL_POINTS, TRIAL_CREDIT_INITIAL_POINTS, now, expires_at, now),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_TRIAL_CREDIT_GRANTED",
+                "exchange trial credit granted as system loan",
+                actor=actor or self._system_actor(),
+                target_user_id=user_id,
+                severity="info",
+                metadata={
+                    "loan_type": "exchange_trial_credit",
+                    "amount_points": TRIAL_CREDIT_INITIAL_POINTS,
+                    "expires_at": expires_at,
+                    "reclaim_policy": "principal_only; user keeps realized profit",
+                },
+            )
+            row = self._trial_credit_row(conn, user_id)
+        if allow_reclaim and row and row["status"] == "active":
+            try:
+                expires_at = datetime.fromisoformat(str(row["expires_at"]))
+            except Exception:
+                expires_at = None
+            if expires_at and datetime.fromisoformat(_now()) >= expires_at:
+                self._reclaim_trial_credit(conn, user_id, actor=actor or self._system_actor(), reason="TRIAL_CREDIT_EXPIRED")
+                row = self._trial_credit_row(conn, user_id)
+        return row
+
+    def _trial_position(self, conn, user_id, symbol):
+        now = _now()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO trading_trial_position_costs
+                (user_id, market_symbol, quantity_units, trial_cost_points, updated_at)
+            VALUES (?, ?, 0, 0, ?)
+            """,
+            (int(user_id), symbol, now),
+        )
+        return conn.execute(
+            "SELECT * FROM trading_trial_position_costs WHERE user_id=? AND market_symbol=?",
+            (int(user_id), symbol),
+        ).fetchone()
+
+    def _trial_delta(self, conn, user_id, *, available_delta=0, locked_delta=0, deployed_delta=0, status=None, reclaimed=False):
+        row = self._ensure_trial_credit(conn, user_id, allow_reclaim=False)
+        if not row:
+            return None
+        next_available = int(row["available_points"] or 0) + int(available_delta)
+        next_locked = int(row["locked_points"] or 0) + int(locked_delta)
+        next_deployed = int(row["deployed_points"] or 0) + int(deployed_delta)
+        if min(next_available, next_locked, next_deployed) < 0:
+            raise ValueError("trial credit accounting would become negative")
+        next_status = status or row["status"]
+        if next_status == "active" and next_available == 0 and next_locked == 0 and next_deployed == 0:
+            next_status = "depleted"
+        conn.execute(
+            """
+            UPDATE trading_trial_credits
+            SET available_points=?, locked_points=?, deployed_points=?, status=?,
+                reclaimed_at=CASE WHEN ? THEN ? ELSE reclaimed_at END,
+                updated_at=?
+            WHERE user_id=?
+            """,
+            (next_available, next_locked, next_deployed, next_status, 1 if reclaimed else 0, _now(), _now(), int(user_id)),
+        )
+        return self._trial_credit_row(conn, user_id)
+
+    def _trial_lock_for_buy(self, conn, user_id, total_points):
+        row = self._ensure_trial_credit(conn, user_id)
+        if not row or row["status"] != "active":
+            return 0
+        amount = min(int(total_points or 0), int(row["available_points"] or 0))
+        if amount <= 0:
+            return 0
+        self._trial_delta(conn, user_id, available_delta=-amount, locked_delta=amount)
+        return amount
+
+    def _trial_unlock(self, conn, user_id, amount):
+        amount = int(amount or 0)
+        if amount <= 0:
+            return
+        self._trial_delta(conn, user_id, available_delta=amount, locked_delta=-amount)
+
+    def _trial_mark_buy_executed(self, conn, *, user_id, market_symbol, quantity_units, trial_used_points, total_points):
+        trial_used_points = int(trial_used_points or 0)
+        if trial_used_points <= 0:
+            return 0
+        total_points = max(1, int(total_points or 0))
+        trial_units = int(quantity_units) if trial_used_points >= total_points else int((int(quantity_units) * trial_used_points) // total_points)
+        if trial_units <= 0:
+            trial_units = 1
+        trial_units = min(int(quantity_units), trial_units)
+        self._trial_delta(conn, user_id, locked_delta=-trial_used_points, deployed_delta=trial_used_points)
+        trial_pos = self._trial_position(conn, user_id, market_symbol)
+        conn.execute(
+            """
+            UPDATE trading_trial_position_costs
+            SET quantity_units=?, trial_cost_points=?, updated_at=?
+            WHERE user_id=? AND market_symbol=?
+            """,
+            (
+                int(trial_pos["quantity_units"] or 0) + trial_units,
+                int(trial_pos["trial_cost_points"] or 0) + trial_used_points,
+                _now(),
+                int(user_id),
+                market_symbol,
+            ),
+        )
+        return trial_units
+
+    def _trial_allocate_sell(self, conn, *, user_id, market_symbol, quantity_units, net_credit_points):
+        trial_pos = self._trial_position(conn, user_id, market_symbol)
+        available_trial_units = int(trial_pos["quantity_units"] or 0)
+        trial_cost_total = int(trial_pos["trial_cost_points"] or 0)
+        quantity_units = int(quantity_units)
+        net_credit_points = int(net_credit_points or 0)
+        if available_trial_units <= 0 or trial_cost_total <= 0 or quantity_units <= 0 or net_credit_points <= 0:
+            return {"trial_units": 0, "trial_cost_points": 0, "trial_repaid_points": 0, "trial_profit_points": 0, "wallet_credit_points": net_credit_points}
+        trial_units = min(available_trial_units, quantity_units)
+        if trial_units == available_trial_units:
+            trial_cost = trial_cost_total
+        else:
+            trial_cost = int(math.ceil(trial_cost_total * trial_units / available_trial_units))
+        trial_net_credit = int(math.floor(net_credit_points * trial_units / quantity_units))
+        trial_repaid = min(trial_net_credit, trial_cost)
+        trial_profit = max(0, trial_net_credit - trial_cost)
+        wallet_credit = max(0, net_credit_points - trial_repaid)
+        remaining_units = max(0, available_trial_units - trial_units)
+        remaining_cost = max(0, trial_cost_total - trial_cost)
+        conn.execute(
+            """
+            UPDATE trading_trial_position_costs
+            SET quantity_units=?, trial_cost_points=?, updated_at=?
+            WHERE user_id=? AND market_symbol=?
+            """,
+            (remaining_units, remaining_cost, _now(), int(user_id), market_symbol),
+        )
+        self._trial_delta(conn, user_id, available_delta=trial_repaid, deployed_delta=-trial_cost)
+        return {
+            "trial_units": trial_units,
+            "trial_cost_points": trial_cost,
+            "trial_repaid_points": trial_repaid,
+            "trial_profit_points": trial_profit,
+            "wallet_credit_points": wallet_credit,
+        }
+
+    def _reclaim_trial_credit(self, conn, user_id, *, actor=None, reason="TRIAL_CREDIT_RECLAIM"):
+        row = self._trial_credit_row(conn, user_id)
+        if not row or row["status"] != "active":
+            return row
+        actor = actor or self._system_actor()
+        reclaimed_before_sell = int(row["available_points"] or 0)
+        for order in conn.execute(
+            """
+            SELECT * FROM trading_orders
+            WHERE user_id=? AND side='buy' AND status IN ('open', 'partially_filled')
+              AND trial_frozen_points > 0
+            ORDER BY id ASC
+            """,
+            (int(user_id),),
+        ).fetchall():
+            trial_frozen = int(order["trial_frozen_points"] or 0)
+            chain_frozen = int(order["chain_frozen_points"] or 0)
+            if trial_frozen:
+                self._trial_delta(conn, user_id, locked_delta=-trial_frozen)
+            if chain_frozen:
+                self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="unfreeze",
+                    amount=chain_frozen,
+                    action_type="trading_unfreeze",
+                    reference_type="trading_order",
+                    reference_id=order["order_uuid"],
+                    idempotency_key=f"trading:trial_reclaim_cancel_unfreeze:{order['order_uuid']}",
+                    reason="TRIAL_CREDIT_RECLAIM_CANCEL_ORDER",
+                    public_metadata={"order_id": order["id"], "market": order["market_symbol"], "side": order["side"]},
+                    actor=actor,
+                )
+            conn.execute(
+                """
+                UPDATE trading_orders
+                SET status='cancelled', frozen_points=0, trial_frozen_points=0, chain_frozen_points=0,
+                    reason=?, updated_at=?
+                WHERE id=?
+                """,
+                (f"{reason}: trial credit reclaimed", _now(), order["id"]),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_TRIAL_CREDIT_ORDER_CANCELLED",
+                "open trial-funded buy order cancelled during trial credit reclaim",
+                actor=actor,
+                target_user_id=int(user_id),
+                order_id=order["id"],
+                market_symbol=order["market_symbol"],
+                severity="warning",
+                metadata={"reason": reason, "trial_frozen_points": trial_frozen, "chain_frozen_points": chain_frozen},
+            )
+        for trial_pos in conn.execute(
+            "SELECT * FROM trading_trial_position_costs WHERE user_id=? AND quantity_units>0 ORDER BY market_symbol",
+            (int(user_id),),
+        ).fetchall():
+            position = self._position(conn, user_id, trial_pos["market_symbol"])
+            sell_units = min(int(position["quantity_units"] or 0), int(trial_pos["quantity_units"] or 0))
+            if sell_units <= 0:
+                continue
+            market = self._market(conn, trial_pos["market_symbol"])
+            current_price, price_source = self._current_market_price_points(conn, market)
+            order_uuid = str(uuid.uuid4())
+            now = _now()
+            conn.execute(
+                """
+                UPDATE trading_spot_positions
+                SET quantity_units=quantity_units-?, locked_quantity_units=locked_quantity_units+?, updated_at=?
+                WHERE user_id=? AND market_symbol=?
+                """,
+                (sell_units, sell_units, now, int(user_id), trial_pos["market_symbol"]),
+            )
+            cur = conn.execute(
+                """
+                INSERT INTO trading_orders (
+                    order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
+                    quantity_units, limit_price_points, execution_price_points, status,
+                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
+                    filled_quantity_units, reason, created_at, updated_at
+                ) VALUES (?, ?, ?, 'sell', 'market', 'trial_mixed', 'house_counterparty',
+                    ?, NULL, ?, 'open', 0, 0, 0, 0, 0, ?, ?, ?)
+                """,
+                (order_uuid, int(user_id), trial_pos["market_symbol"], sell_units, current_price, reason, now, now),
+            )
+            order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (cur.lastrowid,)).fetchone()
+            fill = self._execute_order(conn, order, market, actor=actor)
+            self._audit_event(
+                conn,
+                "TRADING_TRIAL_CREDIT_FORCED_SELL",
+                "trial credit expiry forced spot liquidation",
+                actor=actor,
+                target_user_id=int(user_id),
+                order_id=order["id"],
+                market_symbol=market["symbol"],
+                severity="warning",
+                metadata={"fill_id": fill["id"], "price_source": price_source, "reason": reason},
+            )
+        final = self._trial_credit_row(conn, user_id)
+        reclaimed_after_sell = int(final["available_points"] or 0)
+        lost_points = int(final["deployed_points"] or 0)
+        conn.execute(
+            """
+            UPDATE trading_trial_credits
+            SET available_points=0, locked_points=0, deployed_points=0, status='expired',
+                reclaimed_at=?, updated_at=?
+            WHERE user_id=?
+            """,
+            (_now(), _now(), int(user_id)),
+        )
+        conn.execute(
+            "UPDATE trading_trial_position_costs SET quantity_units=0, trial_cost_points=0, updated_at=? WHERE user_id=?",
+            (_now(), int(user_id)),
+        )
+        self._audit_event(
+            conn,
+            "TRADING_TRIAL_CREDIT_RECLAIMED",
+            "exchange trial credit reclaimed from user",
+            actor=actor,
+            target_user_id=int(user_id),
+            severity="warning",
+            metadata={
+                "loan_type": "exchange_trial_credit",
+                "reason": reason,
+                "reclaimed_available_before_sell": reclaimed_before_sell,
+                "reclaimed_available_after_sell": reclaimed_after_sell,
+                "lost_points": lost_points,
+                "profit_policy": "realized profit remains with user",
+            },
+        )
+        return self._trial_credit_row(conn, user_id)
+
     def _funding_payload(self, conn, user_id):
         user = conn.execute("SELECT username FROM users WHERE id=?", (int(user_id),)).fetchone()
         if user and user["username"] == "root":
@@ -775,13 +1123,32 @@ class TradingEngineService:
                 "initial_balance_points": int(account["initial_balance_points"] or ROOT_SIMULATED_INITIAL_POINTS),
                 "note": "root 模擬交易資金不寫入 PointsChain，也不影響帳戶積分",
             }
+        trial = self._ensure_trial_credit(conn, user_id)
         wallet = self.points_service.ensure_wallet(conn, user_id)
         payload = self.points_service.serialize_wallet(wallet)
+        wallet_available = int(payload.get("points_balance") or 0)
+        wallet_locked = int(payload.get("points_frozen") or 0)
+        trial_payload = None
+        if trial:
+            trial_payload = {
+                "initial_points": int(trial["initial_points"] or 0),
+                "available_points": int(trial["available_points"] or 0),
+                "locked_points": int(trial["locked_points"] or 0),
+                "deployed_points": int(trial["deployed_points"] or 0),
+                "status": trial["status"],
+                "activated_at": trial["activated_at"],
+                "expires_at": trial["expires_at"],
+                "reclaimed_at": trial["reclaimed_at"],
+                "days_valid": TRIAL_CREDIT_DAYS,
+            }
         return {
             "mode": "points_chain",
-            "available_points": int(payload.get("points_balance") or 0),
-            "locked_points": int(payload.get("points_frozen") or 0),
-            "note": "一般用戶可用積分等於實際 PointsChain 錢包餘額",
+            "available_points": wallet_available + int(trial["available_points"] or 0) if trial else wallet_available,
+            "locked_points": wallet_locked + int(trial["locked_points"] or 0) if trial else wallet_locked,
+            "wallet_available_points": wallet_available,
+            "wallet_locked_points": wallet_locked,
+            "trial_credit": trial_payload,
+            "note": "一般用戶交易會優先使用交易所體驗金，體驗金到期或賠光後停止使用；已實現獲利保留給用戶",
         }
 
     def _position_payload(self, row):
@@ -1015,6 +1382,8 @@ class TradingEngineService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
+            self._ensure_trial_credit(conn, user_id)
+            conn.commit()
             state = self._state(conn)
             markets = [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1 ORDER BY symbol").fetchall()]
             market_map = {row["symbol"]: row for row in markets}
@@ -1134,6 +1503,16 @@ class TradingEngineService:
             now = _now()
             order_uuid = str(uuid.uuid4())
             funding_mode = "root_simulated" if self._is_root_actor(actor) else "points_chain"
+            trial_frozen = 0
+            chain_frozen = 0
+            if side == "buy" and funding_mode != "root_simulated":
+                trial_frozen = self._trial_lock_for_buy(conn, user_id, total_points)
+                chain_frozen = total_points - trial_frozen
+                funding_mode = "trial_mixed" if trial_frozen else "points_chain"
+            elif side == "sell" and funding_mode != "root_simulated":
+                trial_position = self._trial_position(conn, user_id, market["symbol"])
+                if int(trial_position["quantity_units"] or 0) > 0:
+                    funding_mode = "trial_mixed"
             frozen_points = total_points if side == "buy" else 0
             order_reason = "EMERGENCY_MARKET_CLOSE" if emergency_close else ""
             cur = conn.execute(
@@ -1141,8 +1520,9 @@ class TradingEngineService:
                 INSERT INTO trading_orders (
                     order_uuid, user_id, market_symbol, side, order_type, funding_mode, execution_mode,
                     quantity_units, limit_price_points, execution_price_points, status,
-                    frozen_points, fee_points, filled_quantity_units, reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, 0, ?, ?, ?)
+                    frozen_points, trial_frozen_points, chain_frozen_points, fee_points,
+                    filled_quantity_units, reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'house_counterparty', ?, ?, ?, 'open', ?, ?, ?, ?, 0, ?, ?, ?)
                 """,
                 (
                     order_uuid,
@@ -1155,6 +1535,8 @@ class TradingEngineService:
                     limit_price,
                     execution_price,
                     frozen_points,
+                    trial_frozen,
+                    chain_frozen,
                     fee,
                     order_reason,
                     now,
@@ -1166,19 +1548,28 @@ class TradingEngineService:
             if side == "buy":
                 if funding_mode == "root_simulated":
                     self._sim_delta(conn, user_id, balance_delta=-total_points, locked_delta=total_points)
-                else:
+                elif chain_frozen > 0:
                     ledger_rows.append(self._ledger(
                         conn,
                         user_id=user_id,
                         currency_type="points",
                         direction="freeze",
-                        amount=total_points,
+                        amount=chain_frozen,
                         action_type="trading_freeze",
                         reference_type="trading_order",
                         reference_id=order_uuid,
                         idempotency_key=f"trading:freeze:{order_uuid}",
                         reason="TRADING_FREEZE",
-                    public_metadata={"order_id": order_id, "market": market["symbol"], "side": side, "order_type": order_type, "price_source": price_source, "fee_bps": effective_fee_bps},
+                        public_metadata={
+                            "order_id": order_id,
+                            "market": market["symbol"],
+                            "side": side,
+                            "order_type": order_type,
+                            "price_source": price_source,
+                            "fee_bps": effective_fee_bps,
+                            "trial_frozen_points": trial_frozen,
+                            "chain_frozen_points": chain_frozen,
+                        },
                         actor=actor,
                     ))
             else:
@@ -1316,53 +1707,68 @@ class TradingEngineService:
         ledger_uuids = []
         funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
         sell_pnl_data = None
+        trial_repaid = 0
+        trial_profit = 0
         if side == "buy":
             frozen_amount = int(order["frozen_points"] or total)
+            trial_frozen = int(order["trial_frozen_points"] or 0) if "trial_frozen_points" in order.keys() else 0
+            chain_frozen = int(order["chain_frozen_points"] or 0) if "chain_frozen_points" in order.keys() else (0 if funding_mode == "root_simulated" else frozen_amount)
             if funding_mode == "root_simulated":
                 refund = max(0, frozen_amount - total)
                 self._sim_delta(conn, user_id, balance_delta=refund, locked_delta=-frozen_amount)
             else:
-                ledger_uuids.append(self._ledger(
-                    conn,
-                    user_id=user_id,
-                    currency_type="points",
-                    direction="unfreeze",
-                    amount=frozen_amount,
-                    action_type="trading_unfreeze",
-                    reference_type="trading_order",
-                    reference_id=order["order_uuid"],
-                    idempotency_key=f"trading:unfreeze:settle:{order['order_uuid']}",
-                    reason="TRADING_UNFREEZE_SETTLEMENT",
-                    public_metadata={"order_id": order["id"], "market": market["symbol"], "side": side},
-                    actor=actor,
-                )["ledger_uuid"])
-                ledger_uuids.append(self._ledger(
-                    conn,
-                    user_id=user_id,
-                    currency_type="points",
-                    direction="debit",
-                    amount=notional,
-                    action_type="trading_spot_buy",
-                    reference_type="trading_order",
-                    reference_id=order["order_uuid"],
-                    idempotency_key=f"trading:spot_buy:{order['order_uuid']}",
-                    reason="TRADING_SPOT_BUY",
-                    public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
-                    actor=actor,
-                )["ledger_uuid"])
-                if fee:
+                trial_used = min(trial_frozen, total)
+                trial_refund = max(0, trial_frozen - trial_used)
+                if trial_refund:
+                    self._trial_unlock(conn, user_id, trial_refund)
+                if trial_used:
+                    self._trial_mark_buy_executed(
+                        conn,
+                        user_id=user_id,
+                        market_symbol=market["symbol"],
+                        quantity_units=quantity_units,
+                        trial_used_points=trial_used,
+                        total_points=total,
+                    )
+                chain_spend = max(0, total - trial_used)
+                chain_refund = max(0, chain_frozen - chain_spend)
+                if chain_frozen > 0:
+                    ledger_uuids.append(self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="unfreeze",
+                        amount=chain_frozen,
+                        action_type="trading_unfreeze",
+                        reference_type="trading_order",
+                        reference_id=order["order_uuid"],
+                        idempotency_key=f"trading:unfreeze:settle:{order['order_uuid']}",
+                        reason="TRADING_UNFREEZE_SETTLEMENT",
+                        public_metadata={"order_id": order["id"], "market": market["symbol"], "side": side, "chain_refund_points": chain_refund},
+                        actor=actor,
+                    )["ledger_uuid"])
+                if chain_spend > 0:
                     ledger_uuids.append(self._ledger(
                         conn,
                         user_id=user_id,
                         currency_type="points",
                         direction="debit",
-                        amount=fee,
-                        action_type="trading_fee",
+                        amount=chain_spend,
+                        action_type="trading_spot_buy",
                         reference_type="trading_order",
                         reference_id=order["order_uuid"],
-                        idempotency_key=f"trading:fee:{order['order_uuid']}",
-                        reason="TRADING_FEE",
-                        public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": effective_fee_bps},
+                        idempotency_key=f"trading:spot_buy:{order['order_uuid']}",
+                        reason="TRADING_SPOT_BUY",
+                        public_metadata={
+                            "order_id": order["id"],
+                            "market": market["symbol"],
+                            "price": price,
+                            "quantity": units_to_quantity(quantity_units),
+                            "notional": notional,
+                            "fee": fee,
+                            "trial_used_points": trial_used,
+                            "chain_spend_points": chain_spend,
+                        },
                         actor=actor,
                     )["ledger_uuid"])
             position = self._position(conn, user_id, market["symbol"])
@@ -1378,9 +1784,9 @@ class TradingEngineService:
                 """,
                 (next_qty, next_avg, _now(), user_id, market["symbol"]),
             )
-            reserve_delta = 0 if funding_mode == "root_simulated" else fee
-            if funding_mode != "root_simulated" and fee:
-                self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
+            reserve_delta = 0 if funding_mode == "root_simulated" else min(fee, max(0, total - trial_used if funding_mode != "root_simulated" else fee))
+            if funding_mode != "root_simulated" and reserve_delta:
+                self._reserve_delta(conn, delta=reserve_delta, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
         else:
             if notional <= 0:
                 raise ValueError("sell notional is too small")
@@ -1390,35 +1796,41 @@ class TradingEngineService:
             if funding_mode == "root_simulated":
                 self._sim_delta(conn, user_id, balance_delta=net_credit)
             else:
-                ledger_uuids.append(self._ledger(
+                trial_allocation = self._trial_allocate_sell(
                     conn,
                     user_id=user_id,
-                    currency_type="points",
-                    direction="credit",
-                    amount=notional,
-                    action_type="trading_spot_sell",
-                    reference_type="trading_order",
-                    reference_id=order["order_uuid"],
-                    idempotency_key=f"trading:spot_sell:{order['order_uuid']}",
-                    reason="TRADING_SPOT_SELL",
-                    public_metadata={"order_id": order["id"], "market": market["symbol"], "price": price, "quantity": units_to_quantity(quantity_units), "notional": notional},
-                    actor=actor,
-                )["ledger_uuid"])
-                if fee:
+                    market_symbol=market["symbol"],
+                    quantity_units=quantity_units,
+                    net_credit_points=net_credit,
+                )
+                trial_repaid = int(trial_allocation["trial_repaid_points"] or 0)
+                trial_profit = int(trial_allocation["trial_profit_points"] or 0)
+                wallet_credit = int(trial_allocation["wallet_credit_points"] or 0)
+                if wallet_credit > 0:
                     ledger_uuids.append(self._ledger(
                         conn,
                         user_id=user_id,
                         currency_type="points",
-                        direction="debit",
-                        amount=fee,
-                        action_type="trading_fee",
+                        direction="credit",
+                        amount=wallet_credit,
+                        action_type="trading_spot_sell",
                         reference_type="trading_order",
                         reference_id=order["order_uuid"],
-                        idempotency_key=f"trading:fee:{order['order_uuid']}",
-                        reason="TRADING_EMERGENCY_CLOSE_FEE" if emergency_close else "TRADING_FEE",
-                        public_metadata={"order_id": order["id"], "market": market["symbol"], "fee_bps": effective_fee_bps, "side": side, "emergency_close": emergency_close},
+                        idempotency_key=f"trading:spot_sell:{order['order_uuid']}",
+                        reason="TRADING_SPOT_SELL",
+                        public_metadata={
+                            "order_id": order["id"],
+                            "market": market["symbol"],
+                            "price": price,
+                            "quantity": units_to_quantity(quantity_units),
+                            "notional": notional,
+                            "fee": fee,
+                            "trial_repaid_points": trial_repaid,
+                            "trial_profit_points": trial_profit,
+                        },
                         actor=actor,
                     )["ledger_uuid"])
+                if fee:
                     self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
             position = self._position(conn, user_id, market["symbol"])
             if int(position["locked_quantity_units"]) < quantity_units:
@@ -1450,8 +1862,8 @@ class TradingEngineService:
             INSERT INTO trading_fills (
                 fill_uuid, order_id, user_id, market_symbol, side, funding_mode, quantity_units,
                 price_points, notional_points, fee_points, reserve_delta_points,
-                points_ledger_uuids_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                trial_repaid_points, trial_profit_points, points_ledger_uuids_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fill_uuid,
@@ -1465,6 +1877,8 @@ class TradingEngineService:
                 notional,
                 fee,
                 reserve_delta,
+                trial_repaid,
+                trial_profit,
                 _json_dumps(ledger_uuids),
                 _now(),
             ),
@@ -1525,16 +1939,20 @@ class TradingEngineService:
                 raise ValueError("order is not open")
             funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
             if order["side"] == "buy" and int(order["frozen_points"] or 0) > 0:
+                trial_frozen = int(order["trial_frozen_points"] or 0) if "trial_frozen_points" in order.keys() else 0
+                chain_frozen = int(order["chain_frozen_points"] or 0) if "chain_frozen_points" in order.keys() else int(order["frozen_points"] or 0)
+                if trial_frozen:
+                    self._trial_unlock(conn, user_id, trial_frozen)
                 if funding_mode == "root_simulated":
                     frozen = int(order["frozen_points"] or 0)
                     self._sim_delta(conn, user_id, balance_delta=frozen, locked_delta=-frozen)
-                else:
+                elif chain_frozen > 0:
                     self._ledger(
                         conn,
                         user_id=user_id,
                         currency_type="points",
                         direction="unfreeze",
-                        amount=int(order["frozen_points"]),
+                        amount=chain_frozen,
                         action_type="trading_unfreeze",
                         reference_type="trading_order",
                         reference_id=order["order_uuid"],
@@ -2184,7 +2602,7 @@ class TradingEngineService:
     def _verify_fill_ledgers(self, conn, errors):
         fills = conn.execute(
             """
-            SELECT f.*, o.order_uuid
+            SELECT f.*, o.order_uuid, o.chain_frozen_points
             FROM trading_fills f
             JOIN trading_orders o ON o.id=f.order_id
             ORDER BY f.id ASC
@@ -2212,12 +2630,13 @@ class TradingEngineService:
                 continue
             ledger_uuids = _json_loads(fill["points_ledger_uuids_json"], [])
             if not isinstance(ledger_uuids, list) or not ledger_uuids:
-                errors.append({
-                    "type": "fill_ledger_refs_missing",
-                    "fill_id": fill["id"],
-                    "fill_uuid": fill["fill_uuid"],
-                    "order_id": fill["order_id"],
-                })
+                if funding_mode != "trial_mixed":
+                    errors.append({
+                        "type": "fill_ledger_refs_missing",
+                        "fill_id": fill["id"],
+                        "fill_uuid": fill["fill_uuid"],
+                        "order_id": fill["order_id"],
+                    })
                 continue
             ledgers = []
             for ledger_uuid in ledger_uuids:
@@ -2243,11 +2662,9 @@ class TradingEngineService:
                     })
             actions = {row["action_type"] for row in ledgers}
             if fill["side"] == "buy":
-                required = {"trading_unfreeze", "trading_spot_buy"}
+                required = {"trading_unfreeze", "trading_spot_buy"} if int(fill["chain_frozen_points"] or 0) > 0 else set()
             else:
-                required = {"trading_spot_sell"}
-            if int(fill["fee_points"] or 0) > 0:
-                required.add("trading_fee")
+                required = {"trading_spot_sell"} if ledgers else set()
             missing = sorted(required - actions)
             if missing:
                 errors.append({
@@ -2282,7 +2699,23 @@ class TradingEngineService:
             funding_mode = order["funding_mode"] if "funding_mode" in order.keys() else "points_chain"
             if funding_mode == "root_simulated":
                 continue
-            expected = int(order["frozen_points"] or 0) if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES else 0
+            if order["side"] == "buy":
+                expected_total = int(order["trial_frozen_points"] or 0) + int(order["chain_frozen_points"] or 0)
+                actual_total = int(order["frozen_points"] or 0) if order["status"] in OPEN_ORDER_STATUSES else 0
+                if order["status"] in OPEN_ORDER_STATUSES and expected_total != actual_total:
+                    errors.append({
+                        "type": "open_order_total_frozen_points_mismatch",
+                        "order_id": order["id"],
+                        "order_uuid": order["order_uuid"],
+                        "status": order["status"],
+                        "expected_frozen_points": expected_total,
+                        "actual_frozen_points": actual_total,
+                    })
+            expected = (
+                int(order["chain_frozen_points"] or 0)
+                if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES and "chain_frozen_points" in order.keys()
+                else (int(order["frozen_points"] or 0) if order["side"] == "buy" and order["status"] in OPEN_ORDER_STATUSES else 0)
+            )
             actual = ledger_net.get(order["order_uuid"], 0)
             if expected != actual:
                 errors.append({

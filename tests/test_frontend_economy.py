@@ -179,6 +179,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-margin-position-list"' in trading_section
     assert 'id="trading-order-form"' in trading_section
     assert 'id="trading-availability-note"' in trading_section
+    assert 'id="trading-trial-credit-available"' in trading_section
+    assert 'id="trading-trial-credit-note"' in trading_section
     assert 'id="trading-root-card"' in trading_section
     assert 'id="trading-limit-match-btn"' in trading_section
     assert 'id="trading-liquidation-scan-btn"' in trading_section
@@ -262,11 +264,16 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "borrowing_enabled" in trading_js
     assert "margin_liquidation_enabled" in trading_js
     assert "margin_maintenance_bps" in trading_js
+    assert 'if (marginCard) marginCard.style.display = "";' in trading_js
+    assert "marginControlsDisabled" in trading_js
+    assert "root 尚未開啟借貸交易，目前僅可查看此區。" in trading_js
     assert "trading-margin-open-btn" in trading_js
     assert '["trading-limit-match-btn", matchTradingLimitOrders]' in trading_js
     assert '["trading-liquidation-scan-btn", scanTradingLiquidations]' in trading_js
     assert "economy-root-virtual-total" in trading_js
     assert "available + spotValue" in trading_js
+    assert "trial_credit" in trading_js
+    assert "體驗金優先" in trading_js
     assert "function loadTradingReferencePrices" in trading_js
     assert "function restartTradingReferenceAutoRefresh" in trading_js
     assert "function tradingReferenceAutoRefreshMs" in trading_js

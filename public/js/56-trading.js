@@ -325,11 +325,18 @@ function renderTradingSummary() {
   if (submitBtn) submitBtn.disabled = false;
   if (contractCard) contractCard.style.display = currentUser === "root" ? "" : "none";
   const borrowingEnabled = !!tradingState.settings?.borrowing_enabled;
-  if (marginCard) marginCard.style.display = borrowingEnabled && currentUser !== "root" ? "" : "none";
+  if (marginCard) marginCard.style.display = "";
+  const marginControlsDisabled = !borrowingEnabled || currentUser === "root";
+  ["trading-margin-market-select", "trading-margin-type", "trading-margin-quantity", "trading-margin-collateral", "trading-margin-open-btn"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = marginControlsDisabled;
+  });
   if ($("trading-margin-note")) {
-    $("trading-margin-note").textContent = borrowingEnabled
-      ? `已開啟，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；手續費與利息計入儲備池統計。`
-      : "root 尚未開啟借貸交易。";
+    $("trading-margin-note").textContent = currentUser === "root"
+      ? "root 可在設定 > 計費 > 交易所參數開啟或調整借貸交易；root 自身請使用合約模擬。"
+      : (borrowingEnabled
+        ? `已開啟，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；手續費與利息計入儲備池統計。`
+        : "root 尚未開啟借貸交易，目前僅可查看此區。");
   }
   if (availabilityNote) {
     availabilityNote.textContent = currentUser === "root"
@@ -340,7 +347,21 @@ function renderTradingSummary() {
   if ($("trading-funding-mode")) {
     $("trading-funding-mode").textContent = funding.mode === "root_simulated"
       ? `root 模擬資金 · 鎖定 ${Number(funding.locked_points || 0)}`
-      : `PointsChain 錢包 · 鎖定 ${Number(funding.locked_points || 0)}`;
+      : `體驗金優先 · 錢包 ${Number(funding.wallet_available_points || 0)} · 鎖定 ${Number(funding.locked_points || 0)}`;
+  }
+  const trial = funding.trial_credit || null;
+  if ($("trading-trial-credit-available")) {
+    $("trading-trial-credit-available").textContent = trial ? String(Number(trial.available_points || 0)) : "-";
+  }
+  if ($("trading-trial-credit-note")) {
+    if (!trial) {
+      $("trading-trial-credit-note").textContent = "root 不適用";
+    } else if (trial.status !== "active") {
+      $("trading-trial-credit-note").textContent = `狀態 ${trial.status}`;
+    } else {
+      const expires = trial.expires_at ? new Date(trial.expires_at).toLocaleString() : "-";
+      $("trading-trial-credit-note").textContent = `鎖定 ${Number(trial.locked_points || 0)} · 部位 ${Number(trial.deployed_points || 0)} · 到期 ${expires}`;
+    }
   }
   if ($("trading-current-price")) $("trading-current-price").textContent = market ? String(Number(market.manual_price_points || 0)) : "-";
   if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "manual_root"}` : "-";
