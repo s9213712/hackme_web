@@ -297,6 +297,82 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
   });
 }
 
+function renderEconomyMarginPositionDetails(rows = []) {
+  const list = $("economy-margin-position-detail-list");
+  if (!list) return;
+  const activeRows = rows.filter((row) => row.status === "open");
+  if (!activeRows.length) {
+    list.innerHTML = `<div class="drive-empty">尚無進階倉位</div>`;
+    return;
+  }
+  list.innerHTML = activeRows.map((row) => tradingMarginPositionRow(row, "economy")).join("");
+  list.querySelectorAll("[data-economy-margin-close]").forEach((btn) => {
+    btn.addEventListener("click", () => closeTradingMarginPosition(btn.dataset.economyMarginClose || ""));
+  });
+  list.querySelectorAll("[data-economy-margin-add-collateral]").forEach((btn) => {
+    btn.addEventListener("click", () => addTradingMarginCollateral(btn.dataset.economyMarginAddCollateral || "", "economy"));
+  });
+}
+
+function tradingMarginRiskText(row) {
+  const risk = row?.risk || {};
+  const ratio = risk.maintenance_ratio_percent ?? row.maintenance_ratio_percent;
+  const status = risk.risk_status || row.risk_status || "normal";
+  const reason = risk.risk_reason || row.risk_reason || "";
+  const ratioText = ratio === null || ratio === undefined ? "無法計算" : `${formatTradingPointsValue(ratio)}%`;
+  const statusLabel = status === "liquidation" ? "清算風險"
+    : (status === "warning" ? "維持率偏低"
+      : (status === "short_price_risk" ? "放空價格風險" : "正常"));
+  return { ratioText, statusLabel, reason };
+}
+
+function tradingMarginPositionRow(row, scope = "trading") {
+  const typeLabel = row.position_label || (row.position_type === "short" ? "借券放空" : "融資買入");
+  const principal = tradingNumber(row.principal_points, 0);
+  const collateral = tradingNumber(row.risk?.initial_margin_points ?? row.initial_margin_points ?? row.collateral_points, 0);
+  const fee = tradingNumber(row.open_fee_points, 0);
+  const interest = tradingNumber(row.risk?.interest_points ?? row.interest_points, 0);
+  const entry = tradingNumber(row.entry_price_points, 0);
+  const currentPrice = tradingNumber(row.risk?.price_points ?? row.current_price_points, 0);
+  const equity = tradingNumber(row.risk?.equity_after_points ?? row.equity_after_points, 0);
+  const maintenance = tradingNumber(row.risk?.maintenance_margin_points ?? row.risk?.maintenance_points ?? row.maintenance_margin_points ?? row.maintenance_points, 0);
+  const initialMarginBps = tradingNumber(row.risk?.initial_margin_bps ?? row.initial_margin_bps, 0);
+  const maintenanceBps = tradingNumber(row.risk?.maintenance_margin_bps ?? row.risk?.maintenance_bps ?? row.maintenance_margin_bps, 0);
+  const unrealizedPnl = tradingNumber(row.risk?.unrealized_pnl_points ?? row.unrealized_pnl_points, 0);
+  const liquidationPrice = tradingNumber(row.risk?.liquidation_price_points ?? row.liquidation_price_points, 0);
+  const pnlClass = unrealizedPnl > 0 ? "positive" : (unrealizedPnl < 0 ? "negative" : "");
+  const leverageHint = collateral > 0 ? `${(principal / collateral).toFixed(2)}x 風險倍數` : "未提供風險倍數";
+  const riskText = tradingMarginRiskText(row);
+  const prefix = scope === "economy" ? "economy-" : "";
+  return `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(typeLabel)} · ${sanitize(tradingDisplaySymbol(row.market_symbol || "-"))} · ${sanitize(row.quantity || "0")}</strong>
+        <div class="drive-card-sub">
+          入場 ${formatTradingPointsValue(entry)} · 現價 ${currentPrice ? formatTradingPointsValue(currentPrice) : "-"} · 本金 ${formatTradingPointsValue(principal)} · 原始保證金 ${formatTradingPointsValue(collateral)}
+        </div>
+        <div class="drive-card-sub">
+          原始保證金率 ${formatTradingPointsValue(initialMarginBps / 100)}% · 維持率 ${sanitize(riskText.ratioText)} · 權益 ${formatTradingPointsValue(equity)} · 維持保證金 ${formatTradingPointsValue(maintenance)}（${formatTradingPointsValue(maintenanceBps / 100)}%） · ${sanitize(riskText.statusLabel)}
+        </div>
+        <div class="drive-card-sub">
+          未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 強平價格 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
+        </div>
+        <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
+        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPointsValue(row.interest_bps_daily || 0)} bps · 已計利息 ${formatTradingPointsValue(interest)} · ${sanitize(leverageHint)}</div>
+        <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
+      </div>
+      <div class="trading-spot-actions">
+        <div class="field">
+          <label>補保證金</label>
+          <input type="number" min="1" step="1" placeholder="點數" data-${prefix}margin-collateral-amount="${sanitize(row.position_uuid || "")}" />
+        </div>
+        <button class="btn" type="button" data-${prefix}margin-add-collateral="${sanitize(row.position_uuid || "")}">補保證金</button>
+        <button class="btn btn-danger" type="button" data-${prefix}margin-close="${sanitize(row.position_uuid || "")}">平倉</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderTradingMarketOptions() {
   const select = $("trading-market-select");
   const rootSelect = $("trading-root-market-select");
@@ -326,21 +402,21 @@ function renderTradingSummary() {
   if (contractCard) contractCard.style.display = currentUser === "root" ? "" : "none";
   const borrowingEnabled = !!tradingState.settings?.borrowing_enabled;
   if (marginCard) marginCard.style.display = "";
-  const marginControlsDisabled = !borrowingEnabled || currentUser === "root";
+  const marginControlsDisabled = !borrowingEnabled;
   ["trading-margin-market-select", "trading-margin-type", "trading-margin-quantity", "trading-margin-collateral", "trading-margin-open-btn"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = marginControlsDisabled;
   });
   if ($("trading-margin-note")) {
-    $("trading-margin-note").textContent = currentUser === "root"
-      ? "root 可在設定 > 計費 > 交易所參數開啟或調整借貸交易；root 自身請使用合約模擬。"
-      : (borrowingEnabled
-        ? `已開啟，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；手續費與利息計入儲備池統計。`
-        : "root 尚未開啟借貸交易，目前僅可查看此區。");
+    $("trading-margin-note").textContent = borrowingEnabled
+      ? (currentUser === "root"
+        ? `root 可用模擬資金進行融資 / 借券，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；不寫入 PointsChain。`
+        : `已開啟，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；手續費與利息計入儲備池統計。`)
+      : "root 尚未開啟借貸交易，目前僅可查看此區。";
   }
   if (availabilityNote) {
     availabilityNote.textContent = currentUser === "root"
-      ? "root 可使用現貨與合約模擬交易；root 以外用戶目前僅開放現貨。"
+      ? "root 可使用現貨、進階交易與合約模擬；root 以外用戶目前僅開放現貨與已啟用的進階交易。"
       : "目前僅對 root 以外用戶開放 BTC/USDT、ETH/USDT 現貨。";
   }
   if ($("trading-funding-available")) $("trading-funding-available").textContent = funding.available_points != null ? String(Number(funding.available_points || 0)) : "-";
@@ -894,20 +970,45 @@ function renderTradingContracts(rows = []) {
 function updateTradingMarginEstimate() {
   const market = tradingState.markets.find((row) => row.symbol === ($("trading-margin-market-select")?.value || "")) || selectedTradingMarket();
   const estimate = $("trading-margin-estimate");
-  if (!estimate || !market) return;
+  const openBtn = $("trading-margin-open-btn");
+  if (!estimate || !market) return { ok: false, blocking: true, message: "沒有可用進階交易市場" };
   const quantity = tradingNumber($("trading-margin-quantity")?.value, 0);
   const collateral = tradingNumber($("trading-margin-collateral")?.value, 0);
   const price = tradingNumber(market.manual_price_points, 0);
   const notional = quantity > 0 && price > 0 ? Math.ceil(quantity * price) : 0;
-  const minCollateral = Math.ceil(notional * 0.3);
-  const typeLabel = ($("trading-margin-type")?.value || "margin_long") === "short" ? "借券放空" : "融資買入";
+  const positionType = $("trading-margin-type")?.value || "margin_long";
+  const marginLongFinancingBps = tradingNumber(tradingState.settings?.margin_long_financing_bps, 9000);
+  const shortCollateralBps = tradingNumber(tradingState.settings?.short_collateral_bps, 6000);
+  const minCollateral = positionType === "short"
+    ? Math.ceil(notional * shortCollateralBps / 10000)
+    : Math.ceil(notional * Math.max(0, 10000 - marginLongFinancingBps) / 10000);
+  const fee = Math.ceil(notional * tradingNumber(market.fee_bps, 0) / 10000);
+  const available = tradingNumber(tradingState.funding?.available_points, 0);
+  const typeLabel = positionType === "short" ? "借券放空" : "融資買入";
   if (!quantity || !collateral || !notional) {
     estimate.textContent = "輸入數量與保證金後顯示預估風險。";
     estimate.style.color = "var(--muted)";
-    return;
+    if (openBtn) openBtn.disabled = true;
+    return { ok: false, blocking: true, message: estimate.textContent };
   }
-  estimate.textContent = `${typeLabel} · 名目金額約 ${notional} 點 · 最低保證金 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
-  estimate.style.color = collateral < minCollateral ? "#ffb74d" : "var(--muted)";
+  let message = `${typeLabel} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
+  if (positionType === "short") {
+    message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${shortCollateralBps} bps`;
+  } else {
+    message = `${message}；融資可貸比例 ${marginLongFinancingBps} bps`;
+  }
+  let blocking = false;
+  if (collateral < minCollateral) {
+    message = `${message}；原始保證金不足，至少需要 ${minCollateral} 點`;
+    blocking = true;
+  } else if ((collateral + fee) > available) {
+    message = `${message}；可用資金不足，需要 ${collateral + fee} 點，目前可用 ${available} 點`;
+    blocking = true;
+  }
+  estimate.textContent = message;
+  estimate.style.color = blocking ? "#ff6b7a" : "var(--muted)";
+  if (openBtn) openBtn.disabled = blocking || !tradingState.settings?.borrowing_enabled;
+  return { ok: !blocking, blocking, message };
 }
 
 function renderTradingMarginPositions(rows = []) {
@@ -918,29 +1019,25 @@ function renderTradingMarginPositions(rows = []) {
     list.innerHTML = `<div class="drive-empty">尚無進階交易倉位</div>`;
     return;
   }
-  list.innerHTML = openRows.map((row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.position_label || row.position_type)} · ${sanitize(tradingDisplaySymbol(row.market_symbol || "-"))} · ${sanitize(row.quantity || "0")}</strong>
-        <div class="drive-card-sub">入場 ${Number(row.entry_price_points || 0)} · 本金 ${Number(row.principal_points || 0)} · 保證金 ${Number(row.collateral_points || 0)} · 日息 ${Number(row.interest_bps_daily || 0)} bps</div>
-        <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
-      </div>
-      <button class="btn btn-danger" type="button" data-margin-close="${sanitize(row.position_uuid || "")}">平倉</button>
-    </div>
-  `).join("");
+  list.innerHTML = openRows.map((row) => tradingMarginPositionRow(row)).join("");
   list.querySelectorAll("[data-margin-close]").forEach((btn) => {
     btn.addEventListener("click", () => closeTradingMarginPosition(btn.dataset.marginClose || ""));
+  });
+  list.querySelectorAll("[data-margin-add-collateral]").forEach((btn) => {
+    btn.addEventListener("click", () => addTradingMarginCollateral(btn.dataset.marginAddCollateral || ""));
   });
 }
 
 function renderTradingWalletSummary(payload = {}) {
   const positions = Array.isArray(payload.positions) ? payload.positions : [];
   const futuresPositions = Array.isArray(payload.futures_positions) ? payload.futures_positions : [];
+  const marginPositions = Array.isArray(payload.margin_positions) ? payload.margin_positions : [];
   const orders = Array.isArray(payload.orders) ? payload.orders : [];
   const fills = Array.isArray(payload.fills) ? payload.fills : [];
   const markets = Array.isArray(payload.markets) ? payload.markets : tradingState.markets;
   const funding = payload.funding || tradingState.funding || {};
   const state = payload.state || {};
+  const marginSummary = payload.margin_summary || {};
   const status = $("economy-trading-safe-mode");
   if (status) {
     status.textContent = state.safe_mode ? `交易 safe mode：${state.reason || "已啟用"}` : "交易引擎正常";
@@ -957,6 +1054,13 @@ function renderTradingWalletSummary(payload = {}) {
       ? "BTC、ETH 等交易對分開顯示"
       : "各交易對分開計算";
   }
+  const activeMarginPositions = marginPositions.filter((row) => row.status === "open");
+  if ($("economy-margin-position-count")) $("economy-margin-position-count").textContent = String(activeMarginPositions.length);
+  if ($("economy-margin-position-summary")) {
+    $("economy-margin-position-summary").textContent = activeMarginPositions.length
+      ? `整戶維持率 ${marginSummary.maintenance_ratio_percent == null ? "無法計算" : `${formatTradingPointsValue(marginSummary.maintenance_ratio_percent)}%`} · ${marginSummary.reason || "風險正常"}`
+      : "融資 / 借券";
+  }
   const activeFuturesPositions = futuresPositions.filter((row) => row.status === "open" && Number(row.quantity || 0) !== 0);
   if ($("economy-contract-position-count")) $("economy-contract-position-count").textContent = String(activeFuturesPositions.length);
   if ($("economy-contract-position-summary")) {
@@ -967,6 +1071,7 @@ function renderTradingWalletSummary(payload = {}) {
   if ($("economy-trading-fill-count")) $("economy-trading-fill-count").textContent = String(fills.length);
   if ($("economy-trading-order-count")) $("economy-trading-order-count").textContent = `訂單 ${orders.length}`;
   renderEconomySpotPositionDetails(positions, markets);
+  renderEconomyMarginPositionDetails(marginPositions);
   if (currentUser === "root") {
     const spotValue = rootVirtualSpotValue(activePositions, markets);
     const available = Number(funding.available_points || 0);
@@ -1238,6 +1343,11 @@ async function openTradingMarginPosition() {
     tradingSetMsg("請先選擇進階交易市場", false);
     return;
   }
+  const estimate = updateTradingMarginEstimate();
+  if (estimate?.blocking) {
+    tradingSetMsg(estimate.message || "進階交易參數不符合開倉條件", false);
+    return;
+  }
   try {
     const json = await fetchTradingJson("/trading/margin/open", {
       method: "POST",
@@ -1252,7 +1362,8 @@ async function openTradingMarginPosition() {
     tradingSetMsg("進階交易倉位已建立");
     await loadTradingDashboard();
   } catch (err) {
-    tradingSetMsg(err.message || "進階交易開倉失敗", false);
+    const detail = err.message || "後端未提供錯誤原因";
+    tradingSetMsg(`進階交易開倉失敗：${detail}`, false);
   }
 }
 
@@ -1269,6 +1380,31 @@ async function closeTradingMarginPosition(positionUuid) {
     await loadTradingDashboard();
   } catch (err) {
     tradingSetMsg(err.message || "進階交易平倉失敗", false);
+  }
+}
+
+async function addTradingMarginCollateral(positionUuid, scope = "trading") {
+  if (!positionUuid) return;
+  const selector = scope === "economy"
+    ? `[data-economy-margin-collateral-amount="${CSS.escape(positionUuid)}"]`
+    : `[data-margin-collateral-amount="${CSS.escape(positionUuid)}"]`;
+  const input = document.querySelector(selector);
+  const amount = Number(input?.value || 0);
+  if (!amount || amount <= 0) {
+    tradingSetMsg("請輸入要補入的保證金點數", false);
+    return;
+  }
+  try {
+    const json = await fetchTradingJson(`/trading/margin/${encodeURIComponent(positionUuid)}/collateral`, {
+      method: "POST",
+      body: JSON.stringify({ amount_points: amount }),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    tradingSetMsg(`已補入 ${formatTradingPointsValue(amount)} 點保證金`);
+    await loadTradingDashboard();
+    if (typeof loadEconomyDashboard === "function") await loadEconomyDashboard();
+  } catch (err) {
+    tradingSetMsg(`補保證金失敗：${err.message || "後端未提供錯誤原因"}`, false);
   }
 }
 

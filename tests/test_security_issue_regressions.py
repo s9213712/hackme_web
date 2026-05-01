@@ -219,6 +219,22 @@ def test_secure_cookie_defaults_are_secure():
     assert 'SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", default=True)' in server
 
 
+def test_trading_stress_pentest_covers_margin_risk_controls():
+    script = (ROOT / "security" / "trading_stress_pentest.py").read_text(encoding="utf-8")
+
+    assert "functional_correctness" in script
+    assert "abnormal_operations" in script
+    assert "security_pentest" in script
+    assert "traceback_leaked" in script
+    assert "error_response_not_json" in script
+    assert "margin long rejects below initial margin" in script
+    assert "short selling rejects below initial margin" in script
+    assert "margin risk exposes initial and maintenance margin" in script
+    assert "margin_add_collateral" in script
+    assert "initial_margin_points" in script
+    assert "maintenance_margin_points" in script
+
+
 def test_table_columns_rejects_unsafe_identifiers(tmp_path):
     import sqlite3
 
@@ -252,3 +268,50 @@ def test_trading_fill_ledger_verification_uses_batch_lookup():
 
     assert "ledger_by_uuid" in verifier
     assert "self._ledger_row" not in verifier
+
+
+def test_root_margin_trading_uses_simulated_funds_not_pointschain():
+    trading_engine = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
+    open_margin = trading_engine.split("def open_margin_position", 1)[1].split("def close_margin_position", 1)[0]
+    close_margin = trading_engine.split("def close_margin_position", 1)[1].split("def scan_margin_liquidations", 1)[0]
+    sim_verify = trading_engine.split("def _verify_sim_accounts", 1)[1].split("def _verify_margin_position_locks", 1)[0]
+    margin_verify = trading_engine.split("def _verify_margin_position_locks", 1)[1].split("def _verify_spot_realized_pnl", 1)[0]
+
+    assert "is_root_simulated = self._is_root_actor(actor)" in open_margin
+    assert "self._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)" in open_margin
+    assert '"funding_mode": "root_simulated"' in open_margin
+    assert "is_root_simulated = self._is_root_user_id(conn, user_id)" in close_margin
+    assert "simulated_return = max(0, collateral + delta)" in close_margin
+    assert "self._sim_delta(conn, user_id, balance_delta=simulated_return, locked_delta=-collateral)" in close_margin
+    assert "TRADING_ROOT_SIM_MARGIN_BAD_DEBT" in close_margin
+    assert "FROM trading_margin_positions p" in sim_verify
+    assert "u.username='root'" in sim_verify
+    assert 'expected = int(position["collateral_chain_points"] or 0)' in margin_verify
+
+
+def test_trading_margin_errors_are_user_readable():
+    trading_routes = (ROOT / "routes" / "trading.py").read_text(encoding="utf-8")
+    service_error = trading_routes.split("def service_error", 1)[1].split("def price_to_points", 1)[0]
+
+    assert "保證金不足，至少需要" in service_error
+    assert "root 模擬交易資金不足" in service_error
+    assert "進階交易尚未啟用" in service_error
+
+
+def test_margin_collateral_and_account_maintenance_are_supported():
+    trading_engine = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
+    trading_routes = (ROOT / "routes" / "trading.py").read_text(encoding="utf-8")
+    dashboard = trading_engine.split("def user_dashboard", 1)[1].split("def _is_executable", 1)[0]
+
+    assert "maintenance_ratio_percent" in trading_engine
+    assert "liquidation_price_points" in trading_engine
+    assert "unrealized_pnl_points" in trading_engine
+    assert "margin_long_financing_bps" in trading_engine
+    assert "short_collateral_bps" in trading_engine
+    assert "def _minimum_margin_collateral_points" in trading_engine
+    assert "risk_reason" in trading_engine
+    assert "借券放空在價格上漲時會虧損" in trading_engine
+    assert "def add_margin_collateral" in trading_engine
+    assert "TRADING_MARGIN_COLLATERAL_ADDED" in trading_engine
+    assert '"margin_summary": self._margin_summary_payload(margin_positions)' in dashboard
+    assert '@app.route("/api/trading/margin/<position_uuid>/collateral", methods=["POST"])' in trading_routes

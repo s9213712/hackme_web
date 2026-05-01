@@ -14,7 +14,8 @@ USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
 TRIAL_CREDIT_INITIAL_POINTS = 1_000
 TRIAL_CREDIT_DAYS = 7
-MARGIN_MIN_COLLATERAL_BPS = 3000
+MARGIN_LONG_FINANCING_BPS = 9000
+SHORT_COLLATERAL_BPS = 6000
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
@@ -382,6 +383,8 @@ def ensure_trading_schema(conn):
         ("trading.pvp_matching_enabled", "false"),
         ("trading.borrowing_enabled", "true"),
         ("trading.borrow_interest_bps_daily", "10"),
+        ("trading.margin_long_financing_bps", str(MARGIN_LONG_FINANCING_BPS)),
+        ("trading.short_collateral_bps", str(SHORT_COLLATERAL_BPS)),
         ("trading.margin_liquidation_enabled", "true"),
         ("trading.margin_maintenance_bps", "1500"),
         ("trading.max_price_staleness_seconds", "900"),
@@ -590,6 +593,8 @@ class TradingEngineService:
             "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
             "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "true")).lower() in {"true", "1", "yes"},
             "borrow_interest_bps_daily": _to_int(raw.get("trading.borrow_interest_bps_daily", "10"), name="borrow_interest_bps_daily", minimum=0, maximum=10000),
+            "margin_long_financing_bps": _to_int(raw.get("trading.margin_long_financing_bps", str(MARGIN_LONG_FINANCING_BPS)), name="margin_long_financing_bps", minimum=0, maximum=10000),
+            "short_collateral_bps": _to_int(raw.get("trading.short_collateral_bps", str(SHORT_COLLATERAL_BPS)), name="short_collateral_bps", minimum=0, maximum=10000),
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
             "margin_maintenance_bps": _to_int(raw.get("trading.margin_maintenance_bps", "1500"), name="margin_maintenance_bps", minimum=0, maximum=10000),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
@@ -641,6 +646,17 @@ class TradingEngineService:
                     ("trading.borrow_interest_bps_daily", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.borrow_interest_bps_daily"] = value
+            for input_key, storage_key in (
+                ("margin_long_financing_bps", "trading.margin_long_financing_bps"),
+                ("short_collateral_bps", "trading.short_collateral_bps"),
+            ):
+                if input_key in settings:
+                    value = str(_to_int(settings.get(input_key), name=input_key, minimum=0, maximum=10000))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                        (storage_key, value, now, self._actor_id(actor)),
+                    )
+                    setting_changes[storage_key] = value
             if "margin_maintenance_bps" in settings:
                 value = str(_to_int(settings.get("margin_maintenance_bps"), name="margin_maintenance_bps", minimum=0, maximum=10000))
                 conn.execute(
@@ -1244,6 +1260,15 @@ class TradingEngineService:
             raise ValueError("borrow trading is disabled")
         return settings
 
+    def _minimum_margin_collateral_points(self, conn, *, position_type, notional):
+        settings = self._settings_payload(conn)
+        notional = int(notional or 0)
+        if position_type == "margin_long":
+            financing_bps = int(settings.get("margin_long_financing_bps") or MARGIN_LONG_FINANCING_BPS)
+            return int(math.ceil(notional * max(0, 10_000 - financing_bps) / 10_000))
+        short_bps = int(settings.get("short_collateral_bps") or SHORT_COLLATERAL_BPS)
+        return int(math.ceil(notional * short_bps / 10_000))
+
     def _margin_interest_points(self, row, now_text=None):
         principal = int(row["principal_points"] or 0)
         bps = int(row["interest_bps_daily"] or 0)
@@ -1269,6 +1294,9 @@ class TradingEngineService:
         interest = self._margin_interest_points(position, now_text=now_text)
         collateral = int(position["collateral_points"] or 0)
         principal = int(position["principal_points"] or 0)
+        entry_price = int(position["entry_price_points"] or price)
+        entry_notional = notional_points(quantity_units, entry_price)
+        initial_margin_bps = int(math.floor((collateral * 10_000) / entry_notional)) if entry_notional > 0 else 0
         if position["position_type"] == "margin_long":
             equity_after = exit_notional - principal - interest - close_fee
             delta = equity_after - collateral
@@ -1278,6 +1306,34 @@ class TradingEngineService:
         settings = self._settings_payload(conn)
         maintenance_bps = int(settings.get("margin_maintenance_bps") or 0)
         maintenance_points = int(math.ceil(exit_notional * maintenance_bps / 10_000))
+        fee_bps = int(market["fee_bps"] or 0)
+        denominator_bps = None
+        liquidation_notional = None
+        if position["position_type"] == "margin_long":
+            denominator_bps = 10_000 - fee_bps - maintenance_bps
+            if denominator_bps > 0:
+                liquidation_notional = int(math.ceil((principal + interest) * 10_000 / denominator_bps))
+        else:
+            denominator_bps = 10_000 + fee_bps + maintenance_bps
+            liquidation_base = collateral + principal - interest
+            if denominator_bps > 0 and liquidation_base > 0:
+                liquidation_notional = int(math.ceil(liquidation_base * 10_000 / denominator_bps))
+        liquidation_price_points = None
+        if liquidation_notional is not None and quantity_units > 0:
+            liquidation_price_points = int(math.ceil((liquidation_notional * ASSET_SCALE) / quantity_units))
+        maintenance_ratio_bps = int(math.floor((equity_after * 10_000) / maintenance_points)) if maintenance_points > 0 else 0
+        if equity_after <= maintenance_points:
+            risk_status = "liquidation"
+            risk_reason = "權益已低於維持保證金，會被列入強制平倉"
+        elif maintenance_ratio_bps < 15_000:
+            risk_status = "warning"
+            risk_reason = "整體維持率偏低，建議補保證金或降低倉位"
+        elif position["position_type"] == "short":
+            risk_status = "short_price_risk"
+            risk_reason = "借券放空在價格上漲時會虧損，價格越高維持率越低"
+        else:
+            risk_status = "normal"
+            risk_reason = "融資做多在價格下跌時會虧損，價格越低維持率越低"
         return {
             "price_points": price,
             "price_source": price_source,
@@ -1285,12 +1341,90 @@ class TradingEngineService:
             "close_fee_points": close_fee,
             "interest_points": interest,
             "collateral_points": collateral,
+            "initial_margin_points": collateral,
+            "original_margin_points": collateral,
+            "initial_margin_bps": initial_margin_bps,
+            "entry_notional_points": entry_notional,
             "principal_points": principal,
             "delta_points": delta,
+            "unrealized_pnl_points": delta,
             "equity_after_points": equity_after,
             "maintenance_bps": maintenance_bps,
             "maintenance_points": maintenance_points,
+            "maintenance_margin_bps": maintenance_bps,
+            "maintenance_margin_points": maintenance_points,
+            "liquidation_notional_points": liquidation_notional,
+            "liquidation_price_points": liquidation_price_points,
+            "maintenance_ratio_bps": maintenance_ratio_bps,
+            "maintenance_ratio_percent": round(maintenance_ratio_bps / 100, 2),
+            "risk_status": risk_status,
+            "risk_reason": risk_reason,
             "liquidation_required": equity_after <= maintenance_points,
+        }
+
+    def _margin_position_payload_with_risk(self, conn, row, *, market=None):
+        item = self._margin_position_payload(row)
+        try:
+            risk = self._margin_risk_payload(conn, row, market=market)
+        except Exception as exc:
+            risk = {
+                "risk_status": "unavailable",
+                "risk_reason": f"風險資料暫時無法計算：{str(exc)[:160]}",
+                "liquidation_required": False,
+            }
+        item["risk"] = risk
+        item["maintenance_ratio_percent"] = risk.get("maintenance_ratio_percent")
+        item["risk_status"] = risk.get("risk_status")
+        item["risk_reason"] = risk.get("risk_reason")
+        item["equity_after_points"] = risk.get("equity_after_points")
+        item["maintenance_points"] = risk.get("maintenance_points")
+        item["maintenance_margin_points"] = risk.get("maintenance_margin_points")
+        item["maintenance_margin_bps"] = risk.get("maintenance_margin_bps")
+        item["initial_margin_points"] = risk.get("initial_margin_points")
+        item["original_margin_points"] = risk.get("original_margin_points")
+        item["initial_margin_bps"] = risk.get("initial_margin_bps")
+        item["entry_notional_points"] = risk.get("entry_notional_points")
+        item["current_price_points"] = risk.get("price_points")
+        item["unrealized_pnl_points"] = risk.get("unrealized_pnl_points")
+        item["liquidation_price_points"] = risk.get("liquidation_price_points")
+        return item
+
+    def _margin_summary_payload(self, rows):
+        active = [row for row in rows if row.get("status") == "open"]
+        total_equity = 0
+        total_maintenance = 0
+        liquidation_count = 0
+        warning_count = 0
+        for row in active:
+            risk = row.get("risk") if isinstance(row.get("risk"), dict) else {}
+            total_equity += int(risk.get("equity_after_points") or 0)
+            total_maintenance += int(risk.get("maintenance_points") or 0)
+            if risk.get("liquidation_required"):
+                liquidation_count += 1
+            elif str(risk.get("risk_status") or "") in {"warning", "unavailable"}:
+                warning_count += 1
+        ratio = round((total_equity / total_maintenance) * 100, 2) if total_maintenance > 0 else None
+        if liquidation_count:
+            status = "liquidation"
+            reason = f"{liquidation_count} 筆倉位低於維持保證金"
+        elif warning_count:
+            status = "warning"
+            reason = f"{warning_count} 筆倉位需要注意"
+        elif active:
+            status = "normal"
+            reason = "整戶維持率正常"
+        else:
+            status = "none"
+            reason = "目前沒有借貸倉位"
+        return {
+            "open_count": len(active),
+            "total_equity_after_points": total_equity,
+            "total_maintenance_points": total_maintenance,
+            "maintenance_ratio_percent": ratio,
+            "status": status,
+            "reason": reason,
+            "liquidation_count": liquidation_count,
+            "warning_count": warning_count,
         }
 
     def _fill_payload(self, row, realized=None):
@@ -1436,9 +1570,10 @@ class TradingEngineService:
                 for row in conn.execute("SELECT * FROM trading_futures_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
             margin_positions = [
-                self._margin_position_payload(row)
+                self._margin_position_payload_with_risk(conn, row, market=market_map.get(row["market_symbol"]))
                 for row in conn.execute("SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
+            conn.commit()
             orders = [
                 self._order_payload(row)
                 for row in conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
@@ -1467,6 +1602,7 @@ class TradingEngineService:
                 "spot_summary": self._spot_summary_payload(positions),
                 "futures_positions": futures_positions,
                 "margin_positions": margin_positions,
+                "margin_summary": self._margin_summary_payload(margin_positions),
                 "orders": orders,
                 "fills": fills,
             }
@@ -2034,17 +2170,25 @@ class TradingEngineService:
             market = self._market(conn, market_symbol)
             price, price_source = self._current_market_price_points(conn, market)
             notional = notional_points(quantity_units, price)
-            min_collateral = int(math.ceil(notional * MARGIN_MIN_COLLATERAL_BPS / 10_000))
+            min_collateral = self._minimum_margin_collateral_points(conn, position_type=position_type, notional=notional)
             if collateral < min_collateral:
                 raise ValueError(f"collateral below minimum {min_collateral}")
             fee = fee_points(notional, int(market["fee_bps"] or 0))
             principal = max(0, notional - collateral) if position_type == "margin_long" else notional
             position_uuid = str(uuid.uuid4())
             ledger_uuids = []
-            trial_fee = self._trial_spend(conn, user_id, fee)
-            chain_fee = fee - trial_fee
-            trial_collateral = self._trial_deploy(conn, user_id, collateral)
-            chain_collateral = collateral - trial_collateral
+            is_root_simulated = self._is_root_actor(actor)
+            if is_root_simulated:
+                self._sim_delta(conn, user_id, balance_delta=-(collateral + fee), locked_delta=collateral)
+                trial_fee = 0
+                chain_fee = 0
+                trial_collateral = 0
+                chain_collateral = 0
+            else:
+                trial_fee = self._trial_spend(conn, user_id, fee)
+                chain_fee = fee - trial_fee
+                trial_collateral = self._trial_deploy(conn, user_id, collateral)
+                chain_collateral = collateral - trial_collateral
             if chain_collateral:
                 ledger_uuids.append(self._ledger(
                     conn,
@@ -2088,7 +2232,7 @@ class TradingEngineService:
                     },
                     actor=actor,
                 )["ledger_uuid"])
-            if fee:
+            if fee and not is_root_simulated:
                 self._reserve_delta(conn, delta=fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_OPEN_FEE", actor=actor)
             now = _now()
             cur = conn.execute(
@@ -2140,12 +2284,106 @@ class TradingEngineService:
                     "chain_collateral_points": chain_collateral,
                     "trial_fee_points": trial_fee,
                     "chain_fee_points": chain_fee,
+                    "funding_mode": "root_simulated" if is_root_simulated else ("trial_mixed" if (trial_collateral or trial_fee) else "points_chain"),
                     "ledger_uuids": ledger_uuids,
                 },
             )
             conn.commit()
             row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (cur.lastrowid,)).fetchone()
             return {"ok": True, "position": self._margin_position_payload(row), "funding": self._funding_payload(conn, user_id)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def add_margin_collateral(self, *, actor, position_uuid, amount_points):
+        actor_user_id = self._actor_id(actor)
+        if not actor_user_id:
+            raise ValueError("login required")
+        amount = _to_int(amount_points, name="collateral_points", minimum=1, maximum=10**12)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            position = conn.execute(
+                "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+                (str(position_uuid or ""),),
+            ).fetchone()
+            if not position:
+                raise ValueError("margin position not found")
+            user_id = int(position["user_id"])
+            if int(user_id) != int(actor_user_id):
+                raise ValueError("cannot update another user's margin position")
+            if position["status"] != "open":
+                raise ValueError("margin position is not open")
+            is_root_simulated = self._is_root_user_id(conn, user_id)
+            ledger_uuids = []
+            trial_added = 0
+            chain_added = 0
+            if is_root_simulated:
+                self._sim_delta(conn, user_id, balance_delta=-amount, locked_delta=amount)
+            else:
+                trial_added = self._trial_deploy(conn, user_id, amount)
+                chain_added = amount - trial_added
+                if chain_added:
+                    ledger_uuids.append(self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="freeze",
+                        amount=chain_added,
+                        action_type="trading_margin_collateral_freeze",
+                        reference_type="trading_margin_position",
+                        reference_id=position["position_uuid"],
+                        idempotency_key=f"trading:margin:collateral_add:{position['position_uuid']}:{uuid.uuid4()}",
+                        reason="TRADING_MARGIN_COLLATERAL_ADD",
+                        public_metadata={
+                            "position_type": position["position_type"],
+                            "market": position["market_symbol"],
+                            "trial_collateral_points": trial_added,
+                            "chain_collateral_points": chain_added,
+                        },
+                        actor=actor,
+                    )["ledger_uuid"])
+            now = _now()
+            conn.execute(
+                """
+                UPDATE trading_margin_positions
+                SET collateral_points=collateral_points+?,
+                    collateral_trial_points=collateral_trial_points+?,
+                    collateral_chain_points=collateral_chain_points+?,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (amount, trial_added, chain_added, now, position["id"]),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_MARGIN_COLLATERAL_ADDED",
+                "margin collateral added",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=position["market_symbol"],
+                metadata={
+                    "position_id": position["id"],
+                    "position_uuid": position["position_uuid"],
+                    "amount_points": amount,
+                    "funding_mode": "root_simulated" if is_root_simulated else ("trial_mixed" if trial_added else "points_chain"),
+                    "trial_collateral_points": trial_added,
+                    "chain_collateral_points": chain_added,
+                    "ledger_uuids": ledger_uuids,
+                },
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
+            return {
+                "ok": True,
+                "position": self._margin_position_payload_with_risk(conn, row),
+                "funding": self._funding_payload(conn, user_id),
+            }
         except Exception:
             conn.rollback()
             raise
@@ -2184,7 +2422,22 @@ class TradingEngineService:
             collateral_chain = int(position["collateral_chain_points"] or 0) if "collateral_chain_points" in position.keys() else collateral
             delta = risk["delta_points"]
             ledger_uuids = []
-            if collateral_chain:
+            is_root_simulated = self._is_root_user_id(conn, user_id)
+            if is_root_simulated:
+                simulated_return = max(0, collateral + delta)
+                self._sim_delta(conn, user_id, balance_delta=simulated_return, locked_delta=-collateral)
+                if collateral + delta < 0:
+                    self._audit_event(
+                        conn,
+                        "TRADING_ROOT_SIM_MARGIN_BAD_DEBT",
+                        "root simulated margin position closed below collateral",
+                        actor=actor,
+                        target_user_id=user_id,
+                        market_symbol=market["symbol"],
+                        severity="warning",
+                        metadata={"position_uuid": position["position_uuid"], "simulated_bad_debt_points": abs(collateral + delta), "risk": risk},
+                    )
+            elif collateral_chain:
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
@@ -2204,7 +2457,9 @@ class TradingEngineService:
                     },
                     actor=actor,
                 )["ledger_uuid"])
-            if delta > 0:
+            if is_root_simulated:
+                pass
+            elif delta > 0:
                 if collateral_trial:
                     self._trial_delta(conn, user_id, available_delta=collateral_trial, deployed_delta=-collateral_trial)
                 ledger_uuids.append(self._ledger(
@@ -2260,9 +2515,9 @@ class TradingEngineService:
                     )
             elif collateral_trial:
                 self._trial_delta(conn, user_id, available_delta=collateral_trial, deployed_delta=-collateral_trial)
-            if close_fee:
+            if close_fee and not is_root_simulated:
                 self._reserve_delta(conn, delta=close_fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_CLOSE_FEE", actor=actor)
-            if interest:
+            if interest and not is_root_simulated:
                 self._reserve_delta(conn, delta=interest, event_type="margin_interest_retained", reason="TRADING_MARGIN_INTEREST", actor=actor)
             now = _now()
             next_status = "liquidated" if force_liquidation else "closed"
@@ -2293,6 +2548,7 @@ class TradingEngineService:
                     "delta_points": delta,
                     "interest_points": interest,
                     "close_fee_points": close_fee,
+                    "funding_mode": "root_simulated" if is_root_simulated else ("trial_mixed" if collateral_trial else "points_chain"),
                     "risk": risk,
                     "ledger_uuids": ledger_uuids,
                 },
@@ -2926,6 +3182,17 @@ class TradingEngineService:
         ).fetchall():
             user_id = int(order["user_id"])
             expected_locked[user_id] = expected_locked.get(user_id, 0) + int(order["frozen_points"] or 0)
+        for position in conn.execute(
+            """
+            SELECT p.user_id, p.collateral_points
+            FROM trading_margin_positions p
+            JOIN users u ON u.id=p.user_id
+            WHERE u.username='root'
+              AND p.status='open'
+            """
+        ).fetchall():
+            user_id = int(position["user_id"])
+            expected_locked[user_id] = expected_locked.get(user_id, 0) + int(position["collateral_points"] or 0)
         for account in conn.execute("SELECT * FROM trading_sim_accounts ORDER BY user_id").fetchall():
             user_id = int(account["user_id"])
             expected = expected_locked.pop(user_id, 0)
@@ -2966,7 +3233,7 @@ class TradingEngineService:
                 ledger_net[reference_id] -= int(row["amount"] or 0)
         for position in conn.execute("SELECT * FROM trading_margin_positions ORDER BY id ASC").fetchall():
             position_uuid = position["position_uuid"]
-            expected = int(position["collateral_points"] or 0) if position["status"] == "open" else 0
+            expected = int(position["collateral_chain_points"] or 0) if position["status"] == "open" else 0
             actual = ledger_net.pop(position_uuid, 0)
             if expected != actual:
                 errors.append({

@@ -1164,14 +1164,15 @@
       <div class="drive-card" id="economy-trading-summary-card" style="margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
-            <div class="drive-card-title">現貨、合約與交易明細</div>
-            <div class="drive-card-sub">錢包頁僅顯示目前部位、合約開發狀態、訂單與成交明細；下單請到積分交易所。</div>
+            <div class="drive-card-title">現貨、進階、合約與交易明細</div>
+            <div class="drive-card-sub">錢包頁顯示目前現貨、融資 / 借券、合約狀態、訂單與成交明細；下單請到積分交易所。</div>
           </div>
           <button class="btn" id="economy-trading-open-btn" type="button">開啟交易所</button>
         </div>
         <div id="economy-trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
           <div><span class="drive-card-sub">現貨部位</span><strong id="economy-spot-position-quantity">尚無現貨</strong><small id="economy-spot-position-summary">各交易對分開計算</small></div>
+          <div><span class="drive-card-sub">進階倉位</span><strong id="economy-margin-position-count">0</strong><small id="economy-margin-position-summary">融資 / 借券</small></div>
           <div><span class="drive-card-sub">合約持倉</span><strong id="economy-contract-position-count">0</strong><small id="economy-contract-position-summary">未開放</small></div>
           <div><span class="drive-card-sub">交易明細</span><strong id="economy-trading-fill-count">0</strong><small id="economy-trading-order-count">訂單 0</small></div>
         </div>
@@ -1183,6 +1184,15 @@
             </div>
           </div>
           <div id="economy-spot-position-detail-list" class="trading-spot-detail-list"></div>
+        </div>
+        <div class="drive-card" style="margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">進階倉位明細</div>
+              <div class="drive-card-sub">融資買入與借券放空分開列出；顯示本金、原始保證金、維持保證金與日息。</div>
+            </div>
+          </div>
+          <div id="economy-margin-position-detail-list" class="drive-file-list"></div>
         </div>
         <div class="settings-option-grid" style="margin-top:.75rem;">
           <div>
@@ -1410,7 +1420,7 @@
                 </select>
               </div>
               <div class="field"><label>數量</label><input type="number" id="trading-margin-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
-              <div class="field"><label>保證金點數</label><input type="number" id="trading-margin-collateral" min="1" step="1" value="100" /></div>
+              <div class="field"><label>原始保證金點數</label><input type="number" id="trading-margin-collateral" min="1" step="1" value="100" /></div>
               <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-margin-open-btn" type="button">建立進階倉位</button></div>
             </div>
             <div class="drive-card-sub" id="trading-margin-estimate" style="margin-top:.45rem;">輸入數量與保證金後顯示預估風險。</div>
@@ -2618,6 +2628,16 @@
                     <div class="field-hint">100 bps = 1%。借貸利息會記入交易儲備池統計。</div>
                   </div>
                   <div class="field">
+                    <label>融資可貸比例 bps（原始保證金）</label>
+                    <input type="number" id="root-trading-margin-long-financing-bps" min="0" max="10000" step="1" value="9000" />
+                    <div class="field-hint">預設 9000 bps = 融資九成；最低自備保證金為剩餘比例。</div>
+                  </div>
+                  <div class="field">
+                    <label>借券原始保證金比例 bps</label>
+                    <input type="number" id="root-trading-short-collateral-bps" min="0" max="10000" step="1" value="6000" />
+                    <div class="field-hint">預設 6000 bps = 借券六成，用於借券放空最低保證金。</div>
+                  </div>
+                  <div class="field">
                     <label>價格來源</label>
                     <select id="root-trading-price-source">
                       <option value="binance_public_api">Binance 公開 API</option>
@@ -2635,7 +2655,7 @@
                     <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
                   </div>
                   <div class="field">
-                    <label>維持保證金 bps</label>
+                    <label>維持保證金比例 bps</label>
                     <input type="number" id="root-trading-maintenance-bps" min="0" max="10000" step="1" value="1500" />
                     <div class="field-hint">1500 bps = 15%。倉位淨值低於此比例時會列入清算。</div>
                   </div>
@@ -3133,9 +3153,9 @@
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260501-1a2b-rank" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260501-trading-settings-errors" defer></script>
+<script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
-<script src="/js/56-trading.js?v=20260501-trading-margin-trial" defer></script>
+<script src="/js/56-trading.js?v=20260501-margin-policy" defer></script>
 <script src="/js/90-bootstrap.js?v=20260430-trading-page-split" defer></script>
 </body>
 </html>

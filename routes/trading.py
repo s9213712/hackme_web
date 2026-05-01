@@ -77,14 +77,34 @@ def register_trading_routes(app, deps):
         lowered = msg.lower()
         if "insufficient" in lowered:
             status = 409
+            if "root simulated trading points" in lowered:
+                msg = "root 模擬交易資金不足，請降低保證金/數量，或在交易所重置 root 模擬資金"
+            else:
+                msg = "交易資金不足，請降低數量或補足可用積分"
         if "safe mode" in lowered:
             status = 423
+        if lowered.startswith("collateral below minimum"):
+            minimum = msg.rsplit(" ", 1)[-1]
+            msg = f"保證金不足，至少需要 {minimum} 點"
+            status = 400
+        elif lowered.startswith("borrow trading is disabled"):
+            msg = "進階交易尚未啟用，請由 root 到設定 > 計費 > 交易所參數開啟借貸交易"
+            status = 403
+        elif lowered.startswith("position_type must be"):
+            msg = "進階交易類型錯誤，請選擇融資買入或借券放空"
+            status = 400
+        elif lowered.startswith("quantity must be"):
+            msg = "交易數量必須是大於 0 的數字"
+            status = 400
+        elif lowered.startswith("collateral_points must be"):
+            msg = "保證金必須是大於 0 的整數"
+            status = 400
         if lowered.startswith("market not found"):
             msg = "交易市場不存在，請重新整理交易所參數後再試"
             status = 400
         elif "not found" in lowered:
             status = 404
-        if "another user" in lowered:
+        if "another user" in lowered or "another user's" in lowered:
             status = 403
         return json_resp({"ok": False, "msg": msg}), status
 
@@ -265,6 +285,33 @@ def register_trading_routes(app, deps):
         try:
             result = trading_service.close_margin_position(actor=actor, position_uuid=position_uuid)
             audit("TRADING_MARGIN_POSITION_CLOSED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"position_uuid={position_uuid}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/margin/<position_uuid>/collateral", methods=["POST"])
+    @require_csrf
+    def trading_margin_add_collateral(position_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.add_margin_collateral(
+                actor=actor,
+                position_uuid=position_uuid,
+                amount_points=data.get("amount_points"),
+            )
+            audit(
+                "TRADING_MARGIN_COLLATERAL_ADDED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"position_uuid={position_uuid}, amount={data.get('amount_points')}",
+            )
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)

@@ -64,7 +64,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
-    assert "/js/56-trading.js?v=20260501-trading-margin-trial" in index_html
+    assert "/js/50-admin.js?v=20260501-margin-policy-settings" in index_html
+    assert "/js/56-trading.js?v=20260501-margin-policy" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-auto-handle-btn"' in index_html
@@ -134,6 +135,13 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-borrowing-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled" checked' in index_html
     assert 'id="root-trading-borrow-interest-bps"' in index_html
+    assert 'id="root-trading-margin-long-financing-bps"' in index_html
+    assert 'id="root-trading-short-collateral-bps"' in index_html
+    assert "融資九成" in index_html
+    assert "借券六成" in index_html
+    assert "融資可貸比例 bps（原始保證金）" in index_html
+    assert "借券原始保證金比例 bps" in index_html
+    assert "維持保證金比例 bps" in index_html
     assert 'id="root-trading-price-source"' in index_html
     assert 'id="root-trading-max-price-staleness"' in index_html
     assert 'id="root-trading-liquidation-enabled"' in index_html
@@ -153,6 +161,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "交易所參數 API 找不到" in admin_js
     assert "交易所參數儲存中" in admin_js
     assert "borrow_interest_bps_daily" in admin_js
+    assert "margin_long_financing_bps" in admin_js
+    assert "short_collateral_bps" in admin_js
     assert "price_source" in admin_js
     assert "max_price_staleness_seconds" in admin_js
     assert "margin_liquidation_enabled" in admin_js
@@ -220,9 +230,24 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="economy-spot-position-quantity"' in economy_section
     assert 'id="economy-spot-position-detail-list"' in economy_section
     assert "現貨明細" in economy_section
+    assert "進階倉位明細" in economy_section
     assert "市價平倉" in economy_section
     assert "現貨部位" in economy_section
     assert "各交易對分開計算" in economy_section
+    assert 'id="economy-margin-position-count"' in economy_section
+    assert 'id="economy-margin-position-summary"' in economy_section
+    assert 'id="economy-margin-position-detail-list"' in economy_section
+    assert "整戶維持率" in trading_js
+    assert "補保證金" in trading_js
+    assert "原始保證金" in trading_js
+    assert "原始保證金率" in trading_js
+    assert "原始保證金最低需求" in trading_js
+    assert "放空價格風險" in trading_js
+    assert "價格上漲會虧損並降低維持率" in trading_js
+    assert "未實現盈虧" in trading_js
+    assert "強平價格" in trading_js
+    assert "liquidation_price_points" in trading_js
+    assert "unrealized_pnl_points" in trading_js
     assert 'id="economy-contract-position-count"' in economy_section
     assert 'id="economy-contract-position-summary"' in economy_section
     assert 'id="economy-trading-order-list"' in economy_section
@@ -235,9 +260,16 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function renderTradingWalletSummary" in trading_js
     assert "function rootVirtualSpotValue" in trading_js
     assert "function renderEconomySpotPositionDetails" in trading_js
+    assert "function renderEconomyMarginPositionDetails" in trading_js
     assert "function submitEconomySpotSell" in trading_js
     assert "data-economy-spot-limit" in trading_js
     assert "data-economy-spot-market-close" in trading_js
+    assert "data-economy-margin-close" in trading_js
+    assert "data-economy-margin-add-collateral" in trading_js
+    assert "data-margin-add-collateral" in trading_js
+    assert "addTradingMarginCollateral" in trading_js
+    assert "margin_positions" in trading_js
+    assert "margin_summary" in trading_js
     assert ">確認</button>" in trading_js
     assert ">市價平倉</button>" in trading_js
     assert "grid-template-columns: minmax(120px, .85fr) repeat(5" in styles
@@ -272,9 +304,21 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "borrowing_enabled" in trading_js
     assert "margin_liquidation_enabled" in trading_js
     assert "margin_maintenance_bps" in trading_js
+    assert "margin_long_financing_bps" in trading_js
+    assert "short_collateral_bps" in trading_js
+    assert "initial_margin_points" in trading_js
+    assert "maintenance_margin_points" in trading_js
+    assert "融資可貸比例" in trading_js
+    assert "借券保證金比例" in trading_js
     assert 'if (marginCard) marginCard.style.display = "";' in trading_js
     assert "marginControlsDisabled" in trading_js
+    assert 'const marginControlsDisabled = !borrowingEnabled;' in trading_js
+    assert 'marginControlsDisabled = !borrowingEnabled || currentUser === "root"' not in trading_js
+    assert "root 可用模擬資金進行融資 / 借券" in trading_js
     assert "root 尚未開啟借貸交易，目前僅可查看此區。" in trading_js
+    assert "保證金不足，至少需要" in trading_js
+    assert "可用資金不足，需要" in trading_js
+    assert "進階交易開倉失敗：" in trading_js
     assert "trading-margin-open-btn" in trading_js
     assert '["trading-limit-match-btn", matchTradingLimitOrders]' in trading_js
     assert '["trading-liquidation-scan-btn", scanTradingLiquidations]' in trading_js

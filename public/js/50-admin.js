@@ -1228,6 +1228,8 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
   if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
   if ($("root-trading-borrow-interest-bps")) $("root-trading-borrow-interest-bps").value = settings.borrow_interest_bps_daily ?? 10;
+  if ($("root-trading-margin-long-financing-bps")) $("root-trading-margin-long-financing-bps").value = settings.margin_long_financing_bps ?? 9000;
+  if ($("root-trading-short-collateral-bps")) $("root-trading-short-collateral-bps").value = settings.short_collateral_bps ?? 6000;
   if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "binance_public_api";
   if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
   if ($("root-trading-liquidation-enabled")) $("root-trading-liquidation-enabled").checked = settings.margin_liquidation_enabled !== false;
@@ -1302,6 +1304,8 @@ async function saveRootTradingSettings() {
       enabled: !!$("root-trading-enabled")?.checked,
       borrowing_enabled: !!$("root-trading-borrowing-enabled")?.checked,
       borrow_interest_bps_daily: Number($("root-trading-borrow-interest-bps")?.value || 0),
+      margin_long_financing_bps: Number($("root-trading-margin-long-financing-bps")?.value || 9000),
+      short_collateral_bps: Number($("root-trading-short-collateral-bps")?.value || 6000),
       price_source: $("root-trading-price-source")?.value || "binance_public_api",
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
