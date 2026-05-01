@@ -1457,6 +1457,64 @@ def start_points_chain_block_worker():
     return worker
 
 
+def start_trading_liquidation_worker():
+    try:
+        check_interval = int(os.environ.get("HTML_LEARNING_TRADING_LIQUIDATION_CHECK_INTERVAL_SECONDS", "30"))
+    except ValueError:
+        check_interval = 30
+    check_interval = max(10, check_interval)
+
+    def loop():
+        actor = {"username": "system", "role": "system"}
+        while True:
+            try:
+                match_result = trading_service.match_open_limit_orders(actor=actor, limit=200)
+                matched = match_result.get("matched") or []
+                match_errors = match_result.get("errors") or []
+                if matched:
+                    audit(
+                        "TRADING_AUTO_LIMIT_MATCH_RUN",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"scanned={match_result.get('scanned')}, matched={len(matched)}",
+                    )
+                if match_errors:
+                    audit(
+                        "TRADING_AUTO_LIMIT_MATCH_ERRORS",
+                        "0.0.0.0",
+                        user="system",
+                        success=False,
+                        detail=json.dumps(match_errors[:5], ensure_ascii=False),
+                    )
+                result = trading_service.scan_margin_liquidations(actor=actor, limit=100)
+                liquidated = result.get("liquidated") or []
+                errors = result.get("errors") or []
+                if liquidated:
+                    audit(
+                        "TRADING_AUTO_LIQUIDATION_RUN",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"scanned={result.get('scanned')}, liquidated={len(liquidated)}",
+                    )
+                if errors:
+                    audit(
+                        "TRADING_AUTO_LIQUIDATION_ERRORS",
+                        "0.0.0.0",
+                        user="system",
+                        success=False,
+                        detail=json.dumps(errors[:5], ensure_ascii=False),
+                    )
+            except Exception as exc:
+                audit("TRADING_AUTO_LIQUIDATION_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            time.sleep(check_interval)
+
+    worker = threading.Thread(target=loop, name="trading-liquidation-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     install_runtime_output_capture(SERVER_LOG_PATH)
@@ -1503,6 +1561,7 @@ if __name__ == "__main__":
     start_daily_snapshot_worker()
     start_storage_maintenance_worker()
     start_points_chain_block_worker()
+    start_trading_liquidation_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")

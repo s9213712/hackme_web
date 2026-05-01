@@ -140,10 +140,12 @@ The Economy branch includes a first-stage spot exchange for `BTC/POINTS` and
 settlement uses the local PointsChain ledger, while root spot settlement uses a
 separate simulated trading balance. POINTS are treated as USDT-equivalent in the
 trading UI (`1 POINT = 1 USDT`) so market prices match the public quote unit.
-BTC/ETH spot execution uses the backend live Binance public price as the
-authoritative execution price. Root-set manual prices remain an administrative
-fallback/reference value and are overwritten by the latest live execution price
-when a supported market is traded.
+BTC/ETH spot execution can use either the backend live Binance public price or
+root manual prices, depending on the root trading settings. The default source
+is Binance public API. If the live source is enabled, the backend keeps a
+last-good price cache, applies the market jump threshold after live history
+exists, and fails closed when the price feed is unavailable beyond the allowed
+staleness window.
 
 The exchange page also shows a Binance public API candlestick chart for BTC/USDT
 and ETH/USDT. The default timeframe is daily, with 15-minute, 1-hour, and
@@ -154,8 +156,11 @@ execution:
 - `BTC/POINTS` maps to Binance `BTCUSDT`.
 - `ETH/POINTS` maps to Binance `ETHUSDT`.
 - The fixed display conversion is `1 POINT = 1 USDT`.
-- If Binance is unavailable, live-price spot execution fails closed with a clear
-  error instead of silently using a stale manual price.
+- If Binance is unavailable, live-price execution can temporarily use the
+  recent last-good price within the configured staleness window. After that it
+  fails closed with a clear error.
+- Open limit orders are scanned by the trading maintenance worker and are
+  filled when the current execution price reaches the limit.
 
 Trading funds are separated by account type:
 
@@ -168,6 +173,9 @@ Trading funds are separated by account type:
   exchange control panel.
 - Contract/futures functionality is root-only at this stage. Root can open and
   close simulated long/short positions; non-root users can only use spot.
+- Borrow trading is experimental and root-controlled. When enabled, the server
+  records margin collateral freezes in PointsChain, scans for liquidation, and
+  verifies collateral locks during trading state checks.
 
 ## Account and Permission Model
 

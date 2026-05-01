@@ -76,6 +76,8 @@ function bindUiEvents() {
   const rootCatalogNew = $("root-catalog-new-btn");
   const rootCatalogRefresh = $("root-catalog-refresh-btn");
   const rootCatalogSave = $("root-catalog-save-btn");
+  const rootTradingSettingsRefresh = $("root-trading-settings-refresh-btn");
+  const rootTradingSettingsSave = $("root-trading-settings-save-btn");
   const rootStorageRefresh = $("root-storage-refresh-btn");
   const rootStorageSave = $("root-storage-save-btn");
   const rootStorageClear = $("root-storage-clear-btn");
@@ -421,6 +423,8 @@ function bindUiEvents() {
   if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
   if (rootCatalogRefresh) rootCatalogRefresh.addEventListener("click", loadRootEconomyCatalog);
   if (rootCatalogSave) rootCatalogSave.addEventListener("click", saveRootEconomyCatalogItem);
+  if (rootTradingSettingsRefresh) rootTradingSettingsRefresh.addEventListener("click", loadRootTradingSettings);
+  if (rootTradingSettingsSave) rootTradingSettingsSave.addEventListener("click", saveRootTradingSettings);
   if (rootStorageRefresh) rootStorageRefresh.addEventListener("click", loadRootStorageUsers);
   if (rootStorageSave) rootStorageSave.addEventListener("click", saveRootStorageOverride);
   if (rootStorageClear) rootStorageClear.addEventListener("click", clearRootStorageOverride);

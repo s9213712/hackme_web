@@ -1391,6 +1391,31 @@
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-bps">-</strong><small>bps</small></div>
         </div>
+        <details class="drive-collapsible-panel" id="trading-margin-card" style="display:none;margin-top:.75rem;">
+          <summary>
+            <div>
+              <div class="drive-card-title">進階交易：融資 / 借券</div>
+              <div class="drive-card-sub" id="trading-margin-note">由 root 開啟後可用；會凍結保證金，手續費與借貸利息計入儲備池統計。</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="settings-option-grid">
+              <div class="field"><label>市場</label><select id="trading-margin-market-select"><option value="">讀取市場中...</option></select></div>
+              <div class="field">
+                <label>類型</label>
+                <select id="trading-margin-type">
+                  <option value="margin_long">融資買入</option>
+                  <option value="short">借券放空</option>
+                </select>
+              </div>
+              <div class="field"><label>數量</label><input type="number" id="trading-margin-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+              <div class="field"><label>保證金點數</label><input type="number" id="trading-margin-collateral" min="1" step="1" value="100" /></div>
+              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="trading-margin-open-btn" type="button">建立進階倉位</button></div>
+            </div>
+            <div class="drive-card-sub" id="trading-margin-estimate" style="margin-top:.45rem;">輸入數量與保證金後顯示預估風險。</div>
+            <div class="drive-file-list" id="trading-margin-position-list" style="margin-top:.75rem;"></div>
+          </div>
+        </details>
         <div class="trading-reference-panel" style="margin-top:.75rem;">
           <div class="drive-card-heading compact-heading">
             <div>
@@ -1398,10 +1423,10 @@
               <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖僅供參考，不會自動改變站內手動價格。</div>
             </div>
             <select id="trading-reference-interval" class="compact-select">
-              <option value="1s" selected>1 秒</option>
+              <option value="1s">1 秒</option>
               <option value="1m">1 分</option>
               <option value="5m">5 分</option>
-              <option value="15m">15 分</option>
+              <option value="15m" selected>15 分</option>
               <option value="1h">1 小時</option>
               <option value="4h">4 小時</option>
               <option value="1d">日線</option>
@@ -1436,6 +1461,11 @@
           <div><span class="drive-card-sub">交易驗證</span><strong id="trading-verification-status">-</strong><small id="trading-verification-detail">-</small></div>
           <div><span class="drive-card-sub">高風險功能</span><strong id="trading-risk-flags">關閉</strong><small>futures / pvp</small></div>
           <div><span class="drive-card-sub">root 模擬資金</span><strong id="trading-root-sim-balance">10000</strong><small><button class="btn btn-small" id="trading-root-reset-sim-btn" type="button">重設回 10000</button></small></div>
+        </div>
+        <div class="admin-toolbar" style="margin-top:.75rem;">
+          <button class="btn" id="trading-limit-match-btn" type="button">立即撮合限價單</button>
+          <button class="btn btn-danger" id="trading-liquidation-scan-btn" type="button">立即掃描強平</button>
+          <span class="drive-card-sub" id="trading-liquidation-status">自動清算排程：讀取中</span>
         </div>
         <div class="drive-card" id="trading-root-contract-card" style="margin-top:.75rem;">
           <div class="drive-card-heading compact-heading">
@@ -2560,6 +2590,69 @@
             <div id="root-catalog-list" class="drive-file-list billing-catalog-list" style="margin-top:.75rem;"></div>
               </div>
             </details>
+            <details class="drive-collapsible-panel settings-collapse">
+              <summary>
+                <div>
+                  <div class="drive-card-title">交易所參數</div>
+                  <div class="drive-card-sub">設定現貨手續費、最低交易額、借貸開關與儲備池統計；借貸交易目前仍屬實驗設定。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="settings-option-grid">
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-enabled" checked /> 啟用交易所</label>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-borrowing-enabled" /> 允許借貸交易（實驗）</label>
+                  </div>
+                  <div class="field">
+                    <label>借貸日利息 bps</label>
+                    <input type="number" id="root-trading-borrow-interest-bps" min="0" max="10000" step="1" value="10" />
+                    <div class="field-hint">100 bps = 1%。借貸利息會記入交易儲備池統計。</div>
+                  </div>
+                  <div class="field">
+                    <label>價格來源</label>
+                    <select id="root-trading-price-source">
+                      <option value="binance_public_api">Binance 公開 API</option>
+                      <option value="manual_root">root 手動價格</option>
+                    </select>
+                    <div class="field-hint">交易執行會使用此價格來源；手動模式適合離線測試與壓測。</div>
+                  </div>
+                  <div class="field">
+                    <label>即時價格備援秒數</label>
+                    <input type="number" id="root-trading-max-price-staleness" min="0" max="86400" step="1" value="900" />
+                    <div class="field-hint">即時價格暫時失敗時，可用最後成功價格的最長時間；0 代表不使用快取。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-liquidation-enabled" checked /> 啟用自動強平 / 清算排程</label>
+                    <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
+                  </div>
+                  <div class="field">
+                    <label>維持保證金 bps</label>
+                    <input type="number" id="root-trading-maintenance-bps" min="0" max="10000" step="1" value="1500" />
+                    <div class="field-hint">1500 bps = 15%。倉位淨值低於此比例時會列入清算。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-futures-enabled" disabled /> 合約功能（保留，暫不開放）</label>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-pvp-enabled" disabled /> PVP 撮合（保留，暫不開放）</label>
+                  </div>
+                  <div class="field">
+                    <label>儲備池目前統計</label>
+                    <strong id="root-trading-reserve-pool">0 POINTS</strong>
+                    <div class="field-hint">暫時只統計手續費、借貸利息與 root 明確撥入，沒有其他用途。</div>
+                  </div>
+                </div>
+                <div class="drive-card-sub" style="margin:.75rem 0 .4rem;">各交易對參數</div>
+                <div id="root-trading-market-settings" class="drive-file-list billing-catalog-list"></div>
+                <div class="admin-toolbar" style="margin-top:.55rem;">
+                  <button class="btn" type="button" id="root-trading-settings-refresh-btn">重新整理交易所參數</button>
+                  <button class="btn btn-primary" type="button" id="root-trading-settings-save-btn">儲存交易所參數</button>
+                </div>
+                <div id="root-trading-settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+              </div>
+            </details>
           </div>
           <div class="form-section" id="sec-settings-drive">
             <details class="drive-collapsible-panel settings-collapse" open>
@@ -3035,7 +3128,7 @@
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-integrity-single-bind" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
-<script src="/js/56-trading.js?v=20260501-trading-split-refresh" defer></script>
+<script src="/js/56-trading.js?v=20260501-trading-latest-candle-settings" defer></script>
 <script src="/js/90-bootstrap.js?v=20260430-trading-page-split" defer></script>
 </body>
 </html>

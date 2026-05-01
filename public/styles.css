@@ -725,6 +725,27 @@
       overflow-wrap: anywhere;
     }
 
+    .root-trading-market-row {
+      grid-template-columns: minmax(180px, .9fr) minmax(260px, 1.4fr);
+      gap: .75rem;
+    }
+
+    .billing-market-grid {
+      grid-template-columns: repeat(4, minmax(110px, 1fr));
+      gap: .5rem;
+    }
+
+    .billing-market-grid label {
+      display: grid;
+      gap: .25rem;
+      font-size: .75rem;
+      color: var(--muted);
+    }
+
+    .billing-market-grid input {
+      min-width: 0;
+    }
+
     .captcha-panel {
       display: grid;
       grid-template-columns: 1fr auto;

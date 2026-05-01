@@ -12,6 +12,7 @@ from services.notifications import create_notification_if_enabled
 ASSET_SCALE = 100_000_000
 USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
+MARGIN_MIN_COLLATERAL_BPS = 3000
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
@@ -210,6 +211,31 @@ def ensure_trading_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS trading_margin_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            position_uuid TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            market_symbol TEXT NOT NULL,
+            position_type TEXT NOT NULL,
+            quantity_units INTEGER NOT NULL CHECK (quantity_units > 0),
+            entry_price_points INTEGER NOT NULL CHECK (entry_price_points > 0),
+            principal_points INTEGER NOT NULL DEFAULT 0 CHECK (principal_points >= 0),
+            collateral_points INTEGER NOT NULL CHECK (collateral_points > 0),
+            open_fee_points INTEGER NOT NULL DEFAULT 0,
+            close_fee_points INTEGER NOT NULL DEFAULT 0,
+            interest_bps_daily INTEGER NOT NULL DEFAULT 0,
+            interest_points INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'open',
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            updated_at TEXT NOT NULL,
+            CHECK (position_type IN ('margin_long', 'short')),
+            CHECK (status IN ('open', 'closed', 'liquidated'))
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS trading_pending_profit (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -293,6 +319,11 @@ def ensure_trading_schema(conn):
         ("trading.enabled", "true"),
         ("trading.futures_enabled", "false"),
         ("trading.pvp_matching_enabled", "false"),
+        ("trading.borrowing_enabled", "false"),
+        ("trading.borrow_interest_bps_daily", "10"),
+        ("trading.margin_liquidation_enabled", "true"),
+        ("trading.margin_maintenance_bps", "1500"),
+        ("trading.max_price_staleness_seconds", "900"),
         ("trading.price_source", "binance_public_api"),
     ]
     for key, value in defaults:
@@ -470,6 +501,134 @@ class TradingEngineService:
         item["display_symbol"] = str(item["symbol"] or "").replace("/POINTS", "/USDT")
         return item
 
+    def _settings_payload(self, conn):
+        rows = conn.execute("SELECT key, value, updated_at, updated_by FROM trading_settings ORDER BY key").fetchall()
+        raw = {row["key"]: row["value"] for row in rows}
+        return {
+            "enabled": str(raw.get("trading.enabled", "true")).lower() in {"true", "1", "yes"},
+            "futures_enabled": str(raw.get("trading.futures_enabled", "false")).lower() in {"true", "1", "yes"},
+            "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
+            "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "false")).lower() in {"true", "1", "yes"},
+            "borrow_interest_bps_daily": _to_int(raw.get("trading.borrow_interest_bps_daily", "10"), name="borrow_interest_bps_daily", minimum=0, maximum=10000),
+            "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
+            "margin_maintenance_bps": _to_int(raw.get("trading.margin_maintenance_bps", "1500"), name="margin_maintenance_bps", minimum=0, maximum=10000),
+            "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
+            "price_source": raw.get("trading.price_source", "binance_public_api"),
+            "raw": raw,
+        }
+
+    def get_root_settings(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return {
+                "settings": self._settings_payload(conn),
+                "markets": [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets ORDER BY symbol").fetchall()],
+                "reserve_pool": dict(self._reserve(conn)),
+            }
+        finally:
+            conn.close()
+
+    def update_root_settings(self, *, actor, settings=None, markets=None):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            now = _now()
+            settings = settings if isinstance(settings, dict) else {}
+            market_updates = markets if isinstance(markets, list) else []
+            setting_changes = {}
+            bool_keys = {
+                "enabled": "trading.enabled",
+                "futures_enabled": "trading.futures_enabled",
+                "pvp_matching_enabled": "trading.pvp_matching_enabled",
+                "borrowing_enabled": "trading.borrowing_enabled",
+                "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
+            }
+            for input_key, storage_key in bool_keys.items():
+                if input_key in settings:
+                    value = "true" if bool(settings.get(input_key)) else "false"
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                        (storage_key, value, now, self._actor_id(actor)),
+                    )
+                    setting_changes[storage_key] = value
+            if "borrow_interest_bps_daily" in settings:
+                value = str(_to_int(settings.get("borrow_interest_bps_daily"), name="borrow_interest_bps_daily", minimum=0, maximum=10000))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.borrow_interest_bps_daily", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.borrow_interest_bps_daily"] = value
+            if "margin_maintenance_bps" in settings:
+                value = str(_to_int(settings.get("margin_maintenance_bps"), name="margin_maintenance_bps", minimum=0, maximum=10000))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.margin_maintenance_bps", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.margin_maintenance_bps"] = value
+            if "max_price_staleness_seconds" in settings:
+                value = str(_to_int(settings.get("max_price_staleness_seconds"), name="max_price_staleness_seconds", minimum=0, maximum=86400))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.max_price_staleness_seconds", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.max_price_staleness_seconds"] = value
+            if "price_source" in settings:
+                value = str(settings.get("price_source") or "").strip()
+                if value not in {"binance_public_api", "manual_root"}:
+                    raise ValueError("price_source must be binance_public_api or manual_root")
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_source", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_source"] = value
+            changed_markets = []
+            for row in market_updates:
+                if not isinstance(row, dict):
+                    continue
+                symbol = str(row.get("symbol") or "").strip().upper()
+                market = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (symbol,)).fetchone()
+                if not market:
+                    raise ValueError(f"market not found: {symbol}")
+                updates = {}
+                for key, max_value in (
+                    ("fee_bps", 5000),
+                    ("min_order_points", 10**9),
+                    ("max_order_points", 10**12),
+                ):
+                    if key in row:
+                        updates[key] = _to_int(row.get(key), name=key, minimum=0 if key != "max_order_points" else 1, maximum=max_value)
+                if "enabled" in row:
+                    updates["enabled"] = 1 if bool(row.get("enabled")) else 0
+                if not updates:
+                    continue
+                if "min_order_points" in updates and "max_order_points" in updates and updates["min_order_points"] > updates["max_order_points"]:
+                    raise ValueError(f"{symbol} minimum order exceeds maximum order")
+                effective_min = int(updates.get("min_order_points", market["min_order_points"]))
+                effective_max = int(updates.get("max_order_points", market["max_order_points"]))
+                if effective_min > effective_max:
+                    raise ValueError(f"{symbol} minimum order exceeds maximum order")
+                updates["updated_at"] = now
+                updates["updated_by"] = self._actor_id(actor)
+                assignments = ", ".join(f"{key}=?" for key in updates)
+                conn.execute(f"UPDATE trading_markets SET {assignments} WHERE symbol=?", [*updates.values(), symbol])
+                changed_markets.append({"symbol": symbol, **updates})
+            if setting_changes:
+                self._audit_event(conn, "TRADING_SETTINGS_UPDATED", "root updated trading settings", actor=actor, metadata=setting_changes)
+            if changed_markets:
+                self._audit_event(conn, "TRADING_MARKET_BILLING_UPDATED", "root updated trading billing parameters", actor=actor, metadata={"markets": changed_markets})
+            if not setting_changes and not changed_markets:
+                raise ValueError("no trading settings changes")
+            conn.commit()
+            return {"ok": True, **self.get_root_settings()}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _live_price_symbol(self, market_symbol):
         return LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
 
@@ -497,12 +656,58 @@ class TradingEngineService:
 
     def _current_market_price_points(self, conn, market):
         symbol = market["symbol"]
-        if not self._live_price_symbol(symbol):
+        settings = self._settings_payload(conn)
+        configured_source = settings.get("price_source") or "binance_public_api"
+        if configured_source == "manual_root" or not self._live_price_symbol(symbol):
             return int(market["manual_price_points"]), str(market["price_source"] or "manual_root")
+        old_price = int(market["manual_price_points"] or 0)
+        old_source = str(market["price_source"] or "")
         try:
             price = self._fetch_live_price_points(symbol)
         except Exception as exc:
+            max_stale = int(settings.get("max_price_staleness_seconds") or 0)
+            try:
+                updated_at = datetime.fromisoformat(str(market["updated_at"]))
+                stale_seconds = int((datetime.now() - updated_at).total_seconds())
+            except Exception:
+                stale_seconds = max_stale + 1
+            if old_price > 0 and max_stale > 0 and stale_seconds <= max_stale and old_source in {"binance_public_api", "binance_public_api_cached"}:
+                self._audit_event(
+                    conn,
+                    "TRADING_PRICE_FALLBACK_USED",
+                    "live trading price unavailable; using cached last-good price",
+                    market_symbol=symbol,
+                    severity="warning",
+                    metadata={"error": str(exc), "cached_price_points": old_price, "stale_seconds": stale_seconds, "max_stale_seconds": max_stale},
+                )
+                return old_price, "binance_public_api_cached"
             raise ValueError(f"live trading price unavailable for {symbol}: {exc}") from exc
+        has_live_history = bool(conn.execute(
+            """
+            SELECT 1
+            FROM trading_orders
+            WHERE market_symbol=?
+            UNION ALL
+            SELECT 1 FROM trading_margin_positions WHERE market_symbol=?
+            UNION ALL
+            SELECT 1 FROM trading_futures_positions WHERE market_symbol=?
+            LIMIT 1
+            """,
+            (symbol, symbol, symbol),
+        ).fetchone())
+        if old_price > 0 and old_source == "binance_public_api" and has_live_history:
+            jump_bps = int(abs(price - old_price) * 10_000 / old_price) if old_price else 0
+            allowed_bps = int(market["max_price_jump_bps"] or 0)
+            if allowed_bps and jump_bps > allowed_bps:
+                self._audit_event(
+                    conn,
+                    "TRADING_PRICE_CIRCUIT_BREAKER",
+                    "live trading price jump exceeded market threshold",
+                    market_symbol=symbol,
+                    severity="critical",
+                    metadata={"old_price_points": old_price, "new_price_points": price, "jump_bps": jump_bps, "allowed_bps": allowed_bps},
+                )
+                raise ValueError(f"live trading price jump {jump_bps} bps exceeds max {allowed_bps} for {symbol}")
         now = _now()
         conn.execute(
             "UPDATE trading_markets SET manual_price_points=?, price_source='binance_public_api', updated_at=? WHERE symbol=?",
@@ -568,6 +773,74 @@ class TradingEngineService:
         item["quantity"] = units_to_quantity(item["quantity_units"])
         return item
 
+    def _margin_position_payload(self, row):
+        item = dict(row)
+        item["quantity"] = units_to_quantity(item["quantity_units"])
+        item["position_label"] = "融資做多" if item["position_type"] == "margin_long" else "借券放空"
+        return item
+
+    def _borrowing_settings(self, conn):
+        settings = self._settings_payload(conn)
+        return {
+            "enabled": bool(settings.get("borrowing_enabled")),
+            "interest_bps_daily": int(settings.get("borrow_interest_bps_daily") or 0),
+        }
+
+    def _assert_borrowing_enabled(self, conn):
+        settings = self._borrowing_settings(conn)
+        if not settings["enabled"]:
+            raise ValueError("borrow trading is disabled")
+        return settings
+
+    def _margin_interest_points(self, row, now_text=None):
+        principal = int(row["principal_points"] or 0)
+        bps = int(row["interest_bps_daily"] or 0)
+        if principal <= 0 or bps <= 0:
+            return 0
+        try:
+            opened_at = datetime.fromisoformat(str(row["opened_at"]))
+            closed_at = datetime.fromisoformat(str(now_text or _now()))
+        except Exception:
+            return 0
+        seconds = max(0, (closed_at - opened_at).total_seconds())
+        days = int(seconds // 86400)
+        if days <= 0:
+            return 0
+        return int(math.ceil(principal * bps * days / 10_000))
+
+    def _margin_risk_payload(self, conn, position, market=None, *, now_text=None):
+        market = market or self._market(conn, position["market_symbol"])
+        price, price_source = self._current_market_price_points(conn, market)
+        quantity_units = int(position["quantity_units"])
+        exit_notional = notional_points(quantity_units, price)
+        close_fee = fee_points(exit_notional, int(market["fee_bps"] or 0))
+        interest = self._margin_interest_points(position, now_text=now_text)
+        collateral = int(position["collateral_points"] or 0)
+        principal = int(position["principal_points"] or 0)
+        if position["position_type"] == "margin_long":
+            equity_after = exit_notional - principal - interest - close_fee
+            delta = equity_after - collateral
+        else:
+            delta = principal - exit_notional - interest - close_fee
+            equity_after = collateral + delta
+        settings = self._settings_payload(conn)
+        maintenance_bps = int(settings.get("margin_maintenance_bps") or 0)
+        maintenance_points = int(math.ceil(exit_notional * maintenance_bps / 10_000))
+        return {
+            "price_points": price,
+            "price_source": price_source,
+            "exit_notional_points": exit_notional,
+            "close_fee_points": close_fee,
+            "interest_points": interest,
+            "collateral_points": collateral,
+            "principal_points": principal,
+            "delta_points": delta,
+            "equity_after_points": equity_after,
+            "maintenance_bps": maintenance_bps,
+            "maintenance_points": maintenance_points,
+            "liquidation_required": equity_after <= maintenance_points,
+        }
+
     def _fill_payload(self, row):
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
@@ -617,6 +890,23 @@ class TradingEngineService:
         finally:
             conn.close()
 
+    def _notify_margin_liquidated(self, conn, *, user_id, position, risk):
+        try:
+            create_notification_if_enabled(
+                conn,
+                user_id=user_id,
+                type="trading_margin_liquidated",
+                title="進階交易倉位已被強制平倉",
+                body=(
+                    f"{position['market_symbol']} {position['position_type']} 已低於維持保證金並自動清算；"
+                    f"結算價 {int(risk.get('price_points') or 0)}，"
+                    f"損益 {int(risk.get('delta_points') or 0)} 點。"
+                ),
+                link="/trading",
+            )
+        except Exception:
+            pass
+
     def list_markets(self, *, include_disabled=False):
         conn = self.get_db()
         try:
@@ -641,6 +931,10 @@ class TradingEngineService:
                 self._futures_position_payload(row)
                 for row in conn.execute("SELECT * FROM trading_futures_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
+            margin_positions = [
+                self._margin_position_payload(row)
+                for row in conn.execute("SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            ]
             orders = [
                 self._order_payload(row)
                 for row in conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
@@ -651,10 +945,12 @@ class TradingEngineService:
             ]
             return {
                 "state": state,
+                "settings": self._settings_payload(conn),
                 "funding": self._funding_payload(conn, user_id),
                 "markets": markets,
                 "positions": positions,
                 "futures_positions": futures_positions,
+                "margin_positions": margin_positions,
                 "orders": orders,
                 "fills": fills,
             }
@@ -812,6 +1108,87 @@ class TradingEngineService:
         finally:
             conn.close()
 
+    def match_open_limit_orders(self, *, actor=None, market_symbol=None, limit=200):
+        limit = _to_int(limit or 200, name="limit", minimum=1, maximum=1000)
+        actor = actor or {"username": "system", "role": "system"}
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            params = []
+            where = "WHERE order_type='limit' AND status IN ('open', 'partially_filled')"
+            if market_symbol:
+                where += " AND market_symbol=?"
+                params.append(str(market_symbol or "").strip().upper())
+            order_uuids = [
+                row["order_uuid"]
+                for row in conn.execute(
+                    f"SELECT order_uuid FROM trading_orders {where} ORDER BY id ASC LIMIT ?",
+                    (*params, limit),
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+
+        matched = []
+        skipped = 0
+        errors = []
+        for order_uuid in order_uuids:
+            conn = self.get_db()
+            try:
+                self.ensure_schema(conn)
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                self._assert_writable(conn)
+                order = conn.execute("SELECT * FROM trading_orders WHERE order_uuid=?", (order_uuid,)).fetchone()
+                if not order or order["status"] not in OPEN_ORDER_STATUSES or order["order_type"] != "limit":
+                    conn.rollback()
+                    skipped += 1
+                    continue
+                market = self._market(conn, order["market_symbol"])
+                current_price, price_source = self._current_market_price_points(conn, market)
+                executable, execution_price = self._is_executable(
+                    market,
+                    side=order["side"],
+                    order_type=order["order_type"],
+                    limit_price=order["limit_price_points"],
+                    current_price=current_price,
+                )
+                if not executable:
+                    conn.rollback()
+                    skipped += 1
+                    continue
+                conn.execute(
+                    "UPDATE trading_orders SET execution_price_points=?, updated_at=? WHERE id=?",
+                    (execution_price, _now(), order["id"]),
+                )
+                order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (order["id"],)).fetchone()
+                fill = self._execute_order(conn, order, market, actor=actor)
+                self._audit_event(
+                    conn,
+                    "TRADING_LIMIT_ORDER_MATCHED",
+                    "limit order matched by scheduled matcher",
+                    actor=actor,
+                    target_user_id=int(order["user_id"]),
+                    order_id=order["id"],
+                    market_symbol=market["symbol"],
+                    metadata={"fill_id": fill["id"], "price_source": price_source, "execution_price_points": execution_price},
+                )
+                self._notify_trade_filled(conn, fill)
+                conn.commit()
+                matched.append({
+                    "order_uuid": order["order_uuid"],
+                    "fill_uuid": fill["fill_uuid"],
+                    "market_symbol": market["symbol"],
+                    "side": order["side"],
+                    "execution_price_points": execution_price,
+                })
+            except Exception as exc:
+                conn.rollback()
+                errors.append({"order_uuid": order_uuid, "error": str(exc)})
+            finally:
+                conn.close()
+        return {"ok": not errors, "scanned": len(order_uuids), "matched": matched, "skipped": skipped, "errors": errors}
+
     def _execute_order(self, conn, order, market, *, actor):
         side = order["side"]
         user_id = int(order["user_id"])
@@ -886,9 +1263,9 @@ class TradingEngineService:
                 """,
                 (next_qty, next_avg, _now(), user_id, market["symbol"]),
             )
-            reserve_delta = 0 if funding_mode == "root_simulated" else total
-            if funding_mode != "root_simulated":
-                self._reserve_delta(conn, delta=reserve_delta, event_type="trade_buy_in", reason="TRADING_SPOT_BUY_AND_FEE", actor=actor, order_id=order["id"])
+            reserve_delta = 0 if funding_mode == "root_simulated" else fee
+            if funding_mode != "root_simulated" and fee:
+                self._reserve_delta(conn, delta=fee, event_type="fee_retained", reason="TRADING_FEE", actor=actor, order_id=order["id"])
         else:
             if notional <= 0:
                 raise ValueError("sell notional is too small")
@@ -898,7 +1275,6 @@ class TradingEngineService:
             if funding_mode == "root_simulated":
                 self._sim_delta(conn, user_id, balance_delta=net_credit)
             else:
-                self._reserve_delta(conn, delta=-notional, event_type="trade_sell_out", reason="TRADING_SPOT_SELL", actor=actor, order_id=order["id"])
                 ledger_uuids.append(self._ledger(
                     conn,
                     user_id=user_id,
@@ -940,7 +1316,7 @@ class TradingEngineService:
                 """,
                 (quantity_units, _now(), user_id, market["symbol"]),
             )
-            reserve_delta = 0 if funding_mode == "root_simulated" else -net_credit
+            reserve_delta = 0 if funding_mode == "root_simulated" else fee
         fill_uuid = str(uuid.uuid4())
         cur = conn.execute(
             """
@@ -1031,6 +1407,334 @@ class TradingEngineService:
             raise
         finally:
             conn.close()
+
+    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        position_type = str(position_type or "").strip().lower()
+        if position_type not in {"margin_long", "short"}:
+            raise ValueError("position_type must be margin_long or short")
+        quantity_units = quantity_to_units(quantity)
+        collateral = _to_int(collateral_points, name="collateral_points", minimum=1, maximum=10**12)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            borrow_settings = self._assert_borrowing_enabled(conn)
+            market = self._market(conn, market_symbol)
+            price, price_source = self._current_market_price_points(conn, market)
+            notional = notional_points(quantity_units, price)
+            min_collateral = int(math.ceil(notional * MARGIN_MIN_COLLATERAL_BPS / 10_000))
+            if collateral < min_collateral:
+                raise ValueError(f"collateral below minimum {min_collateral}")
+            fee = fee_points(notional, int(market["fee_bps"] or 0))
+            principal = max(0, notional - collateral) if position_type == "margin_long" else notional
+            position_uuid = str(uuid.uuid4())
+            ledger_uuids = []
+            ledger_uuids.append(self._ledger(
+                conn,
+                user_id=user_id,
+                currency_type="points",
+                direction="freeze",
+                amount=collateral,
+                action_type="trading_margin_collateral_freeze",
+                reference_type="trading_margin_position",
+                reference_id=position_uuid,
+                idempotency_key=f"trading:margin:collateral:{position_uuid}",
+                reason="TRADING_MARGIN_COLLATERAL",
+                public_metadata={"position_type": position_type, "market": market["symbol"], "quantity": units_to_quantity(quantity_units), "notional": notional},
+                actor=actor,
+            )["ledger_uuid"])
+            if fee:
+                ledger_uuids.append(self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="debit",
+                    amount=fee,
+                    action_type="trading_margin_open_fee",
+                    reference_type="trading_margin_position",
+                    reference_id=position_uuid,
+                    idempotency_key=f"trading:margin:open_fee:{position_uuid}",
+                    reason="TRADING_MARGIN_OPEN_FEE",
+                    public_metadata={"position_type": position_type, "market": market["symbol"], "fee_bps": int(market["fee_bps"] or 0)},
+                    actor=actor,
+                )["ledger_uuid"])
+                self._reserve_delta(conn, delta=fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_OPEN_FEE", actor=actor)
+            now = _now()
+            cur = conn.execute(
+                """
+                INSERT INTO trading_margin_positions (
+                    position_uuid, user_id, market_symbol, position_type, quantity_units,
+                    entry_price_points, principal_points, collateral_points, open_fee_points,
+                    interest_bps_daily, status, opened_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                """,
+                (
+                    position_uuid,
+                    user_id,
+                    market["symbol"],
+                    position_type,
+                    quantity_units,
+                    price,
+                    principal,
+                    collateral,
+                    fee,
+                    int(borrow_settings["interest_bps_daily"]),
+                    now,
+                    now,
+                ),
+            )
+            self._audit_event(
+                conn,
+                "TRADING_MARGIN_POSITION_OPENED",
+                "margin borrow position opened",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=market["symbol"],
+                metadata={
+                    "position_id": cur.lastrowid,
+                    "position_uuid": position_uuid,
+                    "position_type": position_type,
+                    "quantity": units_to_quantity(quantity_units),
+                    "entry_price_points": price,
+                    "price_source": price_source,
+                    "principal_points": principal,
+                    "collateral_points": collateral,
+                    "open_fee_points": fee,
+                    "ledger_uuids": ledger_uuids,
+                },
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (cur.lastrowid,)).fetchone()
+            return {"ok": True, "position": self._margin_position_payload(row), "funding": self._funding_payload(conn, user_id)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def close_margin_position(self, *, actor, position_uuid, force_liquidation=False):
+        actor_user_id = self._actor_id(actor)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            position = conn.execute(
+                "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+                (str(position_uuid or ""),),
+            ).fetchone()
+            if not position:
+                raise ValueError("margin position not found")
+            user_id = int(position["user_id"])
+            if not force_liquidation and int(user_id) != int(actor_user_id or 0):
+                raise ValueError("cannot close another user's margin position")
+            if position["status"] != "open":
+                raise ValueError("margin position is not open")
+            market = self._market(conn, position["market_symbol"])
+            risk = self._margin_risk_payload(conn, position, market)
+            if force_liquidation and not risk.get("liquidation_required"):
+                raise ValueError("margin position recovered above liquidation threshold")
+            price = risk["price_points"]
+            price_source = risk["price_source"]
+            close_fee = risk["close_fee_points"]
+            interest = risk["interest_points"]
+            collateral = int(position["collateral_points"] or 0)
+            delta = risk["delta_points"]
+            ledger_uuids = []
+            ledger_uuids.append(self._ledger(
+                conn,
+                user_id=user_id,
+                currency_type="points",
+                direction="unfreeze",
+                amount=collateral,
+                action_type="trading_margin_collateral_unfreeze",
+                reference_type="trading_margin_position",
+                reference_id=position["position_uuid"],
+                idempotency_key=f"trading:margin:collateral_unfreeze:{position['position_uuid']}",
+                reason="TRADING_MARGIN_COLLATERAL_RELEASE",
+                public_metadata={"position_type": position["position_type"], "market": market["symbol"]},
+                actor=actor,
+            )["ledger_uuid"])
+            if delta > 0:
+                ledger_uuids.append(self._ledger(
+                    conn,
+                    user_id=user_id,
+                    currency_type="points",
+                    direction="credit",
+                    amount=delta,
+                    action_type="trading_margin_profit",
+                    reference_type="trading_margin_position",
+                    reference_id=position["position_uuid"],
+                    idempotency_key=f"trading:margin:profit:{position['position_uuid']}",
+                    reason="TRADING_MARGIN_PROFIT",
+                    public_metadata={"position_type": position["position_type"], "market": market["symbol"], "exit_price_points": price},
+                    actor=actor,
+                )["ledger_uuid"])
+            elif delta < 0:
+                wallet = self.points_service.ensure_wallet(conn, user_id)
+                wallet_balance = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+                debit_amount = min(abs(delta), wallet_balance)
+                bad_debt = abs(delta) - debit_amount
+                if debit_amount:
+                    ledger_uuids.append(self._ledger(
+                        conn,
+                        user_id=user_id,
+                        currency_type="points",
+                        direction="debit",
+                        amount=debit_amount,
+                        action_type="trading_margin_loss",
+                        reference_type="trading_margin_position",
+                        reference_id=position["position_uuid"],
+                        idempotency_key=f"trading:margin:loss:{position['position_uuid']}",
+                        reason="TRADING_MARGIN_LIQUIDATION_LOSS" if force_liquidation else "TRADING_MARGIN_LOSS",
+                        public_metadata={"position_type": position["position_type"], "market": market["symbol"], "exit_price_points": price, "bad_debt_points": bad_debt},
+                        actor=actor,
+                    )["ledger_uuid"])
+                if bad_debt:
+                    self._audit_event(
+                        conn,
+                        "TRADING_MARGIN_BAD_DEBT",
+                        "margin position closed with bad debt",
+                        actor=actor,
+                        target_user_id=user_id,
+                        market_symbol=market["symbol"],
+                        severity="critical",
+                        metadata={"position_uuid": position["position_uuid"], "bad_debt_points": bad_debt, "risk": risk},
+                    )
+            if close_fee:
+                self._reserve_delta(conn, delta=close_fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_CLOSE_FEE", actor=actor)
+            if interest:
+                self._reserve_delta(conn, delta=interest, event_type="margin_interest_retained", reason="TRADING_MARGIN_INTEREST", actor=actor)
+            now = _now()
+            next_status = "liquidated" if force_liquidation else "closed"
+            conn.execute(
+                """
+                UPDATE trading_margin_positions
+                SET close_fee_points=?, interest_points=?, status=?, closed_at=?, updated_at=?
+                WHERE id=?
+                """,
+                (close_fee, interest, next_status, now, now, position["id"]),
+            )
+            event_type = "TRADING_MARGIN_POSITION_LIQUIDATED" if force_liquidation else "TRADING_MARGIN_POSITION_CLOSED"
+            self._audit_event(
+                conn,
+                event_type,
+                "margin borrow position liquidated" if force_liquidation else "margin borrow position closed",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=market["symbol"],
+                severity="warning" if force_liquidation else "info",
+                metadata={
+                    "position_id": position["id"],
+                    "position_uuid": position["position_uuid"],
+                    "position_type": position["position_type"],
+                    "entry_price_points": int(position["entry_price_points"]),
+                    "exit_price_points": price,
+                    "price_source": price_source,
+                    "delta_points": delta,
+                    "interest_points": interest,
+                    "close_fee_points": close_fee,
+                    "risk": risk,
+                    "ledger_uuids": ledger_uuids,
+                },
+            )
+            if force_liquidation:
+                self._notify_margin_liquidated(conn, user_id=user_id, position=position, risk=risk)
+            conn.commit()
+            row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
+            return {
+                "ok": True,
+                "position": self._margin_position_payload(row),
+                "delta_points": delta,
+                "interest_points": interest,
+                "close_fee_points": close_fee,
+                "funding": self._funding_payload(conn, user_id),
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def scan_margin_liquidations(self, *, actor=None, limit=100):
+        limit = _to_int(limit or 100, name="limit", minimum=1, maximum=500)
+        actor = actor or {"username": "system", "role": "system"}
+        conn = self.get_db()
+        candidates = []
+        errors = []
+        scanned = 0
+        try:
+            self.ensure_schema(conn)
+            settings = self._settings_payload(conn)
+            if not settings.get("borrowing_enabled"):
+                return {"ok": True, "enabled": False, "reason": "borrowing_disabled", "scanned": 0, "candidates": [], "liquidated": [], "errors": []}
+            if not settings.get("margin_liquidation_enabled"):
+                return {"ok": True, "enabled": False, "reason": "liquidation_disabled", "scanned": 0, "candidates": [], "liquidated": [], "errors": []}
+            state = self._state(conn)
+            if state.get("safe_mode"):
+                return {"ok": True, "enabled": False, "reason": "trading_safe_mode", "scanned": 0, "candidates": [], "liquidated": [], "errors": []}
+            rows = conn.execute(
+                "SELECT * FROM trading_margin_positions WHERE status='open' ORDER BY id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            scanned = len(rows)
+            for position in rows:
+                try:
+                    risk = self._margin_risk_payload(conn, position)
+                    if risk.get("liquidation_required"):
+                        candidates.append({
+                            "position_uuid": position["position_uuid"],
+                            "user_id": int(position["user_id"]),
+                            "market_symbol": position["market_symbol"],
+                            "position_type": position["position_type"],
+                            "risk": risk,
+                        })
+                except Exception as exc:
+                    errors.append({
+                        "position_uuid": position["position_uuid"],
+                        "user_id": int(position["user_id"]),
+                        "error": str(exc),
+                    })
+        finally:
+            conn.close()
+
+        liquidated = []
+        for candidate in candidates:
+            try:
+                result = self.close_margin_position(
+                    actor=actor,
+                    position_uuid=candidate["position_uuid"],
+                    force_liquidation=True,
+                )
+                liquidated.append({
+                    "position_uuid": candidate["position_uuid"],
+                    "user_id": candidate["user_id"],
+                    "market_symbol": candidate["market_symbol"],
+                    "delta_points": int(result.get("delta_points") or 0),
+                    "interest_points": int(result.get("interest_points") or 0),
+                    "close_fee_points": int(result.get("close_fee_points") or 0),
+                    "risk": candidate["risk"],
+                })
+            except Exception as exc:
+                errors.append({
+                    "position_uuid": candidate["position_uuid"],
+                    "user_id": candidate["user_id"],
+                    "error": str(exc),
+                })
+        return {
+            "ok": not errors,
+            "enabled": True,
+            "scanned": scanned,
+            "candidates": candidates,
+            "liquidated": liquidated,
+            "errors": errors,
+        }
 
     def update_market(self, *, actor, symbol, manual_price_points=None, max_price_jump_bps=None, fee_bps=None, min_order_points=None, max_order_points=None, enabled=None, confirm_jump=False):
         conn = self.get_db()
@@ -1260,12 +1964,14 @@ class TradingEngineService:
                 "fills": int(conn.execute("SELECT COUNT(*) FROM trading_fills WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "spot_positions": int(conn.execute("SELECT COUNT(*) FROM trading_spot_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "futures_positions": int(conn.execute("SELECT COUNT(*) FROM trading_futures_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "margin_positions": int(conn.execute("SELECT COUNT(*) FROM trading_margin_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "pending_profit": int(conn.execute("SELECT COUNT(*) FROM trading_pending_profit WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
             }
             conn.execute("DELETE FROM trading_fills WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_orders WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_spot_positions WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_futures_positions WHERE user_id=?", (user_id,))
+            conn.execute("DELETE FROM trading_margin_positions WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_pending_profit WHERE user_id=?", (user_id,))
             conn.execute(
                 """
@@ -1462,7 +2168,7 @@ class TradingEngineService:
             """
             SELECT COALESCE(SUM(delta_points), 0)
             FROM trading_reserve_pool_events
-            WHERE event_type IN ('trade_buy_in', 'trade_sell_out', 'fee_retained')
+            WHERE event_type = 'fee_retained'
             """
         ).fetchone()[0] or 0)
         if fill_delta != trade_event_delta:
@@ -1471,6 +2177,13 @@ class TradingEngineService:
                 "expected_trade_delta_points": fill_delta,
                 "actual_trade_event_delta_points": trade_event_delta,
             })
+        margin_delta = int(conn.execute(
+            """
+            SELECT COALESCE(SUM(delta_points), 0)
+            FROM trading_reserve_pool_events
+            WHERE event_type IN ('margin_fee_retained', 'margin_interest_retained')
+            """
+        ).fetchone()[0] or 0)
         allocation_delta = 0
         running_balance = 0
         for event in conn.execute("SELECT * FROM trading_reserve_pool_events ORDER BY id ASC").fetchall():
@@ -1517,7 +2230,7 @@ class TradingEngineService:
                     "actual_delta_points": int(event["delta_points"]),
                 })
             allocation_delta += int(event["delta_points"] or 0)
-        expected_balance = fill_delta + allocation_delta
+        expected_balance = fill_delta + margin_delta + allocation_delta
         reserve = self._reserve(conn)
         actual_balance = int(reserve["balance_points"] or 0)
         if expected_balance != actual_balance:
@@ -1526,6 +2239,7 @@ class TradingEngineService:
                 "expected_balance_points": expected_balance,
                 "actual_balance_points": actual_balance,
                 "fill_delta_points": fill_delta,
+                "margin_delta_points": margin_delta,
                 "allocation_delta_points": allocation_delta,
             })
 
@@ -1561,6 +2275,46 @@ class TradingEngineService:
                     "expected_locked_points": expected,
                 })
 
+    def _verify_margin_position_locks(self, conn, errors):
+        ledger_net = {}
+        for row in conn.execute(
+            """
+            SELECT reference_id, direction, amount
+            FROM points_ledger
+            WHERE reference_type='trading_margin_position'
+              AND action_type IN ('trading_margin_collateral_freeze', 'trading_margin_collateral_unfreeze')
+            ORDER BY id ASC
+            """
+        ).fetchall():
+            reference_id = row["reference_id"]
+            if not reference_id:
+                continue
+            ledger_net.setdefault(reference_id, 0)
+            if row["direction"] == "freeze":
+                ledger_net[reference_id] += int(row["amount"] or 0)
+            elif row["direction"] == "unfreeze":
+                ledger_net[reference_id] -= int(row["amount"] or 0)
+        for position in conn.execute("SELECT * FROM trading_margin_positions ORDER BY id ASC").fetchall():
+            position_uuid = position["position_uuid"]
+            expected = int(position["collateral_points"] or 0) if position["status"] == "open" else 0
+            actual = ledger_net.pop(position_uuid, 0)
+            if expected != actual:
+                errors.append({
+                    "type": "margin_collateral_lock_mismatch",
+                    "position_id": position["id"],
+                    "position_uuid": position_uuid,
+                    "status": position["status"],
+                    "expected_frozen_points": expected,
+                    "actual_frozen_points": actual,
+                })
+        for position_uuid, actual in ledger_net.items():
+            if actual:
+                errors.append({
+                    "type": "margin_collateral_orphan_lock",
+                    "position_uuid": position_uuid,
+                    "actual_frozen_points": actual,
+                })
+
     def _verify_state_on_conn(self, conn, *, enter_safe_mode=False):
         errors = []
         totals = self._replay_positions(conn)
@@ -1592,6 +2346,7 @@ class TradingEngineService:
         self._verify_fill_ledgers(conn, errors)
         self._verify_reserve_pool(conn, errors)
         self._verify_sim_accounts(conn, errors)
+        self._verify_margin_position_locks(conn, errors)
         result = {"ok": not errors, "errors": errors, "checked_at": _now()}
         if errors and enter_safe_mode:
             conn.execute(
@@ -1627,6 +2382,7 @@ class TradingEngineService:
             audit_events = [dict(row) for row in conn.execute("SELECT * FROM trading_audit_events ORDER BY id DESC LIMIT 80").fetchall()]
             return {
                 "state": state,
+                "settings": self._settings_payload(conn),
                 "reserve_pool": dict(reserve),
                 "markets": markets,
                 "reserve_events": reserve_events,

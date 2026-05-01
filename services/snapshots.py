@@ -203,6 +203,7 @@ RESETTABLE_TABLES = {
     "trading_audit_events",
     "trading_fills",
     "trading_futures_positions",
+    "trading_margin_positions",
     "trading_markets",
     "trading_orders",
     "trading_pending_profit",
@@ -928,12 +929,13 @@ class SnapshotService:
             "trading_orders": 51,
             "trading_spot_positions": 52,
             "trading_futures_positions": 53,
-            "trading_pending_profit": 54,
-            "trading_reserve_pool_events": 55,
-            "trading_audit_events": 56,
-            "trading_reserve_pool": 57,
-            "trading_state": 58,
-            "trading_markets": 59,
+            "trading_margin_positions": 54,
+            "trading_pending_profit": 55,
+            "trading_reserve_pool_events": 56,
+            "trading_audit_events": 57,
+            "trading_reserve_pool": 58,
+            "trading_state": 59,
+            "trading_markets": 60,
         }
         return sorted(reset_tables, key=lambda name: (priority.get(name, 100), name))
 

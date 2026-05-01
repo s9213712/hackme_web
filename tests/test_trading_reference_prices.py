@@ -77,7 +77,7 @@ def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch
     assert captured["timeout"] == 6
 
 
-def test_trading_reference_prices_defaults_to_fastest_supported_spot_interval(monkeypatch):
+def test_trading_reference_prices_defaults_to_15m_chart_interval(monkeypatch):
     trading_routes.REFERENCE_PRICE_CACHE.clear()
     captured = {}
 
@@ -95,8 +95,8 @@ def test_trading_reference_prices_defaults_to_fastest_supported_spot_interval(mo
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["ok"] is True
-    assert payload["interval"] == "1s"
-    assert "interval=1s" in captured["url"]
+    assert payload["interval"] == "15m"
+    assert "interval=15m" in captured["url"]
 
 
 def test_trading_reference_prices_uses_short_server_side_cache(monkeypatch):
@@ -118,6 +118,30 @@ def test_trading_reference_prices_uses_short_server_side_cache(monkeypatch):
     assert first.status_code == 200
     assert second.status_code == 200
     assert calls["count"] == 1
+
+
+def test_trading_reference_prices_latest_mode_fetches_one_candle(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    captured = {}
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        return _FakeBinanceResponse([
+            [1714500000000, "60000", "61000", "59000", "60500.5"],
+        ])
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.get("/api/trading/reference-prices?market=BTC/USDT&interval=15m&limit=96&latest=1")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["latest_only"] is True
+    assert len(payload["candles"]) == 1
+    assert "limit=1" in captured["url"]
+    assert "interval=15m" in captured["url"]
 
 
 def test_trading_reference_prices_rejects_unsupported_market_without_network(monkeypatch):

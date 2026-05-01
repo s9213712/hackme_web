@@ -40,7 +40,10 @@ function switchSettingsSection(tab) {
     loadCloudDriveAdminPolicy();
     loadRootStorageUsers();
   }
-  if (tab === "billing") loadRootEconomyCatalog();
+  if (tab === "billing") {
+    loadRootEconomyCatalog();
+    loadRootTradingSettings();
+  }
   if (tab === "member-levels") loadEditableMemberLevelRules();
 }
 
@@ -1057,6 +1060,7 @@ async function clearRootStorageOverride() {
 }
 
 let rootEconomyCatalogCache = [];
+let rootTradingSettingsCache = { settings: {}, markets: [] };
 
 function rootCatalogMsg(text, ok = true) {
   const msg = $("root-catalog-msg");
@@ -1189,6 +1193,112 @@ async function saveRootEconomyCatalogItem() {
     rootEconomyCatalogCache = Array.isArray(json.catalog) ? json.catalog : [];
     renderRootEconomyCatalog(rootEconomyCatalogCache);
     if (typeof loadEconomy === "function") loadEconomy();
+  }
+}
+
+function rootTradingSettingsMsg(text, ok = true) {
+  const msg = $("root-trading-settings-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function renderRootTradingSettings(payload) {
+  const settings = payload?.settings || {};
+  const markets = Array.isArray(payload?.markets) ? payload.markets : [];
+  const reserve = payload?.reserve_pool || {};
+  if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
+  if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
+  if ($("root-trading-borrow-interest-bps")) $("root-trading-borrow-interest-bps").value = settings.borrow_interest_bps_daily ?? 10;
+  if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "binance_public_api";
+  if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
+  if ($("root-trading-liquidation-enabled")) $("root-trading-liquidation-enabled").checked = settings.margin_liquidation_enabled !== false;
+  if ($("root-trading-maintenance-bps")) $("root-trading-maintenance-bps").value = settings.margin_maintenance_bps ?? 1500;
+  if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
+  if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
+  if ($("root-trading-reserve-pool")) $("root-trading-reserve-pool").textContent = `${Number(reserve.balance_points || 0)} POINTS`;
+  const list = $("root-trading-market-settings");
+  if (!list) return;
+  if (!markets.length) {
+    list.innerHTML = `<div class="drive-empty">尚無交易市場</div>`;
+    return;
+  }
+  list.innerHTML = markets.map((market) => `
+    <div class="drive-file-row billing-catalog-row root-trading-market-row" data-root-trading-market="${sanitize(market.symbol || "")}">
+      <div>
+        <strong>${sanitize(market.display_symbol || market.symbol || "-")}</strong>
+        <div class="drive-card-sub">目前手續費 ${Number(market.fee_bps || 0)} bps · 最低 ${Number(market.min_order_points || 0)} · 最高 ${Number(market.max_order_points || 0)} POINTS</div>
+      </div>
+      <div class="settings-option-grid billing-market-grid">
+        <label><input type="checkbox" data-trading-market-field="enabled" ${market.enabled ? "checked" : ""} /> 啟用</label>
+        <label>手續費 bps<input type="number" min="0" max="5000" step="1" data-trading-market-field="fee_bps" value="${Number(market.fee_bps || 0)}" /></label>
+        <label>最低交易額<input type="number" min="0" max="1000000000" step="1" data-trading-market-field="min_order_points" value="${Number(market.min_order_points || 0)}" /></label>
+        <label>最高交易額<input type="number" min="1" max="1000000000000" step="1" data-trading-market-field="max_order_points" value="${Number(market.max_order_points || 0)}" /></label>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function loadRootTradingSettings() {
+  if (currentUser !== "root" || !$("root-trading-market-settings")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/trading/settings", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    rootTradingSettingsMsg(json.msg || "交易所參數讀取失敗", false);
+    return;
+  }
+  rootTradingSettingsCache = json;
+  renderRootTradingSettings(json);
+  rootTradingSettingsMsg("");
+}
+
+function collectRootTradingMarketSettings() {
+  return Array.from(document.querySelectorAll("[data-root-trading-market]")).map((row) => {
+    const symbol = row.dataset.rootTradingMarket || "";
+    const payload = { symbol };
+    row.querySelectorAll("[data-trading-market-field]").forEach((input) => {
+      const key = input.dataset.tradingMarketField;
+      payload[key] = input.type === "checkbox" ? input.checked : Number(input.value || 0);
+    });
+    return payload;
+  });
+}
+
+async function saveRootTradingSettings() {
+  if (currentUser !== "root") return;
+  const payload = {
+    settings: {
+      enabled: !!$("root-trading-enabled")?.checked,
+      borrowing_enabled: !!$("root-trading-borrowing-enabled")?.checked,
+      borrow_interest_bps_daily: Number($("root-trading-borrow-interest-bps")?.value || 0),
+      price_source: $("root-trading-price-source")?.value || "binance_public_api",
+      max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
+      margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
+      margin_maintenance_bps: Number($("root-trading-maintenance-bps")?.value || 0),
+      futures_enabled: !!$("root-trading-futures-enabled")?.checked,
+      pvp_matching_enabled: !!$("root-trading-pvp-enabled")?.checked,
+    },
+    markets: collectRootTradingMarketSettings(),
+  };
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/trading/settings", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json().catch(() => ({}));
+  rootTradingSettingsMsg(json.ok ? "交易所參數已儲存" : (json.msg || "交易所參數儲存失敗"), !!json.ok);
+  if (json.ok) {
+    rootTradingSettingsCache = json;
+    renderRootTradingSettings(json);
+    if (typeof loadTradingDashboard === "function") loadTradingDashboard();
   }
 }
 

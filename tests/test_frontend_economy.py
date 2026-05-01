@@ -64,7 +64,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
-    assert "/js/56-trading.js?v=20260501-trading-split-refresh" in index_html
+    assert "/js/56-trading.js?v=20260501-trading-latest-candle-settings" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-auto-handle-btn"' in index_html
@@ -130,10 +130,32 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-catalog-item-key"' in index_html
     assert 'id="root-catalog-storage-gb"' in index_html
     assert 'id="root-catalog-save-btn"' in index_html
+    assert 'id="root-trading-enabled"' in index_html
+    assert 'id="root-trading-borrowing-enabled"' in index_html
+    assert 'id="root-trading-borrow-interest-bps"' in index_html
+    assert 'id="root-trading-price-source"' in index_html
+    assert 'id="root-trading-max-price-staleness"' in index_html
+    assert 'id="root-trading-liquidation-enabled"' in index_html
+    assert 'id="root-trading-maintenance-bps"' in index_html
+    assert 'id="root-trading-futures-enabled"' in index_html
+    assert 'id="root-trading-pvp-enabled"' in index_html
+    assert 'id="root-trading-reserve-pool"' in index_html
+    assert 'id="root-trading-market-settings"' in index_html
+    assert 'id="root-trading-settings-save-btn"' in index_html
     assert "function loadRootEconomyCatalog()" in admin_js
     assert 'apiFetch(API + "/root/economy/catalog"' in admin_js
     assert "saveRootEconomyCatalogItem" in admin_js
+    assert "function loadRootTradingSettings()" in admin_js
+    assert "function saveRootTradingSettings()" in admin_js
+    assert 'apiFetch(API + "/root/trading/settings"' in admin_js
+    assert "borrow_interest_bps_daily" in admin_js
+    assert "price_source" in admin_js
+    assert "max_price_staleness_seconds" in admin_js
+    assert "margin_liquidation_enabled" in admin_js
+    assert "margin_maintenance_bps" in admin_js
+    assert "collectRootTradingMarketSettings" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js
+    assert "loadRootTradingSettings" in bootstrap_js
 
 
 def test_trading_exchange_is_separate_from_wallet_page():
@@ -150,15 +172,24 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-card"' in trading_section
     assert 'id="trading-submit-order-btn"' in trading_section
     assert 'id="trading-order-estimate"' in trading_section
+    assert 'id="trading-margin-card"' in trading_section
+    assert 'id="trading-margin-type"' in trading_section
+    assert 'id="trading-margin-collateral"' in trading_section
+    assert 'id="trading-margin-open-btn"' in trading_section
+    assert 'id="trading-margin-position-list"' in trading_section
     assert 'id="trading-order-form"' in trading_section
     assert 'id="trading-availability-note"' in trading_section
     assert 'id="trading-root-card"' in trading_section
+    assert 'id="trading-limit-match-btn"' in trading_section
+    assert 'id="trading-liquidation-scan-btn"' in trading_section
+    assert 'id="trading-liquidation-status"' in trading_section
     assert 'id="trading-funding-available"' in trading_section
     assert 'id="trading-root-reset-sim-btn"' in trading_section
     assert 'id="trading-reference-chart"' in trading_section
     assert 'id="trading-reference-tooltip"' in trading_section
     assert 'id="trading-reference-interval"' in trading_section
-    assert '<option value="1s" selected>1 秒</option>' in trading_section
+    assert '<option value="1s">1 秒</option>' in trading_section
+    assert '<option value="15m" selected>15 分</option>' in trading_section
     assert 'id="trading-btc-trade-card"' not in trading_section
     assert 'id="trading-btc-trade-path"' not in trading_section
     assert "Binance 參考價格" in trading_section
@@ -209,6 +240,20 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function updateTradingOrderEstimate" in trading_js
     assert "超過可用" in trading_js
     assert "超過可賣現貨" in trading_js
+    assert "function openTradingMarginPosition" in trading_js
+    assert "function closeTradingMarginPosition" in trading_js
+    assert "function matchTradingLimitOrders" in trading_js
+    assert "function scanTradingLiquidations" in trading_js
+    assert "function renderTradingMarginPositions" in trading_js
+    assert '"/trading/margin/open"' in trading_js
+    assert '"/root/trading/liquidations/scan"' in trading_js
+    assert '"/root/trading/orders/match"' in trading_js
+    assert "borrowing_enabled" in trading_js
+    assert "margin_liquidation_enabled" in trading_js
+    assert "margin_maintenance_bps" in trading_js
+    assert "trading-margin-open-btn" in trading_js
+    assert '["trading-limit-match-btn", matchTradingLimitOrders]' in trading_js
+    assert '["trading-liquidation-scan-btn", scanTradingLiquidations]' in trading_js
     assert "economy-root-virtual-total" in trading_js
     assert "available + spotValue" in trading_js
     assert "function loadTradingReferencePrices" in trading_js
@@ -219,7 +264,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "tradingReferenceChartAutoTimer" in trading_js
     assert "tradingReferenceChartAutoBusy" in trading_js
     assert "}, 5000)" in trading_js
-    assert "if (!options.priceOnly) renderTradingReferenceChart(json);" in trading_js
+    assert "function tradingReferenceChartLimit" in trading_js
+    assert "function mergeTradingReferenceLatestPayload" in trading_js
+    assert "loadTradingReferencePrices({ silent: true, latestOnly: true })" in trading_js
+    assert 'const latestParam = latestOnly ? "&latest=1" : "";' in trading_js
+    assert "renderTradingReferenceChart(tradingState.referencePrices || json)" in trading_js
     assert 'currentModuleTab !== "trading"' in trading_js
     assert "tradingDashboardAutoTimer" in trading_js
     assert "function renderTradingReferenceChart" in trading_js

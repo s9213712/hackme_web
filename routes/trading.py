@@ -117,15 +117,16 @@ def register_trading_routes(app, deps):
         binance_symbol = REFERENCE_PRICE_MARKETS.get(market_symbol)
         if not binance_symbol:
             return json_resp({"ok": False, "msg": "不支援的參考價格市場"}), 400
-        interval = str(request.args.get("interval") or "1s").strip()
+        interval = str(request.args.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
             return json_resp({"ok": False, "msg": "不支援的參考價格週期"}), 400
+        latest_only = str(request.args.get("latest") or "").strip().lower() in {"1", "true", "yes"}
         try:
             limit = int(request.args.get("limit") or 60)
         except Exception:
             return json_resp({"ok": False, "msg": "參考價格筆數格式錯誤"}), 400
-        limit = max(12, min(limit, 96))
-        cache_key = (binance_symbol, interval, limit)
+        limit = 1 if latest_only else max(12, min(limit, 96))
+        cache_key = (binance_symbol, interval, limit, latest_only)
         now = time.monotonic()
         cached = REFERENCE_PRICE_CACHE.get(cache_key)
         if cached and now - cached["cached_at"] <= REFERENCE_PRICE_CACHE_TTL_SECONDS:
@@ -178,6 +179,7 @@ def register_trading_routes(app, deps):
             "display_market": display_market_symbol(market_symbol),
             "symbol": binance_symbol,
             "interval": interval,
+            "latest_only": latest_only,
             "usdt_to_points_rate": USDT_TO_POINTS_RATE,
             "candles": candles,
             "points": candles,
@@ -229,6 +231,41 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/margin/open", methods=["POST"])
+    @require_csrf
+    def trading_margin_open():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.open_margin_position(
+                actor=actor,
+                market_symbol=data.get("market_symbol"),
+                position_type=data.get("position_type"),
+                quantity=data.get("quantity"),
+                collateral_points=data.get("collateral_points"),
+            )
+            audit("TRADING_MARGIN_POSITION_OPENED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"position_uuid={result['position'].get('position_uuid')}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/margin/<position_uuid>/close", methods=["POST"])
+    @require_csrf
+    def trading_margin_close(position_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            result = trading_service.close_margin_position(actor=actor, position_uuid=position_uuid)
+            audit("TRADING_MARGIN_POSITION_CLOSED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"position_uuid={position_uuid}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/admin/trading/report", methods=["GET"])
     @require_csrf_safe
     def admin_trading_report():
@@ -236,6 +273,100 @@ def register_trading_routes(app, deps):
         if err:
             return err
         return json_resp({"ok": True, "report": trading_service.root_report()})
+
+    @app.route("/api/root/trading/settings", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_settings():
+        actor, err = root_or_403()
+        if err:
+            return err
+        return json_resp({"ok": True, **trading_service.get_root_settings()})
+
+    @app.route("/api/root/trading/settings", methods=["POST"])
+    @require_csrf
+    def root_trading_settings_update():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.update_root_settings(
+                actor=actor,
+                settings=data.get("settings") if isinstance(data.get("settings"), dict) else {},
+                markets=data.get("markets") if isinstance(data.get("markets"), list) else [],
+            )
+            audit("TRADING_SETTINGS_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail="root billing settings")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/liquidations/scan", methods=["POST"])
+    @require_csrf
+    def root_trading_liquidations_scan():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data = {}
+        if request.data:
+            data, err = parse_json_body()
+            if err:
+                return err
+        try:
+            result = trading_service.scan_margin_liquidations(
+                actor=actor,
+                limit=data.get("limit", 100) if isinstance(data, dict) else 100,
+            )
+            audit(
+                "TRADING_LIQUIDATION_SCAN",
+                get_client_ip(),
+                user=actor["username"],
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=(
+                    f"scanned={result.get('scanned')}, "
+                    f"candidates={len(result.get('candidates') or [])}, "
+                    f"liquidated={len(result.get('liquidated') or [])}, "
+                    f"errors={len(result.get('errors') or [])}"
+                ),
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/orders/match", methods=["POST"])
+    @require_csrf
+    def root_trading_orders_match():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data = {}
+        if request.data:
+            data, err = parse_json_body()
+            if err:
+                return err
+        try:
+            result = trading_service.match_open_limit_orders(
+                actor=actor,
+                market_symbol=data.get("market_symbol") if isinstance(data, dict) else None,
+                limit=data.get("limit", 200) if isinstance(data, dict) else 200,
+            )
+            audit(
+                "TRADING_LIMIT_ORDER_MATCH_SCAN",
+                get_client_ip(),
+                user=actor["username"],
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=(
+                    f"scanned={result.get('scanned')}, "
+                    f"matched={len(result.get('matched') or [])}, "
+                    f"errors={len(result.get('errors') or [])}"
+                ),
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/root/trading/markets/<path:symbol>", methods=["POST"])
     @require_csrf

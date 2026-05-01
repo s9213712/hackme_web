@@ -282,10 +282,11 @@ function renderTradingMarketOptions() {
   const select = $("trading-market-select");
   const rootSelect = $("trading-root-market-select");
   const contractSelect = $("trading-contract-market-select");
+  const marginSelect = $("trading-margin-market-select");
   const options = tradingState.markets.length
     ? tradingState.markets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(tradingDisplaySymbol(market.symbol))}</option>`).join("")
     : `<option value="">沒有可用市場</option>`;
-  [select, rootSelect, contractSelect].forEach((target) => {
+  [select, rootSelect, contractSelect, marginSelect].forEach((target) => {
     if (!target) return;
     const previous = target.value;
     target.innerHTML = options;
@@ -300,9 +301,17 @@ function renderTradingSummary() {
   const submitBtn = $("trading-submit-order-btn");
   const availabilityNote = $("trading-availability-note");
   const contractCard = $("trading-root-contract-card");
+  const marginCard = $("trading-margin-card");
   if (orderForm) orderForm.style.display = "";
   if (submitBtn) submitBtn.disabled = false;
   if (contractCard) contractCard.style.display = currentUser === "root" ? "" : "none";
+  const borrowingEnabled = !!tradingState.settings?.borrowing_enabled;
+  if (marginCard) marginCard.style.display = borrowingEnabled && currentUser !== "root" ? "" : "none";
+  if ($("trading-margin-note")) {
+    $("trading-margin-note").textContent = borrowingEnabled
+      ? `已開啟，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；手續費與利息計入儲備池統計。`
+      : "root 尚未開啟借貸交易。";
+  }
   if (availabilityNote) {
     availabilityNote.textContent = currentUser === "root"
       ? "root 可使用現貨與合約模擬交易；root 以外用戶目前僅開放現貨。"
@@ -326,6 +335,7 @@ function renderTradingSummary() {
   }
   syncTradingOrderSideTheme();
   updateTradingOrderEstimate();
+  updateTradingMarginEstimate();
   loadTradingReferencePrices();
 }
 
@@ -515,8 +525,46 @@ function updateTradingReferenceTooltip(event) {
 }
 
 function tradingReferenceAutoRefreshMs() {
-  const interval = $("trading-reference-interval")?.value || "1s";
+  const interval = $("trading-reference-interval")?.value || "15m";
   return interval === "1s" ? 1000 : 2000;
+}
+
+function tradingReferenceChartLimit(interval) {
+  return interval === "1d" ? 90 : 96;
+}
+
+function mergeTradingReferenceLatestPayload(currentPayload, latestPayload, maxCandles) {
+  const latestCandles = Array.isArray(latestPayload?.candles)
+    ? latestPayload.candles
+    : (Array.isArray(latestPayload?.points) ? latestPayload.points : []);
+  if (!latestCandles.length) return currentPayload || latestPayload;
+  const existingCandles = Array.isArray(currentPayload?.candles)
+    ? currentPayload.candles
+    : (Array.isArray(currentPayload?.points) ? currentPayload.points : []);
+  const mergedCandles = existingCandles.slice();
+  latestCandles.forEach((candle) => {
+    const candleTime = Number(candle?.time || 0);
+    const lastIndex = mergedCandles.length - 1;
+    const lastTime = Number(mergedCandles[lastIndex]?.time || 0);
+    if (lastIndex >= 0 && candleTime > 0 && candleTime === lastTime) {
+      mergedCandles[lastIndex] = candle;
+      return;
+    }
+    if (lastIndex < 0 || !lastTime || candleTime > lastTime) {
+      mergedCandles.push(candle);
+      return;
+    }
+    const existingIndex = mergedCandles.findIndex((item) => Number(item?.time || 0) === candleTime);
+    if (existingIndex >= 0) mergedCandles[existingIndex] = candle;
+  });
+  const trimmedCandles = mergedCandles.slice(Math.max(0, mergedCandles.length - maxCandles));
+  return {
+    ...(currentPayload || {}),
+    ...(latestPayload || {}),
+    candles: trimmedCandles,
+    points: trimmedCandles,
+    latest_only: false,
+  };
 }
 
 function restartTradingReferenceAutoRefresh() {
@@ -535,7 +583,7 @@ function restartTradingReferenceAutoRefresh() {
     if (!currentUser || currentModuleTab !== "trading" || tradingReferenceChartAutoBusy) return;
     tradingReferenceChartAutoBusy = true;
     try {
-      await loadTradingReferencePrices({ silent: true });
+      await loadTradingReferencePrices({ silent: true, latestOnly: true });
     } finally {
       tradingReferenceChartAutoBusy = false;
     }
@@ -546,16 +594,29 @@ async function loadTradingReferencePrices(options = {}) {
   const market = selectedTradingMarket();
   const canvas = $("trading-reference-chart");
   if (!market || !canvas) return;
-  const interval = $("trading-reference-interval")?.value || "1s";
+  const interval = $("trading-reference-interval")?.value || "15m";
   if (tradingReferenceAbort) tradingReferenceAbort.abort();
   tradingReferenceAbort = new AbortController();
   if (!options.silent) renderTradingReferenceChart(null, "參考價格讀取中");
   try {
-    const limit = interval === "1d" ? 90 : 96;
-    const json = await fetchTradingJson(`/trading/reference-prices?market=${encodeURIComponent(market.symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`, {
+    const maxCandles = tradingReferenceChartLimit(interval);
+    const canPatchLatest = !!(
+      options.latestOnly
+      && tradingState.referencePrices
+      && tradingState.referencePrices.market === market.symbol
+      && tradingState.referencePrices.interval === interval
+    );
+    const latestOnly = !!(options.priceOnly || canPatchLatest);
+    const limit = latestOnly ? 1 : maxCandles;
+    const latestParam = latestOnly ? "&latest=1" : "";
+    const json = await fetchTradingJson(`/trading/reference-prices?market=${encodeURIComponent(market.symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}${latestParam}`, {
       signal: tradingReferenceAbort.signal,
     });
-    if (!options.priceOnly) tradingState.referencePrices = json;
+    if (!options.priceOnly) {
+      tradingState.referencePrices = latestOnly
+        ? mergeTradingReferenceLatestPayload(tradingState.referencePrices, json, maxCandles)
+        : json;
+    }
     const last = Array.isArray(json.candles) ? json.candles[json.candles.length - 1] : null;
     if (last && last.close_points) {
       market.manual_price_points = Number(last.close_points || 0);
@@ -564,7 +625,7 @@ async function loadTradingReferencePrices(options = {}) {
       if ($("trading-current-market")) $("trading-current-market").textContent = `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "binance_public_api"}`;
       updateTradingOrderEstimate();
     }
-    if (!options.priceOnly) renderTradingReferenceChart(json);
+    if (!options.priceOnly) renderTradingReferenceChart(tradingState.referencePrices || json);
   } catch (err) {
     if (err.name === "AbortError") return;
     if (!options.priceOnly) tradingState.referencePrices = null;
@@ -639,6 +700,48 @@ function renderTradingContracts(rows = []) {
   });
 }
 
+function updateTradingMarginEstimate() {
+  const market = tradingState.markets.find((row) => row.symbol === ($("trading-margin-market-select")?.value || "")) || selectedTradingMarket();
+  const estimate = $("trading-margin-estimate");
+  if (!estimate || !market) return;
+  const quantity = tradingNumber($("trading-margin-quantity")?.value, 0);
+  const collateral = tradingNumber($("trading-margin-collateral")?.value, 0);
+  const price = tradingNumber(market.manual_price_points, 0);
+  const notional = quantity > 0 && price > 0 ? Math.ceil(quantity * price) : 0;
+  const minCollateral = Math.ceil(notional * 0.3);
+  const typeLabel = ($("trading-margin-type")?.value || "margin_long") === "short" ? "借券放空" : "融資買入";
+  if (!quantity || !collateral || !notional) {
+    estimate.textContent = "輸入數量與保證金後顯示預估風險。";
+    estimate.style.color = "var(--muted)";
+    return;
+  }
+  estimate.textContent = `${typeLabel} · 名目金額約 ${notional} 點 · 最低保證金 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
+  estimate.style.color = collateral < minCollateral ? "#ffb74d" : "var(--muted)";
+}
+
+function renderTradingMarginPositions(rows = []) {
+  const list = $("trading-margin-position-list");
+  if (!list) return;
+  const openRows = rows.filter((row) => row.status === "open");
+  if (!openRows.length) {
+    list.innerHTML = `<div class="drive-empty">尚無進階交易倉位</div>`;
+    return;
+  }
+  list.innerHTML = openRows.map((row) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(row.position_label || row.position_type)} · ${sanitize(tradingDisplaySymbol(row.market_symbol || "-"))} · ${sanitize(row.quantity || "0")}</strong>
+        <div class="drive-card-sub">入場 ${Number(row.entry_price_points || 0)} · 本金 ${Number(row.principal_points || 0)} · 保證金 ${Number(row.collateral_points || 0)} · 日息 ${Number(row.interest_bps_daily || 0)} bps</div>
+        <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
+      </div>
+      <button class="btn btn-danger" type="button" data-margin-close="${sanitize(row.position_uuid || "")}">平倉</button>
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-margin-close]").forEach((btn) => {
+    btn.addEventListener("click", () => closeTradingMarginPosition(btn.dataset.marginClose || ""));
+  });
+}
+
 function renderTradingWalletSummary(payload = {}) {
   const positions = Array.isArray(payload.positions) ? payload.positions : [];
   const futuresPositions = Array.isArray(payload.futures_positions) ? payload.futures_positions : [];
@@ -699,7 +802,13 @@ function renderTradingRootReport(report) {
   if ($("trading-reserve-balance")) $("trading-reserve-balance").textContent = String(Number(reserve.balance_points || 0));
   if ($("trading-verification-status")) $("trading-verification-status").textContent = verification.ok === false ? "異常" : "正常";
   if ($("trading-verification-detail")) $("trading-verification-detail").textContent = `${Array.isArray(verification.errors) ? verification.errors.length : 0} 個問題`;
-  if ($("trading-risk-flags")) $("trading-risk-flags").textContent = "futures=false / pvp=false";
+  const settings = safe.settings || {};
+  if ($("trading-risk-flags")) $("trading-risk-flags").textContent = `borrow=${settings.borrowing_enabled ? "true" : "false"} / liquidation=${settings.margin_liquidation_enabled ? "true" : "false"} / futures=${settings.futures_enabled ? "true" : "false"} / pvp=${settings.pvp_matching_enabled ? "true" : "false"}`;
+  if ($("trading-liquidation-status")) {
+    $("trading-liquidation-status").textContent = settings.margin_liquidation_enabled
+      ? `自動清算排程：啟用，維持保證金 ${Number(settings.margin_maintenance_bps || 0)} bps`
+      : "自動清算排程：停用";
+  }
   if ($("trading-root-sim-balance")) {
     const funding = tradingState.funding || {};
     $("trading-root-sim-balance").textContent = funding.mode === "root_simulated" ? String(Number(funding.available_points || 0)) : "10000";
@@ -768,7 +877,9 @@ async function loadTradingDashboard() {
     const payload = json.trading || {};
     tradingState.funding = payload.funding || null;
     tradingState.markets = payload.markets || [];
+    tradingState.settings = payload.settings || {};
     tradingState.positions = payload.positions || [];
+    tradingState.marginPositions = payload.margin_positions || [];
     tradingState.orders = payload.orders || [];
     tradingState.fills = payload.fills || [];
     const state = payload.state || {};
@@ -782,6 +893,7 @@ async function loadTradingDashboard() {
     renderTradingOrders(tradingState.orders);
     renderTradingFills(tradingState.fills);
     renderTradingContracts(payload.futures_positions || []);
+    renderTradingMarginPositions(tradingState.marginPositions);
     renderTradingWalletSummary(payload);
     if (currentUser === "root") {
       await loadTradingRootReport();
@@ -929,6 +1041,46 @@ async function closeRootTradingContract(positionUuid) {
   }
 }
 
+async function openTradingMarginPosition() {
+  const symbol = $("trading-margin-market-select")?.value || selectedTradingMarket()?.symbol || "";
+  if (!symbol) {
+    tradingSetMsg("請先選擇進階交易市場", false);
+    return;
+  }
+  try {
+    const json = await fetchTradingJson("/trading/margin/open", {
+      method: "POST",
+      body: JSON.stringify({
+        market_symbol: symbol,
+        position_type: $("trading-margin-type")?.value || "margin_long",
+        quantity: $("trading-margin-quantity")?.value || "",
+        collateral_points: Number($("trading-margin-collateral")?.value || 0),
+      }),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    tradingSetMsg("進階交易倉位已建立");
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "進階交易開倉失敗", false);
+  }
+}
+
+async function closeTradingMarginPosition(positionUuid) {
+  if (!positionUuid) return;
+  if (!confirm("確定平掉這筆進階交易倉位？")) return;
+  try {
+    const json = await fetchTradingJson(`/trading/margin/${encodeURIComponent(positionUuid)}/close`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (json.funding) tradingState.funding = json.funding;
+    tradingSetMsg(`進階交易已平倉，損益 ${Number(json.delta_points || 0)} 點，利息 ${Number(json.interest_points || 0)} 點`);
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "進階交易平倉失敗", false);
+  }
+}
+
 async function cancelTradingOrder(orderUuid) {
   if (!orderUuid) return;
   try {
@@ -1014,6 +1166,42 @@ async function resetRootTradingSimulatedBalance() {
   }
 }
 
+async function scanTradingLiquidations() {
+  if (currentUser !== "root") return;
+  const status = $("trading-liquidation-status");
+  if (status) status.textContent = "正在掃描強平條件...";
+  try {
+    const json = await fetchTradingJson("/root/trading/liquidations/scan", {
+      method: "POST",
+      body: JSON.stringify({ limit: 100 }),
+    });
+    const liquidated = Array.isArray(json.liquidated) ? json.liquidated.length : 0;
+    const errors = Array.isArray(json.errors) ? json.errors.length : 0;
+    tradingSetMsg(`強平掃描完成：掃描 ${Number(json.scanned || 0)} 筆，清算 ${liquidated} 筆，錯誤 ${errors} 筆`, errors === 0);
+    if (status) status.textContent = `最近手動掃描：清算 ${liquidated} 筆，錯誤 ${errors} 筆`;
+    await loadTradingDashboard();
+  } catch (err) {
+    if (status) status.textContent = err.message || "強平掃描失敗";
+    tradingSetMsg(err.message || "強平掃描失敗", false);
+  }
+}
+
+async function matchTradingLimitOrders() {
+  if (currentUser !== "root") return;
+  try {
+    const json = await fetchTradingJson("/root/trading/orders/match", {
+      method: "POST",
+      body: JSON.stringify({ limit: 200 }),
+    });
+    const matched = Array.isArray(json.matched) ? json.matched.length : 0;
+    const errors = Array.isArray(json.errors) ? json.errors.length : 0;
+    tradingSetMsg(`限價單撮合完成：掃描 ${Number(json.scanned || 0)} 筆，成交 ${matched} 筆，錯誤 ${errors} 筆`, errors === 0);
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "限價單撮合失敗", false);
+  }
+}
+
 function openTradingModuleFromWallet() {
   if (typeof switchModuleTab === "function") switchModuleTab("trading");
 }
@@ -1038,6 +1226,9 @@ function bindTradingEvents() {
     ["trading-reserve-allocate-btn", allocateTradingReserve],
     ["trading-root-reset-sim-btn", resetRootTradingSimulatedBalance],
     ["trading-contract-open-btn", openRootTradingContract],
+    ["trading-margin-open-btn", openTradingMarginPosition],
+    ["trading-limit-match-btn", matchTradingLimitOrders],
+    ["trading-liquidation-scan-btn", scanTradingLiquidations],
     ["economy-trading-open-btn", openTradingModuleFromWallet],
     ["economy-root-virtual-open-btn", openTradingModuleFromWallet],
   ];
@@ -1048,6 +1239,14 @@ function bindTradingEvents() {
   });
   const marketSelect = $("trading-market-select");
   if (marketSelect) marketSelect.addEventListener("change", renderTradingSummary);
+  const marginMarketSelect = $("trading-margin-market-select");
+  if (marginMarketSelect) marginMarketSelect.addEventListener("change", updateTradingMarginEstimate);
+  ["trading-margin-type", "trading-margin-quantity", "trading-margin-collateral"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("input", updateTradingMarginEstimate);
+    el.addEventListener("change", updateTradingMarginEstimate);
+  });
   ["trading-side", "trading-order-type", "trading-quantity", "trading-limit-price"].forEach((id) => {
     const el = $(id);
     if (!el) return;
