@@ -68,6 +68,7 @@ def _seed_db(db_path):
             (2, "alice", "user", "normal", "normal", "normal"),
             (3, "bob", "user", "normal", "normal", "normal"),
             (4, "restricted", "user", "restricted", "restricted", "restricted"),
+            (5, "admin", "manager", "normal", "normal", "normal"),
         ],
     )
     ensure_member_level_rules_schema(conn)
@@ -136,3 +137,17 @@ def test_restricted_user_cannot_create_dm_thread(tmp_path):
 
     denied = client.post("/api/dm/threads", json={"target_username": "bob"})
     assert denied.status_code == 403
+
+
+def test_manager_can_open_dm_thread_to_user(tmp_path):
+    db_path = tmp_path / "dm.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 5, "username": "admin", "role": "manager"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    created = client.post("/api/dm/threads", json={"target_username": "bob"})
+
+    assert created.status_code == 200
+    payload = created.get_json()
+    assert payload["ok"] is True
+    assert payload["thread"]["other_username"] == "bob"

@@ -31,7 +31,19 @@ def _passthrough(fn):
     return fn
 
 
-def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, current_ssl_enabled=False, audit_log=None):
+def _admin_app(
+    settings_state=None,
+    actor=None,
+    cert_file=None,
+    key_file=None,
+    current_ssl_enabled=False,
+    audit_log=None,
+    base_dir=".",
+    db_path="missing.db",
+    log_dir=".",
+    chat_dir=".",
+    anchor_dir=".",
+):
     app = Flask(__name__)
     app.testing = True
     state = settings_state or {
@@ -46,6 +58,8 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "comfyui_api_host": "localhost",
         "comfyui_api_port": 8192,
         "comfyui_max_batch_size": 1,
+        "comfyui_default_width": 1024,
+        "comfyui_default_height": 1024,
     }
 
     def save_settings(data):
@@ -53,14 +67,14 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         return dict(data)
 
     register_system_admin_routes(app, {
-        "ANCHOR_DIR": ".",
-        "BASE_DIR": ".",
+        "ANCHOR_DIR": str(anchor_dir),
+        "BASE_DIR": str(base_dir),
         "CERT_FILE": str(cert_file or "missing-cert.pem"),
-        "CHAT_DIR": ".",
+        "CHAT_DIR": str(chat_dir),
         "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000, "ssl_enabled": current_ssl_enabled},
-        "DB_PATH": "missing.db",
+        "DB_PATH": str(db_path),
         "KEY_FILE": str(key_file or "missing-key.pem"),
-        "LOG_DIR": ".",
+        "LOG_DIR": str(log_dir),
         "SERVER_LOG_PATH": "server.log",
         "activate_emergency_lockdown": lambda reason: None,
         "audit": (lambda *args, **kwargs: audit_log.append((args, kwargs))) if audit_log is not None else (lambda *args, **kwargs: None),
@@ -295,6 +309,32 @@ def test_root_can_configure_comfyui_batch_limit_without_restart_hint():
     assert res.get_json()["settings"]["comfyui_max_batch_size"] == 4
 
 
+def test_root_can_configure_comfyui_default_dimensions_without_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_default_width": 768, "comfyui_default_height": 1024})
+
+    assert res.status_code == 200
+    assert state["comfyui_default_width"] == 768
+    assert state["comfyui_default_height"] == 1024
+    assert res.get_json()["settings"]["comfyui_default_width"] == 768
+    assert res.get_json()["settings"]["comfyui_default_height"] == 1024
+
+
+def test_invalid_comfyui_default_dimensions_are_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    bad_small = client.put("/api/admin/settings", json={"comfyui_default_width": 32})
+    bad_step = client.put("/api/admin/settings", json={"comfyui_default_height": 1025})
+
+    assert bad_small.status_code == 400
+    assert bad_step.status_code == 400
+    assert state["comfyui_default_width"] == 1024
+    assert state["comfyui_default_height"] == 1024
+
+
 def test_invalid_comfyui_batch_limit_is_rejected():
     app, state = _admin_app()
     client = app.test_client()
@@ -315,6 +355,58 @@ def test_admin_environment_exposes_paths_and_pid():
     assert env["pid"] > 0
     assert env["base_dir"] == "."
     assert env["database_path"] == "missing.db"
+
+
+def test_admin_environment_uses_relative_paths_without_host_path_leak(tmp_path):
+    base = tmp_path / "app"
+    database_dir = base / "database"
+    log_dir = base / "logs"
+    chat_dir = base / "chats"
+    anchor_dir = base / "anchors"
+    for path in (database_dir, log_dir, chat_dir, anchor_dir):
+        path.mkdir(parents=True)
+    db_path = database_dir / "database.db"
+    db_path.write_bytes(b"test")
+
+    app, _ = _admin_app(
+        base_dir=base,
+        db_path=db_path,
+        log_dir=log_dir,
+        chat_dir=chat_dir,
+        anchor_dir=anchor_dir,
+    )
+    client = app.test_client()
+
+    res = client.get("/api/admin/environment")
+    assert res.status_code == 200
+    env = res.get_json()["environment"]
+    assert env["base_dir"] == "."
+    assert env["database_path"] == "database/database.db"
+    assert env["log_dir"] == "logs"
+    assert env["chat_dir"] == "chats"
+    assert env["anchor_dir"] == "anchors"
+    for value in (env["base_dir"], env["database_path"], env["log_dir"], env["chat_dir"], env["anchor_dir"]):
+        assert str(tmp_path) not in value
+        assert not value.startswith("/")
+
+
+def test_admin_environment_redacts_external_runtime_paths(tmp_path):
+    base = tmp_path / "app"
+    external = tmp_path / "external-runtime"
+    base.mkdir()
+    external.mkdir()
+    db_path = external / "database.db"
+    db_path.write_bytes(b"test")
+
+    app, _ = _admin_app(base_dir=base, db_path=db_path)
+    client = app.test_client()
+
+    res = client.get("/api/admin/environment")
+    assert res.status_code == 200
+    database_path = res.get_json()["environment"]["database_path"]
+    assert database_path == "external/database.db"
+    assert str(tmp_path) not in database_path
+    assert not database_path.startswith("/")
 
 
 def test_effective_server_bind_falls_back_to_environment():

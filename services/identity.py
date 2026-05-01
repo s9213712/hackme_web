@@ -57,6 +57,7 @@ PHASE1_USER_COLUMNS = (
     ("is_default_password", "INTEGER NOT NULL DEFAULT 0"),
     ("avatar_file_id", "TEXT"),
     ("avatar_crop_json", "TEXT"),
+    ("preferred_landing_module", "TEXT NOT NULL DEFAULT 'chat'"),
     ("updated_at", "TEXT"),
     ("deleted_at", "TEXT"),
 )

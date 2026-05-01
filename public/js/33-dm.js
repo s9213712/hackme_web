@@ -13,9 +13,7 @@ function currentDmThread() {
 
 function dmAttachmentPreviewUrl(fileId) {
   if (typeof drivePreviewContentUrl === "function") return drivePreviewContentUrl(fileId);
-  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
-  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
-  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`;
 }
 
 function dmFileIsImage(file) {
@@ -104,7 +102,7 @@ async function loadDmThreads() {
   if (!currentUser || !canAccessModule("dm")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/dm/threads", {
+  const res = await apiFetch(API + "/dm/threads", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -130,7 +128,7 @@ async function createDmThread() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/dm/threads", {
+  const res = await apiFetch(API + "/dm/threads", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -158,7 +156,7 @@ async function loadDmMessages(threadId) {
   if (!currentUser || !threadId) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/dm/threads/${encodeURIComponent(threadId)}/messages`, {
+  const res = await apiFetch(API + `/dm/threads/${encodeURIComponent(threadId)}/messages`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -187,7 +185,7 @@ async function sendDmMessage() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/dm/threads/${encodeURIComponent(selectedDmThreadId)}/messages`, {
+  const res = await apiFetch(API + `/dm/threads/${encodeURIComponent(selectedDmThreadId)}/messages`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -207,7 +205,7 @@ async function markDmThreadRead(threadId) {
   if (!threadId) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  await fetch(API + `/dm/threads/${encodeURIComponent(threadId)}/read`, {
+  await apiFetch(API + `/dm/threads/${encodeURIComponent(threadId)}/read`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -218,7 +216,7 @@ async function deleteDmMessage(messageId) {
   if (!messageId || !confirm("確定要從你的視角刪除這則站內信？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/dm/messages/${encodeURIComponent(messageId)}`, {
+  const res = await apiFetch(API + `/dm/messages/${encodeURIComponent(messageId)}`, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -237,7 +235,7 @@ async function blockSelectedDmUser() {
   if (!confirm(`確定要封鎖 ${thread.other_username}？封鎖後雙方無法新增站內信。`)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/dm/blocks", {
+  const res = await apiFetch(API + "/dm/blocks", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

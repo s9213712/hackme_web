@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260430-root-billing" />
+    <link rel="stylesheet" href="/styles.css?v=20260501-024" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -52,21 +52,21 @@
           <input type="text" id="recovery-identifier" placeholder="username 或 name@example.com" autocomplete="username" />
         </div>
         <div class="auth-recovery-actions">
-          <button class="btn" id="reset-request-btn" type="button">寄送重設密碼驗證碼</button>
+          <button class="btn" id="reset-request-btn" type="button">送出重設密碼審核</button>
           <button class="btn" id="verify-request-btn" type="button">寄送 Email 驗證碼</button>
         </div>
-        <div class="field">
+        <div class="field" id="reset-token-field">
           <label>重設密碼驗證碼</label>
           <input type="text" id="reset-token" placeholder="請輸入驗證碼" autocomplete="one-time-code" />
         </div>
-        <div class="field">
+        <div class="field" id="reset-new-pw-field">
           <label>新密碼</label>
           <div class="pw-wrap">
             <input type="password" id="reset-new-pw" placeholder="請輸入新密碼" autocomplete="new-password" />
             <button class="pw-toggle" id="reset-new-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
           </div>
         </div>
-        <div class="field">
+        <div class="field" id="reset-new-pw-confirm-field">
           <label>確認新密碼</label>
           <div class="pw-wrap">
             <input type="password" id="reset-new-pw-confirm" placeholder="請再次輸入新密碼" autocomplete="new-password" />
@@ -310,6 +310,9 @@
           </div>
           <div class="chat-composer-actions">
             <button class="btn" id="chat-refresh-msg-btn" type="button">重新整理訊息</button>
+            <button class="btn" id="chat-backup-room-btn" type="button">備份聊天室</button>
+            <button class="btn" id="chat-restore-room-btn" type="button">還原聊天室</button>
+            <input type="file" id="chat-restore-file" accept="application/json,.json" hidden />
           </div>
           <div class="drive-card" style="margin-top:.75rem;">
             <div class="drive-card-title">聊天室附件</div>
@@ -416,9 +419,9 @@
               <div class="field">
                 <label>可見性</label>
                 <select id="community-board-visibility">
-                  <option value="public">公開</option>
-                  <option value="unlisted">不列入公開列表</option>
-                  <option value="private">私人</option>
+                  <option value="public">公開：所有登入會員可在列表看到</option>
+                  <option value="unlisted">隱藏：不出現在公開列表，持連結可進入</option>
+                  <option value="private">私人：只有版主與受邀會員可進入</option>
                 </select>
               </div>
               <div class="field">
@@ -486,6 +489,7 @@
               <button class="btn community-mini-btn" id="community-back-boards-btn" type="button">返回討論區</button>
               <button class="btn community-mini-btn" id="community-thread-create-open-btn" type="button" style="display:none;">撰寫新主題</button>
               <button class="btn community-mini-btn" id="community-moderator-open-btn" type="button" style="display:none;">版主設定</button>
+              <button class="btn community-mini-btn" id="community-members-open-btn" type="button" style="display:none;">成員邀請</button>
             </div>
             <div class="mini-title" id="community-board-heading">請先選擇討論區</div>
             <div id="community-board-meta" style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem;"></div>
@@ -527,6 +531,27 @@
               </div>
               <div id="community-moderator-msg" class="msg"></div>
               <div id="community-moderator-list" class="community-scroll" style="margin-top:.75rem;max-height:220px;"></div>
+            </div>
+            <div id="community-members-manager" class="community-panel" style="display:none;margin-bottom:.75rem;">
+              <div class="community-panel-head">
+                <div class="mini-title">私人討論區成員</div>
+                <button class="btn community-mini-btn" id="community-members-refresh-btn" type="button">重新整理</button>
+              </div>
+              <div class="settings-option-grid">
+                <div class="field">
+                  <label>邀請會員</label>
+                  <select id="community-member-user-id">
+                    <option value="">讀取會員中...</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <button class="btn btn-primary community-mini-btn" id="community-member-save-btn" type="button">加入成員</button>
+                </div>
+              </div>
+              <div class="field-hint">私人討論區只有 root、管理員、版主、建立者與這裡加入的成員能看見。隱藏討論區不列在一般公開列表，但知道連結的登入會員仍可進入。</div>
+              <div id="community-members-msg" class="msg"></div>
+              <div id="community-members-list" class="community-scroll" style="margin-top:.75rem;max-height:220px;"></div>
             </div>
             <div id="community-thread-creator" style="display:none;">
               <div class="field">
@@ -871,7 +896,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋；邀請其他玩家對戰，或先與電腦練習。週排行榜只計入玩家對戰。</div>
+          <div class="drive-card-sub">目前開放西洋棋、數獨與踩地雷。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -879,6 +904,7 @@
         <section class="game-panel">
           <div class="drive-card-title">遊戲大廳</div>
           <div id="game-catalog-list" class="game-catalog-list"></div>
+          <div id="chess-lobby-panel">
           <div class="settings-option-grid game-action-grid">
             <div class="field">
               <label>邀請玩家</label>
@@ -889,6 +915,21 @@
               <button class="btn btn-primary" id="game-invite-btn" type="button">送出邀請</button>
             </div>
             <div class="field">
+              <label>電腦練習方位</label>
+              <select id="game-practice-side">
+                <option value="white">我執白方</option>
+                <option value="black">我執黑方</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>電腦難度</label>
+              <select id="game-practice-difficulty">
+                <option value="easy">簡單：隨機走棋</option>
+                <option value="normal">普通：優先吃子與將軍</option>
+                <option value="hard">困難：避免明顯送子</option>
+              </select>
+            </div>
+            <div class="field">
               <label>&nbsp;</label>
               <button class="btn" id="game-practice-btn" type="button">和電腦練習</button>
             </div>
@@ -897,8 +938,10 @@
           <div id="game-invite-list" class="drive-file-list compact-list"></div>
           <div class="drive-card-sub">我的棋局</div>
           <div id="game-match-list" class="drive-file-list compact-list"></div>
+          </div>
         </section>
         <section class="game-board-panel">
+          <div id="chess-game-panel">
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title" id="game-current-title">尚未選擇棋局</div>
@@ -908,6 +951,37 @@
           </div>
           <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
           <div id="game-move-history" class="game-move-history"></div>
+          </div>
+          <div id="sudoku-game-panel" class="single-game-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">數獨</div>
+                <div class="drive-card-sub" id="sudoku-status">填入 1-9，完成後檢查答案。</div>
+              </div>
+              <div class="drive-file-actions">
+                <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">新題目</button>
+                <button class="btn btn-primary game-mini-btn" id="sudoku-check-btn" type="button">檢查</button>
+              </div>
+            </div>
+            <div id="sudoku-board" class="sudoku-board" aria-label="數獨棋盤"></div>
+          </div>
+          <div id="minesweeper-game-panel" class="single-game-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">踩地雷</div>
+                <div class="drive-card-sub" id="minesweeper-status">左鍵翻格，右鍵插旗。</div>
+              </div>
+              <div class="drive-file-actions">
+                <select id="minesweeper-difficulty">
+                  <option value="easy">簡單 9x9 / 10 雷</option>
+                  <option value="normal">普通 12x12 / 20 雷</option>
+                  <option value="hard">困難 16x16 / 40 雷</option>
+                </select>
+                <button class="btn game-mini-btn" id="minesweeper-new-btn" type="button">新局</button>
+              </div>
+            </div>
+            <div id="minesweeper-board" class="minesweeper-board" aria-label="踩地雷棋盤"></div>
+          </div>
         </section>
         <section class="game-panel">
           <div class="drive-card-heading">
@@ -952,8 +1026,8 @@
             <textarea id="comfyui-negative-prompt" rows="3" maxlength="3000" placeholder="不希望出現的內容"></textarea>
           </div>
           <div class="settings-option-grid">
-            <div class="field"><label>寬度</label><input type="number" id="comfyui-width" min="64" max="2048" step="8" value="512" /></div>
-            <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="512" /></div>
+            <div class="field"><label>寬度</label><input type="number" id="comfyui-width" min="64" max="2048" step="8" value="1024" /></div>
+            <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="1024" /></div>
             <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
             <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
             <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在安全中心調整" /></div>
@@ -1037,7 +1111,7 @@
           </div>
           <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
         </div>
-        <div class="settings-option-grid">
+        <div class="settings-option-grid" id="economy-adjust-panel">
           <div class="field"><label>調整對象</label><select id="economy-adjust-user-id"><option value="">讀取會員中...</option></select></div>
           <div class="field"><label>方向</label><select id="economy-adjust-direction"><option value="credit">加點</option><option value="debit">扣點</option></select></div>
           <div class="field"><label>數量</label><input type="number" id="economy-adjust-amount" min="1" value="1" /></div>
@@ -1073,7 +1147,10 @@
               <div class="drive-card-title">帳本備份與半自動恢復</div>
               <div class="drive-card-sub">異常時會進入 safe mode，只產生 forensic bundle 與恢復方案；root 確認後才會套用備份並由 ledger 重建 wallet。</div>
             </div>
-            <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+            <div class="drive-file-actions">
+              <button class="btn" id="economy-recovery-auto-handle-btn" type="button">一鍵處理異常鏈</button>
+              <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+            </div>
           </div>
           <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
           <div class="settings-option-grid" style="margin-top:.65rem;">
@@ -1205,6 +1282,8 @@
       <!-- Tabs -->
       <div class="tabs" style="margin-bottom:.6rem;">
         <button class="tab active" id="tab-users">帳號管理</button>
+        <button class="tab" id="tab-notices">發放通知</button>
+        <button class="tab" id="tab-password-resets">密碼重設審核</button>
         <button class="tab" id="tab-violations">違規計次</button>
         <button class="tab" id="tab-governance">會員治理</button>
         <button class="tab" id="tab-appeals">申覆審核</button>
@@ -1224,6 +1303,7 @@
           <span id="pending-selection-info" style="font-size:.75rem;color:var(--muted);">已選 0 筆待審核</span>
           <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
         </div>
+          <div id="admin-users-msg" class="msg"></div>
           <table class="user-table" id="user-table">
             <thead>
               <tr>
@@ -1240,6 +1320,59 @@
             <button class="btn btn-primary" type="button" id="admin-open-add-user">➕ 新增帳號</button>
             <span style="font-size:.75rem;color:var(--muted);align-self:center;">新建立帳號預設為一般用戶</span>
           </div>
+        </div>
+      </div>
+
+      <!-- ── 發放通知 ── -->
+      <div class="form-section" id="sec-notices">
+        <div class="admin-tools">
+          <div class="mini-title">發放通知</div>
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>收件會員</label>
+              <select id="admin-notice-user-id">
+                <option value="">讀取會員中...</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>罐頭訊息</label>
+              <select id="admin-notice-template">
+                <option value="">自訂訊息</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>通知標題</label>
+              <input type="text" id="admin-notice-title" maxlength="120" placeholder="例如：系統維護通知" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="admin-notice-send-btn" type="button">送出通知</button>
+            </div>
+          </div>
+          <div class="field" style="margin-top:.65rem;">
+            <label>通知內容</label>
+            <textarea id="admin-notice-body" rows="6" maxlength="1000" placeholder="輸入要發送給會員的通知內容。"></textarea>
+            <div class="field-hint">通知會出現在對方通知中心，並同步寫入站內信。manager 只能通知一般會員；root 可通知非 root 帳號。</div>
+          </div>
+          <div class="msg" id="admin-notice-msg"></div>
+        </div>
+      </div>
+
+      <!-- ── 密碼重設審核 ── -->
+      <div class="form-section" id="sec-password-resets">
+        <div class="admin-tools">
+          <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.65rem;">
+            <button class="btn btn-primary" id="password-reset-review-refresh" type="button">重新整理</button>
+            <select id="password-reset-review-status" style="max-width:180px;">
+              <option value="pending">待審核</option>
+              <option value="approved">已通過</option>
+              <option value="rejected">已駁回</option>
+              <option value="all">全部</option>
+            </select>
+          </div>
+          <div class="field-hint">目前 mail 系統尚未整合時，可由 root 或 manager 審核使用者的重設密碼申請；審核通過後會設定臨時密碼，使用者下次登入必須修改。</div>
+          <div class="msg" id="password-reset-review-msg"></div>
+          <div id="password-reset-review-list" class="admin-list" style="margin-top:.65rem;"></div>
         </div>
       </div>
 
@@ -1527,9 +1660,32 @@
             <div class="field"><label>描述</label><input type="text" id="security-profile-description" placeholder="用途與風險說明" /></div>
             <div class="field"><label>&nbsp;</label><button class="btn" type="button" id="security-profile-load-current-btn">帶入目前設定</button></div>
           </div>
+          <div class="drive-card-sub" style="margin-top:.65rem;">安全開關</div>
           <div class="settings-option-grid">
-            <div class="field"><label>settings JSON</label><textarea id="security-profile-settings-json" rows="5" placeholder='{"ip_blocking_enabled":true}'></textarea></div>
-            <div class="field"><label>thresholds JSON</label><textarea id="security-profile-thresholds-json" rows="5" placeholder='{"security_pending_chat_reports_threshold":10}'></textarea></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-maintenance-mode" /> 維護模式</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-audit-chain-enabled" /> 審計 hash chain</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-ip-blocking-enabled" /> 錯誤登入鎖 IP</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-login-violation-enabled" /> 登入失敗寫入違規</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-rate-limit-violation-enabled" /> 速率限制寫入違規</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-root-ip-whitelist-enabled" /> root IP 白名單</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-browser-only-mode-enabled" /> Browser-only 模式</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-integrity-guard-enabled" /> Integrity Guard</label></div>
+            <div class="field"><label><input type="checkbox" id="security-profile-setting-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
+            <div class="field">
+              <label>root IP 白名單</label>
+              <textarea id="security-profile-setting-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
+            </div>
+          </div>
+          <div class="drive-card-sub" style="margin-top:.65rem;">閾值</div>
+          <div class="settings-option-grid">
+            <div class="field"><label>登入失敗鎖定次數</label><input type="number" id="security-profile-threshold-max-login-failures" min="1" max="100000" /></div>
+            <div class="field"><label>封鎖時長（分鐘）</label><input type="number" id="security-profile-threshold-block-duration-minutes" min="1" max="100000" /></div>
+            <div class="field"><label>待審聊天室檢舉警戒</label><input type="number" id="security-profile-threshold-security-pending-chat-reports-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>待審申覆警戒</label><input type="number" id="security-profile-threshold-security-pending-appeals-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>待審治理提案警戒</label><input type="number" id="security-profile-threshold-security-pending-moderation-proposals-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>隔離檔案警戒</label><input type="number" id="security-profile-threshold-security-quarantined-files-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>未知加密檔案警戒</label><input type="number" id="security-profile-threshold-security-unknown-encrypted-files-threshold" min="0" max="100000" /></div>
+            <div class="field"><label>Server log 顯示行數</label><input type="number" id="security-profile-threshold-security-log-tail-lines" min="1" max="1000" /></div>
           </div>
           <button class="btn" type="button" id="security-profile-save-btn" style="margin-top:.5rem;">儲存自定義設定檔</button>
           <div id="security-profile-msg" style="font-size:.78rem;margin-top:.45rem;"></div>
@@ -1565,36 +1721,36 @@
       </div>
 
       <div class="form-section" id="sec-server-health">
-        <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
-          <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
-          <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
-        </div>
-        <div class="drive-card" style="margin-bottom:.8rem;">
-          <div class="drive-card-heading">
+        <div class="health-dashboard">
+          <div class="health-hero">
             <div>
-              <div class="drive-card-title">服務狀態</div>
+              <div class="drive-card-title">服務健康度</div>
               <div class="drive-card-sub" id="server-health-details">讀取健康度中...</div>
             </div>
+            <div class="health-actions">
+              <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理</button>
+              <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
+            </div>
           </div>
-          <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;"></div>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.8rem;margin-bottom:.8rem;">
-          <div class="drive-card">
-            <div class="drive-card-title">待處理事項</div>
-            <div id="server-health-workqueue" class="drive-file-list" style="margin-top:.55rem;"></div>
+          <div id="server-health-summary" class="health-summary-grid"></div>
+          <div class="health-section-grid">
+            <section class="health-section">
+              <div class="health-section-title">待處理事項</div>
+              <div id="server-health-workqueue" class="health-list"></div>
+            </section>
+            <section class="health-section">
+              <div class="health-section-title">資料量</div>
+              <div id="server-health-counts" class="health-list"></div>
+            </section>
+            <section class="health-section">
+              <div class="health-section-title">儲存空間</div>
+              <div id="server-health-storage" class="health-list"></div>
+            </section>
           </div>
-          <div class="drive-card">
-            <div class="drive-card-title">資料量</div>
-            <div id="server-health-counts" class="drive-file-list" style="margin-top:.55rem;"></div>
-          </div>
-          <div class="drive-card">
-            <div class="drive-card-title">儲存空間</div>
-            <div id="server-health-storage" class="drive-file-list" style="margin-top:.55rem;"></div>
-          </div>
-        </div>
-        <div class="drive-card" style="margin-bottom:.8rem;">
-          <div class="drive-card-title">審計與檢查</div>
-          <div id="server-health-audit" class="drive-file-list" style="margin-top:.55rem;"></div>
+          <section class="health-section health-section-wide">
+            <div class="health-section-title">審計與檢查</div>
+            <div id="server-health-audit" class="health-list"></div>
+          </section>
         </div>
         <div class="drive-card">
           <div class="drive-card-heading">
@@ -1618,12 +1774,12 @@
           <button class="btn" type="button" id="integrity-bulk-ignore-btn">忽略選取</button>
         </div>
         <div id="integrity-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
-        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem;">
-          <label style="display:inline-flex;align-items:center;gap:.25rem;cursor:pointer;font-size:.8rem;color:var(--text);">
-            <input type="checkbox" id="integrity-select-all" style="width:1em;height:1em;" />
+        <div class="integrity-select-row">
+          <label class="integrity-select-label">
+            <input type="checkbox" id="integrity-select-all" />
             <strong>全選</strong>
           </label>
-          <span id="integrity-selected-count" style="font-size:.75rem;color:var(--muted);"></span>
+          <span id="integrity-selected-count" class="integrity-selected-count"></span>
         </div>
         <div id="integrity-warning" style="font-size:.8rem;margin-bottom:.65rem;"></div>
         <div id="integrity-findings" style="max-height:420px;overflow:auto;font-size:.72rem;"></div>
@@ -1732,6 +1888,14 @@
             </div>
             </div>
             <div class="settings-option-grid">
+              <div class="field">
+                <label>忘記密碼處理模式</label>
+                <select id="s-password-reset-mode">
+                  <option value="admin_review">管理員審核臨時密碼</option>
+                  <option value="email_token">Email 驗證碼重設</option>
+                </select>
+                <div class="field-hint">暫時預設為管理審核；mail 系統完成後可切回 Email token。Email 驗證後端會保留。</div>
+              </div>
               <div class="field">
                 <label>註冊 CAPTCHA 模式</label>
                 <select id="s-captcha-mode">
@@ -1878,6 +2042,14 @@
             <div class="field">
               <label>單次產圖張數上限</label>
               <input type="number" id="s-comfyui-max-batch-size" min="1" max="8" value="1" />
+            </div>
+            <div class="field">
+              <label>預設產圖寬度</label>
+              <input type="number" id="s-comfyui-default-width" min="64" max="2048" step="8" value="1024" />
+            </div>
+            <div class="field">
+              <label>預設產圖高度</label>
+              <input type="number" id="s-comfyui-default-height" min="64" max="2048" step="8" value="1024" />
             </div>
             <div class="field">
               <label>&nbsp;</label>
@@ -2214,6 +2386,24 @@
       <label>電話</label>
       <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
     </div>
+    <div class="field" id="edit-user-landing-field">
+      <label>登入後預設分頁</label>
+      <select id="edit-user-preferred-landing-module">
+        <option value="chat">聊天室</option>
+        <option value="dm">站內信</option>
+        <option value="announcements">公告</option>
+        <option value="community">討論區</option>
+        <option value="drive">雲端硬碟</option>
+        <option value="albums">相簿</option>
+        <option value="games">遊戲區</option>
+        <option value="comfyui">AI 產圖</option>
+        <option value="economy">積分系統</option>
+        <option value="appeals">申覆</option>
+        <option value="accounts">帳號管理</option>
+        <option value="server">安全中心</option>
+      </select>
+      <div class="field-hint">若之後權限或功能設定無法進入該分頁，登入時會自動改開可用分頁。</div>
+    </div>
     <div class="field">
       <label>頭像上傳（JPEG / PNG / GIF，會走雲端硬碟掃描與圖片去 EXIF）</label>
       <input type="file" id="edit-user-avatar-file" accept="image/png,image/jpeg,image/gif" />
@@ -2431,10 +2621,10 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260429-chat-attachment-delete" defer></script>
-<script src="/js/10-users.js?v=20260428-forum-pages" defer></script>
+<script src="/js/00-core.js?v=20260430-admin-notices" defer></script>
+<script src="/js/10-users.js?v=20260430-admin-notices" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
-<script src="/js/25-community.js?v=20260429-moderator-user-select" defer></script>
+<script src="/js/25-community.js?v=20260430-board-members" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/33-dm.js?v=20260429-pm-image-preview" defer></script>
@@ -2442,10 +2632,10 @@
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
 <script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
-<script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
+<script src="/js/38-games.js?v=20260430-sudoku-minesweeper" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260430-security-tests-feedback" defer></script>
-<script src="/js/55-economy.js?v=20260429-ledger-backup-recovery" defer></script>
-<script src="/js/90-bootstrap.js?v=20260430-security-tests-feedback" defer></script>
+<script src="/js/50-admin.js?v=20260501-024" defer></script>
+<script src="/js/55-economy.js?v=20260501-024" defer></script>
+<script src="/js/90-bootstrap.js?v=20260430-board-members" defer></script>
 </body>
 </html>

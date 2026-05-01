@@ -91,6 +91,11 @@ def test_moderation_proposal_vote_and_execute(tmp_path):
     assert proposal["required_votes"] == 1
     proposal_id = proposal["id"]
 
+    proposer_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
+    assert proposer_vote.status_code == 403
+    assert proposer_vote.get_json()["msg"] == "提案者不可投票"
+
+    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
     first_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
     assert first_vote.status_code == 200
     assert first_vote.get_json()["proposal"]["status"] == "approved"
@@ -113,6 +118,33 @@ def test_moderation_proposal_vote_and_execute(tmp_path):
     assert revoked == []
 
 
+def test_governance_cannot_target_self_or_be_voted_by_target(tmp_path):
+    db_path = tmp_path / "moderation.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    self_create = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 2, "action_type": "warn", "reason": "self governance"},
+    )
+    assert self_create.status_code == 403
+    assert self_create.get_json()["msg"] == "不可對自己建立治理提案"
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 4, "action_type": "warn", "reason": "target should not vote"},
+    )
+    assert create.status_code == 200
+    proposal_id = create.get_json()["proposal"]["id"]
+
+    actor_box["actor"] = {"id": 4, "username": "alice", "role": "manager"}
+    target_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
+    assert target_vote.status_code == 403
+    assert target_vote.get_json()["msg"] == "治理對象不可投票"
+
+
 def test_high_risk_governance_requires_root_and_two_managers(tmp_path):
     db_path = tmp_path / "moderation.db"
     _seed_users(db_path)
@@ -131,11 +163,16 @@ def test_high_risk_governance_requires_root_and_two_managers(tmp_path):
     assert proposal["required_votes"] == 3
     proposal_id = proposal["id"]
 
+    proposer_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
+    assert proposer_vote.status_code == 403
+    assert proposer_vote.get_json()["msg"] == "提案者不可投票"
+
+    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
     first_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
     assert first_vote.status_code == 200
     assert first_vote.get_json()["proposal"]["status"] == "pending"
 
-    actor_box["actor"] = {"id": 3, "username": "admin2", "role": "manager"}
+    actor_box["actor"] = {"id": 5, "username": "admin3", "role": "manager"}
     second_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
     assert second_vote.status_code == 200
     assert second_vote.get_json()["proposal"]["status"] == "pending"
@@ -164,6 +201,28 @@ def test_high_risk_governance_requires_root_and_two_managers(tmp_path):
     conn.close()
     assert row == ("active", "suspended")
     assert revoked == [4]
+
+
+def test_root_proposer_does_not_auto_vote_on_high_risk_proposal(tmp_path):
+    db_path = tmp_path / "moderation.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 4, "action_type": "suspend", "reason": "嚴重違規"},
+    )
+    assert create.status_code == 200
+    proposal = create.get_json()["proposal"]
+    assert proposal["required_root_approval"] is True
+    assert proposal["approve_count"] == 0
+    assert proposal["status"] == "pending"
+
+    root_vote = client.post(f"/api/admin/moderation/proposals/{proposal['id']}/vote", json={"vote": "approve"})
+    assert root_vote.status_code == 403
+    assert root_vote.get_json()["msg"] == "提案者不可投票"
 
 
 def test_root_override_is_blocked(tmp_path):

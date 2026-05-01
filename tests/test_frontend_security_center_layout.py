@@ -53,3 +53,18 @@ def test_prelaunch_tests_include_stress_progress_and_logs():
     assert 'securityPentestStart.addEventListener("click", startSecurityPentest)' in bootstrap_js
     assert 'securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke)' in bootstrap_js
     assert 'securityStressStart.addEventListener("click", startSecurityStressTest)' in bootstrap_js
+
+
+def test_integrity_guard_selection_controls_are_left_aligned_and_readable():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'class="integrity-select-row"' in index_html
+    assert 'class="integrity-select-label"' in index_html
+    assert 'class="integrity-selected-count"' in index_html
+    assert 'class="integrity-finding-select"' in admin_js
+    assert ".integrity-select-row" in css
+    assert "justify-content: flex-start;" in css
+    assert "color: var(--text);" in css
+    assert "text-align: left;" in css

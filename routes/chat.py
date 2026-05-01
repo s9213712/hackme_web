@@ -1,12 +1,17 @@
+import json
 import sqlite3
 from datetime import datetime, timedelta
-from flask import request
+from flask import Response, request
 
 from services.cloud_drive import attach_existing_file, can_download_file, ensure_cloud_drive_attachment_schema
 from services.permissions import require_member_action
 from services.sqlite_safe import table_columns as safe_table_columns
 
 CHAT_RECALL_WINDOW_SECONDS = 5 * 60
+CHAT_BACKUP_FORMAT = "hackme_web.chat.backup"
+CHAT_BACKUP_VERSION = 1
+CHAT_BACKUP_MAX_MESSAGES = 5000
+CHAT_BACKUP_MAX_BYTES = 2 * 1024 * 1024
 CHAT_STICKERS = {
     "smile": {"label": "微笑", "glyph": ":)"},
     "thanks": {"label": "感謝", "glyph": "THX"},
@@ -171,6 +176,90 @@ def chat_message_attachment_map(conn, actor, message_ids):
         item["download_reason"] = reason
         by_message.setdefault(int(row["message_id"]), []).append(item)
     return by_message
+
+
+def _chat_room_for_member(conn, room_id, actor):
+    room = conn.execute(
+        """
+        SELECT r.id, r.name, r.owner_user_id, r.is_private, r.created_at, u.username AS owner_username
+        FROM chat_rooms r
+        LEFT JOIN users u ON u.id=r.owner_user_id
+        WHERE r.id=? AND COALESCE(r.is_active, 1)=1
+        """,
+        (room_id,),
+    ).fetchone()
+    if not room:
+        return None, "找不到聊天室", 404
+    member = conn.execute(
+        "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+        (room_id, actor["id"]),
+    ).fetchone()
+    if not member:
+        return None, "你尚未加入此聊天室", 403
+    return room, "", 200
+
+
+def _backup_attachment_payload(attachments):
+    payload = []
+    for item in attachments or []:
+        payload.append({
+            "file_id": item.get("file_id"),
+            "name": item.get("original_filename_plain_for_public") or item.get("file_id") or "附件",
+            "mime_type": item.get("mime_type_plain_for_public") or "",
+            "size_bytes": int(item.get("size_bytes") or 0),
+            "scan_status": item.get("scan_status") or "",
+            "risk_level": item.get("risk_level") or "",
+        })
+    return payload
+
+
+def _load_chat_backup_payload():
+    if request.content_length and request.content_length > CHAT_BACKUP_MAX_BYTES:
+        return None, "聊天室備份檔太大，最多 2 MiB"
+    if request.files:
+        storage = request.files.get("backup_file") or request.files.get("file")
+        if not storage:
+            return None, "請選擇聊天室備份檔"
+        raw = storage.read(CHAT_BACKUP_MAX_BYTES + 1)
+        if len(raw) > CHAT_BACKUP_MAX_BYTES:
+            return None, "聊天室備份檔太大，最多 2 MiB"
+        try:
+            return json.loads(raw.decode("utf-8")), ""
+        except Exception:
+            return None, "備份檔不是有效 JSON"
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return None, "Invalid JSON"
+    if isinstance(data, dict) and "backup" in data:
+        data = data.get("backup")
+    return data, ""
+
+
+def _restore_message_content(message, max_len):
+    sender = str(message.get("sender") or "未知").strip()[:64]
+    created_at = str(message.get("created_at") or "").strip()[:40]
+    message_type = str(message.get("message_type") or "text").strip().lower()
+    if message_type == "sticker":
+        sticker = str(message.get("sticker_key") or "").strip()
+        original = f"[表情包:{sticker or 'unknown'}]"
+    else:
+        original = str(message.get("content") or "").strip()
+    if not original:
+        original = "（空白訊息）"
+    attachments = message.get("attachments") if isinstance(message.get("attachments"), list) else []
+    if attachments:
+        names = [str(item.get("name") or item.get("file_id") or "附件").strip()[:80] for item in attachments if isinstance(item, dict)]
+        if names:
+            original = f"{original}\n[原附件僅保留紀錄：{', '.join(names[:8])}]"
+    prefix = f"[聊天室備份還原] {sender}"
+    if created_at:
+        prefix += f" @ {created_at}"
+    prefix += ": "
+    remaining = max_len - len(prefix)
+    if remaining <= 0:
+        return prefix[:max_len]
+    return prefix + original[:remaining]
 
 
 def register_chat_routes(app, deps):
@@ -398,6 +487,149 @@ def register_chat_routes(app, deps):
             conn.commit()
             audit("CHAT_ROOM_JOIN", get_client_ip(), user=actor["username"], detail=f"room_id={room_id}")
             return json_resp({"ok":True,"msg":"已加入聊天室","room":{"id":room["id"],"name":room["name"]}})
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/rooms/<int:room_id>/backup", methods=["GET"], strict_slashes=False)
+    @require_csrf_safe
+    def chat_room_backup(room_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            room, msg, status = _chat_room_for_member(conn, room_id, actor)
+            if not room:
+                return json_resp({"ok":False,"msg":msg}), status
+            rows = conn.execute(
+                """
+                SELECT m.id, m.sender_id, u.username, m.content, m.created_at,
+                       m.message_type, m.sticker_key, m.is_revoked, m.revoked_at
+                FROM chat_messages m
+                LEFT JOIN users u ON u.id=m.sender_id
+                WHERE m.room_id=? AND m.is_blocked=0
+                ORDER BY m.id ASC
+                LIMIT ?
+                """,
+                (room_id, CHAT_BACKUP_MAX_MESSAGES + 1),
+            ).fetchall()
+            truncated = len(rows) > CHAT_BACKUP_MAX_MESSAGES
+            rows = rows[:CHAT_BACKUP_MAX_MESSAGES]
+            attachment_map = chat_message_attachment_map(conn, actor, [r["id"] for r in rows])
+            backup = {
+                "format": CHAT_BACKUP_FORMAT,
+                "version": CHAT_BACKUP_VERSION,
+                "exported_at": datetime.now().isoformat(),
+                "exported_by": actor["username"],
+                "truncated": truncated,
+                "room": {
+                    "id": room["id"],
+                    "name": room["name"],
+                    "owner_username": room["owner_username"] or "未知",
+                    "is_private": bool(room["is_private"]),
+                    "created_at": room["created_at"],
+                },
+                "messages": [
+                    {
+                        "id": r["id"],
+                        "sender": r["username"] or "系統",
+                        "content": "（訊息已收回）" if r["is_revoked"] else r["content"],
+                        "created_at": r["created_at"],
+                        "message_type": "text" if r["is_revoked"] else (r["message_type"] or "text"),
+                        "sticker_key": None if r["is_revoked"] else r["sticker_key"],
+                        "is_revoked": bool(r["is_revoked"]),
+                        "attachments": [] if r["is_revoked"] else _backup_attachment_payload(attachment_map.get(int(r["id"]), [])),
+                    }
+                    for r in rows
+                ],
+            }
+            payload = json.dumps(backup, ensure_ascii=False, indent=2).encode("utf-8")
+            safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(room["name"] or "chat"))[:40] or "chat"
+            filename = f"chat_backup_{room_id}_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            audit("CHAT_ROOM_BACKUP_EXPORTED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},messages={len(rows)},truncated={truncated}")
+            return Response(
+                payload,
+                mimetype="application/json; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        finally:
+            conn.close()
+
+    @app.route("/api/chat/rooms/restore", methods=["POST"], strict_slashes=False)
+    @require_csrf
+    def chat_room_restore():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok":False,"msg":"未登入"}), 401
+        conn = get_db()
+        try:
+            ensure_chat_feature_schema(conn)
+            ok, msg, status = require_member_action(actor, "chat_send", conn=conn)
+            if not ok:
+                return json_resp({"ok":False,"msg":msg}), status
+            backup, err = _load_chat_backup_payload()
+            if err:
+                return json_resp({"ok":False,"msg":err}), 400
+            if not isinstance(backup, dict) or backup.get("format") != CHAT_BACKUP_FORMAT:
+                return json_resp({"ok":False,"msg":"不是本專案聊天室備份檔"}), 400
+            if int(backup.get("version") or 0) != CHAT_BACKUP_VERSION:
+                return json_resp({"ok":False,"msg":"聊天室備份版本不支援"}), 400
+            messages = backup.get("messages")
+            if not isinstance(messages, list):
+                return json_resp({"ok":False,"msg":"聊天室備份缺少 messages"}), 400
+            if len(messages) > CHAT_BACKUP_MAX_MESSAGES:
+                return json_resp({"ok":False,"msg":f"聊天室備份訊息過多，最多 {CHAT_BACKUP_MAX_MESSAGES} 則"}), 400
+            room_meta = backup.get("room") if isinstance(backup.get("room"), dict) else {}
+            original_name = str(room_meta.get("name") or "聊天室備份").strip()
+            requested_name = str(request.form.get("room_name") or "").strip() if request.form else ""
+            room_name = (requested_name or f"還原 - {original_name}")[:48].strip() or "還原聊天室"
+            restored = []
+            for item in messages:
+                if not isinstance(item, dict):
+                    return json_resp({"ok":False,"msg":"聊天室備份包含無效訊息"}), 400
+                content = _restore_message_content(item, CHAT_MESSAGE_MAX_LEN)
+                is_bad, bad_reason = detect_chat_violation(content)
+                if is_bad:
+                    return json_resp({"ok":False,"msg":f"備份含敏感詞，已拒絕還原：{bad_reason}"}), 403
+                restored.append(content)
+            now = datetime.now().isoformat()
+            conn.commit()
+            conn.execute("BEGIN")
+            cur = conn.execute(
+                "INSERT INTO chat_rooms (name, owner_user_id, is_private, created_at) VALUES (?, ?, 1, ?)",
+                (room_name, actor["id"], now),
+            )
+            new_room_id = cur.lastrowid
+            conn.execute(
+                "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, joined_at) VALUES (?, ?, ?)",
+                (new_room_id, actor["id"], now),
+            )
+            for content in restored:
+                conn.execute(
+                    "INSERT INTO chat_messages (room_id, sender_id, content, message_type, sticker_key, created_at) VALUES (?, ?, ?, 'text', NULL, ?)",
+                    (new_room_id, actor["id"], content, now),
+                )
+            conn.commit()
+            audit(
+                "CHAT_ROOM_RESTORED",
+                get_client_ip(),
+                user=actor["username"],
+                detail=f"new_room_id={new_room_id},messages={len(restored)},source_room={original_name[:80]}",
+            )
+            return json_resp({
+                "ok": True,
+                "msg": "聊天室備份已還原為新聊天室",
+                "room": {"id": new_room_id, "name": room_name, "owner_user_id": actor["id"], "owner_username": actor["username"], "is_private": 1},
+                "restored_messages": len(restored),
+            })
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            audit("CHAT_ROOM_RESTORE_FAILED", get_client_ip(), user=actor["username"], success=False, detail=str(exc))
+            return json_resp({"ok":False,"msg":"聊天室備份還原失敗"}), 500
         finally:
             conn.close()
 

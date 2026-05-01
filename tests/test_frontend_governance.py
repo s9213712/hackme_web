@@ -11,11 +11,13 @@ def test_governance_target_uses_member_select():
     assert '<select id="governance-target-user-id">' in index_html
     assert 'placeholder="目標 user id"' not in index_html
     assert 'src="/js/50-admin.js' in index_html
-    assert "/js/90-bootstrap.js?v=20260430-security-tests-feedback" in index_html
+    assert "/js/90-bootstrap.js?v=20260430-board-members" in index_html
     assert "function renderGovernanceTargetOptions" in admin_js
     assert "請選擇治理目標" in admin_js
     assert "target_user_id: targetId" in admin_js
     assert "請選擇治理目標並填寫提案原因" in admin_js
+    assert 'String(user.id || "") !== String(currentUserId || "")' in admin_js
+    assert "不能對自己建立治理提案" in admin_js
     assert "<label>處理對象</label>" in index_html
     assert "<label>處理方式</label>" in index_html
     assert "<label>動作值</label>" in index_html
@@ -30,6 +32,8 @@ def test_governance_target_uses_member_select():
     assert "GOVERNANCE_ACTION_VALUE_HELP" in admin_js
     assert "GOVERNANCE_HIGH_RISK_ACTIONS" in admin_js
     assert "governancePolicySummary" in admin_js
+    assert "會員規則讀取失敗或功能尚未啟用" in admin_js
+    assert "會員規則僅 root 可讀取" not in admin_js
     assert "function updateGovernanceActionValueHelp" in admin_js
     assert "newbie / normal / restricted / suspended" in admin_js
     assert "required_votes:" not in admin_js

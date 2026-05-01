@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class FakeComfyUIClient:
     base_url = "http://fake-comfyui"
     last_timeout_seconds = None
+    last_params = {}
     discarded = []
     interrupted = 0
     generated_count = 0
@@ -34,6 +35,7 @@ class FakeComfyUIClient:
     def generate_image(self, params, *, timeout_seconds=180):
         FakeComfyUIClient.generated_count += 1
         FakeComfyUIClient.last_timeout_seconds = timeout_seconds
+        FakeComfyUIClient.last_params = dict(params)
         batch_size = int(params.get("batch_size") or 1)
         images = []
         for index in range(batch_size):
@@ -214,11 +216,15 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert models.status_code == 200
     assert models.get_json()["models"] == ["dream.safetensors", "photo.ckpt"]
     assert models.get_json()["max_batch_size"] == 1
+    assert models.get_json()["default_width"] == 1024
+    assert models.get_json()["default_height"] == 1024
 
     status = client.get("/api/comfyui/status")
     assert status.status_code == 200
     assert status.get_json()["available"] is True
     assert status.get_json()["max_batch_size"] == 1
+    assert status.get_json()["default_width"] == 1024
+    assert status.get_json()["default_height"] == 1024
 
     generated = client.post(
         "/api/comfyui/generate",
@@ -286,6 +292,33 @@ def test_comfyui_batch_limit_is_root_configurable(tmp_path):
         },
         "amount": 15,
     }]
+
+
+def test_comfyui_default_dimensions_are_root_configurable(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_default_width": 768, "comfyui_default_height": 1024},
+    ).test_client()
+
+    models = client.get("/api/comfyui/models")
+    status = client.get("/api/comfyui/status")
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={"model": "dream.safetensors", "prompt": "use configured size", "seed": 123, "confirm_billing": True},
+    )
+
+    assert models.get_json()["default_width"] == 768
+    assert models.get_json()["default_height"] == 1024
+    assert status.get_json()["default_width"] == 768
+    assert status.get_json()["default_height"] == 1024
+    assert generated.status_code == 200
+    assert FakeComfyUIClient.last_params["width"] == 768
+    assert FakeComfyUIClient.last_params["height"] == 1024
 
 
 def test_comfyui_generation_failure_does_not_charge_points(tmp_path):
@@ -746,8 +779,10 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
     assert "/js/36-comfyui.js?v=20260429-root-billing-exempt" in index_html
-    assert "/styles.css?v=20260430-root-billing" in index_html
+    assert "/styles.css?v=20260501-024" in index_html
     assert "width: min(420px, 100%);" in css
+    assert "margin: .45rem 0 .75rem;" in css
+    assert "margin: .45rem auto .75rem;" not in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
     assert 'id="comfyui-test-connection-btn"' in index_html
@@ -756,13 +791,13 @@ def test_comfyui_frontend_is_wired():
     assert 'tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none"' in core_js
     assert 'switchModuleTab("comfyui")' in bootstrap_js
     assert 'normTab === "comfyui"' in admin_js
-    assert 'fetch(API + "/comfyui/generate"' in comfyui_js
-    assert 'fetch(API + "/comfyui/interrupt"' in comfyui_js
-    assert 'fetch(API + "/comfyui/save"' in comfyui_js
-    assert 'fetch(API + "/comfyui/discard"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/interrupt"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/save"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/discard"' in comfyui_js
     assert 'source_file_not_deleted' in comfyui_js
-    assert 'fetch(API + "/comfyui/share"' in comfyui_js
-    assert 'fetch(API + "/comfyui/status"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/share"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/status"' in comfyui_js
     assert "function loadComfyuiLastSettings()" in comfyui_js
     assert 'let comfyuiMaxBatchSize = 1;' in comfyui_js
     assert 'let comfyuiBillingQuote = null;' in comfyui_js
@@ -786,20 +821,30 @@ def test_comfyui_frontend_is_wired():
     assert "comfyuiGenerateAbortController.abort()" in comfyui_js
     assert "comfyuiShareGenerationPayload" in comfyui_js
     assert "payload.seed = comfyuiCurrentImage.seed" in comfyui_js
+    assert 'id="comfyui-width" min="64" max="2048" step="8" value="1024"' in index_html
+    assert 'id="comfyui-height" min="64" max="2048" step="8" value="1024"' in index_html
+    assert 'id="s-comfyui-default-width"' in index_html
+    assert 'id="s-comfyui-default-height"' in index_html
+    assert "comfyuiDefaultWidth = 1024" in comfyui_js
+    assert "comfyuiDefaultHeight = 1024" in comfyui_js
+    assert 'if ($("s-comfyui-default-width"))' in admin_js
+    assert "comfyui_default_width" in admin_js
     assert "interruptComfyuiGeneration" in bootstrap_js
     assert 'if (comfyuiLoadDraftBtn) comfyuiLoadDraftBtn.addEventListener("click", loadComfyuiLastSettings);' in bootstrap_js
     assert "bindComfyuiDraftPersistence" in bootstrap_js
-    assert 'fetch(API + "/root/comfyui/test-connection"' in admin_js
+    assert 'apiFetch(API + "/root/comfyui/test-connection"' in admin_js
     assert 'if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);' in bootstrap_js
     assert 'shareComfyuiToCommunity' in bootstrap_js
     assert "comfyui-image:" in community_js
     assert "communityPreviewContentUrl" in community_js
-    assert "csrf_token=${encodeURIComponent(token)}" in community_js
+    assert "csrf_token=${encodeURIComponent(token)}" not in community_js
     assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in community_js
-    assert "/js/25-community.js?v=20260429-moderator-user-select" in index_html
+    assert "/js/25-community.js?v=20260430-board-members" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
-    assert '"feature_comfyui_enabled": True' in settings_py
+    assert '"feature_comfyui_enabled": False' in settings_py
     assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py
     assert '"comfyui_max_batch_size": 1' in settings_py
+    assert '"comfyui_default_width": 1024' in settings_py
+    assert '"comfyui_default_height": 1024' in settings_py
     assert "/api/comfyui/models" in smoke

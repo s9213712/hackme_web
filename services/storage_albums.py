@@ -932,7 +932,7 @@ def ensure_album_share_link(conn, *, actor, album_id):
 def revoke_album_share_links(conn, *, actor, album_id):
     ensure_storage_album_schema(conn)
     album = _album_row(conn, album_id)
-    if not album or album["deleted_at"] or int(album["owner_user_id"]) != int(actor["id"]):
+    if not album or int(album["owner_user_id"]) != int(actor["id"]):
         return None, "找不到相簿"
     conn.execute(
         "UPDATE album_share_links SET revoked_at=? WHERE album_id=? AND revoked_at IS NULL",
@@ -1366,7 +1366,7 @@ def resolve_album_share_token(conn, token):
                a.created_at AS album_created_at, a.updated_at AS album_updated_at
         FROM album_share_links asl
         JOIN albums a ON a.id=asl.album_id
-        WHERE asl.token_hash=?
+        WHERE asl.token_hash=? AND a.deleted_at IS NULL
         """,
         (_hash_share_token(token),),
     ).fetchone()

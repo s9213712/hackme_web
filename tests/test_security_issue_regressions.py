@@ -8,14 +8,15 @@ from services.sqlite_safe import table_columns
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_admin_mutation_routes_use_single_use_csrf_guards():
+def test_admin_mutation_routes_use_session_scoped_csrf_guards():
     system_admin = (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
     auth = (ROOT / "services" / "auth.py").read_text(encoding="utf-8")
 
     assert '@app.route("/api/admin/security-center/thresholds", methods=["PUT"])\n    @require_csrf' in system_admin
     assert '@app.route("/api/admin/security-center/controls", methods=["PUT"])\n    @require_csrf' in system_admin
-    assert 'if request.method not in {"GET", "HEAD", "OPTIONS"}:' in auth
-    assert "delete_csrf_token(csrf_tok)" in auth
+    assert 'CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}' in auth
+    assert "delete_csrf_token(csrf_tok)" not in auth
+    assert '"error": "csrf_invalid"' in auth
 
 
 def test_community_combo_mutation_routes_dispatch_to_single_use_csrf():
@@ -119,6 +120,40 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "你可以到「申覆」分頁提出申覆" in notices
 
 
+def test_appeal_approval_rolls_back_points_before_committing_review():
+    appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
+    review = appeals.split("def admin_violation_appeal_review", 1)[1].split("def ", 1)[0]
+
+    assert "申覆點數帳本 rollback 失敗，申覆狀態尚未變更，請修復後重試" in review
+    assert review.index("points_service.rollback_ledger") < review.index("UPDATE violation_appeals SET status=?")
+    assert review.index("points_service.rollback_ledger") < review.index("conn.commit()")
+
+
+def test_album_share_links_revoked_and_deleted_albums_not_resolved():
+    storage_albums = (ROOT / "services" / "storage_albums.py").read_text(encoding="utf-8")
+    files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
+    revoke = storage_albums.split("def revoke_album_share_links", 1)[1].split("def _is_album_media_storage_row", 1)[0]
+    resolver = storage_albums.split("def resolve_album_share_token", 1)[1].split("def mark_album_share_link_accessed", 1)[0]
+
+    assert 'album["deleted_at"]' not in revoke
+    assert "UPDATE album_share_links SET revoked_at=?" in revoke
+    assert "a.deleted_at IS NULL" in resolver
+    assert "def _html_safe_json" in files
+    assert "safe_token = _html_safe_json(token)" in files
+    assert 'safe_token = json.dumps(str(token or ""))' not in files
+
+
+def test_manual_points_adjustment_is_root_only():
+    economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
+    adjust_route = economy.split("def admin_points_adjust():", 1)[1].split(
+        '@app.route("/api/admin/points/pending-rewards"',
+        1,
+    )[0]
+
+    assert "actor, err = root_or_403()" in adjust_route
+    assert "actor, err = manager_or_403()" not in adjust_route
+
+
 def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     files = (ROOT / "routes" / "files.py").read_text(encoding="utf-8")
 
@@ -126,6 +161,8 @@ def test_storage_upgrade_purchase_rechecks_capacity_after_points_spend():
     assert 'conn.execute("BEGIN IMMEDIATE")' in files
     assert "storage allocation failed after debit" in files
     assert files.count("can_allocate_storage_bytes(conn, storage_root, additional_bytes)") >= 2
+    assert "會員承諾容量已達或超過 Host 可用容量，目前停用容量購買" in files
+    assert '"host_storage_overcommitted" in set(capacity_audit.get("reasons") or [])' in files
 
 
 def test_upload_records_do_not_store_client_controlled_public_mime():

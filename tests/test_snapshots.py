@@ -424,7 +424,7 @@ def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_
     settings = {
         row["key"]: row["value"]
         for row in conn.execute(
-            "SELECT key, value FROM system_settings WHERE key LIKE 'feature_%' OR key IN ('allow_register', 'snapshot_daily_auto_enabled', 'storage_maintenance_auto_enabled')"
+            "SELECT key, value FROM system_settings WHERE key LIKE 'feature_%' OR key IN ('allow_register', 'snapshot_daily_auto_enabled', 'storage_maintenance_auto_enabled', 'audit_chain_enabled', 'integrity_guard_enabled')"
         ).fetchall()
     }
     conn.close()
@@ -442,6 +442,8 @@ def test_runtime_reset_creates_pre_reset_snapshot_and_clears_runtime_tables_and_
     assert settings["feature_economy_enabled"] == "False"
     assert settings["feature_games_enabled"] == "False"
     assert settings["allow_register"] == "False"
+    assert settings["audit_chain_enabled"] == "True"
+    assert settings["integrity_guard_enabled"] == "True"
     conn = _db(db_path)
     current_mode = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()["current_mode"]
     conn.close()
@@ -507,6 +509,8 @@ def test_runtime_reset_invokes_points_and_audit_chain_resets(tmp_path):
     assert result["server_mode"] == "test"
     assert result["management_only_settings"]["feature_accounts_enabled"] is True
     assert result["management_only_settings"]["feature_chat_enabled"] is False
+    assert result["management_only_settings"]["audit_chain_enabled"] is True
+    assert result["management_only_settings"]["integrity_guard_enabled"] is True
     assert calls["points"][0]["pre_reset_snapshot_id"] == result["pre_reset_snapshot_id"]
     assert calls["points"][0]["reason"] == "cleanup"
     assert calls["audit"][0][0][0] == "SYSTEM_RUNTIME_RESET"

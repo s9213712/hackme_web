@@ -148,3 +148,64 @@ def test_report_claim_blocks_other_manager(tmp_path):
     blocked = client.post(f"/api/admin/reports/{report_id}/resolve", json={"action": "reject"})
     assert blocked.status_code == 409
     assert "領取" in blocked.get_json()["msg"]
+
+
+def test_manager_can_send_canned_admin_notice_to_user(tmp_path):
+    db_path = tmp_path / "reports.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, []).test_client()
+
+    templates = client.get("/api/admin/notification-templates")
+    assert templates.status_code == 200
+    assert templates.get_json()["templates"][0]["key"] == "maintenance"
+
+    eligible = client.get("/api/admin/notifications/eligible-users")
+    assert eligible.status_code == 200
+    assert [user["username"] for user in eligible.get_json()["users"]] == ["alice", "bob"]
+
+    sent = client.post(
+        "/api/admin/notifications/send",
+        json={"target_user_id": 3, "title": "測試通知", "body": "這是一則管理通知"},
+    )
+    assert sent.status_code == 200
+    payload = sent.get_json()
+    assert payload["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        note = conn.execute("SELECT type, title, body FROM notifications WHERE user_id=3").fetchone()
+        dm = conn.execute("SELECT sender_user_id, recipient_user_id, body FROM direct_messages").fetchone()
+    finally:
+        conn.close()
+    assert dict(note) == {"type": "admin_notice", "title": "測試通知", "body": "這是一則管理通知"}
+    assert dm["sender_user_id"] == 2
+    assert dm["recipient_user_id"] == 3
+    assert "[管理通知] 測試通知" in dm["body"]
+
+
+def test_manager_admin_notice_cannot_target_root_or_manager(tmp_path):
+    db_path = tmp_path / "reports.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box, []).test_client()
+
+    root_notice = client.post(
+        "/api/admin/notifications/send",
+        json={"target_user_id": 1, "title": "測試通知", "body": "內容"},
+    )
+    assert root_notice.status_code == 403
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("INSERT INTO users (id, username, role, member_level) VALUES (5, 'manager2', 'manager', 'normal')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    peer_notice = client.post(
+        "/api/admin/notifications/send",
+        json={"target_user_id": 5, "title": "測試通知", "body": "內容"},
+    )
+    assert peer_notice.status_code == 403

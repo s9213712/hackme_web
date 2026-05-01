@@ -1,3 +1,5 @@
+import io
+import json
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -170,6 +172,22 @@ def _message_count(db_path):
     return count
 
 
+def _latest_room(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM chat_rooms ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _room_messages(db_path, room_id):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT * FROM chat_messages WHERE room_id=? ORDER BY id ASC", (room_id,)).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def _seed_uploaded_file(db_path, file_id="file-1", owner_user_id=3):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -223,6 +241,55 @@ def test_manager_can_delete_user_message(tmp_path):
     assert res.status_code == 200
     assert res.get_json()["ok"] is True
     assert _message_block_state(db_path, 1) == 1
+
+
+def test_user_can_backup_and_restore_chat_room_as_new_room(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    backup_res = client.get("/api/chat/rooms/1/backup")
+
+    assert backup_res.status_code == 200
+    assert backup_res.headers["Content-Disposition"].startswith("attachment;")
+    backup = json.loads(backup_res.data.decode("utf-8"))
+    assert backup["format"] == "hackme_web.chat.backup"
+    assert backup["room"]["name"] == "大廳"
+    assert [m["content"] for m in backup["messages"]] == ["alice message", "root message", "admin message"]
+
+    restore_res = client.post(
+        "/api/chat/rooms/restore",
+        data={
+            "room_name": "還原測試聊天室",
+            "backup_file": (io.BytesIO(backup_res.data), "chat_backup.json"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert restore_res.status_code == 200
+    payload = restore_res.get_json()
+    assert payload["ok"] is True
+    assert payload["restored_messages"] == 3
+    room = _latest_room(db_path)
+    assert room["name"] == "還原測試聊天室"
+    messages = _room_messages(db_path, room["id"])
+    assert len(messages) == 3
+    assert messages[0]["sender_id"] == 3
+    assert "[聊天室備份還原] alice" in messages[0]["content"]
+    assert "alice message" in messages[0]["content"]
+
+
+def test_non_member_cannot_backup_chat_room(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 99, "username": "outsider", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    res = client.get("/api/chat/rooms/1/backup")
+
+    assert res.status_code == 403
+    assert res.get_json()["ok"] is False
 
 
 def test_manager_cannot_delete_root_message(tmp_path):

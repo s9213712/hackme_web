@@ -8,6 +8,7 @@ from flask import make_response, request, send_from_directory
 
 from services.access_controls import verify_internal_test_token
 from services.account_recovery import (
+    create_password_reset_review_request,
     create_recovery_token,
     ensure_account_recovery_schema,
     lookup_valid_token,
@@ -33,6 +34,8 @@ def register_public_routes(app, deps):
     db_delete_session = deps["db_delete_session"]
     db_get_user_from_token = deps["db_get_user_from_token"]
     db_save_session = deps["db_save_session"]
+    delete_csrf_token = deps.get("delete_csrf_token", lambda token: None)
+    delete_csrf_tokens_for_username = deps.get("delete_csrf_tokens_for_username", lambda username: None)
     decrypt_field = deps["decrypt_field"]
     encrypt_field = deps["encrypt_field"]
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
@@ -65,6 +68,7 @@ def register_public_routes(app, deps):
     enforce_password_strength = deps["enforce_password_strength"]
     validate_phone = deps["validate_phone"]
     verify_csrf_double_submit = deps["verify_csrf_double_submit"]
+    verify_csrf_token = deps.get("verify_csrf_token", lambda token, username: False)
     verify_password = deps["verify_password"]
 
     def record_login_location(conn, user_id, username, ip, ua):
@@ -89,6 +93,10 @@ def register_public_routes(app, deps):
 
     def generic_recovery_response():
         return json_resp({"ok": True, "msg": "如果資料符合，系統會寄出後續操作通知"})
+
+    def password_reset_mode():
+        mode = str(get_system_settings().get("password_reset_mode") or "admin_review").strip().lower()
+        return mode if mode in {"admin_review", "email_token"} else "admin_review"
 
     def current_server_mode(conn):
         try:
@@ -208,13 +216,14 @@ def register_public_routes(app, deps):
         resp = make_response(send_from_directory(PUBLIC_DIR, "index.html"))
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
-        if not user:
-            # Ship a CSRF token for login form — no session needed
-            tok = make_csrf_token()
-            store_csrf_token(tok, "__public__")
-            resp.set_cookie("csrf_token", tok, max_age=3600, httponly=False,
-                            samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
-        # Logged-in users keep their per-user csrf_token cookie (set at login)
+        csrf_owner = user or "__public__"
+        csrf_cookie = request.cookies.get("csrf_token", "")
+        if not csrf_cookie or not verify_csrf_token(csrf_cookie, csrf_owner):
+            csrf_cookie = make_csrf_token()
+            store_csrf_token(csrf_cookie, csrf_owner)
+            resp.set_cookie("csrf_token", csrf_cookie, max_age=CSRF_TOKEN_TTL,
+                            httponly=False, samesite=SESSION_COOKIE_SAMESITE,
+                            secure=SESSION_COOKIE_SECURE)
         return resp
 
     # ── GET CSRF token ─────────────────────────────────────────────────────────────
@@ -222,15 +231,11 @@ def register_public_routes(app, deps):
     def get_csrf_token():
         tok = request.cookies.get("session_token")
         username = db_get_user_from_token(tok) if tok else None
-        token = make_csrf_token()
-        if not username:
-            store_csrf_token(token, "__public__")
-            resp = json_resp({"ok":True,"csrf_token":token})
-            resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
-                            httponly=False, samesite=SESSION_COOKIE_SAMESITE,
-                            secure=SESSION_COOKIE_SECURE)
-            return resp
-        store_csrf_token(token, username)
+        owner = username or "__public__"
+        token = request.cookies.get("csrf_token", "")
+        if not token or not verify_csrf_token(token, owner):
+            token = make_csrf_token()
+            store_csrf_token(token, owner)
         resp = json_resp({"ok":True,"csrf_token":token})
         resp.set_cookie("csrf_token", token, max_age=CSRF_TOKEN_TTL,
                         httponly=False, samesite=SESSION_COOKIE_SAMESITE,
@@ -262,6 +267,7 @@ def register_public_routes(app, deps):
                 "module_community_min_role": settings.get("module_community_min_role"),
                 "module_appeals_min_role": settings.get("module_appeals_min_role"),
                 "module_accounts_min_role": settings.get("module_accounts_min_role"),
+                "password_reset_mode": settings.get("password_reset_mode", "admin_review"),
                 "maintenance_mode": bool(settings.get("maintenance_mode", False)),
                 **features,
             },
@@ -326,6 +332,7 @@ def register_public_routes(app, deps):
             conn.close()
 
     @app.route("/api/register", methods=["POST"])
+    @require_csrf
     def register():
         ip, ua = get_client_ip(), get_ua()
         audit("REGISTER_ATTEMPT", ip, ua=ua)
@@ -347,11 +354,6 @@ def register_public_routes(app, deps):
         if not isinstance(data, dict):
             audit("REGISTER_EMPTY", ip, ua=ua)
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
-
-        # CSRF double-submit check (no session required — safe for register)
-        if not verify_csrf_double_submit(data.get("csrf_token", "")):
-            audit("REGISTER_CSRF", ip, ua=ua)
-            return json_resp({"ok":False,"msg":"Invalid request"}), 403
 
         conn = get_db()
         try:
@@ -657,7 +659,8 @@ def register_public_routes(app, deps):
             ensure_public_account_columns(conn)
             ensure_account_recovery_schema(conn)
             row = find_recovery_user(conn, identifier)
-            if row and row["status"] == "active" and row["email"]:
+            mode = password_reset_mode()
+            if mode == "email_token" and row and row["status"] == "active" and row["email"]:
                 token = create_recovery_token(conn, user_id=row["id"], purpose="password_reset", ip=ip, user_agent=ua, ttl_minutes=60)
                 queue_mail(
                     conn,
@@ -667,10 +670,28 @@ def register_public_routes(app, deps):
                     kind="password_reset",
                 )
                 audit("PASSWORD_RESET_REQUESTED", ip, user=row["username"], ua=ua, success=True)
+            elif mode == "admin_review" and row and row["status"] == "active":
+                request_id, created = create_password_reset_review_request(
+                    conn,
+                    user_id=row["id"],
+                    identifier=identifier,
+                    ip=ip,
+                    user_agent=ua,
+                )
+                audit(
+                    "PASSWORD_RESET_REVIEW_REQUESTED",
+                    ip,
+                    user=row["username"],
+                    ua=ua,
+                    success=True,
+                    detail=f"review_request_id={request_id},created={created}",
+                )
             else:
                 audit("PASSWORD_RESET_REQUESTED", ip, user="-", ua=ua, success=True, detail="generic_no_delivery")
             conn.commit()
             timing_delay()
+            if mode == "admin_review":
+                return json_resp({"ok": True, "msg": "如果資料符合，系統會建立密碼重設審核申請"})
             return generic_recovery_response()
         finally:
             conn.close()
@@ -805,6 +826,10 @@ def register_public_routes(app, deps):
         user = db_get_user_from_token(tok) if tok else None
         if tok:
             db_delete_session(tok)
+        if user:
+            delete_csrf_tokens_for_username(user)
+        else:
+            delete_csrf_token(request.cookies.get("csrf_token", ""))
         audit("LOGOUT", ip, user=user or "-", ua=ua, success=bool(user))
         resp = json_resp({"ok":True,"msg":"已登出"})
         resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
@@ -812,6 +837,7 @@ def register_public_routes(app, deps):
         return resp
 
     @app.route("/api/session/idle-timeout", methods=["POST"])
+    @require_csrf
     def idle_timeout_logout():
         if request.headers.get("X-Idle-Timeout-Logout") != "1":
             return json_resp({"ok": False, "msg": "缺少閒置登出確認"}), 400
@@ -819,6 +845,10 @@ def register_public_routes(app, deps):
         user = db_get_user_from_token(tok) if tok else None
         if tok:
             db_delete_session(tok)
+        if user:
+            delete_csrf_tokens_for_username(user)
+        else:
+            delete_csrf_token(request.cookies.get("csrf_token", ""))
         audit("IDLE_TIMEOUT_LOGOUT", ip, user=user or "-", ua=ua, success=bool(tok))
         resp = json_resp({"ok": True, "msg": "閒置逾時，已登出"})
         resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
@@ -865,6 +895,7 @@ def register_public_routes(app, deps):
             "violation_score": dict(ctx).get("violation_score") or dict(ctx).get("violation_count") or 0,
             "sanction_status": dict(ctx).get("sanction_status") or "none",
             "sanction_until": dict(ctx).get("sanction_until"),
+            "preferred_landing_module": dict(ctx).get("preferred_landing_module") or "chat",
             "must_change_password": bool(dict(ctx).get("must_change_password") or 0),
             "is_default_password": bool(dict(ctx).get("is_default_password") or 0),
             "nickname": decrypt_field(ctx["nickname"]),

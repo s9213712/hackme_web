@@ -24,6 +24,8 @@ let communityBoardModerators = [];
 let communityModeratorManagerOpen = false;
 let communityModeratorCandidates = [];
 let communityModeratorCandidatesLoadedAt = 0;
+let communityBoardMembers = [];
+let communityMembersManagerOpen = false;
 
 const COMMUNITY_MODERATOR_PERMISSIONS = [
   ["can_review_threads", "審核主題"],
@@ -152,11 +154,14 @@ function showCommunityBoardStage() {
   selectedCommunityThread = null;
   communityThreads = [];
   communityBoardModerators = [];
+  communityBoardMembers = [];
   communityThreadCreatorOpen = false;
   communityModeratorManagerOpen = false;
+  communityMembersManagerOpen = false;
   renderCommunityBoards();
   renderCommunityThreads(null);
   renderCommunityModerators();
+  renderCommunityMembers();
   renderCommunityThreadDetail(null, []);
   switchCommunityMode("boards");
 }
@@ -165,6 +170,7 @@ function showCommunityThreadStage() {
   selectedCommunityThreadId = null;
   selectedCommunityThread = null;
   communityModeratorManagerOpen = false;
+  communityMembersManagerOpen = false;
   renderCommunityThreads(selectedCommunityBoard);
   renderCommunityThreadDetail(null, []);
   switchCommunityMode("boards");
@@ -179,8 +185,8 @@ function communityStatusLabel(status) {
 
 function communityVisibilityLabel(visibility) {
   if (visibility === "public") return "公開";
-  if (visibility === "unlisted") return "不公開列表";
-  if (visibility === "private") return "私人";
+  if (visibility === "unlisted") return "隱藏：持連結可進入";
+  if (visibility === "private") return "私人：僅受邀成員";
   return visibility || "公開";
 }
 
@@ -233,21 +239,44 @@ function renderCommunityModeratorUserOptions(selectedValue = "") {
   }
 }
 
+function renderCommunityMemberUserOptions(selectedValue = "") {
+  const select = $("community-member-user-id");
+  if (!select) return;
+  const previous = String(selectedValue || select.value || "");
+  const rows = communityModeratorCandidates.length
+    ? communityModeratorCandidates
+    : (Array.isArray(users) ? users : []);
+  if (!rows.length) {
+    select.innerHTML = `<option value="">沒有可邀請的會員</option>`;
+    return;
+  }
+  const memberIds = new Set(communityBoardMembers.map((item) => String(item.user_id || "")));
+  select.innerHTML = `<option value="">請選擇要邀請的會員</option>` + rows
+    .filter((user) => String(user.id || "") !== String(currentUserId || "") && !memberIds.has(String(user.id || "")))
+    .map((user) => `<option value="${sanitize(String(user.id || ""))}">${sanitize(communityModeratorCandidateLabel(user))}</option>`)
+    .join("");
+  if (previous && rows.some((user) => String(user.id || "") === previous)) {
+    select.value = previous;
+  }
+}
+
 async function loadCommunityModeratorCandidates({ force = false } = {}) {
   if (!currentUser || !canManageCommunity()) return [];
   const fresh = communityModeratorCandidatesLoadedAt && Date.now() - communityModeratorCandidatesLoadedAt < 30000;
   if (!force && fresh) {
     renderCommunityModeratorUserOptions();
+    renderCommunityMemberUserOptions();
     return communityModeratorCandidates;
   }
   if (Array.isArray(users) && users.length && !force) {
     communityModeratorCandidates = users;
     communityModeratorCandidatesLoadedAt = Date.now();
     renderCommunityModeratorUserOptions();
+    renderCommunityMemberUserOptions();
     return communityModeratorCandidates;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/admin/users", {
+  const res = await apiFetch(API + "/admin/users", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -261,6 +290,7 @@ async function loadCommunityModeratorCandidates({ force = false } = {}) {
   communityModeratorCandidatesLoadedAt = Date.now();
   if (Array.isArray(json.users)) users = json.users;
   renderCommunityModeratorUserOptions();
+  renderCommunityMemberUserOptions();
   return communityModeratorCandidates;
 }
 
@@ -345,6 +375,52 @@ function renderCommunityModerators() {
   });
 }
 
+function canManageCommunityMembers() {
+  return selectedCommunityBoardId && canManageCommunity() && selectedCommunityBoard && selectedCommunityBoard.visibility !== "public";
+}
+
+function toggleCommunityMembersManager(forceOpen = null) {
+  communityMembersManagerOpen = forceOpen === null ? !communityMembersManagerOpen : !!forceOpen;
+  renderCommunityMembers();
+}
+
+function renderCommunityMembers() {
+  const panel = $("community-members-manager");
+  const list = $("community-members-list");
+  const openBtn = $("community-members-open-btn");
+  const canShow = canManageCommunityMembers();
+  if (openBtn) {
+    openBtn.style.display = canShow ? "" : "none";
+    openBtn.classList.toggle("active", canShow && communityMembersManagerOpen);
+    openBtn.textContent = communityMembersManagerOpen ? "隱藏成員邀請" : "成員邀請";
+  }
+  if (panel) panel.style.display = canShow && communityMembersManagerOpen ? "block" : "none";
+  if (canShow && communityMembersManagerOpen) {
+    loadCommunityModeratorCandidates().catch(() => {});
+  }
+  if (!list || !canShow) return;
+  renderCommunityMemberUserOptions();
+  if (!communityBoardMembers.length) {
+    list.innerHTML = "<p style='color:var(--muted);'>尚未邀請成員。私人討論區只有版主、建立者與受邀會員能進入。</p>";
+    return;
+  }
+  list.innerHTML = communityBoardMembers.map((member) => `
+    <div class="community-card">
+      <div class="community-card-head">
+        <strong>${sanitize(member.username || "")}</strong>
+        <span class="community-badge approved">會員 #${sanitize(String(member.user_id || ""))}</span>
+      </div>
+      <div class="community-meta">邀請人：${sanitize(member.invited_by || "-")} · ${sanitize(formatChatTime(member.created_at || ""))}</div>
+      <div class="community-actions">
+        <button class="btn community-mini-btn" type="button" data-delete-board-member="${member.user_id}">移除成員</button>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll("button[data-delete-board-member]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteCommunityBoardMember(parseInt(btn.getAttribute("data-delete-board-member"), 10)));
+  });
+}
+
 function renderCommunityCategories() {
   const panel = $("community-category-manager-panel");
   const list = $("community-category-list");
@@ -392,9 +468,7 @@ function communityPlainContent(content) {
 }
 
 function communityPreviewContentUrl(fileId) {
-  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
-  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
-  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`;
 }
 
 function renderCommunityBody(content) {
@@ -570,6 +644,7 @@ function renderCommunityThreads(board) {
   if (creator) creator.style.display = canCreateThread && communityThreadCreatorOpen ? "block" : "none";
   if (submitBtn) submitBtn.textContent = (currentRole === "manager" || currentRole === "super_admin") ? "發布主題" : "送審主題";
   renderCommunityModerators();
+  renderCommunityMembers();
   if (!list) return;
   if (!board) {
     list.innerHTML = "<p style='color:var(--muted);'>請先選擇左側討論區</p>";
@@ -687,7 +762,7 @@ function renderCommunityThreadDetail(thread, posts) {
 
 async function loadAnnouncements() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/announcements", {
+  const res = await apiFetch(API + "/community/announcements", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -699,7 +774,7 @@ async function loadAnnouncements() {
 
 async function publishAnnouncement() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/announcements", {
+  const res = await apiFetch(API + "/community/announcements", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -724,7 +799,7 @@ async function publishAnnouncement() {
 async function deleteAnnouncement(id) {
   if (!confirm("確定要刪除這則公告？")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/announcements/" + id, {
+  const res = await apiFetch(API + "/community/announcements/" + id, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -736,7 +811,7 @@ async function deleteAnnouncement(id) {
 
 async function loadCommunityCategories() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/categories", {
+  const res = await apiFetch(API + "/community/categories", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -749,7 +824,7 @@ async function loadCommunityCategories() {
 async function createCommunityCategory() {
   if (!canManageCommunity()) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/categories", {
+  const res = await apiFetch(API + "/community/categories", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -772,7 +847,7 @@ async function createCommunityCategory() {
 
 async function loadCommunityBoards() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards", {
+  const res = await apiFetch(API + "/community/boards", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -788,7 +863,7 @@ async function loadCommunityBoards() {
 
 async function requestCommunityBoard() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards", {
+  const res = await apiFetch(API + "/community/boards", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -802,7 +877,7 @@ async function requestCommunityBoard() {
     })
   });
   const json = await res.json().catch(() => ({}));
-  flash($("community-board-request-msg"), json.msg || "申請送出失敗", !!json.ok);
+  flash($("community-board-request-msg"), json.msg || (currentUser === "root" ? "建立失敗" : "申請送出失敗"), !!json.ok);
   if (json.ok) {
     if ($("community-board-title")) $("community-board-title").value = "";
     if ($("community-board-description")) $("community-board-description").value = "";
@@ -824,7 +899,7 @@ async function loadCommunityModerators(boardId = selectedCommunityBoardId) {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + boardId + "/moderators", {
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/moderators", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -839,6 +914,28 @@ async function loadCommunityModerators(boardId = selectedCommunityBoardId) {
   renderCommunityModerators();
 }
 
+async function loadCommunityBoardMembers(boardId = selectedCommunityBoardId) {
+  if (!boardId || !canManageCommunity()) {
+    communityBoardMembers = [];
+    renderCommunityMembers();
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/members", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    communityBoardMembers = [];
+    flash($("community-members-msg"), json.msg || "成員清單讀取失敗", false);
+    renderCommunityMembers();
+    return;
+  }
+  communityBoardMembers = Array.isArray(json.members) ? json.members : [];
+  renderCommunityMembers();
+}
+
 async function saveCommunityModerator() {
   if (!selectedCommunityBoardId || !canManageCommunity()) return;
   await loadCommunityModeratorCandidates();
@@ -848,7 +945,7 @@ async function saveCommunityModerator() {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators", {
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -861,11 +958,49 @@ async function saveCommunityModerator() {
   }
 }
 
+async function saveCommunityBoardMember() {
+  if (!selectedCommunityBoardId || !canManageCommunityMembers()) return;
+  await loadCommunityModeratorCandidates();
+  const userId = parseInt($("community-member-user-id")?.value || "", 10);
+  if (!userId) {
+    flash($("community-members-msg"), "請先從下拉選單選擇要邀請的會員", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/members", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+    body: JSON.stringify({ user_id: userId })
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-members-msg"), json.msg || "成員邀請失敗", !!json.ok);
+  if (json.ok) {
+    await Promise.all([loadCommunityBoardMembers(selectedCommunityBoardId), loadCommunityBoards()]);
+  }
+}
+
+async function deleteCommunityBoardMember(userId) {
+  if (!selectedCommunityBoardId || !userId || !canManageCommunityMembers()) return;
+  if (!confirm("確定要移除此私人討論區成員？")) return;
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/members/" + userId, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  flash($("community-members-msg"), json.msg || "成員移除失敗", !!json.ok);
+  if (json.ok) {
+    await Promise.all([loadCommunityBoardMembers(selectedCommunityBoardId), loadCommunityBoards()]);
+  }
+}
+
 async function deleteCommunityModerator(userId) {
   if (!selectedCommunityBoardId || !userId || !canManageCommunity()) return;
   if (!confirm("確定要移除此版主？")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators/" + userId, {
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators/" + userId, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -880,7 +1015,7 @@ async function deleteCommunityModerator(userId) {
 async function loadCommunityBoardReviews() {
   if (!(currentRole === "manager" || currentRole === "super_admin")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/reviews", {
+  const res = await apiFetch(API + "/community/boards/reviews", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -892,7 +1027,7 @@ async function loadCommunityBoardReviews() {
 
 async function loadCommunityThreadReviews() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/reviews", {
+  const res = await apiFetch(API + "/community/threads/reviews", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -911,7 +1046,7 @@ async function loadCommunityThreadReviews() {
 async function reviewCommunityBoard(boardId, action) {
   await fetchCsrfToken({ force: true });
   const note = prompt(action === "approve" ? "核准備註（可留空）" : "駁回原因（可留空）", "") || "";
-  const res = await fetch(API + "/community/boards/" + boardId + "/review", {
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/review", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -927,7 +1062,7 @@ async function reviewCommunityBoard(boardId, action) {
 async function reviewCommunityThread(threadId, action) {
   await fetchCsrfToken({ force: true });
   const note = prompt(action === "approve" ? "核准備註（可留空）" : "駁回原因（可留空）", "") || "";
-  const res = await fetch(API + "/community/threads/" + threadId + "/review", {
+  const res = await apiFetch(API + "/community/threads/" + threadId + "/review", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -946,6 +1081,7 @@ async function openCommunityBoard(boardId, preserveThread = false) {
   selectedCommunityBoardId = boardId;
   if (Number(previousBoardId) !== Number(boardId)) {
     communityModeratorManagerOpen = false;
+    communityMembersManagerOpen = false;
   }
   if (!preserveThread) {
     selectedCommunityThreadId = null;
@@ -954,7 +1090,7 @@ async function openCommunityBoard(boardId, preserveThread = false) {
   }
   await fetchCsrfToken({ force: true });
   const q = encodeURIComponent(communityThreadQuery || "");
-  const res = await fetch(API + "/community/boards/" + boardId + "/threads?page=" + communityThreadPage + "&limit=" + communityThreadLimit + "&q=" + q, {
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/threads?page=" + communityThreadPage + "&limit=" + communityThreadLimit + "&q=" + q, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -969,7 +1105,7 @@ async function openCommunityBoard(boardId, preserveThread = false) {
   communityThreads = Array.isArray(json.threads) ? json.threads : [];
   communityThreadTotal = Number(json.total || 0);
   communityThreadPage = Number(json.page || 0);
-  if (canManageCommunity()) await loadCommunityModerators(boardId);
+  if (canManageCommunity()) await Promise.all([loadCommunityModerators(boardId), loadCommunityBoardMembers(boardId)]);
   renderCommunityBoards();
   renderCommunityThreads(board);
   if (!preserveThread) renderCommunityThreadDetail(null, []);
@@ -981,7 +1117,7 @@ async function createCommunityThread() {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/threads", {
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/threads", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1008,7 +1144,7 @@ async function createCommunityThread() {
 async function openCommunityThread(threadId) {
   selectedCommunityThreadId = threadId;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + threadId, {
+  const res = await apiFetch(API + "/community/threads/" + threadId, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -1028,7 +1164,7 @@ async function replyCommunityThread() {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/posts", {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId + "/posts", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1049,7 +1185,7 @@ async function deleteCommunityThread() {
   if (!selectedCommunityThreadId) return;
   if (!confirm("確定要刪除此主題？回覆也會一併刪除。")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId, {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -1068,7 +1204,7 @@ async function deleteCommunityPost(postId) {
   if (!postId) return;
   if (!confirm("確定要刪除此留言？")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId, {
+  const res = await apiFetch(API + "/community/posts/" + postId, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -1084,7 +1220,7 @@ async function deleteCommunityPost(postId) {
 async function toggleCommunityPostPin(postId, pinned) {
   if (!postId) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId + "/pin", {
+  const res = await apiFetch(API + "/community/posts/" + postId + "/pin", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1100,7 +1236,7 @@ async function toggleCommunityPostPin(postId, pinned) {
 async function reactToCommunityPost(postId, value) {
   if (!postId) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId + "/reaction", {
+  const res = await apiFetch(API + "/community/posts/" + postId + "/reaction", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1121,7 +1257,7 @@ async function reactToCommunityPost(postId, value) {
 async function reactToCommunityThread(threadId, value) {
   if (!threadId) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + threadId + "/reaction", {
+  const res = await apiFetch(API + "/community/threads/" + threadId + "/reaction", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1142,7 +1278,7 @@ async function rewardCommunityThread(threadId) {
   if (pointsRaw === null) return;
   const reason = prompt("獎勵理由", "優質主題貢獻") || "優質主題貢獻";
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + threadId + "/reward", {
+  const res = await apiFetch(API + "/community/threads/" + threadId + "/reward", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1159,7 +1295,7 @@ async function penalizeCommunityPost(postId) {
   if (pointsRaw === null) return;
   const reason = prompt("懲處原因", "討論區違規留言") || "討論區違規留言";
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId + "/penalty", {
+  const res = await apiFetch(API + "/community/posts/" + postId + "/penalty", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1173,7 +1309,7 @@ async function penalizeCommunityPost(postId) {
 async function toggleCommunityThreadLock() {
   if (!selectedCommunityThreadId || !selectedCommunityThread) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/lock", {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId + "/lock", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1190,7 +1326,7 @@ async function toggleCommunityThreadLock() {
 async function toggleCommunityThreadSticky() {
   if (!selectedCommunityThreadId || !selectedCommunityThread) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/sticky", {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId + "/sticky", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1207,6 +1343,7 @@ async function toggleCommunityThreadSticky() {
 async function loadCommunityHome() {
   resetCommunityReviewState();
   switchCommunityMode("boards");
+  syncCommunityBoardRequestLabels();
   await Promise.all([
     loadCommunityCategories(),
     loadCommunityBoards(),
@@ -1223,8 +1360,17 @@ function toggleCommunityAnnouncementEditor(forceOpen = null) {
 function toggleCommunityBoardRequest(forceOpen = null) {
   communityBoardRequestOpen = forceOpen === null ? !communityBoardRequestOpen : !!forceOpen;
   if (communityBoardRequestOpen) toggleCommunityTools(true);
+  syncCommunityBoardRequestLabels();
   const panel = $("community-board-request-panel");
   if (panel) panel.style.display = communityBoardRequestOpen ? "block" : "none";
+}
+
+function syncCommunityBoardRequestLabels() {
+  const isRoot = currentUser === "root";
+  const openBtn = $("community-board-request-open-btn");
+  const submitBtn = $("community-board-request-btn");
+  if (openBtn) openBtn.textContent = isRoot ? "建立討論區" : "申請建立討論區";
+  if (submitBtn) submitBtn.textContent = isRoot ? "建立討論區" : "送出申請";
 }
 
 function toggleCommunityCategoryManager(forceOpen = null) {

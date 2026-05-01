@@ -20,6 +20,6 @@ def test_notification_ui_assets_are_wired():
     assert "notification-toggle" in bootstrap_js
     assert "notification-read-all" in bootstrap_js
 
-    assert 'fetch(API + "/notifications?limit=20"' in notifications_js
-    assert 'fetch(API + `/notifications/${notificationId}/read`' in notifications_js
-    assert 'fetch(API + "/notifications/read-all"' in notifications_js
+    assert 'apiFetch(API + "/notifications?limit=20"' in notifications_js
+    assert 'apiFetch(API + `/notifications/${notificationId}/read`' in notifications_js
+    assert 'apiFetch(API + "/notifications/read-all"' in notifications_js

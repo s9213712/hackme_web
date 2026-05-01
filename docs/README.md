@@ -40,3 +40,5 @@ short [README](../README.md) plus GitHub-required metadata such as
   test runner usage
 - [Functional Permission Pentest](security/FUNCTIONAL_PERMISSION_PENTEST.md):
   role-based permission pentest usage
+- [Deployment And Operations Scripts](DEPLOYMENT.md): includes functional smoke,
+  permission pentest, traffic stress test, and pre-push validation commands

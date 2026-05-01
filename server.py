@@ -47,6 +47,7 @@ from services.auth import (
     db_get_user_from_token,
     db_save_session,
     delete_csrf_token,
+    delete_csrf_tokens_for_username,
     get_current_user_ctx,
     get_request_csrf_token,
     hash_password,
@@ -634,7 +635,8 @@ def get_user_by_username(username):
             "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
             "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
             "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
-        "password_strength_score, must_change_password, is_default_password, avatar_file_id, avatar_crop_json, blocked_until, violation_count, chat_violation_warned "
+            "preferred_landing_module, password_strength_score, must_change_password, is_default_password, "
+            "avatar_file_id, avatar_crop_json, blocked_until, violation_count, chat_violation_warned "
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
@@ -672,6 +674,7 @@ def user_public_payload(row, *, include_sensitive=False):
         "level_updated_at": data.get("level_updated_at"),
         "level_updated_by": data.get("level_updated_by"),
         "level_update_reason": data.get("level_update_reason"),
+        "preferred_landing_module": data.get("preferred_landing_module") or "chat",
         "password_strength_score": data.get("password_strength_score") or 0,
         "must_change_password": bool(data.get("must_change_password") or 0),
         "is_default_password": bool(data.get("is_default_password") or 0),
@@ -1150,6 +1153,8 @@ register_public_routes(app, {
     "db_delete_session": db_delete_session,
     "db_get_user_from_token": db_get_user_from_token,
     "db_save_session": db_save_session,
+    "delete_csrf_token": delete_csrf_token,
+    "delete_csrf_tokens_for_username": delete_csrf_tokens_for_username,
     "decrypt_field": decrypt_field,
     "encrypt_field": encrypt_field,
     "ensure_user_official_room_membership": ensure_user_official_room_membership,
@@ -1184,6 +1189,7 @@ register_public_routes(app, {
     "enforce_password_strength": enforce_password_strength,
     "validate_phone": validate_phone,
     "verify_csrf_double_submit": verify_csrf_double_submit,
+    "verify_csrf_token": verify_csrf_token,
     "verify_password": verify_password,
 })
 
@@ -1197,6 +1203,7 @@ register_chat_routes(app, {
     "db_get_user_from_token": db_get_user_from_token,
     "db_get_user_role": db_get_user_role,
     "delete_csrf_token": delete_csrf_token,
+    "delete_csrf_tokens_for_username": delete_csrf_tokens_for_username,
     "detect_chat_violation": detect_chat_violation,
     "ensure_user_official_room_membership": ensure_user_official_room_membership,
     "get_client_ip": get_client_ip,
@@ -1229,6 +1236,7 @@ register_user_routes(app, {
     "count_role": count_role,
     "db_get_user_from_token": db_get_user_from_token,
     "db_get_user_role": db_get_user_role,
+    "delete_csrf_tokens_for_username": delete_csrf_tokens_for_username,
     "decrypt_field": decrypt_field,
     "encrypt_field": encrypt_field,
     "ensure_user_official_room_membership": ensure_user_official_room_membership,

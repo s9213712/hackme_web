@@ -36,6 +36,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="economy-adjustment-list"' in index_html
     assert 'id="economy-admin-card-title"' in index_html
     assert 'id="economy-admin-card-sub"' in index_html
+    assert 'id="economy-adjust-panel"' in index_html
     assert '<select id="economy-adjust-user-id">' in index_html
     assert '<input type="number" id="economy-adjust-user-id"' not in index_html
     assert 'id="economy-adjust-currency"' not in index_html
@@ -43,20 +44,24 @@ def test_root_points_page_is_chain_operations_console():
     assert "加減分明細" in index_html
     assert "手動加減分與待審核" in index_html
     assert "積分系統" in index_html
-    assert "/js/55-economy.js?v=20260429-ledger-backup-recovery" in index_html
+    assert "/js/55-economy.js?v=20260501-024" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
+    assert 'id="economy-recovery-auto-handle-btn"' in index_html
     assert 'id="economy-recovery-approve-btn"' in index_html
     assert "function renderEconomyRecovery" in economy_js
     assert 'fetchEconomyJson("/root/points/chain/backups"' in economy_js
+    assert 'fetchEconomyJson("/root/points/chain/recovery/auto-handle"' in economy_js
     assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' in economy_js
-    assert "/js/90-bootstrap.js?v=20260430-security-tests-feedback" in index_html
+    assert "async function autoHandlePointsChainRecovery()" in economy_js
+    assert '["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery]' in economy_js
+    assert "/js/90-bootstrap.js?v=20260430-board-members" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
     assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js
     assert 'if ($("economy-admin-ledger-list")) $("economy-admin-ledger-list").innerHTML = "";' in economy_js
     assert 'if ($("economy-pending-list")) $("economy-pending-list").innerHTML = "";' in economy_js
-    assert 'rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包"' in economy_js
+    assert 'rootMode ? "積分系統" : "積分錢包"' in economy_js
     assert 'fetchEconomyJson("/root/points/report")' in economy_js
     assert "startEconomyBlockCountdown" in economy_js
     assert "function canManageEconomyPoints()" in economy_js
@@ -65,8 +70,10 @@ def test_root_points_page_is_chain_operations_console():
     assert "bindEconomyInlineEvents" in economy_js
     assert "economy-adjustment-list" in economy_js
     assert 'adminLedgerList.style.display = rootMode ? "none" : ""' in economy_js
-    assert 'adminTitle.textContent = rootMode ? "手動加減分與待審核" : "管理員調整與審核"' in economy_js
+    assert 'if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";' in economy_js
+    assert 'adminTitle.textContent = rootMode ? "手動加減分與待審核" : "待審核獎勵"' in economy_js
     assert "加減分歷史統一在下方明細查看" in economy_js
+    assert "只有 root 可以手動調整積分" in economy_js
     assert 'fetchEconomyJson("/admin/users")' in economy_js
     assert "function renderEconomyAdjustUserOptions" in economy_js
     assert "async function loadEconomyAccountLookup()" in economy_js
@@ -98,6 +105,6 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-catalog-storage-gb"' in index_html
     assert 'id="root-catalog-save-btn"' in index_html
     assert "function loadRootEconomyCatalog()" in admin_js
-    assert 'fetch(API + "/root/economy/catalog"' in admin_js
+    assert 'apiFetch(API + "/root/economy/catalog"' in admin_js
     assert "saveRootEconomyCatalogItem" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js

@@ -543,6 +543,7 @@ run_checks() {
     request "points chain seal" "POST" "/api/root/points/chain/seal" "200" '{"limit":100}'
     request "points chain verify" "GET" "/api/root/points/chain/verify" "200"
     request "points chain recovery status" "GET" "/api/root/points/chain/recovery" "200"
+    request "points chain one-click anomaly handler" "POST" "/api/root/points/chain/recovery/auto-handle" "200" '{"confirm":"AUTO HANDLE POINTSCHAIN"}'
     request "points chain backup manual" "POST" "/api/root/points/chain/backups" "200" '{}'
     request "points economy stats" "GET" "/api/admin/points/economy/stats" "200"
   else

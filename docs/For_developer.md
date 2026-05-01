@@ -5,7 +5,7 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.04.29-023`
+- Release ID: `2026.04.29-024`
 - Schema version: `26`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -219,6 +219,30 @@ Admin storage APIs:
 - `POST /api/comfyui/save-to-drive`
 - root can configure the API port from server settings
 
+### PointsChain
+
+- `GET /api/points/wallet`
+- `GET /api/points/ledger`
+- `GET /api/points/catalog`
+- `POST /api/points/spend`
+- `GET /api/admin/points/ledger`
+- `POST /api/admin/points/adjust`
+- `GET /api/admin/points/wallets/{user_id}`
+- `GET /api/root/points/report`
+- `GET /api/root/points/audit`
+- `POST /api/root/points/chain/seal`
+- `GET /api/root/points/chain/verify`
+- `GET /api/root/points/chain/recovery`
+- `POST /api/root/points/chain/backups`
+- `POST /api/root/points/chain/recovery/approve`
+- `POST /api/root/points/chain/recovery/auto-handle`
+
+`recovery/auto-handle` is root-only and CSRF-protected. It verifies the chain,
+returns clean status when no recovery is needed, or applies the recommended
+healthy ledger backup only when PointsChain is already in safe mode. Wallets are
+rebuilt from ledger replay; current wallet balances are never trusted as the
+source of truth.
+
 ### Security Center and Operations
 
 - `GET /api/admin/health/readiness`
@@ -271,40 +295,45 @@ host.
 ## Feature Flags and Default Settings
 
 Feature flags and operational settings live in DB-backed `system_settings`.
-Root can change them from Security Center / server settings.
+Root can change them from Security Center / server settings. Fresh deployments
+and server reset start in a management-only state: user-facing feature areas are
+closed until root explicitly enables them.
 
 | Setting | Default |
 |---|---:|
-| `feature_chat_enabled` | `true` |
-| `feature_community_enabled` | `true` |
+| `feature_chat_enabled` | `false` |
+| `feature_community_enabled` | `false` |
 | `feature_accounts_enabled` | `true` |
-| `feature_appeals_enabled` | `true` |
+| `feature_appeals_enabled` | `false` |
 | `feature_audit_log_enabled` | `true` |
 | `feature_violation_center_enabled` | `true` |
-| `feature_reports_enabled` | `true` |
+| `feature_reports_enabled` | `false` |
 | `feature_system_health_enabled` | `true` |
 | `feature_identity_governance_enabled` | `true` |
 | `feature_account_security_enabled` | `false` |
-| `feature_member_governance_enabled` | `false` |
-| `feature_server_modes_enabled` | `false` |
-| `feature_snapshot_restore_enabled` | `false` |
+| `feature_member_governance_enabled` | `true` |
+| `feature_server_modes_enabled` | `true` |
+| `feature_snapshot_restore_enabled` | `true` |
 | `feature_health_center_enabled` | `true` |
-| `feature_forum_core_enabled` | `true` |
+| `feature_forum_core_enabled` | `false` |
 | `feature_ui_rebuild_enabled` | `false` |
-| `feature_reports_notifications_enabled` | `true` |
-| `feature_dm_enabled` | `true` |
-| `feature_attachments_enabled` | `true` |
-| `feature_storage_albums_enabled` | `true` |
+| `feature_reports_notifications_enabled` | `false` |
+| `feature_dm_enabled` | `false` |
+| `feature_attachments_enabled` | `false` |
+| `feature_storage_albums_enabled` | `false` |
 | `feature_personalization_enabled` | `false` |
 | `feature_social_search_enabled` | `false` |
 | `feature_advanced_security_enabled` | `false` |
-| `feature_privacy_uploads_enabled` | `true` |
+| `feature_privacy_uploads_enabled` | `false` |
+| `feature_comfyui_enabled` | `false` |
+| `feature_economy_enabled` | `false` |
+| `feature_games_enabled` | `false` |
 
 Other defaults:
 
 | Setting | Default |
 |---|---:|
-| `audit_chain_enabled` | `false` |
+| `audit_chain_enabled` | `true` |
 | `ip_blocking_enabled` | `true` |
 | `maintenance_mode` | `false` |
 | `root_ip_whitelist_enabled` | `false` |

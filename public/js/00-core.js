@@ -2,10 +2,14 @@
 
 const API = "/api";
 let _csrfToken = null;
+const CSRF_STORAGE_KEY = "hackme_web.csrf_token";
+const CSRF_BROADCAST_CHANNEL = "hackme_web.csrf";
+let csrfBroadcast = null;
 let currentUser = null;
 let currentUserId = null;
 let currentRole = "user";
 let currentRoleLabel = "user";
+let currentPreferredLandingModule = "chat";
 let currentMustChangePassword = false;
 let forcedPasswordChangeMode = false;
 let canManageUsers = false;
@@ -63,6 +67,26 @@ function canAccessModule(moduleKey, role = currentRole) {
   if (siteConfig && siteConfig[featureKey] === false) return false;
   const fallback = moduleKey === "accounts" ? "manager" : "user";
   return clientRoleRank(role || "user") >= clientRoleRank(getModuleMinRole(moduleKey, fallback));
+}
+
+function canOpenLandingModule(moduleKey) {
+  if (moduleKey === "server") return currentUser === "root";
+  if (moduleKey === "accounts") return canAccessModule("accounts");
+  if (moduleKey === "appeals") return currentRole !== "super_admin" && canAccessModule("appeals");
+  if (moduleKey === "announcements") return canAccessModule("community");
+  if (moduleKey === "albums") return canAccessModule("privacy_uploads");
+  if (moduleKey === "drive") return canAccessModule("privacy_uploads");
+  return canAccessModule(moduleKey);
+}
+
+function fallbackLandingModule() {
+  const ordered = ["chat", "dm", "announcements", "community", "drive", "albums", "games", "comfyui", "economy", "appeals", "accounts", "server"];
+  return ordered.find((moduleKey) => canOpenLandingModule(moduleKey)) || "chat";
+}
+
+function resolveLandingModule(preferred) {
+  const moduleKey = String(preferred || "chat").trim();
+  return canOpenLandingModule(moduleKey) ? moduleKey : fallbackLandingModule();
 }
 
 function $(id) { return document.getElementById(id); }
@@ -124,6 +148,7 @@ const SIDEBAR_MENU_CONFIG = [
     group: "管理",
     submenu: [
       { label: "帳號", action: "admin:users" },
+      { label: "發放通知", action: "admin:notices" },
       { label: "違規計次", action: "admin:violations" },
       { label: "會員治理", action: "admin:governance" },
       { label: "申覆審核", action: "admin:appeals" },
@@ -462,6 +487,7 @@ function applySiteConfig(config) {
   const density = typeof siteConfig.site_density === "string" ? siteConfig.site_density : "comfortable";
   document.body.dataset.layoutMode = layoutMode;
   document.body.dataset.density = density;
+  if (typeof updateRecoveryModeUi === "function") updateRecoveryModeUi();
 }
 
 function renderServerVersion(meta) {
@@ -554,6 +580,38 @@ function startServerConnectionMonitor() {
 
 function getCsrfToken() { return _csrfToken; }
 
+function setCsrfToken(token) {
+  _csrfToken = token || null;
+  try {
+    if (_csrfToken) localStorage.setItem(CSRF_STORAGE_KEY, _csrfToken);
+    else localStorage.removeItem(CSRF_STORAGE_KEY);
+  } catch (_) {}
+  try {
+    if (!csrfBroadcast && "BroadcastChannel" in window) csrfBroadcast = new BroadcastChannel(CSRF_BROADCAST_CHANNEL);
+    if (csrfBroadcast) csrfBroadcast.postMessage({ type: "csrf-token", token: _csrfToken });
+  } catch (_) {}
+  return _csrfToken;
+}
+
+try {
+  const storedCsrfToken = localStorage.getItem(CSRF_STORAGE_KEY);
+  if (storedCsrfToken) _csrfToken = storedCsrfToken;
+} catch (_) {}
+
+try {
+  if ("BroadcastChannel" in window) {
+    csrfBroadcast = new BroadcastChannel(CSRF_BROADCAST_CHANNEL);
+    csrfBroadcast.onmessage = (event) => {
+      const data = event?.data || {};
+      if (data.type === "csrf-token") _csrfToken = data.token || null;
+    };
+  }
+} catch (_) {}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === CSRF_STORAGE_KEY) _csrfToken = event.newValue || null;
+});
+
 let _csrfTokenRequest = null;
 
 function markIdleTimeoutLogoutPending() {
@@ -571,7 +629,7 @@ function hasIdleTimeoutLogoutPending() {
 async function fetchCsrfToken({ force = false } = {}) {
   const cookieToken = readCookie("csrf_token");
   if (!force && (_csrfToken || cookieToken)) {
-    _csrfToken = _csrfToken || cookieToken || null;
+    setCsrfToken(_csrfToken || cookieToken || null);
     return _csrfToken;
   }
   if (_csrfTokenRequest) {
@@ -583,12 +641,12 @@ async function fetchCsrfToken({ force = false } = {}) {
       const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
       const json = await res.json().catch(() => ({}));
       if (json && json.ok && typeof json.csrf_token === "string" && json.csrf_token) {
-        _csrfToken = json.csrf_token;
+        setCsrfToken(json.csrf_token);
         return;
       }
     } catch (_) {}
     const latestCookieToken = readCookie("csrf_token");
-    _csrfToken = latestCookieToken || null;
+    setCsrfToken(latestCookieToken || null);
   })();
   try {
     await _csrfTokenRequest;
@@ -596,6 +654,30 @@ async function fetchCsrfToken({ force = false } = {}) {
     _csrfTokenRequest = null;
   }
   return _csrfToken;
+}
+
+function isStateChangingMethod(method) {
+  return ["POST", "PUT", "PATCH", "DELETE"].includes(String(method || "GET").toUpperCase());
+}
+
+async function apiFetch(url, options = {}, retryOnCsrf = true) {
+  const opts = { ...options };
+  opts.credentials = opts.credentials || "same-origin";
+  const method = String(opts.method || "GET").toUpperCase();
+  const headers = new Headers(opts.headers || {});
+  if (isStateChangingMethod(method) && !headers.has("X-CSRF-Token")) {
+    headers.set("X-CSRF-Token", await fetchCsrfToken());
+  }
+  opts.headers = headers;
+  const response = await fetch(url, opts);
+  if (response.status !== 403 || !retryOnCsrf) return response;
+  const payload = await response.clone().json().catch(() => ({}));
+  if (!payload || payload.error !== "csrf_invalid") return response;
+  const refreshed = await fetchCsrfToken({ force: true });
+  if (!refreshed) return response;
+  const retryHeaders = new Headers(options.headers || {});
+  if (isStateChangingMethod(method)) retryHeaders.set("X-CSRF-Token", refreshed);
+  return apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);
 }
 
 function flash(el, text, ok) {
@@ -877,6 +959,7 @@ function setAuthState(json, showLoginHero = false) {
   currentUserId = json.id || null;
   currentRole = json.role || "user";
   currentRoleLabel = json.role_label || currentRole || "user";
+  currentPreferredLandingModule = json.preferred_landing_module || "chat";
   currentMustChangePassword = !!json.must_change_password;
   const idleMinutes = Number(json.session_idle_timeout_minutes ?? 10);
   inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
@@ -966,6 +1049,7 @@ function setAuthState(json, showLoginHero = false) {
   const appealsTab = $("tab-appeals");
   const reportsTab = $("tab-reports");
   const governanceTab = $("tab-governance");
+  const noticesTab = $("tab-notices");
   if (tabModuleAccounts) tabModuleAccounts.style.display = canAccessModule("accounts") ? "" : "none";
   if (tabModuleServer) tabModuleServer.style.display = currentUser === "root" ? "" : "none";
   if (tabModuleChat) tabModuleChat.style.display = canAccessModule("chat") ? "" : "none";
@@ -985,6 +1069,7 @@ function setAuthState(json, showLoginHero = false) {
   if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
   if (governanceTab) governanceTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
+  if (noticesTab) noticesTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
 
@@ -1008,23 +1093,7 @@ function setAuthState(json, showLoginHero = false) {
   if (currentRole !== "super_admin") {
     loadUserAppeals();
   }
-  const initialModule = canAccessModule("accounts")
-    ? "accounts"
-    : canAccessModule("chat")
-      ? "chat"
-      : canAccessModule("dm")
-        ? "dm"
-        : canAccessModule("community")
-          ? "community"
-          : canAccessModule("privacy_uploads")
-            ? "drive"
-            : canAccessModule("comfyui")
-              ? "comfyui"
-              : canAccessModule("games")
-                ? "games"
-                : canAccessModule("economy")
-                  ? "economy"
-                  : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+  const initialModule = resolveLandingModule(currentPreferredLandingModule);
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
@@ -1039,6 +1108,7 @@ function resetAuthState() {
   currentUserId = null;
   currentRole = "user";
   currentRoleLabel = "user";
+  currentPreferredLandingModule = "chat";
   currentMustChangePassword = false;
   inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
   forcedPasswordChangeMode = false;

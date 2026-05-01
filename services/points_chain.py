@@ -21,8 +21,9 @@ WALLET_STATUSES = {"active", "frozen", "limited", "closed"}
 DEFAULT_BLOCK_INTERVAL_SECONDS = 24 * 60 * 60
 DEFAULT_BLOCK_LEDGER_THRESHOLD = 30
 DEFAULT_BLOCK_MAX_INTERVAL_SECONDS = 24 * 60 * 60
-SIGNUP_BONUS_POINTS = 100
-ADMIN_INITIAL_POINTS = 1000
+SIGNUP_BONUS_POINTS = 10
+ADMIN_INITIAL_POINTS = 100
+USER_INITIAL_POINTS = 10
 ADMIN_WEEKLY_SALARY_POINTS = 100
 POINTS_CHAIN_SCHEMA_VERSION = 1
 DEFAULT_BACKUP_INTERVAL_MINUTES = 60
@@ -46,6 +47,7 @@ DEFAULT_RULES = (
     ("marketplace_sale_income", "marketplace_sale_income", "credit", INTERNAL_CURRENCY, 0, 0, None, 0, 0, 1, 0, 1, 1, {"label": "商城收入"}),
     ("new_user_signup_bonus", "new_user_signup_bonus", "credit", INTERNAL_CURRENCY, SIGNUP_BONUS_POINTS, SIGNUP_BONUS_POINTS, SIGNUP_BONUS_POINTS, 0, 0, 0, 0, 1, 1, {"label": "新註冊禮"}),
     ("admin_initial_grant", "admin_initial_grant", "credit", INTERNAL_CURRENCY, ADMIN_INITIAL_POINTS, ADMIN_INITIAL_POINTS, ADMIN_INITIAL_POINTS, 0, 0, 0, 0, 1, 1, {"label": "管理帳號創始補助"}),
+    ("user_initial_grant", "user_initial_grant", "credit", INTERNAL_CURRENCY, USER_INITIAL_POINTS, USER_INITIAL_POINTS, USER_INITIAL_POINTS, 0, 0, 0, 0, 1, 1, {"label": "一般帳號創始補助"}),
     ("admin_weekly_salary", "admin_weekly_salary", "credit", INTERNAL_CURRENCY, ADMIN_WEEKLY_SALARY_POINTS, ADMIN_WEEKLY_SALARY_POINTS, ADMIN_WEEKLY_SALARY_POINTS, 0, 0, 0, 0, 1, 1, {"label": "管理帳號週薪"}),
 )
 
@@ -53,7 +55,6 @@ DEFAULT_PRICE_CATALOG = (
     ("post_cost_standard", "一般發文成本", "forum", "soft", 1, 0, 1, 10, 1, {"description": "防止洗版的基本回收"}),
     ("post_pin_24h", "文章置頂 24 小時", "forum", "soft", 100, 0, 50, 300, 1, {}),
     ("cloud_storage_1gb_30d", "雲端容量 1GB / 30 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {}),
-    ("cloud_storage_10gb_30d", "雲端容量 10GB / 30 天", "cloud_drive", INTERNAL_CURRENCY, 30, 0, 10, 100, 1, {}),
     ("comfyui_txt2img_basic", "基礎生圖一次", "comfyui", "soft", 5, 1, 1, 25, 1, {}),
     ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", INTERNAL_CURRENCY, 2, 1, 1, 20, 1, {}),
     ("comfyui_batch_10", "批次生圖 10 張", "comfyui", INTERNAL_CURRENCY, 15, 1, 5, 80, 1, {}),
@@ -1492,6 +1493,21 @@ class PointsLedgerService:
             """
         ).fetchall()
 
+    def _genesis_user_account_rows(self, conn):
+        cols = table_columns(conn, "users")
+        if "id" not in cols or "username" not in cols or "role" not in cols:
+            return []
+        status_filter = "AND COALESCE(status, 'active')='active'" if "status" in cols else ""
+        return conn.execute(
+            f"""
+            SELECT id, username, role FROM users
+            WHERE username<>'root'
+              AND role NOT IN ('manager', 'super_admin')
+              {status_filter}
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
     def award_signup_bonus(self, *, user_id, actor=None):
         return self.record_transaction(
             user_id=user_id,
@@ -1522,6 +1538,21 @@ class PointsLedgerService:
             actor=actor,
         )
 
+    def award_user_initial_grant(self, *, user_id, actor=None):
+        return self.record_transaction(
+            user_id=user_id,
+            currency_type=DISPLAY_CURRENCY,
+            direction="credit",
+            amount=USER_INITIAL_POINTS,
+            action_type="user_initial_grant",
+            reference_type="genesis_user_allocation",
+            reference_id=str(user_id),
+            idempotency_key=f"user_initial_grant:{int(user_id)}",
+            reason="user genesis allocation",
+            public_metadata={"grant": "user_initial", "amount": USER_INITIAL_POINTS},
+            actor=actor,
+        )
+
     def current_salary_week(self):
         year, week, _weekday = datetime.now(timezone.utc).isocalendar()
         return f"{int(year)}-W{int(week):02d}"
@@ -1548,13 +1579,18 @@ class PointsLedgerService:
             self.ensure_schema(conn)
             admins = [dict(row) for row in self._admin_account_rows(conn)]
             has_blocks = conn.execute("SELECT 1 FROM points_chain_blocks LIMIT 1").fetchone() is not None
+            users = [dict(row) for row in self._genesis_user_account_rows(conn)] if not has_blocks else []
         finally:
             conn.close()
         created = []
         for admin in admins:
             result = self.award_admin_initial_grant(user_id=admin["id"], actor=actor)
             if result.get("created"):
-                created.append({"user_id": admin["id"], "username": admin["username"], "role": admin["role"]})
+                created.append({"user_id": admin["id"], "username": admin["username"], "role": admin["role"], "grant": "admin_initial", "amount": ADMIN_INITIAL_POINTS})
+        for user in users:
+            result = self.award_user_initial_grant(user_id=user["id"], actor=actor)
+            if result.get("created"):
+                created.append({"user_id": user["id"], "username": user["username"], "role": user["role"], "grant": "user_initial", "amount": USER_INITIAL_POINTS})
         sealed = None
         if seal_genesis and created and not has_blocks:
             sealed = self.seal_block(actor=actor, limit=500)
@@ -2361,7 +2397,7 @@ class PointsLedgerService:
                 LEFT JOIN users actor ON actor.id=l.created_by
                 WHERE l.action_type LIKE 'admin_adjust_%'
                    OR l.action_type LIKE 'rollback:%'
-                   OR l.action_type IN ('admin_initial_grant', 'admin_weekly_salary', 'new_user_signup_bonus')
+                   OR l.action_type IN ('admin_initial_grant', 'user_initial_grant', 'admin_weekly_salary', 'new_user_signup_bonus')
                 ORDER BY l.id DESC LIMIT ?
                 """,
                 (min(200, max(1, int(limit or 100))),),

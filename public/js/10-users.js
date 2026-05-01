@@ -150,6 +150,16 @@ function renderUsers() {
       pmBtn.addEventListener("click", () => openPmWithUser(u.username));
       actionButtons.push(pmBtn);
     }
+    if ((currentRole === "manager" || currentRole === "super_admin") && u.username !== "root" && !isSelf) {
+      const noticeBtn = document.createElement("button");
+      noticeBtn.className = "btn";
+      noticeBtn.type = "button";
+      noticeBtn.textContent = "通知";
+      noticeBtn.style.color = "#82b1ff";
+      noticeBtn.title = `發送管理通知給 ${u.username}`;
+      noticeBtn.addEventListener("click", () => openAdminNoticeForUser(u.id));
+      actionButtons.push(noticeBtn);
+    }
     if (canManageUsers && !isSelf) {
       const delBtn = document.createElement("button");
       delBtn.className = "btn btn-danger";
@@ -256,7 +266,7 @@ async function loadUsers() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
-    const res = await fetch(API + "/admin/users", {
+    const res = await apiFetch(API + "/admin/users", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -265,5 +275,6 @@ async function loadUsers() {
     users = Array.isArray(json.users) ? json.users : [];
     canManageUsers = !!json.can_manage;
     renderUsers();
+    if (typeof renderAdminNoticeTargetOptions === "function") renderAdminNoticeTargetOptions();
   } catch (_) {}
 }

@@ -945,12 +945,20 @@ def register_file_routes(app, deps):
             message = "root 依實際磁碟容量控管，不需要用積分購買容量" if _is_root(actor) else ""
             capacity_audit = audit_storage_capacity(conn, storage_root)
             if can_purchase:
+                overcommitted = (
+                    int(capacity_audit["committed_total_bytes"]) >= int(capacity_audit["allocatable_cloud_capacity_bytes"])
+                    or int(capacity_audit["committed_remaining_bytes"]) >= int(capacity_audit["disk"]["safe_free_bytes"])
+                    or "host_storage_overcommitted" in set(capacity_audit.get("reasons") or [])
+                )
+                if overcommitted:
+                    can_purchase = False
+                    message = "會員承諾容量已達或超過 Host 可用容量，目前停用容量購買"
                 headroom = min(
                     max(0, int(capacity_audit["allocatable_cloud_capacity_bytes"]) - int(capacity_audit["committed_total_bytes"])),
                     max(0, int(capacity_audit["disk"]["safe_free_bytes"]) - int(capacity_audit["committed_remaining_bytes"])),
                 )
-                catalog = [item for item in catalog if int(item.get("storage_bytes") or 0) <= headroom]
-                if not catalog:
+                catalog = [item for item in catalog if can_purchase and int(item.get("storage_bytes") or 0) <= headroom]
+                if can_purchase and not catalog:
                     can_purchase = False
                     message = "Host 磁碟可承諾容量不足，目前不能購買更多雲端容量"
             return json_resp({
@@ -1644,9 +1652,19 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    def _html_safe_json(value):
+        return (
+            json.dumps(str(value or ""))
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+        )
+
     @app.route("/shared/albums/<token>", methods=["GET"])
     def storage_album_share_page(token):
-        safe_token = json.dumps(str(token or ""))
+        safe_token = _html_safe_json(token)
         return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>

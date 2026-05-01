@@ -2,17 +2,64 @@
 
 let gameSelectedMatchId = null;
 let gameSelectedSquare = null;
+let gameSelectedKey = "chess";
 let gameState = { matches: [], invites: [], leaderboard: [] };
 const CHESS_PIECES = {
   K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
   k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
 };
+const SUDOKU_PUZZLES = [
+  {
+    puzzle: "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
+    solution: "534678912672195348198342567859761423426853791713924856961537284287419635345286179",
+  },
+  {
+    puzzle: "003020600900305001001806400008102900700000008006708200002609500800203009005010300",
+    solution: "483921657967345821251876493548132976729564138136798245372689514814253769695417382",
+  },
+  {
+    puzzle: "000260701680070090190004500820100040004602900050003028009300074040050036703018000",
+    solution: "435269781682571493197834562826195347374682915951743628519326874248957136763418259",
+  },
+];
+let sudokuState = null;
+let minesweeperState = null;
 
 function setGameMsg(text, ok) {
   const el = $("game-msg");
   if (!el) return;
   el.textContent = text || "";
   el.className = text ? "msg show " + (ok ? "ok" : "err") : "msg";
+}
+
+function gameIcon(key) {
+  if (key === "sudoku") return "9";
+  if (key === "minesweeper") return "!";
+  return "♟";
+}
+
+function gameSubtitle(game) {
+  if (game.key === "sudoku") return "單人邏輯解題";
+  if (game.key === "minesweeper") return "單人推理挑戰";
+  return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
+}
+
+function switchGameView(key) {
+  gameSelectedKey = key || "chess";
+  const isChess = gameSelectedKey === "chess";
+  const chessLobby = $("chess-lobby-panel");
+  const chessPanel = $("chess-game-panel");
+  const sudokuPanel = $("sudoku-game-panel");
+  const minesPanel = $("minesweeper-game-panel");
+  if (chessLobby) chessLobby.style.display = isChess ? "" : "none";
+  if (chessPanel) chessPanel.style.display = isChess ? "" : "none";
+  if (sudokuPanel) sudokuPanel.style.display = gameSelectedKey === "sudoku" ? "" : "none";
+  if (minesPanel) minesPanel.style.display = gameSelectedKey === "minesweeper" ? "" : "none";
+  document.querySelectorAll("[data-game-key]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
+  });
+  if (gameSelectedKey === "sudoku" && !sudokuState) startSudokuGame();
+  if (gameSelectedKey === "minesweeper" && !minesweeperState) startMinesweeperGame();
 }
 
 function gameRequestNeedsFreshCsrf(json, res) {
@@ -35,18 +82,18 @@ async function gameRequest(path, { method = "GET", body = null } = {}) {
     };
   };
 
-  let res = await fetch(API + path, await buildOptions());
+  let res = await apiFetch(API + path, await buildOptions());
   let json = await res.json().catch(() => ({}));
   if (gameRequestNeedsFreshCsrf(json, res)) {
     await fetchCsrfToken({ force: true });
-    res = await fetch(API + path, await buildOptions());
+    res = await apiFetch(API + path, await buildOptions());
     json = await res.json().catch(() => ({}));
   }
   if (!res.ok || !json.ok) {
     throw new Error(json.msg || `HTTP ${res.status}`);
   }
   if (mutates && typeof _csrfToken !== "undefined") {
-    _csrfToken = null;
+    setCsrfToken(null);
   }
   return json;
 }
@@ -56,11 +103,13 @@ function renderGameCatalog(games) {
   if (!wrap) return;
   const rows = Array.isArray(games) ? games : [];
   wrap.innerHTML = rows.map((game) => `
-    <button class="game-catalog-item active" type="button" disabled>
-      <span class="game-catalog-icon">♟</span>
-      <span><strong>${sanitize(game.title || "西洋棋")}</strong><small>${game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰"}</small></span>
+    <button class="game-catalog-item ${game.key === gameSelectedKey ? "active" : ""}" type="button" data-game-key="${sanitize(game.key || "chess")}">
+      <span class="game-catalog-icon">${sanitize(gameIcon(game.key))}</span>
+      <span><strong>${sanitize(game.title || "西洋棋")}</strong><small>${sanitize(gameSubtitle(game))}</small></span>
     </button>
   `).join("") || "<p style=\"color:var(--muted);\">尚未開放遊戲</p>";
+  if (!rows.some((game) => game.key === gameSelectedKey)) gameSelectedKey = "chess";
+  switchGameView(gameSelectedKey);
 }
 
 function renderGameUsers(users) {
@@ -105,7 +154,14 @@ function renderGameInvites(invites) {
 function gameMatchLabel(match) {
   const side = match.my_side === "black" ? "黑方" : "白方";
   const opponentName = match.my_side === "black" ? match.white_username : match.black_username;
-  return `${side} vs ${opponentName || "電腦"}`;
+  const difficulty = match.mode === "computer" ? ` · ${gameDifficultyLabel(match.computer_difficulty)}` : "";
+  return `${side} vs ${opponentName || "電腦"}${difficulty}`;
+}
+
+function gameDifficultyLabel(difficulty) {
+  if (difficulty === "hard") return "困難";
+  if (difficulty === "normal") return "普通";
+  return "簡單";
 }
 
 function renderGameMatches(matches) {
@@ -209,6 +265,183 @@ function renderGameLeaderboard(data) {
   `).join("");
 }
 
+function startSudokuGame() {
+  const item = SUDOKU_PUZZLES[Math.floor(Math.random() * SUDOKU_PUZZLES.length)];
+  sudokuState = {
+    puzzle: item.puzzle,
+    solution: item.solution,
+    values: item.puzzle.split("").map((value) => value === "0" ? "" : value),
+    fixed: item.puzzle.split("").map((value) => value !== "0"),
+  };
+  renderSudokuBoard();
+  const status = $("sudoku-status");
+  if (status) status.textContent = "填入 1-9，完成後檢查答案。";
+}
+
+function renderSudokuBoard() {
+  const board = $("sudoku-board");
+  if (!board || !sudokuState) return;
+  board.innerHTML = sudokuState.values.map((value, index) => {
+    const fixed = sudokuState.fixed[index];
+    const row = Math.floor(index / 9);
+    const col = index % 9;
+    return `
+      <input class="sudoku-cell ${fixed ? "fixed" : ""}" inputmode="numeric" maxlength="1"
+             aria-label="數獨第 ${row + 1} 列第 ${col + 1} 欄"
+             data-sudoku-index="${index}" value="${sanitize(value || "")}" ${fixed ? "readonly" : ""} />
+    `;
+  }).join("");
+}
+
+function updateSudokuCell(index, value) {
+  if (!sudokuState || sudokuState.fixed[index]) return;
+  const normalized = /^[1-9]$/.test(value || "") ? value : "";
+  sudokuState.values[index] = normalized;
+  const input = document.querySelector(`[data-sudoku-index="${index}"]`);
+  if (input && input.value !== normalized) input.value = normalized;
+}
+
+function checkSudokuGame() {
+  const status = $("sudoku-status");
+  if (!sudokuState) return;
+  const current = sudokuState.values.join("");
+  document.querySelectorAll("[data-sudoku-index]").forEach((input) => {
+    const index = Number(input.getAttribute("data-sudoku-index") || 0);
+    input.classList.toggle("wrong", !!sudokuState.values[index] && sudokuState.values[index] !== sudokuState.solution[index]);
+  });
+  if (sudokuState.values.some((value) => !value)) {
+    if (status) status.textContent = "尚未填完。紅色格子代表目前填錯。";
+    return;
+  }
+  if (current === sudokuState.solution) {
+    if (status) status.textContent = "完成，答案正確。";
+    setGameMsg("數獨完成", true);
+  } else if (status) {
+    status.textContent = "還有錯誤，請檢查紅色格子。";
+  }
+}
+
+function minesweeperConfig() {
+  const difficulty = $("minesweeper-difficulty")?.value || "easy";
+  if (difficulty === "hard") return { rows: 16, cols: 16, mines: 40, difficulty };
+  if (difficulty === "normal") return { rows: 12, cols: 12, mines: 20, difficulty };
+  return { rows: 9, cols: 9, mines: 10, difficulty: "easy" };
+}
+
+function startMinesweeperGame() {
+  const config = minesweeperConfig();
+  const total = config.rows * config.cols;
+  minesweeperState = {
+    ...config,
+    status: "ready",
+    firstMove: true,
+    cells: Array.from({ length: total }, () => ({ mine: false, revealed: false, flagged: false, count: 0 })),
+  };
+  renderMinesweeperBoard();
+  updateMinesweeperStatus();
+}
+
+function placeMinesweeperMines(safeIndex) {
+  const state = minesweeperState;
+  if (!state) return;
+  const blocked = new Set([safeIndex, ...minesweeperNeighbors(safeIndex)]);
+  const choices = state.cells.map((_cell, index) => index).filter((index) => !blocked.has(index));
+  for (let placed = 0; placed < state.mines && choices.length; placed += 1) {
+    const pick = Math.floor(Math.random() * choices.length);
+    const index = choices.splice(pick, 1)[0];
+    state.cells[index].mine = true;
+  }
+  state.cells.forEach((cell, index) => {
+    cell.count = cell.mine ? 0 : minesweeperNeighbors(index).filter((neighbor) => state.cells[neighbor].mine).length;
+  });
+  state.firstMove = false;
+  state.status = "active";
+}
+
+function minesweeperNeighbors(index) {
+  const state = minesweeperState;
+  if (!state) return [];
+  const row = Math.floor(index / state.cols);
+  const col = index % state.cols;
+  const neighbors = [];
+  for (let dr = -1; dr <= 1; dr += 1) {
+    for (let dc = -1; dc <= 1; dc += 1) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = row + dr;
+      const nc = col + dc;
+      if (nr >= 0 && nr < state.rows && nc >= 0 && nc < state.cols) {
+        neighbors.push(nr * state.cols + nc);
+      }
+    }
+  }
+  return neighbors;
+}
+
+function revealMinesweeperCell(index) {
+  const state = minesweeperState;
+  index = Number(index);
+  if (!state || state.status === "lost" || state.status === "won") return;
+  if (state.firstMove) placeMinesweeperMines(index);
+  const cell = state.cells[index];
+  if (!cell || cell.flagged || cell.revealed) return;
+  cell.revealed = true;
+  if (cell.mine) {
+    state.status = "lost";
+    state.cells.forEach((item) => { if (item.mine) item.revealed = true; });
+    renderMinesweeperBoard();
+    updateMinesweeperStatus();
+    return;
+  }
+  if (cell.count === 0) {
+    minesweeperNeighbors(index).forEach((neighbor) => {
+      if (!state.cells[neighbor].revealed) revealMinesweeperCell(neighbor);
+    });
+  }
+  if (state.cells.every((item) => item.mine || item.revealed)) {
+    state.status = "won";
+    state.cells.forEach((item) => { if (item.mine) item.flagged = true; });
+    setGameMsg("踩地雷完成", true);
+  }
+  renderMinesweeperBoard();
+  updateMinesweeperStatus();
+}
+
+function toggleMinesweeperFlag(index) {
+  const state = minesweeperState;
+  index = Number(index);
+  if (!state || state.status === "lost" || state.status === "won") return;
+  const cell = state.cells[index];
+  if (!cell || cell.revealed) return;
+  cell.flagged = !cell.flagged;
+  renderMinesweeperBoard();
+  updateMinesweeperStatus();
+}
+
+function renderMinesweeperBoard() {
+  const board = $("minesweeper-board");
+  const state = minesweeperState;
+  if (!board || !state) return;
+  board.style.setProperty("--mine-cols", String(state.cols));
+  board.innerHTML = state.cells.map((cell, index) => {
+    const label = cell.revealed ? (cell.mine ? "*" : (cell.count || "")) : (cell.flagged ? "⚑" : "");
+    const tone = cell.revealed && cell.mine ? "mine" : cell.revealed ? "revealed" : cell.flagged ? "flagged" : "";
+    return `<button class="mine-cell ${tone}" type="button" data-mine-index="${index}">${sanitize(String(label))}</button>`;
+  }).join("");
+}
+
+function updateMinesweeperStatus() {
+  const status = $("minesweeper-status");
+  if (!status || !minesweeperState) return;
+  const flagged = minesweeperState.cells.filter((cell) => cell.flagged).length;
+  if (minesweeperState.status === "won") {
+    status.textContent = "完成，所有安全格都已翻開。";
+  } else if (minesweeperState.status === "lost") {
+    status.textContent = "踩到地雷，請重開一局。";
+  } else {
+    status.textContent = `地雷 ${minesweeperState.mines} · 已插旗 ${flagged} · 左鍵翻格，右鍵插旗。`;
+  }
+}
+
 async function loadGameZone() {
   try {
     await fetchCsrfToken({ force: true });
@@ -275,11 +508,14 @@ async function reviewGameInvite(inviteId, action) {
 
 async function createPracticeGame() {
   try {
-    const json = await gameRequest("/games/chess/practice", { method: "POST", body: {} });
+    const side = $("game-practice-side")?.value || "white";
+    const difficulty = $("game-practice-difficulty")?.value || "easy";
+    const json = await gameRequest("/games/chess/practice", { method: "POST", body: { side, difficulty } });
     gameSelectedMatchId = json.match_id;
     gameSelectedSquare = null;
-    setGameMsg("已建立電腦練習局", true);
-    await refreshGameZoneAfterMutation("已建立電腦練習局");
+    const msg = `${side === "black" ? "已建立電腦練習局，你執黑方" : "已建立電腦練習局，你執白方"}，難度：${gameDifficultyLabel(difficulty)}`;
+    setGameMsg(msg, true);
+    await refreshGameZoneAfterMutation(msg);
   } catch (err) {
     setGameMsg(err.message || "建立練習局失敗", false);
   }
@@ -355,6 +591,31 @@ async function awardGameRewards() {
 }
 
 document.addEventListener("click", (event) => {
+  const catalogBtn = event.target?.closest?.("[data-game-key]");
+  if (catalogBtn) {
+    switchGameView(catalogBtn.dataset.gameKey || "chess");
+    return;
+  }
+  const sudokuNewBtn = event.target?.closest?.("#sudoku-new-btn");
+  if (sudokuNewBtn) {
+    startSudokuGame();
+    return;
+  }
+  const sudokuCheckBtn = event.target?.closest?.("#sudoku-check-btn");
+  if (sudokuCheckBtn) {
+    checkSudokuGame();
+    return;
+  }
+  const minesNewBtn = event.target?.closest?.("#minesweeper-new-btn");
+  if (minesNewBtn) {
+    startMinesweeperGame();
+    return;
+  }
+  const mineBtn = event.target?.closest?.("[data-mine-index]");
+  if (mineBtn) {
+    revealMinesweeperCell(mineBtn.dataset.mineIndex);
+    return;
+  }
   const deleteMatchBtn = event.target?.closest?.("[data-game-delete-match]");
   if (deleteMatchBtn) {
     deleteFinishedGame(deleteMatchBtn.dataset.gameDeleteMatch);
@@ -376,4 +637,17 @@ document.addEventListener("click", (event) => {
   if (squareBtn) {
     selectChessSquare(squareBtn.dataset.chessSquare || "");
   }
+});
+
+document.addEventListener("input", (event) => {
+  const sudokuInput = event.target?.closest?.("[data-sudoku-index]");
+  if (!sudokuInput) return;
+  updateSudokuCell(Number(sudokuInput.dataset.sudokuIndex || 0), sudokuInput.value || "");
+});
+
+document.addEventListener("contextmenu", (event) => {
+  const mineBtn = event.target?.closest?.("[data-mine-index]");
+  if (!mineBtn) return;
+  event.preventDefault();
+  toggleMinesweeperFlag(mineBtn.dataset.mineIndex);
 });

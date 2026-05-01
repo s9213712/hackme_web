@@ -796,6 +796,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_default_password INTEGER NOT NULL DEFAULT 0,
     avatar_file_id TEXT,
     avatar_crop_json TEXT,
+    preferred_landing_module TEXT NOT NULL DEFAULT 'chat',
     deleted_at TEXT,
     -- Timestamps
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),

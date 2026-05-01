@@ -28,6 +28,8 @@ function bindUiEvents() {
   const tabSettingsDrive = $("tab-settings-drive");
   const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
+  const tabNotices  = $("tab-notices");
+  const tabPasswordResets = $("tab-password-resets");
   const tabViol     = $("tab-violations");
   const tabGovernance = $("tab-governance");
   const tabAppeals  = $("tab-appeals");
@@ -57,6 +59,10 @@ function bindUiEvents() {
   const violRefresh  = $("violations-refresh");
   const governanceRefresh = $("governance-refresh");
   const governanceCreate = $("governance-create-proposal");
+  const adminNoticeTemplate = $("admin-notice-template");
+  const adminNoticeSendBtn = $("admin-notice-send-btn");
+  const passwordResetReviewRefresh = $("password-reset-review-refresh");
+  const passwordResetReviewStatus = $("password-reset-review-status");
   const appealSubmit = $("appeal-submit-btn");
   const appealRefresh = $("appeal-refresh-btn");
   const reportRefresh = $("admin-reports-refresh");
@@ -106,6 +112,9 @@ function bindUiEvents() {
   const chatJoinBtn = $("chat-join-room-btn");
   const chatRefreshRoomBtn = $("chat-room-refresh-btn");
   const chatRefreshMsgBtn = $("chat-refresh-msg-btn");
+  const chatBackupRoomBtn = $("chat-backup-room-btn");
+  const chatRestoreRoomBtn = $("chat-restore-room-btn");
+  const chatRestoreFile = $("chat-restore-file");
   const chatSendBtn = $("chat-send-btn");
   const chatFriendAddBtn = $("chat-friend-add-btn");
   const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
@@ -144,6 +153,9 @@ function bindUiEvents() {
   const communityModeratorRefreshBtn = $("community-moderator-refresh-btn");
   const communityModeratorSaveBtn = $("community-moderator-save-btn");
   const communityModeratorPreset = $("community-moderator-preset");
+  const communityMembersOpenBtn = $("community-members-open-btn");
+  const communityMembersRefreshBtn = $("community-members-refresh-btn");
+  const communityMemberSaveBtn = $("community-member-save-btn");
   const communityBackBoardsBtn = $("community-back-boards-btn");
   const communityBackThreadsBtn = $("community-back-threads-btn");
   const communityBoardSearch = $("community-board-search");
@@ -214,6 +226,8 @@ function bindUiEvents() {
   if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
   if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
+  if (tabNotices)  tabNotices.addEventListener("click",  () => switchAdminTab("notices"));
+  if (tabPasswordResets) tabPasswordResets.addEventListener("click", () => switchAdminTab("password-resets"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
   if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
@@ -238,6 +252,8 @@ function bindUiEvents() {
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
   if (adminBulkApproveBtn) adminBulkApproveBtn.addEventListener("click", () => bulkReviewRegistrations("approve"));
   if (adminBulkRejectBtn) adminBulkRejectBtn.addEventListener("click", () => bulkReviewRegistrations("reject"));
+  if (passwordResetReviewRefresh) passwordResetReviewRefresh.addEventListener("click", loadPasswordResetReviews);
+  if (passwordResetReviewStatus) passwordResetReviewStatus.addEventListener("change", loadPasswordResetReviews);
   if (adminOpenAddBtn) adminOpenAddBtn.addEventListener("click", showAdminAddDialog);
   if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
   if (adminAddCancelBtn) adminAddCancelBtn.addEventListener("click", hideAdminAddDialog);
@@ -247,6 +263,9 @@ function bindUiEvents() {
   if (chatRefreshMsgBtn) chatRefreshMsgBtn.addEventListener("click", () => {
     if (selectedChatRoomId) loadChatMessages(selectedChatRoomId, false);
   });
+  if (chatBackupRoomBtn) chatBackupRoomBtn.addEventListener("click", backupSelectedChatRoom);
+  if (chatRestoreRoomBtn) chatRestoreRoomBtn.addEventListener("click", chooseChatRestoreFile);
+  if (chatRestoreFile) chatRestoreFile.addEventListener("change", restoreChatRoomBackup);
   if (chatSendBtn) chatSendBtn.addEventListener("click", sendChatMessage);
   if (chatFriendAddBtn) chatFriendAddBtn.addEventListener("click", addChatFriend);
   document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
@@ -292,6 +311,9 @@ function bindUiEvents() {
   if (communityModeratorRefreshBtn) communityModeratorRefreshBtn.addEventListener("click", () => loadCommunityModerators());
   if (communityModeratorSaveBtn) communityModeratorSaveBtn.addEventListener("click", saveCommunityModerator);
   if (communityModeratorPreset) communityModeratorPreset.addEventListener("change", () => applyModeratorPreset(communityModeratorPreset.value));
+  if (communityMembersOpenBtn) communityMembersOpenBtn.addEventListener("click", () => toggleCommunityMembersManager());
+  if (communityMembersRefreshBtn) communityMembersRefreshBtn.addEventListener("click", () => loadCommunityBoardMembers());
+  if (communityMemberSaveBtn) communityMemberSaveBtn.addEventListener("click", saveCommunityBoardMember);
   if (communityToolsToggleBtn) communityToolsToggleBtn.addEventListener("click", () => toggleCommunityTools());
   if (communityReviewTabBtn) communityReviewTabBtn.addEventListener("click", () => switchCommunityMode(communityMode === "review" ? "boards" : "review"));
   if (communityBackBoardsBtn) communityBackBoardsBtn.addEventListener("click", showCommunityBoardStage);
@@ -414,6 +436,8 @@ function bindUiEvents() {
   if ($("violations-next")) $("violations-next").addEventListener("click", () => loadViolations(violationsPage + 1, violationTargetUser));
   if (governanceRefresh) governanceRefresh.addEventListener("click", loadGovernanceDashboard);
   if (governanceCreate) governanceCreate.addEventListener("click", createGovernanceProposal);
+  if (adminNoticeTemplate) adminNoticeTemplate.addEventListener("change", applyAdminNoticeTemplate);
+  if (adminNoticeSendBtn) adminNoticeSendBtn.addEventListener("click", sendAdminNotice);
   if ($("governance-action-type")) $("governance-action-type").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-target-user-id")) $("governance-target-user-id").addEventListener("change", updateGovernanceActionValueHelp);
   if ($("governance-proposal-status")) $("governance-proposal-status").addEventListener("change", loadGovernanceProposals);
@@ -473,7 +497,7 @@ setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
   await loadSiteConfig();
   setupInactivityTracking();
   startServerConnectionMonitor();
-  _csrfToken = readCookie("csrf_token");
+  setCsrfToken(readCookie("csrf_token"));
   bindUiEvents();
   if (typeof loadCaptchaChallenge === "function") loadCaptchaChallenge();
   // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死

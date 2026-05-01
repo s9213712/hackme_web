@@ -1312,6 +1312,119 @@
       word-break: break-all;
     }
 
+    .health-dashboard {
+      display: grid;
+      gap: .85rem;
+    }
+
+    .health-hero,
+    .health-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+      padding: .85rem;
+    }
+
+    .health-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .85rem;
+    }
+
+    .health-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: .45rem;
+    }
+
+    .health-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: .55rem;
+    }
+
+    .health-metric-card {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,.2);
+      padding: .65rem .7rem;
+    }
+
+    .health-metric-label {
+      color: var(--muted);
+      font-size: .68rem;
+    }
+
+    .health-metric-value {
+      margin-top: .22rem;
+      font-size: 1.05rem;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .health-section-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: .75rem;
+    }
+
+    .health-section-wide {
+      min-width: 0;
+    }
+
+    .health-section-title {
+      color: var(--text);
+      font-size: .9rem;
+      font-weight: 700;
+      margin-bottom: .55rem;
+    }
+
+    .health-list {
+      display: grid;
+      gap: .45rem;
+    }
+
+    .health-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: .65rem;
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 8px;
+      background: rgba(0,0,0,.16);
+      padding: .58rem .65rem;
+    }
+
+    .health-row-main {
+      min-width: 0;
+    }
+
+    .health-row-main strong,
+    .health-row-main small {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .health-row-main small {
+      color: var(--muted);
+      font-size: .72rem;
+      margin-top: .18rem;
+    }
+
+    .health-row-value {
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .health-empty {
+      color: var(--muted);
+      padding: .65rem;
+      text-align: center;
+    }
+
     .drive-transfer-row {
       border-color: rgba(100,181,246,.35);
       background: rgba(100,181,246,.07);
@@ -2120,7 +2233,7 @@
 
     .community-share-image {
       width: min(420px, 100%);
-      margin: .45rem auto .75rem;
+      margin: .45rem 0 .75rem;
       border: 1px solid rgba(255,255,255,.08);
       border-radius: 8px;
       overflow: hidden;
@@ -2508,6 +2621,47 @@
     .admin-toolbar .btn {
       width: auto;
       flex: 0 1 auto;
+    }
+
+    .integrity-select-row {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: .65rem;
+      margin-bottom: .55rem;
+      text-align: left;
+    }
+
+    .integrity-select-label,
+    .integrity-finding-select {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: .35rem;
+      width: auto;
+      margin: 0;
+      color: var(--text);
+      font-size: .82rem;
+      line-height: 1.2;
+      white-space: nowrap;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .integrity-select-label input,
+    .integrity-finding-select input {
+      width: 1rem;
+      height: 1rem;
+      min-width: 1rem;
+      margin: 0;
+      padding: 0;
+      flex: 0 0 auto;
+    }
+
+    .integrity-selected-count {
+      color: var(--muted);
+      font-size: .75rem;
+      text-align: left;
     }
 
     .mini-title {
@@ -3031,6 +3185,84 @@
       border-radius: 6px;
       padding: .18rem .35rem;
       background: rgba(255,255,255,.04);
+    }
+    .single-game-panel {
+      display: flex;
+      flex-direction: column;
+      gap: .75rem;
+    }
+    .sudoku-board {
+      width: min(100%, 540px);
+      aspect-ratio: 1;
+      display: grid;
+      grid-template-columns: repeat(9, minmax(0, 1fr));
+      border: 2px solid rgba(255,255,255,.28);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255,255,255,.14);
+      margin: .65rem auto 0;
+    }
+    .sudoku-cell {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,.16);
+      background: rgba(0,0,0,.2);
+      color: var(--text);
+      text-align: center;
+      font-size: clamp(.95rem, 2.4vw, 1.25rem);
+      font-weight: 700;
+      padding: 0;
+      border-radius: 0;
+      outline: none;
+    }
+    .sudoku-cell:nth-child(3n) {
+      border-right-color: rgba(255,255,255,.48);
+      border-right-width: 2px;
+    }
+    .sudoku-cell:nth-child(9n) {
+      border-right-width: 1px;
+    }
+    .sudoku-cell:nth-child(n+19):nth-child(-n+27),
+    .sudoku-cell:nth-child(n+46):nth-child(-n+54) {
+      border-bottom-color: rgba(255,255,255,.48);
+      border-bottom-width: 2px;
+    }
+    .sudoku-cell.fixed {
+      background: rgba(255,255,255,.1);
+      color: var(--muted);
+    }
+    .sudoku-cell.wrong {
+      background: rgba(255,79,109,.24);
+      border-color: rgba(255,79,109,.75);
+    }
+    .minesweeper-board {
+      width: min(100%, 620px);
+      display: grid;
+      grid-template-columns: repeat(var(--mine-cols, 9), minmax(0, 1fr));
+      gap: 2px;
+      margin: .65rem auto 0;
+    }
+    .mine-cell {
+      aspect-ratio: 1;
+      min-width: 0;
+      padding: 0;
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 4px;
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      font-weight: 800;
+      font-size: clamp(.7rem, 1.8vw, 1rem);
+      line-height: 1;
+      cursor: pointer;
+    }
+    .mine-cell.revealed {
+      background: rgba(255,255,255,.18);
+    }
+    .mine-cell.flagged {
+      color: #ffd166;
+    }
+    .mine-cell.mine {
+      background: rgba(255,79,109,.32);
+      color: #fff;
     }
 
     @media (max-width: 1100px) {

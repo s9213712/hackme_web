@@ -98,7 +98,7 @@ def _init_db(path):
     conn.close()
 
 
-def _build_app(db_path, *, require_email_verification=False):
+def _build_app(db_path, *, require_email_verification=False, password_reset_mode="admin_review"):
     app = Flask(__name__)
     app.testing = True
 
@@ -138,7 +138,14 @@ def _build_app(db_path, *, require_email_verification=False):
         "get_db": get_db,
         "get_feature_settings": lambda: {},
         "get_member_level_rule": lambda conn, level: {},
-        "get_system_settings": lambda: {"require_email_verification": require_email_verification, "max_login_failures": 5, "block_duration_minutes": 10, "allow_register": True, "captcha_mode": "none"},
+        "get_system_settings": lambda: {
+            "require_email_verification": require_email_verification,
+            "password_reset_mode": password_reset_mode,
+            "max_login_failures": 5,
+            "block_duration_minutes": 10,
+            "allow_register": True,
+            "captcha_mode": "none",
+        },
         "get_ua": lambda: "test-agent",
         "hash_password": lambda value: value,
         "is_feature_enabled": lambda name: name == "feature_account_security_enabled",
@@ -181,10 +188,29 @@ def _latest_token(db_path, kind):
         conn.close()
 
 
-def test_password_reset_uses_generic_request_and_one_time_token(tmp_path):
+def test_password_reset_defaults_to_admin_review_request(tmp_path):
     db_path = tmp_path / "recovery.db"
     _init_db(db_path)
     client = _build_app(db_path).test_client()
+
+    requested = client.post("/api/password-reset/request", json={"username_or_email": "alice"})
+    assert requested.status_code == 200
+    assert requested.get_json()["ok"] is True
+
+    conn = sqlite3.connect(db_path)
+    try:
+        pending = conn.execute("SELECT COUNT(*) FROM password_reset_review_requests WHERE user_id=1 AND status='pending'").fetchone()[0]
+        mailed = conn.execute("SELECT COUNT(*) FROM mail_outbox WHERE kind='password_reset'").fetchone()[0]
+    finally:
+        conn.close()
+    assert pending == 1
+    assert mailed == 0
+
+
+def test_password_reset_email_token_mode_uses_one_time_token(tmp_path):
+    db_path = tmp_path / "recovery.db"
+    _init_db(db_path)
+    client = _build_app(db_path, password_reset_mode="email_token").test_client()
 
     requested = client.post("/api/password-reset/request", json={"username_or_email": "alice"})
     assert requested.status_code == 200
@@ -232,7 +258,7 @@ def test_root_password_reset_bypasses_password_policy(tmp_path):
     finally:
         conn.close()
 
-    client = _build_app(db_path).test_client()
+    client = _build_app(db_path, password_reset_mode="email_token").test_client()
     requested = client.post("/api/password-reset/request", json={"username_or_email": "root@example.test"})
     assert requested.status_code == 200
 

@@ -191,6 +191,8 @@ def test_public_mime_type_uses_server_safe_guess_not_client_header():
     assert safe_public_mime_type("pwn.html", "text/html") == "application/octet-stream"
     assert safe_public_mime_type("vector.svg", "image/svg+xml") == "application/octet-stream"
     assert safe_public_mime_type("note.txt", "text/html") == "text/plain"
+    assert safe_public_mime_type("song.mp3", "text/html") == "audio/mpeg"
+    assert safe_public_mime_type("voice.wav", "text/html") in {"audio/wav", "audio/x-wav"}
 
 
 def test_uploaded_file_record_stores_safe_public_mime_type():
@@ -378,9 +380,8 @@ def test_storage_upgrade_price_catalog_backfills_missing_items():
             "SELECT * FROM economy_price_catalog WHERE item_key LIKE 'cloud_storage_%' AND enabled=1 ORDER BY item_key"
         ).fetchall()
         catalog = enrich_storage_upgrade_catalog([dict(row) for row in rows])
-        assert [item["item_key"] for item in catalog] == ["cloud_storage_10gb_30d", "cloud_storage_1gb_30d"]
-        assert catalog[0]["storage_bytes"] == 10 * 1024 * 1024 * 1024
-        assert catalog[1]["storage_bytes"] == 1024 * 1024 * 1024
+        assert [item["item_key"] for item in catalog] == ["cloud_storage_1gb_30d"]
+        assert catalog[0]["storage_bytes"] == 1024 * 1024 * 1024
     finally:
         conn.close()
 

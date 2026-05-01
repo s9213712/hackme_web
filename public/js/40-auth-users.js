@@ -16,7 +16,7 @@ async function doLogin() {
   try {
     const loginPayload = { username: user, password: pw, csrf_token: csrf };
     if (internalTestToken) loginPayload.internal_test_token = internalTestToken;
-    const res = await fetch(API + "/login", {
+    const res = await apiFetch(API + "/login", {
       method: "POST",
       credentials: "same-origin",
       headers: {
@@ -27,13 +27,13 @@ async function doLogin() {
     });
     const json = await res.json();
     if (!json.ok) {
-      _csrfToken = null;
+      setCsrfToken(null);
       flash($("li-msg"), json.msg || "登入失敗", false);
       return;
     }
     clearIdleTimeoutLogoutPending();
-    _csrfToken = null;
-    const meRes = await fetch(API + "/me", { credentials: "same-origin" });
+    setCsrfToken(null);
+    const meRes = await apiFetch(API + "/me", { credentials: "same-origin" });
     const me = await meRes.json();
     if (me.ok) setAuthState(me, true);
     else setAuthState({ username: user, role: "user", role_label: "一般用戶", nickname: "-" }, true);
@@ -86,7 +86,7 @@ function renderCaptchaChallenge(captcha) {
 
 async function loadCaptchaChallenge() {
   try {
-    const res = await fetch(API + "/captcha/challenge", { credentials: "same-origin" });
+    const res = await apiFetch(API + "/captcha/challenge", { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
     if (json.ok) renderCaptchaChallenge(json.captcha || { required: false, mode: "none" });
   } catch (_) {
@@ -144,7 +144,7 @@ async function doRegister() {
   clearMsg();
 
   try {
-    const res = await fetch(API + "/register", {
+    const res = await apiFetch(API + "/register", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -166,7 +166,7 @@ async function doRegister() {
     });
     const json = await res.json();
     if (json.ok) {
-      _csrfToken = null;
+      setCsrfToken(null);
       flash($("reg-msg"), "✓ " + sanitize(json.msg), true);
       setTimeout(() => {
         $("reg-pw").value = "";
@@ -176,7 +176,7 @@ async function doRegister() {
       }, 1500);
       setTimeout(() => showTab("login"), 2000);
     } else {
-      _csrfToken = null;
+      setCsrfToken(null);
       flash($("reg-msg"), json.msg || "註冊失敗", false);
       loadCaptchaChallenge();
     }
@@ -190,6 +190,17 @@ async function doRegister() {
 
 function setRecoveryMsg(text, ok) {
   flash($("recovery-msg"), text, ok);
+}
+
+function updateRecoveryModeUi() {
+  const mode = (siteConfig && siteConfig.password_reset_mode) || "admin_review";
+  const emailTokenMode = mode === "email_token";
+  const requestBtn = $("reset-request-btn");
+  if (requestBtn) requestBtn.textContent = emailTokenMode ? "寄送重設密碼驗證碼" : "送出重設密碼審核";
+  ["reset-token-field", "reset-new-pw-field", "reset-new-pw-confirm-field", "reset-confirm-btn"].forEach((id) => {
+    const el = $(id);
+    if (el) el.style.display = emailTokenMode ? "" : "none";
+  });
 }
 
 function toggleRecoveryPanel() {
@@ -210,13 +221,13 @@ async function postRecoveryAction(path, payload) {
     setRecoveryMsg("安全驗證狀態失效，請重新整理頁面", false);
     return null;
   }
-  const res = await fetch(API + path, {
+  const res = await apiFetch(API + path, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
     body: JSON.stringify({ ...payload, csrf_token: csrf })
   });
-  _csrfToken = null;
+  setCsrfToken(null);
   return res.json().catch(() => ({ ok: false, msg: "回應格式錯誤" }));
 }
 
@@ -229,7 +240,10 @@ async function requestPasswordReset() {
   try {
     const json = await postRecoveryAction("/password-reset/request", { username_or_email: identifier });
     if (!json) return;
-    setRecoveryMsg(json.msg || "如果資料符合，系統會寄出後續操作通知", Boolean(json.ok));
+    const fallback = ((siteConfig && siteConfig.password_reset_mode) === "email_token")
+      ? "如果資料符合，系統會寄出後續操作通知"
+      : "如果資料符合，系統會建立密碼重設審核申請";
+    setRecoveryMsg(json.msg || fallback, Boolean(json.ok));
   } catch (_) {
     setRecoveryMsg("網路錯誤，請稍後再試", false);
   }
@@ -306,7 +320,7 @@ async function doLogout(options = {}) {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/logout", {
+    const res = await apiFetch(API + "/logout", {
       method: "POST",
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -315,7 +329,7 @@ async function doLogout(options = {}) {
       flash($("li-msg"), "登出失敗，請稍後再試", false);
     }
   } catch (_) {}
-  _csrfToken = null;
+  setCsrfToken(null);
   resetAuthState();
 }
 
@@ -323,7 +337,7 @@ async function forceIdleTimeoutLogout() {
   markIdleTimeoutLogoutPending();
   showLoginScreen();
   try {
-    const res = await fetch(API + "/session/idle-timeout", {
+    const res = await apiFetch(API + "/session/idle-timeout", {
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
@@ -331,7 +345,7 @@ async function forceIdleTimeoutLogout() {
     });
     if (res.ok) clearIdleTimeoutLogoutPending();
   } catch (_) {}
-  _csrfToken = null;
+  setCsrfToken(null);
   resetAuthState();
 }
 
@@ -340,7 +354,7 @@ async function toggleBlock(userId, isBlocked) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const body = isBlocked ? { action: "unblock" } : { action: "block", minutes: 30 };
-  const res = await fetch(API + `/admin/users/${userId}/block`, {
+  const res = await apiFetch(API + `/admin/users/${userId}/block`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -362,7 +376,7 @@ async function editUser(userId) {
 
   let source = target || {};
   if (csrf) {
-    const detailRes = await fetch(API + `/admin/users/${userId}`, {
+    const detailRes = await apiFetch(API + `/admin/users/${userId}`, {
       method: "GET",
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -387,7 +401,8 @@ async function editUser(userId) {
     base_level: source.base_level || source.member_level || "normal",
     effective_level: source.effective_level || source.base_level || source.member_level || "normal",
     sanction_status: source.sanction_status || "none",
-    sanction_until: source.sanction_until || ""
+    sanction_until: source.sanction_until || "",
+    preferred_landing_module: source.preferred_landing_module || currentPreferredLandingModule || "chat"
   };
 
   editingUserId = userId;
@@ -401,6 +416,7 @@ async function editUser(userId) {
   editingUserOriginal.base_level = current.base_level;
   editingUserOriginal.sanction_status = current.sanction_status;
   editingUserOriginal.sanction_until = current.sanction_until;
+  editingUserOriginal.preferred_landing_module = current.preferred_landing_module;
 
   const usernameEl = $("user-edit-username");
   if (usernameEl) usernameEl.textContent = current.username || String(userId);
@@ -415,6 +431,7 @@ async function editUser(userId) {
   setUserEditField("edit-user-idno", current.id_number);
   setUserEditField("edit-user-birthdate", current.birthdate);
   setUserEditField("edit-user-phone", current.phone);
+  setUserEditField("edit-user-preferred-landing-module", current.preferred_landing_module);
   setUserEditField("edit-avatar-crop-x", current.avatar_crop.x ?? 0);
   setUserEditField("edit-avatar-crop-y", current.avatar_crop.y ?? 0);
   setUserEditField("edit-avatar-crop-width", current.avatar_crop.width ?? 0);
@@ -429,9 +446,11 @@ async function editUser(userId) {
   const roleField = $("edit-user-role-field");
   const statusField = $("edit-user-status-field");
   const currentPwField = $("edit-user-current-pw-field");
+  const landingField = $("edit-user-landing-field");
   if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (currentPwField) currentPwField.style.display = editingUserIsSelf ? "" : "none";
+  if (landingField) landingField.style.display = editingUserIsSelf ? "" : "none";
   const memberFields = $("edit-user-member-level-fields");
   if (memberFields) memberFields.style.display = editingUserIsSelf || currentUser !== "root" ? "none" : "";
   setUserEditField("edit-user-base-level", current.base_level);
@@ -451,26 +470,34 @@ async function editUser(userId) {
   if (firstField) firstField.focus();
 }
 
-async function uploadUserAvatar() {
-  if (!editingUserId) return;
-  const input = $("edit-user-avatar-file");
-  const file = input?.files?.[0];
-  if (!file) {
-    setUserEditMsg("請先選擇頭像檔案", false);
-    return;
-  }
-  const crop = {
+function selectedUserAvatarFile() {
+  return $("edit-user-avatar-file")?.files?.[0] || null;
+}
+
+function currentAvatarCropPayload() {
+  return {
     x: parseInt($("edit-avatar-crop-x")?.value || "0", 10) || 0,
     y: parseInt($("edit-avatar-crop-y")?.value || "0", 10) || 0,
     width: parseInt($("edit-avatar-crop-width")?.value || "0", 10) || 0,
     height: parseInt($("edit-avatar-crop-height")?.value || "0", 10) || 0,
   };
+}
+
+async function submitUserAvatarUpload({ reloadUsers = true } = {}) {
+  if (!editingUserId) return;
+  const input = $("edit-user-avatar-file");
+  const file = selectedUserAvatarFile();
+  if (!file) {
+    setUserEditMsg("請先選擇頭像檔案", false);
+    return { ok: false, msg: "請先選擇頭像檔案" };
+  }
+  const crop = currentAvatarCropPayload();
   const form = new FormData();
   form.append("file", file);
   form.append("crop_json", JSON.stringify(crop));
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/users/${editingUserId}/avatar`, {
+  const res = await apiFetch(API + `/admin/users/${editingUserId}/avatar`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
@@ -480,11 +507,17 @@ async function uploadUserAvatar() {
   const status = $("edit-user-avatar-status");
   if (json && json.ok) {
     if (status) status.textContent = `頭像已更新 file_id: ${json.avatar_file_id}`;
+    if (input) input.value = "";
     setUserEditMsg("頭像已更新", true);
-    if (["manager", "super_admin"].includes(currentRole)) loadUsers();
+    if (reloadUsers && ["manager", "super_admin"].includes(currentRole)) loadUsers();
   } else {
     setUserEditMsg(json.msg || "頭像上傳失敗", false);
   }
+  return json;
+}
+
+async function uploadUserAvatar() {
+  await submitUserAvatarUpload({ reloadUsers: true });
 }
 
 async function submitEditUser() {
@@ -502,15 +535,20 @@ async function submitEditUser() {
   const sanctionStatus = $("edit-user-sanction-status")?.value || "none";
   const sanctionUntil = $("edit-user-sanction-until")?.value || "";
   const levelReason = $("edit-user-level-reason")?.value.trim() || "";
+  const preferredLandingModule = $("edit-user-preferred-landing-module")?.value || "chat";
   const currentPassword = $("edit-user-current-pw")?.value || "";
   const password = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
+  const avatarFile = selectedUserAvatarFile();
 
   if (nickname !== editingUserOriginal.nickname) payload.nickname = nickname;
   if (realName !== editingUserOriginal.real_name) payload.real_name = realName;
   if (idNo !== editingUserOriginal.id_number) payload.id_number = idNo;
   if (birthdate !== editingUserOriginal.birthdate) payload.birthdate = birthdate;
   if (phone !== editingUserOriginal.phone) payload.phone = phone;
+  if (editingUserIsSelf && preferredLandingModule !== editingUserOriginal.preferred_landing_module) {
+    payload.preferred_landing_module = preferredLandingModule;
+  }
   if (!editingUserIsSelf && canManageUsers && role !== editingUserOriginal.role) payload.role = role;
   if (!editingUserIsSelf && canManageUsers && status !== editingUserOriginal.status) payload.status = status;
   if (!editingUserIsSelf && currentUser === "root") {
@@ -546,21 +584,25 @@ async function submitEditUser() {
     return;
   }
 
-  if (!Object.keys(payload).length) {
+  if (!Object.keys(payload).length && !avatarFile) {
     setUserEditMsg("未變更任何欄位", false);
     return;
   }
 
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/users/${editingUserId}`, {
-    method: "PUT",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  if (json && json.ok) {
+  if (Object.keys(payload).length) {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + `/admin/users/${editingUserId}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json || !json.ok) {
+      setUserEditMsg(json.msg || "修改失敗", false);
+      return;
+    }
     if (forcedPasswordChangeMode) {
       forcedPasswordChangeMode = false;
       currentMustChangePassword = false;
@@ -568,18 +610,25 @@ async function submitEditUser() {
       resetAuthState();
       return;
     }
-    hideUserEditDialog();
-    if (["manager", "super_admin"].includes(currentRole)) loadUsers();
-    return;
   }
-  setUserEditMsg(json.msg || "修改失敗", false);
+
+  if (avatarFile) {
+    const avatarJson = await submitUserAvatarUpload({ reloadUsers: false });
+    if (!avatarJson || !avatarJson.ok) return;
+  }
+
+  hideUserEditDialog();
+  if (editingUserIsSelf && payload.preferred_landing_module) {
+    currentPreferredLandingModule = payload.preferred_landing_module;
+  }
+  if (["manager", "super_admin"].includes(currentRole)) loadUsers();
 }
 
 async function removeUser(userId) {
   if (!window.confirm("確定要刪除帳號？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/users/${userId}`, {
+  const res = await apiFetch(API + `/admin/users/${userId}`, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -615,7 +664,7 @@ async function createUserByAdmin() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/users", {
+  const res = await apiFetch(API + "/admin/users", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -653,7 +702,7 @@ async function reviewRegistration(userId, action) {
   if (!confirm(`確定要${label}這筆註冊申請？`)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/users/${userId}/review-registration`, {
+  const res = await apiFetch(API + `/admin/users/${userId}/review-registration`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -678,7 +727,7 @@ async function bulkReviewRegistrations(action) {
   let failed = 0;
   for (const userId of ids) {
     try {
-      const res = await fetch(API + `/admin/users/${userId}/review-registration`, {
+      const res = await apiFetch(API + `/admin/users/${userId}/review-registration`, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -704,7 +753,7 @@ async function promoteUser(userId, username) {
   if (!confirm(`確定要將「${username}」升級為管理者？`)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/users/" + userId + "/promote", {
+  const res = await apiFetch(API + "/admin/users/" + userId + "/promote", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -731,7 +780,7 @@ async function updateUserMemberLevel(userId, username) {
   if (!confirm(`確定要將「${username}」的會員等級調整為 ${level}？`)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/users/${userId}`, {
+  const res = await apiFetch(API + `/admin/users/${userId}`, {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -756,7 +805,7 @@ async function demoteUser(userId, username, currentRole) {
   if (!confirm(msg)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/users/" + userId + "/demote", {
+  const res = await apiFetch(API + "/admin/users/" + userId + "/demote", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

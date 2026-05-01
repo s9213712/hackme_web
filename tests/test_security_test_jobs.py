@@ -1,3 +1,4 @@
+import sqlite3
 import time
 
 from flask import Flask, jsonify, make_response
@@ -156,6 +157,25 @@ def test_root_can_start_stress_job(tmp_path, monkeypatch):
     assert "25" in commands[0]
     assert "--concurrency" in commands[0]
     assert "5" in commands[0]
+
+
+def test_security_test_jobs_accept_sqlite_row_actor(tmp_path, monkeypatch):
+    system_admin.SECURITY_TEST_JOBS.clear()
+    monkeypatch.setattr(system_admin.subprocess, "Popen", _FakeProcess)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    actor = conn.execute(
+        "SELECT 1 AS id, 'root' AS username, 'super_admin' AS role"
+    ).fetchone()
+    client = _app(tmp_path, actor=actor).test_client()
+
+    res = client.post("/api/root/security-tests/functional", json={"port": 50741})
+    data = res.get_json()
+    job = _wait_for_job_done(client, data["job"]["job_id"])
+
+    assert res.status_code == 202
+    assert data["job"]["actor"] == "root"
+    assert job["status"] == "passed"
 
 
 def test_security_test_jobs_are_root_only(tmp_path):

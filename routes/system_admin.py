@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from flask import request, send_file
 
 from services.access_controls import (
@@ -133,6 +134,21 @@ def register_system_admin_routes(app, deps):
     snapshot_service = deps.get("snapshot_service")
     integrity_guard = deps.get("integrity_guard")
     verify_audit_integrity = deps["verify_audit_integrity"]
+
+    def public_runtime_path(path):
+        if not path:
+            return "-"
+        try:
+            base = Path(BASE_DIR).resolve(strict=False)
+            target = Path(path).resolve(strict=False)
+            rel = target.relative_to(base)
+            return "." if str(rel) == "." else rel.as_posix()
+        except Exception:
+            try:
+                name = Path(path).name
+            except Exception:
+                name = ""
+            return f"external/{name}" if name else "external"
 
     def default_schedule_server_restart(*, reason, delay_seconds=1.25):
         if app.testing:
@@ -289,6 +305,15 @@ def register_system_admin_routes(app, deps):
             return number
         return None
 
+    def _security_test_actor_value(actor, key, default=None):
+        if not actor:
+            return default
+        if hasattr(actor, "keys") and key in actor.keys():
+            return actor[key]
+        if isinstance(actor, dict):
+            return actor.get(key, default)
+        return getattr(actor, key, default)
+
     def _security_test_job_payload(job):
         if not job:
             return None
@@ -317,6 +342,7 @@ def register_system_admin_routes(app, deps):
             "report_artifacts",
             "log_path",
             "error",
+            "actor",
         )}
         payload["progress_percent"] = progress
         payload["log_tail"] = log_tail
@@ -359,7 +385,7 @@ def register_system_admin_routes(app, deps):
     def _start_security_test_job(kind, command, *, command_label, report_root, report_prefix, actor, env=None):
         job_id = f"{kind}_{uuid.uuid4().hex[:12]}"
         started_ts = time.time()
-        actor_username = actor.get("username") if actor else "root"
+        actor_username = _security_test_actor_value(actor, "username", "root")
         client_ip = get_client_ip()
         log_dir = os.path.join(report_root, "_jobs")
         os.makedirs(log_dir, exist_ok=True)
@@ -806,11 +832,11 @@ def register_system_admin_routes(app, deps):
                 "platform": platform.platform(),
                 "python_version": sys.version.split()[0],
                 "pid": os.getpid(),
-                "base_dir": BASE_DIR,
-                "database_path": DB_PATH,
-                "log_dir": LOG_DIR,
-                "chat_dir": CHAT_DIR,
-                "anchor_dir": ANCHOR_DIR,
+                "base_dir": public_runtime_path(BASE_DIR),
+                "database_path": public_runtime_path(DB_PATH),
+                "log_dir": public_runtime_path(LOG_DIR),
+                "chat_dir": public_runtime_path(CHAT_DIR),
+                "anchor_dir": public_runtime_path(ANCHOR_DIR),
                 "database_bytes": db_size,
                 "log_files": len(log_files),
                 "chat_files": len(chat_files),
@@ -1337,6 +1363,15 @@ def register_system_admin_routes(app, deps):
             if batch_size < 1 or batch_size > 8:
                 return json_resp({"ok":False,"msg":"comfyui_max_batch_size 必須是 1-8"}), 400
             data["comfyui_max_batch_size"] = batch_size
+        for key in ("comfyui_default_width", "comfyui_default_height"):
+            if key in data:
+                try:
+                    size = int(data.get(key))
+                except Exception:
+                    return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
+                if size < 64 or size > 2048 or size % 8 != 0:
+                    return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
+                data[key] = size
         if "cloud_drive_storage_root" in data:
             raw_root = str(data.get("cloud_drive_storage_root") or "").strip()
             if raw_root:
@@ -1351,6 +1386,11 @@ def register_system_admin_routes(app, deps):
             if raw_mode and normalize_captcha_mode(raw_mode) != raw_mode:
                 return json_resp({"ok":False,"msg":"captcha_mode 必須是 none、math、image 或 turnstile"}), 400
             data["captcha_mode"] = normalize_captcha_mode(raw_mode)
+        if "password_reset_mode" in data:
+            reset_mode = str(data.get("password_reset_mode") or "").strip().lower()
+            if reset_mode not in {"admin_review", "email_token"}:
+                return json_resp({"ok":False,"msg":"password_reset_mode 必須是 admin_review 或 email_token"}), 400
+            data["password_reset_mode"] = reset_mode
         if "captcha_ttl_seconds" in data:
             try:
                 ttl_seconds = int(data.get("captcha_ttl_seconds"))
@@ -1564,8 +1604,9 @@ def register_system_admin_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
-        if actor["username"] != "root":
-            return json_resp({"ok":False,"msg":"只有 root 可管理會員等級規則"}), 403
+        role = "super_admin" if actor["username"] == "root" else actor.get("role", "user")
+        if role_rank(role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"需要管理員權限"}), 403
 
         conn = get_db()
         try:

@@ -66,7 +66,7 @@ async function loadChatRooms() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
-    const res = await fetch(API + "/chat/rooms", {
+    const res = await apiFetch(API + "/chat/rooms", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -145,7 +145,7 @@ async function loadChatFriends() {
   if (!currentUser) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/chat/friends", {
+  const res = await apiFetch(API + "/chat/friends", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -162,7 +162,7 @@ async function addChatFriend() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/chat/friends/requests", {
+  const res = await apiFetch(API + "/chat/friends/requests", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -180,7 +180,7 @@ async function reviewChatFriendRequest(requestId, decision) {
   if (!requestId || !decision) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/friends/requests/${encodeURIComponent(requestId)}/${encodeURIComponent(decision)}`, {
+  const res = await apiFetch(API + `/chat/friends/requests/${encodeURIComponent(requestId)}/${encodeURIComponent(decision)}`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -195,7 +195,7 @@ async function removeChatFriend(friendUserId) {
   if (!confirm("確定解除好友？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/friends/${encodeURIComponent(friendUserId)}`, {
+  const res = await apiFetch(API + `/chat/friends/${encodeURIComponent(friendUserId)}`, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -233,7 +233,7 @@ async function loadChatMessages(roomId, silent = false) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
-    const res = await fetch(API + `/chat/rooms/${roomId}/messages`, {
+    const res = await apiFetch(API + `/chat/rooms/${roomId}/messages`, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -276,7 +276,7 @@ async function createChatRoom() {
 
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/chat/rooms", {
+  const res = await apiFetch(API + "/chat/rooms", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -310,7 +310,7 @@ async function joinChatRoom() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/chat/rooms/" + roomId + "/join", {
+  const res = await apiFetch(API + "/chat/rooms/" + roomId + "/join", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" }
@@ -353,7 +353,7 @@ async function sendChatMessage() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/rooms/${selectedChatRoomId}/messages`, {
+  const res = await apiFetch(API + `/chat/rooms/${selectedChatRoomId}/messages`, {
     method: "POST",
     credentials: "same-origin",
     headers: {
@@ -393,7 +393,7 @@ async function sendChatSticker(stickerKey) {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/rooms/${selectedChatRoomId}/messages`, {
+  const res = await apiFetch(API + `/chat/rooms/${selectedChatRoomId}/messages`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -409,16 +409,98 @@ async function sendChatSticker(stickerKey) {
   setChatMsg("chat-room-warn", json.msg || "表情包發送失敗", false);
 }
 
+async function backupSelectedChatRoom() {
+  if (!selectedChatRoomId) {
+    setChatMsg("chat-room-warn", "請先選擇聊天室", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + `/chat/rooms/${encodeURIComponent(selectedChatRoomId)}/backup`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    setChatMsg("chat-room-warn", json.msg || `備份聊天室失敗（HTTP ${res.status}）`, false);
+    return;
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const filenameMatch = disposition.match(/filename="([^"]+)"/);
+  const filename = filenameMatch ? filenameMatch[1] : `chat_backup_${selectedChatRoomId}.json`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setChatMsg("chat-room-warn", "聊天室備份已下載", true);
+}
+
+function chooseChatRestoreFile() {
+  const input = $("chat-restore-file");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+async function restoreChatRoomBackup() {
+  const input = $("chat-restore-file");
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    setChatMsg("chat-room-warn", "聊天室備份檔太大，最多 2 MiB", false);
+    return;
+  }
+  const name = prompt("還原後的新聊天室名稱：", `還原 - ${file.name.replace(/\.json$/i, "")}`) || "";
+  const form = new FormData();
+  form.append("backup_file", file);
+  if (name.trim()) form.append("room_name", name.trim());
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/chat/rooms/restore", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" },
+    body: form
+  });
+  const json = await res.json().catch(() => ({}));
+  setChatMsg("chat-room-warn", json.msg || (json.ok ? "聊天室備份已還原" : `還原失敗（HTTP ${res.status}）`), !!json.ok);
+  if (json.ok) {
+    await loadChatRooms();
+    if (json.room && json.room.id) await openChatRoom(json.room.id, true);
+  }
+}
+
 async function openPmWithUser(targetUsername) {
-  // Switch to chat tab first
-  const chatTab = $("tab-module-chat");
-  if (chatTab) chatTab.click();
-  // Fill in target and optionally auto-create PM room
+  const target = String(targetUsername || "").trim();
+  if (!target) return;
+  if (target === currentUser) {
+    flash($("admin-users-msg") || $("dm-warn") || $("chat-room-warn"), "不能私訊自己", false);
+    return;
+  }
+
+  if (canAccessModule("dm") && typeof createDmThread === "function") {
+    switchModuleTab("dm");
+    const dmTargetInput = $("dm-target-user");
+    if (dmTargetInput) dmTargetInput.value = target;
+    await createDmThread();
+    return;
+  }
+
+  if (!canAccessModule("chat")) {
+    flash($("admin-users-msg") || $("dm-warn") || $("chat-room-warn"), "站內信或聊天功能目前未啟用，請先由 root 在安全中心開啟。", false);
+    return;
+  }
+
+  switchModuleTab("chat");
   const targetInput = $("chat-room-target-user");
   const nameInput = $("chat-room-name");
-  if (targetInput) targetInput.value = targetUsername;
+  if (targetInput) targetInput.value = target;
   if (nameInput) nameInput.value = "";
-  // Trigger create immediately (backend auto-finds or creates 1on1 room)
   await createChatRoom();
 }
 
@@ -437,7 +519,7 @@ async function reportChatMessage(messageId) {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/messages/${messageId}/report`, {
+  const res = await apiFetch(API + `/chat/messages/${messageId}/report`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -471,7 +553,7 @@ async function deleteChatRoom(roomId) {
   if (!confirm(`確定要刪除此聊天室 ${label}？歷史資料會保留在資料庫與審計紀錄中。`)) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`, {
+  const res = await apiFetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -502,7 +584,7 @@ async function deleteChatMessage(messageId, recall = false) {
   if (!confirm(recall ? "確定要收回這則留言嗎？" : "確定要刪除此留言嗎？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/chat/messages/${messageId}`, {
+  const res = await apiFetch(API + `/chat/messages/${messageId}`, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }

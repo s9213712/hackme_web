@@ -271,11 +271,191 @@ def test_manager_can_create_category_and_assign_board(tmp_path):
     )
     assert board.status_code == 200
     assert board.get_json()["ok"] is True
+    assert board.get_json()["status"] == "approved"
 
     boards = client.get("/api/community/boards").get_json()["boards"]
     python_board = next(item for item in boards if item["title"] == "Python")
     assert python_board["category_id"] == category["id"]
     assert python_board["category"]["name"] == "技術交流"
+    assert python_board["status"] == "approved"
+
+
+def test_manager_board_creation_still_requires_review(tmp_path):
+    db_path = tmp_path / "community.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES
+            (1, 'root', 'super_admin'),
+            (2, 'admin', 'manager');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    board = client.post(
+        "/api/community/boards",
+        json={"title": "Manager Board", "description": "needs review", "rules": "友善"},
+    )
+    assert board.status_code == 200
+    assert board.get_json()["ok"] is True
+    assert board.get_json()["status"] == "pending"
+
+    reviews = client.get("/api/community/boards/reviews")
+    assert reviews.status_code == 200
+    assert any(item["title"] == "Manager Board" for item in reviews.get_json()["items"])
+
+
+def test_private_board_requires_invitation_and_invited_user_can_access(tmp_path):
+    db_path = tmp_path / "community.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES
+            (1, 'root', 'super_admin'),
+            (3, 'alice', 'user'),
+            (4, 'bob', 'user');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    board = client.post(
+        "/api/community/boards",
+        json={"title": "Private Lab", "description": "invite only", "visibility": "private"},
+    )
+    assert board.status_code == 200
+    board_id = board.get_json()["board_id"]
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    assert client.get(f"/api/community/boards/{board_id}/threads").status_code == 403
+    assert all(item["id"] != board_id for item in client.get("/api/community/boards").get_json()["boards"])
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    invite = client.post(f"/api/community/boards/{board_id}/members", json={"user_id": 4})
+    assert invite.status_code == 200
+    assert invite.get_json()["ok"] is True
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    listed = client.get("/api/community/boards").get_json()["boards"]
+    assert any(item["id"] == board_id for item in listed)
+    assert client.get(f"/api/community/boards/{board_id}/threads").status_code == 200
+
+    actor_box["actor"] = {"id": 3, "username": "alice", "role": "user"}
+    assert client.get(f"/api/community/boards/{board_id}/threads").status_code == 403
+
+
+def test_private_board_blocks_uninvited_manager_from_content_routes(tmp_path):
+    db_path = tmp_path / "community.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES
+            (1, 'root', 'super_admin'),
+            (2, 'admin', 'manager');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    board = client.post(
+        "/api/community/boards",
+        json={"title": "Private Admin Lab", "description": "invite only", "visibility": "private"},
+    )
+    assert board.status_code == 200
+    board_id = board.get_json()["board_id"]
+    thread = client.post(
+        f"/api/community/boards/{board_id}/threads",
+        json={"title": "Private Topic", "content": "secret content"},
+    )
+    assert thread.status_code == 200
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    thread_id = conn.execute("SELECT id FROM forum_threads WHERE board_id=? ORDER BY id DESC LIMIT 1", (board_id,)).fetchone()["id"]
+    pending_id = conn.execute(
+        "INSERT INTO forum_threads (board_id, title, content, status, author_user_id, author_username, created_at, updated_at) "
+        "VALUES (?, 'Pending Secret', 'pending secret', 'pending', 1, 'root', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+        (board_id,),
+    ).lastrowid
+    conn.commit()
+    conn.close()
+    post = client.post(f"/api/community/threads/{thread_id}/posts", json={"content": "private reply"})
+    assert post.status_code == 200
+    conn = sqlite3.connect(db_path)
+    post_id = conn.execute("SELECT id FROM forum_posts WHERE thread_id=? ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()[0]
+    conn.close()
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    assert client.get(f"/api/community/boards/{board_id}/threads").status_code == 403
+    assert client.get(f"/api/community/threads/{thread_id}").status_code == 403
+    assert client.post(f"/api/community/threads/{thread_id}/posts", json={"content": "leak"}).status_code == 403
+    assert client.post(f"/api/community/threads/{thread_id}/reaction", json={"value": 1}).status_code == 403
+    assert client.put(f"/api/community/posts/{post_id}", json={"content": "edit leak"}).status_code == 403
+    assert client.delete(f"/api/community/posts/{post_id}").status_code == 403
+    reviews = client.get("/api/community/threads/reviews")
+    assert reviews.status_code == 200
+    assert all(item["id"] != pending_id for item in reviews.get_json()["items"])
+
+    actor_box["actor"] = {"id": 1, "username": "root", "role": "super_admin"}
+    assert client.post(f"/api/community/boards/{board_id}/members", json={"user_id": 2}).status_code == 200
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    assert client.get(f"/api/community/boards/{board_id}/threads").status_code == 200
+    assert client.get(f"/api/community/threads/{thread_id}").status_code == 200
+
+
+def test_unlisted_board_is_hidden_from_list_but_direct_link_is_accessible(tmp_path):
+    db_path = tmp_path / "community.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        INSERT INTO users (id, username, role) VALUES
+            (1, 'root', 'super_admin'),
+            (4, 'bob', 'user');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+    board = client.post(
+        "/api/community/boards",
+        json={"title": "Hidden Link Board", "description": "link only", "visibility": "unlisted"},
+    )
+    assert board.status_code == 200
+    board_id = board.get_json()["board_id"]
+
+    actor_box["actor"] = {"id": 4, "username": "bob", "role": "user"}
+    listed = client.get("/api/community/boards").get_json()["boards"]
+    assert all(item["id"] != board_id for item in listed)
+    assert client.get(f"/api/community/boards/{board_id}/threads").status_code == 200
 
 
 def test_non_manager_cannot_create_category(tmp_path):

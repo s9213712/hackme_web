@@ -41,7 +41,7 @@ async function submitBugReport() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/bug-reports", {
+  const res = await apiFetch(API + "/bug-reports", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

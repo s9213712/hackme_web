@@ -57,3 +57,17 @@ def test_login_recovery_uses_human_facing_verification_wording():
     assert "Email 驗證 token" not in index
     assert "無法取得 CSRF token" not in auth
     assert "安全驗證狀態失效" in auth
+
+
+def test_user_can_choose_login_default_module():
+    index = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    core = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+    auth = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
+
+    assert 'id="edit-user-preferred-landing-module"' in index
+    assert "登入後預設分頁" in index
+    assert "currentPreferredLandingModule = json.preferred_landing_module || \"chat\";" in core
+    assert "function resolveLandingModule(preferred)" in core
+    assert "const initialModule = resolveLandingModule(currentPreferredLandingModule);" in core
+    assert "preferred_landing_module" in auth
+    assert "payload.preferred_landing_module = preferredLandingModule;" in auth

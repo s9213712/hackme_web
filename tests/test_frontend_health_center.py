@@ -12,11 +12,16 @@ def test_health_center_is_grouped_into_readable_sections():
     assert 'id="server-health-counts"' in index_html
     assert 'id="server-health-storage"' in index_html
     assert 'id="server-health-audit"' in index_html
+    assert 'class="health-dashboard"' in index_html
+    assert 'class="health-summary-grid"' in index_html
+    assert 'class="health-section-grid"' in index_html
     assert "待處理事項" in index_html
     assert "資料量" in index_html
     assert "儲存空間" in index_html
     assert "審計與檢查" in index_html
     assert "function renderHealthRows" in admin_js
+    assert "health-metric-card" in admin_js
+    assert "health-row" in admin_js
     assert "pending_moderation_proposals" in admin_js
     assert "quarantined_files" in admin_js
     assert "Readiness:" in admin_js
