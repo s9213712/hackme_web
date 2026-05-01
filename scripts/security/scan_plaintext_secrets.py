@@ -73,6 +73,7 @@ SAFE_DYNAMIC_RHS = {
     "pwConfirm",
 }
 SAFE_PLACEHOLDER_RE = re.compile(r"(?i)^(<redacted>|redacted|changeme|change-me|replace-me|replace_me|example|dummy|placeholder|null|none|true|false)$")
+SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -286,10 +287,14 @@ def mask_evidence(text: str) -> str:
 def is_safe_dynamic_assignment(rule: Rule, match: re.Match[str]) -> bool:
     if rule.name != "plaintext_credential_assignment":
         return False
-    rhs = (match.group(2) or "").strip().strip("'\"")
+    rhs = (match.group(2) or "").strip().strip("'\"").rstrip("):")
     if not rhs:
         return True
     if rhs in SAFE_DYNAMIC_RHS:
+        return True
+    if SAFE_IDENTIFIER_RE.match(rhs) and ("_" in rhs or any(ch.isupper() for ch in rhs)):
+        return True
+    if rhs in {"[]", "{}"} or rhs.startswith(("[", "{")):
         return True
     if rhs.startswith(("password[", "pw[", "secret[", "token[")):
         return True

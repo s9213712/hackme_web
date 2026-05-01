@@ -145,6 +145,27 @@ def login_default_or_rotated(client, username, default_password, rotated_passwor
         return client.login(username, default_password, rotate_to=rotated_password)
 
 
+def enable_smoke_features(root_client):
+    feature_updates = {
+        "feature_chat_enabled": True,
+        "feature_community_enabled": True,
+        "feature_appeals_enabled": True,
+        "feature_privacy_uploads_enabled": True,
+        "feature_attachments_enabled": True,
+        "feature_storage_albums_enabled": True,
+        "feature_games_enabled": True,
+    }
+    csrf = root_client.fetch_csrf()
+    res = root_client.request(
+        "PUT",
+        "/api/admin/features",
+        body=feature_updates,
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("root enable smoke feature flags", res, 200)
+    assert_json_ok("root enable smoke feature flags", res)
+
+
 def run_functional_suite(base_url):
     probe = Client(base_url)
     root = Client(base_url)
@@ -188,6 +209,8 @@ def run_functional_suite(base_url):
     assert_status("test /api/me", user_me, 200)
     if user_me["json"].get("role") != "user":
         raise SmokeFailure(f"test role mismatch: {user_me['json']}")
+
+    enable_smoke_features(root)
 
     csrf = user.fetch_csrf()
     res = user.request("GET", "/api/admin/users", headers={"X-CSRF-Token": csrf})
