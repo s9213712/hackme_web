@@ -48,6 +48,7 @@ let serverConnectionFailures = 0;
 let serverConnectionTimer = null;
 let notificationPollTimer = null;
 let notificationsOpen = false;
+const avatarCacheBustByUserId = new Map();
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -265,7 +266,11 @@ function updateSidebarIdentity() {
   if (user) user.textContent = currentUser || "未登入";
   if (role) role.textContent = currentRoleLabel || currentRole || "-";
   if (level) level.textContent = currentUser ? (level.dataset.memberLevel || "-") : "-";
-  if (avatar) avatar.textContent = currentUser ? String(currentUser).slice(0, 1).toUpperCase() : "-";
+  if (avatar) {
+    avatar.innerHTML = currentUser ? userAvatarInnerMarkup(currentUserId, currentUser) : '<span class="user-avatar-fallback">-</span>';
+    avatar.setAttribute("title", currentUser || "未登入");
+    bindAvatarFallbacks(avatar);
+  }
   if (points) points.textContent = currentUser ? (points.dataset.points || "0") : "0";
   if (violations) violations.textContent = currentUser ? (violations.dataset.violations || "0") : "0";
   if (effective) effective.textContent = currentUser ? (effective.dataset.effectiveLevel || "-") : "-";
@@ -413,6 +418,58 @@ function sanitize(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#x27;')
     .replace(/\//g, '&#x2F;');
+}
+
+function avatarInitial(username) {
+  const value = String(username || "").trim();
+  return value ? value.slice(0, 1).toUpperCase() : "?";
+}
+
+function avatarUrlForUser(userId) {
+  if (!userId) return "";
+  const bust = avatarCacheBustByUserId.get(String(userId));
+  const suffix = bust ? `?v=${encodeURIComponent(bust)}` : "";
+  return `${API}/admin/users/${encodeURIComponent(userId)}/avatar${suffix}`;
+}
+
+function userAvatarInnerMarkup(userId, username) {
+  const url = avatarUrlForUser(userId);
+  const label = `${username || "使用者"} 大頭貼`;
+  return `
+    <span class="user-avatar-fallback">${sanitize(avatarInitial(username))}</span>
+    ${url ? `<img class="user-avatar-img" src="${sanitize(url)}" alt="${sanitize(label)}" loading="lazy">` : ""}
+  `;
+}
+
+function userAvatarMarkup(userId, username, extraClass = "") {
+  return `<span class="user-avatar ${sanitize(extraClass)}" title="${sanitize(username || "使用者")}">${userAvatarInnerMarkup(userId, username)}</span>`;
+}
+
+function userIdentityMarkup(userId, username, meta = "", extraClass = "") {
+  return `
+    <span class="identity-with-avatar ${sanitize(extraClass)}">
+      ${userAvatarMarkup(userId, username)}
+      <span class="identity-text">
+        <strong>${sanitize(username || "系統")}</strong>
+        ${meta ? `<small>${sanitize(meta)}</small>` : ""}
+      </span>
+    </span>
+  `;
+}
+
+function bindAvatarFallbacks(root = document) {
+  root.querySelectorAll("img.user-avatar-img:not([data-avatar-bound])").forEach((img) => {
+    img.dataset.avatarBound = "1";
+    img.addEventListener("error", () => {
+      img.style.display = "none";
+    });
+  });
+}
+
+function markUserAvatarUpdated(userId) {
+  if (!userId) return;
+  avatarCacheBustByUserId.set(String(userId), Date.now());
+  updateSidebarIdentity();
 }
 
 function readCookie(name) {
@@ -793,7 +850,10 @@ function renderChatMessages(messages) {
       : "";
     return `
       <div class="${cls.join(" ")}">
-        <span class="meta">${sanitize(formatChatTime(m.created_at))} · ${sanitize(m.sender || "系統")}</span>
+        <div class="chat-msg-head">
+          ${userAvatarMarkup(m.sender_id, m.sender || "系統", "user-avatar-sm")}
+          <span class="meta"><strong>${sanitize(m.sender || "系統")}</strong><small>${sanitize(formatChatTime(m.created_at))}</small></span>
+        </div>
         ${body}
         ${attachments}
         ${actions.join("")}
@@ -806,6 +866,7 @@ function renderChatMessages(messages) {
   list.querySelectorAll("button[data-delete-message]").forEach((btn) => {
     btn.addEventListener("click", () => deleteChatMessage(parseInt(btn.getAttribute("data-delete-message"), 10), btn.getAttribute("data-recall-message") === "1"));
   });
+  bindAvatarFallbacks(list);
   list.scrollTop = list.scrollHeight;
 }
 

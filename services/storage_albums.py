@@ -3,6 +3,9 @@ import secrets
 import uuid
 from datetime import datetime
 
+ALBUM_SHARE_PASSWORD_ITERATIONS = 200_000
+MAX_ALBUM_SHARE_PASSWORD_LENGTH = 256
+
 
 def _now():
     return datetime.now().isoformat()
@@ -129,6 +132,8 @@ def ensure_storage_album_schema(conn):
             owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             token TEXT NOT NULL UNIQUE,
             token_hash TEXT NOT NULL UNIQUE,
+            password_required INTEGER NOT NULL DEFAULT 0,
+            password_hash TEXT,
             revoked_at TEXT,
             access_count INTEGER NOT NULL DEFAULT 0,
             last_accessed_at TEXT,
@@ -149,6 +154,11 @@ def ensure_storage_album_schema(conn):
     storage_file_cols = {row["name"] for row in conn.execute("PRAGMA table_info(storage_files)").fetchall()}
     if "trash_source" not in storage_file_cols:
         conn.execute("ALTER TABLE storage_files ADD COLUMN trash_source TEXT")
+    album_share_cols = {row["name"] for row in conn.execute("PRAGMA table_info(album_share_links)").fetchall()}
+    if "password_required" not in album_share_cols:
+        conn.execute("ALTER TABLE album_share_links ADD COLUMN password_required INTEGER NOT NULL DEFAULT 0")
+    if "password_hash" not in album_share_cols:
+        conn.execute("ALTER TABLE album_share_links ADD COLUMN password_hash TEXT")
 
 
 def normalize_virtual_path(path, display_name=None):
@@ -872,6 +882,48 @@ def _album_share_url(token):
     return f"/shared/albums/{token}" if token else ""
 
 
+def _hash_album_share_password(password):
+    password = str(password or "")
+    if len(password) > MAX_ALBUM_SHARE_PASSWORD_LENGTH:
+        raise ValueError("相簿分享密碼太長")
+    salt = secrets.token_urlsafe(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        ALBUM_SHARE_PASSWORD_ITERATIONS,
+    ).hex()
+    return f"pbkdf2_sha256${ALBUM_SHARE_PASSWORD_ITERATIONS}${salt}${digest}"
+
+
+def _verify_album_share_password(password, stored_hash):
+    parts = str(stored_hash or "").split("$", 3)
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+        return False
+    try:
+        iterations = int(parts[1])
+    except Exception:
+        return False
+    salt = parts[2]
+    expected = parts[3]
+    actual = hashlib.pbkdf2_hmac(
+        "sha256",
+        str(password or "").encode("utf-8"),
+        salt.encode("utf-8"),
+        iterations,
+    ).hex()
+    return secrets.compare_digest(actual, expected)
+
+
+def _album_share_password_required(row):
+    if not row:
+        return False
+    keys = row.keys()
+    if "password_required" in keys:
+        return bool(int(row["password_required"] or 0))
+    return bool(row["password_hash"] if "password_hash" in keys else "")
+
+
 def _album_share_link_payload(row):
     if not row:
         return None
@@ -883,6 +935,7 @@ def _album_share_link_payload(row):
         "access_count": int(row["access_count"] or 0),
         "last_accessed_at": row["last_accessed_at"],
         "url": _album_share_url(token),
+        "password_required": _album_share_password_required(row),
     }
 
 
@@ -899,22 +952,57 @@ def _active_album_share_link(conn, album_id):
     ).fetchone()
 
 
-def ensure_album_share_link(conn, *, actor, album_id):
+def _apply_album_share_password(conn, link_id, *, password=None, clear_password=False):
+    if clear_password:
+        conn.execute(
+            "UPDATE album_share_links SET password_required=0, password_hash=NULL WHERE id=?",
+            (link_id,),
+        )
+        return None
+    password = str(password or "")
+    if not password:
+        return None
+    try:
+        password_hash = _hash_album_share_password(password)
+    except ValueError as exc:
+        return str(exc)
+    conn.execute(
+        "UPDATE album_share_links SET password_required=1, password_hash=? WHERE id=?",
+        (password_hash, link_id),
+    )
+    return None
+
+
+def ensure_album_share_link(conn, *, actor, album_id, password=None, password_provided=False, clear_password=False):
     ensure_storage_album_schema(conn)
     album = _album_row(conn, album_id)
     if not album or album["deleted_at"] or int(album["owner_user_id"]) != int(actor["id"]):
         return None, "找不到相簿"
     existing = _active_album_share_link(conn, album_id)
     if existing:
+        if password_provided or clear_password:
+            msg = _apply_album_share_password(conn, existing["id"], password=password, clear_password=clear_password)
+            if msg:
+                return None, msg
+            existing = conn.execute("SELECT * FROM album_share_links WHERE id=?", (existing["id"],)).fetchone()
         return _album_share_link_payload(existing), None
     now = _now()
     token = secrets.token_urlsafe(32)
     link_id = uuid.uuid4().hex
+    password_hash = None
+    password_required = 0
+    if str(password or ""):
+        try:
+            password_hash = _hash_album_share_password(password)
+            password_required = 1
+        except ValueError as exc:
+            return None, str(exc)
     conn.execute(
         """
         INSERT INTO album_share_links (
-            id, album_id, owner_user_id, token, token_hash, created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            id, album_id, owner_user_id, token, token_hash, password_required,
+            password_hash, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             link_id,
@@ -922,6 +1010,8 @@ def ensure_album_share_link(conn, *, actor, album_id):
             int(actor["id"]),
             token,
             _hash_share_token(token),
+            password_required,
+            password_hash,
             int(actor["id"]),
             now,
         ),
@@ -955,7 +1045,7 @@ def _album_row(conn, album_id):
     return conn.execute("SELECT * FROM albums WHERE id=?", (album_id,)).fetchone()
 
 
-def create_album(conn, *, actor, title, description="", visibility="private"):
+def create_album(conn, *, actor, title, description="", visibility="private", share_password=None):
     ensure_storage_album_schema(conn)
     title = str(title or "").strip()
     if not title:
@@ -980,7 +1070,13 @@ def create_album(conn, *, actor, title, description="", visibility="private"):
         ),
     )
     if normalized_visibility == "unlisted":
-        link, msg = ensure_album_share_link(conn, actor=actor, album_id=album_id)
+        link, msg = ensure_album_share_link(
+            conn,
+            actor=actor,
+            album_id=album_id,
+            password=share_password,
+            password_provided=share_password is not None,
+        )
         if msg:
             return None, msg
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
@@ -1127,7 +1223,7 @@ def get_album(conn, *, actor, album_id, include_files=False):
     return data
 
 
-def update_album(conn, *, actor, album_id, title=None, description=None, visibility=None):
+def update_album(conn, *, actor, album_id, title=None, description=None, visibility=None, share_password=None, share_password_provided=False, clear_share_password=False):
     album = get_album(conn, actor=actor, album_id=album_id)
     if not album:
         return None, "找不到相簿"
@@ -1146,19 +1242,42 @@ def update_album(conn, *, actor, album_id, title=None, description=None, visibil
         next_visibility = _normalize_album_visibility(visibility)
         fields.append("visibility=?")
         params.append(next_visibility)
-    if not fields:
+    password_update_requested = share_password_provided or clear_share_password
+    if not fields and not password_update_requested:
         return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
-    fields.append("updated_at=?")
-    params.append(_now())
-    params.append(album_id)
-    conn.execute(f"UPDATE albums SET {', '.join(fields)} WHERE id=?", tuple(params))
+    now = _now()
+    if fields:
+        fields.append("updated_at=?")
+        params.append(now)
+        params.append(album_id)
+        conn.execute(f"UPDATE albums SET {', '.join(fields)} WHERE id=?", tuple(params))
+    else:
+        conn.execute("UPDATE albums SET updated_at=? WHERE id=?", (now, album_id))
     if visibility is not None:
         if next_visibility == "unlisted":
-            link, msg = ensure_album_share_link(conn, actor=actor, album_id=album_id)
+            link, msg = ensure_album_share_link(
+                conn,
+                actor=actor,
+                album_id=album_id,
+                password=share_password,
+                password_provided=share_password_provided,
+                clear_password=clear_share_password,
+            )
             if msg:
                 return None, msg
         else:
             revoke_album_share_links(conn, actor=actor, album_id=album_id)
+    elif album.get("visibility") == "unlisted" and (share_password_provided or clear_share_password):
+        link, msg = ensure_album_share_link(
+            conn,
+            actor=actor,
+            album_id=album_id,
+            password=share_password,
+            password_provided=share_password_provided,
+            clear_password=clear_share_password,
+        )
+        if msg:
+            return None, msg
     return get_album(conn, actor=actor, album_id=album_id, include_files=True), None
 
 
@@ -1355,7 +1474,7 @@ def mark_share_link_accessed(conn, link_id):
     )
 
 
-def resolve_album_share_token(conn, token):
+def resolve_album_share_token(conn, token, password=None):
     ensure_storage_album_schema(conn)
     token = str(token or "").strip()
     if not token:
@@ -1376,6 +1495,11 @@ def resolve_album_share_token(conn, token):
         return None, "revoked"
     if row["visibility"] != "unlisted":
         return None, "not_unlisted"
+    if _album_share_password_required(row):
+        if not str(password or ""):
+            return None, "password_required"
+        if not _verify_album_share_password(password, row["password_hash"]):
+            return None, "password_invalid"
     return row, None
 
 
@@ -1428,8 +1552,8 @@ def public_album_payload(conn, share_row):
     }
 
 
-def resolve_album_share_file(conn, token, file_id):
-    share_row, reason = resolve_album_share_token(conn, token)
+def resolve_album_share_file(conn, token, file_id, password=None):
+    share_row, reason = resolve_album_share_token(conn, token, password=password)
     if not share_row:
         return None, reason
     file_row = conn.execute(

@@ -81,6 +81,12 @@ pipeline as normal uploads.
 Albums have their own page for gallery-style browsing. Albums are backed by the
 storage file manager and do not duplicate physical cloud-drive files.
 
+Set album visibility to `不列出，持連結可看` to generate an album share URL.
+Open the album detail or preview panel and use the `複製` button next to
+`持連結可看` to copy the URL for another person. Album share links can also
+have an optional password; the password is stored as a hash and must be shared
+out of band with the recipient.
+
 ### ComfyUI
 
 The AI image page checks whether the configured ComfyUI API is reachable. If the

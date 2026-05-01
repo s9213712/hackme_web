@@ -1,4 +1,5 @@
 import io
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -297,6 +298,30 @@ def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
     assert saved_settings[-1]["ip_blocking_enabled"] is True
     assert saved_settings[-1]["security_pending_chat_reports_threshold"] == 3
     assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
+
+
+def test_builtin_security_profiles_refresh_and_close_superweak_controls(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.execute(
+        "UPDATE security_profiles SET settings_json=? WHERE name='superweak'",
+        ('{"audit_chain_enabled": true, "integrity_guard_enabled": true, "feature_economy_enabled": true}',),
+    )
+    conn.commit()
+    ensure_snapshot_schema(conn)
+    row = conn.execute("SELECT settings_json FROM security_profiles WHERE name='superweak'").fetchone()
+    conn.close()
+
+    refreshed = json.loads(row["settings_json"])
+    assert refreshed["server_ssl_enabled"] is False
+    assert refreshed["audit_chain_enabled"] is False
+    assert refreshed["feature_audit_log_enabled"] is False
+    assert refreshed["integrity_guard_enabled"] is False
+    assert refreshed["ip_blocking_enabled"] is False
+    assert refreshed["login_violation_enabled"] is False
+    assert refreshed["feature_economy_enabled"] is False
+    assert refreshed["captcha_mode"] == "none"
 
 
 def test_production_mode_requires_confirmation_and_hardens_accounts(tmp_path):

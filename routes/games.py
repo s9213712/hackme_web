@@ -15,7 +15,18 @@ from services.chess_game import (
 from services.points_chain import DISPLAY_CURRENCY
 
 GAME_KEY = "chess"
+SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b"}
 WEEKLY_REWARDS = (300, 200, 100)
+COMPUTER_DIFFICULTIES = {"easy", "normal", "hard"}
+MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
+PIECE_VALUES = {
+    "p": 100,
+    "n": 320,
+    "b": 330,
+    "r": 500,
+    "q": 900,
+    "k": 20000,
+}
 
 
 def utc_now():
@@ -35,6 +46,65 @@ def completed_week_start(week_key):
 
 def default_board_json():
     return json.dumps(initial_board(), ensure_ascii=False, sort_keys=True)
+
+
+def normalize_computer_difficulty(value):
+    difficulty = str(value or "easy").strip().lower()
+    return difficulty if difficulty in COMPUTER_DIFFICULTIES else None
+
+
+def move_material_value(move):
+    captured = str(move.get("captured") or "").lower()
+    promotion = str(move.get("promotion") or "").lower()
+    score = PIECE_VALUES.get(captured, 0)
+    if promotion:
+        score += max(0, PIECE_VALUES.get(promotion, 0) - PIECE_VALUES["p"])
+    return score
+
+
+def choose_computer_move(board, side, difficulty="easy"):
+    moves = legal_moves(board, side)
+    if not moves:
+        return None
+    difficulty = normalize_computer_difficulty(difficulty) or "easy"
+    if difficulty == "easy":
+        return random.choice(moves)
+
+    scored = []
+    for move in moves:
+        try:
+            applied = validate_move(board, side, move["from"], move["to"], move.get("promotion"))
+        except ValueError:
+            continue
+        next_board = applied["board"]
+        status = game_status(next_board, opponent(side))
+        score = move_material_value(move)
+        if status["status"] == "finished" and status.get("winner_color") == side:
+            score += 100000
+        elif status.get("reason") == "check":
+            score += 60
+
+        if difficulty == "hard" and status["status"] == "active":
+            reply_scores = []
+            for reply in legal_moves(next_board, opponent(side)):
+                try:
+                    reply_applied = validate_move(next_board, opponent(side), reply["from"], reply["to"], reply.get("promotion"))
+                except ValueError:
+                    continue
+                reply_score = move_material_value(reply)
+                reply_status = game_status(reply_applied["board"], side)
+                if reply_status["status"] == "finished" and reply_status.get("winner_color") == opponent(side):
+                    reply_score += 100000
+                reply_scores.append(reply_score)
+            if reply_scores:
+                score -= max(reply_scores)
+        scored.append((score, move))
+
+    if not scored:
+        return random.choice(moves)
+    best_score = max(score for score, _move in scored)
+    best_moves = [move for score, move in scored if score == best_score]
+    return random.choice(best_moves)
 
 
 def load_board(row):
@@ -62,6 +132,8 @@ def game_schema_sql():
         status TEXT NOT NULL DEFAULT 'active',
         white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        human_side TEXT NOT NULL DEFAULT 'white',
+        computer_difficulty TEXT NOT NULL DEFAULT 'easy',
         current_turn TEXT NOT NULL DEFAULT 'white',
         board_json TEXT NOT NULL,
         move_history_json TEXT NOT NULL DEFAULT '[]',
@@ -74,7 +146,9 @@ def game_schema_sql():
         CHECK (game_key IN ('chess')),
         CHECK (mode IN ('pvp', 'computer')),
         CHECK (status IN ('active', 'finished', 'cancelled')),
-        CHECK (current_turn IN ('white', 'black'))
+        CHECK (current_turn IN ('white', 'black')),
+        CHECK (human_side IN ('white', 'black')),
+        CHECK (computer_difficulty IN ('easy', 'normal', 'hard'))
     );
     CREATE TABLE IF NOT EXISTS game_invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,40 +177,106 @@ def game_schema_sql():
         created_at TEXT NOT NULL,
         UNIQUE(game_key, week_key, user_id)
     );
+    CREATE TABLE IF NOT EXISTS game_solo_scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_key TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        week_key TEXT NOT NULL,
+        difficulty TEXT NOT NULL DEFAULT 'standard',
+        puzzle_id TEXT,
+        raw_elapsed_ms INTEGER NOT NULL,
+        penalty_seconds INTEGER NOT NULL DEFAULT 0,
+        elapsed_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b')),
+        CHECK (elapsed_ms > 0),
+        CHECK (raw_elapsed_ms > 0),
+        CHECK (penalty_seconds >= 0)
+    );
     CREATE INDEX IF NOT EXISTS idx_game_matches_players ON game_matches(game_key, status, white_user_id, black_user_id);
     CREATE INDEX IF NOT EXISTS idx_game_matches_finished ON game_matches(game_key, mode, finished_at);
     CREATE INDEX IF NOT EXISTS idx_game_invites_user_status ON game_invites(game_key, opponent_user_id, status);
     CREATE INDEX IF NOT EXISTS idx_game_rewards_week ON game_leaderboard_rewards(game_key, week_key);
+    CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
     """
 
 
 def ensure_game_schema(conn):
     conn.executescript(game_schema_sql())
+    solo_schema = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_solo_scores'"
+    ).fetchone()
+    if solo_schema and "1a2b" not in str(solo_schema["sql"] or ""):
+        conn.executescript(
+            """
+            ALTER TABLE game_solo_scores RENAME TO game_solo_scores_old;
+            CREATE TABLE game_solo_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_key TEXT NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                week_key TEXT NOT NULL,
+                difficulty TEXT NOT NULL DEFAULT 'standard',
+                puzzle_id TEXT,
+                raw_elapsed_ms INTEGER NOT NULL,
+                penalty_seconds INTEGER NOT NULL DEFAULT 0,
+                elapsed_ms INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK (game_key IN ('sudoku', 'minesweeper', '1a2b')),
+                CHECK (elapsed_ms > 0),
+                CHECK (raw_elapsed_ms > 0),
+                CHECK (penalty_seconds >= 0)
+            );
+            INSERT INTO game_solo_scores (
+                id, game_key, user_id, week_key, difficulty, puzzle_id,
+                raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+            )
+            SELECT id, game_key, user_id, week_key, difficulty, puzzle_id,
+                   raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+            FROM game_solo_scores_old;
+            DROP TABLE game_solo_scores_old;
+            CREATE INDEX IF NOT EXISTS idx_game_solo_scores_rank ON game_solo_scores(game_key, week_key, difficulty, elapsed_ms);
+            """
+        )
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_matches)").fetchall()}
     if "white_deleted_at" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN white_deleted_at TEXT")
     if "black_deleted_at" not in cols:
         conn.execute("ALTER TABLE game_matches ADD COLUMN black_deleted_at TEXT")
+    if "human_side" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN human_side TEXT NOT NULL DEFAULT 'white'")
+    if "computer_difficulty" not in cols:
+        conn.execute("ALTER TABLE game_matches ADD COLUMN computer_difficulty TEXT NOT NULL DEFAULT 'easy'")
 
 
 def serialize_match(row, actor_id=None):
     board = load_board(row)
     history = load_history(row)
     side = None
+    human_side = row["human_side"] if "human_side" in row.keys() else "white"
+    computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "easy"
     if actor_id:
-        if int(row["white_user_id"]) == int(actor_id):
+        if row["mode"] == "computer" and int(row["white_user_id"]) == int(actor_id):
+            side = human_side
+        elif int(row["white_user_id"]) == int(actor_id):
             side = "white"
         elif row["black_user_id"] and int(row["black_user_id"]) == int(actor_id):
             side = "black"
+    white_username = row["white_username"]
+    black_username = row["black_username"] or ("電腦" if row["mode"] == "computer" else "-")
+    if row["mode"] == "computer" and human_side == "black":
+        white_username = "電腦"
+        black_username = row["white_username"]
     return {
         "id": row["id"],
         "game_key": row["game_key"],
         "mode": row["mode"],
         "status": row["status"],
         "white_user_id": row["white_user_id"],
-        "white_username": row["white_username"],
+        "white_username": white_username,
         "black_user_id": row["black_user_id"],
-        "black_username": row["black_username"] or ("電腦" if row["mode"] == "computer" else "-"),
+        "black_username": black_username,
+        "human_side": human_side,
+        "computer_difficulty": computer_difficulty,
         "current_turn": row["current_turn"],
         "board": board,
         "board_rows": board_rows(board),
@@ -186,7 +326,11 @@ def serialize_invite(row):
 def finish_match(conn, row, status_info, now):
     winner_color = status_info.get("winner_color")
     winner_user_id = None
-    if winner_color == "white":
+    human_side = row["human_side"] if "human_side" in row.keys() else "white"
+    if row["mode"] == "computer":
+        if winner_color == human_side:
+            winner_user_id = row["white_user_id"]
+    elif winner_color == "white":
         winner_user_id = row["white_user_id"]
     elif winner_color == "black":
         winner_user_id = row["black_user_id"]
@@ -237,10 +381,19 @@ def register_games_routes(app, deps):
         return int(row["white_user_id"]) == int(actor["id"]) or (row["black_user_id"] and int(row["black_user_id"]) == int(actor["id"]))
 
     def actor_color(actor, row):
+        if row["mode"] == "computer" and int(row["white_user_id"]) == int(actor["id"]):
+            return row["human_side"] if "human_side" in row.keys() else "white"
         if int(row["white_user_id"]) == int(actor["id"]):
             return "white"
         if row["black_user_id"] and int(row["black_user_id"]) == int(actor["id"]):
             return "black"
+        return None
+
+    def actor_delete_column(actor, row):
+        if int(row["white_user_id"]) == int(actor["id"]):
+            return "white_deleted_at"
+        if row["black_user_id"] and int(row["black_user_id"]) == int(actor["id"]):
+            return "black_deleted_at"
         return None
 
     def award_weekly_rewards(week, actor=None):
@@ -313,6 +466,29 @@ def register_games_routes(app, deps):
                 "status": "available",
                 "supports_invites": True,
                 "supports_computer": True,
+                "computer_difficulties": [
+                    {"key": "easy", "label": "簡單"},
+                    {"key": "normal", "label": "普通"},
+                    {"key": "hard", "label": "困難"},
+                ],
+            }, {
+                "key": "sudoku",
+                "title": "數獨",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "minesweeper",
+                "title": "踩地雷",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
+            }, {
+                "key": "1a2b",
+                "title": "1A2B",
+                "status": "available",
+                "supports_invites": False,
+                "supports_computer": False,
             }],
         })
 
@@ -439,14 +615,17 @@ def register_games_routes(app, deps):
             match_id = None
             new_status = {"accept": "accepted", "reject": "rejected", "cancel": "cancelled"}[action]
             if action == "accept":
+                inviter_is_white = random.choice([True, False])
+                white_user_id = int(invite["inviter_user_id"]) if inviter_is_white else int(invite["opponent_user_id"])
+                black_user_id = int(invite["opponent_user_id"]) if inviter_is_white else int(invite["inviter_user_id"])
                 cur = conn.execute(
                     """
                     INSERT INTO game_matches (
-                        game_key, mode, status, white_user_id, black_user_id, current_turn,
+                        game_key, mode, status, white_user_id, black_user_id, human_side, current_turn,
                         board_json, move_history_json, created_at, updated_at
-                    ) VALUES (?, 'pvp', 'active', ?, ?, 'white', ?, '[]', ?, ?)
+                    ) VALUES (?, 'pvp', 'active', ?, ?, 'white', 'white', ?, '[]', ?, ?)
                     """,
-                    (GAME_KEY, int(invite["inviter_user_id"]), int(invite["opponent_user_id"]), default_board_json(), now, now),
+                    (GAME_KEY, white_user_id, black_user_id, default_board_json(), now, now),
                 )
                 match_id = cur.lastrowid
             conn.execute(
@@ -467,18 +646,56 @@ def register_games_routes(app, deps):
         actor, err, status = actor_or_401()
         if err:
             return err, status
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        human_side = str(data.get("side") or data.get("human_side") or "white").strip().lower()
+        if human_side not in {"white", "black"}:
+            return json_resp({"ok": False, "msg": "請選擇白方或黑方"}), 400
+        difficulty = normalize_computer_difficulty(data.get("difficulty") or data.get("computer_difficulty"))
+        if difficulty is None:
+            return json_resp({"ok": False, "msg": "請選擇有效的電腦難度"}), 400
         conn = get_db()
         try:
             ensure_game_schema(conn)
             now = utc_now()
+            board = initial_board()
+            history = []
+            current_turn = "white"
+            if human_side == "black":
+                opening_moves = legal_moves(board, "white")
+                if opening_moves:
+                    computer_move = choose_computer_move(board, "white", difficulty)
+                    applied = validate_move(board, "white", computer_move["from"], computer_move["to"], computer_move.get("promotion"))
+                    board = applied["board"]
+                    history.append({
+                        "by": "white",
+                        "from": computer_move["from"],
+                        "to": computer_move["to"],
+                        "piece": computer_move["piece"],
+                        "captured": applied.get("captured"),
+                        "computer": True,
+                        "at": now,
+                    })
+                    current_turn = "black"
             cur = conn.execute(
                 """
                 INSERT INTO game_matches (
-                    game_key, mode, status, white_user_id, black_user_id, current_turn,
+                    game_key, mode, status, white_user_id, black_user_id, human_side, computer_difficulty, current_turn,
                     board_json, move_history_json, created_at, updated_at
-                ) VALUES (?, 'computer', 'active', ?, NULL, 'white', ?, '[]', ?, ?)
+                ) VALUES (?, 'computer', 'active', ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (GAME_KEY, int(actor["id"]), default_board_json(), now, now),
+                (
+                    GAME_KEY,
+                    int(actor["id"]),
+                    human_side,
+                    difficulty,
+                    current_turn,
+                    json.dumps(board, ensure_ascii=False, sort_keys=True),
+                    json.dumps(history, ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             conn.commit()
             return json_resp({"ok": True, "match_id": cur.lastrowid})
@@ -543,12 +760,12 @@ def register_games_routes(app, deps):
             if not row:
                 return json_resp({"ok": False, "msg": "找不到棋局"}), 404
             side = actor_color(actor, row)
-            if not side:
+            column = actor_delete_column(actor, row)
+            if not side or not column:
                 return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
             if row["status"] == "active":
                 return json_resp({"ok": False, "msg": "進行中的棋局不能刪除，請先認輸或完成棋局"}), 409
             now = utc_now()
-            column = "white_deleted_at" if side == "white" else "black_deleted_at"
             conn.execute(f"UPDATE game_matches SET {column}=?, updated_at=? WHERE id=?", (now, now, match_id))
             conn.commit()
             audit(
@@ -611,14 +828,16 @@ def register_games_routes(app, deps):
             board = move["board"]
             next_turn = opponent(side)
             status_info = game_status(board, next_turn)
-            if row["mode"] == "computer" and status_info["status"] == "active" and next_turn == "black":
-                computer_moves = legal_moves(board, "black")
-                if computer_moves:
-                    computer_move = random.choice(computer_moves)
-                    computer_applied = validate_move(board, "black", computer_move["from"], computer_move["to"], computer_move.get("promotion"))
+            human_side = row["human_side"] if "human_side" in row.keys() else "white"
+            computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "easy"
+            if row["mode"] == "computer" and status_info["status"] == "active" and next_turn != human_side:
+                computer_side = next_turn
+                computer_move = choose_computer_move(board, computer_side, computer_difficulty)
+                if computer_move:
+                    computer_applied = validate_move(board, computer_side, computer_move["from"], computer_move["to"], computer_move.get("promotion"))
                     board = computer_applied["board"]
                     history.append({
-                        "by": "black",
+                        "by": computer_side,
                         "from": computer_move["from"],
                         "to": computer_move["to"],
                         "piece": computer_move["piece"],
@@ -626,7 +845,7 @@ def register_games_routes(app, deps):
                         "computer": True,
                         "at": utc_now(),
                     })
-                    next_turn = "white"
+                    next_turn = human_side
                     status_info = game_status(board, next_turn)
             conn.execute(
                 """
@@ -664,7 +883,7 @@ def register_games_routes(app, deps):
             if not side:
                 return json_resp({"ok": False, "msg": "不是這局的玩家"}), 403
             winner = row["black_user_id"] if side == "white" else row["white_user_id"]
-            if row["mode"] == "computer" and side == "white":
+            if row["mode"] == "computer":
                 winner = None
             now = utc_now()
             conn.execute(
@@ -717,6 +936,97 @@ def register_games_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/games/<game_key>/solo-leaderboard", methods=["GET"])
+    @require_csrf_safe
+    def solo_game_leaderboard(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = str(game_key or "").strip().lower()
+        if game_key not in SOLO_GAME_KEYS:
+            return json_resp({"ok": False, "msg": "不支援的單人遊戲"}), 404
+        week = str(request.args.get("week") or current_week_key()).strip()
+        difficulty = str(request.args.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
+        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+            return json_resp({"ok": False, "msg": "不支援的難度"}), 400
+        if game_key in {"sudoku", "1a2b"}:
+            difficulty = "standard"
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            return json_resp({
+                "ok": True,
+                "game_key": game_key,
+                "week": week,
+                "difficulty": difficulty,
+                "rank_mode": "time_asc",
+                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+            })
+        finally:
+            conn.close()
+
+    @app.route("/api/games/<game_key>/solo-scores", methods=["POST"])
+    @require_csrf
+    def submit_solo_game_score(game_key):
+        actor, err, status = actor_or_401()
+        if err:
+            return err, status
+        game_key = str(game_key or "").strip().lower()
+        if game_key not in SOLO_GAME_KEYS:
+            return json_resp({"ok": False, "msg": "不支援的單人遊戲"}), 404
+        data, err, status = parse_json_body()
+        if err:
+            return err, status
+        try:
+            raw_elapsed_ms = int(data.get("raw_elapsed_ms") or data.get("elapsed_ms") or 0)
+            penalty_seconds = int(data.get("penalty_seconds") or 0)
+            elapsed_ms = int(data.get("elapsed_ms") or 0)
+        except Exception:
+            return json_resp({"ok": False, "msg": "成績格式錯誤"}), 400
+        if raw_elapsed_ms <= 0 or elapsed_ms <= 0 or penalty_seconds < 0:
+            return json_resp({"ok": False, "msg": "成績時間不可小於等於 0"}), 400
+        if elapsed_ms < raw_elapsed_ms or elapsed_ms != raw_elapsed_ms + penalty_seconds * 1000:
+            return json_resp({"ok": False, "msg": "成績時間與加時不一致"}), 400
+        if elapsed_ms > 24 * 60 * 60 * 1000 or penalty_seconds > 3600:
+            return json_resp({"ok": False, "msg": "成績時間超出合理範圍"}), 400
+        difficulty = str(data.get("difficulty") or ("easy" if game_key == "minesweeper" else "standard")).strip().lower()
+        if game_key == "minesweeper" and difficulty not in MINESWEEPER_DIFFICULTIES:
+            return json_resp({"ok": False, "msg": "不支援的難度"}), 400
+        if game_key in {"sudoku", "1a2b"}:
+            difficulty = "standard"
+        puzzle_id = str(data.get("puzzle_id") or "")[:64]
+        week = current_week_key()
+        now = utc_now()
+        conn = get_db()
+        try:
+            ensure_game_schema(conn)
+            cur = conn.execute(
+                """
+                INSERT INTO game_solo_scores (
+                    game_key, user_id, week_key, difficulty, puzzle_id,
+                    raw_elapsed_ms, penalty_seconds, elapsed_ms, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (game_key, int(actor["id"]), week, difficulty, puzzle_id, raw_elapsed_ms, penalty_seconds, elapsed_ms, now),
+            )
+            conn.commit()
+            audit(
+                "GAME_SOLO_SCORE_SUBMITTED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"game_key={game_key},score_id={cur.lastrowid},elapsed_ms={elapsed_ms},penalty_seconds={penalty_seconds}",
+            )
+            return json_resp({
+                "ok": True,
+                "score_id": cur.lastrowid,
+                "week": week,
+                "leaderboard": solo_leaderboard_rows(conn, game_key, week, difficulty),
+            })
+        finally:
+            conn.close()
+
     @app.route("/api/root/games/chess/weekly-rewards/award", methods=["POST"])
     @require_csrf
     def award_chess_weekly_rewards():
@@ -756,5 +1066,43 @@ def leaderboard_rows(conn, week):
         LIMIT 50
         """,
         (GAME_KEY, week),
+    ).fetchall()
+    return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]
+
+
+def solo_leaderboard_rows(conn, game_key, week, difficulty):
+    rows = conn.execute(
+        """
+        SELECT best.user_id,
+               u.username,
+               best.elapsed_ms,
+               best.raw_elapsed_ms,
+               best.penalty_seconds,
+               attempts.attempts,
+               best.created_at AS latest_at
+        FROM game_solo_scores s
+        JOIN game_solo_scores best ON best.id=(
+            SELECT s2.id
+            FROM game_solo_scores s2
+            WHERE s2.game_key=s.game_key
+              AND s2.week_key=s.week_key
+              AND s2.difficulty=s.difficulty
+              AND s2.user_id=s.user_id
+            ORDER BY s2.elapsed_ms ASC, s2.created_at ASC, s2.id ASC
+            LIMIT 1
+        )
+        JOIN (
+            SELECT user_id, COUNT(*) AS attempts
+            FROM game_solo_scores
+            WHERE game_key=? AND week_key=? AND difficulty=?
+            GROUP BY user_id
+        ) attempts ON attempts.user_id=best.user_id
+        JOIN users u ON u.id=best.user_id
+        WHERE s.game_key=? AND s.week_key=? AND s.difficulty=?
+        GROUP BY best.id, best.user_id, u.username, best.elapsed_ms, best.raw_elapsed_ms, best.penalty_seconds, attempts.attempts, best.created_at
+        ORDER BY best.elapsed_ms ASC, attempts.attempts ASC, u.username COLLATE NOCASE ASC
+        LIMIT 50
+        """,
+        (game_key, week, difficulty, game_key, week, difficulty),
     ).fetchall()
     return [{**dict(row), "rank": index + 1} for index, row in enumerate(rows)]

@@ -18,6 +18,8 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "/preview/content" in drive_js
     assert "drive-preview-archive" in drive_js
     assert "drive-preview-text" in drive_js
+    assert "function renderDriveArchiveEntries(entries)" in drive_js
+    assert '".7z", ".rar", ".tar", ".gz"' in drive_js
     assert "closeDrivePreview()" in drive_js
     assert 'data-drive-action="preview" data-file-id="${sanitize(file.id)}"' in drive_js
     assert 'data-drive-action="preview" data-file-id="${sanitize(file.file_id)}"' in drive_js
@@ -48,6 +50,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="storage-trash-list"' in index_html
     assert 'id="album-create-title"' in index_html
     assert 'id="album-create-description"' in index_html
+    assert 'id="album-create-share-password"' in index_html
+    assert 'id="album-edit-share-password"' in index_html
+    assert 'id="album-edit-clear-share-password"' in index_html
     assert 'id="album-picker-select"' in index_html
     assert 'id="album-list"' in index_html
     assert 'id="album-detail-card"' in index_html
@@ -72,6 +77,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "async function copyAlbumShareUrl(url)" in drive_js
     assert 'data-drive-action="copy-album-share-link"' in drive_js
     assert "share_url" in drive_js
+    assert "payload.share_password = sharePassword" in drive_js
+    assert "clear_share_password" in drive_js
+    assert "password_required" in drive_js
     assert "async function removeAlbumFile(albumId, albumFileId)" in drive_js
     assert "請輸入相簿 id" not in drive_js
     assert 'id="storage-breadcrumb"' in index_html
@@ -187,9 +195,18 @@ def test_album_viewer_has_dedicated_module():
     assert "loadCurrentSecurityProfileDraft" in admin_js
     assert "renderSecurityProfilePreview" in admin_js
     assert "function applySecurityProfileToInputs" in admin_js
+    assert "function applySecurityProfileDataToInputs" in admin_js
     assert "function previewSecurityProfileSelection" in admin_js
+    assert "function bindSecurityProfileSelect" in admin_js
+    assert '"feature_audit_log_enabled"' in admin_js
+    assert '"feature_economy_enabled"' in admin_js
+    assert 'id="sc-feature-audit-log-enabled"' in index_html
+    assert 'id="sc-feature-economy-enabled"' in index_html
     assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
     assert 'previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s")' in bootstrap_js
+    assert 'bindSecurityProfileSelect("security-mode-select", "security-mode-profile-preview", "sc")' in admin_js
+    assert 'bindSecurityProfileSelect("server-mode-select", "server-mode-profile-preview", "s")' in admin_js
+    assert "按套用才會寫入伺服器" in admin_js
     assert "await loadSettings();" in admin_js
     assert "populateProfileSelect(\"server-mode-select\"" in admin_js
     assert 'confirm: "RESET_RUNTIME_STATE"' in admin_js

@@ -1,8 +1,9 @@
 import sqlite3
+from unittest.mock import patch
 
 from flask import Flask, jsonify
 
-from routes.games import ensure_game_schema, register_games_routes
+from routes.games import choose_computer_move, ensure_game_schema, register_games_routes
 from services.chess_game import game_status, initial_board, legal_moves, validate_move
 
 
@@ -51,6 +52,65 @@ def _seed_db(db_path):
     ensure_game_schema(conn)
     conn.commit()
     conn.close()
+
+
+def test_game_catalog_includes_sudoku_minesweeper_and_1a2b(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    response = client.get("/api/games/catalog")
+    assert response.status_code == 200
+    games = response.get_json()["games"]
+    by_key = {game["key"]: game for game in games}
+    assert {"chess", "sudoku", "minesweeper", "1a2b"} <= set(by_key)
+    assert by_key["sudoku"]["supports_invites"] is False
+    assert by_key["minesweeper"]["supports_computer"] is False
+    assert by_key["1a2b"]["supports_invites"] is False
+
+
+def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    first = client.post(
+        "/api/games/sudoku/solo-scores",
+        json={"raw_elapsed_ms": 50000, "penalty_seconds": 10, "elapsed_ms": 60000, "puzzle_id": "p1"},
+    )
+    assert first.status_code == 200
+    second = client.post(
+        "/api/games/sudoku/solo-scores",
+        json={"raw_elapsed_ms": 45000, "penalty_seconds": 0, "elapsed_ms": 45000, "puzzle_id": "p1"},
+    )
+    assert second.status_code == 200
+
+    board = client.get("/api/games/sudoku/solo-leaderboard")
+    assert board.status_code == 200
+    payload = board.get_json()
+    assert payload["rank_mode"] == "time_asc"
+    assert payload["leaderboard"][0]["username"] == "alice"
+    assert payload["leaderboard"][0]["elapsed_ms"] == 45000
+    assert payload["leaderboard"][0]["attempts"] == 2
+
+    bad = client.post(
+        "/api/games/minesweeper/solo-scores",
+        json={"raw_elapsed_ms": 10000, "penalty_seconds": 10, "elapsed_ms": 10000, "difficulty": "easy"},
+    )
+    assert bad.status_code == 400
+
+    onea2b = client.post(
+        "/api/games/1a2b/solo-scores",
+        json={"raw_elapsed_ms": 30000, "penalty_seconds": 0, "elapsed_ms": 30000, "puzzle_id": "1a2b-4digits"},
+    )
+    assert onea2b.status_code == 200
+    onea2b_board = client.get("/api/games/1a2b/solo-leaderboard")
+    assert onea2b_board.status_code == 200
+    assert onea2b_board.get_json()["leaderboard"][0]["elapsed_ms"] == 30000
 
 
 def test_chess_legal_move_validation_blocks_illegal_moves():
@@ -168,6 +228,63 @@ def test_chess_practice_match_accepts_player_move_and_computer_reply(tmp_path):
     assert data["match"]["move_history"][1]["computer"] is True
 
 
+def test_chess_practice_can_choose_black_and_computer_moves_first(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    with patch("routes.games.random.choice", side_effect=lambda seq: seq[0]):
+        created = client.post("/api/games/chess/practice", json={"side": "black"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+
+    detail = client.get(f"/api/games/chess/matches/{match_id}")
+    assert detail.status_code == 200
+    match = detail.get_json()["match"]
+    assert match["my_side"] == "black"
+    assert match["human_side"] == "black"
+    assert match["white_username"] == "電腦"
+    assert match["black_username"] == "alice"
+    assert match["current_turn"] == "black"
+    assert len(match["move_history"]) == 1
+    assert match["move_history"][0]["computer"] is True
+    assert match["move_history"][0]["by"] == "white"
+
+
+def test_chess_practice_difficulty_is_persisted_and_rejects_invalid_value(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    rejected = client.post("/api/games/chess/practice", json={"difficulty": "impossible"})
+    assert rejected.status_code == 400
+    assert "難度" in rejected.get_json()["msg"]
+
+    created = client.post("/api/games/chess/practice", json={"difficulty": "hard"})
+    assert created.status_code == 200
+    match_id = created.get_json()["match_id"]
+    match = client.get(f"/api/games/chess/matches/{match_id}").get_json()["match"]
+    assert match["computer_difficulty"] == "hard"
+
+
+def test_chess_computer_normal_difficulty_prefers_high_value_capture():
+    board = {
+        "e1": "K",
+        "e8": "k",
+        "d8": "q",
+        "d1": "Q",
+        "h2": "P",
+    }
+    move = choose_computer_move(board, "black", "normal")
+    assert move["from"] == "d8"
+    assert move["to"] == "d1"
+    assert move["captured"] == "Q"
+
+
 def test_chess_pvp_checkmate_finishes_match(tmp_path):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
@@ -180,7 +297,8 @@ def test_chess_pvp_checkmate_finishes_match(tmp_path):
     invite_id = invite.get_json()["invite_id"]
 
     actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
-    accepted = client.post(f"/api/games/chess/invites/{invite_id}/accept", json={})
+    with patch("routes.games.random.choice", return_value=True):
+        accepted = client.post(f"/api/games/chess/invites/{invite_id}/accept", json={})
     assert accepted.status_code == 200
     match_id = accepted.get_json()["match_id"]
 
@@ -201,6 +319,33 @@ def test_chess_pvp_checkmate_finishes_match(tmp_path):
     assert match["result_reason"] == "checkmate"
     assert match["winner_username"] == "bob"
     assert match["legal_moves"] == []
+
+
+def test_chess_pvp_accept_randomizes_sides(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    invite = client.post("/api/games/chess/invites", json={"opponent_username": "bob"})
+    assert invite.status_code == 200
+    invite_id = invite.get_json()["invite_id"]
+
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    with patch("routes.games.random.choice", return_value=False):
+        accepted = client.post(f"/api/games/chess/invites/{invite_id}/accept", json={})
+    assert accepted.status_code == 200
+    match_id = accepted.get_json()["match_id"]
+
+    bob_match = client.get(f"/api/games/chess/matches/{match_id}").get_json()["match"]
+    assert bob_match["my_side"] == "white"
+    assert bob_match["white_username"] == "bob"
+    assert bob_match["black_username"] == "alice"
+
+    actor_box["actor"] = {"id": 2, "username": "alice", "role": "user"}
+    alice_match = client.get(f"/api/games/chess/matches/{match_id}").get_json()["match"]
+    assert alice_match["my_side"] == "black"
 
 
 def test_chess_invite_accept_creates_pvp_match_and_leaderboard(tmp_path):

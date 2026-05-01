@@ -186,7 +186,9 @@ function renderUsers() {
     actions.className = "action";
     actionButtons.forEach((btn) => actions.appendChild(btn));
     appendTextCell(u.id);
-    appendTextCell(u.username || "");
+    const usernameCell = document.createElement("td");
+    usernameCell.innerHTML = userIdentityMarkup(u.id, u.username || "", u.nickname || "", "user-table-identity");
+    tr.appendChild(usernameCell);
     appendTextCell(u.nickname || "");
     appendTextCell(u.real_name || "");
     appendTextCell(u.role_label || u.role || "");
@@ -229,6 +231,7 @@ function renderUsers() {
     tr.appendChild(actionCell);
     tbody.appendChild(tr);
   }
+  bindAvatarFallbacks(tbody);
   selectedPendingUserIds = new Set([...selectedPendingUserIds].filter((id) => allowedPendingIds.has(id)));
   updatePendingSelectionUi();
   // Role quota info

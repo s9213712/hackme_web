@@ -1,3 +1,4 @@
+import gzip
 import mimetypes
 import tarfile
 import zipfile
@@ -14,7 +15,10 @@ AUDIO_EXTENSIONS = {
 VIDEO_EXTENSIONS = {".m4v", ".mov", ".mp4", ".ogv", ".webm"}
 IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
-ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"}
+ARCHIVE_EXTENSIONS = {
+    ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".tar.gz", ".tar.bz2",
+    ".tbz2", ".tar.xz", ".txz",
+}
 
 
 def _filename(row):
@@ -56,10 +60,10 @@ def preview_category(row):
         return "image", _display_mime(mime, filename)
     if mime == "application/pdf" or ext in PDF_EXTENSIONS:
         return "pdf", "application/pdf"
-    if mime.startswith("text/") or ext in TEXT_EXTENSIONS:
-        return "text", mime if mime != "application/octet-stream" else "text/plain"
     if ext in ARCHIVE_EXTENSIONS:
         return "archive", mime
+    if mime.startswith("text/") or ext in TEXT_EXTENSIONS:
+        return "text", mime if mime != "application/octet-stream" else "text/plain"
     return "metadata", mime
 
 
@@ -90,15 +94,15 @@ def build_preview_metadata(row, path, *, max_text_bytes=65536, max_archive_entri
         return payload
     if category == "archive":
         payload["render_mode"] = "archive"
-        payload["entries"] = _archive_entries(path, max_entries=max_archive_entries)
+        payload["entries"] = _archive_entries(path, filename=filename, max_entries=max_archive_entries)
         payload["truncated"] = len(payload["entries"]) >= max_archive_entries
         return payload
     return payload
 
 
-def _archive_entries(path, *, max_entries):
+def _archive_entries(path, *, filename=None, max_entries):
     entries = []
-    lower = str(path).lower()
+    lower = str(filename or path).lower()
     try:
         if lower.endswith(".zip"):
             with zipfile.ZipFile(path) as archive:
@@ -118,6 +122,26 @@ def _archive_entries(path, *, max_entries):
                         "compressed_size": None,
                         "is_dir": member.isdir(),
                     })
+        elif lower.endswith(".gz"):
+            with gzip.open(path, "rb") as archive:
+                sample = archive.read(1)
+            inferred_name = Path(str(path)).name.removesuffix(".gz") or Path(str(path)).name
+            entries.append({
+                "name": inferred_name,
+                "size": None,
+                "compressed_size": int(Path(path).stat().st_size),
+                "is_dir": False,
+                "note": "gzip stream preview",
+                "readable": bool(sample or Path(path).stat().st_size == 0),
+            })
+        elif lower.endswith((".rar", ".7z")):
+            entries.append({
+                "name": Path(str(path)).name,
+                "size": int(Path(path).stat().st_size),
+                "compressed_size": int(Path(path).stat().st_size),
+                "is_dir": False,
+                "note": "此壓縮格式需額外工具才可列出內容；目前提供檔案層級預覽。",
+            })
     except Exception as exc:
         return [{"name": f"archive_preview_error: {exc}", "size": 0, "compressed_size": None, "is_dir": False}]
     return entries

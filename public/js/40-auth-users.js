@@ -503,6 +503,7 @@ async function submitUserAvatarUpload({ reloadUsers = true } = {}) {
   if (json && json.ok) {
     if (status) status.textContent = `頭像已更新 file_id: ${json.avatar_file_id}`;
     if (input) input.value = "";
+    markUserAvatarUpdated(editingUserId);
     setUserEditMsg("頭像已更新", true);
     if (reloadUsers && ["manager", "super_admin"].includes(currentRole)) loadUsers();
   } else {

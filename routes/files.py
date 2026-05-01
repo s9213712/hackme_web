@@ -1471,6 +1471,7 @@ def register_file_routes(app, deps):
                 title=data.get("title"),
                 description=data.get("description") or "",
                 visibility=data.get("visibility") or "private",
+                share_password=data.get("share_password") if "share_password" in data else None,
             )
             if msg:
                 conn.rollback()
@@ -1514,6 +1515,9 @@ def register_file_routes(app, deps):
                 title=data.get("title") if "title" in data else None,
                 description=data.get("description") if "description" in data else None,
                 visibility=data.get("visibility") if "visibility" in data else None,
+                share_password=data.get("share_password") if "share_password" in data else None,
+                share_password_provided="share_password" in data,
+                clear_share_password=bool(data.get("clear_share_password", False)),
             )
             if msg:
                 conn.rollback()
@@ -1684,12 +1688,24 @@ def register_file_routes(app, deps):
     .thumb img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
     .name {{ padding: 10px 12px; overflow-wrap: anywhere; font-size: 14px; }}
     .empty {{ padding: 24px; background: #fff; border: 1px solid #dde3ea; border-radius: 8px; }}
+    .password-panel {{ display: none; margin: 16px 0 24px; padding: 16px; background: #fff; border: 1px solid #dde3ea; border-radius: 8px; }}
+    .password-panel.show {{ display: block; }}
+    .password-row {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+    .password-row input {{ min-width: 220px; flex: 1; padding: 10px 12px; border: 1px solid #c7d0dc; border-radius: 6px; }}
+    .password-row button {{ padding: 10px 14px; border: 0; border-radius: 6px; background: #2357d9; color: #fff; cursor: pointer; }}
   </style>
 </head>
 <body>
   <main>
     <h1 id="album-title">分享相簿</h1>
     <div class="meta" id="album-meta">讀取中...</div>
+    <form class="password-panel" id="album-password-panel">
+      <label for="album-password-input">這本相簿需要分享密碼</label>
+      <div class="password-row">
+        <input type="password" id="album-password-input" autocomplete="current-password" placeholder="輸入分享密碼">
+        <button type="submit">開啟相簿</button>
+      </div>
+    </form>
     <div class="grid" id="album-files"></div>
   </main>
   <script>
@@ -1697,6 +1713,9 @@ def register_file_routes(app, deps):
   const titleEl = document.getElementById("album-title");
   const metaEl = document.getElementById("album-meta");
   const filesEl = document.getElementById("album-files");
+  const passwordPanel = document.getElementById("album-password-panel");
+  const passwordInput = document.getElementById("album-password-input");
+  let sharePassword = "";
   function fileKind(file) {{
     const mime = String(file.mime_type || "").toLowerCase();
     if (mime.startsWith("image/")) return "image";
@@ -1706,10 +1725,33 @@ def register_file_routes(app, deps):
   function esc(value) {{
     return String(value || "").replace(/[&<>"']/g, (ch) => ({{ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }}[ch]));
   }}
-  fetch(`/api/storage/shared/albums/${{encodeURIComponent(TOKEN)}}`)
+  function fileUrl(file, inline) {{
+    const raw = file.download_url || "#";
+    try {{
+      const url = new URL(raw, window.location.origin);
+      if (sharePassword) url.searchParams.set("password", sharePassword);
+      if (inline) url.searchParams.set("inline", "1");
+      return url.pathname + url.search;
+    }} catch (err) {{
+      return raw;
+    }}
+  }}
+  function loadAlbum() {{
+    const headers = sharePassword ? {{ "X-Album-Share-Password": sharePassword }} : {{}};
+    fetch(`/api/storage/shared/albums/${{encodeURIComponent(TOKEN)}}`, {{ headers }})
     .then((res) => res.json().then((body) => ({{ status: res.status, body }})))
     .then((result) => {{
-      if (!result.body.ok) throw new Error(result.body.msg || "分享相簿不存在或已失效");
+      if (!result.body.ok) {{
+        if (result.body.reason === "password_required" || result.body.reason === "password_invalid") {{
+          passwordPanel.classList.add("show");
+          metaEl.textContent = result.body.reason === "password_invalid" ? "密碼不正確，請重新輸入。" : "請輸入分享密碼。";
+          filesEl.innerHTML = "";
+          passwordInput.focus();
+          return;
+        }}
+        throw new Error(result.body.msg || "分享相簿不存在或已失效");
+      }}
+      passwordPanel.classList.remove("show");
       const album = result.body.album || {{}};
       titleEl.textContent = album.title || "分享相簿";
       metaEl.textContent = `${{(album.files || []).length}} 個檔案${{album.description ? " · " + album.description : ""}}`;
@@ -1719,10 +1761,11 @@ def register_file_routes(app, deps):
       }}
       filesEl.innerHTML = album.files.map((file) => {{
         const kind = fileKind(file);
-        const href = file.download_url || "#";
+        const href = fileUrl(file, false);
+        const inlineHref = fileUrl(file, true);
         const safeHref = esc(href);
         const thumb = kind === "image"
-          ? `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer"><img src="${{safeHref}}?inline=1" alt=""></a>`
+          ? `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer"><img src="${{esc(inlineHref)}}" alt=""></a>`
           : `<a class="thumb" href="${{safeHref}}" target="_blank" rel="noreferrer">${{esc(kind)}}</a>`;
         return `<article class="tile">${{thumb}}<div class="name">${{esc(file.display_name || file.file_id || "file")}}</div></article>`;
       }}).join("");
@@ -1732,17 +1775,44 @@ def register_file_routes(app, deps):
       metaEl.textContent = err.message || "分享相簿不存在或已失效";
       filesEl.innerHTML = "";
     }});
+  }}
+  passwordPanel.addEventListener("submit", (event) => {{
+    event.preventDefault();
+    sharePassword = passwordInput.value || "";
+    loadAlbum();
+  }});
+  loadAlbum();
   </script>
 </body>
 </html>"""
+
+    def _album_share_password_from_request():
+        return request.headers.get("X-Album-Share-Password") or request.args.get("password") or ""
+
+    def _album_share_error_response(reason):
+        if reason == "password_required":
+            return json_resp({
+                "ok": False,
+                "msg": "這本相簿需要分享密碼",
+                "reason": reason,
+                "password_required": True,
+            }), 401
+        if reason == "password_invalid":
+            return json_resp({
+                "ok": False,
+                "msg": "分享密碼不正確",
+                "reason": reason,
+                "password_required": True,
+            }), 403
+        return json_resp({"ok": False, "msg": "分享相簿不存在或已失效", "reason": reason}), 404
 
     @app.route("/api/storage/shared/albums/<token>", methods=["GET"])
     def storage_album_share_api(token):
         conn = get_db()
         try:
-            row, reason = resolve_album_share_token(conn, token)
+            row, reason = resolve_album_share_token(conn, token, password=_album_share_password_from_request())
             if not row:
-                return json_resp({"ok": False, "msg": "分享相簿不存在或已失效", "reason": reason}), 404
+                return _album_share_error_response(reason)
             album = public_album_payload(conn, row)
             mark_album_share_link_accessed(conn, row["id"])
             conn.commit()
@@ -1754,8 +1824,10 @@ def register_file_routes(app, deps):
     def storage_album_share_file_download(token, file_id):
         conn = get_db()
         try:
-            resolved, reason = resolve_album_share_file(conn, token, file_id)
+            resolved, reason = resolve_album_share_file(conn, token, file_id, password=_album_share_password_from_request())
             if not resolved:
+                if reason in {"password_required", "password_invalid"}:
+                    return _album_share_error_response(reason)
                 return json_resp({"ok": False, "msg": "分享檔案不存在或已失效", "reason": reason}), 404
             share = resolved["share"]
             row = resolved["file"]

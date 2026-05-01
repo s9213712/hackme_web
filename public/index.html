@@ -796,6 +796,10 @@
               </select>
             </div>
             <div class="field">
+              <label>分享密碼（選填）</label>
+              <input type="password" id="album-create-share-password" placeholder="持連結可看時生效" autocomplete="new-password" />
+            </div>
+            <div class="field">
               <label>&nbsp;</label>
               <button class="btn btn-primary" id="album-create-btn" type="button">建立</button>
             </div>
@@ -825,6 +829,15 @@
                   <option value="unlisted">不列出，持連結可看</option>
                   <option value="public">公開</option>
                 </select>
+              </div>
+              <div class="field">
+                <label>分享密碼</label>
+                <input type="password" id="album-edit-share-password" placeholder="留空不變，輸入新密碼可更新" autocomplete="new-password" />
+                <div class="drive-card-sub" id="album-edit-share-password-state">目前未設定分享密碼。</div>
+                <label class="inline-check">
+                  <input type="checkbox" id="album-edit-clear-share-password" />
+                  清除分享密碼
+                </label>
               </div>
               <div class="field">
                 <label>&nbsp;</label>
@@ -872,7 +885,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋；邀請其他玩家對戰，或先與電腦練習。週排行榜只計入玩家對戰。</div>
+          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷與 1A2B。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -880,6 +893,7 @@
         <section class="game-panel">
           <div class="drive-card-title">遊戲大廳</div>
           <div id="game-catalog-list" class="game-catalog-list"></div>
+          <div id="chess-lobby-panel">
           <div class="settings-option-grid game-action-grid">
             <div class="field">
               <label>邀請玩家</label>
@@ -890,6 +904,21 @@
               <button class="btn btn-primary" id="game-invite-btn" type="button">送出邀請</button>
             </div>
             <div class="field">
+              <label>電腦練習方位</label>
+              <select id="game-practice-side">
+                <option value="white">我執白方</option>
+                <option value="black">我執黑方</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>電腦難度</label>
+              <select id="game-practice-difficulty">
+                <option value="easy">簡單：隨機走棋</option>
+                <option value="normal">普通：優先吃子與將軍</option>
+                <option value="hard">困難：避免明顯送子</option>
+              </select>
+            </div>
+            <div class="field">
               <label>&nbsp;</label>
               <button class="btn" id="game-practice-btn" type="button">和電腦練習</button>
             </div>
@@ -898,8 +927,10 @@
           <div id="game-invite-list" class="drive-file-list compact-list"></div>
           <div class="drive-card-sub">我的棋局</div>
           <div id="game-match-list" class="drive-file-list compact-list"></div>
+          </div>
         </section>
         <section class="game-board-panel">
+          <div id="chess-game-panel">
           <div class="drive-card-heading">
             <div>
               <div class="drive-card-title" id="game-current-title">尚未選擇棋局</div>
@@ -909,6 +940,59 @@
           </div>
           <div id="chess-board" class="chess-board" aria-label="西洋棋棋盤"></div>
           <div id="game-move-history" class="game-move-history"></div>
+          </div>
+          <div id="sudoku-game-panel" class="single-game-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">數獨</div>
+                <div class="drive-card-sub" id="sudoku-status">按開始後才會出現題目並開始計時。</div>
+              </div>
+              <div class="drive-file-actions">
+                <button class="btn game-mini-btn" id="sudoku-new-btn" type="button">開始</button>
+                <button class="btn btn-primary game-mini-btn" id="sudoku-check-btn" type="button">檢查</button>
+              </div>
+            </div>
+            <div id="sudoku-board" class="sudoku-board" aria-label="數獨棋盤"></div>
+          </div>
+          <div id="minesweeper-game-panel" class="single-game-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">踩地雷</div>
+                <div class="drive-card-sub" id="minesweeper-status">按開始後才會出現盤面並開始計時。</div>
+              </div>
+              <div class="drive-file-actions">
+                <select id="minesweeper-difficulty">
+                  <option value="easy">簡單 9x9 / 10 雷</option>
+                  <option value="normal">普通 12x12 / 20 雷</option>
+                  <option value="hard">困難 16x16 / 40 雷</option>
+                </select>
+                <button class="btn game-mini-btn" id="minesweeper-new-btn" type="button">開始</button>
+              </div>
+            </div>
+            <div id="minesweeper-board" class="minesweeper-board" aria-label="踩地雷棋盤"></div>
+          </div>
+          <div id="onea2b-game-panel" class="single-game-panel" style="display:none;">
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">1A2B</div>
+                <div class="drive-card-sub" id="onea2b-status">按開始後才會產生答案並開始計時。</div>
+              </div>
+              <div class="drive-file-actions">
+                <button class="btn game-mini-btn" id="onea2b-new-btn" type="button">開始</button>
+              </div>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>猜測數字</label>
+                <input type="text" id="onea2b-guess-input" inputmode="numeric" maxlength="4" placeholder="例如 0123" disabled />
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary game-mini-btn" id="onea2b-guess-btn" type="button">送出</button>
+              </div>
+            </div>
+            <div id="onea2b-history" class="onea2b-history" aria-label="1A2B 猜測紀錄"></div>
+          </div>
         </section>
         <section class="game-panel">
           <div class="drive-card-heading">
@@ -1621,7 +1705,9 @@
           <div class="drive-card-title">安全機制開關</div>
           <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="sc-maintenance-mode" /> 維護模式</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-server-ssl-enabled" /> HTTPS / SSL 設定</label></div>
             <div class="field"><label><input type="checkbox" id="sc-audit-chain-enabled" /> 審計 hash chain</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-feature-audit-log-enabled" /> Audit log 查詢頁</label></div>
             <div class="field"><label><input type="checkbox" id="sc-ip-blocking-enabled" /> 錯誤登入鎖 IP</label></div>
             <div class="field"><label><input type="checkbox" id="sc-login-violation-enabled" /> 登入失敗寫入違規</label></div>
             <div class="field"><label><input type="checkbox" id="sc-rate-limit-violation-enabled" /> 速率限制寫入違規</label></div>
@@ -1629,6 +1715,7 @@
             <div class="field"><label><input type="checkbox" id="sc-browser-only-mode-enabled" /> Browser-only 模式</label></div>
             <div class="field"><label><input type="checkbox" id="sc-integrity-guard-enabled" /> Integrity Guard</label></div>
             <div class="field"><label><input type="checkbox" id="sc-integrity-guard-strict-mode" /> Integrity strict mode</label></div>
+            <div class="field"><label><input type="checkbox" id="sc-feature-economy-enabled" /> PointsChain / 積分私有鏈</label></div>
             <div class="field">
               <label>root IP 白名單</label>
               <textarea id="sc-root-ip-whitelist" rows="3" placeholder="127.0.0.1, 192.168.1.10"></textarea>
@@ -2597,7 +2684,7 @@
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
 <script src="/js/36-comfyui.js?v=20260429-root-billing-exempt" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
-<script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
+<script src="/js/38-games.js?v=20260501-1a2b" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-024" defer></script>
 <script src="/js/55-economy.js?v=20260501-024" defer></script>

@@ -399,7 +399,7 @@ function driveFileCategory(file) {
   if (mime.startsWith("image/") || [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(ext)) return "image";
   if (mime === "application/pdf" || ext === ".pdf") return "pdf";
   if (mime.startsWith("text/") || [".css", ".csv", ".htm", ".html", ".ini", ".js", ".json", ".log", ".md", ".py", ".sql", ".text", ".toml", ".txt", ".xml", ".yaml", ".yml"].includes(ext)) return "text";
-  if ([".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"].includes(ext)) return "archive";
+  if ([".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"].includes(ext)) return "archive";
   return "metadata";
 }
 
@@ -1012,6 +1012,18 @@ function shouldOpenDriveFullscreen(fileId, options = {}) {
   return repeated;
 }
 
+function renderDriveArchiveEntries(entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  if (!rows.length) return "壓縮檔內無可列出的項目";
+  return rows.map((entry) => {
+    const name = `${entry.is_dir ? "[dir] " : ""}${sanitize(entry.name || "-")}`;
+    const size = entry.size === null || entry.size === undefined ? "-" : formatDriveBytes(entry.size || 0);
+    const compressed = entry.compressed_size === null || entry.compressed_size === undefined ? "" : ` · compressed ${formatDriveBytes(entry.compressed_size || 0)}`;
+    const note = entry.note ? ` · ${sanitize(entry.note)}` : "";
+    return `${name} · ${size}${compressed}${note}`;
+  }).join("\n");
+}
+
 async function previewDriveFile(fileId, options = {}) {
   if (shouldOpenDriveFullscreen(fileId, options)) {
     return previewAlbumFileFullscreen(fileId, options.fileName || "");
@@ -1038,7 +1050,7 @@ async function previewDriveFile(fileId, options = {}) {
     }
     if (preview.render_mode === "archive") {
       const entries = Array.isArray(preview.entries) ? preview.entries : [];
-      panel.innerHTML += `<div class="drive-preview-archive">${entries.map((entry) => `${entry.is_dir ? "[dir] " : ""}${sanitize(entry.name || "-")} · ${formatDriveBytes(entry.size || 0)}`).join("\n") || "壓縮檔內無可列出的項目"}</div>${preview.truncated ? '<div class="drive-card-sub">項目過多，已截斷顯示。</div>' : ""}`;
+      panel.innerHTML += `<div class="drive-preview-archive">${renderDriveArchiveEntries(entries)}</div>${preview.truncated ? '<div class="drive-card-sub">項目過多，已截斷顯示。</div>' : ""}`;
       return;
     }
     if (preview.render_mode === "media") {
@@ -1099,7 +1111,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     if (preview.render_mode === "archive") {
       const entries = Array.isArray(preview.entries) ? preview.entries : [];
       if (meta) meta.textContent = baseMeta;
-      body.innerHTML = `<div class="drive-preview-archive">${entries.map((entry) => `${entry.is_dir ? "[dir] " : ""}${sanitize(entry.name || "-")} · ${formatDriveBytes(entry.size || 0)}`).join("\n") || "壓縮檔內無可列出的項目"}</div>${preview.truncated ? '<div class="drive-card-sub">項目過多，已截斷顯示。</div>' : ""}`;
+      body.innerHTML = `<div class="drive-preview-archive">${renderDriveArchiveEntries(entries)}</div>${preview.truncated ? '<div class="drive-card-sub">項目過多，已截斷顯示。</div>' : ""}`;
       return;
     }
     if (preview.render_mode !== "media") {
@@ -2038,14 +2050,18 @@ async function createAlbum() {
   const title = $("album-create-title")?.value || "";
   const description = $("album-create-description")?.value || "";
   const visibility = $("album-create-visibility")?.value || "private";
+  const sharePassword = $("album-create-share-password")?.value || "";
   if (!title.trim()) {
     alert("請輸入相簿名稱");
     return;
   }
   try {
-    const json = await storageAction("/storage/albums", "POST", { title, description, visibility });
+    const payload = { title, description, visibility };
+    if (sharePassword) payload.share_password = sharePassword;
+    const json = await storageAction("/storage/albums", "POST", payload);
     $("album-create-title").value = "";
     if ($("album-create-description")) $("album-create-description").value = "";
+    if ($("album-create-share-password")) $("album-create-share-password").value = "";
     selectedAlbumId = json.album?.id || "";
     await loadDriveDashboard();
     await loadAlbumGallery();
@@ -2104,12 +2120,22 @@ function absoluteAlbumShareUrl(url) {
 
 function albumShareLinkMarkup(album) {
   const url = album?.share_url || album?.share_link?.url || "";
-  if (!url) return "";
+  const visibility = album?.visibility || "";
+  if (!url) {
+    if (visibility === "unlisted") {
+      return `<div class="drive-card-sub drive-share-link">分享連結建立中，請儲存或刷新相簿後再複製。</div>`;
+    }
+    return "";
+  }
   const absolute = absoluteAlbumShareUrl(url);
+  const passwordNote = album?.share_link?.password_required
+    ? `<span class="drive-share-password-note">已設定分享密碼，請另外告知對方密碼。</span>`
+    : "";
   return `
     <div class="drive-card-sub drive-share-link">
-      <span>分享連結：<a href="${sanitize(url)}" target="_blank" rel="noreferrer">${sanitize(absolute)}</a></span>
+      <span>持連結可看：<a href="${sanitize(url)}" target="_blank" rel="noreferrer">${sanitize(absolute)}</a></span>
       <button class="btn btn-sm" type="button" data-drive-action="copy-album-share-link" data-share-url="${sanitize(absolute)}">複製</button>
+      ${passwordNote}
     </div>
   `;
 }
@@ -2142,6 +2168,14 @@ function renderAlbumDetail(album) {
   if ($("album-edit-title")) $("album-edit-title").value = album.title || "";
   if ($("album-edit-description")) $("album-edit-description").value = album.description || "";
   if ($("album-edit-visibility")) $("album-edit-visibility").value = album.visibility || "private";
+  if ($("album-edit-share-password")) $("album-edit-share-password").value = "";
+  if ($("album-edit-clear-share-password")) $("album-edit-clear-share-password").checked = false;
+  const passwordState = $("album-edit-share-password-state");
+  if (passwordState) {
+    passwordState.textContent = album?.share_link?.password_required
+      ? "目前已設定分享密碼。留空不變，輸入新密碼可更新。"
+      : "目前未設定分享密碼。";
+  }
 }
 
 async function openAlbum(id, options = {}) {
@@ -2162,11 +2196,15 @@ function closeAlbumDetail() {
 async function saveAlbumDetail() {
   if (!selectedAlbumId) return;
   try {
-    const json = await storageAction(`/storage/albums/${encodeURIComponent(selectedAlbumId)}`, "PUT", {
+    const payload = {
       title: $("album-edit-title")?.value || "",
       description: $("album-edit-description")?.value || "",
       visibility: $("album-edit-visibility")?.value || "private",
-    });
+    };
+    const sharePassword = $("album-edit-share-password")?.value || "";
+    if (sharePassword) payload.share_password = sharePassword;
+    if ($("album-edit-clear-share-password")?.checked) payload.clear_share_password = true;
+    const json = await storageAction(`/storage/albums/${encodeURIComponent(selectedAlbumId)}`, "PUT", payload);
     renderAlbumDetail(json.album || {});
     await loadDriveDashboard();
     await loadAlbumGallery();

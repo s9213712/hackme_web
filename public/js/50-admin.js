@@ -1363,6 +1363,10 @@ async function applyServerMode() {
     status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {
+    if (json.profile) {
+      applySecurityProfileDataToInputs(json.profile, "s");
+      applySecurityProfileDataToInputs(json.profile, "sc");
+    }
     if ($("server-mode-confirm")) $("server-mode-confirm").value = "";
     await loadServerMode();
     await loadSecurityCenter();
@@ -1505,7 +1509,9 @@ function formatBytes(bytes) {
 
 const SECURITY_CONTROL_KEYS = [
   "maintenance_mode",
+  "server_ssl_enabled",
   "audit_chain_enabled",
+  "feature_audit_log_enabled",
   "ip_blocking_enabled",
   "login_violation_enabled",
   "rate_limit_violation_enabled",
@@ -1513,7 +1519,8 @@ const SECURITY_CONTROL_KEYS = [
   "root_ip_whitelist",
   "browser_only_mode_enabled",
   "integrity_guard_enabled",
-  "integrity_guard_strict_mode"
+  "integrity_guard_strict_mode",
+  "feature_economy_enabled"
 ];
 const SECURITY_THRESHOLD_KEYS = [
   "max_login_failures",
@@ -1561,8 +1568,7 @@ function renderSecurityProfilePreview(selectId, previewId) {
   `;
 }
 
-function applySecurityProfileToInputs(profileName, prefix = "sc") {
-  const profile = findSecurityProfile(profileName);
+function applySecurityProfileDataToInputs(profile, prefix = "sc") {
   if (!profile) return;
   const settings = profile.settings && typeof profile.settings === "object" ? profile.settings : {};
   SECURITY_CONTROL_KEYS.forEach((key) => {
@@ -1582,9 +1588,26 @@ function applySecurityProfileToInputs(profileName, prefix = "sc") {
   });
 }
 
+function applySecurityProfileToInputs(profileName, prefix = "sc") {
+  const profile = findSecurityProfile(profileName);
+  applySecurityProfileDataToInputs(profile, prefix);
+}
+
 function previewSecurityProfileSelection(selectId, previewId, inputPrefix = "") {
   renderSecurityProfilePreview(selectId, previewId);
   if (inputPrefix) applySecurityProfileToInputs($(selectId)?.value, inputPrefix);
+  const profile = findSecurityProfile($(selectId)?.value);
+  const msg = selectId === "security-mode-select" ? $("security-controls-msg") : $("server-mode-status");
+  if (msg && profile) {
+    msg.textContent = `已預覽「${profile.label || profile.name}」的安全開關；按套用才會寫入伺服器。`;
+    msg.style.color = "var(--muted)";
+  }
+}
+
+function bindSecurityProfileSelect(selectId, previewId, inputPrefix = "") {
+  const select = $(selectId);
+  if (!select) return;
+  select.onchange = () => previewSecurityProfileSelection(selectId, previewId, inputPrefix);
 }
 
 function populateProfileSelect(selectId, profiles, selectedMode) {
@@ -1836,6 +1859,8 @@ function populateSecurityProfiles(profiles, selectedMode) {
   securityProfiles = Array.isArray(profiles) ? profiles : [];
   populateProfileSelect("security-mode-select", securityProfiles, selectedMode);
   populateProfileSelect("server-mode-select", securityProfiles, selectedMode);
+  bindSecurityProfileSelect("security-mode-select", "security-mode-profile-preview", "sc");
+  bindSecurityProfileSelect("server-mode-select", "server-mode-profile-preview", "s");
   renderSecurityProfilePreview("security-mode-select", "security-mode-profile-preview");
   renderSecurityProfilePreview("server-mode-select", "server-mode-profile-preview");
 }
@@ -1974,6 +1999,10 @@ async function applySecurityMode() {
     status.style.color = json.ok ? "#4caf50" : "#ff4f6d";
   }
   if (json.ok) {
+    if (json.profile) {
+      applySecurityProfileDataToInputs(json.profile, "sc");
+      applySecurityProfileDataToInputs(json.profile, "s");
+    }
     if ($("security-mode-confirm")) $("security-mode-confirm").value = "";
     await loadSecurityCenter();
     await loadServerMode();
