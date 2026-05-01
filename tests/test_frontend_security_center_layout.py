@@ -84,6 +84,24 @@ def test_custom_security_profile_uses_form_controls_not_raw_json():
     assert "JSON.parse" not in save_body
 
 
+def test_security_control_and_threshold_saves_show_visible_status():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    controls_body = admin_js.split("async function saveSecurityCenterControls()", 1)[1].split("async function saveSecurityThresholds()", 1)[0]
+    thresholds_body = admin_js.split("async function saveSecurityThresholds()", 1)[1].split("async function applySecurityMode()", 1)[0]
+
+    assert 'id="security-save-status"' in index_html
+    assert "function setSecuritySaveStatus" in admin_js
+    assert 'setSecuritySaveStatus("正在儲存安全開關..."' in controls_body
+    assert 'setSecuritySaveStatus("正在儲存安全閾值..."' in thresholds_body
+    assert "security-controls-msg" in controls_body
+    assert "security-thresholds-msg" in thresholds_body
+    assert "catch (err)" in controls_body
+    assert "catch (err)" in thresholds_body
+    assert "btn.disabled = true" in controls_body
+    assert "btn.disabled = true" in thresholds_body
+
+
 def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")

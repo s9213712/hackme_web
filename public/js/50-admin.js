@@ -2190,51 +2190,73 @@ async function loadSecurityCenter() {
   startServerOutputPoll();
 }
 
-async function saveSecurityCenterControls() {
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const payload = {};
-  SECURITY_CONTROL_KEYS.forEach((key) => {
-    const el = $(securityInputId("sc", key));
+function setSecuritySaveStatus(message, ok = true, targetId = "") {
+  const color = ok ? "#4caf50" : "#ff4f6d";
+  ["security-save-status", targetId].filter(Boolean).forEach((id) => {
+    const el = $(id);
     if (!el) return;
-    payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+    el.textContent = message || "";
+    el.style.color = color;
   });
-  const res = await apiFetch(API + "/admin/security-center/controls", {
-    method: "PUT",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  const msg = $("security-controls-msg");
-  if (msg) {
-    msg.textContent = json.ok ? "安全機制開關已儲存" : (json.msg || "儲存失敗");
-    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+}
+
+async function saveSecurityCenterControls() {
+  const btn = $("security-controls-save-btn");
+  if (btn) btn.disabled = true;
+  setSecuritySaveStatus("正在儲存安全開關...", true, "security-controls-msg");
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const payload = {};
+    SECURITY_CONTROL_KEYS.forEach((key) => {
+      const el = $(securityInputId("sc", key));
+      if (!el) return;
+      payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
+    });
+    const res = await apiFetch(API + "/admin/security-center/controls", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    const message = json.ok ? (json.msg || "安全機制開關已儲存") : (json.msg || `安全開關儲存失敗（HTTP ${res.status}）`);
+    setSecuritySaveStatus(message, !!json.ok, "security-controls-msg");
+    if (json.ok) await loadSecurityCenter();
+  } catch (err) {
+    setSecuritySaveStatus(`安全開關儲存失敗：${err.message || "請求失敗"}`, false, "security-controls-msg");
+  } finally {
+    if (btn) btn.disabled = false;
   }
-  if (json.ok) await loadSecurityCenter();
 }
 
 async function saveSecurityThresholds() {
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const payload = {};
-  SECURITY_THRESHOLD_KEYS.forEach((key) => {
-    const el = $(securityInputId("sc", key));
-    if (el) payload[key] = parseInt(el.value || "0", 10);
-  });
-  const res = await apiFetch(API + "/admin/security-center/thresholds", {
-    method: "PUT",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify(payload)
-  });
-  const json = await res.json().catch(() => ({}));
-  const msg = $("security-thresholds-msg");
-  if (msg) {
-    msg.textContent = json.ok ? "安全閾值已儲存" : (json.msg || "儲存失敗");
-    msg.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  const btn = $("security-thresholds-save-btn");
+  if (btn) btn.disabled = true;
+  setSecuritySaveStatus("正在儲存安全閾值...", true, "security-thresholds-msg");
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const payload = {};
+    SECURITY_THRESHOLD_KEYS.forEach((key) => {
+      const el = $(securityInputId("sc", key));
+      if (el) payload[key] = parseInt(el.value || "0", 10);
+    });
+    const res = await apiFetch(API + "/admin/security-center/thresholds", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    const message = json.ok ? (json.msg || "安全閾值已儲存") : (json.msg || `安全閾值儲存失敗（HTTP ${res.status}）`);
+    setSecuritySaveStatus(message, !!json.ok, "security-thresholds-msg");
+    if (json.ok) await loadSecurityCenter();
+  } catch (err) {
+    setSecuritySaveStatus(`安全閾值儲存失敗：${err.message || "請求失敗"}`, false, "security-thresholds-msg");
+  } finally {
+    if (btn) btn.disabled = false;
   }
-  if (json.ok) await loadSecurityCenter();
 }
 
 async function applySecurityMode() {
