@@ -35,18 +35,18 @@ async function gameRequest(path, { method = "GET", body = null } = {}) {
     };
   };
 
-  let res = await fetch(API + path, await buildOptions());
+  let res = await apiFetch(API + path, await buildOptions());
   let json = await res.json().catch(() => ({}));
   if (gameRequestNeedsFreshCsrf(json, res)) {
     await fetchCsrfToken({ force: true });
-    res = await fetch(API + path, await buildOptions());
+    res = await apiFetch(API + path, await buildOptions());
     json = await res.json().catch(() => ({}));
   }
   if (!res.ok || !json.ok) {
     throw new Error(json.msg || `HTTP ${res.status}`);
   }
   if (mutates && typeof _csrfToken !== "undefined") {
-    _csrfToken = null;
+    setCsrfToken(null);
   }
   return json;
 }

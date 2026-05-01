@@ -68,4 +68,18 @@ security/stress_test.py --target http://127.0.0.1:5000 --requests 500 --concurre
 
 The script reports approximate requests per second, status distribution, and
 latency percentiles. It is not a replacement for production-grade load testing,
-but it gives a repeatable baseline for the current host.
+but it gives a repeatable baseline for the current host. It refuses public
+targets by default; use `--i-own-this-target` only for staging or systems you are
+explicitly authorized to test. Concurrency is capped at `100`.
+
+## Pre-push Validation
+
+Run the project-level validation before publishing:
+
+```bash
+python3 scripts/pre_push_checks.py
+```
+
+The helper compiles Python under `server.py`, `routes/`, `services/`,
+`security/`, `scripts/`, and `tests/`, checks that the Release ID appears in the
+required docs, starts an isolated server, and runs the smoke suite.

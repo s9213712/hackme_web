@@ -29,6 +29,7 @@ function bindUiEvents() {
   const tabSettingsDrive = $("tab-settings-drive");
   const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
+  const tabPasswordResets = $("tab-password-resets");
   const tabViol     = $("tab-violations");
   const tabGovernance = $("tab-governance");
   const tabAppeals  = $("tab-appeals");
@@ -58,6 +59,8 @@ function bindUiEvents() {
   const violRefresh  = $("violations-refresh");
   const governanceRefresh = $("governance-refresh");
   const governanceCreate = $("governance-create-proposal");
+  const passwordResetReviewRefresh = $("password-reset-review-refresh");
+  const passwordResetReviewStatus = $("password-reset-review-status");
   const appealSubmit = $("appeal-submit-btn");
   const appealRefresh = $("appeal-refresh-btn");
   const reportRefresh = $("admin-reports-refresh");
@@ -216,6 +219,7 @@ function bindUiEvents() {
   if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
   if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));
+  if (tabPasswordResets) tabPasswordResets.addEventListener("click", () => switchAdminTab("password-resets"));
   if (tabViol)     tabViol.addEventListener("click",     () => switchAdminTab("violations"));
   if (tabGovernance) tabGovernance.addEventListener("click", () => switchAdminTab("governance"));
   if (tabAppeals)  tabAppeals.addEventListener("click",   () => switchAdminTab("appeals"));
@@ -240,6 +244,8 @@ function bindUiEvents() {
   if (adminRefresh) adminRefresh.addEventListener("click", loadUsers);
   if (adminBulkApproveBtn) adminBulkApproveBtn.addEventListener("click", () => bulkReviewRegistrations("approve"));
   if (adminBulkRejectBtn) adminBulkRejectBtn.addEventListener("click", () => bulkReviewRegistrations("reject"));
+  if (passwordResetReviewRefresh) passwordResetReviewRefresh.addEventListener("click", loadPasswordResetReviews);
+  if (passwordResetReviewStatus) passwordResetReviewStatus.addEventListener("change", loadPasswordResetReviews);
   if (adminOpenAddBtn) adminOpenAddBtn.addEventListener("click", showAdminAddDialog);
   if (adminAddBtn)  adminAddBtn.addEventListener("click",  createUserByAdmin);
   if (adminAddCancelBtn) adminAddCancelBtn.addEventListener("click", hideAdminAddDialog);
@@ -475,7 +481,7 @@ setupPwToggle("reset-new-pw-confirm", "reset-new-pw-confirm-toggle");
   await loadSiteConfig();
   setupInactivityTracking();
   startServerConnectionMonitor();
-  _csrfToken = readCookie("csrf_token");
+  setCsrfToken(readCookie("csrf_token"));
   bindUiEvents();
   if (typeof loadCaptchaChallenge === "function") loadCaptchaChallenge();
   // 帶 timeout 的 fetch，避免 server 無回應時 UI 卡死

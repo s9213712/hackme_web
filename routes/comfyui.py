@@ -117,6 +117,13 @@ def register_comfyui_routes(app, deps):
         settings = get_system_settings() or {}
         return _int_range(settings.get("comfyui_max_batch_size"), 1, 1, 8)
 
+    def _configured_default_dimensions():
+        settings = get_system_settings() or {}
+        return {
+            "width": _int_range(settings.get("comfyui_default_width"), 1024, 64, 2048, multiple_of=8),
+            "height": _int_range(settings.get("comfyui_default_height"), 1024, 64, 2048, multiple_of=8),
+        }
+
     def _client():
         return injected_client or ComfyUIClient(_configured_comfyui_url())
 
@@ -242,12 +249,13 @@ def register_comfyui_routes(app, deps):
         if not model:
             return None, "請選擇模型"
         seed = _int_range(data.get("seed"), secrets.randbits(32), 0, 2**63 - 1)
+        default_dimensions = _configured_default_dimensions()
         params = {
             "model": model,
             "prompt": prompt,
             "negative_prompt": negative,
-            "width": _int_range(data.get("width"), 512, 64, 2048, multiple_of=8),
-            "height": _int_range(data.get("height"), 512, 64, 2048, multiple_of=8),
+            "width": _int_range(data.get("width"), default_dimensions["width"], 64, 2048, multiple_of=8),
+            "height": _int_range(data.get("height"), default_dimensions["height"], 64, 2048, multiple_of=8),
             "steps": _int_range(data.get("steps"), 20, 1, 80),
             "cfg": _float_range(data.get("cfg"), 7.0, 1.0, 30.0),
             "sampler_name": str(data.get("sampler_name") or SAFE_SAMPLER_FALLBACK).strip() or SAFE_SAMPLER_FALLBACK,
@@ -514,6 +522,8 @@ def register_comfyui_routes(app, deps):
             "available": True,
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
             "max_batch_size": _configured_max_batch_size(),
+            "default_width": _configured_default_dimensions()["width"],
+            "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
             "system": status.get("system") if isinstance(status, dict) else {},
         })
@@ -587,6 +597,8 @@ def register_comfyui_routes(app, deps):
             "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
             "max_batch_size": _configured_max_batch_size(),
+            "default_width": _configured_default_dimensions()["width"],
+            "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
         })
 

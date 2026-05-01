@@ -20,7 +20,7 @@ SMOKE = ROOT / "tests" / "smoke_suite.py"
 
 
 def iter_python_files():
-    for rel in ("server.py", "routes", "services", "scripts", "tests"):
+    for rel in ("server.py", "routes", "services", "security", "scripts", "tests"):
         path = ROOT / rel
         if path.is_file() and path.suffix == ".py":
             yield path

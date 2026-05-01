@@ -1337,6 +1337,15 @@ def register_system_admin_routes(app, deps):
             if batch_size < 1 or batch_size > 8:
                 return json_resp({"ok":False,"msg":"comfyui_max_batch_size 必須是 1-8"}), 400
             data["comfyui_max_batch_size"] = batch_size
+        for key in ("comfyui_default_width", "comfyui_default_height"):
+            if key in data:
+                try:
+                    size = int(data.get(key))
+                except Exception:
+                    return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
+                if size < 64 or size > 2048 or size % 8 != 0:
+                    return json_resp({"ok":False,"msg":f"{key} 必須是 64-2048 且為 8 的倍數"}), 400
+                data[key] = size
         if "cloud_drive_storage_root" in data:
             raw_root = str(data.get("cloud_drive_storage_root") or "").strip()
             if raw_root:
@@ -1351,6 +1360,11 @@ def register_system_admin_routes(app, deps):
             if raw_mode and normalize_captcha_mode(raw_mode) != raw_mode:
                 return json_resp({"ok":False,"msg":"captcha_mode 必須是 none、math、image 或 turnstile"}), 400
             data["captcha_mode"] = normalize_captcha_mode(raw_mode)
+        if "password_reset_mode" in data:
+            reset_mode = str(data.get("password_reset_mode") or "").strip().lower()
+            if reset_mode not in {"admin_review", "email_token"}:
+                return json_resp({"ok":False,"msg":"password_reset_mode 必須是 admin_review 或 email_token"}), 400
+            data["password_reset_mode"] = reset_mode
         if "captcha_ttl_seconds" in data:
             try:
                 ttl_seconds = int(data.get("captcha_ttl_seconds"))
@@ -1564,8 +1578,9 @@ def register_system_admin_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok":False,"msg":"未登入"}), 401
-        if actor["username"] != "root":
-            return json_resp({"ok":False,"msg":"只有 root 可管理會員等級規則"}), 403
+        role = "super_admin" if actor["username"] == "root" else actor.get("role", "user")
+        if role_rank(role) < role_rank("manager"):
+            return json_resp({"ok":False,"msg":"需要管理員權限"}), 403
 
         conn = get_db()
         try:

@@ -7,6 +7,12 @@ from flask import request, send_file
 from services.member_levels import apply_member_level_change, ensure_member_level_user_columns
 from services.cloud_drive import ensure_cloud_drive_attachment_schema, resolve_file_storage_path, store_cloud_upload
 from services.sanction_notices import record_admin_sanction_notice
+from services.account_recovery import (
+    ensure_account_recovery_schema,
+    get_password_reset_review_request,
+    list_password_reset_review_requests,
+    mark_password_reset_review_request,
+)
 
 
 def register_user_routes(app, deps):
@@ -21,6 +27,7 @@ def register_user_routes(app, deps):
     audit = deps["audit"]
     check_user_rate_limit = deps["check_user_rate_limit"]
     count_role = deps["count_role"]
+    delete_csrf_tokens_for_username = deps.get("delete_csrf_tokens_for_username", lambda username: None)
     decrypt_field = deps["decrypt_field"]
     encrypt_field = deps["encrypt_field"]
     ensure_user_official_room_membership = deps["ensure_user_official_room_membership"]
@@ -166,12 +173,70 @@ def register_user_routes(app, deps):
             points=0,
         )
 
+    def _can_review_password_reset(actor_role, target):
+        if not target or target["target_username"] == "root":
+            return False, "root 密碼不可透過管理審核流程重設"
+        if role_rank(actor_role) >= role_rank("super_admin"):
+            return True, ""
+        if role_rank(actor_role) >= role_rank("manager") and target["target_role"] == "user":
+            return True, ""
+        return False, "管理員只能審核一般用戶的密碼重設"
+
+    def _apply_reviewed_password_reset(conn, *, request_row, actor, actor_role, password, note):
+        allowed, msg = _can_review_password_reset(actor_role, request_row)
+        if not allowed:
+            return msg, 403
+        if request_row["status"] != "pending":
+            return "此密碼重設申請已處理", 409
+        ok, msg = validate_password(password)
+        if not ok:
+            return msg, 400
+        if is_feature_enabled("feature_account_security_enabled"):
+            ok, msg, strength = enforce_password_strength(password, min_score=3)
+            if not ok:
+                return msg, 400
+        else:
+            strength = score_password_strength(password)
+        current_row = conn.execute(
+            "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (request_row["user_id"],),
+        ).fetchone()
+        if current_row and verify_password(current_row["password_hash"], password):
+            return "新密碼不可與目前密碼相同", 400
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
+            (request_row["user_id"], hash_password(password), now),
+        )
+        conn.execute(
+            """
+            UPDATE users
+            SET password_strength_score=?, password_changed_at=?, must_change_password=1,
+                is_default_password=0, failed_login_count=0, locked_until=NULL, updated_at=?
+            WHERE id=?
+            """,
+            (strength["score"], now, now, request_row["user_id"]),
+        )
+        trim_password_history(conn, request_row["user_id"])
+        delete_csrf_tokens_for_username(request_row["username"])
+        mark_password_reset_review_request(
+            conn,
+            request_id=request_row["id"],
+            status="approved",
+            reviewer_user_id=actor["id"],
+            note=note,
+        )
+        revoke_user_sessions(request_row["user_id"])
+        return "", 200
+
     def ensure_avatar_user_columns(conn):
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "avatar_file_id" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN avatar_file_id TEXT")
         if "avatar_crop_json" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN avatar_crop_json TEXT")
+        if "preferred_landing_module" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN preferred_landing_module TEXT")
         if "updated_at" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
 
@@ -709,6 +774,8 @@ def register_user_routes(app, deps):
                 updates.append("role=?")
                 params.append(val)
                 governance_notice_needed = True
+                if role_rank(val) > role_rank(target["role"]):
+                    revoke_sessions_needed = True
             if "password" in data and isinstance(data["password"], str) and data["password"]:
                 action_name = "password_change" if is_self else "admin_password_reset"
                 limit = 5 if is_self else 20
@@ -788,6 +855,7 @@ def register_user_routes(app, deps):
                 conn.commit()
             if revoke_sessions_needed:
                 revoke_user_sessions(user_id)
+                delete_csrf_tokens_for_username(target["username"])
             audit("ADMIN_UPDATE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
                   detail=f"target_id={user_id},self={is_self}")
             return json_resp({"ok":True,"msg":"帳號已更新"})
@@ -843,6 +911,139 @@ def register_user_routes(app, deps):
                 detail=f"target={target['username']},action={action}"
             )
             return json_resp({"ok":True,"msg":"審核已完成","status":new_status})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/password-reset-requests", methods=["GET"])
+    @require_csrf_safe
+    def admin_password_reset_requests():
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok": False, "msg": "只有管理者以上可審核密碼重設"}), 403
+        status = normalize_text(request.args.get("status") or "pending") or "pending"
+        if status not in {"pending", "approved", "rejected", "all"}:
+            return json_resp({"ok": False, "msg": "status 不支援"}), 400
+        conn = get_db()
+        try:
+            ensure_account_recovery_schema(conn)
+            rows = list_password_reset_review_requests(conn, status=status, limit=100)
+            requests_payload = []
+            for row in rows:
+                allowed, _ = _can_review_password_reset(actor_role, row)
+                requests_payload.append({
+                    "id": row["id"],
+                    "user_id": row["user_id"],
+                    "username": row["target_username"],
+                    "role": row["target_role"],
+                    "target_status": row["target_status"],
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "requested_ip": row["requested_ip"],
+                    "reviewed_at": row["reviewed_at"],
+                    "reviewed_by": row["reviewed_by_username"],
+                    "review_note": row["review_note"],
+                    "can_review": bool(allowed and row["status"] == "pending"),
+                })
+            return json_resp({"ok": True, "requests": requests_payload})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/password-reset-requests/<int:request_id>/approve", methods=["POST"])
+    @require_csrf
+    def admin_password_reset_approve(request_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok": False, "msg": "只有管理者以上可審核密碼重設"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        password = data.get("temporary_password", "") if isinstance(data.get("temporary_password"), str) else ""
+        password_confirm = data.get("temporary_password_confirm", "") if isinstance(data.get("temporary_password_confirm"), str) else ""
+        note = normalize_text(data.get("note") or "password reset review approved")
+        if not password:
+            return json_resp({"ok": False, "msg": "請輸入臨時密碼"}), 400
+        if password != password_confirm:
+            return json_resp({"ok": False, "msg": "兩次密碼輸入不一致"}), 400
+        conn = get_db()
+        try:
+            ensure_account_recovery_schema(conn)
+            row = get_password_reset_review_request(conn, request_id)
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到密碼重設申請"}), 404
+            err, status_code = _apply_reviewed_password_reset(
+                conn,
+                request_row=row,
+                actor=actor,
+                actor_role=actor_role,
+                password=password[:128],
+                note=note,
+            )
+            if err:
+                return json_resp({"ok": False, "msg": err}), status_code
+            conn.commit()
+            audit(
+                "PASSWORD_RESET_REVIEW_APPROVED",
+                get_client_ip(),
+                user=actor["username"],
+                ua=get_ua(),
+                success=True,
+                detail=f"request_id={request_id},target={row['target_username']}",
+            )
+            return json_resp({"ok": True, "msg": "密碼已重設，該帳號下次登入必須修改密碼"})
+        finally:
+            conn.close()
+
+    @app.route("/api/admin/password-reset-requests/<int:request_id>/reject", methods=["POST"])
+    @require_csrf
+    def admin_password_reset_reject(request_id):
+        actor = get_current_user_ctx()
+        if not actor:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        actor_role = "super_admin" if actor["username"] == "root" else actor["role"]
+        if role_rank(actor_role) < role_rank("manager"):
+            return json_resp({"ok": False, "msg": "只有管理者以上可審核密碼重設"}), 403
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            data = {}
+        note = normalize_text((data or {}).get("note") or "password reset review rejected")
+        conn = get_db()
+        try:
+            ensure_account_recovery_schema(conn)
+            row = get_password_reset_review_request(conn, request_id)
+            if not row:
+                return json_resp({"ok": False, "msg": "找不到密碼重設申請"}), 404
+            allowed, msg = _can_review_password_reset(actor_role, row)
+            if not allowed:
+                return json_resp({"ok": False, "msg": msg}), 403
+            if row["status"] != "pending":
+                return json_resp({"ok": False, "msg": "此密碼重設申請已處理"}), 409
+            mark_password_reset_review_request(
+                conn,
+                request_id=request_id,
+                status="rejected",
+                reviewer_user_id=actor["id"],
+                note=note,
+            )
+            conn.commit()
+            audit(
+                "PASSWORD_RESET_REVIEW_REJECTED",
+                get_client_ip(),
+                user=actor["username"],
+                ua=get_ua(),
+                success=True,
+                detail=f"request_id={request_id},target={row['target_username']}",
+            )
+            return json_resp({"ok": True, "msg": "密碼重設申請已駁回"})
         finally:
             conn.close()
 
@@ -936,6 +1137,7 @@ def register_user_routes(app, deps):
 
             conn.execute("UPDATE users SET role=?, violation_count=0, updated_at=? WHERE id=?",
                          (to_role, datetime.now().isoformat(), user_id))
+            delete_csrf_tokens_for_username(target["username"])
             conn.commit()
             if points_service and to_role in {"manager", "super_admin"} and target["username"] != "root":
                 try:

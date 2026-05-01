@@ -23,6 +23,8 @@ def test_cloud_drive_preview_ui_is_wired():
     assert 'data-drive-action="preview" data-file-id="${sanitize(file.file_id)}"' in drive_js
     assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
     assert 'preview.category === "video"' in drive_js
+    assert 'preview.category === "audio"' in drive_js
+    assert '<audio controls src="${url}"></audio>' in drive_js
     assert 'preview.category === "pdf"' in drive_js
     assert 'preview.category === "image"' in drive_js
     assert '"img-src":     "\'self\' data: blob:"' in server_py
@@ -114,7 +116,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
     assert '/js/35-drive.js?v=20260429-storage-purchase-feedback' in index_html
-    assert '/styles.css?v=20260430-root-billing' in index_html
+    assert '/styles.css?v=20260501-024' in index_html
     assert '/js/00-core.js?v=20260430-trading-page-split' in index_html
     assert '/js/40-auth-users.js?v=20260429-timeout-login' in index_html
     assert 'src="/js/50-admin.js' in index_html
@@ -254,7 +256,7 @@ def test_cloud_drive_storage_upgrade_ui_is_wired():
     assert "root 不需要購買容量方案" in drive_js
     assert "root 依實際磁碟容量控管，不需要購買容量方案" in drive_js
     assert "let driveStorageUpgradeCanPurchase = false;" in drive_js
-    assert "button.disabled = false;" in drive_js
+    assert "button.disabled = !driveStorageUpgradeCanPurchase || !driveStorageUpgradeCatalog.length;" in drive_js
     assert "正在購買容量..." in drive_js
     assert "async function loadStorageUpgradeOptions" in drive_js
     assert "async function purchaseStorageUpgrade" in drive_js
@@ -266,6 +268,17 @@ def test_cloud_drive_storage_upgrade_ui_is_wired():
     assert "root 不需要用積分購買容量" in routes_py
     assert "purchased_extra_bytes" in upload_security_py
     assert "+storage_purchase" in upload_security_py
+
+
+def test_core_api_fetch_refreshes_csrf_once():
+    core_js = (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
+
+    assert "async function apiFetch" in core_js
+    assert 'payload.error !== "csrf_invalid"' in core_js
+    assert "fetchCsrfToken({ force: true })" in core_js
+    assert "return apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);" in core_js
+    assert 'headers.set("X-CSRF-Token", await fetchCsrfToken());' in core_js
+    assert "BroadcastChannel" in core_js
 
 
 def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():

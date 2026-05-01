@@ -46,6 +46,8 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "comfyui_api_host": "localhost",
         "comfyui_api_port": 8192,
         "comfyui_max_batch_size": 1,
+        "comfyui_default_width": 1024,
+        "comfyui_default_height": 1024,
     }
 
     def save_settings(data):
@@ -293,6 +295,32 @@ def test_root_can_configure_comfyui_batch_limit_without_restart_hint():
     assert res.status_code == 200
     assert state["comfyui_max_batch_size"] == 4
     assert res.get_json()["settings"]["comfyui_max_batch_size"] == 4
+
+
+def test_root_can_configure_comfyui_default_dimensions_without_restart_hint():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"comfyui_default_width": 768, "comfyui_default_height": 1024})
+
+    assert res.status_code == 200
+    assert state["comfyui_default_width"] == 768
+    assert state["comfyui_default_height"] == 1024
+    assert res.get_json()["settings"]["comfyui_default_width"] == 768
+    assert res.get_json()["settings"]["comfyui_default_height"] == 1024
+
+
+def test_invalid_comfyui_default_dimensions_are_rejected():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    bad_small = client.put("/api/admin/settings", json={"comfyui_default_width": 32})
+    bad_step = client.put("/api/admin/settings", json={"comfyui_default_height": 1025})
+
+    assert bad_small.status_code == 400
+    assert bad_step.status_code == 400
+    assert state["comfyui_default_width"] == 1024
+    assert state["comfyui_default_height"] == 1024
 
 
 def test_invalid_comfyui_batch_limit_is_rejected():

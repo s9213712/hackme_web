@@ -304,7 +304,7 @@ def test_admin_cloud_drive_security_policy_endpoint_is_root_only(tmp_path):
     assert res.status_code == 403
 
 
-def test_admin_member_level_rules_endpoint_is_root_only(tmp_path):
+def test_member_level_rules_summary_is_manager_readable_but_updates_are_root_only(tmp_path):
     db_path = tmp_path / "rules.db"
     app = Flask(__name__)
     app.testing = True
@@ -353,4 +353,8 @@ def test_admin_member_level_rules_endpoint_is_root_only(tmp_path):
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     res = client.get("/api/admin/member-level-rules")
+    assert res.status_code == 200
+    assert any(rule["level"] == "normal" for rule in res.get_json()["rules"])
+
+    res = client.put("/api/admin/member-level-rules/normal", json={"can_post": True})
     assert res.status_code == 403

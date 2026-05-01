@@ -2,6 +2,9 @@
 
 const API = "/api";
 let _csrfToken = null;
+const CSRF_STORAGE_KEY = "hackme_web.csrf_token";
+const CSRF_BROADCAST_CHANNEL = "hackme_web.csrf";
+let csrfBroadcast = null;
 let currentUser = null;
 let currentUserId = null;
 let currentRole = "user";
@@ -464,6 +467,7 @@ function applySiteConfig(config) {
   const density = typeof siteConfig.site_density === "string" ? siteConfig.site_density : "comfortable";
   document.body.dataset.layoutMode = layoutMode;
   document.body.dataset.density = density;
+  if (typeof updateRecoveryModeUi === "function") updateRecoveryModeUi();
 }
 
 function renderServerVersion(meta) {
@@ -556,6 +560,38 @@ function startServerConnectionMonitor() {
 
 function getCsrfToken() { return _csrfToken; }
 
+function setCsrfToken(token) {
+  _csrfToken = token || null;
+  try {
+    if (_csrfToken) localStorage.setItem(CSRF_STORAGE_KEY, _csrfToken);
+    else localStorage.removeItem(CSRF_STORAGE_KEY);
+  } catch (_) {}
+  try {
+    if (!csrfBroadcast && "BroadcastChannel" in window) csrfBroadcast = new BroadcastChannel(CSRF_BROADCAST_CHANNEL);
+    if (csrfBroadcast) csrfBroadcast.postMessage({ type: "csrf-token", token: _csrfToken });
+  } catch (_) {}
+  return _csrfToken;
+}
+
+try {
+  const storedCsrfToken = localStorage.getItem(CSRF_STORAGE_KEY);
+  if (storedCsrfToken) _csrfToken = storedCsrfToken;
+} catch (_) {}
+
+try {
+  if ("BroadcastChannel" in window) {
+    csrfBroadcast = new BroadcastChannel(CSRF_BROADCAST_CHANNEL);
+    csrfBroadcast.onmessage = (event) => {
+      const data = event?.data || {};
+      if (data.type === "csrf-token") _csrfToken = data.token || null;
+    };
+  }
+} catch (_) {}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === CSRF_STORAGE_KEY) _csrfToken = event.newValue || null;
+});
+
 let _csrfTokenRequest = null;
 
 function markIdleTimeoutLogoutPending() {
@@ -573,7 +609,7 @@ function hasIdleTimeoutLogoutPending() {
 async function fetchCsrfToken({ force = false } = {}) {
   const cookieToken = readCookie("csrf_token");
   if (!force && (_csrfToken || cookieToken)) {
-    _csrfToken = _csrfToken || cookieToken || null;
+    setCsrfToken(_csrfToken || cookieToken || null);
     return _csrfToken;
   }
   if (_csrfTokenRequest) {
@@ -585,12 +621,12 @@ async function fetchCsrfToken({ force = false } = {}) {
       const res = await fetch(API + '/csrf-token', { credentials: 'same-origin' });
       const json = await res.json().catch(() => ({}));
       if (json && json.ok && typeof json.csrf_token === "string" && json.csrf_token) {
-        _csrfToken = json.csrf_token;
+        setCsrfToken(json.csrf_token);
         return;
       }
     } catch (_) {}
     const latestCookieToken = readCookie("csrf_token");
-    _csrfToken = latestCookieToken || null;
+    setCsrfToken(latestCookieToken || null);
   })();
   try {
     await _csrfTokenRequest;
@@ -598,6 +634,30 @@ async function fetchCsrfToken({ force = false } = {}) {
     _csrfTokenRequest = null;
   }
   return _csrfToken;
+}
+
+function isStateChangingMethod(method) {
+  return ["POST", "PUT", "PATCH", "DELETE"].includes(String(method || "GET").toUpperCase());
+}
+
+async function apiFetch(url, options = {}, retryOnCsrf = true) {
+  const opts = { ...options };
+  opts.credentials = opts.credentials || "same-origin";
+  const method = String(opts.method || "GET").toUpperCase();
+  const headers = new Headers(opts.headers || {});
+  if (isStateChangingMethod(method) && !headers.has("X-CSRF-Token")) {
+    headers.set("X-CSRF-Token", await fetchCsrfToken());
+  }
+  opts.headers = headers;
+  const response = await fetch(url, opts);
+  if (response.status !== 403 || !retryOnCsrf) return response;
+  const payload = await response.clone().json().catch(() => ({}));
+  if (!payload || payload.error !== "csrf_invalid") return response;
+  const refreshed = await fetchCsrfToken({ force: true });
+  if (!refreshed) return response;
+  const retryHeaders = new Headers(options.headers || {});
+  if (isStateChangingMethod(method)) retryHeaders.set("X-CSRF-Token", refreshed);
+  return apiFetch(url, { ...options, credentials: opts.credentials, headers: retryHeaders }, false);
 }
 
 function flash(el, text, ok) {

@@ -111,6 +111,8 @@ Root-facing security and operations pages are grouped under Security Center:
 - audit log
 - server log
 - health checks
+- server health dashboard with grouped service status, work queue, storage,
+  readiness/anomaly, and audit-chain findings
 - integrity guard; pending warnings are visible for 24 hours, then auto-approved
 - server modes
 - access controls
@@ -119,6 +121,11 @@ Root-facing security and operations pages are grouped under Security Center:
 - custom security profiles
 - snapshot / restore / reset controls
 - system environment summary
+
+The PointsChain operations panel includes a root-only one-click abnormal-chain
+handler. It is intended for safe-mode recovery: the button verifies the chain,
+uses the prepared healthy backup only when available, rebuilds wallets from the
+ledger, and reports manual-required when no trusted backup exists.
 
 ## Account and Permission Model
 

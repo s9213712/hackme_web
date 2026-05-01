@@ -433,6 +433,11 @@ class TradingEngineService:
         item["locked_quantity"] = units_to_quantity(item["locked_quantity_units"])
         return item
 
+    def _futures_position_payload(self, row):
+        item = dict(row)
+        item["quantity"] = units_to_quantity(item["quantity_units"])
+        return item
+
     def _fill_payload(self, row):
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
@@ -459,6 +464,10 @@ class TradingEngineService:
                 self._position_payload(row)
                 for row in conn.execute("SELECT * FROM trading_spot_positions WHERE user_id=? ORDER BY market_symbol", (int(user_id),)).fetchall()
             ]
+            futures_positions = [
+                self._futures_position_payload(row)
+                for row in conn.execute("SELECT * FROM trading_futures_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            ]
             orders = [
                 self._order_payload(row)
                 for row in conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
@@ -467,7 +476,7 @@ class TradingEngineService:
                 self._fill_payload(row)
                 for row in conn.execute("SELECT * FROM trading_fills WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
-            return {"state": state, "markets": markets, "positions": positions, "orders": orders, "fills": fills}
+            return {"state": state, "markets": markets, "positions": positions, "futures_positions": futures_positions, "orders": orders, "fills": fills}
         finally:
             conn.close()
 
@@ -801,7 +810,6 @@ class TradingEngineService:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
-            self._assert_writable(conn)
             market = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (str(symbol or "").strip().upper(),)).fetchone()
             if not market:
                 raise ValueError("market not found")

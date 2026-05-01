@@ -341,7 +341,7 @@ async function fetchEconomyJson(url, options = {}) {
   await fetchCsrfToken({ force: true });
   const headers = { ...(options.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const res = await fetch(API + url, { credentials: "same-origin", ...options, headers });
+  const res = await apiFetch(API + url, { credentials: "same-origin", ...options, headers });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
   return json;
@@ -353,7 +353,7 @@ async function loadEconomyDashboard() {
     const rootMode = currentUser === "root";
     const canManagePoints = canManageEconomyPoints();
     const adminCard = $("economy-admin-card");
-    if ($("economy-page-title")) $("economy-page-title").textContent = rootMode ? "PointsChain 積分管理" : "PointsChain 積分錢包";
+    if ($("economy-page-title")) $("economy-page-title").textContent = rootMode ? "積分系統" : "積分錢包";
     if ($("economy-user-summary-grid")) $("economy-user-summary-grid").style.display = rootMode ? "none" : "";
     if ($("economy-user-ledger-card")) $("economy-user-ledger-card").style.display = rootMode ? "none" : "";
     if (adminCard) adminCard.style.display = canManagePoints ? "" : "none";
@@ -425,11 +425,13 @@ async function loadEconomyAdmin() {
     const adminTitle = $("economy-admin-card-title");
     const adminSub = $("economy-admin-card-sub");
     const adminLedgerList = $("economy-admin-ledger-list");
-    if (adminTitle) adminTitle.textContent = rootMode ? "手動加減分與待審核" : "管理員調整與審核";
+    const adjustPanel = $("economy-adjust-panel");
+    if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";
+    if (adminTitle) adminTitle.textContent = rootMode ? "手動加減分與待審核" : "待審核獎勵";
     if (adminSub) {
       adminSub.textContent = rootMode
         ? "這裡只負責送出補償、扣回與審核；加減分歷史統一在下方明細查看"
-        : "補償、扣回與高價值獎勵都會寫入 PointsChain ledger";
+        : "manager 可處理待審核獎勵；手動加減分只允許 root 操作";
     }
     if (adminLedgerList) {
       adminLedgerList.style.display = rootMode ? "none" : "";
@@ -586,6 +588,10 @@ async function submitEconomyAdjustment() {
   const btn = $("economy-adjust-btn");
   const oldText = btn ? btn.textContent : "";
   try {
+    if (currentUser !== "root") {
+      economySetMsg("只有 root 可以手動調整積分", false);
+      return;
+    }
     const userId = Number($("economy-adjust-user-id")?.value || 0);
     if (!Number.isFinite(userId) || userId <= 0) {
       economySetMsg("請先選擇要調整的會員", false);
@@ -704,6 +710,42 @@ async function approvePointsChainRecovery() {
   }
 }
 
+async function autoHandlePointsChainRecovery() {
+  if (currentUser !== "root") return;
+  if (!confirm("一鍵處理會先驗證 PointsChain；若已進入 safe mode 且有建議健康備份，會自動套用該備份並由 ledger 重建 wallet。是否繼續？")) return;
+  const btn = $("economy-recovery-auto-handle-btn");
+  const oldText = btn ? btn.textContent : "";
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "處理中...";
+    }
+    economySetMsg("正在驗證 PointsChain 並準備處理異常...");
+    const json = await fetchEconomyJson("/root/points/chain/recovery/auto-handle", {
+      method: "POST",
+      body: JSON.stringify({ confirm: "AUTO HANDLE POINTSCHAIN" }),
+    });
+    await loadEconomyDashboard();
+    if (json.action === "verified_clean") {
+      economySetMsg(json.msg || "PointsChain 驗證正常");
+      setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || {}), true);
+      return;
+    }
+    const resultMessage = formatEconomyRecoveryResult(json);
+    economySetMsg(json.msg || resultMessage || "異常鏈處理完成", !!json.ok);
+    setEconomyChainStatus(formatEconomyVerificationSummary(json.verification || json.initial_verification || {}), !!json.ok);
+  } catch (err) {
+    economySetMsg(err.message || "一鍵處理異常鏈失敗", false);
+    setEconomyChainStatus(err.message || "一鍵處理異常鏈失敗", false);
+    await loadEconomyRootReport();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || "一鍵處理異常鏈";
+    }
+  }
+}
+
 async function rollbackEconomyLedger() {
   if (currentUser !== "root") return;
   const ledgerUuid = $("economy-rollback-ledger-uuid")?.value?.trim() || "";
@@ -738,6 +780,7 @@ function bindEconomyInlineEvents() {
     ["economy-wallet-sanction-btn", sanctionEconomyWallet],
     ["economy-root-report-btn", loadEconomyRootReport],
     ["economy-backup-btn", createPointsChainBackup],
+    ["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery],
     ["economy-recovery-approve-btn", approvePointsChainRecovery],
     ["economy-rollback-btn", rollbackEconomyLedger],
     ["economy-seal-btn", sealPointsChainBlock],

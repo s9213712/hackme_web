@@ -256,7 +256,7 @@ async function loadUsers() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
-    const res = await fetch(API + "/admin/users", {
+    const res = await apiFetch(API + "/admin/users", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });

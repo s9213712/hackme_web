@@ -89,7 +89,7 @@ async function ensureAttachmentFileOptionsLoaded({ force = false } = {}) {
   });
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/cloud-drive/files", {
+  const res = await apiFetch(API + "/cloud-drive/files", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -304,7 +304,7 @@ function renderStorageUpgrade(payload) {
     : `<option value="">${isRoot ? "root 不需要購買容量方案" : "目前沒有可用的容量方案"}</option>`;
   select.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
   if (button) {
-    button.disabled = false;
+    button.disabled = !driveStorageUpgradeCanPurchase || !driveStorageUpgradeCatalog.length;
     button.textContent = driveStorageUpgradeCanPurchase ? "用積分購買容量" : (isRoot ? "root 不需要購買容量" : "容量方案不可購買");
     button.title = driveStorageUpgradeCanPurchase ? "用積分購買所選雲端硬碟容量" : (driveStorageUpgradeMessage || "目前沒有可購買的容量方案");
   }
@@ -394,7 +394,7 @@ function driveFileCategory(file) {
   const name = file?.display_name || file?.virtual_path || file?.original_filename_plain_for_public || file?.storage_path || "";
   const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
   const ext = driveFileExtension(name);
-  if (mime.startsWith("audio/") || [".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"].includes(ext)) return "audio";
+  if (mime.startsWith("audio/") || [".aac", ".aif", ".aiff", ".amr", ".flac", ".m4a", ".mid", ".midi", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"].includes(ext)) return "audio";
   if (mime.startsWith("video/") || [".m4v", ".mov", ".mp4", ".ogv", ".webm"].includes(ext)) return "video";
   if (mime.startsWith("image/") || [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(ext)) return "image";
   if (mime === "application/pdf" || ext === ".pdf") return "pdf";
@@ -525,7 +525,7 @@ function renderDriveFiles(files) {
 async function loadDriveFiles(csrf) {
   const list = $("drive-file-list");
   if (!list) return;
-  const res = await fetch(API + "/cloud-drive/files", {
+  const res = await apiFetch(API + "/cloud-drive/files", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -639,7 +639,7 @@ async function loadRemoteDownloadCapabilities() {
   const status = $("drive-remote-download-status");
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/cloud-drive/remote-download/capabilities", {
+  const res = await apiFetch(API + "/cloud-drive/remote-download/capabilities", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -690,14 +690,14 @@ async function startRemoteDriveDownload() {
       form.append("torrent_file", torrentFile);
       form.append("privacy_mode", $("drive-remote-privacy-mode")?.value || "private_scannable");
       form.append("virtual_path", $("drive-remote-virtual-path")?.value || "");
-      res = await fetch(API + "/cloud-drive/remote-download/torrent-tasks", {
+      res = await apiFetch(API + "/cloud-drive/remote-download/torrent-tasks", {
         method: "POST",
         credentials: "same-origin",
         headers: { "X-CSRF-Token": getCsrfToken() || "" },
         body: form
       });
     } else {
-      res = await fetch(API + "/cloud-drive/remote-download/tasks", {
+      res = await apiFetch(API + "/cloud-drive/remote-download/tasks", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -744,7 +744,7 @@ async function pollRemoteDownloadTask(taskId, transferId) {
   while (true) {
     await driveSleep(900);
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
+    const res = await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }
     });
@@ -773,7 +773,7 @@ async function pollRemoteDownloadTask(taskId, transferId) {
 async function downloadDriveFile(fileId, likelyHighRisk) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const doFetch = (confirmed) => fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/download${confirmed ? "?confirm_high_risk=1" : ""}`, {
+  const doFetch = (confirmed) => apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/download${confirmed ? "?confirm_high_risk=1" : ""}`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -797,7 +797,7 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
   const match = disposition.match(/filename="?([^"]+)"?/i);
   let name = match ? match[1] : "download.bin";
   let outputBlob = blob;
-  const keyRes = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/e2ee-key`, {
+  const keyRes = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/e2ee-key`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -908,9 +908,7 @@ function driveFileIsImage(file) {
 }
 
 function drivePreviewContentUrl(fileId) {
-  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
-  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
-  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`;
 }
 
 function clearAlbumFullPreviewUrl() {
@@ -921,7 +919,7 @@ function clearAlbumFullPreviewUrl() {
 }
 
 async function fetchDrivePreviewBlob(fileId, csrf) {
-  const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`, {
+  const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1025,7 +1023,7 @@ async function previewDriveFile(fileId, options = {}) {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
+    const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -1083,7 +1081,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
+    const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -1146,7 +1144,7 @@ async function editDriveTextFile(fileId) {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
+    const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -1230,7 +1228,7 @@ async function loadContextAttachments(contextType, contextId, targetId) {
   if (!contextType || !contextId || !targetId) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/cloud-drive/refs?context_type=${encodeURIComponent(contextType)}&context_id=${encodeURIComponent(contextId)}`, {
+  const res = await apiFetch(API + `/cloud-drive/refs?context_type=${encodeURIComponent(contextType)}&context_id=${encodeURIComponent(contextId)}`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1262,7 +1260,7 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
   form.append("context_id", String(contextId));
   grantUserIds.forEach((id) => form.append("grant_user_ids", String(id)));
   if (grantRole) form.append("grant_role", grantRole);
-  const res = await fetch(API + "/cloud-drive/upload", {
+  const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
@@ -1312,7 +1310,7 @@ async function uploadPendingChatAttachment() {
   const form = new FormData();
   form.append("file", input.files[0]);
   form.append("privacy_mode", "private_scannable");
-  const res = await fetch(API + "/cloud-drive/upload", {
+  const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
@@ -1343,7 +1341,7 @@ async function addExistingChatFileToPending(fileId) {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/files/${encodeURIComponent(fileId)}/status`, {
+  const res = await apiFetch(API + `/files/${encodeURIComponent(fileId)}/status`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1421,7 +1419,7 @@ async function uploadAnnouncementAttachmentRequest() {
   const form = new FormData();
   form.append("file", input.files[0]);
   form.append("privacy_mode", "private_scannable");
-  const res = await fetch(API + "/cloud-drive/upload", {
+  const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
@@ -1647,10 +1645,10 @@ function renderAlbums(albums) {
 async function loadStorageFiles(csrf) {
   const headers = { "X-CSRF-Token": csrf || "" };
   const [filesRes, trashRes, foldersRes, albumsRes] = await Promise.all([
-    fetch(API + "/storage/files", { credentials: "same-origin", headers }),
-    fetch(API + "/storage/trash", { credentials: "same-origin", headers }),
-    fetch(API + "/storage/folders", { credentials: "same-origin", headers }),
-    fetch(API + "/storage/albums", { credentials: "same-origin", headers })
+    apiFetch(API + "/storage/files", { credentials: "same-origin", headers }),
+    apiFetch(API + "/storage/trash", { credentials: "same-origin", headers }),
+    apiFetch(API + "/storage/folders", { credentials: "same-origin", headers }),
+    apiFetch(API + "/storage/albums", { credentials: "same-origin", headers })
   ]);
   const filesJson = await filesRes.json().catch(() => ({}));
   const trashJson = await trashRes.json().catch(() => ({}));
@@ -1819,7 +1817,7 @@ async function uploadStorageFile() {
   const form = new FormData();
   form.append("file", input.files[0]);
   form.append("virtual_path", pathInput?.value || joinStoragePath(currentStoragePath, input.files[0].name));
-  const res = await fetch(API + "/storage/files", {
+  const res = await apiFetch(API + "/storage/files", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
@@ -1869,7 +1867,7 @@ async function uploadStorageFolder() {
     form.append("file", file);
     form.append("virtual_path", virtualPath);
     try {
-      const res = await fetch(API + "/storage/files", {
+      const res = await apiFetch(API + "/storage/files", {
         method: "POST",
         credentials: "same-origin",
         headers: { "X-CSRF-Token": csrf || "" },
@@ -1916,11 +1914,11 @@ async function storageAction(path, method = "POST", body = null) {
   };
   let res;
   try {
-    res = await fetch(API + path, options);
+    res = await apiFetch(API + path, options);
   } catch (err) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     try {
-      res = await fetch(API + path, options);
+      res = await apiFetch(API + path, options);
     } catch (retryErr) {
       throw new Error(`連線失敗：${retryErr.message || err.message || "無法連到 API"}`);
     }
@@ -1979,7 +1977,7 @@ async function purgeStorageTrash() {
 async function downloadStorageFile(id) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/storage/files/${encodeURIComponent(id)}/download`, {
+  const res = await apiFetch(API + `/storage/files/${encodeURIComponent(id)}/download`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -2208,7 +2206,7 @@ async function loadAlbumGallery() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/storage/albums", {
+    const res = await apiFetch(API + "/storage/albums", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -2327,7 +2325,7 @@ async function loadDriveDashboard() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/files/security-policy", {
+    const res = await apiFetch(API + "/files/security-policy", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -2351,7 +2349,7 @@ async function loadStorageUpgradeOptions() {
   const card = $("drive-storage-upgrade-card");
   if (!card) return;
   const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/cloud-drive/storage-upgrades", {
+  const res = await apiFetch(API + "/cloud-drive/storage-upgrades", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
   });
@@ -2394,7 +2392,7 @@ async function purchaseStorageUpgrade() {
   if (msg) flash(msg, "正在購買容量...", true);
   try {
     const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/cloud-drive/storage-upgrades/purchase", {
+    const res = await apiFetch(API + "/cloud-drive/storage-upgrades/purchase", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

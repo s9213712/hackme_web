@@ -99,7 +99,7 @@ security/run_functional_smoke.sh --keep-runtime
 | community/forum | announcement、category、board、board approval、thread、reply、lock、sticky、curate。 |
 | chat/DM | chat room、chat message、DM thread、DM message。 |
 | storage/cloud drive | quota/list、root storage capacity audit、root storage user list、storage upgrade catalog、cloud-drive upload、status、preview、download、delete。 |
-| PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、economy stats。 |
+| PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、一鍵異常鏈處理、economy stats。 |
 | reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
 | hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法。 |
 

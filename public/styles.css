@@ -1312,6 +1312,119 @@
       word-break: break-all;
     }
 
+    .health-dashboard {
+      display: grid;
+      gap: .85rem;
+    }
+
+    .health-hero,
+    .health-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.035);
+      padding: .85rem;
+    }
+
+    .health-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .85rem;
+    }
+
+    .health-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: .45rem;
+    }
+
+    .health-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: .55rem;
+    }
+
+    .health-metric-card {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,.2);
+      padding: .65rem .7rem;
+    }
+
+    .health-metric-label {
+      color: var(--muted);
+      font-size: .68rem;
+    }
+
+    .health-metric-value {
+      margin-top: .22rem;
+      font-size: 1.05rem;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .health-section-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: .75rem;
+    }
+
+    .health-section-wide {
+      min-width: 0;
+    }
+
+    .health-section-title {
+      color: var(--text);
+      font-size: .9rem;
+      font-weight: 700;
+      margin-bottom: .55rem;
+    }
+
+    .health-list {
+      display: grid;
+      gap: .45rem;
+    }
+
+    .health-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: .65rem;
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 8px;
+      background: rgba(0,0,0,.16);
+      padding: .58rem .65rem;
+    }
+
+    .health-row-main {
+      min-width: 0;
+    }
+
+    .health-row-main strong,
+    .health-row-main small {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .health-row-main small {
+      color: var(--muted);
+      font-size: .72rem;
+      margin-top: .18rem;
+    }
+
+    .health-row-value {
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .health-empty {
+      color: var(--muted);
+      padding: .65rem;
+      text-align: center;
+    }
+
     .drive-transfer-row {
       border-color: rgba(100,181,246,.35);
       background: rgba(100,181,246,.07);

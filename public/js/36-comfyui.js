@@ -12,6 +12,8 @@ let comfyuiProgressStartedAt = 0;
 let comfyuiGenerateAbortController = null;
 let comfyuiMaxBatchSize = 1;
 let comfyuiBillingQuote = null;
+let comfyuiDefaultWidth = 1024;
+let comfyuiDefaultHeight = 1024;
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 900;
 const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-select",
@@ -78,6 +80,15 @@ function setComfyuiBusy(busy) {
 function applyComfyuiRuntimeLimits(payload = {}) {
   const parsed = Number(payload.max_batch_size || 1);
   comfyuiMaxBatchSize = Math.max(1, Math.min(8, Number.isFinite(parsed) ? parsed : 1));
+  const defaultWidth = Number(payload.default_width || payload.comfyui_default_width || 1024);
+  const defaultHeight = Number(payload.default_height || payload.comfyui_default_height || 1024);
+  comfyuiDefaultWidth = Math.max(64, Math.min(2048, Number.isFinite(defaultWidth) ? defaultWidth : 1024));
+  comfyuiDefaultHeight = Math.max(64, Math.min(2048, Number.isFinite(defaultHeight) ? defaultHeight : 1024));
+  const draft = readComfyuiDraft();
+  const widthInput = $("comfyui-width");
+  const heightInput = $("comfyui-height");
+  if (widthInput && !draft["comfyui-width"]) widthInput.value = String(comfyuiDefaultWidth);
+  if (heightInput && !draft["comfyui-height"]) heightInput.value = String(comfyuiDefaultHeight);
   const input = $("comfyui-batch-size");
   if (!input) return;
   input.min = "1";
@@ -276,7 +287,7 @@ async function loadComfyuiAlbums({ force = false } = {}) {
       ? await storageAction("/storage/albums", "GET")
       : await (async () => {
           await fetchCsrfToken({ force: true });
-          const res = await fetch(API + "/storage/albums", {
+          const res = await apiFetch(API + "/storage/albums", {
             credentials: "same-origin",
             headers: { "X-CSRF-Token": getCsrfToken() || "" }
           });
@@ -363,7 +374,7 @@ async function loadComfyuiModels() {
   setComfyuiMessage("");
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/comfyui/models", {
+    const res = await apiFetch(API + "/comfyui/models", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }
     });
@@ -395,7 +406,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
   if (status) status.textContent = "檢測 ComfyUI 伺服器中...";
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/comfyui/status", {
+    const res = await apiFetch(API + "/comfyui/status", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": getCsrfToken() || "" }
     });
@@ -440,8 +451,8 @@ function comfyuiPayload() {
     model: $("comfyui-model-select")?.value || "",
     prompt: $("comfyui-prompt")?.value || "",
     negative_prompt: $("comfyui-negative-prompt")?.value || "",
-    width: comfyuiNumberValue("comfyui-width", 512),
-    height: comfyuiNumberValue("comfyui-height", 512),
+    width: comfyuiNumberValue("comfyui-width", comfyuiDefaultWidth),
+    height: comfyuiNumberValue("comfyui-height", comfyuiDefaultHeight),
     steps: comfyuiNumberValue("comfyui-steps", 20),
     cfg: comfyuiNumberValue("comfyui-cfg", 7),
     batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1))),
@@ -507,7 +518,7 @@ async function generateComfyuiImage() {
   comfyuiGenerateAbortController = controller;
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/comfyui/generate", {
+    const res = await apiFetch(API + "/comfyui/generate", {
       method: "POST",
       credentials: "same-origin",
       signal: controller.signal,
@@ -566,7 +577,7 @@ async function interruptComfyuiGeneration() {
   comfyuiGenerateAbortController.abort();
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/comfyui/interrupt", {
+    const res = await apiFetch(API + "/comfyui/interrupt", {
       method: "POST",
       credentials: "same-origin",
       headers: {
@@ -600,7 +611,7 @@ async function saveComfyuiImageToDrive() {
   setComfyuiMessage("");
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/comfyui/save", {
+    const res = await apiFetch(API + "/comfyui/save", {
       method: "POST",
       credentials: "same-origin",
       headers: {
@@ -637,7 +648,7 @@ async function discardComfyuiImage() {
       await fetchCsrfToken({ force: true });
       for (const image of imagesToDiscard) {
         if (!image?.image_ref) continue;
-        const res = await fetch(API + "/comfyui/discard", {
+        const res = await apiFetch(API + "/comfyui/discard", {
           method: "POST",
           credentials: "same-origin",
           headers: {
@@ -696,7 +707,7 @@ async function shareComfyuiToCommunity() {
     await fetchCsrfToken({ force: true });
     const savedFile = comfyuiSavedResult?.file || {};
     const savedStorageFile = comfyuiSavedResult?.storage_file || {};
-    const res = await fetch(API + "/comfyui/share", {
+    const res = await apiFetch(API + "/comfyui/share", {
       method: "POST",
       credentials: "same-origin",
       headers: {

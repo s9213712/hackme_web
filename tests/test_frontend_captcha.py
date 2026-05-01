@@ -14,7 +14,7 @@ def test_captcha_ui_and_settings_are_wired():
     assert 'id="captcha-answer"' in index_html
     assert 'id="s-captcha-mode"' in index_html
     assert "async function loadCaptchaChallenge()" in auth_js
-    assert 'fetch(API + "/captcha/challenge"' in auth_js
+    assert 'apiFetch(API + "/captcha/challenge"' in auth_js
     assert "captcha_answer" in auth_js
     assert "captcha_mode" in admin_js
     assert "captcha_ttl_seconds" in admin_js

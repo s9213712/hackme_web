@@ -49,7 +49,7 @@ async function loadNotifications() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   try {
-    const res = await fetch(API + "/notifications?limit=20", {
+    const res = await apiFetch(API + "/notifications?limit=20", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -71,7 +71,7 @@ async function markNotificationRead(notificationId) {
   if (!currentUser || !notificationId) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/notifications/${notificationId}/read`, {
+  const res = await apiFetch(API + `/notifications/${notificationId}/read`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -88,7 +88,7 @@ async function markAllNotificationsRead() {
   if (!currentUser) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/notifications/read-all", {
+  const res = await apiFetch(API + "/notifications/read-all", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }

@@ -10,7 +10,7 @@ async function loadUserAppeals() {
   if (!wrap || !currentUser) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/appeals", {
+  const res = await apiFetch(API + "/appeals", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -98,7 +98,7 @@ async function submitAppeal(violationId) {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/appeals", {
+  const res = await apiFetch(API + "/appeals", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -121,7 +121,7 @@ async function loadAdminAppeals(page = 0, status = null) {
   const targetPage = Math.max(1, parseInt(page || 1, 10));
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/appeals?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=20", {
+  const res = await apiFetch(API + "/admin/appeals?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=20", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -200,7 +200,7 @@ async function reviewAppeal(appealId, action) {
   if (note === null) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/appeals/" + parseInt(appealId, 10) + "/review", {
+  const res = await apiFetch(API + "/admin/appeals/" + parseInt(appealId, 10) + "/review", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -228,7 +228,7 @@ async function bulkReviewAppeals(action) {
   let failed = 0;
   for (const appealId of ids) {
     try {
-      const res = await fetch(API + "/admin/appeals/" + parseInt(appealId, 10) + "/review", {
+      const res = await apiFetch(API + "/admin/appeals/" + parseInt(appealId, 10) + "/review", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -253,7 +253,7 @@ async function loadAdminReports(page = 0, status = null) {
   const targetPage = Math.max(0, parseInt(page || 0, 10));
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/message-reports?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=30", {
+  const res = await apiFetch(API + "/admin/message-reports?status=" + encodeURIComponent(targetStatus) + "&page=" + targetPage + "&limit=30", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -336,7 +336,7 @@ async function reviewMessageReport(reportId, action, kind = "chat") {
   const path = kind === "community_post"
     ? "/admin/community-post-reports/" + reportId + "/review"
     : "/admin/message-reports/" + reportId + "/review";
-  const res = await fetch(API + path, {
+  const res = await apiFetch(API + path, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -368,7 +368,7 @@ async function bulkReviewMessageReports(action) {
       const path = kind === "community_post"
         ? "/admin/community-post-reports/" + parseInt(rawId, 10) + "/review"
         : "/admin/message-reports/" + parseInt(rawId, 10) + "/review";
-      const res = await fetch(API + path, {
+      const res = await apiFetch(API + path, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

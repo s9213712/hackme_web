@@ -23,7 +23,7 @@ async function fetchTradingJson(url, options = {}) {
   await fetchCsrfToken({ force: true });
   const headers = { ...(options.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const res = await fetch(API + url, { credentials: "same-origin", ...options, headers });
+  const res = await apiFetch(API + url, { credentials: "same-origin", ...options, headers });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
   return json;
@@ -108,6 +108,7 @@ function renderTradingFills(rows, targetId = "trading-fill-list") {
 
 function renderTradingWalletSummary(payload = {}) {
   const positions = Array.isArray(payload.positions) ? payload.positions : [];
+  const futuresPositions = Array.isArray(payload.futures_positions) ? payload.futures_positions : [];
   const orders = Array.isArray(payload.orders) ? payload.orders : [];
   const fills = Array.isArray(payload.fills) ? payload.fills : [];
   const state = payload.state || {};
@@ -117,13 +118,20 @@ function renderTradingWalletSummary(payload = {}) {
     status.style.color = state.safe_mode ? "#ffb74d" : "var(--muted)";
   }
   const activePositions = positions.filter((row) => Number(row.quantity || 0) !== 0 || Number(row.locked_quantity || 0) !== 0);
-  if ($("economy-spot-position-count")) $("economy-spot-position-count").textContent = String(activePositions.length);
+  const totalSpotQuantity = activePositions.reduce((total, row) => total + Number(row.quantity || 0), 0);
+  if ($("economy-spot-position-quantity")) $("economy-spot-position-quantity").textContent = String(Number.isFinite(totalSpotQuantity) ? totalSpotQuantity : 0);
   if ($("economy-spot-position-summary")) {
     $("economy-spot-position-summary").textContent = activePositions.length
       ? activePositions.slice(0, 2).map((row) => `${row.market_symbol}: ${row.quantity || "0"}`).join(" / ")
       : "尚無現貨";
   }
-  if ($("economy-contract-status")) $("economy-contract-status").textContent = "未開放";
+  const activeFuturesPositions = futuresPositions.filter((row) => row.status === "open" && Number(row.quantity || 0) !== 0);
+  if ($("economy-contract-position-count")) $("economy-contract-position-count").textContent = String(activeFuturesPositions.length);
+  if ($("economy-contract-position-summary")) {
+    $("economy-contract-position-summary").textContent = activeFuturesPositions.length
+      ? activeFuturesPositions.slice(0, 2).map((row) => `${row.market_symbol}: ${row.side} ${row.quantity || "0"}`).join(" / ")
+      : "未開放";
+  }
   if ($("economy-trading-fill-count")) $("economy-trading-fill-count").textContent = String(fills.length);
   if ($("economy-trading-order-count")) $("economy-trading-order-count").textContent = `訂單 ${orders.length}`;
   renderTradingOrders(orders, "economy-trading-order-list", false);

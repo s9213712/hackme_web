@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260430-root-billing" />
+    <link rel="stylesheet" href="/styles.css?v=20260501-024" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -52,21 +52,21 @@
           <input type="text" id="recovery-identifier" placeholder="username 或 name@example.com" autocomplete="username" />
         </div>
         <div class="auth-recovery-actions">
-          <button class="btn" id="reset-request-btn" type="button">寄送重設密碼驗證碼</button>
+          <button class="btn" id="reset-request-btn" type="button">送出重設密碼審核</button>
           <button class="btn" id="verify-request-btn" type="button">寄送 Email 驗證碼</button>
         </div>
-        <div class="field">
+        <div class="field" id="reset-token-field">
           <label>重設密碼驗證碼</label>
           <input type="text" id="reset-token" placeholder="請輸入驗證碼" autocomplete="one-time-code" />
         </div>
-        <div class="field">
+        <div class="field" id="reset-new-pw-field">
           <label>新密碼</label>
           <div class="pw-wrap">
             <input type="password" id="reset-new-pw" placeholder="請輸入新密碼" autocomplete="new-password" />
             <button class="pw-toggle" id="reset-new-pw-toggle" type="button" aria-label="顯示密碼">👁</button>
           </div>
         </div>
-        <div class="field">
+        <div class="field" id="reset-new-pw-confirm-field">
           <label>確認新密碼</label>
           <div class="pw-wrap">
             <input type="password" id="reset-new-pw-confirm" placeholder="請再次輸入新密碼" autocomplete="new-password" />
@@ -953,8 +953,8 @@
             <textarea id="comfyui-negative-prompt" rows="3" maxlength="3000" placeholder="不希望出現的內容"></textarea>
           </div>
           <div class="settings-option-grid">
-            <div class="field"><label>寬度</label><input type="number" id="comfyui-width" min="64" max="2048" step="8" value="512" /></div>
-            <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="512" /></div>
+            <div class="field"><label>寬度</label><input type="number" id="comfyui-width" min="64" max="2048" step="8" value="1024" /></div>
+            <div class="field"><label>高度</label><input type="number" id="comfyui-height" min="64" max="2048" step="8" value="1024" /></div>
             <div class="field"><label>步數</label><input type="number" id="comfyui-steps" min="1" max="80" value="20" /></div>
             <div class="field"><label>CFG</label><input type="number" id="comfyui-cfg" min="1" max="30" step="0.5" value="7" /></div>
             <div class="field"><label>張數</label><input type="number" id="comfyui-batch-size" min="1" max="1" value="1" title="目前系統限制單次只能產生 1 張，root 可在安全中心調整" /></div>
@@ -1033,8 +1033,8 @@
         </div>
         <div id="economy-trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-          <div><span class="drive-card-sub">現貨部位</span><strong id="economy-spot-position-count">0</strong><small id="economy-spot-position-summary">尚無現貨</small></div>
-          <div><span class="drive-card-sub">合約</span><strong id="economy-contract-status">未開放</strong><small>futures_enabled=false</small></div>
+          <div><span class="drive-card-sub">現貨數量</span><strong id="economy-spot-position-quantity">0</strong><small id="economy-spot-position-summary">尚無現貨</small></div>
+          <div><span class="drive-card-sub">合約持倉</span><strong id="economy-contract-position-count">0</strong><small id="economy-contract-position-summary">未開放</small></div>
           <div><span class="drive-card-sub">交易明細</span><strong id="economy-trading-fill-count">0</strong><small id="economy-trading-order-count">訂單 0</small></div>
         </div>
         <div class="settings-option-grid" style="margin-top:.75rem;">
@@ -1056,7 +1056,7 @@
           </div>
           <button class="btn" id="economy-admin-refresh-btn" type="button">刷新</button>
         </div>
-        <div class="settings-option-grid">
+        <div class="settings-option-grid" id="economy-adjust-panel">
           <div class="field"><label>調整對象</label><select id="economy-adjust-user-id"><option value="">讀取會員中...</option></select></div>
           <div class="field"><label>方向</label><select id="economy-adjust-direction"><option value="credit">加點</option><option value="debit">扣點</option></select></div>
           <div class="field"><label>數量</label><input type="number" id="economy-adjust-amount" min="1" value="1" /></div>
@@ -1092,7 +1092,10 @@
               <div class="drive-card-title">帳本備份與半自動恢復</div>
               <div class="drive-card-sub">異常時會進入 safe mode，只產生 forensic bundle 與恢復方案；root 確認後才會套用備份並由 ledger 重建 wallet。</div>
             </div>
-            <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+            <div class="drive-file-actions">
+              <button class="btn" id="economy-recovery-auto-handle-btn" type="button">一鍵處理異常鏈</button>
+              <button class="btn btn-danger" id="economy-recovery-approve-btn" type="button">確認恢復</button>
+            </div>
           </div>
           <div id="economy-recovery-status" class="drive-card-sub">safe mode：-</div>
           <div class="settings-option-grid" style="margin-top:.65rem;">
@@ -1320,6 +1323,7 @@
       <!-- Tabs -->
       <div class="tabs" style="margin-bottom:.6rem;">
         <button class="tab active" id="tab-users">帳號管理</button>
+        <button class="tab" id="tab-password-resets">密碼重設審核</button>
         <button class="tab" id="tab-violations">違規計次</button>
         <button class="tab" id="tab-governance">會員治理</button>
         <button class="tab" id="tab-appeals">申覆審核</button>
@@ -1339,6 +1343,7 @@
           <span id="pending-selection-info" style="font-size:.75rem;color:var(--muted);">已選 0 筆待審核</span>
           <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
         </div>
+          <div id="admin-users-msg" class="msg"></div>
           <table class="user-table" id="user-table">
             <thead>
               <tr>
@@ -1355,6 +1360,24 @@
             <button class="btn btn-primary" type="button" id="admin-open-add-user">➕ 新增帳號</button>
             <span style="font-size:.75rem;color:var(--muted);align-self:center;">新建立帳號預設為一般用戶</span>
           </div>
+        </div>
+      </div>
+
+      <!-- ── 密碼重設審核 ── -->
+      <div class="form-section" id="sec-password-resets">
+        <div class="admin-tools">
+          <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.65rem;">
+            <button class="btn btn-primary" id="password-reset-review-refresh" type="button">重新整理</button>
+            <select id="password-reset-review-status" style="max-width:180px;">
+              <option value="pending">待審核</option>
+              <option value="approved">已通過</option>
+              <option value="rejected">已駁回</option>
+              <option value="all">全部</option>
+            </select>
+          </div>
+          <div class="field-hint">目前 mail 系統尚未整合時，可由 root 或 manager 審核使用者的重設密碼申請；審核通過後會設定臨時密碼，使用者下次登入必須修改。</div>
+          <div class="msg" id="password-reset-review-msg"></div>
+          <div id="password-reset-review-list" class="admin-list" style="margin-top:.65rem;"></div>
         </div>
       </div>
 
@@ -1680,36 +1703,36 @@
       </div>
 
       <div class="form-section" id="sec-server-health">
-        <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
-          <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理健康度</button>
-          <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
-        </div>
-        <div class="drive-card" style="margin-bottom:.8rem;">
-          <div class="drive-card-heading">
+        <div class="health-dashboard">
+          <div class="health-hero">
             <div>
-              <div class="drive-card-title">服務狀態</div>
+              <div class="drive-card-title">服務健康度</div>
               <div class="drive-card-sub" id="server-health-details">讀取健康度中...</div>
             </div>
+            <div class="health-actions">
+              <button class="btn btn-primary" type="button" id="health-refresh-btn">重新整理</button>
+              <button class="btn" type="button" id="integrity-repair-btn">處理鏈異常</button>
+            </div>
           </div>
-          <div id="server-health-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;"></div>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.8rem;margin-bottom:.8rem;">
-          <div class="drive-card">
-            <div class="drive-card-title">待處理事項</div>
-            <div id="server-health-workqueue" class="drive-file-list" style="margin-top:.55rem;"></div>
+          <div id="server-health-summary" class="health-summary-grid"></div>
+          <div class="health-section-grid">
+            <section class="health-section">
+              <div class="health-section-title">待處理事項</div>
+              <div id="server-health-workqueue" class="health-list"></div>
+            </section>
+            <section class="health-section">
+              <div class="health-section-title">資料量</div>
+              <div id="server-health-counts" class="health-list"></div>
+            </section>
+            <section class="health-section">
+              <div class="health-section-title">儲存空間</div>
+              <div id="server-health-storage" class="health-list"></div>
+            </section>
           </div>
-          <div class="drive-card">
-            <div class="drive-card-title">資料量</div>
-            <div id="server-health-counts" class="drive-file-list" style="margin-top:.55rem;"></div>
-          </div>
-          <div class="drive-card">
-            <div class="drive-card-title">儲存空間</div>
-            <div id="server-health-storage" class="drive-file-list" style="margin-top:.55rem;"></div>
-          </div>
-        </div>
-        <div class="drive-card" style="margin-bottom:.8rem;">
-          <div class="drive-card-title">審計與檢查</div>
-          <div id="server-health-audit" class="drive-file-list" style="margin-top:.55rem;"></div>
+          <section class="health-section health-section-wide">
+            <div class="health-section-title">審計與檢查</div>
+            <div id="server-health-audit" class="health-list"></div>
+          </section>
         </div>
         <div class="drive-card">
           <div class="drive-card-heading">
@@ -1847,6 +1870,14 @@
             </div>
             </div>
             <div class="settings-option-grid">
+              <div class="field">
+                <label>忘記密碼處理模式</label>
+                <select id="s-password-reset-mode">
+                  <option value="admin_review">管理員審核臨時密碼</option>
+                  <option value="email_token">Email 驗證碼重設</option>
+                </select>
+                <div class="field-hint">暫時預設為管理審核；mail 系統完成後可切回 Email token。Email 驗證後端會保留。</div>
+              </div>
               <div class="field">
                 <label>註冊 CAPTCHA 模式</label>
                 <select id="s-captcha-mode">
@@ -1994,6 +2025,14 @@
             <div class="field">
               <label>單次產圖張數上限</label>
               <input type="number" id="s-comfyui-max-batch-size" min="1" max="8" value="1" />
+            </div>
+            <div class="field">
+              <label>預設產圖寬度</label>
+              <input type="number" id="s-comfyui-default-width" min="64" max="2048" step="8" value="1024" />
+            </div>
+            <div class="field">
+              <label>預設產圖高度</label>
+              <input type="number" id="s-comfyui-default-height" min="64" max="2048" step="8" value="1024" />
             </div>
             <div class="field">
               <label>&nbsp;</label>
@@ -2560,9 +2599,9 @@
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
 <script src="/js/38-games.js?v=20260429-game-delete-finished" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
-<script src="/js/50-admin.js?v=20260430-trading-page-split" defer></script>
-<script src="/js/55-economy.js?v=20260430-trading-engine" defer></script>
-<script src="/js/56-trading.js?v=20260430-trading-page-split" defer></script>
+<script src="/js/50-admin.js?v=20260501-024" defer></script>
+<script src="/js/55-economy.js?v=20260501-024" defer></script>
+<script src="/js/56-trading.js?v=20260430-trading-positions" defer></script>
 <script src="/js/90-bootstrap.js?v=20260430-trading-page-split" defer></script>
 </body>
 </html>

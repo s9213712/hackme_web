@@ -10,9 +10,13 @@
 - **登出**：刪除 session 與 csrf cookie。
 
 ## CSRF 與請求保護
-- 登入採一次性 token（DB 驗證 + 消費）。
-- 一般 `GET` 採 `@require_csrf_safe`，保留短期可用 token。
-- 登出與所有修改操作需 `POST` + CSRF。
+- CSRF token 可由 `GET /api/csrf-token` 取得；未登入時回傳 anonymous token，登入後回傳目前 session 的 token。
+- Token 為 session-scoped，同一個登入 session 期間保持穩定，不會在每次頁面載入或每次 API 請求後消耗。
+- Token rotate 時機：登入成功、登出、session 重新建立、密碼變更、角色/權限提升。
+- 只有 `POST`、`PUT`、`PATCH`、`DELETE` 需要 CSRF；`GET`、`HEAD`、`OPTIONS` 不要求 token。
+- 前端應透過 `apiFetch()` 或 `X-CSRF-Token` header 傳送 token；後端亦接受表單欄位 `csrf_token`。禁止把 token 放在 URL query string。
+- CSRF 驗證失敗固定回 `HTTP 403` 與 `{ "ok": false, "error": "csrf_invalid", "message": "CSRF token expired or invalid" }`，前端 `apiFetch()` 會刷新 token 並重試一次。
+- 排查 `csrf_invalid`：先呼叫 `/api/csrf-token` 檢查是否能取得目前 session token；若登出、改密碼、權限提升或多分頁舊頁面仍使用舊 token，重新整理或讓 `apiFetch()` 自動刷新。
 
 ## 速率與封鎖
 - 註冊：60 秒 10 次

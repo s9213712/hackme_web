@@ -67,6 +67,7 @@ def test_spot_buy_uses_points_chain_and_updates_position(tmp_path):
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["positions"][0]["market_symbol"] == "ETH/POINTS"
     assert dashboard["positions"][0]["quantity"] == "0.1"
+    assert dashboard["futures_positions"] == []
     ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
     assert "trading_freeze" in ledger_actions
     assert "trading_unfreeze" in ledger_actions
@@ -182,8 +183,8 @@ def test_reserve_pool_tampering_enters_trading_safe_mode(tmp_path):
     verification = trading.verify_state()
     assert verification["ok"] is False
     assert any(error["type"] == "reserve_pool_replay_mismatch" for error in verification["errors"])
-    with pytest.raises(ValueError, match="safe mode"):
-        trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", fee_bps=20)
+    updated = trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", enabled=False)
+    assert updated["market"]["enabled"] is False
 
 
 def test_open_order_frozen_tampering_enters_trading_safe_mode(tmp_path):

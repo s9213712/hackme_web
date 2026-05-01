@@ -35,9 +35,28 @@ def ensure_account_recovery_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS password_reset_review_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            requested_identifier_hash TEXT NOT NULL,
+            requested_ip TEXT,
+            user_agent TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT,
+            reviewed_by_user_id INTEGER,
+            review_note TEXT,
+            completed_at TEXT
+        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_hash ON account_recovery_tokens(token_hash)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_account_recovery_tokens_user ON account_recovery_tokens(user_id, purpose, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_mail_outbox_kind ON mail_outbox(kind, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_password_reset_reviews_status ON password_reset_review_requests(status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_password_reset_reviews_user ON password_reset_review_requests(user_id, status)")
 
 
 def normalize_email(value):
@@ -48,6 +67,11 @@ def normalize_email(value):
     if not local or not domain or "." not in domain:
         return ""
     return email
+
+
+def hash_recovery_identifier(value):
+    normalized = str(value or "").strip().lower()
+    return hashlib.sha256(f"account-recovery-identifier-v1:{normalized}".encode("utf-8")).hexdigest()
 
 
 def hash_recovery_token(token):
@@ -85,6 +109,93 @@ def queue_mail(conn, *, recipient, subject, body, kind):
     )
 
 
+def create_password_reset_review_request(conn, *, user_id, identifier, ip=None, user_agent=None):
+    ensure_account_recovery_schema(conn)
+    existing = conn.execute(
+        """
+        SELECT id FROM password_reset_review_requests
+        WHERE user_id=? AND status='pending'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchone()
+    if existing:
+        return int(existing["id"]), False
+    cur = conn.execute(
+        """
+        INSERT INTO password_reset_review_requests
+        (user_id, requested_identifier_hash, requested_ip, user_agent, status, created_at)
+        VALUES (?, ?, ?, ?, 'pending', ?)
+        """,
+        (
+            int(user_id),
+            hash_recovery_identifier(identifier),
+            ip,
+            (user_agent or "")[:300],
+            datetime.now().isoformat(),
+        ),
+    )
+    return int(cur.lastrowid), True
+
+
+def list_password_reset_review_requests(conn, *, status="pending", limit=100):
+    ensure_account_recovery_schema(conn)
+    where = ""
+    params = []
+    if status and status != "all":
+        where = "WHERE r.status=?"
+        params.append(status)
+    params.append(max(1, min(int(limit or 100), 200)))
+    return conn.execute(
+        f"""
+        SELECT
+            r.*,
+            u.username AS target_username,
+            u.role AS target_role,
+            u.status AS target_status,
+            reviewer.username AS reviewed_by_username
+        FROM password_reset_review_requests r
+        JOIN users u ON u.id=r.user_id
+        LEFT JOIN users reviewer ON reviewer.id=r.reviewed_by_user_id
+        {where}
+        ORDER BY
+            CASE r.status WHEN 'pending' THEN 0 ELSE 1 END,
+            r.created_at DESC,
+            r.id DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+
+
+def get_password_reset_review_request(conn, request_id):
+    ensure_account_recovery_schema(conn)
+    return conn.execute(
+        """
+        SELECT r.*, u.username AS target_username, u.role AS target_role, u.status AS target_status
+        FROM password_reset_review_requests r
+        JOIN users u ON u.id=r.user_id
+        WHERE r.id=?
+        LIMIT 1
+        """,
+        (int(request_id),),
+    ).fetchone()
+
+
+def mark_password_reset_review_request(conn, *, request_id, status, reviewer_user_id, note=""):
+    if status not in {"approved", "rejected"}:
+        raise ValueError("unsupported password reset review status")
+    now = datetime.now().isoformat()
+    conn.execute(
+        """
+        UPDATE password_reset_review_requests
+        SET status=?, reviewed_at=?, reviewed_by_user_id=?, review_note=?, completed_at=?
+        WHERE id=? AND status='pending'
+        """,
+        (status, now, int(reviewer_user_id), str(note or "")[:500], now, int(request_id)),
+    )
+
+
 def lookup_valid_token(conn, *, token, purpose):
     ensure_account_recovery_schema(conn)
     if purpose not in TOKEN_PURPOSES:
@@ -112,4 +223,3 @@ def lookup_valid_token(conn, *, token, purpose):
 
 def mark_token_used(conn, token_id):
     conn.execute("UPDATE account_recovery_tokens SET used_at=? WHERE id=?", (datetime.now().isoformat(), int(token_id)))
-

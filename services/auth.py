@@ -17,6 +17,7 @@ CSRF_TOKEN_TTL = SESSION_TTL
 SESSION_IDLE_TIMEOUT = 10 * 60
 MIN_DELAY = 0.25
 MAX_DELAY = 0.90
+CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 _STATE = {
     "get_db": None,
@@ -74,6 +75,15 @@ def _record_csrf_failure(reason, username="-"):
     )
 
 
+def csrf_invalid_response(reason="invalid", username="-"):
+    _record_csrf_failure(reason, username)
+    return json_resp({
+        "ok": False,
+        "error": "csrf_invalid",
+        "message": "CSRF token expired or invalid",
+    }), 403
+
+
 def generate_csrf_dummy():
     tok = request.cookies.get("csrf_token", "")
     return tok
@@ -99,7 +109,6 @@ def verify_csrf_double_submit(body_token):
         if not row:
             conn.rollback()
             return False
-        conn.execute("DELETE FROM csrf_tokens WHERE token_hash=?", (tok_hash,))
         conn.commit()
         return True
     except Exception:
@@ -176,7 +185,7 @@ def timing_delay():
 
 
 def make_csrf_token():
-    return secrets.token_hex(16)
+    return secrets.token_urlsafe(32)
 
 
 def store_csrf_token(token, username):
@@ -220,12 +229,23 @@ def delete_csrf_token(token):
     conn.close()
 
 
+def delete_csrf_tokens_for_username(username):
+    if not username:
+        return
+    conn = _STATE["get_db"]()
+    try:
+        conn.execute("DELETE FROM csrf_tokens WHERE username=?", (username,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def require_csrf(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        csrf_tok = request.headers.get("X-CSRF-Token", "") or ""
-        if not isinstance(csrf_tok, str):
-            csrf_tok = ""
+        if request.method not in CSRF_PROTECTED_METHODS:
+            return f(*args, **kwargs)
+        csrf_tok = get_request_csrf_token()
         body_username = None
         if request.is_json:
             body = request.get_json(silent=True) or {}
@@ -235,10 +255,6 @@ def require_csrf(f):
                     body_username = body_username.strip()
                 else:
                     body_username = ""
-            if not csrf_tok and isinstance(body, dict):
-                csrf_body = body.get("csrf_token", "")
-                if isinstance(csrf_body, str):
-                    csrf_tok = csrf_body
 
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
@@ -246,20 +262,16 @@ def require_csrf(f):
         if user:
             # Authenticated: token stored under username
             if not verify_csrf_token(csrf_tok, user):
-                _record_csrf_failure("invalid_authenticated", user)
-                return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+                return csrf_invalid_response("invalid_authenticated", user)
         else:
             # Unauthenticated: token stored under "__public__" OR under body_username
             if not csrf_tok:
-                _record_csrf_failure("missing_public", body_username or "-")
-                return json_resp({"ok": False, "msg": "CSRF token 缺失"}), 403
+                return csrf_invalid_response("missing_public", body_username or "-")
             if not verify_csrf_token(csrf_tok, "__public__"):
                 # Also accept token stored under body_username (e.g. login request)
                 if not body_username or not verify_csrf_token(csrf_tok, body_username):
-                    _record_csrf_failure("invalid_public", body_username or "-")
-                    return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
+                    return csrf_invalid_response("invalid_public", body_username or "-")
 
-        delete_csrf_token(csrf_tok)
         return f(*args, **kwargs)
     return decorated
 
@@ -267,20 +279,15 @@ def require_csrf(f):
 def require_csrf_safe(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        csrf_tok = request.headers.get("X-CSRF-Token", "") or ""
-        if not csrf_tok and request.method in {"GET", "HEAD", "OPTIONS"}:
-            csrf_tok = request.args.get("csrf_token", "") or ""
-        if not isinstance(csrf_tok, str):
-            csrf_tok = ""
         tok = request.cookies.get("session_token")
         user = db_get_user_from_token(tok) if tok else None
         if not user:
             return json_resp({"ok": False, "msg": "未登入"}), 401
+        if request.method not in CSRF_PROTECTED_METHODS:
+            return f(*args, **kwargs)
+        csrf_tok = get_request_csrf_token()
         if not verify_csrf_token(csrf_tok, user):
-            _record_csrf_failure("invalid_safe", user)
-            return json_resp({"ok": False, "msg": "CSRF token 無效或已過期"}), 403
-        if request.method not in {"GET", "HEAD", "OPTIONS"}:
-            delete_csrf_token(csrf_tok)
+            return csrf_invalid_response("invalid_safe", user)
         return f(*args, **kwargs)
     return decorated
 
@@ -291,6 +298,10 @@ def get_request_csrf_token():
         token = ""
     if token:
         return token
+    if request.form:
+        req_token = request.form.get("csrf_token", "")
+        if isinstance(req_token, str):
+            return req_token
     if request.is_json:
         body = request.get_json(silent=True) or {}
         if isinstance(body, dict):

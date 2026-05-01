@@ -173,14 +173,15 @@ function switchModuleTab(tab) {
 
 function switchAdminTab(tab) {
   currentAdminTab = tab;
-  ["users","violations","governance","appeals","reports"].forEach(t => {
+  ["users","password-resets","violations","governance","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
     if (sec) sec.classList.toggle("active", t === tab);
   });
-  ["tab-users","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
+  ["tab-users","tab-password-resets","tab-violations","tab-governance","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
     if (btn) btn.classList.toggle("active", id === "tab-" + tab);
   });
+  if (tab === "password-resets") loadPasswordResetReviews();
   if (tab === "violations") loadViolations(0);
   if (tab === "governance") loadGovernanceDashboard();
   if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
@@ -196,7 +197,7 @@ let serverOutputPollTimer = null;
 async function loadAudit(page) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/audit?page=" + page, {
+  const res = await apiFetch(API + "/admin/audit?page=" + page, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -346,7 +347,7 @@ async function addViolation(userId) {
   const csrf = getCsrfToken();
   const reason = prompt("輸入違規原因：");
   if (!reason) return;
-  const res = await fetch(API + "/admin/users/" + userId + "/violation", {
+  const res = await apiFetch(API + "/admin/users/" + userId + "/violation", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -365,7 +366,7 @@ async function resetViolations(userId) {
   if (!confirm("確定要歸零該用戶違規次數？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/users/" + userId + "/reset-violations", {
+  const res = await apiFetch(API + "/admin/users/" + userId + "/reset-violations", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -409,7 +410,7 @@ function renderGovernanceTargetOptions(selectedValue = null) {
     select.innerHTML = `<option value="">無法讀取會員清單</option>`;
     return;
   }
-  const targetRows = rows.filter((user) => user.username !== "root");
+  const targetRows = rows.filter((user) => user.username !== "root" && String(user.id || "") !== String(currentUserId || ""));
   select.innerHTML = `<option value="">請選擇治理目標</option>` + targetRows.map((user) => {
     const id = String(user.id || "");
     const role = user.username === "root" ? "root" : (user.role || "user");
@@ -459,13 +460,13 @@ async function loadMemberLevelRulesSummary() {
   if (!container) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/member-level-rules", {
+  const res = await apiFetch(API + "/admin/member-level-rules", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
-    container.innerHTML = `<div style="color:#ffb74d;">${sanitize(json.msg || "會員規則僅 root 可讀取或功能尚未啟用")}</div>`;
+    container.innerHTML = `<div style="color:#ffb74d;">${sanitize(json.msg || "會員規則讀取失敗或功能尚未啟用")}</div>`;
     return;
   }
   const rules = Array.isArray(json.rules) ? json.rules : [];
@@ -558,6 +559,10 @@ async function createGovernanceProposal() {
     alert("請選擇治理目標並填寫提案原因");
     return;
   }
+  if (String(targetId) === String(currentUserId || "")) {
+    alert("不能對自己建立治理提案");
+    return;
+  }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const payload = {
@@ -567,7 +572,7 @@ async function createGovernanceProposal() {
     ttl_hours: parseInt($("governance-ttl-hours")?.value || "72", 10),
     reason
   };
-  const res = await fetch(API + "/admin/moderation/proposals", {
+  const res = await apiFetch(API + "/admin/moderation/proposals", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -585,7 +590,7 @@ async function voteGovernanceProposal(proposalId, vote) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const comment = prompt("投票備註（可空白）") || "";
-  const res = await fetch(API + `/admin/moderation/proposals/${proposalId}/vote`, {
+  const res = await apiFetch(API + `/admin/moderation/proposals/${proposalId}/vote`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -600,7 +605,7 @@ async function executeGovernanceProposal(proposalId) {
   if (!confirm("確定執行已通過的治理提案？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/moderation/proposals/${proposalId}/execute`, {
+  const res = await apiFetch(API + `/admin/moderation/proposals/${proposalId}/execute`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -611,12 +616,125 @@ async function executeGovernanceProposal(proposalId) {
 }
 
 function openGovernanceProposalForUser(userId, username) {
+  if (String(userId || "") === String(currentUserId || "")) {
+    alert("不能對自己建立治理提案");
+    return;
+  }
   switchAdminTab("governance");
   governancePendingTargetUserId = String(userId || "");
   renderGovernanceTargetOptions(userId);
   if ($("governance-target-user-id")) $("governance-target-user-id").value = userId;
   if ($("governance-reason")) $("governance-reason").value = `針對 ${username || "user #" + userId} 建立治理提案：`;
   updateGovernanceActionValueHelp();
+}
+
+function passwordResetReviewSetMsg(text, ok = true) {
+  const msg = $("password-reset-review-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+async function loadPasswordResetReviews() {
+  const list = $("password-reset-review-list");
+  if (!list) return;
+  const status = $("password-reset-review-status")?.value || "pending";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/admin/password-reset-requests?status=" + encodeURIComponent(status), {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    list.innerHTML = "";
+    passwordResetReviewSetMsg(json.msg || "密碼重設申請讀取失敗", false);
+    return;
+  }
+  const rows = Array.isArray(json.requests) ? json.requests : [];
+  if (!rows.length) {
+    list.innerHTML = `<p style="color:var(--muted);">目前沒有密碼重設申請</p>`;
+    passwordResetReviewSetMsg("", true);
+    return;
+  }
+  list.innerHTML = rows.map((item) => `
+    <div class="admin-card" style="margin-bottom:.65rem;">
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+        <strong>#${Number(item.id || 0)}</strong>
+        <span>${sanitize(item.username || "-")}</span>
+        <span style="color:var(--muted);">${sanitize(item.role || "-")} · ${sanitize(item.target_status || "-")}</span>
+        <span style="color:${item.status === "pending" ? "#ffb74d" : item.status === "approved" ? "#4caf50" : "#ff4f6d"};">${sanitize(item.status || "")}</span>
+        <span style="margin-left:auto;color:var(--muted);">${sanitize(item.created_at || "")}</span>
+      </div>
+      <div style="color:var(--muted);font-size:.78rem;margin-top:.25rem;">IP: ${sanitize(item.requested_ip || "-")} · reviewed_by: ${sanitize(item.reviewed_by || "-")}</div>
+      ${item.review_note ? `<div style="margin-top:.35rem;color:var(--muted);">${sanitize(item.review_note)}</div>` : ""}
+      ${item.can_review ? `
+        <div class="settings-option-grid" style="margin-top:.6rem;">
+          <div class="field">
+            <label>臨時密碼</label>
+            <input type="password" data-reset-review-pass="${Number(item.id || 0)}" autocomplete="new-password" />
+          </div>
+          <div class="field">
+            <label>確認臨時密碼</label>
+            <input type="password" data-reset-review-pass-confirm="${Number(item.id || 0)}" autocomplete="new-password" />
+          </div>
+          <div class="field">
+            <label>審核備註</label>
+            <input type="text" data-reset-review-note="${Number(item.id || 0)}" placeholder="可填處理原因或交付方式" />
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <div style="display:flex;gap:.45rem;">
+              <button class="btn btn-primary" type="button" data-reset-review-approve="${Number(item.id || 0)}">通過</button>
+              <button class="btn" type="button" data-reset-review-reject="${Number(item.id || 0)}">駁回</button>
+            </div>
+          </div>
+        </div>
+      ` : ""}
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-reset-review-approve]").forEach((btn) => {
+    btn.addEventListener("click", () => approvePasswordResetReview(btn.getAttribute("data-reset-review-approve")));
+  });
+  list.querySelectorAll("[data-reset-review-reject]").forEach((btn) => {
+    btn.addEventListener("click", () => rejectPasswordResetReview(btn.getAttribute("data-reset-review-reject")));
+  });
+}
+
+async function approvePasswordResetReview(requestId) {
+  const password = document.querySelector(`[data-reset-review-pass="${CSS.escape(String(requestId))}"]`)?.value || "";
+  const passwordConfirm = document.querySelector(`[data-reset-review-pass-confirm="${CSS.escape(String(requestId))}"]`)?.value || "";
+  const note = document.querySelector(`[data-reset-review-note="${CSS.escape(String(requestId))}"]`)?.value || "";
+  if (!password || password !== passwordConfirm) {
+    passwordResetReviewSetMsg("請輸入一致的臨時密碼", false);
+    return;
+  }
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + `/admin/password-reset-requests/${encodeURIComponent(requestId)}/approve`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ temporary_password: password, temporary_password_confirm: passwordConfirm, note })
+  });
+  const json = await res.json().catch(() => ({}));
+  passwordResetReviewSetMsg(json.msg || (json.ok ? "已通過" : "處理失敗"), !!json.ok);
+  if (json.ok) await loadPasswordResetReviews();
+}
+
+async function rejectPasswordResetReview(requestId) {
+  const note = document.querySelector(`[data-reset-review-note="${CSS.escape(String(requestId))}"]`)?.value || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + `/admin/password-reset-requests/${encodeURIComponent(requestId)}/reject`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ note })
+  });
+  const json = await res.json().catch(() => ({}));
+  passwordResetReviewSetMsg(json.msg || (json.ok ? "已駁回" : "處理失敗"), !!json.ok);
+  if (json.ok) await loadPasswordResetReviews();
 }
 
 // ── Settings & restart ───────────────────────────────────────
@@ -692,7 +810,7 @@ async function loadCloudDriveAdminPolicy() {
   if (!rootEl) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/cloud-drive/security-policy", {
+  const res = await apiFetch(API + "/admin/cloud-drive/security-policy", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -739,7 +857,7 @@ async function saveCloudDriveAdminPolicy() {
     if (el) payload[key] = el.value || "";
   });
   payload.notes = $("s-cd-notes")?.value || "";
-  const res = await fetch(API + "/admin/cloud-drive/security-policy", {
+  const res = await apiFetch(API + "/admin/cloud-drive/security-policy", {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -828,7 +946,7 @@ async function loadRootStorageUsers() {
   if (!$("root-storage-users")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/storage/users", {
+  const res = await apiFetch(API + "/root/storage/users", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -864,7 +982,7 @@ async function saveRootStorageOverride() {
     can_upload: $("root-storage-can-upload")?.value || "inherit",
     reason
   };
-  const res = await fetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
+  const res = await apiFetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -884,7 +1002,7 @@ async function clearRootStorageOverride() {
   if (!confirm("清除此帳號的 root 直接雲端硬碟設定？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
+  const res = await apiFetch(API + `/root/storage/users/${encodeURIComponent(userId)}/quota-override`, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -970,7 +1088,7 @@ async function loadRootEconomyCatalog() {
   if (currentUser !== "root" || !$("root-catalog-list")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/economy/catalog", {
+  const res = await apiFetch(API + "/root/economy/catalog", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1015,7 +1133,7 @@ async function saveRootEconomyCatalogItem() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/economy/catalog", {
+  const res = await apiFetch(API + "/root/economy/catalog", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1036,7 +1154,7 @@ async function loadEditableMemberLevelRules() {
   if (!container) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/member-level-rules", {
+  const res = await apiFetch(API + "/admin/member-level-rules", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1115,7 +1233,7 @@ async function saveMemberLevelRule(level) {
     const el = container?.querySelector(`[data-level="${CSS.escape(level)}"][data-rule-int="${key}"]`);
     if (el) payload[key] = parseInt(el.value || "0");
   });
-  const res = await fetch(API + "/admin/member-level-rules/" + encodeURIComponent(level), {
+  const res = await apiFetch(API + "/admin/member-level-rules/" + encodeURIComponent(level), {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1136,7 +1254,7 @@ async function loadServerMode() {
   if (!$("server-mode-select")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/server-mode", {
+  const res = await apiFetch(API + "/admin/server-mode", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1166,7 +1284,7 @@ async function loadInternalTestTokenStatus() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/admin/access-controls", {
+    const res = await apiFetch(API + "/admin/access-controls", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -1194,7 +1312,7 @@ async function rotateInternalTestToken() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const ttl = parseInt($("internal-test-token-ttl")?.value || "1440", 10);
-  const res = await fetch(API + "/admin/access-controls/internal-test-token", {
+  const res = await apiFetch(API + "/admin/access-controls/internal-test-token", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1232,7 +1350,7 @@ async function applyServerMode() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/server-mode", {
+  const res = await apiFetch(API + "/admin/server-mode", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1255,7 +1373,7 @@ async function applyServerMode() {
 async function loadSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/settings", {
+  const res = await apiFetch(API + "/admin/settings", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1276,6 +1394,7 @@ async function loadSettings() {
   if ($("s-integrity-guard-strict-mode")) $("s-integrity-guard-strict-mode").checked = !!s.integrity_guard_strict_mode;
   if ($("s-allow-register")) $("s-allow-register").checked = !!s.allow_register;
   if ($("s-require-email")) $("s-require-email").checked = !!s.require_email_verification;
+  if ($("s-password-reset-mode")) $("s-password-reset-mode").value = s.password_reset_mode || "admin_review";
   if ($("s-captcha-mode")) $("s-captcha-mode").value = s.captcha_mode || "none";
   if ($("s-captcha-ttl-seconds")) $("s-captcha-ttl-seconds").value = s.captcha_ttl_seconds || 300;
   if ($("s-captcha-turnstile-site-key")) $("s-captcha-turnstile-site-key").value = s.captcha_turnstile_site_key || "";
@@ -1289,6 +1408,8 @@ async function loadSettings() {
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
   if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
+  if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
+  if ($("s-comfyui-default-height")) $("s-comfyui-default-height").value = s.comfyui_default_height || 1024;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
@@ -1570,7 +1691,7 @@ async function loadSecurityTestJobs() {
     if (target && !target.value) target.value = window.location.origin;
     const stressTarget = $("security-stress-target");
     if (stressTarget && !stressTarget.value) stressTarget.value = window.location.origin;
-    const res = await fetch(API + "/root/security-tests", {
+    const res = await apiFetch(API + "/root/security-tests", {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
     });
@@ -1593,7 +1714,7 @@ async function loadSecurityTestJob(jobId) {
   if (!jobId) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/root/security-tests/${encodeURIComponent(jobId)}`, {
+  const res = await apiFetch(API + `/root/security-tests/${encodeURIComponent(jobId)}`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1619,7 +1740,7 @@ async function startSecurityPentest() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/root/security-tests/pentest", {
+    const res = await apiFetch(API + "/root/security-tests/pentest", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1644,7 +1765,7 @@ async function startSecurityFunctionalSmoke() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/root/security-tests/functional", {
+    const res = await apiFetch(API + "/root/security-tests/functional", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1671,7 +1792,7 @@ async function startSecurityStressTest() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await fetch(API + "/root/security-tests/stress", {
+    const res = await apiFetch(API + "/root/security-tests/stress", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1690,7 +1811,7 @@ async function loadServerOutput() {
   if (currentUser !== "root") return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/server-output?limit=300", {
+  const res = await apiFetch(API + "/admin/server-output?limit=300", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1723,7 +1844,7 @@ async function loadSecurityCenter() {
   if (currentUser !== "root") return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/security-center", {
+  const res = await apiFetch(API + "/admin/security-center", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1788,7 +1909,7 @@ async function saveSecurityCenterControls() {
     if (!el) return;
     payload[key] = el.type === "checkbox" ? !!el.checked : el.value || "";
   });
-  const res = await fetch(API + "/admin/security-center/controls", {
+  const res = await apiFetch(API + "/admin/security-center/controls", {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1811,7 +1932,7 @@ async function saveSecurityThresholds() {
     const el = $(securityInputId("sc", key));
     if (el) payload[key] = parseInt(el.value || "0", 10);
   });
-  const res = await fetch(API + "/admin/security-center/thresholds", {
+  const res = await apiFetch(API + "/admin/security-center/thresholds", {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1840,7 +1961,7 @@ async function applySecurityMode() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/server-mode", {
+  const res = await apiFetch(API + "/admin/server-mode", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1904,7 +2025,7 @@ async function saveSecurityProfile() {
     settings,
     thresholds
   };
-  const res = await fetch(API + "/admin/security-center/profiles", {
+  const res = await apiFetch(API + "/admin/security-center/profiles", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -1937,22 +2058,22 @@ function healthStatusColor(status) {
 
 function renderHealthMetric(label, value, color = "#82b1ff") {
   return `
-    <div style="border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.22);border-radius:8px;padding:.6rem;min-width:0;">
-      <div style="font-size:.68rem;color:var(--muted);">${sanitize(label)}</div>
-      <div style="font-size:1.05rem;color:${color};font-weight:700;margin-top:.2rem;word-break:break-word;">${sanitize(value)}</div>
+    <div class="health-metric-card">
+      <div class="health-metric-label">${sanitize(label)}</div>
+      <div class="health-metric-value" style="color:${color};">${sanitize(value)}</div>
     </div>
   `;
 }
 
 function renderHealthRows(rows) {
-  if (!rows.length) return "<p style='color:var(--muted);padding:.65rem;text-align:center;'>目前沒有需要顯示的項目</p>";
+  if (!rows.length) return `<p class="health-empty">目前沒有需要顯示的項目</p>`;
   return rows.map((row) => `
-    <div class="drive-file-row" style="grid-template-columns:minmax(0,1fr) auto;align-items:center;">
-      <div>
+    <div class="health-row">
+      <div class="health-row-main">
         <strong>${sanitize(row.label)}</strong>
         ${row.detail ? `<small>${sanitize(row.detail)}</small>` : ""}
       </div>
-      <span style="color:${row.color || "#82b1ff"};font-weight:700;white-space:nowrap;">${sanitize(row.value)}</span>
+      <span class="health-row-value" style="color:${row.color || "#82b1ff"};">${sanitize(row.value)}</span>
     </div>
   `).join("");
 }
@@ -1961,7 +2082,7 @@ async function loadServerHealth() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/health", {
+  const res = await apiFetch(API + "/admin/health", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -2084,7 +2205,7 @@ async function repairIntegrityChains() {
   if (!confirm("確定要重新封鏈並解除維護模式？")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/integrity/repair", {
+  const res = await apiFetch(API + "/admin/integrity/repair", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -2101,8 +2222,8 @@ async function loadIntegrityGuard() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const [statusRes, findingsRes] = await Promise.all([
-    fetch(API + "/root/integrity/status", { credentials: "same-origin", headers: { "X-CSRF-Token": csrf || "" } }),
-    fetch(API + "/root/integrity/findings?status=pending", { credentials: "same-origin", headers: { "X-CSRF-Token": csrf || "" } })
+    apiFetch(API + "/root/integrity/status", { credentials: "same-origin", headers: { "X-CSRF-Token": csrf || "" } }),
+    apiFetch(API + "/root/integrity/findings?status=pending", { credentials: "same-origin", headers: { "X-CSRF-Token": csrf || "" } })
   ]);
   const statusJson = await statusRes.json().catch(() => ({}));
   const findingsJson = await findingsRes.json().catch(() => ({}));
@@ -2209,7 +2330,7 @@ async function rescanIntegrityGuard() {
   if (!confirm("重新掃描會比對目前檔案與已核准 manifest，異常不會自動核准。")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/integrity/rescan", {
+  const res = await apiFetch(API + "/root/integrity/rescan", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
@@ -2236,7 +2357,7 @@ async function reviewIntegrityFinding(id, action) {
   note = prompt("審核備註（可留空）：") || "";
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/root/integrity/findings/${encodeURIComponent(id)}/${action}`, {
+  const res = await apiFetch(API + `/root/integrity/findings/${encodeURIComponent(id)}/${action}`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2267,7 +2388,7 @@ async function reviewSelectedIntegrityFindings(action) {
   const note = prompt("批次審核備註（可留空）：") || "";
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/integrity/findings/bulk-review", {
+  const res = await apiFetch(API + "/root/integrity/findings/bulk-review", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2281,7 +2402,7 @@ async function reviewSelectedIntegrityFindings(action) {
 async function exportIntegrityReport() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/integrity/report", {
+  const res = await apiFetch(API + "/root/integrity/report", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -2315,6 +2436,7 @@ async function saveSettings() {
     integrity_guard_strict_mode: !!$("s-integrity-guard-strict-mode")?.checked,
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
+    password_reset_mode: $("s-password-reset-mode")?.value || "admin_review",
     captcha_mode: $("s-captcha-mode")?.value || "none",
     captcha_ttl_seconds: parseInt($("s-captcha-ttl-seconds")?.value || "300"),
     captcha_turnstile_site_key: ($("s-captcha-turnstile-site-key")?.value || "").trim(),
@@ -2328,6 +2450,8 @@ async function saveSettings() {
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
     comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
+    comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
+    comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",
@@ -2353,7 +2477,7 @@ async function saveSettings() {
     const el = $(featureSettingInputId(key));
     if (el) payload[key] = !!el.checked;
   });
-  const res = await fetch(API + "/admin/settings", {
+  const res = await apiFetch(API + "/admin/settings", {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2402,7 +2526,7 @@ async function testComfyuiConnection() {
   if (button) button.disabled = true;
   try {
     await fetchCsrfToken({ force: true });
-    const res = await fetch(API + "/root/comfyui/test-connection", {
+    const res = await apiFetch(API + "/root/comfyui/test-connection", {
       method: "POST",
       credentials: "same-origin",
       headers: {
@@ -2433,7 +2557,7 @@ async function loadServerEnv() {
   if (!currentUser || currentRole !== "super_admin") return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/environment", {
+  const res = await apiFetch(API + "/admin/environment", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -2480,7 +2604,7 @@ async function restartServer(event) {
     const csrf = await fetchCsrfToken({ force: true });
     if (!csrf) throw new Error("安全驗證狀態失效，請重新整理頁面後再試。");
     if (status) status.textContent = "已送出重啟指令，等待伺服器離線...";
-    const res = await fetch(API + "/admin/restart", {
+    const res = await apiFetch(API + "/admin/restart", {
       method: "POST",
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -2513,7 +2637,7 @@ async function probeRestartVersion(timeoutMs = 1500) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(API + "/version?restart_probe=" + Date.now(), {
+    const res = await apiFetch(API + "/version?restart_probe=" + Date.now(), {
       credentials: "same-origin",
       cache: "no-store",
       signal: ctrl.signal,
@@ -2557,7 +2681,7 @@ async function loadSnapshots() {
   list.innerHTML = "<em>載入中…</em>";
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/snapshots", {
+  const res = await apiFetch(API + "/admin/snapshots", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -2622,7 +2746,7 @@ async function loadSnapshots() {
       if (!confirm(`確定刪除 snapshot ${id}？`)) return;
       await fetchCsrfToken({ force: true });
       const csrf = getCsrfToken();
-      const r = await fetch(API + `/admin/snapshots/${encodeURIComponent(id)}?reason=admin_delete`, {
+      const r = await apiFetch(API + `/admin/snapshots/${encodeURIComponent(id)}?reason=admin_delete`, {
         method: "DELETE",
         credentials: "same-origin",
         headers: { "X-CSRF-Token": csrf || "" }
@@ -2650,7 +2774,7 @@ async function loadSnapshots() {
 async function downloadSnapshot(snapshotId) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/download`, {
+  const res = await apiFetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/download`, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -2675,7 +2799,7 @@ async function downloadSnapshot(snapshotId) {
 async function performRestore(snapshotId, reason) {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
+  const res = await apiFetch(API + `/admin/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2699,7 +2823,7 @@ async function uploadSnapshotRestore() {
   form.append("file", file);
   form.append("confirm", "RESTORE");
   form.append("reason", reason);
-  const res = await fetch(API + "/admin/snapshots/upload-restore", {
+  const res = await apiFetch(API + "/admin/snapshots/upload-restore", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" },
@@ -2714,7 +2838,7 @@ async function createSnapshot() {
   const notes = prompt("Snapshot 備註（可留空）：") || "";
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/snapshots", {
+  const res = await apiFetch(API + "/admin/snapshots", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2735,7 +2859,7 @@ async function resetServer() {
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/system-reset", {
+  const res = await apiFetch(API + "/admin/system-reset", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2759,7 +2883,7 @@ async function rescanIntegrityGuard() {
   if (!confirm("重新掃描會比對目前檔案與已核准 manifest，異常不會自動核准。")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/root/integrity/scan", {
+  const res = await apiFetch(API + "/root/integrity/scan", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
@@ -2848,7 +2972,7 @@ async function loadPlatformStats() {
   if (!container) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await fetch(API + "/admin/platform-stats", {
+  const res = await apiFetch(API + "/admin/platform-stats", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });

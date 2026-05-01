@@ -14,7 +14,7 @@ def test_chat_room_delete_ui_is_wired():
     assert "/js/20-chat.js?v=20260429-official-chat-protect" in index_html
     assert "/js/00-core.js?v=20260430-trading-page-split" in index_html
     assert "/js/90-bootstrap.js?v=20260430-trading-page-split" in index_html
-    assert "/styles.css?v=20260430-root-billing" in index_html
+    assert "/styles.css?v=20260501-024" in index_html
     assert 'id="chat-friend-username"' in index_html
     assert 'id="chat-pending-attachment-list"' in index_html
     assert 'data-chat-sticker="smile"' in index_html
@@ -41,7 +41,7 @@ def test_chat_room_delete_ui_is_wired():
     assert "attachment_file_ids" in chat_js
     assert "async function uploadPendingChatAttachment()" in drive_js
     assert "async function addExistingChatFileToPending(fileId)" in drive_js
-    assert 'fetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`' in chat_js
+    assert 'apiFetch(API + `/chat/rooms/${encodeURIComponent(roomId)}`' in chat_js
     assert ".chat-room-delete-btn" in css
     assert ".chat-sticker-bar" in css
     assert ".chat-friend-panel" in css

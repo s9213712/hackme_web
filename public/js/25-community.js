@@ -247,7 +247,7 @@ async function loadCommunityModeratorCandidates({ force = false } = {}) {
     return communityModeratorCandidates;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/admin/users", {
+  const res = await apiFetch(API + "/admin/users", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -392,9 +392,7 @@ function communityPlainContent(content) {
 }
 
 function communityPreviewContentUrl(fileId) {
-  const token = typeof getCsrfToken === "function" ? getCsrfToken() : "";
-  const query = token ? `?csrf_token=${encodeURIComponent(token)}` : "";
-  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content${query}`;
+  return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`;
 }
 
 function renderCommunityBody(content) {
@@ -687,7 +685,7 @@ function renderCommunityThreadDetail(thread, posts) {
 
 async function loadAnnouncements() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/announcements", {
+  const res = await apiFetch(API + "/community/announcements", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -699,7 +697,7 @@ async function loadAnnouncements() {
 
 async function publishAnnouncement() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/announcements", {
+  const res = await apiFetch(API + "/community/announcements", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -724,7 +722,7 @@ async function publishAnnouncement() {
 async function deleteAnnouncement(id) {
   if (!confirm("確定要刪除這則公告？")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/announcements/" + id, {
+  const res = await apiFetch(API + "/community/announcements/" + id, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -736,7 +734,7 @@ async function deleteAnnouncement(id) {
 
 async function loadCommunityCategories() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/categories", {
+  const res = await apiFetch(API + "/community/categories", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -749,7 +747,7 @@ async function loadCommunityCategories() {
 async function createCommunityCategory() {
   if (!canManageCommunity()) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/categories", {
+  const res = await apiFetch(API + "/community/categories", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -772,7 +770,7 @@ async function createCommunityCategory() {
 
 async function loadCommunityBoards() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards", {
+  const res = await apiFetch(API + "/community/boards", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -788,7 +786,7 @@ async function loadCommunityBoards() {
 
 async function requestCommunityBoard() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards", {
+  const res = await apiFetch(API + "/community/boards", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -824,7 +822,7 @@ async function loadCommunityModerators(boardId = selectedCommunityBoardId) {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + boardId + "/moderators", {
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/moderators", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -848,7 +846,7 @@ async function saveCommunityModerator() {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators", {
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -865,7 +863,7 @@ async function deleteCommunityModerator(userId) {
   if (!selectedCommunityBoardId || !userId || !canManageCommunity()) return;
   if (!confirm("確定要移除此版主？")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators/" + userId, {
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/moderators/" + userId, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -880,7 +878,7 @@ async function deleteCommunityModerator(userId) {
 async function loadCommunityBoardReviews() {
   if (!(currentRole === "manager" || currentRole === "super_admin")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/reviews", {
+  const res = await apiFetch(API + "/community/boards/reviews", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -892,7 +890,7 @@ async function loadCommunityBoardReviews() {
 
 async function loadCommunityThreadReviews() {
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/reviews", {
+  const res = await apiFetch(API + "/community/threads/reviews", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -911,7 +909,7 @@ async function loadCommunityThreadReviews() {
 async function reviewCommunityBoard(boardId, action) {
   await fetchCsrfToken({ force: true });
   const note = prompt(action === "approve" ? "核准備註（可留空）" : "駁回原因（可留空）", "") || "";
-  const res = await fetch(API + "/community/boards/" + boardId + "/review", {
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/review", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -927,7 +925,7 @@ async function reviewCommunityBoard(boardId, action) {
 async function reviewCommunityThread(threadId, action) {
   await fetchCsrfToken({ force: true });
   const note = prompt(action === "approve" ? "核准備註（可留空）" : "駁回原因（可留空）", "") || "";
-  const res = await fetch(API + "/community/threads/" + threadId + "/review", {
+  const res = await apiFetch(API + "/community/threads/" + threadId + "/review", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -954,7 +952,7 @@ async function openCommunityBoard(boardId, preserveThread = false) {
   }
   await fetchCsrfToken({ force: true });
   const q = encodeURIComponent(communityThreadQuery || "");
-  const res = await fetch(API + "/community/boards/" + boardId + "/threads?page=" + communityThreadPage + "&limit=" + communityThreadLimit + "&q=" + q, {
+  const res = await apiFetch(API + "/community/boards/" + boardId + "/threads?page=" + communityThreadPage + "&limit=" + communityThreadLimit + "&q=" + q, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -981,7 +979,7 @@ async function createCommunityThread() {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/boards/" + selectedCommunityBoardId + "/threads", {
+  const res = await apiFetch(API + "/community/boards/" + selectedCommunityBoardId + "/threads", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1008,7 +1006,7 @@ async function createCommunityThread() {
 async function openCommunityThread(threadId) {
   selectedCommunityThreadId = threadId;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + threadId, {
+  const res = await apiFetch(API + "/community/threads/" + threadId, {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
   });
@@ -1028,7 +1026,7 @@ async function replyCommunityThread() {
     return;
   }
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/posts", {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId + "/posts", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1049,7 +1047,7 @@ async function deleteCommunityThread() {
   if (!selectedCommunityThreadId) return;
   if (!confirm("確定要刪除此主題？回覆也會一併刪除。")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId, {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -1068,7 +1066,7 @@ async function deleteCommunityPost(postId) {
   if (!postId) return;
   if (!confirm("確定要刪除此留言？")) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId, {
+  const res = await apiFetch(API + "/community/posts/" + postId, {
     method: "DELETE",
     credentials: "same-origin",
     headers: { "X-CSRF-Token": getCsrfToken() || "" }
@@ -1084,7 +1082,7 @@ async function deleteCommunityPost(postId) {
 async function toggleCommunityPostPin(postId, pinned) {
   if (!postId) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId + "/pin", {
+  const res = await apiFetch(API + "/community/posts/" + postId + "/pin", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1100,7 +1098,7 @@ async function toggleCommunityPostPin(postId, pinned) {
 async function reactToCommunityPost(postId, value) {
   if (!postId) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId + "/reaction", {
+  const res = await apiFetch(API + "/community/posts/" + postId + "/reaction", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1121,7 +1119,7 @@ async function reactToCommunityPost(postId, value) {
 async function reactToCommunityThread(threadId, value) {
   if (!threadId) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + threadId + "/reaction", {
+  const res = await apiFetch(API + "/community/threads/" + threadId + "/reaction", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1142,7 +1140,7 @@ async function rewardCommunityThread(threadId) {
   if (pointsRaw === null) return;
   const reason = prompt("獎勵理由", "優質主題貢獻") || "優質主題貢獻";
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + threadId + "/reward", {
+  const res = await apiFetch(API + "/community/threads/" + threadId + "/reward", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1159,7 +1157,7 @@ async function penalizeCommunityPost(postId) {
   if (pointsRaw === null) return;
   const reason = prompt("懲處原因", "討論區違規留言") || "討論區違規留言";
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/posts/" + postId + "/penalty", {
+  const res = await apiFetch(API + "/community/posts/" + postId + "/penalty", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1173,7 +1171,7 @@ async function penalizeCommunityPost(postId) {
 async function toggleCommunityThreadLock() {
   if (!selectedCommunityThreadId || !selectedCommunityThread) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/lock", {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId + "/lock", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
@@ -1190,7 +1188,7 @@ async function toggleCommunityThreadLock() {
 async function toggleCommunityThreadSticky() {
   if (!selectedCommunityThreadId || !selectedCommunityThread) return;
   await fetchCsrfToken({ force: true });
-  const res = await fetch(API + "/community/threads/" + selectedCommunityThreadId + "/sticky", {
+  const res = await apiFetch(API + "/community/threads/" + selectedCommunityThreadId + "/sticky", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },

@@ -123,10 +123,7 @@ def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_pat
 
     assert res.status_code == 200
     assert body["ok"] is True
-    assert [item["item_key"] for item in body["catalog"]] == [
-        "cloud_storage_1gb_30d",
-        "cloud_storage_10gb_30d",
-    ]
+    assert [item["item_key"] for item in body["catalog"]] == ["cloud_storage_1gb_30d"]
 
 
 def test_dm_upload_enters_owner_drive_and_grants_counterparty_download(tmp_path):

@@ -7,7 +7,10 @@ TEXT_EXTENSIONS = {
     ".css", ".csv", ".htm", ".html", ".ini", ".js", ".json", ".log", ".md",
     ".py", ".sql", ".text", ".toml", ".txt", ".xml", ".yaml", ".yml",
 }
-AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba"}
+AUDIO_EXTENSIONS = {
+    ".aac", ".aif", ".aiff", ".amr", ".flac", ".m4a", ".mid", ".midi",
+    ".mp3", ".oga", ".ogg", ".opus", ".wav", ".weba",
+}
 VIDEO_EXTENSIONS = {".m4v", ".mov", ".mp4", ".ogv", ".webm"}
 IMAGE_EXTENSIONS = {".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 PDF_EXTENSIONS = {".pdf"}

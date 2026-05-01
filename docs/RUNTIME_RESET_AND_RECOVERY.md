@@ -75,6 +75,14 @@ PointsChain restore is only valid in PointsChain safe mode and requires root
 confirmation. It does not replace the whole server database and it does not
 restore unrelated application state.
 
+Root can use the one-click anomaly handler from the PointsChain operations card
+or `POST /api/root/points/chain/recovery/auto-handle`. That action still follows
+the recovery boundary above: it first verifies the chain, only applies the
+recommended healthy backup when safe mode already exists, rebuilds wallets from
+ledger replay, and writes audit events for start, clean result, restore, manual
+required, or failure outcomes. If there is no healthy backup, it returns manual
+required instead of overwriting the live ledger.
+
 ## Conflict Rules
 
 - Use server snapshot restore when the whole site state must roll back together.

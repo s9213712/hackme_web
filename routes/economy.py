@@ -352,7 +352,7 @@ def register_economy_routes(app, deps):
     @app.route("/api/admin/points/adjust", methods=["POST"])
     @require_csrf
     def admin_points_adjust():
-        actor, err = manager_or_403()
+        actor, err = root_or_403()
         if err:
             return err
         data, err = parse_json_body()
@@ -493,6 +493,96 @@ def register_economy_routes(app, deps):
             "recovery": points_service.safe_mode_status(),
             "backups": points_service.list_ledger_backups(limit=100),
         })
+
+    @app.route("/api/root/points/chain/recovery/auto-handle", methods=["POST"])
+    @require_csrf
+    def root_points_chain_recovery_auto_handle():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        if str(data.get("confirm") or "") != "AUTO HANDLE POINTSCHAIN":
+            return json_resp({"ok": False, "msg": "confirm must be AUTO HANDLE POINTSCHAIN"}, 400)
+        try:
+            audit(
+                "POINTS_CHAIN_AUTO_HANDLE_START",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail="root requested one-click PointsChain anomaly handling",
+            )
+            verification = points_service.verify_chain()
+            recovery = points_service.safe_mode_status()
+            if verification.get("ok") and not recovery.get("safe_mode"):
+                audit(
+                    "POINTS_CHAIN_AUTO_HANDLE_CLEAN",
+                    get_client_ip(),
+                    user=actor["username"],
+                    success=True,
+                    ua=get_ua(),
+                    detail="PointsChain verification passed; no recovery needed",
+                )
+                return json_resp({
+                    "ok": True,
+                    "action": "verified_clean",
+                    "msg": "PointsChain 驗證正常，無需恢復",
+                    "verification": verification,
+                    "recovery": recovery,
+                })
+            plan = recovery.get("restore_plan") if isinstance(recovery, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+            backup_id = str(plan.get("recommended_backup_id") or "")
+            if not recovery.get("safe_mode") or not backup_id:
+                audit(
+                    "POINTS_CHAIN_AUTO_HANDLE_MANUAL_REQUIRED",
+                    get_client_ip(),
+                    user=actor["username"],
+                    success=False,
+                    ua=get_ua(),
+                    detail=f"safe_mode={bool(recovery.get('safe_mode'))}, backup_id={backup_id or '-'}",
+                )
+                return json_resp({
+                    "ok": False,
+                    "action": "manual_required",
+                    "msg": "PointsChain 異常，但目前沒有可自動套用的健康備份，請檢查 forensic bundle 後手動處理",
+                    "verification": verification,
+                    "recovery": recovery,
+                    "backups": points_service.list_ledger_backups(limit=100),
+                }, 409)
+            result = points_service.restore_from_backup(
+                actor=actor,
+                backup_id=backup_id,
+                confirm="RESTORE POINTSCHAIN",
+            )
+            audit(
+                "POINTS_CHAIN_AUTO_HANDLE_RESTORE",
+                get_client_ip(),
+                user=actor["username"],
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=f"backup_id={backup_id}, verification_ok={bool((result.get('verification') or {}).get('ok'))}",
+            )
+            return json_resp({
+                "ok": True,
+                "action": "restored_from_backup",
+                "msg": "已使用建議備份恢復 PointsChain，wallet 已由 ledger 重建",
+                "initial_verification": verification,
+                **result,
+            })
+        except Exception as exc:
+            audit(
+                "POINTS_CHAIN_AUTO_HANDLE_FAILED",
+                get_client_ip(),
+                user=actor["username"],
+                success=False,
+                ua=get_ua(),
+                detail=str(exc),
+            )
+            return service_error(exc)
 
     @app.route("/api/root/points/chain/backups", methods=["POST"])
     @require_csrf

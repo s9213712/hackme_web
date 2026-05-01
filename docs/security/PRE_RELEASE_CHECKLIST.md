@@ -29,6 +29,14 @@
   - 報告路徑：
   - 結論：`failures` 必須為 `0`；若有 `skip`，必須確認是外部服務未啟用或預期條件，而不是功能缺失。
 
+- [ ] 阻擋：已完成基礎壓力測試。
+  - 指令：
+    ```bash
+    security/stress_test.py --target https://<staging-host> --i-own-this-target
+    ```
+  - 報告路徑：
+  - 結論：沒有 HTTP 500/502/503；若有瓶頸，已記錄目前主機容量上限。
+
 - [ ] 阻擋：本機自動測試通過。
   ```bash
   python3 scripts/pre_push_checks.py

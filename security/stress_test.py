@@ -5,12 +5,21 @@ import statistics
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
 DEFAULT_PATHS = ["/", "/api/version", "/api/site-config", "/api/captcha/challenge"]
+MAX_CONCURRENCY = 100
+SAFE_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def is_safe_target(base_url):
+    parsed = urllib.parse.urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    return host in SAFE_HOSTS or host.endswith(".local") or "staging" in host
 
 
 def request_once(base_url, path, timeout):
@@ -39,9 +48,11 @@ def percentile(values, pct):
 
 
 def run(args):
+    if not args.i_own_this_target and not is_safe_target(args.target):
+        raise SystemExit("Refusing non-local target without --i-own-this-target")
     paths = [item.strip() for item in args.paths.split(",") if item.strip()] if args.paths else DEFAULT_PATHS
     total = max(1, args.requests)
-    concurrency = max(1, args.concurrency)
+    concurrency = min(MAX_CONCURRENCY, max(1, args.concurrency))
     results = []
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -123,6 +134,7 @@ def main():
     parser.add_argument("--paths", default=",".join(DEFAULT_PATHS), help="Comma-separated GET paths.")
     parser.add_argument("--timeout", type=float, default=8.0, help="Per-request timeout seconds.")
     parser.add_argument("--out", default="security/reports", help="Report output directory.")
+    parser.add_argument("--i-own-this-target", action="store_true", help="Allow non-local targets you are authorized to test.")
     args = parser.parse_args()
     summary = run(args)
     json_path, md_path = write_report(summary, args.out)

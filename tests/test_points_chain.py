@@ -186,25 +186,31 @@ def test_signup_bonus_is_single_currency_and_idempotent(tmp_path):
 
     assert first["created"] is True
     assert second["created"] is False
-    assert second["wallet"]["points_balance"] == 100
+    assert second["wallet"]["points_balance"] == 10
     assert second["ledger"]["currency_type"] == "points"
 
 
-def test_admin_initial_grants_create_genesis_block_once_for_non_root_admins(tmp_path):
+def test_initial_grants_create_genesis_block_once_for_default_accounts(tmp_path):
     service = _service(tmp_path)
 
     first = service.bootstrap_admin_initial_grants(actor={"username": "system", "role": "system"}, seal_genesis=True)
     second = service.bootstrap_admin_initial_grants(actor={"username": "system", "role": "system"}, seal_genesis=True)
 
-    assert first["created_count"] == 1
+    assert first["created_count"] == 2
     assert first["created"][0]["username"] == "bob"
+    assert first["created"][0]["amount"] == 100
+    assert first["created"][1]["username"] == "alice"
+    assert first["created"][1]["amount"] == 10
     assert first["sealed"]["sealed"] is True
     assert first["sealed"]["block"]["block_number"] == 1
     assert second["created_count"] == 0
-    assert service.get_wallet(2)["points_balance"] == 1000
+    assert service.get_wallet(2)["points_balance"] == 100
+    assert service.get_wallet(1)["points_balance"] == 10
     assert service.get_wallet(3)["points_balance"] == 0
     assert service.verify_chain()["counts"]["sealed_blocks"] == 1
-    assert service.root_report()["adjustments"][0]["action_type"] == "admin_initial_grant"
+    actions = [row["action_type"] for row in service.root_report()["adjustments"]]
+    assert "admin_initial_grant" in actions
+    assert "user_initial_grant" in actions
 
 
 def test_admin_weekly_salary_is_idempotent_by_week(tmp_path):

@@ -9,11 +9,6 @@ STORAGE_UPGRADE_PRODUCTS = {
         "duration_days": 30,
         "label": "雲端容量 1GB / 30 天",
     },
-    "cloud_storage_10gb_30d": {
-        "storage_bytes": 10 * 1024 ** 3,
-        "duration_days": 30,
-        "label": "雲端容量 10GB / 30 天",
-    },
 }
 
 STORAGE_UPGRADE_PRICE_DEFAULTS = {
@@ -25,17 +20,6 @@ STORAGE_UPGRADE_PRICE_DEFAULTS = {
         "dynamic_pricing": 0,
         "min_price": 50,
         "max_price": 500,
-        "enabled": 1,
-        "metadata_json": "{}",
-    },
-    "cloud_storage_10gb_30d": {
-        "item_name": "雲端容量 10GB / 30 天",
-        "category": "cloud_drive",
-        "currency_type": "soft",
-        "base_price": 30,
-        "dynamic_pricing": 0,
-        "min_price": 10,
-        "max_price": 100,
         "enabled": 1,
         "metadata_json": "{}",
     },
