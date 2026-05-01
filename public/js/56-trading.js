@@ -5,6 +5,8 @@ let tradingState = {
   positions: [],
   orders: [],
   fills: [],
+  bots: [],
+  botRuns: [],
   rootReport: null,
   referencePrices: null,
 };
@@ -19,6 +21,9 @@ let tradingReferenceChartModel = null;
 let tradingReferenceHoverIndex = null;
 let tradingDashboardAutoTimer = null;
 let tradingDashboardAutoBusy = false;
+let tradingTrialCountdownTimer = null;
+let tradingCurrentBotTab = "dca";
+const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 
 function tradingSetMsg(text, ok = true) {
   const msg = $("trading-msg");
@@ -53,6 +58,59 @@ function formatTradingPointsValue(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "-";
   return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function tradingBpsToPercent(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number / 100 : fallback;
+}
+
+function tradingPercentToBps(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.round(number * 100);
+}
+
+function formatTradingPercentFromBps(value, fallback = 0) {
+  return formatTradingPointsValue(tradingBpsToPercent(value, fallback));
+}
+
+function formatTradingDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days}天 ${hours}小時 ${minutes}分`;
+  if (hours > 0) return `${hours}小時 ${minutes}分 ${seconds}秒`;
+  if (minutes > 0) return `${minutes}分 ${seconds}秒`;
+  return `${seconds}秒`;
+}
+
+function tradingTrialCountdownText(trial) {
+  if (!trial || trial.status !== "active") return "";
+  const expiresAt = trial.expires_at ? new Date(trial.expires_at).getTime() : 0;
+  if (!expiresAt || Number.isNaN(expiresAt)) return "到期時間未設定";
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return "體驗金已到期，等待下次交易狀態刷新";
+  return `倒數 ${formatTradingDuration(remaining)}`;
+}
+
+function updateTradingTrialCountdown() {
+  const funding = tradingState.funding || {};
+  const trial = funding.trial_credit || null;
+  const note = $("trading-trial-credit-note");
+  if (!note) return;
+  if (!trial) {
+    note.textContent = "root 不適用";
+    return;
+  }
+  if (trial.status !== "active") {
+    note.textContent = `狀態 ${trial.status}`;
+    return;
+  }
+  const countdown = tradingTrialCountdownText(trial);
+  note.textContent = `${countdown} · 鎖定 ${formatTradingPointsValue(trial.locked_points)} · 部位 ${formatTradingPointsValue(trial.deployed_points)} · 初始 ${formatTradingPointsValue(trial.initial_points)}`;
 }
 
 function tradingNumber(value, fallback = 0) {
@@ -358,7 +416,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
           未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 強平價格 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
         </div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
-        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPointsValue(row.interest_bps_daily || 0)} bps · 已計利息 ${formatTradingPointsValue(interest)} · ${sanitize(leverageHint)}</div>
+        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercentFromBps(row.interest_bps_daily || 0)}% · 已計利息 ${formatTradingPointsValue(interest)} · ${sanitize(leverageHint)}</div>
         <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
       </div>
       <div class="trading-spot-actions">
@@ -378,10 +436,15 @@ function renderTradingMarketOptions() {
   const rootSelect = $("trading-root-market-select");
   const contractSelect = $("trading-contract-market-select");
   const marginSelect = $("trading-margin-market-select");
+  const botSelects = [
+    $("trading-auto-bot-market"),
+    $("trading-dca-bot-market"),
+    $("trading-backtest-market"),
+  ];
   const options = tradingState.markets.length
     ? tradingState.markets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(tradingDisplaySymbol(market.symbol))}</option>`).join("")
     : `<option value="">沒有可用市場</option>`;
-  [select, rootSelect, contractSelect, marginSelect].forEach((target) => {
+  [select, rootSelect, contractSelect, marginSelect, ...botSelects].forEach((target) => {
     if (!target) return;
     const previous = target.value;
     target.innerHTML = options;
@@ -410,8 +473,8 @@ function renderTradingSummary() {
   if ($("trading-margin-note")) {
     $("trading-margin-note").textContent = borrowingEnabled
       ? (currentUser === "root"
-        ? `root 可用模擬資金進行融資 / 借券，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；不寫入 PointsChain。`
-        : `已開啟，日息 ${Number(tradingState.settings?.borrow_interest_bps_daily || 0)} bps；手續費與利息計入儲備池統計。`)
+        ? `root 可用模擬資金進行融資 / 借券，日息 ${formatTradingPercentFromBps(tradingState.settings?.borrow_interest_bps_daily || 0)}%；不寫入 PointsChain。`
+        : `已開啟，日息 ${formatTradingPercentFromBps(tradingState.settings?.borrow_interest_bps_daily || 0)}%；手續費與利息計入儲備池統計。`)
       : "root 尚未開啟借貸交易，目前僅可查看此區。";
   }
   if (availabilityNote) {
@@ -419,29 +482,24 @@ function renderTradingSummary() {
       ? "root 可使用現貨、進階交易與合約模擬；root 以外用戶目前僅開放現貨與已啟用的進階交易。"
       : "目前僅對 root 以外用戶開放 BTC/USDT、ETH/USDT 現貨。";
   }
-  if ($("trading-funding-available")) $("trading-funding-available").textContent = funding.available_points != null ? String(Number(funding.available_points || 0)) : "-";
+  const trial = funding.trial_credit || null;
+  const trialAvailable = trial ? Number(trial.available_points || 0) : 0;
+  const trialInitial = trial ? Number(trial.initial_points || 0) : 0;
+  const walletAvailable = Number(funding.wallet_available_points || 0);
+  const totalAvailable = Number(funding.available_points ?? (walletAvailable + trialAvailable));
+  if ($("trading-funding-available")) $("trading-funding-available").textContent = funding.available_points != null ? formatTradingPointsValue(totalAvailable) : "-";
   if ($("trading-funding-mode")) {
     $("trading-funding-mode").textContent = funding.mode === "root_simulated"
-      ? `root 模擬資金 · 鎖定 ${Number(funding.locked_points || 0)}`
-      : `體驗金優先 · 錢包 ${Number(funding.wallet_available_points || 0)} · 鎖定 ${Number(funding.locked_points || 0)}`;
+      ? `root 模擬資金 · 鎖定 ${formatTradingPointsValue(funding.locked_points)}`
+      : `體驗金優先 · 總可用 ${formatTradingPointsValue(totalAvailable)} = 體驗金 ${formatTradingPointsValue(trialAvailable)} + 真實積分 ${formatTradingPointsValue(walletAvailable)} · 鎖定 ${formatTradingPointsValue(funding.locked_points)}`;
   }
-  const trial = funding.trial_credit || null;
   if ($("trading-trial-credit-available")) {
-    $("trading-trial-credit-available").textContent = trial ? String(Number(trial.available_points || 0)) : "-";
+    $("trading-trial-credit-available").textContent = trial ? `${formatTradingPointsValue(trialAvailable)} / ${formatTradingPointsValue(trialInitial)}` : "-";
   }
-  if ($("trading-trial-credit-note")) {
-    if (!trial) {
-      $("trading-trial-credit-note").textContent = "root 不適用";
-    } else if (trial.status !== "active") {
-      $("trading-trial-credit-note").textContent = `狀態 ${trial.status}`;
-    } else {
-      const expires = trial.expires_at ? new Date(trial.expires_at).toLocaleString() : "-";
-      $("trading-trial-credit-note").textContent = `鎖定 ${Number(trial.locked_points || 0)} · 部位 ${Number(trial.deployed_points || 0)} · 到期 ${expires}`;
-    }
-  }
+  updateTradingTrialCountdown();
   if ($("trading-current-price")) $("trading-current-price").textContent = market ? String(Number(market.manual_price_points || 0)) : "-";
   if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "manual_root"}` : "-";
-  if ($("trading-fee-bps")) $("trading-fee-bps").textContent = market ? String(Number(market.fee_bps || 0)) : "-";
+  if ($("trading-fee-bps")) $("trading-fee-bps").textContent = market ? formatTradingPercentFromBps(market.fee_bps || 0) : "-";
   const position = market ? tradingState.positions.find((row) => row.market_symbol === market.symbol) : null;
   if ($("trading-position-quantity")) $("trading-position-quantity").textContent = position ? sanitize(position.quantity || "0") : "0";
   if ($("trading-position-locked")) $("trading-position-locked").textContent = `鎖定 ${position ? sanitize(position.locked_quantity || "0") : "0"}`;
@@ -993,9 +1051,9 @@ function updateTradingMarginEstimate() {
   }
   let message = `${typeLabel} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
   if (positionType === "short") {
-    message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${shortCollateralBps} bps`;
+    message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercentFromBps(shortCollateralBps)}%`;
   } else {
-    message = `${message}；融資可貸比例 ${marginLongFinancingBps} bps`;
+    message = `${message}；融資可貸比例 ${formatTradingPercentFromBps(marginLongFinancingBps)}%`;
   }
   let blocking = false;
   if (collateral < minCollateral) {
@@ -1026,6 +1084,124 @@ function renderTradingMarginPositions(rows = []) {
   list.querySelectorAll("[data-margin-add-collateral]").forEach((btn) => {
     btn.addEventListener("click", () => addTradingMarginCollateral(btn.dataset.marginAddCollateral || ""));
   });
+}
+
+function tradingBotTriggerLabel(row) {
+  if (row.bot_type === "dca") return `每 ${Number(row.interval_hours || 24)} 小時定投 ${formatTradingPointsValue(row.budget_points)} 點`;
+  if (row.workflow) {
+    const branches = Array.isArray(row.workflow.branches) ? row.workflow.branches : [];
+    return branches.length ? `${branches.length} 個 workflow 分支` : "Workflow 尚未設定";
+  }
+  const price = formatTradingPointsValue(row.trigger_price_points || 0);
+  if (row.trigger_type === "price_above") return `價格 >= ${price}`;
+  if (row.trigger_type === "price_below") return `價格 <= ${price}`;
+  return "每次掃描";
+}
+
+function switchTradingBotTab(tab) {
+  tradingCurrentBotTab = tab || "dca";
+  document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tradingBotTab === tradingCurrentBotTab);
+  });
+  document.querySelectorAll(".trading-bot-tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `trading-bot-tab-${tradingCurrentBotTab}`);
+  });
+}
+
+function tradingWorkflowTemplate() {
+  return {
+    version: 1,
+    strategy_kind: "workflow",
+    branches: [{
+      id: "entry",
+      name: "進場策略",
+      priority: 10,
+      logic: "AND",
+      cooldown_seconds: 300,
+      max_runs: 100,
+      conditions: [{ type: "price_below", value: 100000 }],
+      actions: [{ type: "buy_percent", percent: 10, step: 1 }],
+    }],
+  };
+}
+
+function tradingWorkflowText() {
+  const raw = $("trading-auto-workflow-json")?.value || "";
+  if (raw.trim()) return raw.trim();
+  const saved = localStorage.getItem(TRADING_WORKFLOW_STORAGE_KEY);
+  return saved || JSON.stringify(tradingWorkflowTemplate(), null, 2);
+}
+
+function loadTradingWorkflowFromEditor() {
+  const saved = localStorage.getItem(TRADING_WORKFLOW_STORAGE_KEY);
+  const textarea = $("trading-auto-workflow-json");
+  if (!textarea) return;
+  textarea.value = saved || JSON.stringify(tradingWorkflowTemplate(), null, 2);
+  tradingSetMsg(saved ? "已載入 Workflow 編輯器結果" : "尚無編輯器結果，已載入預設範例");
+}
+
+function parseTradingWorkflowInput() {
+  try {
+    return JSON.parse(tradingWorkflowText());
+  } catch (err) {
+    throw new Error("Workflow JSON 格式錯誤，請回編輯器修正後再載入");
+  }
+}
+
+function renderTradingBots(rows = [], runs = []) {
+  const dcaList = $("trading-dca-bot-list");
+  const strategyList = $("trading-strategy-bot-list");
+  const runList = $("trading-bot-run-list");
+  const renderRows = (items, emptyText) => items.length ? items.map((row) => `
+        <div class="drive-file-row">
+          <div>
+            <strong>${sanitize(row.name || "未命名機器人")} · ${sanitize(tradingDisplaySymbol(row.market_symbol || ""))}</strong>
+            <div class="drive-card-sub">
+              ${sanitize(row.bot_type_label || (row.bot_type === "dca" ? "定投機器人" : "Workflow 機器人"))} · ${sanitize(tradingBotTriggerLabel(row))} 時 ${row.side === "sell" ? "賣出" : "買入"} ${row.bot_type === "dca" ? "系統換算數量" : sanitize(row.quantity_text || "workflow 決定")}，
+              ${row.order_type === "limit" ? `限價 ${formatTradingPointsValue(row.limit_price_points)}` : "市價單"}
+            </div>
+            <div class="drive-card-sub">
+              狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${Number(row.max_runs || 1)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
+            </div>
+            ${row.last_error ? `<div class="drive-card-sub negative">上次錯誤：${sanitize(row.last_error)}</div>` : ""}
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn" type="button" data-trading-bot-toggle="${sanitize(row.bot_uuid || "")}" data-trading-bot-enabled="${row.enabled ? "0" : "1"}">${row.enabled ? "暫停" : "啟用"}</button>
+            <button class="btn" type="button" data-trading-bot-backtest="${sanitize(row.bot_uuid || "")}">回測</button>
+            <button class="btn btn-danger" type="button" data-trading-bot-delete="${sanitize(row.bot_uuid || "")}">刪除</button>
+          </div>
+        </div>
+      `).join("") : `<div class="drive-empty">${sanitize(emptyText)}</div>`;
+  if (dcaList) dcaList.innerHTML = renderRows(rows.filter((row) => row.bot_type === "dca"), "尚無定投機器人");
+  if (strategyList) strategyList.innerHTML = renderRows(rows.filter((row) => row.bot_type !== "dca"), "尚無自動化 Workflow");
+  [dcaList, strategyList].forEach((list) => {
+    if (!list) return;
+    list.querySelectorAll("[data-trading-bot-delete]").forEach((btn) => btn.addEventListener("click", () => deleteTradingBot(btn.dataset.tradingBotDelete || "")));
+    list.querySelectorAll("[data-trading-bot-toggle]").forEach((btn) => btn.addEventListener("click", () => toggleTradingBot(btn.dataset.tradingBotToggle || "", btn.dataset.tradingBotEnabled === "1")));
+    list.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => btn.addEventListener("click", () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || "")));
+  });
+  const botSelect = $("trading-backtest-bot-select");
+  if (botSelect) {
+    const previous = botSelect.value;
+    botSelect.innerHTML = `<option value="">使用目前表單設定</option>` + rows.map((row) => `<option value="${sanitize(row.bot_uuid || "")}">${sanitize(row.bot_type === "dca" ? "定投" : "Workflow")} · ${sanitize(row.name || row.market_symbol || "")}</option>`).join("");
+    if (previous && Array.from(botSelect.options).some((option) => option.value === previous)) botSelect.value = previous;
+  }
+  if (runList) {
+    if (!runs.length) {
+      runList.innerHTML = `<div class="drive-empty">尚無執行紀錄</div>`;
+    } else {
+      runList.innerHTML = runs.slice(0, 20).map((row) => `
+        <div class="drive-file-row">
+          <div>
+            <strong>${sanitize(row.status || "-")} · ${sanitize(tradingDisplaySymbol(row.market_symbol || ""))}</strong>
+            <div class="drive-card-sub">觀測價 ${formatTradingPointsValue(row.observed_price_points)} · 條件 ${sanitize(row.trigger_type || "-")} ${row.trigger_price_points ? formatTradingPointsValue(row.trigger_price_points) : ""}</div>
+            <div class="drive-card-sub">${sanitize(row.created_at || "")}${row.order_uuid ? ` · 訂單 ${sanitize(row.order_uuid)}` : ""}</div>
+            ${row.error ? `<div class="drive-card-sub negative">${sanitize(row.error)}</div>` : ""}
+          </div>
+        </div>
+      `).join("");
+    }
+  }
 }
 
 function renderTradingWalletSummary(payload = {}) {
@@ -1102,7 +1278,7 @@ function renderTradingRootReport(report) {
   if ($("trading-risk-flags")) $("trading-risk-flags").textContent = `borrow=${settings.borrowing_enabled ? "true" : "false"} / liquidation=${settings.margin_liquidation_enabled ? "true" : "false"} / futures=${settings.futures_enabled ? "true" : "false"} / pvp=${settings.pvp_matching_enabled ? "true" : "false"}`;
   if ($("trading-liquidation-status")) {
     $("trading-liquidation-status").textContent = settings.margin_liquidation_enabled
-      ? `自動清算排程：啟用，維持保證金 ${Number(settings.margin_maintenance_bps || 0)} bps`
+      ? `自動清算排程：啟用，維持保證金 ${formatTradingPercentFromBps(settings.margin_maintenance_bps || 0)}%`
       : "自動清算排程：停用";
   }
   if ($("trading-root-sim-balance")) {
@@ -1146,8 +1322,8 @@ function populateTradingRootMarketForm() {
   if (!market) return;
   if ($("trading-root-market-select")) $("trading-root-market-select").value = market.symbol;
   if ($("trading-root-price")) $("trading-root-price").value = Number(market.manual_price_points || 0);
-  if ($("trading-root-jump-bps")) $("trading-root-jump-bps").value = Number(market.max_price_jump_bps || 0);
-  if ($("trading-root-fee-bps")) $("trading-root-fee-bps").value = Number(market.fee_bps || 0);
+  if ($("trading-root-jump-bps")) $("trading-root-jump-bps").value = formatTradingPercentFromBps(market.max_price_jump_bps || 0);
+  if ($("trading-root-fee-bps")) $("trading-root-fee-bps").value = formatTradingPercentFromBps(market.fee_bps || 0);
   if ($("trading-root-min-order")) $("trading-root-min-order").value = Number(market.min_order_points || 1);
   if ($("trading-root-max-order")) $("trading-root-max-order").value = Number(market.max_order_points || 1);
   if ($("trading-root-enabled")) $("trading-root-enabled").checked = !!market.enabled;
@@ -1178,6 +1354,8 @@ async function loadTradingDashboard() {
     tradingState.marginPositions = payload.margin_positions || [];
     tradingState.orders = payload.orders || [];
     tradingState.fills = payload.fills || [];
+    tradingState.bots = payload.bots || [];
+    tradingState.botRuns = payload.bot_runs || [];
     const state = payload.state || {};
     const status = $("trading-safe-mode");
     if (status) {
@@ -1188,6 +1366,7 @@ async function loadTradingDashboard() {
     renderTradingSummary();
     renderTradingOrders(tradingState.orders);
     renderTradingFills(tradingState.fills);
+    renderTradingBots(tradingState.bots, tradingState.botRuns);
     renderTradingContracts(payload.futures_positions || []);
     renderTradingMarginPositions(tradingState.marginPositions);
     renderTradingWalletSummary(payload);
@@ -1242,6 +1421,230 @@ async function submitTradingOrder() {
     await loadEconomyDashboard();
   } catch (err) {
     tradingSetMsg(err.message || "下單失敗", false);
+  }
+}
+
+async function saveTradingBot() {
+  const marketSymbol = $("trading-auto-bot-market")?.value || selectedTradingMarket()?.symbol || "";
+  if (!marketSymbol) {
+    tradingSetMsg("請先選擇自動化機器人市場", false);
+    return;
+  }
+  let workflow;
+  try {
+    workflow = parseTradingWorkflowInput();
+  } catch (err) {
+    tradingSetMsg(err.message || "Workflow JSON 格式錯誤", false);
+    return;
+  }
+  const payload = {
+    bot_type: "conditional",
+    name: $("trading-auto-bot-name")?.value || "",
+    market_symbol: marketSymbol,
+    trigger_type: "always",
+    trigger_price_points: null,
+    side: "buy",
+    order_type: "market",
+    quantity: "0.00000001",
+    limit_price_points: null,
+    workflow_json: workflow,
+    strategy_mode: $("trading-auto-strategy-mode")?.value || "and",
+    max_daily_runs: Number($("trading-auto-daily-runs")?.value || 5),
+    max_runs: Number($("trading-auto-bot-max-runs")?.value || 1),
+    cooldown_seconds: Number($("trading-auto-bot-cooldown")?.value || 300),
+    enabled: !!$("trading-auto-bot-enabled")?.checked,
+  };
+  try {
+    await fetchTradingJson("/trading/bots", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    tradingSetMsg("自動化條件機器人已新增");
+    if ($("trading-auto-bot-name")) $("trading-auto-bot-name").value = "";
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(`自動化機器人新增失敗：${err.message || "後端未提供錯誤原因"}`, false);
+  }
+}
+
+async function saveTradingDcaBot() {
+  const marketSymbol = $("trading-dca-bot-market")?.value || selectedTradingMarket()?.symbol || "";
+  if (!marketSymbol) {
+    tradingSetMsg("請先選擇定投市場", false);
+    return;
+  }
+  const preset = $("trading-dca-bot-interval-preset")?.value || "24";
+  const intervalHours = preset === "custom" ? Number($("trading-dca-bot-interval-hours")?.value || 24) : Number(preset || 24);
+  const payload = {
+    bot_type: "dca",
+    name: $("trading-dca-bot-name")?.value || "",
+    market_symbol: marketSymbol,
+    budget_points: Number($("trading-dca-bot-budget-points")?.value || 0),
+    interval_hours: intervalHours,
+    price_upper_limit: Number($("trading-dca-price-upper")?.value || 0) || null,
+    price_lower_limit: Number($("trading-dca-price-lower")?.value || 0) || null,
+    max_runs: Number($("trading-dca-bot-max-runs")?.value || 1),
+    enabled: !!$("trading-dca-bot-enabled")?.checked,
+  };
+  try {
+    await fetchTradingJson("/trading/bots", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    tradingSetMsg("定投機器人已新增");
+    if ($("trading-dca-bot-name")) $("trading-dca-bot-name").value = "";
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(`定投機器人新增失敗：${err.message || "後端未提供錯誤原因"}`, false);
+  }
+}
+
+async function backtestTradingBot() {
+  const result = $("trading-bot-backtest-result");
+  const marketSymbol = $("trading-backtest-market")?.value || selectedTradingMarket()?.symbol || "";
+  const candles = tradingState.referencePrices?.candles || tradingState.referencePrices?.points || [];
+  if (!marketSymbol) {
+    tradingSetMsg("請先選擇回測市場", false);
+    return;
+  }
+  if (!Array.isArray(candles) || candles.length < 2) {
+    tradingSetMsg("請先載入 Binance 參考圖表再回測", false);
+    return;
+  }
+  const botUuid = $("trading-backtest-bot-select")?.value || "";
+  const selectedBot = botUuid ? tradingState.bots.find((row) => row.bot_uuid === botUuid) : null;
+  const botType = selectedBot ? (selectedBot.bot_type === "dca" ? "dca" : "workflow") : ($("trading-backtest-strategy")?.value || "dca");
+  let workflow = null;
+  if (botType === "workflow") {
+    try {
+      workflow = selectedBot?.workflow || parseTradingWorkflowInput();
+    } catch (err) {
+      tradingSetMsg(err.message || "Workflow JSON 格式錯誤", false);
+      return;
+    }
+  }
+  const payload = {
+    market_symbol: marketSymbol,
+    strategy: botType,
+    workflow_json: workflow,
+    initial_cash_points: Number($("trading-backtest-initial-cash")?.value || 10000),
+    order_points: selectedBot?.budget_points || Number($("trading-backtest-order-points")?.value || 100),
+    interval_candles: Math.max(1, Math.ceil(Number(selectedBot?.interval_hours ? selectedBot.interval_hours / 0.25 : 1))),
+    timeframe: $("trading-backtest-timeframe")?.value || "15m",
+    start_time: $("trading-backtest-start")?.value || "",
+    end_time: $("trading-backtest-end")?.value || "",
+    slippage_percent: Number($("trading-backtest-slippage-percent")?.value || 0),
+    candles,
+  };
+  try {
+    const json = await fetchTradingJson("/trading/bots/backtest", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const text = `回測完成：交易 ${Number(json.trade_count || 0)} 次，期末 ${formatTradingPointsValue(json.final_value_points)} 點，損益 ${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)} 點，報酬 ${formatTradingPointsValue(json.return_percent)}%`;
+    if (result) result.textContent = text;
+    renderTradingBacktestResult(json);
+    tradingSetMsg(text, Number(json.pnl_points || 0) >= 0);
+  } catch (err) {
+    const text = err.message || "回測失敗";
+    if (result) result.textContent = text;
+    tradingSetMsg(text, false);
+  }
+}
+
+function renderTradingBacktestResult(json) {
+  const metrics = $("trading-backtest-metrics");
+  const trades = $("trading-backtest-trades");
+  if (metrics) {
+    metrics.innerHTML = `
+      <div><span class="drive-card-sub">初始資金</span><strong>${formatTradingPointsValue(json.initial_cash_points)}</strong><small>POINTS</small></div>
+      <div><span class="drive-card-sub">最終資金</span><strong>${formatTradingPointsValue(json.final_value_points)}</strong><small>POINTS</small></div>
+      <div><span class="drive-card-sub">總損益</span><strong>${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)}</strong><small>${formatTradingPointsValue(json.return_percent)}%</small></div>
+      <div><span class="drive-card-sub">交易次數</span><strong>${Number(json.trade_count || 0)}</strong><small>回測未修改帳本</small></div>
+    `;
+  }
+  if (trades) {
+    const rows = Array.isArray(json.trades) ? json.trades : [];
+    trades.innerHTML = rows.length ? rows.slice(-20).map((row) => `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(row.side || "buy")} · ${sanitize(row.quantity || "0")}</strong>
+          <div class="drive-card-sub">${sanitize(row.time || "")} · 價格 ${formatTradingPointsValue(row.price_points)} · 金額 ${formatTradingPointsValue(row.spend_points)} · 費用 ${formatTradingPointsValue(row.fee_points)}</div>
+        </div>
+      </div>
+    `).join("") : `<div class="drive-empty">回測期間沒有交易</div>`;
+  }
+}
+
+function prepareTradingBacktestFromBot(botUuid) {
+  const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
+  if (!bot) return;
+  switchTradingBotTab("backtest");
+  if ($("trading-backtest-bot-select")) $("trading-backtest-bot-select").value = botUuid;
+  if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = bot.bot_type === "dca" ? "dca" : "workflow";
+  if ($("trading-backtest-market")) $("trading-backtest-market").value = bot.market_symbol || "";
+  if (bot.workflow && $("trading-auto-workflow-json")) $("trading-auto-workflow-json").value = JSON.stringify(bot.workflow, null, 2);
+}
+
+async function deleteTradingBot(botUuid) {
+  if (!botUuid) return;
+  if (!confirm("確定刪除這個交易機器人？")) return;
+  try {
+    await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
+      method: "DELETE",
+      body: JSON.stringify({}),
+    });
+    tradingSetMsg("交易機器人已刪除");
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "交易機器人刪除失敗", false);
+  }
+}
+
+async function toggleTradingBot(botUuid, enabled) {
+  const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
+  if (!bot) return;
+  const payload = {
+    bot_type: bot.bot_type || "conditional",
+    name: bot.name || "",
+    market_symbol: bot.market_symbol,
+    side: bot.side || "buy",
+    order_type: bot.order_type || "market",
+    quantity: bot.quantity_text || "0.00000001",
+    limit_price_points: bot.limit_price_points || null,
+    trigger_type: bot.trigger_type || "always",
+    trigger_price_points: bot.trigger_price_points || null,
+    budget_points: Number(bot.budget_points || 0),
+    interval_hours: Number(bot.interval_hours || 24),
+    max_runs: Number(bot.max_runs || 1),
+    cooldown_seconds: Number(bot.cooldown_seconds || 0),
+    workflow_json: bot.workflow || null,
+    enabled,
+  };
+  try {
+    await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    tradingSetMsg(enabled ? "機器人已啟用" : "機器人已暫停");
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "機器人狀態更新失敗", false);
+  }
+}
+
+async function scanTradingBots() {
+  try {
+    const json = await fetchTradingJson("/trading/bots/scan", {
+      method: "POST",
+      body: JSON.stringify({ limit: 50 }),
+    });
+    const triggered = Array.isArray(json.triggered) ? json.triggered.length : 0;
+    const failed = Array.isArray(json.failed) ? json.failed.length : 0;
+    tradingSetMsg(`機器人掃描完成：掃描 ${Number(json.scanned || 0)} 個，觸發 ${triggered} 個，失敗 ${failed} 個`, failed === 0);
+    await loadTradingDashboard();
+  } catch (err) {
+    tradingSetMsg(err.message || "交易機器人掃描失敗", false);
   }
 }
 
@@ -1433,8 +1836,8 @@ async function saveTradingRootMarket() {
       method: "POST",
       body: JSON.stringify({
         manual_price_points: Number($("trading-root-price")?.value || 0),
-        max_price_jump_bps: Number($("trading-root-jump-bps")?.value || 0),
-        fee_bps: Number($("trading-root-fee-bps")?.value || 0),
+        max_price_jump_bps: tradingPercentToBps($("trading-root-jump-bps")?.value || 0),
+        fee_bps: tradingPercentToBps($("trading-root-fee-bps")?.value || 0),
         min_order_points: Number($("trading-root-min-order")?.value || 0),
         max_order_points: Number($("trading-root-max-order")?.value || 0),
         enabled: !!$("trading-root-enabled")?.checked,
@@ -1548,6 +1951,11 @@ function bindTradingEvents() {
   const bindings = [
     ["trading-refresh-btn", loadTradingDashboard],
     ["trading-submit-order-btn", submitTradingOrder],
+    ["trading-auto-bot-save-btn", saveTradingBot],
+    ["trading-dca-bot-save-btn", saveTradingDcaBot],
+    ["trading-bot-scan-btn", scanTradingBots],
+    ["trading-backtest-run-btn", backtestTradingBot],
+    ["trading-workflow-load-btn", loadTradingWorkflowFromEditor],
     ["trading-root-refresh-btn", loadTradingRootReport],
     ["trading-root-save-market-btn", saveTradingRootMarket],
     ["trading-reserve-allocate-btn", allocateTradingReserve],
@@ -1564,6 +1972,24 @@ function bindTradingEvents() {
     if (!el) return;
     el.addEventListener("click", handler);
   });
+  document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => switchTradingBotTab(btn.dataset.tradingBotTab || "dca"));
+  });
+  const dcaPreset = $("trading-dca-bot-interval-preset");
+  if (dcaPreset) {
+    dcaPreset.addEventListener("change", () => {
+      const target = $("trading-dca-bot-interval-hours");
+      if (!target) return;
+      target.disabled = dcaPreset.value !== "custom";
+      if (dcaPreset.value !== "custom") target.value = dcaPreset.value;
+    });
+  }
+  const backtestBotSelect = $("trading-backtest-bot-select");
+  if (backtestBotSelect) {
+    backtestBotSelect.addEventListener("change", () => {
+      if (backtestBotSelect.value) prepareTradingBacktestFromBot(backtestBotSelect.value);
+    });
+  }
   const marketSelect = $("trading-market-select");
   if (marketSelect) marketSelect.addEventListener("change", renderTradingSummary);
   const marginMarketSelect = $("trading-margin-market-select");
@@ -1624,6 +2050,9 @@ function bindTradingEvents() {
         tradingDashboardAutoBusy = false;
       }
     }, 5000);
+  }
+  if (!tradingTrialCountdownTimer) {
+    tradingTrialCountdownTimer = setInterval(updateTradingTrialCountdown, 1000);
   }
 }
 

@@ -235,6 +235,19 @@ def test_trading_stress_pentest_covers_margin_risk_controls():
     assert "maintenance_margin_points" in script
 
 
+def test_trading_bot_tables_are_snapshot_scoped():
+    snapshots = (ROOT / "services" / "snapshots.py").read_text(encoding="utf-8")
+    trading = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")
+
+    assert '"trading_bots"' in snapshots
+    assert '"trading_bot_runs"' in snapshots
+    assert "CREATE TABLE IF NOT EXISTS trading_bots" in trading
+    assert "CREATE TABLE IF NOT EXISTS trading_bot_runs" in trading
+    assert "bot_type TEXT NOT NULL DEFAULT 'conditional'" in trading
+    assert "budget_points INTEGER NOT NULL DEFAULT 0" in trading
+    assert "def backtest_trading_bot" in trading
+
+
 def test_table_columns_rejects_unsafe_identifiers(tmp_path):
     import sqlite3
 

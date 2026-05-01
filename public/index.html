@@ -1396,12 +1396,126 @@
           </div>
         </div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
-          <div><span class="drive-card-sub">交易可用積分</span><strong id="trading-funding-available">-</strong><small id="trading-funding-mode">-</small></div>
+          <div><span class="drive-card-sub">交易總可用</span><strong id="trading-funding-available">-</strong><small id="trading-funding-mode">-</small></div>
           <div><span class="drive-card-sub">交易所體驗金</span><strong id="trading-trial-credit-available">-</strong><small id="trading-trial-credit-note">root 不適用</small></div>
           <div><span class="drive-card-sub">目前價格</span><strong id="trading-current-price">-</strong><small id="trading-current-market">-</small></div>
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
-          <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-bps">-</strong><small>bps</small></div>
+          <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-bps">-</strong><small>%</small></div>
         </div>
+        <details class="drive-collapsible-panel" id="trading-bot-card" style="margin-top:.75rem;">
+          <summary>
+            <div>
+              <div class="drive-card-title">現貨交易機器人</div>
+              <div class="drive-card-sub">以條件工作流自動觸發現貨下單；仍走交易引擎、PointsChain、審計與風控。</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="segmented-control compact-segments trading-bot-tabs" aria-label="交易機器人分頁">
+              <button class="active" type="button" data-trading-bot-tab="dca">定投機器人</button>
+              <button type="button" data-trading-bot-tab="strategy">自動化 Workflow</button>
+              <button type="button" data-trading-bot-tab="backtest">回測分析</button>
+              <button type="button" data-trading-bot-tab="records">紀錄</button>
+            </div>
+            <div class="trading-bot-panel trading-bot-tab-panel active" id="trading-bot-tab-dca">
+                <div class="drive-card-title">定投機器人</div>
+                <div class="drive-card-sub">固定時間、固定金額、長期買入；不混入條件策略。</div>
+                <div class="settings-option-grid" style="margin-top:.65rem;">
+                  <div class="field"><label>名稱</label><input type="text" id="trading-dca-bot-name" maxlength="80" placeholder="例如 每日 BTC 定投" /></div>
+                  <div class="field"><label>市場</label><select id="trading-dca-bot-market"><option value="">讀取市場中...</option></select></div>
+                  <div class="field"><label>定投方向</label><select id="trading-dca-bot-side" disabled><option value="buy">買入</option></select></div>
+                  <div class="field"><label>每次投入點數</label><input type="number" id="trading-dca-bot-budget-points" min="1" step="1" value="100" /></div>
+                  <div class="field">
+                    <label>定投週期</label>
+                    <select id="trading-dca-bot-interval-preset">
+                      <option value="24">每日</option>
+                      <option value="168">每週</option>
+                      <option value="720">每月</option>
+                      <option value="custom">自訂間隔</option>
+                    </select>
+                  </div>
+                  <div class="field"><label>自訂間隔小時</label><input type="number" id="trading-dca-bot-interval-hours" min="1" max="8760" step="1" value="24" /></div>
+                  <div class="field"><label>價格上限（可選）</label><input type="number" id="trading-dca-price-upper" min="1" step="1" placeholder="高於此價暫停" /></div>
+                  <div class="field"><label>價格下限（可選）</label><input type="number" id="trading-dca-price-lower" min="1" step="1" placeholder="低於此價暫停" /></div>
+                  <div class="field"><label>最多執行次數</label><input type="number" id="trading-dca-bot-max-runs" min="1" max="1000" step="1" value="7" /></div>
+                  <div class="field"><label><input type="checkbox" id="trading-dca-bot-enabled" checked /> 啟用</label></div>
+                  <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-dca-bot-save-btn" type="button">新增定投</button></div>
+                </div>
+                <div class="drive-card-title" style="margin-top:.85rem;">定投列表</div>
+                <div id="trading-dca-bot-list" class="drive-file-list"></div>
+            </div>
+            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-strategy">
+                <div class="drive-card-title">自動化 Workflow 機器人</div>
+                <div class="drive-card-sub">用節點流程描述條件、邏輯、控制與行為。回測會使用同一份 workflow，不會另建一套邏輯。</div>
+                <div class="settings-option-grid" style="margin-top:.65rem;">
+                  <div class="field"><label>名稱</label><input type="text" id="trading-auto-bot-name" maxlength="80" placeholder="例如 BTC 多條件進場" /></div>
+                  <div class="field"><label>市場</label><select id="trading-auto-bot-market"><option value="">讀取市場中...</option></select></div>
+                  <div class="field">
+                    <label>策略模式</label>
+                    <select id="trading-auto-strategy-mode">
+                      <option value="single">單條件觸發</option>
+                      <option value="and">多條件 AND</option>
+                      <option value="or">多條件 OR</option>
+                      <option value="risk">停利 / 停損</option>
+                    </select>
+                  </div>
+                  <div class="field"><label>每日最大觸發</label><input type="number" id="trading-auto-daily-runs" min="1" max="100" step="1" value="5" /></div>
+                  <div class="field"><label>最多總觸發</label><input type="number" id="trading-auto-bot-max-runs" min="1" max="1000" step="1" value="5" /></div>
+                  <div class="field"><label>預設冷卻秒數</label><input type="number" id="trading-auto-bot-cooldown" min="0" max="86400" step="1" value="300" /></div>
+                  <div class="field"><label><input type="checkbox" id="trading-auto-bot-enabled" checked /> 啟用</label></div>
+                </div>
+                <div class="trading-workflow-json-panel" style="margin-top:.75rem;">
+                  <div class="drive-card-heading compact-heading">
+                    <div>
+                      <div class="drive-card-title">Workflow JSON</div>
+                      <div class="drive-card-sub">節點式流程請在獨立編輯器繪製；此處只放可讀 JSON，避免交易頁變得擁擠。</div>
+                    </div>
+                    <div class="drive-file-actions">
+                      <a class="btn" href="/trading-workflow-editor.html" target="_blank" rel="noopener">開啟 Workflow 編輯器</a>
+                      <button class="btn" id="trading-workflow-load-btn" type="button">載入編輯器結果</button>
+                    </div>
+                  </div>
+                  <textarea id="trading-auto-workflow-json" rows="10" spellcheck="false" placeholder="從 Workflow 編輯器產生的 JSON 會貼在這裡"></textarea>
+                </div>
+                <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
+                  <button class="btn btn-primary" id="trading-auto-bot-save-btn" type="button">儲存 Workflow Bot</button>
+                  <button class="btn" id="trading-bot-scan-btn" type="button">掃描執行已啟用機器人</button>
+                </div>
+                <div class="drive-card-title" style="margin-top:.85rem;">自動化列表</div>
+                <div id="trading-strategy-bot-list" class="drive-file-list"></div>
+            </div>
+            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-backtest">
+              <div class="drive-card-title">回測分析</div>
+              <div class="drive-card-sub">回測只讀歷史 K 線與目前設定，不建立訂單、不扣款、不修改持倉、不寫 PointsChain。</div>
+              <div class="settings-option-grid" style="margin-top:.65rem;">
+                <div class="field">
+                  <label>回測類型</label>
+                  <select id="trading-backtest-strategy">
+                    <option value="dca">定投機器人</option>
+                    <option value="workflow">自動化 Workflow</option>
+                  </select>
+                </div>
+                <div class="field"><label>選擇已儲存 Bot</label><select id="trading-backtest-bot-select"><option value="">使用目前表單設定</option></select></div>
+                <div class="field"><label>市場</label><select id="trading-backtest-market"><option value="">讀取市場中...</option></select></div>
+                <div class="field"><label>K 線週期</label><select id="trading-backtest-timeframe"><option value="5m">5 分</option><option value="15m" selected>15 分</option><option value="1h">1 小時</option><option value="4h">4 小時</option><option value="1d">日線</option></select></div>
+                <div class="field"><label>回測開始</label><input type="datetime-local" id="trading-backtest-start" /></div>
+                <div class="field"><label>回測結束</label><input type="datetime-local" id="trading-backtest-end" /></div>
+                <div class="field"><label>初始資金</label><input type="number" id="trading-backtest-initial-cash" min="1" step="1" value="10000" /></div>
+                <div class="field"><label>每次投入 / 單筆金額</label><input type="number" id="trading-backtest-order-points" min="1" step="1" value="100" /></div>
+                <div class="field"><label>滑價百分比</label><input type="number" id="trading-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
+                <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-backtest-run-btn" type="button">執行回測</button></div>
+              </div>
+              <div class="drive-card-sub" id="trading-bot-backtest-result" style="margin-top:.75rem;">回測結果僅供參考。歷史績效不代表未來收益。</div>
+              <div id="trading-backtest-metrics" class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;"></div>
+              <div id="trading-backtest-trades" class="drive-file-list" style="margin-top:.75rem;"></div>
+            </div>
+            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-records">
+              <div class="drive-card-title">執行紀錄</div>
+              <div class="drive-card-sub">顯示定投與自動化 Workflow 的最近掃描、觸發、跳過與錯誤。</div>
+              <div id="trading-bot-run-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+            </div>
+            <div class="drive-card-sub" id="trading-bot-msg" style="margin-top:.45rem;">第一版採手動掃描執行，避免無人值守交易失控。</div>
+          </div>
+        </details>
         <details class="drive-collapsible-panel" id="trading-margin-card" style="display:none;margin-top:.75rem;">
           <summary>
             <div>
@@ -1504,8 +1618,8 @@
         <div class="settings-option-grid" style="margin-top:.75rem;">
           <div class="field"><label>市場</label><select id="trading-root-market-select"><option value="">讀取市場中...</option></select></div>
           <div class="field"><label>手動價格</label><input type="number" id="trading-root-price" min="1" step="1" /></div>
-          <div class="field"><label>最大跳動 bps</label><input type="number" id="trading-root-jump-bps" min="0" step="1" /></div>
-          <div class="field"><label>手續費 bps</label><input type="number" id="trading-root-fee-bps" min="0" max="5000" step="1" /></div>
+          <div class="field"><label>最大跳動百分比</label><input type="number" id="trading-root-jump-bps" min="0" step="0.01" /></div>
+          <div class="field"><label>手續費百分比</label><input type="number" id="trading-root-fee-bps" min="0" max="50" step="0.01" /></div>
           <div class="field"><label>單筆最小點數</label><input type="number" id="trading-root-min-order" min="1" step="1" /></div>
           <div class="field"><label>單筆最大點數</label><input type="number" id="trading-root-max-order" min="1" step="1" /></div>
           <div class="field"><label><input type="checkbox" id="trading-root-enabled" /> 啟用市場</label></div>
@@ -2623,19 +2737,19 @@
                     <label><input type="checkbox" id="root-trading-borrowing-enabled" checked /> 允許借貸交易（實驗）</label>
                   </div>
                   <div class="field">
-                    <label>借貸日利息 bps</label>
-                    <input type="number" id="root-trading-borrow-interest-bps" min="0" max="10000" step="1" value="10" />
-                    <div class="field-hint">100 bps = 1%。借貸利息會記入交易儲備池統計。</div>
+                    <label>借貸日利息百分比</label>
+                    <input type="number" id="root-trading-borrow-interest-bps" min="0" max="100" step="0.01" value="0.1" />
+                    <div class="field-hint">例如 1% 代表每日利息 1%。借貸利息會記入交易儲備池統計。</div>
                   </div>
                   <div class="field">
-                    <label>融資可貸比例 bps（原始保證金）</label>
-                    <input type="number" id="root-trading-margin-long-financing-bps" min="0" max="10000" step="1" value="9000" />
-                    <div class="field-hint">預設 9000 bps = 融資九成；最低自備保證金為剩餘比例。</div>
+                    <label>融資可貸比例（%）</label>
+                    <input type="number" id="root-trading-margin-long-financing-bps" min="0" max="100" step="0.01" value="90" />
+                    <div class="field-hint">預設 90% = 融資九成；最低自備保證金為剩餘比例。</div>
                   </div>
                   <div class="field">
-                    <label>借券原始保證金比例 bps</label>
-                    <input type="number" id="root-trading-short-collateral-bps" min="0" max="10000" step="1" value="6000" />
-                    <div class="field-hint">預設 6000 bps = 借券六成，用於借券放空最低保證金。</div>
+                    <label>借券原始保證金比例（%）</label>
+                    <input type="number" id="root-trading-short-collateral-bps" min="0" max="100" step="0.01" value="60" />
+                    <div class="field-hint">預設 60% = 借券六成，用於借券放空最低保證金。</div>
                   </div>
                   <div class="field">
                     <label>價格來源</label>
@@ -2655,9 +2769,9 @@
                     <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
                   </div>
                   <div class="field">
-                    <label>維持保證金比例 bps</label>
-                    <input type="number" id="root-trading-maintenance-bps" min="0" max="10000" step="1" value="1500" />
-                    <div class="field-hint">1500 bps = 15%。倉位淨值低於此比例時會列入清算。</div>
+                    <label>維持保證金比例（%）</label>
+                    <input type="number" id="root-trading-maintenance-bps" min="0" max="100" step="0.01" value="15" />
+                    <div class="field-hint">預設 15%。倉位淨值低於此比例時會列入清算。</div>
                   </div>
                   <div class="field">
                     <label><input type="checkbox" id="root-trading-futures-enabled" disabled /> 合約功能（保留，暫不開放）</label>

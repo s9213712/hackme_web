@@ -95,6 +95,212 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     assert "ETH/POINTS 買入 0.1 已成交" in notes[-1]["body"]
 
 
+def test_trading_bot_workflow_triggers_existing_order_path(tmp_path):
+    _, trading = _services(tmp_path)
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "ETH dip buyer",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_below",
+            "trigger_price_points": 5000,
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    assert bot["bot"]["bot_uuid"]
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert scanned["scanned"] == 1
+    assert len(scanned["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["bots"][0]["run_count"] == 1
+    assert dashboard["orders"][0]["status"] == "filled"
+    assert dashboard["bot_runs"][0]["status"] == "triggered"
+
+
+def test_trading_bot_workflow_records_skipped_condition(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "ETH expensive buyer",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_below",
+            "trigger_price_points": 1,
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert scanned["triggered"] == []
+    assert scanned["skipped"][0]["reason"] == "condition_not_met"
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["bots"][0]["run_count"] == 0
+    assert dashboard["bot_runs"][0]["status"] == "skipped"
+
+
+def test_dca_trading_bot_converts_budget_to_market_order(tmp_path):
+    _, trading = _services(tmp_path)
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "Daily ETH DCA",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "max_runs": 1,
+            "enabled": True,
+        },
+    )
+
+    assert bot["bot"]["bot_type"] == "dca"
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert len(scanned["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["orders"][0]["side"] == "buy"
+    assert dashboard["orders"][0]["order_type"] == "market"
+    assert dashboard["bots"][0]["run_count"] == 1
+
+
+def test_workflow_bot_uses_branch_priority_and_percent_action(tmp_path):
+    _, trading = _services(tmp_path)
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "stop",
+                "name": "too low",
+                "priority": 100,
+                "logic": "AND",
+                "conditions": [{"type": "price_below", "value": 1}],
+                "actions": [{"type": "close_all", "step": 1}],
+            },
+            {
+                "id": "entry",
+                "name": "entry",
+                "priority": 10,
+                "logic": "AND",
+                "cooldown_seconds": 0,
+                "conditions": [{"type": "price_below", "value": 6000}],
+                "actions": [{"type": "buy_percent", "percent": 10, "step": 1}],
+            },
+        ],
+    }
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "Workflow ETH buyer",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "max_runs": 2,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    assert bot["bot"]["workflow"]["branches"][0]["id"] == "stop"
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert len(scanned["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["bots"][0]["workflow"]["strategy_kind"] == "workflow"
+    assert dashboard["orders"][0]["side"] == "buy"
+    assert dashboard["orders"][0]["status"] == "filled"
+
+
+def test_workflow_backtest_can_sell_without_mutating_orders(tmp_path):
+    _, trading = _services(tmp_path)
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "workflow",
+            "initial_cash_points": 1000,
+            "workflow_json": {
+                "version": 1,
+                "branches": [
+                    {
+                        "id": "entry",
+                        "name": "buy",
+                        "priority": 10,
+                        "logic": "AND",
+                        "conditions": [{"type": "price_below", "value": 5000}],
+                        "actions": [{"type": "buy_percent", "percent": 50, "step": 1}],
+                    },
+                    {
+                        "id": "exit",
+                        "name": "sell",
+                        "priority": 20,
+                        "logic": "AND",
+                        "conditions": [{"type": "has_position", "value": True}, {"type": "price_above", "value": 5200}],
+                        "actions": [{"type": "sell_percent", "percent": 100, "step": 1}],
+                    },
+                ],
+            },
+            "candles": [
+                {"time": 1, "close_points": 4900},
+                {"time": 2, "close_points": 5300},
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    assert [row["side"] for row in result["trades"]] == ["buy", "sell"]
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["orders"] == []
+    assert dashboard["fills"] == []
+
+
+def test_backtest_trading_bot_does_not_create_orders(tmp_path):
+    _, trading = _services(tmp_path)
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "dca",
+            "initial_cash_points": 1000,
+            "order_points": 100,
+            "interval_candles": 1,
+            "candles": [
+                {"time": 1, "close_points": 5000},
+                {"time": 2, "close_points": 4000},
+                {"time": 3, "close_points": 4500},
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["trade_count"] == 3
+    assert result["final_value_points"] > 0
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["orders"] == []
+    assert dashboard["fills"] == []
+
+
 def test_insufficient_trading_balance_creates_notification(tmp_path):
     _, trading = _services(tmp_path)
 
@@ -574,7 +780,7 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
         market_symbol="ETH/POINTS",
         position_type="short",
         quantity="0.1",
-        collateral_points=200,
+        collateral_points=300,
     )
 
     conn = trading.get_db()

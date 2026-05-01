@@ -254,6 +254,113 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/bots", methods=["GET"])
+    @require_csrf_safe
+    def trading_bots_list():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            return json_resp(trading_service.list_trading_bots(actor=actor))
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/bots", methods=["POST"])
+    @require_csrf
+    def trading_bots_create():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.save_trading_bot(actor=actor, payload=data)
+            audit("TRADING_BOT_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"bot_uuid={result['bot'].get('bot_uuid')}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/bots/backtest", methods=["POST"])
+    @require_csrf
+    def trading_bots_backtest():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.backtest_trading_bot(actor=actor, payload=data)
+            audit(
+                "TRADING_BOT_BACKTEST",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"market={result.get('market_symbol')}, strategy={result.get('strategy')}, trades={result.get('trade_count')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/bots/<bot_uuid>", methods=["PUT"])
+    @require_csrf
+    def trading_bots_update(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.save_trading_bot(actor=actor, payload=data, bot_uuid=bot_uuid)
+            audit("TRADING_BOT_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"bot_uuid={bot_uuid}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/bots/<bot_uuid>", methods=["DELETE"])
+    @require_csrf
+    def trading_bots_delete(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            result = trading_service.delete_trading_bot(actor=actor, bot_uuid=bot_uuid)
+            audit("TRADING_BOT_DELETED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"bot_uuid={bot_uuid}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/bots/scan", methods=["POST"])
+    @require_csrf
+    def trading_bots_scan():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data = {}
+        if request.data:
+            data, err = parse_json_body()
+            if err:
+                return err
+        try:
+            result = trading_service.run_trading_bots(
+                actor=actor,
+                limit=data.get("limit", 50) if isinstance(data, dict) else 50,
+            )
+            audit(
+                "TRADING_BOT_SCAN",
+                get_client_ip(),
+                user=actor["username"],
+                success=bool(result.get("ok")),
+                ua=get_ua(),
+                detail=f"scanned={result.get('scanned')}, triggered={len(result.get('triggered') or [])}, failed={len(result.get('failed') or [])}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/margin/open", methods=["POST"])
     @require_csrf
     def trading_margin_open():

@@ -18,6 +18,24 @@ MARGIN_LONG_FINANCING_BPS = 9000
 SHORT_COLLATERAL_BPS = 6000
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
+TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
+TRADING_BOT_TYPES = {"conditional", "dca"}
+WORKFLOW_CONDITION_TYPES = {
+    "price_below",
+    "price_above",
+    "rsi_above",
+    "rsi_below",
+    "kd_above",
+    "kd_below",
+    "ma_position",
+    "bb_position",
+    "has_position",
+    "change_percent_up",
+    "change_percent_down",
+    "take_profit_percent",
+    "stop_loss_percent",
+}
+WORKFLOW_ACTION_TYPES = {"buy_percent", "buy_amount", "sell_percent", "close_all", "hold"}
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
 LIVE_PRICE_MARKETS = {
     "BTC/POINTS": "BTCUSDT",
@@ -368,6 +386,63 @@ def ensure_trading_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_bots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_uuid TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            bot_type TEXT NOT NULL DEFAULT 'conditional',
+            name TEXT NOT NULL,
+            market_symbol TEXT NOT NULL REFERENCES trading_markets(symbol),
+            side TEXT NOT NULL,
+            order_type TEXT NOT NULL,
+            quantity_text TEXT NOT NULL,
+            limit_price_points INTEGER,
+            trigger_type TEXT NOT NULL DEFAULT 'price_below',
+            trigger_price_points INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            max_runs INTEGER NOT NULL DEFAULT 1,
+            run_count INTEGER NOT NULL DEFAULT 0,
+            cooldown_seconds INTEGER NOT NULL DEFAULT 300,
+            interval_hours INTEGER NOT NULL DEFAULT 24,
+            budget_points INTEGER NOT NULL DEFAULT 0,
+            workflow_json TEXT,
+            last_run_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (bot_type IN ('conditional', 'dca')),
+            CHECK (side IN ('buy', 'sell')),
+            CHECK (order_type IN ('market', 'limit')),
+            CHECK (trigger_type IN ('always', 'price_above', 'price_below')),
+            CHECK (max_runs >= 1),
+            CHECK (run_count >= 0),
+            CHECK (cooldown_seconds >= 0),
+            CHECK (interval_hours >= 1),
+            CHECK (budget_points >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_bot_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_uuid TEXT NOT NULL UNIQUE,
+            bot_id INTEGER NOT NULL REFERENCES trading_bots(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            market_symbol TEXT NOT NULL,
+            trigger_type TEXT NOT NULL,
+            trigger_price_points INTEGER,
+            observed_price_points INTEGER,
+            status TEXT NOT NULL,
+            order_uuid TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            CHECK (status IN ('triggered', 'skipped', 'failed'))
+        )
+        """
+    )
     now = _now()
     conn.execute(
         "INSERT OR IGNORE INTO trading_reserve_pool (id, balance_points, updated_at) VALUES (1, 0, ?)",
@@ -430,6 +505,15 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_trial_points INTEGER NOT NULL DEFAULT 0")
     if "open_fee_chain_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_chain_points INTEGER NOT NULL DEFAULT 0")
+    bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_bots)").fetchall()}
+    if "bot_type" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN bot_type TEXT NOT NULL DEFAULT 'conditional'")
+    if "interval_hours" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN interval_hours INTEGER NOT NULL DEFAULT 24")
+    if "budget_points" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN budget_points INTEGER NOT NULL DEFAULT 0")
+    if "workflow_json" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN workflow_json TEXT")
 
 
 class TradingEngineService:
@@ -574,6 +658,18 @@ class TradingEngineService:
         item["quantity"] = units_to_quantity(item["quantity_units"])
         item["filled_quantity"] = units_to_quantity(item["filled_quantity_units"])
         return item
+
+    def _bot_payload(self, row):
+        item = dict(row)
+        item["enabled"] = bool(item["enabled"])
+        item["can_run"] = bool(item["enabled"]) and int(item["run_count"] or 0) < int(item["max_runs"] or 1)
+        item["display_symbol"] = str(item["market_symbol"] or "").replace("/POINTS", "/USDT")
+        item["bot_type_label"] = "定投機器人" if item.get("bot_type") == "dca" else "條件機器人"
+        item["workflow"] = _json_loads(item.get("workflow_json"), None)
+        return item
+
+    def _bot_run_payload(self, row):
+        return dict(row)
 
     def _market_payload(self, row):
         item = dict(row)
@@ -803,7 +899,9 @@ class TradingEngineService:
                     severity="critical",
                     metadata={"old_price_points": old_price, "new_price_points": price, "jump_bps": jump_bps, "allowed_bps": allowed_bps},
                 )
-                raise ValueError(f"live trading price jump {jump_bps} bps exceeds max {allowed_bps} for {symbol}")
+                raise ValueError(
+                    f"live trading price jump {jump_bps / 100:.2f}% exceeds max {allowed_bps / 100:.2f}% for {symbol}"
+                )
         now = _now()
         conn.execute(
             "UPDATE trading_markets SET manual_price_points=?, price_source='binance_public_api', updated_at=? WHERE symbol=?",
@@ -1593,6 +1691,14 @@ class TradingEngineService:
                 ).fetchall()
             }
             fills = [self._fill_payload(row, realized=pnl_by_fill.get(row["id"])) for row in fill_rows]
+            bots = [
+                self._bot_payload(row)
+                for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            ]
+            bot_runs = [
+                self._bot_run_payload(row)
+                for row in conn.execute("SELECT * FROM trading_bot_runs WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            ]
             return {
                 "state": state,
                 "settings": self._settings_payload(conn),
@@ -1605,6 +1711,8 @@ class TradingEngineService:
                 "margin_summary": self._margin_summary_payload(margin_positions),
                 "orders": orders,
                 "fills": fills,
+                "bots": bots,
+                "bot_runs": bot_runs,
             }
         finally:
             conn.close()
@@ -1619,6 +1727,751 @@ class TradingEngineService:
         if side == "sell" and limit_price <= current_price:
             return True, current_price
         return False, None
+
+    def _legacy_workflow(self, *, trigger_type, trigger_price, side, quantity_text, order_type, limit_price, max_runs, cooldown_seconds):
+        condition = {"type": "always"}
+        if trigger_type == "price_above":
+            condition = {"type": "price_above", "value": int(trigger_price or 0)}
+        elif trigger_type == "price_below":
+            condition = {"type": "price_below", "value": int(trigger_price or 0)}
+        action = {"type": "buy_amount", "amount_points": 100, "step": 1}
+        if side == "sell":
+            action = {"type": "sell_percent", "percent": 100, "step": 1}
+        return {
+            "version": 1,
+            "strategy_kind": "workflow",
+            "source": "legacy_condition",
+            "branches": [{
+                "id": "branch_1",
+                "name": "預設策略",
+                "priority": 10,
+                "logic": "AND",
+                "cooldown_seconds": int(cooldown_seconds or 0),
+                "max_runs": int(max_runs or 1),
+                "conditions": [condition],
+                "actions": [{**action, "order_type": order_type, "limit_price_points": limit_price, "quantity": quantity_text}],
+            }],
+        }
+
+    def _validate_workflow(self, value):
+        if not value:
+            return None
+        if isinstance(value, str):
+            try:
+                workflow = json.loads(value)
+            except Exception as exc:
+                raise ValueError("workflow_json must be valid JSON") from exc
+        elif isinstance(value, dict):
+            workflow = value
+        else:
+            raise ValueError("workflow_json must be an object")
+        branches = workflow.get("branches")
+        if not isinstance(branches, list) or not branches:
+            raise ValueError("workflow must contain at least one branch")
+        clean_branches = []
+        for index, branch in enumerate(branches[:20], start=1):
+            if not isinstance(branch, dict):
+                raise ValueError("workflow branch must be an object")
+            logic = str(branch.get("logic") or "AND").upper()
+            if logic not in {"AND", "OR"}:
+                raise ValueError("workflow branch logic must be AND or OR")
+            conditions = branch.get("conditions") or [{"type": "always"}]
+            actions = branch.get("actions") or [{"type": "hold", "step": 1}]
+            if not isinstance(conditions, list) or not isinstance(actions, list):
+                raise ValueError("workflow branch conditions/actions must be arrays")
+            clean_conditions = []
+            for condition in conditions[:20]:
+                if not isinstance(condition, dict):
+                    raise ValueError("workflow condition must be an object")
+                ctype = str(condition.get("type") or "always").strip()
+                if ctype != "always" and ctype not in WORKFLOW_CONDITION_TYPES:
+                    raise ValueError(f"unsupported workflow condition: {ctype}")
+                clean = {"type": ctype}
+                for key in ("value", "period", "position", "operator"):
+                    if key in condition:
+                        clean[key] = condition.get(key)
+                clean_conditions.append(clean)
+            clean_actions = []
+            for action in actions[:20]:
+                if not isinstance(action, dict):
+                    raise ValueError("workflow action must be an object")
+                atype = str(action.get("type") or "hold").strip()
+                if atype not in WORKFLOW_ACTION_TYPES:
+                    raise ValueError(f"unsupported workflow action: {atype}")
+                clean = {
+                    "type": atype,
+                    "step": _to_int(action.get("step", len(clean_actions) + 1), name="workflow action step", minimum=1, maximum=1000),
+                    "order_type": str(action.get("order_type") or "market").strip().lower(),
+                }
+                if clean["order_type"] not in {"market", "limit"}:
+                    raise ValueError("workflow action order_type must be market or limit")
+                for key in ("percent", "amount_points", "limit_price_points"):
+                    if key in action and action.get(key) not in (None, ""):
+                        clean[key] = float(action.get(key))
+                clean_actions.append(clean)
+            clean_branches.append({
+                "id": str(branch.get("id") or f"branch_{index}")[:80],
+                "name": str(branch.get("name") or f"策略分支 {index}")[:80],
+                "priority": _to_int(branch.get("priority", 0), name="workflow priority", minimum=-1000, maximum=1000),
+                "logic": logic,
+                "cooldown_seconds": _to_int(branch.get("cooldown_seconds", 0), name="workflow cooldown_seconds", minimum=0, maximum=86400),
+                "max_runs": _to_int(branch.get("max_runs", 1000), name="workflow max_runs", minimum=1, maximum=1000),
+                "conditions": clean_conditions,
+                "actions": clean_actions,
+            })
+        clean = {"version": 1, "strategy_kind": "workflow", "branches": clean_branches}
+        if workflow.get("source"):
+            clean["source"] = str(workflow.get("source"))[:80]
+        return clean
+
+    def _validate_bot_payload(self, conn, payload):
+        payload = payload or {}
+        market = self._market(conn, payload.get("market_symbol"))
+        bot_type = str(payload.get("bot_type") or "conditional").strip().lower()
+        if bot_type not in TRADING_BOT_TYPES:
+            raise ValueError("bot_type must be conditional or dca")
+        side = str(payload.get("side") or "").strip().lower()
+        order_type = str(payload.get("order_type") or "").strip().lower()
+        trigger_type = str(payload.get("trigger_type") or "").strip().lower()
+        if bot_type == "dca":
+            side = "buy"
+            order_type = "market"
+            trigger_type = "always"
+        if side not in {"buy", "sell"}:
+            raise ValueError("bot side must be buy or sell")
+        if order_type not in {"market", "limit"}:
+            raise ValueError("bot order_type must be market or limit")
+        if trigger_type not in TRADING_BOT_TRIGGER_TYPES:
+            raise ValueError("bot trigger_type must be always, price_above, or price_below")
+        budget_points = _to_int(payload.get("budget_points", 0), name="budget_points", minimum=0, maximum=10**12)
+        if bot_type == "dca":
+            if budget_points <= 0:
+                raise ValueError("dca budget_points must be positive")
+            quantity_text = "0.00000001"
+        else:
+            quantity_text = str(payload.get("quantity") or payload.get("quantity_text") or "").strip()
+            quantity_to_units(quantity_text)
+        limit_price = None
+        if order_type == "limit":
+            limit_price = _to_int(payload.get("limit_price_points"), name="limit_price_points", minimum=1, maximum=10**12)
+        trigger_price = None
+        if trigger_type != "always":
+            trigger_price = _to_int(payload.get("trigger_price_points"), name="trigger_price_points", minimum=1, maximum=10**12)
+        max_runs = _to_int(payload.get("max_runs", 1), name="max_runs", minimum=1, maximum=1000)
+        cooldown_seconds = _to_int(payload.get("cooldown_seconds", 300), name="cooldown_seconds", minimum=0, maximum=86400)
+        interval_hours = _to_int(payload.get("interval_hours", 24), name="interval_hours", minimum=1, maximum=8760)
+        if bot_type == "dca":
+            cooldown_seconds = max(cooldown_seconds, interval_hours * 3600)
+        workflow = None
+        if bot_type == "conditional":
+            workflow = self._validate_workflow(payload.get("workflow_json") or payload.get("workflow"))
+            if workflow is None:
+                workflow = self._legacy_workflow(
+                    trigger_type=trigger_type,
+                    trigger_price=trigger_price,
+                    side=side,
+                    quantity_text=quantity_text,
+                    order_type=order_type,
+                    limit_price=limit_price,
+                    max_runs=max_runs,
+                    cooldown_seconds=cooldown_seconds,
+                )
+        name = str(payload.get("name") or "").strip()[:80] or f"{market['symbol']} {bot_type}"
+        return {
+            "bot_type": bot_type,
+            "name": name,
+            "market_symbol": market["symbol"],
+            "side": side,
+            "order_type": order_type,
+            "quantity_text": quantity_text,
+            "limit_price_points": limit_price,
+            "trigger_type": trigger_type,
+            "trigger_price_points": trigger_price,
+            "enabled": bool(payload.get("enabled", True)),
+            "max_runs": max_runs,
+            "cooldown_seconds": cooldown_seconds,
+            "interval_hours": interval_hours,
+            "budget_points": budget_points,
+            "workflow": workflow,
+        }
+
+    def list_trading_bots(self, *, actor):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            bots = [
+                self._bot_payload(row)
+                for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
+            ]
+            runs = [
+                self._bot_run_payload(row)
+                for row in conn.execute("SELECT * FROM trading_bot_runs WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
+            ]
+            return {"ok": True, "bots": bots, "runs": runs}
+        finally:
+            conn.close()
+
+    def save_trading_bot(self, *, actor, payload, bot_uuid=None):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            data = self._validate_bot_payload(conn, payload)
+            now = _now()
+            if bot_uuid:
+                existing = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid),)).fetchone()
+                if not existing:
+                    raise ValueError("trading bot not found")
+                if int(existing["user_id"]) != int(user_id):
+                    raise ValueError("cannot update another user's trading bot")
+                conn.execute(
+                    """
+                    UPDATE trading_bots
+                    SET bot_type=?, name=?, market_symbol=?, side=?, order_type=?, quantity_text=?,
+                        limit_price_points=?, trigger_type=?, trigger_price_points=?,
+                        enabled=?, max_runs=?, cooldown_seconds=?, interval_hours=?, budget_points=?,
+                        workflow_json=?, last_error='', updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"], data["quantity_text"],
+                        data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
+                        1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
+                        data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
+                        now, existing["id"],
+                    ),
+                )
+                bot_id = existing["id"]
+                event_type = "TRADING_BOT_UPDATED"
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO trading_bots (
+                        bot_uuid, user_id, bot_type, name, market_symbol, side, order_type, quantity_text,
+                        limit_price_points, trigger_type, trigger_price_points, enabled,
+                        max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()), user_id, data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"],
+                        data["quantity_text"], data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
+                        1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
+                        data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
+                        now, now,
+                    ),
+                )
+                bot_id = cur.lastrowid
+                event_type = "TRADING_BOT_CREATED"
+            row = conn.execute("SELECT * FROM trading_bots WHERE id=?", (bot_id,)).fetchone()
+            self._audit_event(conn, event_type, "trading bot workflow saved", actor=actor, target_user_id=user_id, market_symbol=row["market_symbol"], metadata={"bot_uuid": row["bot_uuid"], "bot_type": row["bot_type"], "trigger_type": row["trigger_type"], "side": row["side"], "order_type": row["order_type"]})
+            conn.commit()
+            return {"ok": True, "bot": self._bot_payload(row)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def delete_trading_bot(self, *, actor, bot_uuid):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid or ""),)).fetchone()
+            if not row:
+                raise ValueError("trading bot not found")
+            if int(row["user_id"]) != int(user_id):
+                raise ValueError("cannot delete another user's trading bot")
+            conn.execute("DELETE FROM trading_bots WHERE id=?", (row["id"],))
+            self._audit_event(conn, "TRADING_BOT_DELETED", "trading bot workflow deleted", actor=actor, target_user_id=user_id, market_symbol=row["market_symbol"], metadata={"bot_uuid": row["bot_uuid"]})
+            conn.commit()
+            return {"ok": True, "bot_uuid": row["bot_uuid"]}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _bot_trigger_hit(self, bot, observed_price):
+        if str(bot["bot_type"] or "conditional") == "dca":
+            return True
+        trigger_type = bot["trigger_type"]
+        if trigger_type == "always":
+            return True
+        trigger_price = int(bot["trigger_price_points"] or 0)
+        if trigger_type == "price_above":
+            return int(observed_price) >= trigger_price
+        if trigger_type == "price_below":
+            return int(observed_price) <= trigger_price
+        return False
+
+    def _quantity_text_from_budget(self, *, budget_points, price_points):
+        budget = int(budget_points or 0)
+        price = int(price_points or 0)
+        if budget <= 0 or price <= 0:
+            raise ValueError("dca budget or price is invalid")
+        units = int((budget * ASSET_SCALE) // price)
+        if units <= 0:
+            raise ValueError("dca budget is too small for current price")
+        return units_to_quantity(units)
+
+    def _workflow_indicator_context(self, candles, index):
+        candles = candles or []
+        index = max(0, min(int(index or 0), len(candles) - 1)) if candles else 0
+        closes = []
+        highs = []
+        lows = []
+        for candle in candles[:index + 1]:
+            try:
+                closes.append(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt") or 0))
+                highs.append(float(candle.get("high_points") or candle.get("high_usdt") or closes[-1]))
+                lows.append(float(candle.get("low_points") or candle.get("low_usdt") or closes[-1]))
+            except Exception:
+                continue
+        if not closes:
+            return {}
+        def sma(period):
+            period = int(period)
+            if len(closes) < period:
+                return None
+            return sum(closes[-period:]) / period
+        def rsi(period=14):
+            if len(closes) <= period:
+                return None
+            gains = []
+            losses = []
+            for offset in range(len(closes) - period, len(closes)):
+                delta = closes[offset] - closes[offset - 1]
+                gains.append(max(delta, 0))
+                losses.append(abs(min(delta, 0)))
+            avg_gain = sum(gains) / period
+            avg_loss = sum(losses) / period
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            return 100 - (100 / (1 + rs))
+        ma20 = sma(20)
+        ma50 = sma(50)
+        bb_mid = ma20
+        bb_upper = None
+        bb_lower = None
+        if ma20 is not None and len(closes) >= 20:
+            variance = sum((value - ma20) ** 2 for value in closes[-20:]) / 20
+            std = math.sqrt(variance)
+            bb_upper = ma20 + 2 * std
+            bb_lower = ma20 - 2 * std
+        kd_k = None
+        if len(closes) >= 9 and highs and lows:
+            high9 = max(highs[-9:])
+            low9 = min(lows[-9:])
+            kd_k = 50.0 if high9 == low9 else ((closes[-1] - low9) * 100 / (high9 - low9))
+        return {
+            "price": closes[-1],
+            "ma20": ma20,
+            "ma50": ma50,
+            "ma200": sma(200),
+            "bb_mid": bb_mid,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "rsi": rsi(14),
+            "kd": kd_k,
+        }
+
+    def _workflow_condition_hit(self, condition, context):
+        ctype = str(condition.get("type") or "always")
+        price = float(context.get("price") or 0)
+        value = float(condition.get("value") or 0)
+        if ctype == "always":
+            return True
+        if ctype == "price_below":
+            return price > 0 and price <= value
+        if ctype == "price_above":
+            return price > 0 and price >= value
+        if ctype == "has_position":
+            return bool(context.get("has_position")) == bool(condition.get("value", True))
+        if ctype == "rsi_above":
+            return context.get("rsi") is not None and float(context["rsi"]) >= value
+        if ctype == "rsi_below":
+            return context.get("rsi") is not None and float(context["rsi"]) <= value
+        if ctype == "kd_above":
+            return context.get("kd") is not None and float(context["kd"]) >= value
+        if ctype == "kd_below":
+            return context.get("kd") is not None and float(context["kd"]) <= value
+        if ctype == "ma_position":
+            period = int(condition.get("period") or 50)
+            ma_value = context.get(f"ma{period}")
+            position = str(condition.get("position") or "above")
+            return ma_value is not None and ((price >= ma_value) if position == "above" else (price <= ma_value))
+        if ctype == "bb_position":
+            position = str(condition.get("position") or "above_mid")
+            if position == "above_mid":
+                return context.get("bb_mid") is not None and price >= float(context["bb_mid"])
+            if position == "below_mid":
+                return context.get("bb_mid") is not None and price <= float(context["bb_mid"])
+            if position == "above_upper":
+                return context.get("bb_upper") is not None and price >= float(context["bb_upper"])
+            if position == "below_lower":
+                return context.get("bb_lower") is not None and price <= float(context["bb_lower"])
+        return False
+
+    def _workflow_decision(self, workflow, *, context, run_count=0, last_run_at=None):
+        workflow = self._validate_workflow(workflow)
+        branches = sorted(workflow["branches"], key=lambda row: int(row.get("priority") or 0), reverse=True)
+        now_dt = datetime.now()
+        for branch in branches:
+            cooldown = int(branch.get("cooldown_seconds") or 0)
+            if cooldown and last_run_at:
+                try:
+                    if (now_dt - datetime.fromisoformat(str(last_run_at))).total_seconds() < cooldown:
+                        continue
+                except Exception:
+                    pass
+            conditions = branch.get("conditions") or [{"type": "always"}]
+            hits = [self._workflow_condition_hit(condition, context) for condition in conditions]
+            matched = all(hits) if branch.get("logic") == "AND" else any(hits)
+            if not matched:
+                continue
+            step = int(run_count or 0) + 1
+            actions = sorted(branch.get("actions") or [], key=lambda row: int(row.get("step") or 1))
+            action = next((row for row in actions if int(row.get("step") or 1) >= step), actions[-1] if actions else {"type": "hold"})
+            return {"branch": branch, "action": action, "reason": branch.get("name") or branch.get("id") or "workflow"}
+        return None
+
+    def _workflow_order_from_decision(self, conn, *, user_id, actor, market, decision, price_points):
+        action = decision.get("action") or {}
+        atype = str(action.get("type") or "hold")
+        if atype == "hold":
+            return None
+        funding = self._funding_payload(conn, user_id)
+        position = self._position(conn, user_id, market["symbol"])
+        order_type = str(action.get("order_type") or "market").lower()
+        limit_price = int(action.get("limit_price_points") or 0) or None
+        if atype in {"buy_percent", "buy_amount"}:
+            available = int(funding.get("available_points") or 0)
+            amount = int(float(action.get("amount_points") or 0))
+            if atype == "buy_percent":
+                amount = int(available * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
+            fee_rate = int(market["fee_bps"] or 0) / 10000
+            spend = max(0, min(amount, available))
+            if spend <= 0:
+                raise ValueError("workflow buy action has no available funds")
+            units = int((spend / (1 + fee_rate)) * ASSET_SCALE // int(price_points or 1))
+            if units <= 0:
+                raise ValueError("workflow buy action is too small")
+            return {"side": "buy", "order_type": order_type, "quantity": units_to_quantity(units), "limit_price_points": limit_price}
+        if atype in {"sell_percent", "close_all"}:
+            sellable_units = max(0, int(position["quantity_units"] or 0) - int(position["locked_quantity_units"] or 0))
+            percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
+            units = int(sellable_units * percent / 100)
+            if units <= 0:
+                raise ValueError("workflow sell action has no sellable position")
+            return {"side": "sell", "order_type": order_type, "quantity": units_to_quantity(units), "limit_price_points": limit_price}
+        return None
+
+    def run_trading_bots(self, *, actor, limit=50):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        limit = _to_int(limit or 50, name="limit", minimum=1, maximum=200)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT b.*, u.username, u.role
+                FROM trading_bots b
+                JOIN users u ON u.id=b.user_id
+                WHERE b.user_id=? AND b.enabled=1 AND b.run_count < b.max_runs
+                ORDER BY b.id ASC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        scanned = 0
+        triggered = []
+        skipped = []
+        failed = []
+        for row in rows:
+            scanned += 1
+            now_dt = datetime.now()
+            if row["last_run_at"]:
+                try:
+                    last_run = datetime.fromisoformat(str(row["last_run_at"]))
+                    if (now_dt - last_run).total_seconds() < int(row["cooldown_seconds"] or 0):
+                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": "cooldown"})
+                        continue
+                except Exception:
+                    pass
+            observed_price = None
+            try:
+                price_conn = self.get_db()
+                self.ensure_schema(price_conn)
+                market = self._market(price_conn, row["market_symbol"])
+                observed_price, price_source = self._current_market_price_points(price_conn, market)
+                workflow = _json_loads(row["workflow_json"], None) if "workflow_json" in row.keys() else None
+                order_payload = None
+                if workflow and str(row["bot_type"] or "conditional") == "conditional":
+                    position = self._position(price_conn, int(row["user_id"]), row["market_symbol"])
+                    context = {
+                        "price": observed_price,
+                        "has_position": int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0),
+                    }
+                    decision = self._workflow_decision(workflow, context=context, run_count=int(row["run_count"] or 0), last_run_at=row["last_run_at"])
+                    if not decision:
+                        skipped_reason = "condition_not_met" if workflow.get("source") == "legacy_condition" else "workflow_not_matched"
+                        price_conn.close()
+                        self._record_bot_run(row, status="skipped", observed_price=observed_price, error=skipped_reason)
+                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": skipped_reason, "observed_price_points": observed_price})
+                        continue
+                    order_payload = self._workflow_order_from_decision(
+                        price_conn,
+                        user_id=int(row["user_id"]),
+                        actor={"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
+                        market=market,
+                        decision=decision,
+                        price_points=observed_price,
+                    )
+                    if not order_payload:
+                        price_conn.close()
+                        self._record_bot_run(row, status="skipped", observed_price=observed_price, error="workflow_hold")
+                        skipped.append({"bot_uuid": row["bot_uuid"], "reason": "workflow_hold", "observed_price_points": observed_price})
+                        continue
+                price_conn.close()
+                if not workflow and not self._bot_trigger_hit(row, observed_price):
+                    self._record_bot_run(row, status="skipped", observed_price=observed_price, error="condition_not_met")
+                    skipped.append({"bot_uuid": row["bot_uuid"], "reason": "condition_not_met", "observed_price_points": observed_price})
+                    continue
+                quantity_text = row["quantity_text"]
+                if str(row["bot_type"] or "conditional") == "dca":
+                    quantity_text = self._quantity_text_from_budget(
+                        budget_points=int(row["budget_points"] or 0),
+                        price_points=observed_price,
+                    )
+                bot_actor = {"id": int(row["user_id"]), "username": row["username"], "role": row["role"]}
+                if order_payload:
+                    quantity_text = order_payload["quantity"]
+                    order_type = order_payload["order_type"]
+                    side = order_payload["side"]
+                    limit_price_points = order_payload.get("limit_price_points")
+                else:
+                    order_type = row["order_type"]
+                    side = row["side"]
+                    limit_price_points = row["limit_price_points"]
+                result = self.place_order(
+                    actor=bot_actor,
+                    market_symbol=row["market_symbol"],
+                    side=side,
+                    order_type=order_type,
+                    quantity=quantity_text,
+                    limit_price_points=limit_price_points,
+                )
+                order_uuid = (result.get("order") or {}).get("order_uuid")
+                self._record_bot_run(row, status="triggered", observed_price=observed_price, order_uuid=order_uuid)
+                triggered.append({"bot_uuid": row["bot_uuid"], "order_uuid": order_uuid, "observed_price_points": observed_price, "executed": bool(result.get("executed"))})
+            except Exception as exc:
+                if "price_conn" in locals():
+                    try:
+                        price_conn.close()
+                    except Exception:
+                        pass
+                self._record_bot_run(row, status="failed", observed_price=observed_price, error=str(exc))
+                failed.append({"bot_uuid": row["bot_uuid"], "error": str(exc), "observed_price_points": observed_price})
+        return {"ok": not failed, "scanned": scanned, "triggered": triggered, "skipped": skipped, "failed": failed}
+
+    def backtest_trading_bot(self, *, actor, payload):
+        if not self._actor_id(actor):
+            raise ValueError("login required")
+        payload = payload or {}
+        candles = payload.get("candles") or []
+        if not isinstance(candles, list) or len(candles) < 2:
+            raise ValueError("candles are required for backtest")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = self._market(conn, payload.get("market_symbol"))
+            fee_bps = int(market["fee_bps"] or 0)
+        finally:
+            conn.close()
+        strategy = str(payload.get("strategy") or payload.get("bot_type") or "conditional").strip().lower()
+        if strategy == "strategy":
+            strategy = "workflow"
+        if strategy not in {"conditional", "dca", "workflow"}:
+            raise ValueError("backtest strategy must be conditional, workflow, or dca")
+        workflow = None
+        if strategy == "workflow":
+            workflow = self._validate_workflow(payload.get("workflow_json") or payload.get("workflow"))
+        cash = _to_int(payload.get("initial_cash_points", 10_000), name="initial_cash_points", minimum=1, maximum=10**12)
+        order_points = _to_int(payload.get("order_points", 100), name="order_points", minimum=1, maximum=10**12)
+        trigger_type = str(payload.get("trigger_type") or "price_below").strip().lower()
+        trigger_price = int(payload.get("trigger_price_points") or 0)
+        interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
+        initial_cash = cash
+        units = 0
+        trades = []
+        for index, candle in enumerate(candles):
+            try:
+                price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
+            except Exception:
+                continue
+            if price <= 0:
+                continue
+            should_buy = False
+            should_sell = False
+            workflow_spend = order_points
+            workflow_sell_percent = 0.0
+            if strategy == "dca":
+                should_buy = index % interval_candles == 0
+            elif strategy == "workflow":
+                context = self._workflow_indicator_context(candles, index)
+                context["price"] = price
+                context["has_position"] = units > 0
+                decision = self._workflow_decision(workflow, context=context, run_count=len(trades), last_run_at=None)
+                action = (decision or {}).get("action") or {}
+                atype = str(action.get("type") or "hold")
+                if atype in {"buy_percent", "buy_amount"}:
+                    should_buy = True
+                    workflow_spend = int(float(action.get("amount_points") or 0))
+                    if atype == "buy_percent":
+                        workflow_spend = int(cash * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
+                elif atype in {"sell_percent", "close_all"}:
+                    should_sell = True
+                    workflow_sell_percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
+            elif trigger_type == "price_below":
+                should_buy = trigger_price > 0 and price <= trigger_price
+            elif trigger_type == "price_above":
+                should_buy = trigger_price > 0 and price >= trigger_price
+            elif trigger_type == "always":
+                should_buy = True
+            if should_sell and units > 0:
+                sell_units = int(units * workflow_sell_percent / 100)
+                if sell_units > 0:
+                    gross = notional_points(sell_units, price)
+                    fee = fee_points(gross, fee_bps)
+                    cash += max(0, gross - fee)
+                    units -= sell_units
+                    trades.append({
+                        "index": index,
+                        "time": candle.get("time") or candle.get("time_iso") or index,
+                        "side": "sell",
+                        "price_points": price,
+                        "spend_points": 0,
+                        "fee_points": fee,
+                        "quantity": units_to_quantity(sell_units),
+                    })
+                continue
+            if not should_buy or cash <= 0:
+                continue
+            spend = min(workflow_spend, cash)
+            fee = fee_points(spend, fee_bps)
+            net_spend = max(0, spend - fee)
+            buy_units = int((net_spend * ASSET_SCALE) // price)
+            if buy_units <= 0:
+                continue
+            cash -= spend
+            units += buy_units
+            trades.append({
+                "index": index,
+                "time": candle.get("time") or candle.get("time_iso") or index,
+                "side": "buy",
+                "price_points": price,
+                "spend_points": spend,
+                "fee_points": fee,
+                "quantity": units_to_quantity(buy_units),
+            })
+        last_price = 0
+        for candle in reversed(candles):
+            try:
+                last_price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
+                if last_price > 0:
+                    break
+            except Exception:
+                continue
+        position_value = notional_points(units, last_price) if last_price else 0
+        final_value = cash + position_value
+        return {
+            "ok": True,
+            "strategy": strategy,
+            "market_symbol": market["symbol"],
+            "initial_cash_points": initial_cash,
+            "cash_points": cash,
+            "position_quantity": units_to_quantity(units),
+            "position_value_points": position_value,
+            "final_value_points": final_value,
+            "pnl_points": final_value - initial_cash,
+            "return_percent": round(((final_value - initial_cash) * 100) / initial_cash, 4),
+            "trade_count": len(trades),
+            "trades": trades[-50:],
+        }
+
+    def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error=""):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            now = _now()
+            conn.execute(
+                """
+                INSERT INTO trading_bot_runs (
+                    run_uuid, bot_id, user_id, market_symbol, trigger_type, trigger_price_points,
+                    observed_price_points, status, order_uuid, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    int(bot["id"]),
+                    int(bot["user_id"]),
+                    bot["market_symbol"],
+                    bot["trigger_type"],
+                    bot["trigger_price_points"],
+                    observed_price,
+                    status,
+                    order_uuid,
+                    str(error or "")[:240],
+                    now,
+                ),
+            )
+            if status == "triggered":
+                conn.execute(
+                    "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error='', updated_at=? WHERE id=?",
+                    (now, now, int(bot["id"])),
+                )
+            elif status == "failed":
+                conn.execute(
+                    "UPDATE trading_bots SET last_error=?, updated_at=? WHERE id=?",
+                    (str(error or "")[:240], now, int(bot["id"])),
+                )
+            self._audit_event(
+                conn,
+                "TRADING_BOT_RUN",
+                f"trading bot {status}",
+                actor={"id": int(bot["user_id"]), "username": bot["username"], "role": bot["role"]},
+                target_user_id=int(bot["user_id"]),
+                market_symbol=bot["market_symbol"],
+                severity="warning" if status == "failed" else "info",
+                metadata={"bot_uuid": bot["bot_uuid"], "status": status, "observed_price_points": observed_price, "order_uuid": order_uuid, "error": str(error or "")[:240]},
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False):
         user_id = self._actor_id(actor)
@@ -2661,7 +3514,9 @@ class TradingEngineService:
                 jump_bps = int(abs(new_price - old_price) * 10_000 / old_price) if old_price else 0
                 allowed_bps = int(market["max_price_jump_bps"] or 0)
                 if jump_bps > allowed_bps and not confirm_jump:
-                    raise ValueError(f"price jump {jump_bps} bps exceeds max {allowed_bps}; confirmation required")
+                    raise ValueError(
+                        f"price jump {jump_bps / 100:.2f}% exceeds max {allowed_bps / 100:.2f}%; confirmation required"
+                    )
                 updates["manual_price_points"] = new_price
                 updates["price_source"] = "manual_root"
             for key, value, max_value in (
@@ -2876,7 +3731,10 @@ class TradingEngineService:
                 "margin_positions": int(conn.execute("SELECT COUNT(*) FROM trading_margin_positions WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "pending_profit": int(conn.execute("SELECT COUNT(*) FROM trading_pending_profit WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
                 "spot_realized_pnl": int(conn.execute("SELECT COUNT(*) FROM trading_spot_realized_pnl WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
+                "bots": int(conn.execute("SELECT COUNT(*) FROM trading_bots WHERE user_id=?", (user_id,)).fetchone()[0] or 0),
             }
+            conn.execute("DELETE FROM trading_bot_runs WHERE user_id=?", (user_id,))
+            conn.execute("DELETE FROM trading_bots WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_spot_realized_pnl WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_fills WHERE user_id=?", (user_id,))
             conn.execute("DELETE FROM trading_orders WHERE user_id=?", (user_id,))
@@ -3233,6 +4091,19 @@ class TradingEngineService:
                 ledger_net[reference_id] -= int(row["amount"] or 0)
         for position in conn.execute("SELECT * FROM trading_margin_positions ORDER BY id ASC").fetchall():
             position_uuid = position["position_uuid"]
+            collateral_points = int(position["collateral_points"] or 0)
+            collateral_trial = int(position["collateral_trial_points"] or 0) if "collateral_trial_points" in position.keys() else 0
+            collateral_chain = int(position["collateral_chain_points"] or 0) if "collateral_chain_points" in position.keys() else collateral_points
+            split_total = collateral_trial + collateral_chain
+            if collateral_points != split_total:
+                errors.append({
+                    "type": "margin_collateral_lock_mismatch",
+                    "position_id": position["id"],
+                    "position_uuid": position_uuid,
+                    "status": position["status"],
+                    "expected_collateral_points": split_total,
+                    "actual_collateral_points": collateral_points,
+                })
             expected = int(position["collateral_chain_points"] or 0) if position["status"] == "open" else 0
             actual = ledger_net.pop(position_uuid, 0)
             if expected != actual:

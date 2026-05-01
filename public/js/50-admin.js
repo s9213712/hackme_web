@@ -1,3 +1,19 @@
+function adminBpsToPercent(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number / 100 : fallback;
+}
+
+function adminPercentToBps(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.round(number * 100);
+}
+
+function adminFormatPercentFromBps(value, fallback = 0) {
+  const percent = adminBpsToPercent(value, fallback);
+  return percent.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
 function switchServerTab(tab) {
   currentServerTab = tab;
   if (tab !== "security") stopServerOutputPoll();
@@ -1227,13 +1243,13 @@ function renderRootTradingSettings(payload) {
   const reserve = payload?.reserve_pool || {};
   if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
   if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
-  if ($("root-trading-borrow-interest-bps")) $("root-trading-borrow-interest-bps").value = settings.borrow_interest_bps_daily ?? 10;
-  if ($("root-trading-margin-long-financing-bps")) $("root-trading-margin-long-financing-bps").value = settings.margin_long_financing_bps ?? 9000;
-  if ($("root-trading-short-collateral-bps")) $("root-trading-short-collateral-bps").value = settings.short_collateral_bps ?? 6000;
+  if ($("root-trading-borrow-interest-bps")) $("root-trading-borrow-interest-bps").value = adminBpsToPercent(settings.borrow_interest_bps_daily ?? 10, 0.1);
+  if ($("root-trading-margin-long-financing-bps")) $("root-trading-margin-long-financing-bps").value = adminBpsToPercent(settings.margin_long_financing_bps ?? 9000, 90);
+  if ($("root-trading-short-collateral-bps")) $("root-trading-short-collateral-bps").value = adminBpsToPercent(settings.short_collateral_bps ?? 6000, 60);
   if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "binance_public_api";
   if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
   if ($("root-trading-liquidation-enabled")) $("root-trading-liquidation-enabled").checked = settings.margin_liquidation_enabled !== false;
-  if ($("root-trading-maintenance-bps")) $("root-trading-maintenance-bps").value = settings.margin_maintenance_bps ?? 1500;
+  if ($("root-trading-maintenance-bps")) $("root-trading-maintenance-bps").value = adminBpsToPercent(settings.margin_maintenance_bps ?? 1500, 15);
   if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
   if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
   if ($("root-trading-reserve-pool")) $("root-trading-reserve-pool").textContent = `${Number(reserve.balance_points || 0)} POINTS`;
@@ -1247,11 +1263,11 @@ function renderRootTradingSettings(payload) {
     <div class="drive-file-row billing-catalog-row root-trading-market-row" data-root-trading-market="${sanitize(market.symbol || "")}">
       <div>
         <strong>${sanitize(market.display_symbol || market.symbol || "-")}</strong>
-        <div class="drive-card-sub">目前手續費 ${Number(market.fee_bps || 0)} bps · 最低 ${Number(market.min_order_points || 0)} · 最高 ${Number(market.max_order_points || 0)} POINTS</div>
+        <div class="drive-card-sub">目前手續費 ${adminFormatPercentFromBps(market.fee_bps || 0)}% · 最低 ${Number(market.min_order_points || 0)} · 最高 ${Number(market.max_order_points || 0)} POINTS</div>
       </div>
       <div class="settings-option-grid billing-market-grid">
         <label><input type="checkbox" data-trading-market-field="enabled" ${market.enabled ? "checked" : ""} /> 啟用</label>
-        <label>手續費 bps<input type="number" min="0" max="5000" step="1" data-trading-market-field="fee_bps" value="${Number(market.fee_bps || 0)}" /></label>
+        <label>手續費百分比<input type="number" min="0" max="50" step="0.01" data-trading-market-field="fee_bps" value="${adminFormatPercentFromBps(market.fee_bps || 0)}" /></label>
         <label>最低交易額<input type="number" min="0" max="1000000000" step="1" data-trading-market-field="min_order_points" value="${Number(market.min_order_points || 0)}" /></label>
         <label>最高交易額<input type="number" min="1" max="1000000000000" step="1" data-trading-market-field="max_order_points" value="${Number(market.max_order_points || 0)}" /></label>
       </div>
@@ -1288,7 +1304,7 @@ function collectRootTradingMarketSettings() {
     const payload = { symbol };
     row.querySelectorAll("[data-trading-market-field]").forEach((input) => {
       const key = input.dataset.tradingMarketField;
-      payload[key] = input.type === "checkbox" ? input.checked : Number(input.value || 0);
+      payload[key] = input.type === "checkbox" ? input.checked : (key === "fee_bps" ? adminPercentToBps(input.value) : Number(input.value || 0));
     });
     return payload;
   });
@@ -1303,13 +1319,13 @@ async function saveRootTradingSettings() {
     settings: {
       enabled: !!$("root-trading-enabled")?.checked,
       borrowing_enabled: !!$("root-trading-borrowing-enabled")?.checked,
-      borrow_interest_bps_daily: Number($("root-trading-borrow-interest-bps")?.value || 0),
-      margin_long_financing_bps: Number($("root-trading-margin-long-financing-bps")?.value || 9000),
-      short_collateral_bps: Number($("root-trading-short-collateral-bps")?.value || 6000),
+      borrow_interest_bps_daily: adminPercentToBps($("root-trading-borrow-interest-bps")?.value || 0),
+      margin_long_financing_bps: adminPercentToBps($("root-trading-margin-long-financing-bps")?.value || 90, 9000),
+      short_collateral_bps: adminPercentToBps($("root-trading-short-collateral-bps")?.value || 60, 6000),
       price_source: $("root-trading-price-source")?.value || "binance_public_api",
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
-      margin_maintenance_bps: Number($("root-trading-maintenance-bps")?.value || 0),
+      margin_maintenance_bps: adminPercentToBps($("root-trading-maintenance-bps")?.value || 0),
       futures_enabled: !!$("root-trading-futures-enabled")?.checked,
       pvp_matching_enabled: !!$("root-trading-pvp-enabled")?.checked,
     },

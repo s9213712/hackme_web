@@ -201,6 +201,8 @@ RESETTABLE_TABLES = {
     "storage_quota_log",
     "storage_share_links",
     "trading_audit_events",
+    "trading_bot_runs",
+    "trading_bots",
     "trading_fills",
     "trading_futures_positions",
     "trading_margin_positions",

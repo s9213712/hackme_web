@@ -139,9 +139,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-short-collateral-bps"' in index_html
     assert "融資九成" in index_html
     assert "借券六成" in index_html
-    assert "融資可貸比例 bps（原始保證金）" in index_html
-    assert "借券原始保證金比例 bps" in index_html
-    assert "維持保證金比例 bps" in index_html
+    assert "融資可貸比例（%）" in index_html
+    assert "借券原始保證金比例（%）" in index_html
+    assert "維持保證金比例（%）" in index_html
     assert 'id="root-trading-price-source"' in index_html
     assert 'id="root-trading-max-price-staleness"' in index_html
     assert 'id="root-trading-liquidation-enabled"' in index_html
@@ -156,6 +156,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "saveRootEconomyCatalogItem" in admin_js
     assert "function loadRootTradingSettings()" in admin_js
     assert "function saveRootTradingSettings()" in admin_js
+    assert "adminPercentToBps" in admin_js
+    assert "adminFormatPercentFromBps" in admin_js
     assert 'apiFetch(API + "/root/trading/settings"' in admin_js
     assert "parseRootTradingSettingsResponse" in admin_js
     assert "交易所參數 API 找不到" in admin_js
@@ -201,6 +203,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-liquidation-scan-btn"' in trading_section
     assert 'id="trading-liquidation-status"' in trading_section
     assert 'id="trading-funding-available"' in trading_section
+    assert "交易總可用" in trading_section
     assert 'id="trading-root-reset-sim-btn"' in trading_section
     assert 'id="trading-reference-chart"' in trading_section
     assert 'id="trading-reference-tooltip"' in trading_section
@@ -295,6 +298,31 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "超過可賣現貨" in trading_js
     assert "function openTradingMarginPosition" in trading_js
     assert "function closeTradingMarginPosition" in trading_js
+    assert "現貨交易機器人" in trading_section
+    assert "自動化 Workflow" in trading_section
+    assert "定投" in trading_section
+    assert "回測分析" in trading_section
+    assert "/trading-workflow-editor.html" in trading_section
+    assert 'id="trading-auto-workflow-json"' in trading_section
+    assert 'id="trading-workflow-load-btn"' in trading_section
+    assert (ROOT / "public" / "trading-workflow-editor.html").exists()
+    assert 'id="trading-auto-bot-save-btn"' in trading_section
+    assert 'id="trading-dca-bot-save-btn"' in trading_section
+    assert 'id="trading-bot-scan-btn"' in trading_section
+    assert 'id="trading-backtest-run-btn"' in trading_section
+    assert 'id="trading-auto-bot-market"' in trading_section
+    assert 'id="trading-dca-bot-market"' in trading_section
+    assert 'id="trading-backtest-market"' in trading_section
+    assert 'id="trading-bot-type"' not in trading_section
+    assert "function saveTradingBot" in trading_js
+    assert "function saveTradingDcaBot" in trading_js
+    assert "function scanTradingBots" in trading_js
+    assert "function backtestTradingBot" in trading_js
+    assert "parseTradingWorkflowInput" in trading_js
+    assert "prepareTradingBacktestFromBot" in trading_js
+    assert '"/trading/bots/scan"' in trading_js
+    assert '"/trading/bots/backtest"' in trading_js
+    assert "tradingState.bots" in trading_js
     assert "function matchTradingLimitOrders" in trading_js
     assert "function scanTradingLiquidations" in trading_js
     assert "function renderTradingMarginPositions" in trading_js
@@ -306,6 +334,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "margin_maintenance_bps" in trading_js
     assert "margin_long_financing_bps" in trading_js
     assert "short_collateral_bps" in trading_js
+    assert "tradingPercentToBps" in trading_js
+    assert "formatTradingPercentFromBps" in trading_js
     assert "initial_margin_points" in trading_js
     assert "maintenance_margin_points" in trading_js
     assert "融資可貸比例" in trading_js
@@ -325,6 +355,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "economy-root-virtual-total" in trading_js
     assert "available + spotValue" in trading_js
     assert "trial_credit" in trading_js
+    assert "function tradingTrialCountdownText" in trading_js
+    assert "setInterval(updateTradingTrialCountdown, 1000)" in trading_js
+    assert "總可用" in trading_js
+    assert "體驗金" in trading_js
+    assert "真實積分" in trading_js
     assert "體驗金優先" in trading_js
     assert "function loadTradingReferencePrices" in trading_js
     assert "function restartTradingReferenceAutoRefresh" in trading_js
