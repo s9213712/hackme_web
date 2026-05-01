@@ -41,6 +41,35 @@ def test_points_spend_route_does_not_trust_client_ledger_provenance():
     assert 'reference_id=f"catalog:{item_key}"' in economy
     assert "metadata={}" in economy
     assert "_stable_spend_key" in economy
+    stable_key = economy.split("def _stable_spend_key", 1)[1].split("def service_error", 1)[0]
+    assert "minute_bucket" in stable_key
+    assert "int(time.time() // 60)" in stable_key
+    assert 'f"spend:{user_id}:{item_key}:{quantity}"' not in stable_key
+
+
+def test_economy_admin_user_id_validation_does_not_leak_type_errors():
+    economy = (ROOT / "routes" / "economy.py").read_text(encoding="utf-8")
+    pending_route = economy.split('def admin_points_pending_rewards():', 1)[1].split(
+        '@app.route("/api/admin/points/pending-rewards/<int:pending_reward_id>/review"',
+        1,
+    )[0]
+
+    assert "def parse_required_user_id" in economy
+    assert 'return json_resp({"ok": False, "msg": "user_id required"}), 400' in pending_route
+    assert 'user_id=int(data.get("user_id"))' not in pending_route
+
+
+def test_moderation_execute_claims_proposal_under_write_lock():
+    moderation = (ROOT / "routes" / "moderation.py").read_text(encoding="utf-8")
+    execute_route = moderation.split("def moderation_proposal_execute", 1)[1].split(
+        '@app.route("/api/root/moderation/proposals/<int:proposal_id>/override"',
+        1,
+    )[0]
+
+    assert 'conn.execute("BEGIN IMMEDIATE")' in execute_route
+    assert "status='executing'" in execute_route
+    assert execute_route.index('conn.execute("BEGIN IMMEDIATE")') < execute_route.index("refresh_proposal_vote_counts")
+    assert execute_route.index("status='executing'") < execute_route.index("execute_proposal_action")
 
 
 def test_root_economy_catalog_write_uses_single_use_csrf():
