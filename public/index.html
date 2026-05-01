@@ -2267,6 +2267,42 @@
           </details>
           </div>
         </details>
+        <details class="drive-collapsible-panel settings-collapse">
+          <summary>
+            <div>
+              <div class="drive-card-title">GitHub 更新中心</div>
+              <div class="drive-card-sub">root 可從 GitHub 選擇分支、先看 diff，再套用 fast-forward 更新。</div>
+            </div>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>更新來源分支</label>
+                <select id="server-update-branch-select"></select>
+                <div class="field-hint">只允許從 origin 分支 fast-forward 更新；工作目錄有未提交變更時會拒絕。</div>
+              </div>
+              <div class="field">
+                <label>確認字串</label>
+                <input type="text" id="server-update-confirm" placeholder="APPLY_UNVERIFIED_UPDATE" />
+                <div class="field-hint">套用更新前必須確認：此次更新未經本機驗證，需自行測試與 debug。</div>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn" type="button" id="server-update-refresh-btn">讀取分支</button>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn" type="button" id="server-update-preview-btn">預覽 diff</button>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" type="button" id="server-update-apply-btn">套用更新</button>
+              </div>
+            </div>
+            <div id="server-update-status" class="msg"></div>
+            <pre id="server-update-diff" class="security-log-box security-log-pre" style="max-height:260px;margin-top:.65rem;"></pre>
+          </div>
+        </details>
         <form id="settings-form" style="margin-top:.6rem;">
           <div class="tabs" style="margin-bottom:.85rem;">
             <button class="tab active" type="button" id="tab-settings-security">安全</button>

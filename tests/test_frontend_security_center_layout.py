@@ -102,6 +102,28 @@ def test_security_control_and_threshold_saves_show_visible_status():
     assert "btn.disabled = true" in thresholds_body
 
 
+def test_server_update_ui_warns_and_requires_preview_then_apply():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+
+    assert "GitHub 更新中心" in index_html
+    assert 'id="server-update-branch-select"' in index_html
+    assert 'id="server-update-preview-btn"' in index_html
+    assert 'id="server-update-apply-btn"' in index_html
+    assert 'id="server-update-diff"' in index_html
+    assert "APPLY_UNVERIFIED_UPDATE" in index_html
+    assert "loadServerUpdateStatus" in admin_js
+    assert "previewServerUpdate" in admin_js
+    assert "applyServerUpdate" in admin_js
+    assert 'API + "/root/server-update/preview"' in admin_js
+    assert 'API + "/root/server-update/apply"' in admin_js
+    assert "此次更新未經驗證" in admin_js
+    assert "serverUpdateRefresh.addEventListener" in bootstrap_js
+    assert "serverUpdatePreview.addEventListener" in bootstrap_js
+    assert "serverUpdateApply.addEventListener" in bootstrap_js
+
+
 def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")

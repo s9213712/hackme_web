@@ -84,6 +84,9 @@ function bindUiEvents() {
   const rootStorageUserSelect = $("root-storage-user-select");
   const rootStorageUsers = $("root-storage-users");
   const serverModeApply = $("server-mode-apply-btn");
+  const serverUpdateRefresh = $("server-update-refresh-btn");
+  const serverUpdatePreview = $("server-update-preview-btn");
+  const serverUpdateApply = $("server-update-apply-btn");
   const internalTestTokenRefresh = $("internal-test-token-refresh-btn");
   const internalTestTokenRotate = $("internal-test-token-rotate-btn");
   const healthRefresh = $("health-refresh-btn");
@@ -435,6 +438,9 @@ function bindUiEvents() {
     fillRootStorageOverrideForm(button.dataset.rootStorageSelect || "");
   });
   if (serverModeApply) serverModeApply.addEventListener("click", applyServerMode);
+  if (serverUpdateRefresh) serverUpdateRefresh.addEventListener("click", () => loadServerUpdateStatus(true));
+  if (serverUpdatePreview) serverUpdatePreview.addEventListener("click", previewServerUpdate);
+  if (serverUpdateApply) serverUpdateApply.addEventListener("click", applyServerUpdate);
   if (internalTestTokenRefresh) internalTestTokenRefresh.addEventListener("click", loadInternalTestTokenStatus);
   if (internalTestTokenRotate) internalTestTokenRotate.addEventListener("click", rotateInternalTestToken);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);

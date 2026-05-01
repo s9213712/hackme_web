@@ -48,6 +48,8 @@ SECURITY_TEST_JOBS_LOCK = threading.Lock()
 
 
 COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
+SERVER_UPDATE_WARNING = "此更新直接來自 GitHub diff/merge，尚未經本機測試驗證；更新後請自行執行 smoke test、權限測試與 debug。"
 
 
 def public_relative_path(path, base_dir):
@@ -78,6 +80,17 @@ def validate_comfyui_api_host(value):
     if not COMFYUI_HOST_RE.match(host):
         return None
     return host
+
+
+def validate_git_branch_name(value):
+    branch = str(value or "").strip()
+    if not branch or branch in {"HEAD", ".", ".."}:
+        return None
+    if branch.startswith("/") or branch.endswith("/") or ".." in branch or branch.endswith(".lock"):
+        return None
+    if not GIT_BRANCH_RE.match(branch):
+        return None
+    return branch
 
 
 def restart_launcher_code():
@@ -286,6 +299,105 @@ def register_system_admin_routes(app, deps):
                 detail=f"reason={reason},msg={result.get('msg')}",
             )
         return result
+
+    def run_git_command(args, *, timeout=30):
+        command = ["git", "-C", BASE_DIR, *args]
+        completed = subprocess.run(
+            command,
+            cwd=BASE_DIR,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        return {
+            "ok": completed.returncode == 0,
+            "returncode": completed.returncode,
+            "stdout": (completed.stdout or "").strip(),
+            "stderr": (completed.stderr or "").strip(),
+            "command": ["git", "-C", ".", *args],
+        }
+
+    def git_short_text(result, limit=12000):
+        text = "\n".join(part for part in (result.get("stdout"), result.get("stderr")) if part)
+        return text[:limit]
+
+    def current_git_state(fetch=False):
+        if fetch:
+            fetch_result = run_git_command(["fetch", "--prune", "origin"], timeout=90)
+            if not fetch_result["ok"]:
+                return {"ok": False, "msg": "GitHub 分支資料更新失敗", "error": git_short_text(fetch_result)}
+        branch_result = run_git_command(["rev-parse", "--abbrev-ref", "HEAD"])
+        commit_result = run_git_command(["rev-parse", "--short", "HEAD"])
+        status_result = run_git_command(["status", "--porcelain"])
+        remote_result = run_git_command(["remote", "get-url", "origin"])
+        refs_result = run_git_command(["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])
+        if not branch_result["ok"] or not commit_result["ok"] or not status_result["ok"]:
+            return {"ok": False, "msg": "目前 Git 狀態讀取失敗", "error": git_short_text(branch_result) or git_short_text(commit_result) or git_short_text(status_result)}
+        branches = []
+        if refs_result["ok"]:
+            for ref in refs_result["stdout"].splitlines():
+                ref = ref.strip()
+                if not ref or ref == "origin/HEAD" or not ref.startswith("origin/"):
+                    continue
+                branch = ref.removeprefix("origin/")
+                if validate_git_branch_name(branch):
+                    branches.append(branch)
+        return {
+            "ok": True,
+            "current_branch": branch_result["stdout"],
+            "current_commit": commit_result["stdout"],
+            "origin_url": remote_result["stdout"] if remote_result["ok"] else "",
+            "dirty": bool(status_result["stdout"]),
+            "dirty_files": status_result["stdout"].splitlines()[:80],
+            "branches": sorted(set(branches)),
+        }
+
+    def git_update_preview(branch, *, fetch=True):
+        branch = validate_git_branch_name(branch)
+        if not branch:
+            return {"ok": False, "msg": "分支名稱格式不合法"}
+        state = current_git_state(fetch=fetch)
+        if not state.get("ok"):
+            return state
+        remote_ref = f"origin/{branch}"
+        verify = run_git_command(["rev-parse", "--verify", remote_ref])
+        if not verify["ok"]:
+            return {"ok": False, "msg": f"找不到遠端分支 {remote_ref}", "state": state}
+        ahead_behind = run_git_command(["rev-list", "--left-right", "--count", f"HEAD...{remote_ref}"])
+        name_status = run_git_command(["diff", "--name-status", "HEAD", remote_ref, "--"], timeout=60)
+        stat = run_git_command(["diff", "--stat", "HEAD", remote_ref, "--"], timeout=60)
+        summary = {"ahead": None, "behind": None}
+        if ahead_behind["ok"]:
+            parts = ahead_behind["stdout"].split()
+            if len(parts) >= 2:
+                summary = {"ahead": int(parts[0]), "behind": int(parts[1])}
+        changed_files = []
+        if name_status["ok"]:
+            for line in name_status["stdout"].splitlines()[:300]:
+                parts = line.split("\t")
+                changed_files.append({"status": parts[0], "path": parts[-1] if parts else line})
+        return {
+            "ok": True,
+            "branch": branch,
+            "remote_ref": remote_ref,
+            "state": state,
+            "summary": summary,
+            "changed_files": changed_files,
+            "diff_stat": stat["stdout"] if stat["ok"] else git_short_text(stat),
+            "warning": SERVER_UPDATE_WARNING,
+            "requires_confirmation": "APPLY_UNVERIFIED_UPDATE",
+            "strategy": "git fetch + git diff preview + git merge --ff-only",
+        }
+
+    def run_integrity_scan_after_update(actor):
+        if not integrity_guard:
+            return {"ok": False, "msg": "integrity guard unavailable"}
+        try:
+            result = integrity_guard.scan(actor=actor["username"], create_initial_manifest=False)
+            return {"ok": bool(result.get("ok", True)), "result": result}
+        except Exception as exc:
+            return {"ok": False, "msg": str(exc)}
 
     def cloud_drive_storage_payload(settings):
         configured = str(settings.get("cloud_drive_storage_root") or "").strip()
@@ -1143,6 +1255,114 @@ def register_system_admin_routes(app, deps):
         saved = save_settings(updates)
         _audit_settings_changed("SECURITY_CONTROLS_CHANGED", actor, before_settings, saved, scope="security_controls")
         return json_resp({"ok": True, "msg": "安全機制設定已更新", "settings": {key: get_system_settings().get(key) for key in SECURITY_SETTING_KEYS}})
+
+    @app.route("/api/root/server-update/status", methods=["GET"])
+    @require_csrf_safe
+    def root_server_update_status():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        fetch = str(request.args.get("fetch") or "").lower() in {"1", "true", "yes"}
+        state = current_git_state(fetch=fetch)
+        return json_resp({"ok": bool(state.get("ok")), "update": state, "warning": SERVER_UPDATE_WARNING}), (200 if state.get("ok") else 500)
+
+    @app.route("/api/root/server-update/preview", methods=["POST"])
+    @require_csrf
+    def root_server_update_preview():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        branch = validate_git_branch_name((data or {}).get("branch"))
+        if not branch:
+            return json_resp({"ok": False, "msg": "請選擇合法的更新分支"}), 400
+        preview = git_update_preview(branch, fetch=True)
+        audit(
+            "SERVER_UPDATE_PREVIEW",
+            get_client_ip(),
+            user=actor["username"],
+            success=bool(preview.get("ok")),
+            ua=get_ua(),
+            detail=json.dumps({"branch": branch, "ok": bool(preview.get("ok")), "msg": preview.get("msg", "")}, ensure_ascii=False, sort_keys=True),
+        )
+        return json_resp({"ok": bool(preview.get("ok")), "preview": preview, "msg": preview.get("msg", "")}), (200 if preview.get("ok") else 400)
+
+    @app.route("/api/root/server-update/apply", methods=["POST"])
+    @require_csrf
+    def root_server_update_apply():
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        branch = validate_git_branch_name((data or {}).get("branch"))
+        confirm = str((data or {}).get("confirm") or "").strip()
+        if not branch:
+            return json_resp({"ok": False, "msg": "請選擇合法的更新分支"}), 400
+        if confirm != "APPLY_UNVERIFIED_UPDATE":
+            return json_resp({"ok": False, "msg": "請輸入 APPLY_UNVERIFIED_UPDATE 確認此次更新未經驗證"}), 400
+        preview = git_update_preview(branch, fetch=True)
+        if not preview.get("ok"):
+            return json_resp({"ok": False, "msg": preview.get("msg") or "更新預覽失敗", "preview": preview}), 400
+        state = preview.get("state") or {}
+        if state.get("dirty"):
+            return json_resp({
+                "ok": False,
+                "msg": "目前工作目錄已有未提交變更，為避免覆蓋本地修改，請先處理後再更新。",
+                "dirty_files": state.get("dirty_files") or [],
+                "preview": preview,
+            }), 409
+        before_commit = state.get("current_commit") or ""
+        merge_result = run_git_command(["merge", "--ff-only", f"origin/{branch}"], timeout=120)
+        after_state = current_git_state(fetch=False)
+        integrity_result = None
+        if merge_result["ok"]:
+            integrity_result = run_integrity_scan_after_update(actor)
+            _notify_root(
+                "server_update_unverified",
+                "伺服器已套用未驗證更新",
+                f"已從 origin/{branch} 套用更新。此更新尚未經本機測試驗證，請執行 smoke test、權限測試並處理 Integrity Guard pending findings。",
+                link="/server",
+            )
+        detail = {
+            "branch": branch,
+            "before_commit": before_commit,
+            "after_commit": (after_state or {}).get("current_commit"),
+            "success": bool(merge_result["ok"]),
+            "merge_output": git_short_text(merge_result, limit=4000),
+            "warning": SERVER_UPDATE_WARNING,
+        }
+        audit(
+            "SERVER_UPDATE_APPLIED",
+            get_client_ip(),
+            user=actor["username"],
+            success=bool(merge_result["ok"]),
+            ua=get_ua(),
+            detail=json.dumps(detail, ensure_ascii=False, sort_keys=True),
+        )
+        if not merge_result["ok"]:
+            return json_resp({
+                "ok": False,
+                "msg": "Git 更新套用失敗。通常是目標分支無法 fast-forward，請改用乾淨部署或手動合併。",
+                "preview": preview,
+                "merge": merge_result,
+                "warning": SERVER_UPDATE_WARNING,
+            }), 409
+        return json_resp({
+            "ok": True,
+            "msg": "伺服器更新已套用；請重啟伺服器並自行執行測試與 debug。",
+            "preview": preview,
+            "merge": merge_result,
+            "state": after_state,
+            "integrity": integrity_result,
+            "warning": SERVER_UPDATE_WARNING,
+            "restart_required": True,
+        })
 
     @app.route("/api/admin/security-center/profiles", methods=["GET", "POST"])
     @require_csrf_safe

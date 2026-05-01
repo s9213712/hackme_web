@@ -36,6 +36,7 @@ function switchServerTab(tab) {
   if (tab === "settings") {
     loadSettings();
     loadServerMode();
+    loadServerUpdateStatus(false);
   }
   if (tab === "env") loadServerEnv();
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
@@ -2843,6 +2844,137 @@ async function testComfyuiConnection() {
     }
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+function setServerUpdateStatus(message, ok = true) {
+  const el = $("server-update-status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.className = `msg show ${ok ? "ok" : "err"}`;
+  el.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function renderServerUpdatePreview(preview) {
+  const box = $("server-update-diff");
+  if (!box) return;
+  if (!preview || !preview.ok) {
+    box.textContent = preview?.msg || "";
+    return;
+  }
+  const state = preview.state || {};
+  const summary = preview.summary || {};
+  const files = (preview.changed_files || []).map((row) => `${row.status}\t${row.path}`).join("\n");
+  box.textContent = [
+    `目前分支：${state.current_branch || "-"} @ ${state.current_commit || "-"}`,
+    `目標分支：${preview.remote_ref || "-"}`,
+    `本地 ahead：${summary.ahead ?? "-"}，遠端 ahead：${summary.behind ?? "-"}`,
+    `工作目錄：${state.dirty ? "有未提交變更，禁止套用" : "乾淨"}`,
+    "",
+    "警告：",
+    preview.warning || "此次更新未經驗證，請自行測試與 debug。",
+    "",
+    "Diff stat：",
+    preview.diff_stat || "(無差異)",
+    "",
+    "Changed files：",
+    files || "(無檔案變更)"
+  ].join("\n");
+}
+
+async function loadServerUpdateStatus(fetchRemote = false) {
+  if (currentUser !== "root") return;
+  const branchSelect = $("server-update-branch-select");
+  const refreshBtn = $("server-update-refresh-btn");
+  if (refreshBtn) refreshBtn.disabled = true;
+  setServerUpdateStatus(fetchRemote ? "正在從 GitHub 讀取分支..." : "正在讀取更新狀態...");
+  try {
+    const csrf = await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + `/root/server-update/status${fetchRemote ? "?fetch=1" : ""}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || json.update?.msg || `更新狀態讀取失敗（HTTP ${res.status}）`);
+    const update = json.update || {};
+    const branches = update.branches || [];
+    if (branchSelect) {
+      const previous = branchSelect.value || update.current_branch || "";
+      branchSelect.innerHTML = branches.length
+        ? branches.map((branch) => `<option value="${sanitize(branch)}">${sanitize(branch)}</option>`).join("")
+        : `<option value="${sanitize(update.current_branch || "main")}">${sanitize(update.current_branch || "main")}</option>`;
+      branchSelect.value = branches.includes(previous) ? previous : (branches.includes(update.current_branch) ? update.current_branch : (branches[0] || update.current_branch || "main"));
+    }
+    setServerUpdateStatus(`目前 ${update.current_branch || "-"} @ ${update.current_commit || "-"}；${update.dirty ? "工作目錄有未提交變更，不能套用更新" : "工作目錄乾淨"}`, !update.dirty);
+    renderServerUpdatePreview({ ok: true, state: update, warning: json.warning, summary: {}, changed_files: [], diff_stat: "" });
+  } catch (err) {
+    setServerUpdateStatus(err.message || "更新狀態讀取失敗", false);
+  } finally {
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+}
+
+async function previewServerUpdate() {
+  const branch = $("server-update-branch-select")?.value || "";
+  const btn = $("server-update-preview-btn");
+  if (!branch) {
+    setServerUpdateStatus("請先選擇更新分支", false);
+    return;
+  }
+  if (btn) btn.disabled = true;
+  setServerUpdateStatus("正在 fetch GitHub 並產生 diff 預覽...");
+  try {
+    const csrf = await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/root/server-update/preview", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ branch })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || json.preview?.msg || `diff 預覽失敗（HTTP ${res.status}）`);
+    renderServerUpdatePreview(json.preview || {});
+    setServerUpdateStatus("Diff 預覽完成。套用前請確認更新未經驗證，並輸入確認字串。");
+  } catch (err) {
+    setServerUpdateStatus(err.message || "diff 預覽失敗", false);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function applyServerUpdate() {
+  const branch = $("server-update-branch-select")?.value || "";
+  const confirmText = $("server-update-confirm")?.value || "";
+  const btn = $("server-update-apply-btn");
+  if (!branch) {
+    setServerUpdateStatus("請先選擇更新分支", false);
+    return;
+  }
+  if (confirmText !== "APPLY_UNVERIFIED_UPDATE") {
+    setServerUpdateStatus("請輸入 APPLY_UNVERIFIED_UPDATE 才能套用未驗證更新", false);
+    return;
+  }
+  if (!confirm("此更新會從 GitHub 套用到目前伺服器程式碼，且尚未經本機測試驗證。確定繼續？")) return;
+  if (btn) btn.disabled = true;
+  setServerUpdateStatus("正在套用 GitHub 更新，請勿關閉頁面...");
+  try {
+    const csrf = await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/root/server-update/apply", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ branch, confirm: confirmText })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || `更新套用失敗（HTTP ${res.status}）`);
+    renderServerUpdatePreview(json.preview || {});
+    const integrity = json.integrity?.result?.summary || {};
+    setServerUpdateStatus(`更新已套用，請重啟伺服器並自行測試；Integrity pending=${integrity.pending ?? "-"}`);
+    if (typeof loadIntegrityGuard === "function") await loadIntegrityGuard();
+  } catch (err) {
+    setServerUpdateStatus(err.message || "更新套用失敗", false);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
