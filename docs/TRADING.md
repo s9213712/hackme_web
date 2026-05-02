@@ -286,8 +286,8 @@ The trading page separates bots into:
 - Backtest analysis.
 - Bot execution records.
 
-Bot execution is manual scan in this stage. This avoids unattended runaway
-trading while the strategy system is still evolving.
+New enabled DCA bots execute their first run immediately after creation. Later
+runs depend on the bot interval/cooldown and the bot scanner.
 
 ### DCA Bot
 
@@ -303,7 +303,8 @@ Configuration:
 - Enabled/disabled.
 
 At scan time, the bot converts budget points to quantity using the current
-backend execution price.
+backend execution price. The bot card shows whether the bot is ready, cooling
+down, disabled, exhausted, or waiting for the next run.
 
 ### Workflow Strategy Bot
 
@@ -328,6 +329,32 @@ Execution order:
 4. Matching action nodes execute by step order.
 5. Executed step IDs are remembered so the same batch step is not repeated.
 6. Higher-priority actions, such as forced stop loss, win over normal entries.
+
+Built-in reference templates:
+
+- Conservative dip buy: price threshold plus cooldown.
+- Breakout buy: price breakout plus MA50 trend filter.
+- Stop-loss guard: position exists plus price threshold close.
+- RSI scale in/out: RSI oversold buy and RSI overbought partial sell.
+- MA trend pullback: MA50 trend plus RSI pullback entry.
+- Bollinger mean reversion: lower-band entry and middle-band partial exit.
+- KD momentum tracking: KD strength plus MA20 trend filter.
+- Take-profit / stop-loss guard: unrealized PnL percent rules for partial
+  profit taking or full close.
+
+These templates are examples, not recommendations. Users should adjust
+thresholds and backtest them before enabling live scans.
+
+Workflow files are stored under the project-level `workflows/` directory:
+
+- `workflows/system/` contains built-in templates tracked by Git.
+- `workflows/custom/<username>/` contains user-created templates generated at
+  runtime and ignored by Git.
+- Official templates must include structured explanations: purpose, trigger
+  conditions, actions, risk notes, suitable usage, and tuning guidance.
+- The trading page loads template options through
+  `GET /api/trading/workflow-templates`; saving a custom template writes it
+  through `POST /api/trading/workflow-templates/custom`.
 
 ## Workflow Editor
 
@@ -374,8 +401,21 @@ Supported inputs:
 - Initial cash.
 - Order points or workflow action sizing.
 
-If candles are not supplied by the frontend, the backend fetches historical
-K-lines from Binance for the selected market and timeframe.
+If candles are not supplied by the frontend, the backend downloads historical
+K-lines for the selected market and timeframe. It tries Binance first, then
+OKX, Coinbase Exchange, Kraken, Gemini, and Bitstamp where the selected
+interval is supported. The backtest result shows the provider, provider symbol,
+candle count, and first/last candle time so users can verify what data was
+used.
+
+Backtest length limits:
+
+- The engine accepts at most 5000 candles per backtest.
+- When the browser has not loaded chart candles, the backend downloads candles
+  automatically. One automatic provider request currently downloads at most
+  1000 candles.
+- Long historical periods should be split into multiple runs until paginated
+  historical download is added.
 
 Backtest output includes:
 

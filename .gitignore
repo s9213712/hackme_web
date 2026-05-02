@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 database/database.db
 database/database.db.bak
+database/*.db-shm
+database/*.db-wal
 database/app.db
 .blocked_ips.json
 .fail_log.json
@@ -16,6 +18,13 @@ database/app.db
 
 *.log
 *.json
+!workflows/
+!workflows/README.md
+!workflows/system/
+!workflows/system/*.json
+!workflows/custom/
+workflows/custom/*
+!workflows/custom/.gitkeep
 chats/*.jsonl
 !chats/.gitkeep
 storage/

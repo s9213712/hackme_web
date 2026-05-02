@@ -204,6 +204,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    workflow_templates = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((ROOT / "workflows" / "system").glob("*.json"))
+    )
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     economy_section = index_html.split('id="module-economy"', 1)[1].split('id="module-trading"', 1)[0]
     trading_section = index_html.split('id="module-trading"', 1)[1].split('id="module-accounts"', 1)[0]
@@ -353,10 +356,17 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-workflow-load-btn"' in trading_section
     assert 'id="trading-workflow-template-select"' in trading_section
     assert 'id="trading-workflow-template-apply-btn"' in trading_section
+    assert 'id="trading-workflow-template-explanation"' in trading_section
+    assert 'id="trading-workflow-custom-name"' in trading_section
+    assert 'id="trading-workflow-custom-save-btn"' in trading_section
     assert "保守逢低買入" in trading_section
     assert "突破追價買入" in trading_section
     assert "持倉跌破停損" in trading_section
     assert "RSI 分批買賣" in trading_section
+    assert "MA 趨勢回踩" in trading_section
+    assert "布林通道均值回歸" in trading_section
+    assert "KD 動能追蹤" in trading_section
+    assert "停利停損風控" in trading_section
     assert (ROOT / "public" / "trading-workflow-editor.html").exists()
     assert 'id="trading-auto-bot-save-btn"' in trading_section
     assert 'id="trading-dca-bot-save-btn"' in trading_section
@@ -375,6 +385,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "data-trading-bot-next-run" in trading_js
     assert "已立即執行第一筆" in trading_js
     assert "function tradingErrorText" in trading_js
+    assert "交易所 API 不存在" in trading_js
     assert "function bindTradingActionButton" in trading_js
     assert "自動化機器人新增失敗" in trading_js
     assert "定投機器人新增失敗" in trading_js
@@ -382,8 +393,17 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "正在新增自動化機器人" in trading_js
     assert "parseTradingWorkflowInput" in trading_js
     assert "function tradingWorkflowTemplates" in trading_js
+    assert "function loadTradingWorkflowTemplates" in trading_js
+    assert "function renderTradingWorkflowTemplateExplanation" in trading_js
+    assert "function saveTradingWorkflowCustomTemplate" in trading_js
     assert "function applyTradingWorkflowTemplate" in trading_js
-    assert "workflow_graph" in trading_js
+    assert "workflow_graph" in workflow_templates
+    assert "system_template" in workflow_templates
+    assert "stop_loss_percent" in workflow_templates
+    assert "take_profit_percent" in workflow_templates
+    assert "未載入圖表，正在由後端下載歷史 K 線後回測" in trading_js
+    assert "candle_limit = 500" in trading_js
+    assert "資料來源" in trading_js
     assert "prepareTradingBacktestFromBot" in trading_js
     assert '"/trading/bots/scan"' in trading_js
     assert '"/trading/bots/backtest"' in trading_js

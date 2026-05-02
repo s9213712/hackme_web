@@ -1,0 +1,54 @@
+{
+  "id": "ma_pullback",
+  "label": "MA 趨勢回踩",
+  "description": "價格在 MA50 上方維持多頭，但 RSI 回落時，以可用資金 12% 分批進場。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範順勢回踩策略。價格仍站在 MA50 上方時，等待 RSI 回落，嘗試在多頭趨勢中的短線回檔買入。",
+    "entry_conditions": [
+      "價格位於 MA50 上方。",
+      "RSI 小於或等於 45。",
+      "兩個條件同時成立後，還需要通過 4 小時冷卻。"
+    ],
+    "actions": [
+      "用可用資金的 12% 市價買入。",
+      "每次觸發後冷卻 4 小時，避免同一段回檔重複買太多。"
+    ],
+    "risk_notes": [
+      "MA50 失守前可能已經出現趨勢反轉。",
+      "回踩策略若沒有停損，可能把反轉誤判成低接機會。"
+    ],
+    "best_for": [
+      "趨勢市場中的低接測試。",
+      "學習控制節點 cooldown 與多條件進場。"
+    ],
+    "tuning": [
+      "可把 MA50 改成 MA20 增加敏感度，或 MA200 降低交易頻率。",
+      "依波動率調整 RSI 回落門檻與買入比例。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "MA 趨勢回踩",
+    "description": "價格在 MA50 上方維持多頭，但 RSI 回落時，以可用資金 12% 分批進場。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 170 },
+      { "id": "above_ma50", "type": "condition", "label": "站上 MA50", "x": 260, "y": 110, "condition": { "type": "ma_position", "period": 50, "position": "above" } },
+      { "id": "rsi_pullback", "type": "condition", "label": "RSI <= 45", "x": 260, "y": 230, "condition": { "type": "rsi_below", "value": 45 } },
+      { "id": "entry_and", "type": "logic", "label": "AND", "x": 500, "y": 170, "operator": "AND" },
+      { "id": "cooldown", "type": "control", "label": "冷卻 4 小時", "x": 680, "y": 170, "cooldown_seconds": 14400, "max_runs": 100 },
+      { "id": "buy_pullback", "type": "action", "label": "買入 12%", "x": 900, "y": 170, "action": { "type": "buy_percent", "percent": 12, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_ma", "from": "start", "from_port": "out", "to": "above_ma50", "to_port": "in" },
+      { "id": "e_start_rsi", "from": "start", "from_port": "out", "to": "rsi_pullback", "to_port": "in" },
+      { "id": "e_ma_and", "from": "above_ma50", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_rsi_and", "from": "rsi_pullback", "from_port": "true", "to": "entry_and", "to_port": "in" },
+      { "id": "e_and_cooldown", "from": "entry_and", "from_port": "true", "to": "cooldown", "to_port": "in" },
+      { "id": "e_cooldown_buy", "from": "cooldown", "from_port": "then", "to": "buy_pullback", "to_port": "in" }
+    ]
+  }
+}

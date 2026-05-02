@@ -1,0 +1,52 @@
+{
+  "id": "kd_momentum",
+  "label": "KD 動能追蹤",
+  "description": "KD 強於 60 且價格在 MA20 上方時追蹤動能，以可用資金 10% 買入。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範短週期動能策略。KD 強勢且價格站上 MA20 時，視為短線動能偏多。",
+    "entry_conditions": [
+      "KD 大於或等於 60。",
+      "價格位於 MA20 上方。",
+      "兩個條件必須同時成立。"
+    ],
+    "actions": [
+      "用可用資金的 10% 市價買入。",
+      "此模板不含出場，需要搭配停利停損或手動管理。"
+    ],
+    "risk_notes": [
+      "KD 反應較快，容易受短線雜訊影響。",
+      "在盤整行情可能頻繁觸發假訊號。"
+    ],
+    "best_for": [
+      "短線動能回測。",
+      "學習技術指標與移動平均同時判斷。"
+    ],
+    "tuning": [
+      "可提高 KD 門檻降低訊號數量。",
+      "可改 MA20 為 MA50，讓策略更偏中期趨勢。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "KD 動能追蹤",
+    "description": "KD 強於 60 且價格在 MA20 上方時追蹤動能，以可用資金 10% 買入。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 170 },
+      { "id": "kd_strong", "type": "condition", "label": "KD >= 60", "x": 260, "y": 110, "condition": { "type": "kd_above", "value": 60 } },
+      { "id": "above_ma20", "type": "condition", "label": "站上 MA20", "x": 260, "y": 230, "condition": { "type": "ma_position", "period": 20, "position": "above" } },
+      { "id": "momentum_and", "type": "logic", "label": "AND", "x": 500, "y": 170, "operator": "AND" },
+      { "id": "buy_momentum", "type": "action", "label": "買入 10%", "x": 720, "y": 170, "action": { "type": "buy_percent", "percent": 10, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_kd", "from": "start", "from_port": "out", "to": "kd_strong", "to_port": "in" },
+      { "id": "e_start_ma20", "from": "start", "from_port": "out", "to": "above_ma20", "to_port": "in" },
+      { "id": "e_kd_and", "from": "kd_strong", "from_port": "true", "to": "momentum_and", "to_port": "in" },
+      { "id": "e_ma20_and", "from": "above_ma20", "from_port": "true", "to": "momentum_and", "to_port": "in" },
+      { "id": "e_momentum_buy", "from": "momentum_and", "from_port": "true", "to": "buy_momentum", "to_port": "in" }
+    ]
+  }
+}

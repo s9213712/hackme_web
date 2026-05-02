@@ -1,0 +1,48 @@
+{
+  "id": "dip_buy",
+  "label": "保守逢低買入",
+  "description": "價格低於指定門檻時，以可用資金 10% 市價買入，並設 1 小時冷卻。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範最保守的單條件逢低買入策略。當價格跌到指定門檻以下時，策略會等待冷卻條件通過後，用固定比例資金買入。",
+    "entry_conditions": [
+      "價格小於或等於 90000。",
+      "同一模板觸發後必須等待 1 小時冷卻，避免短時間連續追單。"
+    ],
+    "actions": [
+      "用可用資金的 10% 送出市價買入。",
+      "買入 step=1，同一輪狀態中不會重複執行同一步。"
+    ],
+    "risk_notes": [
+      "這不是抄底保證，價格可能跌破門檻後繼續下跌。",
+      "市價單會受當下價格與滑價影響，回測結果不等於實際成交結果。"
+    ],
+    "best_for": [
+      "想先理解 Workflow 基本節點連線的新使用者。",
+      "低頻、低風險比例的逢低買入測試。"
+    ],
+    "tuning": [
+      "依照交易對價格調整 price_below 門檻。",
+      "依照風險承受度調整 buy_percent 與 cooldown_seconds。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "保守逢低買入",
+    "description": "價格低於指定門檻時，以可用資金 10% 市價買入，並設 1 小時冷卻。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 140 },
+      { "id": "price_dip", "type": "condition", "label": "價格 <= 90000", "x": 260, "y": 140, "condition": { "type": "price_below", "value": 90000 } },
+      { "id": "cooldown", "type": "control", "label": "冷卻 1 小時", "x": 450, "y": 140, "cooldown_seconds": 3600, "max_runs": 100 },
+      { "id": "buy_10_percent", "type": "action", "label": "買入 10%", "x": 650, "y": 140, "action": { "type": "buy_percent", "percent": 10, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_price", "from": "start", "from_port": "out", "to": "price_dip", "to_port": "in" },
+      { "id": "e_price_cooldown", "from": "price_dip", "from_port": "true", "to": "cooldown", "to_port": "in" },
+      { "id": "e_cooldown_buy", "from": "cooldown", "from_port": "then", "to": "buy_10_percent", "to_port": "in" }
+    ]
+  }
+}

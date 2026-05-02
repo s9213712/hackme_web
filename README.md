@@ -7,11 +7,16 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.02-041`**
+**Current Release ID: `2026.05.02-042`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
 hardening in a compact single-node deployment.
+
+Release `2026.05.02-042` organizes official trading Workflow templates under
+`workflows/`, adds detailed template explanations, validates every official
+template with trigger checks and K-line backtests, and surfaces backtest length
+limits in the UI/API.
 
 Release `2026.05.02-041` hardens the root GitHub update flow: applying an
 update now creates a server snapshot and PointsChain ledger backup first, aborts

@@ -1,0 +1,50 @@
+{
+  "id": "risk_guard",
+  "label": "停利停損風控",
+  "description": "已有持倉時，虧損達 5% 立即全平，獲利達 10% 先賣出一半。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範以持倉損益百分比做風控。虧損達門檻時全平，獲利達門檻時先賣出一半。",
+    "entry_conditions": [
+      "未實現虧損達 5% 時觸發停損分支。",
+      "未實現獲利達 10% 時觸發停利分支。"
+    ],
+    "actions": [
+      "停損分支 priority=100，觸發後立即全部平倉。",
+      "停利分支 priority=50，觸發後賣出 50%。"
+    ],
+    "risk_notes": [
+      "百分比門檻需要考慮手續費與市場波動。",
+      "市價平倉在劇烈波動時可能成交在較差價格。"
+    ],
+    "best_for": [
+      "搭配任何進場模板作為保護層。",
+      "測試高優先權節點是否會優先於一般策略執行。"
+    ],
+    "tuning": [
+      "依不同市場波動調整 stop_loss_percent 與 take_profit_percent。",
+      "可把賣出 50% 改成全部平倉，讓策略更保守。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "停利停損風控",
+    "description": "已有持倉時，虧損達 5% 立即全平，獲利達 10% 先賣出一半。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 180 },
+      { "id": "stop_loss", "type": "condition", "label": "虧損 >= 5%", "x": 260, "y": 100, "condition": { "type": "stop_loss_percent", "value": 5 } },
+      { "id": "close_all", "type": "action", "label": "立即全平", "priority": 100, "x": 520, "y": 100, "action": { "type": "close_all", "step": 1, "order_type": "market" } },
+      { "id": "take_profit", "type": "condition", "label": "獲利 >= 10%", "x": 260, "y": 260, "condition": { "type": "take_profit_percent", "value": 10 } },
+      { "id": "sell_half", "type": "action", "label": "賣出 50%", "priority": 50, "x": 520, "y": 260, "action": { "type": "sell_percent", "percent": 50, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_stop_loss", "from": "start", "from_port": "out", "to": "stop_loss", "to_port": "in" },
+      { "id": "e_stop_close", "from": "stop_loss", "from_port": "true", "to": "close_all", "to_port": "in" },
+      { "id": "e_start_take_profit", "from": "start", "from_port": "out", "to": "take_profit", "to_port": "in" },
+      { "id": "e_profit_sell", "from": "take_profit", "from_port": "true", "to": "sell_half", "to_port": "in" }
+    ]
+  }
+}

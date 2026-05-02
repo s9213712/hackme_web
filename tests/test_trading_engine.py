@@ -686,6 +686,55 @@ def test_dca_backtest_reports_metrics_and_equity_curve(tmp_path):
     assert len(result["equity_curve"]) == 4
     assert "return_percent" in result
     assert "win_rate_percent" in result
+    assert result["candle_count"] == 4
+    assert result["data_source"] == "provided_candles"
+    assert result["first_candle_time"] == "2026-01-01T00:00:00+00:00"
+    assert result["last_candle_time"] == "2026-01-01T00:45:00+00:00"
+
+
+def test_workflow_backtest_supports_take_profit_and_stop_loss_percent(tmp_path):
+    _, trading = _services(tmp_path)
+    workflow = {
+        "version": 2,
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start", "label": "Start"},
+            {"id": "entry", "type": "condition", "label": "entry", "condition": {"type": "price_below", "value": 100}},
+            {"id": "buy", "type": "action", "label": "buy", "action": {"type": "buy_percent", "percent": 50, "step": 1}},
+            {"id": "profit", "type": "condition", "label": "take profit", "condition": {"type": "take_profit_percent", "value": 10}},
+            {"id": "sell", "type": "action", "label": "sell half", "priority": 50, "action": {"type": "sell_percent", "percent": 50, "step": 1}},
+            {"id": "loss", "type": "condition", "label": "stop loss", "condition": {"type": "stop_loss_percent", "value": 5}},
+            {"id": "close", "type": "action", "label": "close", "priority": 100, "action": {"type": "close_all", "step": 1}},
+        ],
+        "edges": [
+            {"from": "start", "from_port": "out", "to": "entry", "to_port": "in"},
+            {"from": "entry", "from_port": "true", "to": "buy", "to_port": "in"},
+            {"from": "start", "from_port": "out", "to": "profit", "to_port": "in"},
+            {"from": "profit", "from_port": "true", "to": "sell", "to_port": "in"},
+            {"from": "start", "from_port": "out", "to": "loss", "to_port": "in"},
+            {"from": "loss", "from_port": "true", "to": "close", "to_port": "in"},
+        ],
+    }
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "workflow",
+            "initial_cash_points": 1000,
+            "workflow_json": workflow,
+            "candles": [
+                {"time": 1, "close_points": 90},
+                {"time": 2, "close_points": 110},
+                {"time": 3, "close_points": 80},
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell"]
+    assert result["trade_count"] == 3
 
 
 def test_backtest_trading_bot_rejects_excessive_candle_count(tmp_path):

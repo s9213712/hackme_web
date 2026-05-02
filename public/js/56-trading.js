@@ -12,6 +12,7 @@ let tradingState = {
   marginSummary: null,
   referencePrices: null,
   btcSignal: null,
+  workflowTemplates: [],
 };
 let tradingEventsBound = false;
 let tradingReferencePriceAbort = null;
@@ -74,7 +75,10 @@ async function fetchTradingJson(url, options = {}) {
     json = {};
   }
   if (!res.ok || !json.ok) {
-    const text = tradingErrorText(json, raw ? raw.slice(0, 220) : `HTTP ${res.status}`);
+    let fallback = `HTTP ${res.status}`;
+    if (res.status === 404) fallback = `交易所 API 不存在：${url}。請確認伺服器已重啟且目前是包含交易所功能的分支。`;
+    else if (raw && raw.trim() && !/^not found$/i.test(raw.trim())) fallback = raw.slice(0, 220);
+    const text = tradingErrorText(json, fallback);
     throw new Error(text || `HTTP ${res.status}`);
   }
   return json;
@@ -1364,120 +1368,158 @@ function switchTradingBotTab(tab) {
 }
 
 function tradingWorkflowTemplates() {
-  return {
-    dip_buy: {
-      label: "保守逢低買入",
-      workflow: {
-        version: 2,
-        strategy_kind: "workflow_graph",
-        source: "basic_template",
-        name: "保守逢低買入",
-        description: "價格低於指定門檻時，以可用資金 10% 市價買入，並設 1 小時冷卻。",
-        start_node_id: "start",
-        nodes: [
-          { id: "start", type: "start", label: "開始", x: 80, y: 140 },
-          { id: "price_dip", type: "condition", label: "價格 <= 90000", x: 260, y: 140, condition: { type: "price_below", value: 90000 } },
-          { id: "cooldown", type: "control", label: "冷卻 1 小時", x: 450, y: 140, cooldown_seconds: 3600, max_runs: 100 },
-          { id: "buy_10_percent", type: "action", label: "買入 10%", x: 650, y: 140, action: { type: "buy_percent", percent: 10, step: 1, order_type: "market" } },
-        ],
-        edges: [
-          { id: "e_start_price", from: "start", from_port: "out", to: "price_dip", to_port: "in" },
-          { id: "e_price_cooldown", from: "price_dip", from_port: "true", to: "cooldown", to_port: "in" },
-          { id: "e_cooldown_buy", from: "cooldown", from_port: "then", to: "buy_10_percent", to_port: "in" },
-        ],
-      },
-    },
-    breakout_buy: {
-      label: "突破追價買入",
-      workflow: {
-        version: 2,
-        strategy_kind: "workflow_graph",
-        source: "basic_template",
-        name: "突破追價買入",
-        description: "價格突破門檻且站上 MA50 時，以可用資金 15% 市價買入。",
-        start_node_id: "start",
-        nodes: [
-          { id: "start", type: "start", label: "開始", x: 80, y: 150 },
-          { id: "price_breakout", type: "condition", label: "價格 >= 100000", x: 260, y: 90, condition: { type: "price_above", value: 100000 } },
-          { id: "above_ma50", type: "condition", label: "站上 MA50", x: 260, y: 210, condition: { type: "ma_position", period: 50, position: "above" } },
-          { id: "both_true", type: "logic", label: "AND", x: 480, y: 150, operator: "AND" },
-          { id: "buy_15_percent", type: "action", label: "買入 15%", x: 680, y: 150, action: { type: "buy_percent", percent: 15, step: 1, order_type: "market" } },
-        ],
-        edges: [
-          { id: "e_start_breakout", from: "start", from_port: "out", to: "price_breakout", to_port: "in" },
-          { id: "e_start_ma", from: "start", from_port: "out", to: "above_ma50", to_port: "in" },
-          { id: "e_breakout_and", from: "price_breakout", from_port: "true", to: "both_true", to_port: "in" },
-          { id: "e_ma_and", from: "above_ma50", from_port: "true", to: "both_true", to_port: "in" },
-          { id: "e_and_buy", from: "both_true", from_port: "true", to: "buy_15_percent", to_port: "in" },
-        ],
-      },
-    },
-    stop_loss: {
-      label: "持倉跌破停損",
-      workflow: {
-        version: 2,
-        strategy_kind: "workflow_graph",
-        source: "basic_template",
-        name: "持倉跌破停損",
-        description: "已有持倉且價格跌破門檻時，立即全數平倉。",
-        start_node_id: "start",
-        nodes: [
-          { id: "start", type: "start", label: "開始", x: 80, y: 150 },
-          { id: "has_position", type: "condition", label: "已有持倉", x: 260, y: 90, condition: { type: "has_position", value: true } },
-          { id: "price_stop", type: "condition", label: "價格 <= 80000", x: 260, y: 210, condition: { type: "price_below", value: 80000 } },
-          { id: "risk_and", type: "logic", label: "AND", x: 480, y: 150, operator: "AND" },
-          { id: "close_all", type: "action", label: "全部平倉", priority: 100, x: 680, y: 150, action: { type: "close_all", step: 1, order_type: "market" } },
-        ],
-        edges: [
-          { id: "e_start_position", from: "start", from_port: "out", to: "has_position", to_port: "in" },
-          { id: "e_start_stop", from: "start", from_port: "out", to: "price_stop", to_port: "in" },
-          { id: "e_position_and", from: "has_position", from_port: "true", to: "risk_and", to_port: "in" },
-          { id: "e_stop_and", from: "price_stop", from_port: "true", to: "risk_and", to_port: "in" },
-          { id: "e_and_close", from: "risk_and", from_port: "true", to: "close_all", to_port: "in" },
-        ],
-      },
-    },
-    rsi_scale: {
-      label: "RSI 分批買賣",
-      workflow: {
-        version: 2,
-        strategy_kind: "workflow_graph",
-        source: "basic_template",
-        name: "RSI 分批買賣",
-        description: "RSI 偏低時分批買入，RSI 偏高且已有持倉時分批賣出。",
-        start_node_id: "start",
-        nodes: [
-          { id: "start", type: "start", label: "開始", x: 80, y: 180 },
-          { id: "rsi_low", type: "condition", label: "RSI <= 30", x: 260, y: 90, condition: { type: "rsi_below", value: 30 } },
-          { id: "buy_step_1", type: "action", label: "買入 10%", x: 500, y: 90, action: { type: "buy_percent", percent: 10, step: 1, order_type: "market" } },
-          { id: "rsi_high", type: "condition", label: "RSI >= 70", x: 260, y: 250, condition: { type: "rsi_above", value: 70 } },
-          { id: "has_position", type: "condition", label: "已有持倉", x: 260, y: 370, condition: { type: "has_position", value: true } },
-          { id: "exit_and", type: "logic", label: "AND", x: 500, y: 310, operator: "AND" },
-          { id: "sell_half", type: "action", label: "賣出 50%", priority: 20, x: 720, y: 310, action: { type: "sell_percent", percent: 50, step: 1, order_type: "market" } },
-        ],
-        edges: [
-          { id: "e_start_low", from: "start", from_port: "out", to: "rsi_low", to_port: "in" },
-          { id: "e_low_buy", from: "rsi_low", from_port: "true", to: "buy_step_1", to_port: "in" },
-          { id: "e_start_high", from: "start", from_port: "out", to: "rsi_high", to_port: "in" },
-          { id: "e_start_position", from: "start", from_port: "out", to: "has_position", to_port: "in" },
-          { id: "e_high_and", from: "rsi_high", from_port: "true", to: "exit_and", to_port: "in" },
-          { id: "e_position_and", from: "has_position", from_port: "true", to: "exit_and", to_port: "in" },
-          { id: "e_and_sell", from: "exit_and", from_port: "true", to: "sell_half", to_port: "in" },
-        ],
-      },
-    },
-  };
+  if (!Array.isArray(tradingState.workflowTemplates) || !tradingState.workflowTemplates.length) return {};
+  return tradingState.workflowTemplates.reduce((acc, item) => {
+    if (item && item.id && item.workflow) {
+      acc[item.id] = {
+          label: item.label || item.id,
+          description: item.description || "",
+          explanation: item.explanation || {},
+          scope: item.scope || "system",
+          source_path: item.source_path || "",
+          workflow: item.workflow,
+      };
+    }
+    return acc;
+  }, {});
+}
+
+function renderTradingWorkflowTemplateOptions() {
+  const select = $("trading-workflow-template-select");
+  if (!select) return;
+  const previous = select.value;
+  const templates = tradingWorkflowTemplates();
+  const entries = Object.entries(templates);
+  if (!entries.length) {
+    select.innerHTML = `<option value="">沒有可用模板</option>`;
+    return;
+  }
+  select.innerHTML = entries.map(([id, item]) => {
+    const scopeLabel = item.scope === "custom" ? "自訂" : "系統";
+    return `<option value="${sanitize(id)}">${sanitize(item.label || id)}（${scopeLabel}）</option>`;
+  }).join("");
+  if (previous && entries.some(([id]) => id === previous)) select.value = previous;
+  renderTradingWorkflowTemplateExplanation();
+}
+
+function tradingWorkflowExplanationList(items) {
+  if (!Array.isArray(items) || !items.length) return "";
+  return `<ul>${items.map((item) => `<li>${sanitize(item)}</li>`).join("")}</ul>`;
+}
+
+function renderTradingWorkflowTemplateExplanation() {
+  const box = $("trading-workflow-template-explanation");
+  if (!box) return;
+  const key = $("trading-workflow-template-select")?.value || "";
+  const item = tradingWorkflowTemplates()[key];
+  if (!item) {
+    box.innerHTML = `<div class="muted">選擇模板後會顯示用途、條件、行為與風險提醒。</div>`;
+    return;
+  }
+  const detail = item.explanation || {};
+  const sections = [
+    ["用途", detail.purpose || item.description],
+    ["觸發條件", tradingWorkflowExplanationList(detail.entry_conditions)],
+    ["執行行為", tradingWorkflowExplanationList(detail.actions)],
+    ["風險提醒", tradingWorkflowExplanationList(detail.risk_notes)],
+    ["適合情境", tradingWorkflowExplanationList(detail.best_for)],
+    ["可調參數", tradingWorkflowExplanationList(detail.tuning)],
+  ].filter(([, content]) => !!content);
+  box.innerHTML = `
+    <div class="drive-card-title">${sanitize(item.label || key)}</div>
+    ${sections.map(([title, content]) => `
+      <div class="workflow-template-section">
+        <strong>${sanitize(title)}</strong>
+        <div>${content.startsWith("<") ? content : sanitize(content)}</div>
+      </div>
+    `).join("")}
+    <div class="muted">來源：${sanitize(item.source_path || item.scope || "workflow")}</div>
+  `;
+}
+
+async function loadTradingWorkflowTemplates({ force = false } = {}) {
+  if (!force && Array.isArray(tradingState.workflowTemplates) && tradingState.workflowTemplates.length) {
+    renderTradingWorkflowTemplateOptions();
+    return;
+  }
+  try {
+    const json = await fetchTradingJson("/trading/workflow-templates");
+    tradingState.workflowTemplates = Array.isArray(json.templates) ? json.templates : [];
+    renderTradingWorkflowTemplateOptions();
+    if (Array.isArray(json.errors) && json.errors.length) {
+      tradingSetMsg(`部分 Workflow 模板載入失敗：${json.errors[0].error || "未知錯誤"}`, false);
+    }
+  } catch (err) {
+    renderTradingWorkflowTemplateOptions();
+    tradingSetMsg(err.message || "Workflow 模板讀取失敗，請確認 workflows/system 內有模板檔", false);
+  }
+}
+
+async function saveTradingWorkflowCustomTemplate() {
+  const textarea = $("trading-auto-workflow-json");
+  if (!textarea) {
+    tradingSetMsg("找不到 Workflow JSON 編輯欄位", false);
+    return;
+  }
+  let workflow;
+  try {
+    workflow = JSON.parse(textarea.value || tradingWorkflowText());
+  } catch (err) {
+    tradingSetMsg("Workflow JSON 格式錯誤，無法儲存自訂模板", false);
+    return;
+  }
+  const label = ($("trading-workflow-custom-name")?.value || workflow.name || "自訂 Workflow").trim();
+  try {
+    const json = await fetchTradingJson("/trading/workflow-templates/custom", {
+      method: "POST",
+      body: JSON.stringify({
+        id: label,
+        label,
+        description: workflow.description || "",
+        workflow,
+      }),
+    });
+    if (json.template) {
+      tradingState.workflowTemplates = [
+        ...(tradingState.workflowTemplates || []).filter((item) => item.id !== json.template.id),
+        json.template,
+      ];
+      renderTradingWorkflowTemplateOptions();
+      const select = $("trading-workflow-template-select");
+      if (select) select.value = json.template.id;
+    } else {
+      await loadTradingWorkflowTemplates({ force: true });
+    }
+    tradingSetMsg(json.msg || "Workflow 自訂模板已儲存到 workflows/custom");
+  } catch (err) {
+    tradingSetMsg(err.message || "Workflow 自訂模板儲存失敗", false);
+  }
 }
 
 function tradingWorkflowTemplate(name = "dip_buy") {
   const templates = tradingWorkflowTemplates();
-  return JSON.parse(JSON.stringify((templates[name] || templates.dip_buy).workflow));
+  const item = templates[name] || templates.dip_buy || Object.values(templates)[0];
+  if (!item || !item.workflow) {
+    return {
+      version: 2,
+      strategy_kind: "workflow_graph",
+      name: "空白 Workflow",
+      start_node_id: "start",
+      nodes: [{ id: "start", type: "start", label: "開始", x: 80, y: 100 }],
+      edges: [],
+    };
+  }
+  return JSON.parse(JSON.stringify(item.workflow));
 }
 
 function applyTradingWorkflowTemplate() {
   const key = $("trading-workflow-template-select")?.value || "dip_buy";
   const templates = tradingWorkflowTemplates();
   const item = templates[key] || templates.dip_buy;
+  if (!item || !item.workflow) {
+    tradingSetMsg("沒有可用 Workflow 模板，請確認 workflows/system 內有模板檔", false);
+    return;
+  }
   const textarea = $("trading-auto-workflow-json");
   if (!textarea) {
     tradingSetMsg("找不到 Workflow JSON 編輯欄位", false);
@@ -1485,6 +1527,7 @@ function applyTradingWorkflowTemplate() {
   }
   textarea.value = JSON.stringify(item.workflow, null, 2);
   localStorage.setItem(TRADING_WORKFLOW_STORAGE_KEY, textarea.value);
+  renderTradingWorkflowTemplateExplanation();
   tradingSetMsg(`已套用基礎模板：${item.label}。請依市場價格調整門檻後再儲存機器人。`);
 }
 
@@ -1775,6 +1818,7 @@ async function loadTradingDashboard() {
   if (!tradingEnabled) return;
   if (card) card.style.display = "";
   try {
+    await loadTradingWorkflowTemplates();
     const json = await fetchTradingJson("/trading/dashboard");
     const payload = json.trading || {};
     tradingState.funding = payload.funding || null;
@@ -1959,10 +2003,6 @@ async function backtestTradingBot() {
     tradingSetMsg("請先選擇回測市場", false);
     return;
   }
-  if (!Array.isArray(candles) || candles.length < 2) {
-    tradingSetMsg("請先載入 Binance 參考圖表再回測", false);
-    return;
-  }
   const botUuid = $("trading-backtest-bot-select")?.value || "";
   const selectedBot = botUuid ? tradingState.bots.find((row) => row.bot_uuid === botUuid) : null;
   const botType = selectedBot ? (selectedBot.bot_type === "dca" ? "dca" : "workflow") : ($("trading-backtest-strategy")?.value || "dca");
@@ -1986,14 +2026,22 @@ async function backtestTradingBot() {
     start_time: $("trading-backtest-start")?.value || "",
     end_time: $("trading-backtest-end")?.value || "",
     slippage_percent: Number($("trading-backtest-slippage-percent")?.value || 0),
-    candles,
   };
+  if (Array.isArray(candles) && candles.length >= 2) {
+    payload.candles = candles;
+    payload.data_source = tradingState.referencePrices?.source || "browser_loaded_chart";
+    payload.provider_symbol = tradingState.referencePrices?.symbol || "";
+  } else {
+    payload.candle_limit = 500;
+    tradingSetMsg("未載入圖表，正在由後端下載歷史 K 線後回測...");
+  }
   try {
     const json = await fetchTradingJson("/trading/bots/backtest", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    const text = `回測完成：交易 ${Number(json.trade_count || 0)} 次，期末 ${formatTradingPointsValue(json.final_value_points)} 點，損益 ${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)} 點，報酬 ${formatTradingPointsValue(json.return_percent)}%`;
+    const sourceText = json.data_source ? `，資料 ${sanitize(json.data_source)} ${Number(json.candle_count || 0)} 根` : "";
+    const text = `回測完成：交易 ${Number(json.trade_count || 0)} 次，期末 ${formatTradingPointsValue(json.final_value_points)} 點，損益 ${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)} 點，報酬 ${formatTradingPointsValue(json.return_percent)}%${sourceText}`;
     if (result) result.textContent = text;
     renderTradingBacktestResult(json);
     tradingSetMsg(text, Number(json.pnl_points || 0) >= 0);
@@ -2013,6 +2061,9 @@ function renderTradingBacktestResult(json) {
       <div><span class="drive-card-sub">最終資金</span><strong>${formatTradingPointsValue(json.final_value_points)}</strong><small>POINTS</small></div>
       <div><span class="drive-card-sub">總損益</span><strong>${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)}</strong><small>${formatTradingPointsValue(json.return_percent)}%</small></div>
       <div><span class="drive-card-sub">交易次數</span><strong>${Number(json.trade_count || 0)}</strong><small>回測未修改帳本</small></div>
+      <div><span class="drive-card-sub">資料來源</span><strong>${sanitize(json.data_source || "-")}</strong><small>${Number(json.candle_count || 0)} 根 K 線</small></div>
+      <div><span class="drive-card-sub">資料範圍</span><strong>${sanitize(String(json.first_candle_time || "-"))}</strong><small>${sanitize(String(json.last_candle_time || "-"))}</small></div>
+      <div><span class="drive-card-sub">回測上限</span><strong>${Number(json.max_backtest_candles || 0).toLocaleString()} 根</strong><small>自動下載單次最多 ${Number(json.provider_candle_limit || json.download_candle_limit || 0).toLocaleString()} 根</small></div>
     `;
   }
   if (trades) {
@@ -2445,6 +2496,7 @@ function bindTradingEvents() {
     ["trading-backtest-run-btn", backtestTradingBot, "正在執行回測...", "回測失敗"],
     ["trading-workflow-load-btn", loadTradingWorkflowFromEditor, "正在載入 Workflow 編輯器結果...", "Workflow 載入失敗"],
     ["trading-workflow-template-apply-btn", applyTradingWorkflowTemplate, "正在套用 Workflow 基礎模板...", "Workflow 模板套用失敗"],
+    ["trading-workflow-custom-save-btn", saveTradingWorkflowCustomTemplate, "正在儲存 Workflow 自訂模板...", "Workflow 自訂模板儲存失敗"],
     ["trading-root-refresh-btn", loadTradingRootReport, "正在讀取 root 交易報告...", "交易報告讀取失敗"],
     ["trading-root-save-market-btn", saveTradingRootMarket, "正在儲存交易市場設定...", "市場設定儲存失敗"],
     ["trading-reserve-allocate-btn", allocateTradingReserve, "正在撥入交易資金池...", "資金池撥入失敗"],
@@ -2461,6 +2513,8 @@ function bindTradingEvents() {
     if (!el) return;
     bindTradingActionButton(el, handler, pendingText, fallbackText);
   });
+  const workflowTemplateSelect = $("trading-workflow-template-select");
+  if (workflowTemplateSelect) workflowTemplateSelect.addEventListener("change", renderTradingWorkflowTemplateExplanation);
   document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       switchTradingBotTab(btn.dataset.tradingBotTab || "dca");

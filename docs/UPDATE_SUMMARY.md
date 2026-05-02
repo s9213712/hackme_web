@@ -1,20 +1,25 @@
 # Update Summary
 
-Release ID: `2026.05.02-041`
+Release ID: `2026.05.02-042`
 
 ## Highlights
 
-- Root GitHub updates now create a `pre_update` server snapshot before applying
-  the selected remote branch.
-- Root GitHub updates now create and verify a `pre_server_update` PointsChain
-  ledger backup before merge.
-- If either the snapshot or PointsChain backup fails, the update is aborted
-  before touching the checked-out source.
-- Successful updates now automatically schedule a server restart.
-- The frontend update center now reports the snapshot id, PointsChain backup id,
-  and restart mode after applying an update.
-- Workflow bot conditions can now evaluate live/backtest unrealized PnL for
-  stop-loss and take-profit percentage rules.
+- Trading Workflow templates now live under `workflows/`, with system templates
+  tracked in `workflows/system/` and user custom templates written under
+  `workflows/custom/<username>/`.
+- Official Workflow templates now include structured explanations covering
+  purpose, trigger conditions, actions, risk notes, suitable usage, and tuning
+  guidance.
+- The trading page loads Workflow templates from the backend, displays template
+  explanations, and supports saving custom templates to the runtime workflow
+  directory.
+- Added `security/trading_workflow_template_validation.py` to validate official
+  templates, confirm trigger behavior, download public K-line data, run backend
+  backtests, and compare results against an independent replay.
+- Backtest responses now expose the engine candle limit and automatic provider
+  download limit so users can see the actual tested range.
+- Trading API 404 errors now render as actionable frontend messages instead of
+  raw `NOT FOUND` text.
 
 ## Operator Notes
 

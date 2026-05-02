@@ -1,0 +1,52 @@
+{
+  "id": "stop_loss",
+  "label": "持倉跌破停損",
+  "description": "已有持倉且價格跌破門檻時，立即全數平倉。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範風險控制策略。只有在帳戶已有持倉且價格跌破指定門檻時，才會觸發全部平倉。",
+    "entry_conditions": [
+      "目前使用者在該市場有持倉。",
+      "價格小於或等於 80000。",
+      "兩個條件必須同時成立。"
+    ],
+    "actions": [
+      "送出全部平倉動作。",
+      "action priority=100，代表它應優先於一般進場策略。"
+    ],
+    "risk_notes": [
+      "停損門檻設太近會造成頻繁出場。",
+      "停損門檻設太遠會讓虧損放大。"
+    ],
+    "best_for": [
+      "搭配其他進場模板使用。",
+      "測試高優先權風控節點。"
+    ],
+    "tuning": [
+      "依持倉成本與可接受虧損調整 price_below。",
+      "可改成 stop_loss_percent 類型，改用百分比風控。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "持倉跌破停損",
+    "description": "已有持倉且價格跌破門檻時，立即全數平倉。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 150 },
+      { "id": "has_position", "type": "condition", "label": "已有持倉", "x": 260, "y": 90, "condition": { "type": "has_position", "value": true } },
+      { "id": "price_stop", "type": "condition", "label": "價格 <= 80000", "x": 260, "y": 210, "condition": { "type": "price_below", "value": 80000 } },
+      { "id": "risk_and", "type": "logic", "label": "AND", "x": 480, "y": 150, "operator": "AND" },
+      { "id": "close_all", "type": "action", "label": "全部平倉", "priority": 100, "x": 680, "y": 150, "action": { "type": "close_all", "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_position", "from": "start", "from_port": "out", "to": "has_position", "to_port": "in" },
+      { "id": "e_start_stop", "from": "start", "from_port": "out", "to": "price_stop", "to_port": "in" },
+      { "id": "e_position_and", "from": "has_position", "from_port": "true", "to": "risk_and", "to_port": "in" },
+      { "id": "e_stop_and", "from": "price_stop", "from_port": "true", "to": "risk_and", "to_port": "in" },
+      { "id": "e_and_close", "from": "risk_and", "from_port": "true", "to": "close_all", "to_port": "in" }
+    ]
+  }
+}

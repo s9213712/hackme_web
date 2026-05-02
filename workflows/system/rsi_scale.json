@@ -1,0 +1,55 @@
+{
+  "id": "rsi_scale",
+  "label": "RSI 分批買賣",
+  "description": "RSI 偏低時分批買入，RSI 偏高且已有持倉時分批賣出。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範震盪指標與分批進出場。RSI 偏低時買入，RSI 偏高且已有持倉時賣出部分持倉。",
+    "entry_conditions": [
+      "RSI 小於或等於 30 時觸發買入分支。",
+      "RSI 大於或等於 70 且已有持倉時觸發賣出分支。"
+    ],
+    "actions": [
+      "低 RSI 分支買入 10%。",
+      "高 RSI 分支賣出 50%。"
+    ],
+    "risk_notes": [
+      "RSI 在強趨勢市場可能長時間維持超買或超賣。",
+      "只有單一 RSI 指標時，容易在趨勢行情中逆勢交易。"
+    ],
+    "best_for": [
+      "震盪行情的回測。",
+      "學習同一 Workflow 內同時放進場與出場分支。"
+    ],
+    "tuning": [
+      "可把 RSI 30/70 改成 35/65 降低觸發門檻。",
+      "可加入 MA 或布林條件避免逆大趨勢交易。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "RSI 分批買賣",
+    "description": "RSI 偏低時分批買入，RSI 偏高且已有持倉時分批賣出。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 180 },
+      { "id": "rsi_low", "type": "condition", "label": "RSI <= 30", "x": 260, "y": 90, "condition": { "type": "rsi_below", "value": 30 } },
+      { "id": "buy_step_1", "type": "action", "label": "買入 10%", "x": 500, "y": 90, "action": { "type": "buy_percent", "percent": 10, "step": 1, "order_type": "market" } },
+      { "id": "rsi_high", "type": "condition", "label": "RSI >= 70", "x": 260, "y": 250, "condition": { "type": "rsi_above", "value": 70 } },
+      { "id": "has_position", "type": "condition", "label": "已有持倉", "x": 260, "y": 370, "condition": { "type": "has_position", "value": true } },
+      { "id": "exit_and", "type": "logic", "label": "AND", "x": 500, "y": 310, "operator": "AND" },
+      { "id": "sell_half", "type": "action", "label": "賣出 50%", "priority": 20, "x": 720, "y": 310, "action": { "type": "sell_percent", "percent": 50, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_low", "from": "start", "from_port": "out", "to": "rsi_low", "to_port": "in" },
+      { "id": "e_low_buy", "from": "rsi_low", "from_port": "true", "to": "buy_step_1", "to_port": "in" },
+      { "id": "e_start_high", "from": "start", "from_port": "out", "to": "rsi_high", "to_port": "in" },
+      { "id": "e_start_position", "from": "start", "from_port": "out", "to": "has_position", "to_port": "in" },
+      { "id": "e_high_and", "from": "rsi_high", "from_port": "true", "to": "exit_and", "to_port": "in" },
+      { "id": "e_position_and", "from": "has_position", "from_port": "true", "to": "exit_and", "to_port": "in" },
+      { "id": "e_and_sell", "from": "exit_and", "from_port": "true", "to": "sell_half", "to_port": "in" }
+    ]
+  }
+}

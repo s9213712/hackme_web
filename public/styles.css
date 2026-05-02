@@ -5302,6 +5302,28 @@
       }
     }
 
+    .workflow-template-section {
+      display: grid;
+      gap: .22rem;
+      padding: .42rem 0;
+      border-top: 1px solid rgba(148, 163, 184, .18);
+      font-size: .82rem;
+      line-height: 1.45;
+    }
+
+    .workflow-template-section:first-of-type {
+      border-top: 0;
+    }
+
+    .workflow-template-section ul {
+      margin: .1rem 0 0 1.05rem;
+      padding: 0;
+    }
+
+    .workflow-template-section li {
+      margin: .12rem 0;
+    }
+
     @media (max-width: 420px) {
       .tetris-touch-controls {
         grid-template-columns: repeat(3, minmax(0, 1fr));

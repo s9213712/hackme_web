@@ -1498,13 +1498,26 @@
                         <option value="breakout_buy">突破追價買入</option>
                         <option value="stop_loss">持倉跌破停損</option>
                         <option value="rsi_scale">RSI 分批買賣</option>
+                        <option value="ma_pullback">MA 趨勢回踩</option>
+                        <option value="bollinger_reversion">布林通道均值回歸</option>
+                        <option value="kd_momentum">KD 動能追蹤</option>
+                        <option value="risk_guard">停利停損風控</option>
                       </select>
                     </div>
                     <div class="field">
                       <label>操作</label>
                       <button class="btn" id="trading-workflow-template-apply-btn" type="button">套用模板</button>
                     </div>
+                    <div class="field">
+                      <label>自訂模板名稱</label>
+                      <input id="trading-workflow-custom-name" type="text" placeholder="例如：我的 MA 策略">
+                    </div>
+                    <div class="field">
+                      <label>儲存</label>
+                      <button class="btn" id="trading-workflow-custom-save-btn" type="button">儲存為自訂模板</button>
+                    </div>
                   </div>
+                  <div id="trading-workflow-template-explanation" class="drive-file-list" style="margin:.55rem 0;"></div>
                   <textarea id="trading-auto-workflow-json" rows="10" spellcheck="false" placeholder="從 Workflow 編輯器產生的 JSON 會貼在這裡"></textarea>
                 </div>
                 <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">

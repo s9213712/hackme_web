@@ -1,12 +1,15 @@
 import json
+import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from flask import request
 
 from services.btc_trade_bridge import btc_trade_status, expand_server_path
+from services.trading_engine import MAX_BACKTEST_CANDLES
 
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
@@ -60,6 +63,11 @@ GEMINI_TIMEFRAMES = {"5m": "5m", "15m": "15m", "1h": "1hr", "1d": "1day"}
 BITSTAMP_STEP_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
+BACKTEST_PROVIDER_CANDLE_LIMIT = 1000
+WORKFLOW_ROOT = Path(__file__).resolve().parents[1] / "workflows"
+WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "system"
+WORKFLOW_CUSTOM_DIR = WORKFLOW_ROOT / "custom"
+WORKFLOW_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
 def register_trading_routes(app, deps):
@@ -113,6 +121,65 @@ def register_trading_routes(app, deps):
         if not isinstance(data, dict):
             return None, json_resp({"ok": False, "msg": "Invalid request"}, 400)
         return data, None
+
+    def workflow_user_slug(actor):
+        raw = str(actor_value(actor, "username", "") or actor_value(actor, "id", "user")).strip()
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")
+        return slug[:80] or "user"
+
+    def workflow_template_slug(value, fallback="workflow"):
+        raw = str(value or fallback).strip()
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")
+        slug = slug[:80] or fallback
+        if not WORKFLOW_SLUG_RE.match(slug):
+            raise ValueError("workflow template id must use letters, numbers, dash, or underscore")
+        return slug
+
+    def relative_workflow_path(path):
+        try:
+            return path.resolve().relative_to(WORKFLOW_ROOT.resolve()).as_posix()
+        except Exception:
+            return path.name
+
+    def load_workflow_template_file(path, *, scope):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(f"workflow template cannot be loaded: {path.name}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"workflow template must be an object: {path.name}")
+        workflow = payload.get("workflow") if isinstance(payload.get("workflow"), dict) else payload
+        validated = trading_service._validate_workflow(workflow)
+        template_id = workflow_template_slug(payload.get("id") or validated.get("name") or path.stem, path.stem)
+        return {
+            "id": template_id,
+            "label": str(payload.get("label") or validated.get("name") or template_id),
+            "description": str(payload.get("description") or validated.get("description") or ""),
+            "explanation": payload.get("explanation") if isinstance(payload.get("explanation"), dict) else {},
+            "scope": scope,
+            "source_path": relative_workflow_path(path),
+            "workflow": validated,
+        }
+
+    def workflow_template_files_for(actor):
+        files = []
+        if WORKFLOW_SYSTEM_DIR.is_dir():
+            files.extend(("system", path) for path in sorted(WORKFLOW_SYSTEM_DIR.glob("*.json")))
+        if actor:
+            custom_dir = WORKFLOW_CUSTOM_DIR / workflow_user_slug(actor)
+            if custom_dir.is_dir():
+                files.extend(("custom", path) for path in sorted(custom_dir.glob("*.json")))
+        return files
+
+    def list_workflow_templates(actor):
+        templates = []
+        errors = []
+        for scope, path in workflow_template_files_for(actor):
+            try:
+                templates.append(load_workflow_template_file(path, scope=scope))
+            except Exception as exc:
+                errors.append({"file": relative_workflow_path(path), "error": str(exc)})
+        return templates, errors
 
     def service_error(exc):
         msg = str(exc) or exc.__class__.__name__
@@ -221,8 +288,13 @@ def register_trading_routes(app, deps):
             "price_points": price_to_points(close_price),
         }
 
-    def fetch_binance_reference_candles(binance_symbol, interval, limit):
-        query = urlencode({"symbol": binance_symbol, "interval": interval, "limit": limit})
+    def fetch_binance_reference_candles(binance_symbol, interval, limit, *, start_ms=None, end_ms=None):
+        query_data = {"symbol": binance_symbol, "interval": interval, "limit": limit}
+        if start_ms is not None:
+            query_data["startTime"] = int(start_ms)
+        if end_ms is not None:
+            query_data["endTime"] = int(end_ms)
+        query = urlencode(query_data)
         payload = fetch_json_url(f"{BINANCE_KLINES_URL}?{query}")
         if not isinstance(payload, list):
             raise ValueError("Binance 參考價格格式錯誤")
@@ -395,8 +467,7 @@ def register_trading_routes(app, deps):
 
     def fetch_reference_candles_for_backtest(data):
         market_symbol = str(data.get("market_symbol") or data.get("market") or "BTC/USDT").strip().upper()
-        binance_symbol = REFERENCE_PRICE_MARKETS.get(market_symbol)
-        if not binance_symbol:
+        if market_symbol not in REFERENCE_PRICE_MARKETS:
             raise ValueError("unsupported backtest market")
         interval = str(data.get("timeframe") or data.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
@@ -405,54 +476,34 @@ def register_trading_routes(app, deps):
             limit = int(data.get("limit") or data.get("candle_limit") or 500)
         except Exception:
             raise ValueError("backtest candle limit is invalid")
-        query = {
-            "symbol": binance_symbol,
-            "interval": interval,
-            "limit": max(2, min(limit, 1000)),
-        }
+        if limit > MAX_BACKTEST_CANDLES:
+            raise ValueError(f"backtest candle limit must be <= {MAX_BACKTEST_CANDLES}")
+        download_limit = max(2, min(limit, BACKTEST_PROVIDER_CANDLE_LIMIT))
         start_ms = parse_time_ms(data.get("start_time"))
         end_ms = parse_time_ms(data.get("end_time"))
-        if start_ms is not None:
-            query["startTime"] = start_ms
-        if end_ms is not None:
-            query["endTime"] = end_ms
-        req = Request(
-            f"{BINANCE_KLINES_URL}?{urlencode(query)}",
-            headers={"User-Agent": "hackme_web/1.0 trading-backtest"},
-        )
-        with urlopen(req, timeout=8) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, list):
-            raise ValueError("backtest price provider returned invalid data")
-        candles = []
-        for item in payload:
+        if start_ms is not None or end_ms is not None:
             try:
-                open_time = int(item[0])
-                open_price = float(item[1])
-                high_price = float(item[2])
-                low_price = float(item[3])
-                close_price = float(item[4])
+                provider_result = fetch_binance_reference_candles(
+                    REFERENCE_PRICE_MARKETS.get(market_symbol),
+                    interval,
+                    download_limit,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                )
             except Exception:
-                continue
-            if min(open_price, high_price, low_price, close_price) <= 0:
-                continue
-            candles.append({
-                "time": open_time,
-                "time_iso": datetime.fromtimestamp(open_time / 1000, tz=timezone.utc).isoformat(),
-                "open_usdt": open_price,
-                "high_usdt": high_price,
-                "low_usdt": low_price,
-                "close_usdt": close_price,
-                "open_points": price_to_points(open_price),
-                "high_points": price_to_points(high_price),
-                "low_points": price_to_points(low_price),
-                "close_points": price_to_points(close_price),
-                "price_usdt": close_price,
-                "price_points": price_to_points(close_price),
-            })
+                provider_result = fetch_reference_candles_with_fallback(market_symbol, interval, download_limit)
+        else:
+            provider_result = fetch_reference_candles_with_fallback(market_symbol, interval, download_limit)
+        candles = provider_result.get("candles") or []
         if len(candles) < 2:
             raise ValueError("backtest price provider returned too few candles")
-        return candles
+        return {
+            "source": provider_result.get("source") or "unknown_price_provider",
+            "symbol": provider_result.get("symbol") or market_symbol,
+            "candles": candles,
+            "requested_limit": limit,
+            "download_limit": download_limit,
+        }
 
     @app.route("/api/trading/markets", methods=["GET"])
     @require_csrf_safe
@@ -491,6 +542,61 @@ def register_trading_routes(app, deps):
             "signal": status.get("signal") if status.get("available") else None,
             "msg": status.get("message") or "",
         })
+
+    @app.route("/api/trading/workflow-templates", methods=["GET"])
+    @require_csrf_safe
+    def trading_workflow_templates():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        templates, errors = list_workflow_templates(actor)
+        return json_resp({
+            "ok": not bool(errors),
+            "templates": templates,
+            "system": [item for item in templates if item.get("scope") == "system"],
+            "custom": [item for item in templates if item.get("scope") == "custom"],
+            "workflow_root": "workflows",
+            "errors": errors,
+        })
+
+    @app.route("/api/trading/workflow-templates/custom", methods=["POST"])
+    @require_csrf
+    def trading_workflow_templates_save_custom():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            workflow = trading_service._validate_workflow(data.get("workflow") or data.get("workflow_json"))
+            template_id = workflow_template_slug(data.get("id") or data.get("label") or workflow.get("name"), "custom_workflow")
+            label = str(data.get("label") or workflow.get("name") or template_id).strip()[:120] or template_id
+            description = str(data.get("description") or workflow.get("description") or "").strip()[:500]
+            custom_dir = WORKFLOW_CUSTOM_DIR / workflow_user_slug(actor)
+            custom_dir.mkdir(parents=True, exist_ok=True)
+            path = custom_dir / f"{template_id}.json"
+            payload = {
+                "id": template_id,
+                "label": label,
+                "description": description,
+                "explanation": data.get("explanation") if isinstance(data.get("explanation"), dict) else {},
+                "scope": "custom",
+                "workflow": workflow,
+            }
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            item = load_workflow_template_file(path, scope="custom")
+            audit(
+                "TRADING_WORKFLOW_TEMPLATE_SAVED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"template_id={template_id}, path={relative_workflow_path(path)}",
+            )
+            return json_resp({"ok": True, "template": item, "msg": "Workflow 自訂模板已儲存"})
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/trading/reference-prices", methods=["GET"])
     @require_csrf_safe
@@ -645,9 +751,20 @@ def register_trading_routes(app, deps):
         if err:
             return err
         try:
-            if not isinstance(data.get("candles"), list):
-                data["candles"] = fetch_reference_candles_for_backtest(data)
+            if not isinstance(data.get("candles"), list) or len(data.get("candles") or []) < 2:
+                fetched = fetch_reference_candles_for_backtest(data)
+                data["candles"] = fetched["candles"]
+                data["data_source"] = fetched["source"]
+                data["provider_symbol"] = fetched["symbol"]
+                data["requested_candle_limit"] = fetched.get("requested_limit")
+                data["download_candle_limit"] = fetched.get("download_limit")
             result = trading_service.backtest_trading_bot(actor=actor, payload=data)
+            result["data_source"] = result.get("data_source") or data.get("data_source") or ("browser_loaded_chart" if isinstance((data or {}).get("candles"), list) else "")
+            result["provider_symbol"] = result.get("provider_symbol") or data.get("provider_symbol") or ""
+            result["max_backtest_candles"] = MAX_BACKTEST_CANDLES
+            result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
+            result["requested_candle_limit"] = data.get("requested_candle_limit") or data.get("candle_limit") or data.get("limit") or len(data.get("candles") or [])
+            result["download_candle_limit"] = data.get("download_candle_limit") or len(data.get("candles") or [])
             audit(
                 "TRADING_BOT_BACKTEST",
                 get_client_ip(),

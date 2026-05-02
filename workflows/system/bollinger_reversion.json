@@ -1,0 +1,55 @@
+{
+  "id": "bollinger_reversion",
+  "label": "布林通道均值回歸",
+  "description": "價格跌破布林下軌時買入，回到中線上方且已有持倉時賣出一半。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範布林通道均值回歸。價格低於下軌時視為偏離均值，回到中線上方後分批獲利了結。",
+    "entry_conditions": [
+      "價格低於布林下軌時觸發買入分支。",
+      "價格回到布林中線上方且已有持倉時觸發賣出分支。"
+    ],
+    "actions": [
+      "跌破下軌時買入 10%。",
+      "回到中線上方時賣出 50%。"
+    ],
+    "risk_notes": [
+      "趨勢崩跌時，價格可能沿著下軌持續下跌。",
+      "均值回歸策略需要搭配最大虧損或停損保護。"
+    ],
+    "best_for": [
+      "震盪市場與區間行情。",
+      "學習同一模板中設定買入與部分賣出。"
+    ],
+    "tuning": [
+      "可調整布林週期或標準差參數，後續若 UI 支援可直接改節點參數。",
+      "可加入 stop_loss_percent 作為安全分支。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "布林通道均值回歸",
+    "description": "價格跌破布林下軌時買入，回到中線上方且已有持倉時賣出一半。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 210 },
+      { "id": "below_lower", "type": "condition", "label": "低於布林下軌", "x": 260, "y": 110, "condition": { "type": "bb_position", "position": "below_lower" } },
+      { "id": "buy_reversion", "type": "action", "label": "買入 10%", "x": 520, "y": 110, "action": { "type": "buy_percent", "percent": 10, "step": 1, "order_type": "market" } },
+      { "id": "above_mid", "type": "condition", "label": "回到布林中線上", "x": 260, "y": 270, "condition": { "type": "bb_position", "position": "above_mid" } },
+      { "id": "has_position", "type": "condition", "label": "已有持倉", "x": 260, "y": 390, "condition": { "type": "has_position", "value": true } },
+      { "id": "exit_and", "type": "logic", "label": "AND", "x": 520, "y": 330, "operator": "AND" },
+      { "id": "sell_half", "type": "action", "label": "賣出 50%", "priority": 20, "x": 760, "y": 330, "action": { "type": "sell_percent", "percent": 50, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_lower", "from": "start", "from_port": "out", "to": "below_lower", "to_port": "in" },
+      { "id": "e_lower_buy", "from": "below_lower", "from_port": "true", "to": "buy_reversion", "to_port": "in" },
+      { "id": "e_start_mid", "from": "start", "from_port": "out", "to": "above_mid", "to_port": "in" },
+      { "id": "e_start_pos", "from": "start", "from_port": "out", "to": "has_position", "to_port": "in" },
+      { "id": "e_mid_and", "from": "above_mid", "from_port": "true", "to": "exit_and", "to_port": "in" },
+      { "id": "e_pos_and", "from": "has_position", "from_port": "true", "to": "exit_and", "to_port": "in" },
+      { "id": "e_exit_sell", "from": "exit_and", "from_port": "true", "to": "sell_half", "to_port": "in" }
+    ]
+  }
+}

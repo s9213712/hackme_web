@@ -1,0 +1,63 @@
+{
+  "id": "staged_profit_taking",
+  "label": "分批獲利了結",
+  "description": "獲利 10% 先賣出 40%，獲利 20% 全部了結；持倉虧損 8% 立即全平止損。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "示範三路並行的風控策略：輕微獲利時分批減倉，大幅獲利時清倉，同時設定止損底線。讓帳面獲利不會因等待更高目標而回吐。",
+    "entry_conditions": [
+      "虧損達 8% 時觸發止損分支（priority=100，最優先）。",
+      "獲利達 20% 時觸發全部了結分支（priority=70）。",
+      "獲利達 10% 且已有持倉時觸發分批賣出分支（priority=60）。"
+    ],
+    "actions": [
+      "止損：close_all，優先度最高，可重複觸發。",
+      "全部了結（+20%）：close_all，可重複觸發。",
+      "分批賣出（+10%）：sell_percent 40%，只執行一次（step=1）。"
+    ],
+    "risk_notes": [
+      "sell_percent 只執行一次，若需再次觸發須重置機器人狀態。",
+      "三個分支都從 start 獨立發出，任何一個條件成立就執行對應動作。",
+      "市價單在流動性不足時可能有滑價。"
+    ],
+    "best_for": [
+      "測試多個優先度不同的出場路徑。",
+      "希望先保住部分獲利再追更高目標的使用者。"
+    ],
+    "tuning": [
+      "調整 take_profit_percent 閾值以符合個人風報比。",
+      "sell_percent 的 40% 可改成 30% 或 50%，依倉位管理偏好設定。",
+      "若不需要分批，可刪去 sell_40 分支，只保留止損與全平。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "分批獲利了結",
+    "description": "獲利 10% 先賣出 40%，獲利 20% 全部了結；持倉虧損 8% 立即全平止損。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start",       "type": "start",     "label": "開始",         "x":  80, "y": 270 },
+      { "id": "sl_cond",     "type": "condition", "label": "虧損 >= 8%",   "x": 260, "y":  90, "condition": { "type": "stop_loss_percent",  "value":  8 } },
+      { "id": "close_sl",    "type": "action",    "label": "全平止損",     "x": 540, "y":  90, "priority": 100, "action": { "type": "close_all",     "step": 1, "order_type": "market" } },
+      { "id": "tp20_cond",   "type": "condition", "label": "獲利 >= 20%",  "x": 260, "y": 210, "condition": { "type": "take_profit_percent", "value": 20 } },
+      { "id": "close_tp20",  "type": "action",    "label": "全部了結",     "x": 540, "y": 210, "priority":  70, "action": { "type": "close_all",     "step": 1, "order_type": "market" } },
+      { "id": "tp10_cond",   "type": "condition", "label": "獲利 >= 10%",  "x": 260, "y": 350, "condition": { "type": "take_profit_percent", "value": 10 } },
+      { "id": "has_pos",     "type": "condition", "label": "已有持倉",     "x": 260, "y": 450, "condition": { "type": "has_position",        "value": true } },
+      { "id": "partial_and", "type": "logic",     "label": "AND",          "x": 420, "y": 400, "operator": "AND" },
+      { "id": "sell_40",     "type": "action",    "label": "賣出 40%",     "x": 600, "y": 400, "priority":  60, "action": { "type": "sell_percent",   "percent": 40, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_sl",       "from": "start",       "from_port": "out",  "to": "sl_cond",    "to_port": "in" },
+      { "id": "e_s_tp20",     "from": "start",       "from_port": "out",  "to": "tp20_cond",  "to_port": "in" },
+      { "id": "e_s_tp10",     "from": "start",       "from_port": "out",  "to": "tp10_cond",  "to_port": "in" },
+      { "id": "e_s_pos",      "from": "start",       "from_port": "out",  "to": "has_pos",    "to_port": "in" },
+      { "id": "e_sl_close",   "from": "sl_cond",     "from_port": "true", "to": "close_sl",   "to_port": "in" },
+      { "id": "e_tp20_close", "from": "tp20_cond",   "from_port": "true", "to": "close_tp20", "to_port": "in" },
+      { "id": "e_tp10_and",   "from": "tp10_cond",   "from_port": "true", "to": "partial_and","to_port": "in" },
+      { "id": "e_pos_and",    "from": "has_pos",     "from_port": "true", "to": "partial_and","to_port": "in" },
+      { "id": "e_and_sell",   "from": "partial_and", "from_port": "true", "to": "sell_40",    "to_port": "in" }
+    ]
+  }
+}

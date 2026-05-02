@@ -1,0 +1,52 @@
+{
+  "id": "breakout_buy",
+  "label": "突破追價買入",
+  "description": "價格突破門檻且站上 MA50 時，以可用資金 15% 市價買入。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "用來示範突破型動能策略。策略要求價格突破指定門檻，同時位於 MA50 上方，避免只因短暫拉高就追價。",
+    "entry_conditions": [
+      "價格大於或等於 100000。",
+      "目前價格在 MA50 上方。",
+      "兩個條件必須同時成立，AND 節點才會放行。"
+    ],
+    "actions": [
+      "用可用資金的 15% 送出市價買入。",
+      "此模板只示範進場，不包含停利或停損。"
+    ],
+    "risk_notes": [
+      "突破後可能立刻回落，稱為假突破。",
+      "若沒有搭配停損模板或風控模板，持倉風險會留在帳上。"
+    ],
+    "best_for": [
+      "測試多條件 AND 節點。",
+      "趨勢行情或突破行情的基礎策略。"
+    ],
+    "tuning": [
+      "依市場波動調整 price_above 門檻。",
+      "可把 MA50 改成 MA20 或 MA200 以測試不同趨勢週期。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "突破追價買入",
+    "description": "價格突破門檻且站上 MA50 時，以可用資金 15% 市價買入。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start", "type": "start", "label": "開始", "x": 80, "y": 150 },
+      { "id": "price_breakout", "type": "condition", "label": "價格 >= 100000", "x": 260, "y": 90, "condition": { "type": "price_above", "value": 100000 } },
+      { "id": "above_ma50", "type": "condition", "label": "站上 MA50", "x": 260, "y": 210, "condition": { "type": "ma_position", "period": 50, "position": "above" } },
+      { "id": "both_true", "type": "logic", "label": "AND", "x": 480, "y": 150, "operator": "AND" },
+      { "id": "buy_15_percent", "type": "action", "label": "買入 15%", "x": 680, "y": 150, "action": { "type": "buy_percent", "percent": 15, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_start_breakout", "from": "start", "from_port": "out", "to": "price_breakout", "to_port": "in" },
+      { "id": "e_start_ma", "from": "start", "from_port": "out", "to": "above_ma50", "to_port": "in" },
+      { "id": "e_breakout_and", "from": "price_breakout", "from_port": "true", "to": "both_true", "to_port": "in" },
+      { "id": "e_ma_and", "from": "above_ma50", "from_port": "true", "to": "both_true", "to_port": "in" },
+      { "id": "e_and_buy", "from": "both_true", "from_port": "true", "to": "buy_15_percent", "to_port": "in" }
+    ]
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "id": "full_entry_exit",
+  "label": "完整進出場策略",
+  "description": "價格低於門檻且空倉時買入，持倉後虧損 10% 觸發止損全平，獲利 15% 觸發止盈全平。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "示範一個含進場、止損、止盈的完整獨立策略。三條路徑從同一個 start 分出，各自判斷後觸發對應動作，無需拆成多個機器人。",
+    "entry_conditions": [
+      "目前空倉（has_position = false）。",
+      "價格小於或等於 85000。",
+      "兩個條件同時成立才進場，避免持倉中重複加碼。"
+    ],
+    "actions": [
+      "進場：以可用資金 80% 市價買入。",
+      "止損：虧損達 10% 時，以 priority=100 立即全平。",
+      "止盈：獲利達 15% 時，以 priority=80 全部了結。"
+    ],
+    "risk_notes": [
+      "止損與止盈節點使用 close_all，可重複觸發（不受 executed_action_ids 限制）。",
+      "進場 buy_entry 只執行一次（step=1 完成後不再執行），若需重複進場請增加步驟或另設機器人。",
+      "price_below 門檻須依交易對價格調整，預設 85000 僅為示例。"
+    ],
+    "best_for": [
+      "初次使用多路徑 Workflow 的使用者。",
+      "需要一個模板同時含進場與風控的場景。"
+    ],
+    "tuning": [
+      "修改 price_below 門檻符合當前市價。",
+      "依風險偏好調整 stop_loss_percent（建議 5–15%）與 take_profit_percent（建議 10–30%）。",
+      "將 buy_percent 從 80% 改為較小比例可降低單次倉位風險。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "完整進出場策略",
+    "description": "價格低於門檻且空倉時買入，持倉後虧損 10% 觸發止損全平，獲利 15% 觸發止盈全平。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start",           "type": "start",     "label": "開始",          "x":  80, "y": 240 },
+      { "id": "no_position",     "type": "condition", "label": "目前空倉",       "x": 260, "y": 120, "condition": { "type": "has_position",      "value": false } },
+      { "id": "price_dip",       "type": "condition", "label": "價格 <= 85000",  "x": 260, "y": 220, "condition": { "type": "price_below",        "value": 85000 } },
+      { "id": "entry_and",       "type": "logic",     "label": "AND",           "x": 480, "y": 170, "operator": "AND" },
+      { "id": "buy_entry",       "type": "action",    "label": "買入 80%",       "x": 700, "y": 170, "priority":  10, "action": { "type": "buy_percent",  "percent": 80, "step": 1, "order_type": "market" } },
+      { "id": "stop_loss_cond",  "type": "condition", "label": "虧損 >= 10%",   "x": 260, "y": 340, "condition": { "type": "stop_loss_percent",  "value": 10 } },
+      { "id": "close_sl",        "type": "action",    "label": "止損全平",       "x": 700, "y": 340, "priority": 100, "action": { "type": "close_all",    "step": 1, "order_type": "market" } },
+      { "id": "take_profit_cond","type": "condition", "label": "獲利 >= 15%",   "x": 260, "y": 440, "condition": { "type": "take_profit_percent", "value": 15 } },
+      { "id": "close_tp",        "type": "action",    "label": "止盈全平",       "x": 700, "y": 440, "priority":  80, "action": { "type": "close_all",    "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_nop",    "from": "start",           "from_port": "out",  "to": "no_position",      "to_port": "in" },
+      { "id": "e_s_dip",    "from": "start",           "from_port": "out",  "to": "price_dip",        "to_port": "in" },
+      { "id": "e_s_sl",     "from": "start",           "from_port": "out",  "to": "stop_loss_cond",   "to_port": "in" },
+      { "id": "e_s_tp",     "from": "start",           "from_port": "out",  "to": "take_profit_cond", "to_port": "in" },
+      { "id": "e_nop_and",  "from": "no_position",     "from_port": "true", "to": "entry_and",        "to_port": "in" },
+      { "id": "e_dip_and",  "from": "price_dip",       "from_port": "true", "to": "entry_and",        "to_port": "in" },
+      { "id": "e_and_buy",  "from": "entry_and",       "from_port": "true", "to": "buy_entry",        "to_port": "in" },
+      { "id": "e_sl_close", "from": "stop_loss_cond",  "from_port": "true", "to": "close_sl",         "to_port": "in" },
+      { "id": "e_tp_close", "from": "take_profit_cond","from_port": "true", "to": "close_tp",         "to_port": "in" }
+    ]
+  }
+}

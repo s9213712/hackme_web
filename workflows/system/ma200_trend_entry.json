@@ -1,0 +1,60 @@
+{
+  "id": "ma200_trend_entry",
+  "label": "MA200 長線趨勢進場",
+  "description": "確認長期牛市（站上 MA200）且 MA50 上升、RSI 未過熱時，以 15% 資金分批買入，設 6 小時冷卻避免追高。",
+  "scope": "system",
+  "explanation": {
+    "purpose": "示範以 MA200 作為長期趨勢過濾器，確認大環境在牛市（價格在 MA200 上方）才允許進場，再加上 MA50 與 RSI 的中短期確認，避免在空頭市場逆勢進場。",
+    "entry_conditions": [
+      "價格站在 MA200 上方（長期趨勢多頭）。",
+      "價格站在 MA50 上方（中期趨勢多頭）。",
+      "RSI 小於或等於 60（動能尚未過熱，非追高）。",
+      "三個條件同時成立後，還需通過 6 小時冷卻才進場。"
+    ],
+    "actions": [
+      "以可用資金的 15% 市價買入。",
+      "6 小時冷卻防止同一趨勢期間過度重複加倉。"
+    ],
+    "risk_notes": [
+      "MA200 上方不代表不會回調，趨勢中仍有波動風險。",
+      "此模板只含進場邏輯，建議與 risk_guard 或 full_entry_exit 搭配使用。",
+      "MA200 需要 200 根 K 棒才能計算，數據不足時條件不成立。"
+    ],
+    "best_for": [
+      "長線多頭趨勢的分批建倉。",
+      "學習三條件 AND 過濾與控制節點的冷卻機制。"
+    ],
+    "tuning": [
+      "可把 RSI 門檻從 60 降至 50，要求更明確的拉回再進場。",
+      "可把冷卻從 6 小時改為 12 或 24 小時，降低倉位累積速度。",
+      "可把 buy_percent 調低至 5–10% 以更保守的方式建倉。"
+    ]
+  },
+  "workflow": {
+    "version": 2,
+    "strategy_kind": "workflow_graph",
+    "source": "system_template",
+    "name": "MA200 長線趨勢進場",
+    "description": "確認長期牛市（站上 MA200）且 MA50 上升、RSI 未過熱時，以 15% 資金分批買入，設 6 小時冷卻避免追高。",
+    "start_node_id": "start",
+    "nodes": [
+      { "id": "start",       "type": "start",     "label": "開始",       "x":  80, "y": 190 },
+      { "id": "above_ma200", "type": "condition", "label": "站上 MA200", "x": 260, "y":  90, "condition": { "type": "ma_position", "period": 200, "position": "above" } },
+      { "id": "above_ma50",  "type": "condition", "label": "站上 MA50",  "x": 260, "y": 190, "condition": { "type": "ma_position", "period":  50, "position": "above" } },
+      { "id": "rsi_ok",      "type": "condition", "label": "RSI <= 60",  "x": 260, "y": 290, "condition": { "type": "rsi_below",   "value": 60 } },
+      { "id": "trend_and",   "type": "logic",     "label": "AND",        "x": 480, "y": 190, "operator": "AND" },
+      { "id": "cooldown",    "type": "control",   "label": "冷卻 6 小時","x": 660, "y": 190, "cooldown_seconds": 21600, "max_runs": 100 },
+      { "id": "buy_15",      "type": "action",    "label": "買入 15%",   "x": 860, "y": 190, "priority": 10, "action": { "type": "buy_percent", "percent": 15, "step": 1, "order_type": "market" } }
+    ],
+    "edges": [
+      { "id": "e_s_ma200",   "from": "start",      "from_port": "out",  "to": "above_ma200", "to_port": "in" },
+      { "id": "e_s_ma50",    "from": "start",      "from_port": "out",  "to": "above_ma50",  "to_port": "in" },
+      { "id": "e_s_rsi",     "from": "start",      "from_port": "out",  "to": "rsi_ok",      "to_port": "in" },
+      { "id": "e_ma200_and", "from": "above_ma200","from_port": "true", "to": "trend_and",   "to_port": "in" },
+      { "id": "e_ma50_and",  "from": "above_ma50", "from_port": "true", "to": "trend_and",   "to_port": "in" },
+      { "id": "e_rsi_and",   "from": "rsi_ok",     "from_port": "true", "to": "trend_and",   "to_port": "in" },
+      { "id": "e_and_cool",  "from": "trend_and",  "from_port": "true", "to": "cooldown",    "to_port": "in" },
+      { "id": "e_cool_buy",  "from": "cooldown",   "from_port": "then", "to": "buy_15",      "to_port": "in" }
+    ]
+  }
+}

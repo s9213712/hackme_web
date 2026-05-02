@@ -3178,7 +3178,7 @@ class TradingEngineService:
             action_id = node["id"]
             if action.get("type") != "close_all" and action_id in executed:
                 continue
-            if action.get("type") != "close_all" and int(action.get("step") or 1) <= int(branch_counts.get(action_id, run_count or 0)):
+            if action.get("type") != "close_all" and int(action.get("step") or 1) <= int(branch_counts.get(action_id, 0)):
                 continue
             gates = incoming.get(action_id) or []
             matched = all(edge_value(edge) for edge in gates) if gates else False
@@ -3632,6 +3632,13 @@ class TradingEngineService:
             "ok": True,
             "strategy": strategy,
             "market_symbol": market["symbol"],
+            "data_source": str(payload.get("data_source") or ("provided_candles" if payload.get("candles") else "")),
+            "provider_symbol": str(payload.get("provider_symbol") or ""),
+            "candle_count": len(candles),
+            "max_backtest_candles": MAX_BACKTEST_CANDLES,
+            "requested_candle_limit": payload.get("requested_candle_limit") or payload.get("candle_limit") or payload.get("limit") or len(candles),
+            "first_candle_time": candles[0].get("time_iso") or candles[0].get("time") if candles else "",
+            "last_candle_time": candles[-1].get("time_iso") or candles[-1].get("time") if candles else "",
             "initial_cash_points": initial_cash,
             "cash_points": cash,
             "position_quantity": units_to_quantity(units),
