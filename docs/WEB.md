@@ -66,6 +66,20 @@ Cloud Drive supports:
 - album creation and album viewing
 - share links for storage files
 
+Privacy / encryption modes are deliberately explicit because not every mode is
+end-to-end encrypted:
+
+| Mode | Best for | Server can read plaintext | Scan / preview | Main risk |
+|---|---|---:|---|---|
+| `private_scannable` | Normal personal cloud-drive files | Yes | Server scan and preview after policy allows | Not E2EE; server-side code can process the file |
+| `public_attachment` | Attachments, album display, shared files | Yes | Best preview/share compatibility | Not for confidential material |
+| `e2ee_vault` | Highly private storage | No | Server can only inspect ciphertext/metadata; preview is limited | Browser-local vault key loss can make the file unrecoverable |
+| `e2ee_vault_with_client_scan` | Highly private storage with a browser-side scan report | No | Client report is informational and not fully trusted by the server | Same key-loss risk; scan report is not authoritative |
+
+Use `private_scannable` when users need normal cloud-drive behavior. Use E2EE
+only when confidentiality is more important than server-side preview, scanning,
+and recovery support.
+
 Remote downloads are integrated into Cloud Drive:
 
 - HTTP/HTTPS direct links

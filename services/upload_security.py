@@ -944,10 +944,10 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=No
         restrictions.append("root 雲端硬碟使用量已超過磁碟安全警示線 80%，請清理檔案或擴充儲存空間")
 
     modes = {
-        "public_attachment": "可掃毒、可預覽、站方可處理明文",
-        "private_scannable": "可掃毒、掃描後伺服器端加密保存",
-        "e2ee_vault": "端到端加密，server/root/admin 不可讀，掃毒能力受限",
-        "e2ee_vault_with_client_scan": "端到端加密加本機掃描回報，回報不可完全信任",
+        "public_attachment": "附件/分享用，伺服器可讀明文並掃描，不適合機密資料",
+        "private_scannable": "一般私密檔案，伺服器可讀明文並掃描，靠權限控管存取",
+        "e2ee_vault": "瀏覽器端加密後上傳，server/root/admin 不可讀，掃毒與預覽受限",
+        "e2ee_vault_with_client_scan": "瀏覽器端加密後上傳，附本機掃描回報；回報不可完全信任",
     }
     return {
         "policy": policy,

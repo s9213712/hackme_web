@@ -249,11 +249,16 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
 
-    assert 'value="private_scannable">私密檔案（伺服器掃毒後保存）' in index_html
-    assert 'value="public_attachment">公開附件（可預覽、可分享）' in index_html
+    assert 'value="private_scannable">一般私密檔案（可掃毒、可預覽）' in index_html
+    assert 'value="public_attachment">附件/分享用（可預覽、可授權分享）' in index_html
     assert 'value="e2ee_vault">端到端加密（站方無法讀取）' in index_html
     assert 'value="e2ee_vault_with_client_scan">端到端加密（附本機掃描回報）' in index_html
+    assert "四種模式怎麼選" in index_html
+    assert "非 E2EE 會讓伺服器取得明文" in index_html
     assert "drivePrivacyModeLabel(file.privacy_mode)" in drive_js
+    assert "DRIVE_PRIVACY_MODE_COMPARISON" in drive_js
+    assert "一般私密檔案" in drive_js
+    assert "站方無法讀取" in drive_js
     assert "root 上限：儲存磁碟可用空間 90%" in drive_js
     assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js

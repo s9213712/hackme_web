@@ -1406,6 +1406,65 @@
       font-size: .73rem;
     }
 
+    .field-help {
+      margin-top: .32rem;
+      color: var(--muted);
+      font-size: .74rem;
+      line-height: 1.45;
+    }
+
+    .drive-mode-details {
+      margin-top: .45rem;
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    .drive-mode-details > summary {
+      cursor: pointer;
+      color: var(--accent2);
+      font-weight: 700;
+    }
+
+    .drive-mode-table-wrap {
+      margin: .55rem 0;
+      overflow-x: auto;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px;
+    }
+
+    .drive-mode-table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      background: rgba(0,0,0,.14);
+      font-size: .76rem;
+    }
+
+    .drive-mode-table th,
+    .drive-mode-table td {
+      padding: .55rem .6rem;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .drive-mode-table th {
+      color: var(--text);
+      background: rgba(255,255,255,.04);
+      white-space: nowrap;
+    }
+
+    .drive-mode-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .drive-mode-table td span {
+      display: block;
+      margin-top: .15rem;
+      color: rgba(255,255,255,.42);
+      font-size: .68rem;
+    }
+
     .drive-file-list {
       display: grid;
       gap: .55rem;

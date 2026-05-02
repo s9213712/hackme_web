@@ -8,18 +8,53 @@ function formatDriveBytes(bytes) {
 }
 
 const DRIVE_PRIVACY_MODE_LABELS = {
-  private_scannable: "私密檔案",
-  public_attachment: "公開附件",
+  private_scannable: "一般私密檔案",
+  public_attachment: "附件/分享用",
   e2ee_vault: "端到端加密",
   e2ee_vault_with_client_scan: "端到端加密 + 本機掃描",
 };
 
 const DRIVE_PRIVACY_MODE_DESCRIPTIONS = {
-  private_scannable: "伺服器可掃毒，適合一般個人檔案",
-  public_attachment: "可預覽、可分享，不適合機密資料",
-  e2ee_vault: "站方無法讀取，掃毒能力受限",
-  e2ee_vault_with_client_scan: "站方無法讀取，附本機掃描回報",
+  private_scannable: "伺服器可讀明文並掃毒，適合一般個人檔案",
+  public_attachment: "伺服器可讀明文並掃毒，適合附件、相簿或分享",
+  e2ee_vault: "瀏覽器端加密，站方無法讀取，預覽與掃毒受限",
+  e2ee_vault_with_client_scan: "瀏覽器端加密，附本機掃描回報但不可完全信任",
 };
+
+const DRIVE_PRIVACY_MODE_COMPARISON = [
+  {
+    mode: "private_scannable",
+    bestFor: "一般雲端硬碟檔案",
+    serverAccess: "可讀明文",
+    scan: "伺服器掃毒",
+    preview: "通過政策後可預覽",
+    keyRisk: "無本機金鑰風險",
+  },
+  {
+    mode: "public_attachment",
+    bestFor: "附件、分享、相簿展示",
+    serverAccess: "可讀明文",
+    scan: "伺服器掃毒",
+    preview: "最完整",
+    keyRisk: "無本機金鑰風險",
+  },
+  {
+    mode: "e2ee_vault",
+    bestFor: "高度私密保存",
+    serverAccess: "不可讀明文",
+    scan: "只能檢查密文/metadata",
+    preview: "不提供伺服器預覽",
+    keyRisk: "清除瀏覽器金鑰後可能無法解密",
+  },
+  {
+    mode: "e2ee_vault_with_client_scan",
+    bestFor: "私密保存 + 使用者自檢回報",
+    serverAccess: "不可讀明文",
+    scan: "本機回報，伺服器不可完全信任",
+    preview: "不提供伺服器預覽",
+    keyRisk: "清除瀏覽器金鑰後可能無法解密",
+  },
+];
 
 const DRIVE_E2EE_VAULT_KEY_STORAGE = "hackme_drive_e2ee_vault_key_v1";
 const ATTACHMENT_FILE_SELECT_IDS = [
@@ -41,6 +76,40 @@ function drivePrivacyModeLabel(mode) {
 
 function drivePrivacyModeDescription(mode) {
   return DRIVE_PRIVACY_MODE_DESCRIPTIONS[mode] || "";
+}
+
+function renderDrivePrivacyModeComparison() {
+  const target = $("drive-privacy-mode-comparison");
+  if (!target) return;
+  target.innerHTML = `
+    <div class="drive-mode-table-wrap">
+      <table class="drive-mode-table">
+        <thead>
+          <tr>
+            <th>模式</th>
+            <th>適合用途</th>
+            <th>站方能否讀取</th>
+            <th>安全檢查</th>
+            <th>預覽/下載</th>
+            <th>注意事項</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${DRIVE_PRIVACY_MODE_COMPARISON.map((item) => `
+            <tr>
+              <td><strong>${sanitize(drivePrivacyModeLabel(item.mode))}</strong><span>${sanitize(item.mode)}</span></td>
+              <td>${sanitize(item.bestFor)}</td>
+              <td>${sanitize(item.serverAccess)}</td>
+              <td>${sanitize(item.scan)}</td>
+              <td>${sanitize(item.preview)}</td>
+              <td>${sanitize(item.keyRisk)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="drive-card-sub">結論：要預覽、掃毒、分享就用「一般私密檔案」或「附件/分享用」；真正不想讓站方讀內容才用 E2EE，但要自己保管本機金鑰。</div>
+  `;
 }
 
 function attachmentFileDisplayName(file) {
@@ -373,6 +442,7 @@ function renderDriveDashboard(payload) {
   renderDriveGroupedStats("drive-risk-summary", quota.by_risk_level, "尚無風險統計");
   renderDriveGroupedStats("drive-scan-summary", quota.by_scan_status, "尚無掃描狀態");
   renderDriveGroupedStats("drive-mode-summary", quota.by_privacy_mode, "尚無隱私模式統計", drivePrivacyModeLabel);
+  renderDrivePrivacyModeComparison();
 }
 
 function driveFileNeedsWarning(file) {

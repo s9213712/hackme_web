@@ -104,6 +104,28 @@ def _actor(user_id, username, role="user"):
     }
 
 
+def test_privacy_modes_explain_server_readability_and_e2ee_tradeoffs(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    res = client.get("/api/files/privacy-modes")
+
+    assert res.status_code == 200
+    body = res.get_json()
+    modes = body["modes"]
+    assert modes["private_scannable"]["server_can_read"] is True
+    assert "不是端到端加密" in modes["private_scannable"]["warning"]
+    assert modes["public_attachment"]["server_can_read"] is True
+    assert modes["e2ee_vault"]["server_can_read"] is False
+    assert "vault key" in modes["e2ee_vault"]["warning"]
+    assert modes["e2ee_vault_with_client_scan"]["server_scan"] == "client_report_untrusted"
+    assert "不可完全信任" in modes["e2ee_vault_with_client_scan"]["warning"]
+
+
 def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_path):
     class LockedPointsService:
         def ensure_schema(self, conn):
