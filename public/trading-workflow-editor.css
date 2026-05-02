@@ -245,11 +245,49 @@
       background-size: 24px 24px;
       overflow: auto;
     }
+    .graph-edge-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      overflow: visible;
+    }
+    .graph-edge {
+      fill: none;
+      stroke: var(--line-strong);
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      opacity: .92;
+    }
+    .graph-edge.positive { stroke: var(--green); }
+    .graph-edge.negative {
+      stroke: var(--red);
+      stroke-dasharray: 7 6;
+    }
+    .graph-edge.neutral { stroke: var(--blue); }
     .graph-node {
       position: absolute;
+      z-index: 2;
       width: 210px;
       min-height: 118px;
       box-shadow: 0 10px 24px rgba(0,0,0,.22);
+    }
+    .node-inline-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: .32rem;
+      margin-top: .48rem;
+    }
+    .node-inline-controls.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .node-inline-controls input,
+    .node-inline-controls select {
+      min-height: 28px;
+      padding: .28rem .38rem;
+      border-radius: 6px;
+      font-size: .74rem;
+      background: rgba(11, 18, 32, .9);
     }
     .node-sub {
       margin-top: .22rem;

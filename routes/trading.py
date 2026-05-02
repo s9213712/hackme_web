@@ -143,6 +143,33 @@ def register_trading_routes(app, deps):
         elif lowered.startswith("contract trading is disabled"):
             msg = "合約交易尚未啟用，請由 root 到設定 > 計費 > 交易所參數開啟 futures_enabled"
             status = 403
+        elif lowered.startswith("bot_type must be"):
+            msg = "交易機器人類型錯誤，請重新選擇定投或 Workflow 機器人"
+            status = 400
+        elif lowered.startswith("bot side must be"):
+            msg = "交易機器人方向錯誤，請選擇買入或賣出"
+            status = 400
+        elif lowered.startswith("bot order_type must be"):
+            msg = "交易機器人訂單類型錯誤，請選擇市價單或限價單"
+            status = 400
+        elif lowered.startswith("bot trigger_type must be"):
+            msg = "交易機器人觸發條件錯誤，請重新設定價格條件"
+            status = 400
+        elif lowered.startswith("dca budget_points must be positive"):
+            msg = "定投機器人每次投入點數必須大於 0"
+            status = 400
+        elif lowered.startswith("max_runs must be"):
+            msg = "交易機器人最多執行次數必須是 1 到 1000 之間的整數"
+            status = 400
+        elif lowered.startswith("cooldown_seconds must be"):
+            msg = "交易機器人冷卻秒數必須是 0 到 86400 之間的整數"
+            status = 400
+        elif lowered.startswith("interval_hours must be"):
+            msg = "定投間隔小時必須是 1 到 8760 之間的整數"
+            status = 400
+        elif lowered.startswith("workflow graph"):
+            msg = f"Workflow 設定錯誤：{msg}"
+            status = 400
         elif lowered.startswith("position_type must be"):
             msg = "進階交易類型錯誤，請選擇融資買入或借券放空"
             status = 400
@@ -590,6 +617,19 @@ def register_trading_routes(app, deps):
             return err
         try:
             result = trading_service.save_trading_bot(actor=actor, payload=data)
+            bot = result.get("bot") or {}
+            if bot.get("bot_type") == "dca" and bot.get("enabled"):
+                try:
+                    result["initial_run"] = trading_service.run_trading_bot_once(actor=actor, bot_uuid=bot.get("bot_uuid"))
+                except Exception as initial_exc:
+                    result["initial_run"] = {
+                        "ok": False,
+                        "scanned": 1,
+                        "triggered": [],
+                        "skipped": [],
+                        "failed": [{"bot_uuid": bot.get("bot_uuid"), "error": str(initial_exc)}],
+                    }
+                    result["msg"] = f"定投機器人已建立，但首次執行失敗：{initial_exc}"
             audit("TRADING_BOT_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"bot_uuid={result['bot'].get('bot_uuid')}")
             return json_resp(result)
         except Exception as exc:

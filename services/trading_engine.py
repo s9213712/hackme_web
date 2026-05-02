@@ -865,6 +865,16 @@ class TradingEngineService:
         item = dict(row)
         item["enabled"] = bool(item["enabled"])
         item["can_run"] = bool(item["enabled"]) and int(item["run_count"] or 0) < int(item["max_runs"] or 1)
+        item["next_run_at"] = None
+        if item["can_run"]:
+            try:
+                if item.get("last_run_at"):
+                    next_dt = datetime.fromisoformat(str(item["last_run_at"])) + timedelta(seconds=int(item.get("cooldown_seconds") or 0))
+                    item["next_run_at"] = next_dt.isoformat(timespec="seconds")
+                else:
+                    item["next_run_at"] = _now()
+            except Exception:
+                item["next_run_at"] = None
         item["display_symbol"] = str(item["market_symbol"] or "").replace("/POINTS", "/USDT")
         item["bot_type_label"] = "定投機器人" if item.get("bot_type") == "dca" else "條件機器人"
         item["workflow"] = _json_loads(item.get("workflow_json"), None)
@@ -3244,6 +3254,34 @@ class TradingEngineService:
             conn.close()
 
         return self._run_trading_bot_rows(rows)
+
+    def run_trading_bot_once(self, *, actor, bot_uuid):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute(
+                """
+                SELECT b.*, u.username, u.role
+                FROM trading_bots b
+                JOIN users u ON u.id=b.user_id
+                WHERE b.bot_uuid=? AND b.user_id=?
+                LIMIT 1
+                """,
+                (str(bot_uuid or ""), user_id),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            raise ValueError("trading bot not found")
+        if not bool(row["enabled"]):
+            return {"ok": True, "scanned": 1, "triggered": [], "skipped": [{"bot_uuid": row["bot_uuid"], "reason": "disabled"}], "failed": []}
+        if int(row["run_count"] or 0) >= int(row["max_runs"] or 1):
+            return {"ok": True, "scanned": 1, "triggered": [], "skipped": [{"bot_uuid": row["bot_uuid"], "reason": "max_runs_reached"}], "failed": []}
+        return self._run_trading_bot_rows([row])
 
     def run_due_trading_bots(self, *, actor=None, limit=50):
         limit = _to_int(limit or 50, name="limit", minimum=1, maximum=200)

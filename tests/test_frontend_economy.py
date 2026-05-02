@@ -351,6 +351,12 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "/trading-workflow-editor.html" in trading_section
     assert 'id="trading-auto-workflow-json"' in trading_section
     assert 'id="trading-workflow-load-btn"' in trading_section
+    assert 'id="trading-workflow-template-select"' in trading_section
+    assert 'id="trading-workflow-template-apply-btn"' in trading_section
+    assert "保守逢低買入" in trading_section
+    assert "突破追價買入" in trading_section
+    assert "持倉跌破停損" in trading_section
+    assert "RSI 分批買賣" in trading_section
     assert (ROOT / "public" / "trading-workflow-editor.html").exists()
     assert 'id="trading-auto-bot-save-btn"' in trading_section
     assert 'id="trading-dca-bot-save-btn"' in trading_section
@@ -364,7 +370,20 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function saveTradingDcaBot" in trading_js
     assert "function scanTradingBots" in trading_js
     assert "function backtestTradingBot" in trading_js
+    assert "function tradingBotNextRunText" in trading_js
+    assert "function updateTradingBotCountdowns" in trading_js
+    assert "data-trading-bot-next-run" in trading_js
+    assert "已立即執行第一筆" in trading_js
+    assert "function tradingErrorText" in trading_js
+    assert "function bindTradingActionButton" in trading_js
+    assert "自動化機器人新增失敗" in trading_js
+    assert "定投機器人新增失敗" in trading_js
+    assert "未提供錯誤原因" in trading_js
+    assert "正在新增自動化機器人" in trading_js
     assert "parseTradingWorkflowInput" in trading_js
+    assert "function tradingWorkflowTemplates" in trading_js
+    assert "function applyTradingWorkflowTemplate" in trading_js
+    assert "workflow_graph" in trading_js
     assert "prepareTradingBacktestFromBot" in trading_js
     assert '"/trading/bots/scan"' in trading_js
     assert '"/trading/bots/backtest"' in trading_js
@@ -401,8 +420,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "可用資金不足，需要" in trading_js
     assert "進階交易開倉失敗：" in trading_js
     assert "trading-margin-open-btn" in trading_js
-    assert '["trading-limit-match-btn", matchTradingLimitOrders]' in trading_js
-    assert '["trading-liquidation-scan-btn", scanTradingLiquidations]' in trading_js
+    assert '"trading-limit-match-btn", matchTradingLimitOrders' in trading_js
+    assert '"trading-liquidation-scan-btn", scanTradingLiquidations' in trading_js
     assert "economy-root-virtual-total" in trading_js
     assert "available + spotValue" in trading_js
     assert "trial_credit" in trading_js
@@ -472,8 +491,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'activePositions.map((row) => tradingPositionLabel(row)).join(" / ")' in trading_js
     assert "rootVirtualSpotValue(activePositions, markets)" in trading_js
     assert 'renderTradingOrders(orders, "economy-trading-order-list", false)' in trading_js
-    assert '["economy-trading-open-btn", openTradingModuleFromWallet]' in trading_js
-    assert '["economy-root-virtual-open-btn", openTradingModuleFromWallet]' in trading_js
+    assert '"economy-trading-open-btn", openTradingModuleFromWallet' in trading_js
+    assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' in trading_js
 
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
     workflow_editor_js = (ROOT / "public" / "js" / "trading-workflow-editor.js").read_text(encoding="utf-8")

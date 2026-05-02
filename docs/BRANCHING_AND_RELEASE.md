@@ -41,8 +41,8 @@ The server release ID lives in:
 services/release_info.py
 ```
 
-When a change adds or changes a user-facing production feature, increment the
-last numeric segment by 1 before release.
+Every push to a shared branch must increment the last numeric segment by 1
+before release.
 
 Example:
 
@@ -55,7 +55,8 @@ Also update visible documentation references:
 - `README.md`
 - `docs/README.zh-TW.md`
 - `docs/For_developer.md`
+- `docs/UPDATE_SUMMARY.md`
 
-Bug fixes that only repair a broken implementation may keep the same release ID
-until the next production-facing feature release, unless the fix itself is being
-published as a distinct server build.
+`docs/UPDATE_SUMMARY.md` is the frontend-visible release note source used by
+the root GitHub update center. Keep it concise and operator-facing, because it
+is shown after previewing or applying updates from the settings page.

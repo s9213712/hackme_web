@@ -1490,6 +1490,21 @@
                       <button class="btn" id="trading-workflow-load-btn" type="button">載入編輯器結果</button>
                     </div>
                   </div>
+                  <div class="settings-option-grid compact-grid" style="margin:.65rem 0;">
+                    <div class="field">
+                      <label>基礎模板</label>
+                      <select id="trading-workflow-template-select">
+                        <option value="dip_buy">保守逢低買入</option>
+                        <option value="breakout_buy">突破追價買入</option>
+                        <option value="stop_loss">持倉跌破停損</option>
+                        <option value="rsi_scale">RSI 分批買賣</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>操作</label>
+                      <button class="btn" id="trading-workflow-template-apply-btn" type="button">套用模板</button>
+                    </div>
+                  </div>
                   <textarea id="trading-auto-workflow-json" rows="10" spellcheck="false" placeholder="從 Workflow 編輯器產生的 JSON 會貼在這裡"></textarea>
                 </div>
                 <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
@@ -2327,6 +2342,9 @@
               </div>
             </div>
             <div id="server-update-status" class="msg"></div>
+            <div class="drive-card-sub" style="margin-top:.65rem;">更新摘要</div>
+            <pre id="server-update-summary" class="security-log-box security-log-pre" style="max-height:220px;margin-top:.35rem;"></pre>
+            <div class="drive-card-sub" style="margin-top:.65rem;">Diff 預覽</div>
             <pre id="server-update-diff" class="security-log-box security-log-pre" style="max-height:260px;margin-top:.65rem;"></pre>
           </div>
         </details>

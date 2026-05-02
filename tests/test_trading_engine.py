@@ -385,6 +385,32 @@ def test_dca_trading_bot_converts_budget_to_market_order(tmp_path):
     assert dashboard["bots"][0]["run_count"] == 1
 
 
+def test_run_single_dca_bot_once_executes_created_bot_immediately(tmp_path):
+    _, trading = _services(tmp_path)
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "Immediate ETH DCA",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "max_runs": 2,
+            "enabled": True,
+        },
+    )["bot"]
+
+    result = trading.run_trading_bot_once(actor=_actor(), bot_uuid=bot["bot_uuid"])
+
+    assert result["ok"] is True
+    assert result["scanned"] == 1
+    assert len(result["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["orders"][0]["side"] == "buy"
+    assert dashboard["bots"][0]["run_count"] == 1
+    assert dashboard["bots"][0]["next_run_at"]
+
+
 def test_workflow_rsi_uses_wilder_smoothing(tmp_path):
     _, trading = _services(tmp_path)
     closes = [44, 44.15, 43.9, 44.35, 44.6, 44.3, 44.8, 45.0, 44.7, 45.2, 45.4, 45.1, 45.6, 45.8, 46.0, 45.7, 46.3]

@@ -22,6 +22,12 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert 'style="' not in html
     assert "workflow_graph" in js
     assert "data-port-node" in js
+    assert "graph-edge-layer" in js
+    assert "renderGraphEdgeLayer" in js
+    assert "edgePath" in js
+    assert "data-node-inline" in js
+    assert "renderNodeInlineControls" in js
+    assert "refreshGraphEdgeLayer" in js
     assert "TRUE/FALSE branch" in js
     assert "Nested AND" in js
     assert "validateWorkflow" in js
@@ -29,6 +35,11 @@ def test_trading_workflow_editor_has_full_node_editor_surface():
     assert "applyGraphNodePositions" in js
     assert "window.HackmeTradingWorkflowEditor" in js
     assert 'style="' not in js
+
+    css = (ROOT / "public" / "trading-workflow-editor.css").read_text(encoding="utf-8")
+    assert ".graph-edge-layer" in css
+    assert ".graph-edge.positive" in css
+    assert ".node-inline-controls" in css
 
 
 def test_trading_workflow_editor_static_page_requires_login():

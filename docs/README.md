@@ -14,6 +14,8 @@ short [README](../README.md) plus GitHub-required metadata such as
   operator notes
 - [Version Story](VERSION_STORY.md): project history, branch decisions, and
   abandoned WebTerminal notes
+- [Update Summary](UPDATE_SUMMARY.md): latest release notes shown by the root
+  GitHub update center
 - [Runtime Reset And Recovery](RUNTIME_RESET_AND_RECOVERY.md): reset,
   snapshot/restore, and PointsChain recovery boundaries
 - [Deployment And Operations Scripts](DEPLOYMENT.md): one-command deployment,

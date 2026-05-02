@@ -30,7 +30,13 @@ The active project emphasizes:
 
 ## Current Economy Work
 
-Release `2026.05.02-039` keeps the active Economy workflow line focused on
+Release `2026.05.02-040` keeps the active Economy workflow line focused on
+trading automation usability: DCA bots execute their first run immediately,
+bot cards show next-run countdowns, failed bot actions show visible reasons,
+Workflow templates are easier to apply, and the root update center displays the
+tracked update summary from `docs/UPDATE_SUMMARY.md`.
+
+Release `2026.05.02-039` kept the active Economy workflow line focused on
 simulated trading correctness and operator-visible behavior. BTC_trade is a
 soft integration: hackme_web can read runtime signal files from a configured
 BTC_trade folder, but missing files keep the signal panel hidden instead of

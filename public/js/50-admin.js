@@ -2984,13 +2984,21 @@ function setServerUpdateStatus(message, ok = true) {
   el.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function renderServerUpdateSummary(summary) {
+  const box = $("server-update-summary");
+  if (!box) return;
+  box.textContent = summary || "尚未提供更新摘要。每次 push 前請更新 docs/UPDATE_SUMMARY.md。";
+}
+
 function renderServerUpdatePreview(preview) {
   const box = $("server-update-diff");
   if (!box) return;
   if (!preview || !preview.ok) {
     box.textContent = preview?.msg || "";
+    renderServerUpdateSummary(preview?.release_summary || "");
     return;
   }
+  renderServerUpdateSummary(preview.release_summary || preview.state?.release_summary || "");
   const state = preview.state || {};
   const summary = preview.summary || {};
   const files = (preview.changed_files || []).map((row) => `${row.status}\t${row.path}`).join("\n");
@@ -3035,6 +3043,7 @@ async function loadServerUpdateStatus(fetchRemote = false) {
       branchSelect.value = branches.includes(previous) ? previous : (branches.includes(update.current_branch) ? update.current_branch : (branches[0] || update.current_branch || "main"));
     }
     setServerUpdateStatus(`目前 ${update.current_branch || "-"} @ ${update.current_commit || "-"}；${update.dirty ? "工作目錄有未提交變更，不能套用更新" : "工作目錄乾淨"}`, !update.dirty);
+    renderServerUpdateSummary(update.release_summary || "");
     renderServerUpdatePreview({ ok: true, state: update, warning: json.warning, summary: {}, changed_files: [], diff_stat: "" });
   } catch (err) {
     setServerUpdateStatus(err.message || "更新狀態讀取失敗", false);
@@ -3096,7 +3105,9 @@ async function applyServerUpdate() {
     });
     const json = await res.json().catch(() => ({}));
     if (!json.ok) throw new Error(json.msg || `更新套用失敗（HTTP ${res.status}）`);
-    renderServerUpdatePreview(json.preview || {});
+    const preview = json.preview || {};
+    preview.release_summary = json.release_summary || preview.release_summary || "";
+    renderServerUpdatePreview(preview);
     const integrity = json.integrity?.result?.summary || {};
     setServerUpdateStatus(`更新已套用，請重啟伺服器並自行測試；Integrity pending=${integrity.pending ?? "-"}`);
     if (typeof loadIntegrityGuard === "function") await loadIntegrityGuard();

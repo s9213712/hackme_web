@@ -356,6 +356,23 @@ def register_system_admin_routes(app, deps):
         text = "\n".join(part for part in (result.get("stdout"), result.get("stderr")) if part)
         return text[:limit]
 
+    def read_update_summary(limit=12000):
+        path = os.path.join(BASE_DIR, "docs", "UPDATE_SUMMARY.md")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read()[:limit]
+        except OSError:
+            return ""
+
+    def read_update_summary_from_ref(ref, limit=12000):
+        ref = str(ref or "").strip()
+        if not ref:
+            return ""
+        result = run_git_command(["show", f"{ref}:docs/UPDATE_SUMMARY.md"], timeout=30)
+        if result["ok"]:
+            return (result["stdout"] or "")[:limit]
+        return ""
+
     def current_git_state(fetch=False):
         if fetch:
             fetch_result = run_git_command(["fetch", "--prune", "origin"], timeout=90)
@@ -385,6 +402,7 @@ def register_system_admin_routes(app, deps):
             "dirty": bool(status_result["stdout"]),
             "dirty_files": status_result["stdout"].splitlines()[:80],
             "branches": sorted(set(branches)),
+            "release_summary": read_update_summary(),
         }
 
     def git_update_preview(branch, *, fetch=True):
@@ -419,6 +437,7 @@ def register_system_admin_routes(app, deps):
             "summary": summary,
             "changed_files": changed_files,
             "diff_stat": stat["stdout"] if stat["ok"] else git_short_text(stat),
+            "release_summary": read_update_summary_from_ref(remote_ref),
             "warning": SERVER_UPDATE_WARNING,
             "requires_confirmation": "APPLY_UNVERIFIED_UPDATE",
             "strategy": "git fetch + git diff preview + git merge --ff-only",
@@ -1395,6 +1414,7 @@ def register_system_admin_routes(app, deps):
             "merge": merge_result,
             "state": after_state,
             "integrity": integrity_result,
+            "release_summary": read_update_summary(),
             "warning": SERVER_UPDATE_WARNING,
             "restart_required": True,
         })

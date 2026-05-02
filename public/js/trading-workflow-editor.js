@@ -37,6 +37,8 @@
   let pendingConnection = null;
   let dragNode = null;
   let workflow = normalizeWorkflow(loadInitialWorkflow());
+  const GRAPH_NODE_WIDTH = 210;
+  const GRAPH_NODE_HEIGHT = 118;
 
   function uid(prefix) {
     return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
@@ -305,11 +307,104 @@
         </div>
         <div class="node-label">${html(item.label || nodeTitle(item))}</div>
         <div class="node-sub">${html(nodeTitle(item))}</div>
+        ${renderNodeInlineControls(item)}
         <div class="ports">
           <div>${(item.inputs || []).map((port) => portButton(item, port, "in")).join("")}</div>
           <div>${(item.outputs || []).map((port) => portButton(item, port, "out")).join("")}</div>
         </div>
       </article>
+    `;
+  }
+
+  function renderNodeInlineControls(item) {
+    const nodeAttr = `data-inline-node="${html(item.id)}" data-node-inline`;
+    if (item.type === "condition") {
+      const condition = item.condition || {};
+      const valueInput = condition.type && !["always", "ma_position", "bb_position", "has_position"].includes(condition.type)
+        ? `<input ${nodeAttr} data-condition-field="value" type="number" step="0.01" value="${html(condition.value ?? "")}" aria-label="條件數值">`
+        : "";
+      const periodInput = condition.type === "ma_position"
+        ? `<input ${nodeAttr} data-condition-field="period" type="number" min="1" value="${Number(condition.period || 50)}" aria-label="MA 週期">`
+        : "";
+      const positionSelect = condition.type === "ma_position"
+        ? `<select ${nodeAttr} data-condition-field="position" aria-label="均線位置"><option value="above" ${condition.position !== "below" ? "selected" : ""}>上方</option><option value="below" ${condition.position === "below" ? "selected" : ""}>下方</option></select>`
+        : "";
+      const bbSelect = condition.type === "bb_position"
+        ? `<select ${nodeAttr} data-condition-field="position" aria-label="布林位置"><option value="above_mid" ${condition.position === "above_mid" ? "selected" : ""}>中線上方</option><option value="below_mid" ${condition.position === "below_mid" ? "selected" : ""}>中線下方</option><option value="above_upper" ${condition.position === "above_upper" ? "selected" : ""}>上軌上方</option><option value="below_lower" ${condition.position === "below_lower" ? "selected" : ""}>下軌下方</option></select>`
+        : "";
+      const boolSelect = condition.type === "has_position"
+        ? `<select ${nodeAttr} data-condition-field="value_bool" aria-label="持倉狀態"><option value="true" ${condition.value !== false ? "selected" : ""}>有持倉</option><option value="false" ${condition.value === false ? "selected" : ""}>沒有持倉</option></select>`
+        : "";
+      return `
+        <div class="node-inline-controls">
+          <select ${nodeAttr} data-condition-field="type" aria-label="條件類型">${CONDITION_TYPES.map((type) => `<option value="${type}" ${type === condition.type ? "selected" : ""}>${html(CONDITION_LABELS[type] || type)}</option>`).join("")}</select>
+          ${valueInput}${periodInput}${positionSelect}${bbSelect}${boolSelect}
+        </div>
+      `;
+    }
+    if (item.type === "logic") {
+      return `
+        <div class="node-inline-controls">
+          <select ${nodeAttr} data-node-field="operator" aria-label="邏輯"><option value="AND" ${item.operator === "AND" ? "selected" : ""}>AND</option><option value="OR" ${item.operator === "OR" ? "selected" : ""}>OR</option><option value="NOT" ${item.operator === "NOT" ? "selected" : ""}>NOT</option></select>
+        </div>
+      `;
+    }
+    if (item.type === "control") {
+      return `
+        <div class="node-inline-controls two">
+          <input ${nodeAttr} data-node-field="cooldown_seconds" type="number" min="0" value="${Number(item.cooldown_seconds || 0)}" aria-label="冷卻秒數">
+          <input ${nodeAttr} data-node-field="max_runs" type="number" min="1" value="${Number(item.max_runs || 100)}" aria-label="最大執行次數">
+        </div>
+      `;
+    }
+    if (item.type === "action") {
+      const action = item.action || {};
+      const percentInput = ["buy_percent", "sell_percent"].includes(action.type)
+        ? `<input ${nodeAttr} data-action-field="percent" type="number" min="0" max="100" step="0.01" value="${html(action.percent ?? 10)}" aria-label="百分比">`
+        : "";
+      const amountInput = action.type === "buy_amount"
+        ? `<input ${nodeAttr} data-action-field="amount_points" type="number" min="1" step="1" value="${html(action.amount_points ?? 100)}" aria-label="買入點數">`
+        : "";
+      return `
+        <div class="node-inline-controls">
+          <select ${nodeAttr} data-action-field="type" aria-label="行為類型">${ACTION_TYPES.map((type) => `<option value="${type}" ${type === action.type ? "selected" : ""}>${html(ACTION_LABELS[type] || type)}</option>`).join("")}</select>
+          <input ${nodeAttr} data-action-field="step" type="number" min="1" value="${Number(action.step || 1)}" aria-label="Step">
+          ${percentInput}${amountInput}
+        </div>
+      `;
+    }
+    return "";
+  }
+
+  function portPoint(nodeItem, portName, direction) {
+    const ports = direction === "out" ? (nodeItem.outputs || []) : (nodeItem.inputs || []);
+    const index = Math.max(0, ports.indexOf(portName));
+    const count = Math.max(1, ports.length);
+    const x = Number(nodeItem.x || 0) + (direction === "out" ? GRAPH_NODE_WIDTH : 0);
+    const y = Number(nodeItem.y || 0) + GRAPH_NODE_HEIGHT - 18 - ((count - 1 - index) * 24);
+    return { x, y };
+  }
+
+  function edgePath(edgeItem) {
+    const source = workflow.nodes.find((nodeItem) => nodeItem.id === edgeItem.from);
+    const target = workflow.nodes.find((nodeItem) => nodeItem.id === edgeItem.to);
+    if (!source || !target) return "";
+    const start = portPoint(source, edgeItem.from_port, "out");
+    const end = portPoint(target, edgeItem.to_port, "in");
+    const dx = Math.max(80, Math.abs(end.x - start.x) * 0.45);
+    return `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`;
+  }
+
+  function renderGraphEdgeLayer() {
+    const maxX = Math.max(1500, ...workflow.nodes.map((item) => Number(item.x || 0) + GRAPH_NODE_WIDTH + 180));
+    const maxY = Math.max(1000, ...workflow.nodes.map((item) => Number(item.y || 0) + GRAPH_NODE_HEIGHT + 160));
+    return `
+      <svg class="graph-edge-layer" width="${Math.ceil(maxX)}" height="${Math.ceil(maxY)}" viewBox="0 0 ${Math.ceil(maxX)} ${Math.ceil(maxY)}" aria-hidden="true">
+        ${workflow.edges.map((item) => {
+          const kind = ["true", "then"].includes(item.from_port) ? "positive" : (["false", "wait"].includes(item.from_port) ? "negative" : "neutral");
+          return `<path class="graph-edge ${kind}" d="${html(edgePath(item))}" data-edge-path="${html(item.id)}"></path>`;
+        }).join("")}
+      </svg>
     `;
   }
 
@@ -341,6 +436,7 @@
           </div>
         </div>
         <div class="graph-canvas" data-graph-canvas>
+          ${renderGraphEdgeLayer()}
           ${workflow.nodes.map(renderNode).join("")}
         </div>
         ${renderEdges()}
@@ -429,6 +525,46 @@
       return;
     }
     inspector.innerHTML = `<div class="inspector-card">${common}<div class="hint">Start node 是 graph execution order 的入口。</div></div>`;
+  }
+
+  function refreshSelectedNodeDom(item) {
+    const nodeEl = document.querySelector(`[data-node-id="${CSS.escape(item.id)}"]`);
+    if (!nodeEl) return;
+    const label = nodeEl.querySelector(".node-label");
+    const sub = nodeEl.querySelector(".node-sub");
+    if (label) label.textContent = item.label || nodeTitle(item);
+    if (sub) sub.textContent = nodeTitle(item);
+    nodeEl.dataset.x = String(Number(item.x || 0));
+    nodeEl.dataset.y = String(Number(item.y || 0));
+    nodeEl.style.left = `${Number(item.x || 0)}px`;
+    nodeEl.style.top = `${Number(item.y || 0)}px`;
+  }
+
+  function refreshGraphEdgeLayer() {
+    const canvas = document.querySelector("[data-graph-canvas]");
+    const layer = canvas?.querySelector(".graph-edge-layer");
+    if (!canvas || !layer) return;
+    const maxX = Math.max(1500, ...workflow.nodes.map((item) => Number(item.x || 0) + GRAPH_NODE_WIDTH + 180));
+    const maxY = Math.max(1000, ...workflow.nodes.map((item) => Number(item.y || 0) + GRAPH_NODE_HEIGHT + 160));
+    layer.setAttribute("width", String(Math.ceil(maxX)));
+    layer.setAttribute("height", String(Math.ceil(maxY)));
+    layer.setAttribute("viewBox", `0 0 ${Math.ceil(maxX)} ${Math.ceil(maxY)}`);
+    workflow.edges.forEach((item) => {
+      const path = layer.querySelector(`[data-edge-path="${CSS.escape(item.id)}"]`);
+      if (path) path.setAttribute("d", edgePath(item));
+    });
+  }
+
+  function refreshAfterFieldEdit(item, { rebuild = false } = {}) {
+    if (rebuild) {
+      render();
+      return;
+    }
+    refreshSelectedNodeDom(item);
+    refreshGraphEdgeLayer();
+    renderSummary();
+    renderValidation();
+    syncJson();
   }
 
   function validateWorkflow() {
@@ -582,7 +718,7 @@
       return;
     }
     const nodeEl = event.target.closest("[data-node-id]");
-    if (nodeEl && !event.target.closest(".node-tools") && !event.target.closest("[data-port-node]")) {
+    if (nodeEl && !event.target.closest(".node-tools") && !event.target.closest("[data-port-node]") && !event.target.closest("[data-node-inline]")) {
       selectedNodeId = nodeEl.dataset.nodeId;
       render();
       return;
@@ -641,11 +777,13 @@
   function handleInput(event) {
     if (event.target.id === "strategyName") workflow.name = event.target.value.slice(0, 80);
     if (event.target.id === "strategyDescription") workflow.description = event.target.value.slice(0, 160);
-    const item = selectedNode();
+    const inlineNodeId = event.target.dataset.inlineNode;
+    const item = inlineNodeId ? workflow.nodes.find((nodeItem) => nodeItem.id === inlineNodeId) : selectedNode();
     if (!item) return render();
     const nodeField = event.target.dataset.nodeField;
     const conditionField = event.target.dataset.conditionField;
     const actionField = event.target.dataset.actionField;
+    const typeChangingField = conditionField === "type" || actionField === "type";
     if (nodeField) {
       if (["x", "y", "priority", "cooldown_seconds", "max_runs"].includes(nodeField)) item[nodeField] = numberValue(event.target.value, item[nodeField] || 0);
       else item[nodeField] = event.target.value;
@@ -665,7 +803,7 @@
       item.action = cleanAction(item.action);
       item.label = actionLabel(item.action);
     }
-    render();
+    refreshAfterFieldEdit(item, { rebuild: event.type === "change" || typeChangingField });
   }
 
   function handleDrop(event) {
@@ -696,6 +834,7 @@
 
   document.addEventListener("click", handleClick);
   document.addEventListener("input", handleInput);
+  document.addEventListener("change", handleInput);
   document.addEventListener("dragstart", (event) => {
     const target = event.target.closest("[data-node-id]");
     if (!target) return;

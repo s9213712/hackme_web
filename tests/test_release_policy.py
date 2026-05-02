@@ -17,8 +17,8 @@ def _release_id():
 
 def test_release_id_is_synced_to_public_docs():
     release_id = _release_id()
-    assert release_id == "2026.05.02-039"
-    for rel in ("README.md", "docs/README.zh-TW.md", "docs/For_developer.md"):
+    assert release_id == "2026.05.02-040"
+    for rel in ("README.md", "docs/README.zh-TW.md", "docs/For_developer.md", "docs/UPDATE_SUMMARY.md"):
         assert release_id in (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -46,6 +46,7 @@ def test_root_keeps_only_readme_markdown_and_docs_has_index():
         "PHASE_STATUS.md",
         "implementation_workflow.md",
         "BRANCHING_AND_RELEASE.md",
+        "UPDATE_SUMMARY.md",
         "security/PRE_RELEASE_CHECKLIST.md",
         "security/FUNCTIONAL_SMOKE.md",
         "security/FUNCTIONAL_PERMISSION_PENTEST.md",

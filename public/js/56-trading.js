@@ -26,6 +26,7 @@ let tradingDashboardAutoTimer = null;
 let tradingDashboardAutoBusy = false;
 let tradingTrialCountdownTimer = null;
 let tradingBtcSignalCountdownTimer = null;
+let tradingBotCountdownTimer = null;
 let tradingCurrentBotTab = "dca";
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 
@@ -45,14 +46,59 @@ function tradingSetMsg(text, ok = true) {
   }
 }
 
+function tradingErrorText(json, fallback = "操作失敗") {
+  if (!json || typeof json !== "object") return fallback;
+  if (json.msg) return String(json.msg);
+  if (json.message) return String(json.message);
+  if (json.error) return String(json.error);
+  if (Array.isArray(json.errors) && json.errors.length) {
+    return json.errors.map((item) => {
+      if (!item) return "";
+      if (typeof item === "string") return item;
+      return item.msg || item.message || item.error || JSON.stringify(item);
+    }).filter(Boolean).slice(0, 3).join("；");
+  }
+  return fallback;
+}
+
 async function fetchTradingJson(url, options = {}) {
   await fetchCsrfToken({ force: true });
   const headers = { ...(options.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
   const res = await apiFetch(API + url, { credentials: "same-origin", ...options, headers });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+  const raw = await res.text().catch(() => "");
+  let json = {};
+  try {
+    json = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    json = {};
+  }
+  if (!res.ok || !json.ok) {
+    const text = tradingErrorText(json, raw ? raw.slice(0, 220) : `HTTP ${res.status}`);
+    throw new Error(text || `HTTP ${res.status}`);
+  }
   return json;
+}
+
+function bindTradingActionButton(el, handler, pendingText, fallbackText) {
+  if (!el || typeof handler !== "function") return;
+  el.addEventListener("click", async (event) => {
+    event.preventDefault();
+    if (el.disabled) return;
+    const previousText = el.textContent;
+    el.disabled = true;
+    el.setAttribute("aria-busy", "true");
+    if (pendingText) tradingSetMsg(pendingText);
+    try {
+      await handler(event);
+    } catch (err) {
+      tradingSetMsg(`${fallbackText || "操作失敗"}：${err?.message || "未提供錯誤原因"}`, false);
+    } finally {
+      el.disabled = false;
+      el.removeAttribute("aria-busy");
+      if (previousText) el.textContent = previousText;
+    }
+  });
 }
 
 function selectedTradingMarket() {
@@ -408,10 +454,10 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
     `;
   }).join("");
   list.querySelectorAll("[data-economy-spot-limit]").forEach((btn) => {
-    btn.addEventListener("click", () => submitEconomySpotSell(btn.dataset.economySpotLimit || "", "limit"));
+    bindTradingActionButton(btn, () => submitEconomySpotSell(btn.dataset.economySpotLimit || "", "limit"), "正在送出限價賣出...", "限價賣出失敗");
   });
   list.querySelectorAll("[data-economy-spot-market-close]").forEach((btn) => {
-    btn.addEventListener("click", () => submitEconomySpotSell(btn.dataset.economySpotMarketClose || "", "market"));
+    bindTradingActionButton(btn, () => submitEconomySpotSell(btn.dataset.economySpotMarketClose || "", "market"), "正在市價平倉...", "市價平倉失敗");
   });
 }
 
@@ -425,10 +471,10 @@ function renderEconomyMarginPositionDetails(rows = []) {
   }
   list.innerHTML = activeRows.map((row) => tradingMarginPositionRow(row, "economy")).join("");
   list.querySelectorAll("[data-economy-margin-close]").forEach((btn) => {
-    btn.addEventListener("click", () => closeTradingMarginPosition(btn.dataset.economyMarginClose || ""));
+    bindTradingActionButton(btn, () => closeTradingMarginPosition(btn.dataset.economyMarginClose || ""), "正在平倉進階交易...", "進階交易平倉失敗");
   });
   list.querySelectorAll("[data-economy-margin-add-collateral]").forEach((btn) => {
-    btn.addEventListener("click", () => addTradingMarginCollateral(btn.dataset.economyMarginAddCollateral || "", "economy"));
+    bindTradingActionButton(btn, () => addTradingMarginCollateral(btn.dataset.economyMarginAddCollateral || "", "economy"), "正在補入保證金...", "補保證金失敗");
   });
 }
 
@@ -1139,7 +1185,7 @@ function renderTradingOrders(rows, targetId = "trading-order-list", allowCancel 
     `;
   }).join("");
   list.querySelectorAll("[data-trading-cancel]").forEach((btn) => {
-    btn.addEventListener("click", () => cancelTradingOrder(btn.dataset.tradingCancel || ""));
+    bindTradingActionButton(btn, () => cancelTradingOrder(btn.dataset.tradingCancel || ""), "正在取消訂單...", "取消訂單失敗");
   });
 }
 
@@ -1189,7 +1235,7 @@ function renderTradingContracts(rows = []) {
     </div>
   `).join("");
   list.querySelectorAll("[data-contract-close]").forEach((btn) => {
-    btn.addEventListener("click", () => closeRootTradingContract(btn.dataset.contractClose || ""));
+    bindTradingActionButton(btn, () => closeRootTradingContract(btn.dataset.contractClose || ""), "正在平倉合約...", "合約平倉失敗");
   });
 }
 
@@ -1267,10 +1313,10 @@ function renderTradingMarginPositions(rows = []) {
   }
   list.innerHTML = openRows.map((row) => tradingMarginPositionRow(row)).join("");
   list.querySelectorAll("[data-margin-close]").forEach((btn) => {
-    btn.addEventListener("click", () => closeTradingMarginPosition(btn.dataset.marginClose || ""));
+    bindTradingActionButton(btn, () => closeTradingMarginPosition(btn.dataset.marginClose || ""), "正在平倉進階交易...", "進階交易平倉失敗");
   });
   list.querySelectorAll("[data-margin-add-collateral]").forEach((btn) => {
-    btn.addEventListener("click", () => addTradingMarginCollateral(btn.dataset.marginAddCollateral || ""));
+    bindTradingActionButton(btn, () => addTradingMarginCollateral(btn.dataset.marginAddCollateral || ""), "正在補入保證金...", "補保證金失敗");
   });
 }
 
@@ -1317,21 +1363,129 @@ function switchTradingBotTab(tab) {
   });
 }
 
-function tradingWorkflowTemplate() {
+function tradingWorkflowTemplates() {
   return {
-    version: 1,
-    strategy_kind: "workflow",
-    branches: [{
-      id: "entry",
-      name: "進場策略",
-      priority: 10,
-      logic: "AND",
-      cooldown_seconds: 300,
-      max_runs: 100,
-      conditions: [{ type: "price_below", value: 100000 }],
-      actions: [{ type: "buy_percent", percent: 10, step: 1 }],
-    }],
+    dip_buy: {
+      label: "保守逢低買入",
+      workflow: {
+        version: 2,
+        strategy_kind: "workflow_graph",
+        source: "basic_template",
+        name: "保守逢低買入",
+        description: "價格低於指定門檻時，以可用資金 10% 市價買入，並設 1 小時冷卻。",
+        start_node_id: "start",
+        nodes: [
+          { id: "start", type: "start", label: "開始", x: 80, y: 140 },
+          { id: "price_dip", type: "condition", label: "價格 <= 90000", x: 260, y: 140, condition: { type: "price_below", value: 90000 } },
+          { id: "cooldown", type: "control", label: "冷卻 1 小時", x: 450, y: 140, cooldown_seconds: 3600, max_runs: 100 },
+          { id: "buy_10_percent", type: "action", label: "買入 10%", x: 650, y: 140, action: { type: "buy_percent", percent: 10, step: 1, order_type: "market" } },
+        ],
+        edges: [
+          { id: "e_start_price", from: "start", from_port: "out", to: "price_dip", to_port: "in" },
+          { id: "e_price_cooldown", from: "price_dip", from_port: "true", to: "cooldown", to_port: "in" },
+          { id: "e_cooldown_buy", from: "cooldown", from_port: "then", to: "buy_10_percent", to_port: "in" },
+        ],
+      },
+    },
+    breakout_buy: {
+      label: "突破追價買入",
+      workflow: {
+        version: 2,
+        strategy_kind: "workflow_graph",
+        source: "basic_template",
+        name: "突破追價買入",
+        description: "價格突破門檻且站上 MA50 時，以可用資金 15% 市價買入。",
+        start_node_id: "start",
+        nodes: [
+          { id: "start", type: "start", label: "開始", x: 80, y: 150 },
+          { id: "price_breakout", type: "condition", label: "價格 >= 100000", x: 260, y: 90, condition: { type: "price_above", value: 100000 } },
+          { id: "above_ma50", type: "condition", label: "站上 MA50", x: 260, y: 210, condition: { type: "ma_position", period: 50, position: "above" } },
+          { id: "both_true", type: "logic", label: "AND", x: 480, y: 150, operator: "AND" },
+          { id: "buy_15_percent", type: "action", label: "買入 15%", x: 680, y: 150, action: { type: "buy_percent", percent: 15, step: 1, order_type: "market" } },
+        ],
+        edges: [
+          { id: "e_start_breakout", from: "start", from_port: "out", to: "price_breakout", to_port: "in" },
+          { id: "e_start_ma", from: "start", from_port: "out", to: "above_ma50", to_port: "in" },
+          { id: "e_breakout_and", from: "price_breakout", from_port: "true", to: "both_true", to_port: "in" },
+          { id: "e_ma_and", from: "above_ma50", from_port: "true", to: "both_true", to_port: "in" },
+          { id: "e_and_buy", from: "both_true", from_port: "true", to: "buy_15_percent", to_port: "in" },
+        ],
+      },
+    },
+    stop_loss: {
+      label: "持倉跌破停損",
+      workflow: {
+        version: 2,
+        strategy_kind: "workflow_graph",
+        source: "basic_template",
+        name: "持倉跌破停損",
+        description: "已有持倉且價格跌破門檻時，立即全數平倉。",
+        start_node_id: "start",
+        nodes: [
+          { id: "start", type: "start", label: "開始", x: 80, y: 150 },
+          { id: "has_position", type: "condition", label: "已有持倉", x: 260, y: 90, condition: { type: "has_position", value: true } },
+          { id: "price_stop", type: "condition", label: "價格 <= 80000", x: 260, y: 210, condition: { type: "price_below", value: 80000 } },
+          { id: "risk_and", type: "logic", label: "AND", x: 480, y: 150, operator: "AND" },
+          { id: "close_all", type: "action", label: "全部平倉", priority: 100, x: 680, y: 150, action: { type: "close_all", step: 1, order_type: "market" } },
+        ],
+        edges: [
+          { id: "e_start_position", from: "start", from_port: "out", to: "has_position", to_port: "in" },
+          { id: "e_start_stop", from: "start", from_port: "out", to: "price_stop", to_port: "in" },
+          { id: "e_position_and", from: "has_position", from_port: "true", to: "risk_and", to_port: "in" },
+          { id: "e_stop_and", from: "price_stop", from_port: "true", to: "risk_and", to_port: "in" },
+          { id: "e_and_close", from: "risk_and", from_port: "true", to: "close_all", to_port: "in" },
+        ],
+      },
+    },
+    rsi_scale: {
+      label: "RSI 分批買賣",
+      workflow: {
+        version: 2,
+        strategy_kind: "workflow_graph",
+        source: "basic_template",
+        name: "RSI 分批買賣",
+        description: "RSI 偏低時分批買入，RSI 偏高且已有持倉時分批賣出。",
+        start_node_id: "start",
+        nodes: [
+          { id: "start", type: "start", label: "開始", x: 80, y: 180 },
+          { id: "rsi_low", type: "condition", label: "RSI <= 30", x: 260, y: 90, condition: { type: "rsi_below", value: 30 } },
+          { id: "buy_step_1", type: "action", label: "買入 10%", x: 500, y: 90, action: { type: "buy_percent", percent: 10, step: 1, order_type: "market" } },
+          { id: "rsi_high", type: "condition", label: "RSI >= 70", x: 260, y: 250, condition: { type: "rsi_above", value: 70 } },
+          { id: "has_position", type: "condition", label: "已有持倉", x: 260, y: 370, condition: { type: "has_position", value: true } },
+          { id: "exit_and", type: "logic", label: "AND", x: 500, y: 310, operator: "AND" },
+          { id: "sell_half", type: "action", label: "賣出 50%", priority: 20, x: 720, y: 310, action: { type: "sell_percent", percent: 50, step: 1, order_type: "market" } },
+        ],
+        edges: [
+          { id: "e_start_low", from: "start", from_port: "out", to: "rsi_low", to_port: "in" },
+          { id: "e_low_buy", from: "rsi_low", from_port: "true", to: "buy_step_1", to_port: "in" },
+          { id: "e_start_high", from: "start", from_port: "out", to: "rsi_high", to_port: "in" },
+          { id: "e_start_position", from: "start", from_port: "out", to: "has_position", to_port: "in" },
+          { id: "e_high_and", from: "rsi_high", from_port: "true", to: "exit_and", to_port: "in" },
+          { id: "e_position_and", from: "has_position", from_port: "true", to: "exit_and", to_port: "in" },
+          { id: "e_and_sell", from: "exit_and", from_port: "true", to: "sell_half", to_port: "in" },
+        ],
+      },
+    },
   };
+}
+
+function tradingWorkflowTemplate(name = "dip_buy") {
+  const templates = tradingWorkflowTemplates();
+  return JSON.parse(JSON.stringify((templates[name] || templates.dip_buy).workflow));
+}
+
+function applyTradingWorkflowTemplate() {
+  const key = $("trading-workflow-template-select")?.value || "dip_buy";
+  const templates = tradingWorkflowTemplates();
+  const item = templates[key] || templates.dip_buy;
+  const textarea = $("trading-auto-workflow-json");
+  if (!textarea) {
+    tradingSetMsg("找不到 Workflow JSON 編輯欄位", false);
+    return;
+  }
+  textarea.value = JSON.stringify(item.workflow, null, 2);
+  localStorage.setItem(TRADING_WORKFLOW_STORAGE_KEY, textarea.value);
+  tradingSetMsg(`已套用基礎模板：${item.label}。請依市場價格調整門檻後再儲存機器人。`);
 }
 
 function tradingWorkflowText() {
@@ -1357,6 +1511,59 @@ function parseTradingWorkflowInput() {
   }
 }
 
+function formatTradingCountdown(ms) {
+  const seconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) return `${hours} 小時 ${String(minutes).padStart(2, "0")} 分 ${String(rest).padStart(2, "0")} 秒`;
+  return `${minutes} 分 ${String(rest).padStart(2, "0")} 秒`;
+}
+
+function parseTradingDateMs(value) {
+  if (!value) return NaN;
+  const raw = String(value);
+  let parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) return parsed;
+  parsed = Date.parse(raw.replace(" ", "T"));
+  return parsed;
+}
+
+function tradingBotNextRunInfo(row) {
+  if (!row || !row.enabled) return { text: "下次執行：已停用", ready: false };
+  if (Number(row.run_count || 0) >= Number(row.max_runs || 1)) return { text: "下次執行：已達最大次數", ready: false };
+  let nextMs = parseTradingDateMs(row.next_run_at);
+  if (Number.isNaN(nextMs)) {
+    const lastMs = parseTradingDateMs(row.last_run_at);
+    nextMs = Number.isNaN(lastMs) ? Date.now() : lastMs + (Number(row.cooldown_seconds || 0) * 1000);
+  }
+  const remaining = nextMs - Date.now();
+  if (remaining <= 0) return { text: "下次執行：可立即執行", ready: true };
+  const when = new Date(nextMs).toLocaleString("zh-TW", { hour12: false });
+  return { text: `下次執行：${formatTradingCountdown(remaining)} 後（${when}）`, ready: false };
+}
+
+function tradingBotNextRunText(row) {
+  return tradingBotNextRunInfo(row).text;
+}
+
+function updateTradingBotCountdowns() {
+  document.querySelectorAll("[data-trading-bot-next-run]").forEach((node) => {
+    const uuid = node.dataset.tradingBotNextRun || "";
+    const row = (tradingState.bots || []).find((item) => item.bot_uuid === uuid);
+    node.textContent = tradingBotNextRunText(row);
+  });
+}
+
+function restartTradingBotCountdown() {
+  if (tradingBotCountdownTimer) window.clearInterval(tradingBotCountdownTimer);
+  tradingBotCountdownTimer = null;
+  updateTradingBotCountdowns();
+  if ((tradingState.bots || []).some((row) => row.enabled && Number(row.run_count || 0) < Number(row.max_runs || 1))) {
+    tradingBotCountdownTimer = window.setInterval(updateTradingBotCountdowns, 1000);
+  }
+}
+
 function renderTradingBots(rows = [], runs = []) {
   const dcaList = $("trading-dca-bot-list");
   const strategyList = $("trading-strategy-bot-list");
@@ -1372,6 +1579,7 @@ function renderTradingBots(rows = [], runs = []) {
             <div class="drive-card-sub">
               狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${Number(row.max_runs || 1)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
             </div>
+            <div class="drive-card-sub" data-trading-bot-next-run="${sanitize(row.bot_uuid || "")}">${sanitize(tradingBotNextRunText(row))}</div>
             ${row.last_error ? `<div class="drive-card-sub negative">上次錯誤：${sanitize(row.last_error)}</div>` : ""}
           </div>
           <div class="drive-file-actions">
@@ -1385,9 +1593,20 @@ function renderTradingBots(rows = [], runs = []) {
   if (strategyList) strategyList.innerHTML = renderRows(rows.filter((row) => row.bot_type !== "dca"), "尚無自動化 Workflow");
   [dcaList, strategyList].forEach((list) => {
     if (!list) return;
-    list.querySelectorAll("[data-trading-bot-delete]").forEach((btn) => btn.addEventListener("click", () => deleteTradingBot(btn.dataset.tradingBotDelete || "")));
-    list.querySelectorAll("[data-trading-bot-toggle]").forEach((btn) => btn.addEventListener("click", () => toggleTradingBot(btn.dataset.tradingBotToggle || "", btn.dataset.tradingBotEnabled === "1")));
-    list.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => btn.addEventListener("click", () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || "")));
+    list.querySelectorAll("[data-trading-bot-delete]").forEach((btn) => {
+      bindTradingActionButton(btn, () => deleteTradingBot(btn.dataset.tradingBotDelete || ""), "準備刪除交易機器人...", "交易機器人刪除失敗");
+    });
+    list.querySelectorAll("[data-trading-bot-toggle]").forEach((btn) => {
+      bindTradingActionButton(
+        btn,
+        () => toggleTradingBot(btn.dataset.tradingBotToggle || "", btn.dataset.tradingBotEnabled === "1"),
+        btn.dataset.tradingBotEnabled === "1" ? "準備啟用交易機器人..." : "準備暫停交易機器人...",
+        "交易機器人狀態更新失敗"
+      );
+    });
+    list.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
+      bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
+    });
   });
   const botSelect = $("trading-backtest-bot-select");
   if (botSelect) {
@@ -1411,6 +1630,7 @@ function renderTradingBots(rows = [], runs = []) {
       `).join("");
     }
   }
+  restartTradingBotCountdown();
 }
 
 function renderTradingWalletSummary(payload = {}) {
@@ -1596,7 +1816,10 @@ async function loadTradingDashboard() {
 }
 
 async function loadTradingRootReport() {
-  if (currentUser !== "root") return;
+  if (currentUser !== "root") {
+    tradingSetMsg("只有 root 可以讀取交易管理報告", false);
+    return;
+  }
   try {
     const json = await fetchTradingJson("/admin/trading/report");
     tradingState.rootReport = json.report || {};
@@ -1668,6 +1891,7 @@ async function saveTradingBot() {
     enabled: !!$("trading-auto-bot-enabled")?.checked,
   };
   try {
+    tradingSetMsg("正在新增自動化機器人...");
     await fetchTradingJson("/trading/bots", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -1700,11 +1924,26 @@ async function saveTradingDcaBot() {
     enabled: !!$("trading-dca-bot-enabled")?.checked,
   };
   try {
-    await fetchTradingJson("/trading/bots", {
+    tradingSetMsg("正在新增定投機器人...");
+    const json = await fetchTradingJson("/trading/bots", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    tradingSetMsg("定投機器人已新增");
+    const initial = json.initial_run || null;
+    const failed = Array.isArray(initial?.failed) ? initial.failed : [];
+    const triggered = Array.isArray(initial?.triggered) ? initial.triggered : [];
+    const skipped = Array.isArray(initial?.skipped) ? initial.skipped : [];
+    if (!payload.enabled) {
+      tradingSetMsg("定投機器人已新增（目前停用，未立即執行）");
+    } else if (failed.length) {
+      tradingSetMsg(`定投機器人已新增，但首次執行失敗：${tradingErrorText(failed[0], "後端未提供錯誤原因")}`, false);
+    } else if (triggered.length) {
+      tradingSetMsg("定投機器人已新增，已立即執行第一筆");
+    } else if (skipped.length) {
+      tradingSetMsg(`定投機器人已新增，但首次執行被略過：${sanitize(skipped[0].reason || "未符合條件")}`, false);
+    } else {
+      tradingSetMsg("定投機器人已新增，等待下一次掃描");
+    }
     if ($("trading-dca-bot-name")) $("trading-dca-bot-name").value = "";
     await loadTradingDashboard();
   } catch (err) {
@@ -1791,18 +2030,29 @@ function renderTradingBacktestResult(json) {
 
 function prepareTradingBacktestFromBot(botUuid) {
   const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
-  if (!bot) return;
+  if (!bot) {
+    tradingSetMsg("找不到要回測的交易機器人", false);
+    return;
+  }
   switchTradingBotTab("backtest");
   if ($("trading-backtest-bot-select")) $("trading-backtest-bot-select").value = botUuid;
   if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = bot.bot_type === "dca" ? "dca" : "workflow";
   if ($("trading-backtest-market")) $("trading-backtest-market").value = bot.market_symbol || "";
   if (bot.workflow && $("trading-auto-workflow-json")) $("trading-auto-workflow-json").value = JSON.stringify(bot.workflow, null, 2);
+  tradingSetMsg("已帶入機器人回測設定，請確認時間範圍後執行回測");
 }
 
 async function deleteTradingBot(botUuid) {
-  if (!botUuid) return;
-  if (!confirm("確定刪除這個交易機器人？")) return;
+  if (!botUuid) {
+    tradingSetMsg("找不到要刪除的交易機器人", false);
+    return;
+  }
+  if (!confirm("確定刪除這個交易機器人？")) {
+    tradingSetMsg("已取消刪除交易機器人");
+    return;
+  }
   try {
+    tradingSetMsg("正在刪除交易機器人...");
     await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
       method: "DELETE",
       body: JSON.stringify({}),
@@ -1816,7 +2066,10 @@ async function deleteTradingBot(botUuid) {
 
 async function toggleTradingBot(botUuid, enabled) {
   const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
-  if (!bot) return;
+  if (!bot) {
+    tradingSetMsg("找不到要更新的交易機器人", false);
+    return;
+  }
   const payload = {
     bot_type: bot.bot_type || "conditional",
     name: bot.name || "",
@@ -1835,6 +2088,7 @@ async function toggleTradingBot(botUuid, enabled) {
     enabled,
   };
   try {
+    tradingSetMsg(enabled ? "正在啟用機器人..." : "正在暫停機器人...");
     await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
       method: "PUT",
       body: JSON.stringify(payload),
@@ -1848,6 +2102,7 @@ async function toggleTradingBot(botUuid, enabled) {
 
 async function scanTradingBots() {
   try {
+    tradingSetMsg("正在掃描已啟用交易機器人...");
     const json = await fetchTradingJson("/trading/bots/scan", {
       method: "POST",
       body: JSON.stringify({ limit: 50 }),
@@ -1939,7 +2194,10 @@ async function openRootTradingContract() {
 }
 
 async function closeRootTradingContract(positionUuid) {
-  if (!positionUuid) return;
+  if (!positionUuid) {
+    tradingSetMsg("找不到要平倉的合約倉位", false);
+    return;
+  }
   try {
     const json = await fetchTradingJson(`/root/trading/contracts/${encodeURIComponent(positionUuid)}/close`, {
       method: "POST",
@@ -1985,8 +2243,14 @@ async function openTradingMarginPosition() {
 }
 
 async function closeTradingMarginPosition(positionUuid) {
-  if (!positionUuid) return;
-  if (!confirm("確定平掉這筆進階交易倉位？")) return;
+  if (!positionUuid) {
+    tradingSetMsg("找不到要平倉的進階交易倉位", false);
+    return;
+  }
+  if (!confirm("確定平掉這筆進階交易倉位？")) {
+    tradingSetMsg("已取消進階交易平倉");
+    return;
+  }
   try {
     const json = await fetchTradingJson(`/trading/margin/${encodeURIComponent(positionUuid)}/close`, {
       method: "POST",
@@ -2001,7 +2265,10 @@ async function closeTradingMarginPosition(positionUuid) {
 }
 
 async function addTradingMarginCollateral(positionUuid, scope = "trading") {
-  if (!positionUuid) return;
+  if (!positionUuid) {
+    tradingSetMsg("找不到要補保證金的進階交易倉位", false);
+    return;
+  }
   const selector = scope === "economy"
     ? `[data-economy-margin-collateral-amount="${CSS.escape(positionUuid)}"]`
     : `[data-margin-collateral-amount="${CSS.escape(positionUuid)}"]`;
@@ -2027,7 +2294,10 @@ async function addTradingMarginCollateral(positionUuid, scope = "trading") {
 }
 
 async function cancelTradingOrder(orderUuid) {
-  if (!orderUuid) return;
+  if (!orderUuid) {
+    tradingSetMsg("找不到要取消的訂單", false);
+    return;
+  }
   try {
     await fetchTradingJson(`/trading/orders/${encodeURIComponent(orderUuid)}/cancel`, {
       method: "POST",
@@ -2109,7 +2379,10 @@ async function resetRootTradingSimulatedBalance() {
 }
 
 async function scanTradingLiquidations() {
-  if (currentUser !== "root") return;
+  if (currentUser !== "root") {
+    tradingSetMsg("只有 root 可以手動掃描強平條件", false);
+    return;
+  }
   const status = $("trading-liquidation-status");
   if (status) status.textContent = "正在掃描強平條件...";
   try {
@@ -2129,7 +2402,10 @@ async function scanTradingLiquidations() {
 }
 
 async function matchTradingLimitOrders() {
-  if (currentUser !== "root") return;
+  if (currentUser !== "root") {
+    tradingSetMsg("只有 root 可以手動掃描限價單撮合", false);
+    return;
+  }
   try {
     const json = await fetchTradingJson("/root/trading/orders/match", {
       method: "POST",
@@ -2161,31 +2437,35 @@ function bindTradingEvents() {
   if (tradingEventsBound) return;
   tradingEventsBound = true;
   const bindings = [
-    ["trading-refresh-btn", loadTradingDashboard],
-    ["trading-submit-order-btn", submitTradingOrder],
-    ["trading-auto-bot-save-btn", saveTradingBot],
-    ["trading-dca-bot-save-btn", saveTradingDcaBot],
-    ["trading-bot-scan-btn", scanTradingBots],
-    ["trading-backtest-run-btn", backtestTradingBot],
-    ["trading-workflow-load-btn", loadTradingWorkflowFromEditor],
-    ["trading-root-refresh-btn", loadTradingRootReport],
-    ["trading-root-save-market-btn", saveTradingRootMarket],
-    ["trading-reserve-allocate-btn", allocateTradingReserve],
-    ["trading-root-reset-sim-btn", resetRootTradingSimulatedBalance],
-    ["trading-contract-open-btn", openRootTradingContract],
-    ["trading-margin-open-btn", openTradingMarginPosition],
-    ["trading-limit-match-btn", matchTradingLimitOrders],
-    ["trading-liquidation-scan-btn", scanTradingLiquidations],
-    ["economy-trading-open-btn", openTradingModuleFromWallet],
-    ["economy-root-virtual-open-btn", openTradingModuleFromWallet],
+    ["trading-refresh-btn", loadTradingDashboard, "正在重新整理交易資料...", "交易資料重新整理失敗"],
+    ["trading-submit-order-btn", submitTradingOrder, "正在送出訂單...", "下單失敗"],
+    ["trading-auto-bot-save-btn", saveTradingBot, "正在新增自動化機器人...", "自動化機器人新增失敗"],
+    ["trading-dca-bot-save-btn", saveTradingDcaBot, "正在新增定投機器人...", "定投機器人新增失敗"],
+    ["trading-bot-scan-btn", scanTradingBots, "正在掃描已啟用交易機器人...", "交易機器人掃描失敗"],
+    ["trading-backtest-run-btn", backtestTradingBot, "正在執行回測...", "回測失敗"],
+    ["trading-workflow-load-btn", loadTradingWorkflowFromEditor, "正在載入 Workflow 編輯器結果...", "Workflow 載入失敗"],
+    ["trading-workflow-template-apply-btn", applyTradingWorkflowTemplate, "正在套用 Workflow 基礎模板...", "Workflow 模板套用失敗"],
+    ["trading-root-refresh-btn", loadTradingRootReport, "正在讀取 root 交易報告...", "交易報告讀取失敗"],
+    ["trading-root-save-market-btn", saveTradingRootMarket, "正在儲存交易市場設定...", "市場設定儲存失敗"],
+    ["trading-reserve-allocate-btn", allocateTradingReserve, "正在撥入交易資金池...", "資金池撥入失敗"],
+    ["trading-root-reset-sim-btn", resetRootTradingSimulatedBalance, "準備重置 root 模擬交易...", "root 模擬資金重設失敗"],
+    ["trading-contract-open-btn", openRootTradingContract, "正在建立 root 合約模擬倉位...", "合約開倉失敗"],
+    ["trading-margin-open-btn", openTradingMarginPosition, "正在建立進階交易倉位...", "進階交易開倉失敗"],
+    ["trading-limit-match-btn", matchTradingLimitOrders, "正在掃描限價單撮合...", "限價單撮合失敗"],
+    ["trading-liquidation-scan-btn", scanTradingLiquidations, "正在掃描強平條件...", "強平掃描失敗"],
+    ["economy-trading-open-btn", openTradingModuleFromWallet, "正在切換到交易所...", "交易所切換失敗"],
+    ["economy-root-virtual-open-btn", openTradingModuleFromWallet, "正在切換到交易所...", "交易所切換失敗"],
   ];
-  bindings.forEach(([id, handler]) => {
+  bindings.forEach(([id, handler, pendingText, fallbackText]) => {
     const el = $(id);
     if (!el) return;
-    el.addEventListener("click", handler);
+    bindTradingActionButton(el, handler, pendingText, fallbackText);
   });
   document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
-    btn.addEventListener("click", () => switchTradingBotTab(btn.dataset.tradingBotTab || "dca"));
+    btn.addEventListener("click", () => {
+      switchTradingBotTab(btn.dataset.tradingBotTab || "dca");
+      tradingSetMsg(`已切換到${btn.textContent?.trim() || "交易機器人"}分頁`);
+    });
   });
   const dcaPreset = $("trading-dca-bot-interval-preset");
   if (dcaPreset) {
@@ -2194,12 +2474,14 @@ function bindTradingEvents() {
       if (!target) return;
       target.disabled = dcaPreset.value !== "custom";
       if (dcaPreset.value !== "custom") target.value = dcaPreset.value;
+      tradingSetMsg(dcaPreset.value === "custom" ? "已切換為自訂定投間隔" : `已選擇每 ${dcaPreset.value} 小時定投`);
     });
   }
   const backtestBotSelect = $("trading-backtest-bot-select");
   if (backtestBotSelect) {
     backtestBotSelect.addEventListener("change", () => {
       if (backtestBotSelect.value) prepareTradingBacktestFromBot(backtestBotSelect.value);
+      else tradingSetMsg("已切換為使用目前表單設定回測");
     });
   }
   const marketSelect = $("trading-market-select");
