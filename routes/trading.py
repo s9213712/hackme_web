@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -61,6 +61,7 @@ BITSTAMP_STEP_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 8
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
 BTC_TRADE_SIGNAL_KEYS = {"bar_ts", "signal_ok", "ml_ok", "position", "current_price", "entry_checks", "ml_status"}
+BTC_TRADE_TIMEFRAME_SECONDS = {"4h": 4 * 60 * 60}
 
 
 def _expand_server_path(raw_path):
@@ -73,6 +74,37 @@ def _expand_server_path(raw_path):
 def _load_json_file(path):
     with open(path, "r", encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def _parse_btc_trade_time(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _btc_trade_next_prediction(signal, *, timeframe="4h", fallback_updated_at=None):
+    interval = BTC_TRADE_TIMEFRAME_SECONDS.get(str(timeframe or "4h").lower(), 4 * 60 * 60)
+    base = _parse_btc_trade_time(signal.get("bar_ts")) or _parse_btc_trade_time(fallback_updated_at)
+    if not base:
+        return None
+    now = datetime.now(timezone.utc)
+    next_at = base + timedelta(seconds=interval)
+    while next_at <= now:
+        next_at += timedelta(seconds=interval)
+    return {
+        "next_prediction_at": next_at.isoformat(),
+        "next_prediction_seconds": max(0, int((next_at - now).total_seconds())),
+        "prediction_interval_seconds": interval,
+    }
 
 
 def btc_trade_status(project_dir):
@@ -162,6 +194,9 @@ def btc_trade_status(project_dir):
                 }
         except Exception:
             pass
+    next_prediction = _btc_trade_next_prediction(signal, timeframe=signal["timeframe"], fallback_updated_at=signal.get("updated_at"))
+    if next_prediction:
+        signal.update(next_prediction)
     payload["available"] = True
     payload["needs_initialization"] = False
     payload["message"] = "BTC_trade 信號可用"

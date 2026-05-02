@@ -153,6 +153,9 @@ def test_btc_trade_signal_reads_latest_report(tmp_path):
     assert payload["signal"]["ml_status"]["situation"] == "三多"
     assert payload["signal"]["portfolio"]["position"] == "LONG"
     assert payload["signal"]["last_trade"]["action"] == "ENTRY"
+    assert payload["signal"]["prediction_interval_seconds"] == 14400
+    assert payload["signal"]["next_prediction_at"]
+    assert payload["signal"]["next_prediction_seconds"] >= 0
 
 
 def test_root_btc_trade_check_reports_initialization_needed(tmp_path):

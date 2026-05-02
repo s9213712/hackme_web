@@ -289,6 +289,10 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'if (normTab === "trading"' in admin_js
     assert "function renderTradingWalletSummary" in trading_js
     assert "function loadTradingBtcSignal" in trading_js
+    assert "function tradingBtcSignalCountdownText" in trading_js
+    assert "function updateTradingBtcSignalMeta" in trading_js
+    assert "next_prediction_at" in trading_js
+    assert "下次預測倒數" in trading_js
     assert "/trading/btc-signal" in trading_js
     assert "function rootVirtualSpotValue" in trading_js
     assert "function renderEconomySpotPositionDetails" in trading_js
