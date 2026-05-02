@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
@@ -23,6 +24,7 @@ CHAT_STICKERS = {
     "cheer": {"label": "加油", "glyph": "GO"},
     "sad": {"label": "難過", "glyph": ":("},
 }
+CHAT_HTML_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
 
 
 def actor_value(actor, key, default=None):
@@ -38,6 +40,14 @@ def actor_role(actor):
     if not actor:
         return "guest"
     return "super_admin" if actor_value(actor, "username") == "root" else (actor_value(actor, "role") or "user")
+
+
+def sanitize_chat_content(value):
+    """Store chat as plain text so saved messages cannot become stored HTML."""
+    if value is None:
+        return ""
+    text = str(value).replace("\x00", "").strip()
+    return CHAT_HTML_TAG_RE.sub("", text).strip()
 
 
 def _table_columns(conn, table):
@@ -888,7 +898,7 @@ def register_chat_routes(app, deps):
                 content = f"[sticker:{sticker_key}]"
             else:
                 sticker_key = None
-                content = (data.get("content") or "").strip()
+                content = sanitize_chat_content(data.get("content"))
                 if not content and attachment_file_ids:
                     content = "已分享附件"
             if not content:

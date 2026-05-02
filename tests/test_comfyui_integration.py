@@ -785,7 +785,8 @@ def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    client = _build_app(db_path, storage_root).test_client()
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
 
     interrupted = client.post("/api/comfyui/interrupt", json={})
 
@@ -794,6 +795,21 @@ def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
     assert body["ok"] is True
     assert body["interrupt"]["interrupted"] is True
     assert FakeComfyUIClient.interrupted == 1
+
+
+def test_comfyui_interrupt_denies_normal_user(tmp_path):
+    FakeComfyUIClient.interrupted = 0
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    interrupted = client.post("/api/comfyui/interrupt", json={})
+
+    assert interrupted.status_code == 403
+    assert interrupted.get_json()["ok"] is False
+    assert FakeComfyUIClient.interrupted == 0
 
 
 def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
