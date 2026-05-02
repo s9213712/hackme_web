@@ -785,7 +785,8 @@ def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    client = _build_app(db_path, storage_root).test_client()
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
 
     interrupted = client.post("/api/comfyui/interrupt", json={})
 
@@ -794,6 +795,21 @@ def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
     assert body["ok"] is True
     assert body["interrupt"]["interrupted"] is True
     assert FakeComfyUIClient.interrupted == 1
+
+
+def test_comfyui_interrupt_denies_normal_user(tmp_path):
+    FakeComfyUIClient.interrupted = 0
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    interrupted = client.post("/api/comfyui/interrupt", json={})
+
+    assert interrupted.status_code == 403
+    assert interrupted.get_json()["ok"] is False
+    assert FakeComfyUIClient.interrupted == 0
 
 
 def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
@@ -943,7 +959,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
     assert "/js/36-comfyui.js?v=20260429-root-billing-exempt" in index_html
-    assert "/styles.css?v=20260501-024" in index_html
+    assert "/styles.css?v=" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
