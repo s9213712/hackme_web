@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Pre-push hook: auto-bumps APP_RELEASE_ID and syncs UPDATE_SUMMARY.md Release ID.
+# Install: ln -sf ../../hooks/pre-push .git/hooks/pre-push
+# Or run once: bash hooks/install-hooks.sh
+
+set -euo pipefail
+
+RELEASE_FILE="services/release_info.py"
+SUMMARY_FILE="docs/UPDATE_SUMMARY.md"
+
+if [[ ! -f "$RELEASE_FILE" ]]; then
+  echo "pre-push: $RELEASE_FILE not found, skipping version bump" >&2
+  exit 0
+fi
+
+# Read current APP_RELEASE_ID
+CURRENT=$(python3 - <<'EOF'
+import re, sys
+try:
+    content = open("services/release_info.py").read()
+    m = re.search(r'APP_RELEASE_ID\s*=\s*"([^"]+)"', content)
+    print(m.group(1) if m else "", end="")
+except Exception as e:
+    sys.exit(1)
+EOF
+) || { echo "pre-push: could not parse APP_RELEASE_ID, skipping" >&2; exit 0; }
+
+if [[ -z "$CURRENT" ]]; then
+  echo "pre-push: APP_RELEASE_ID is empty, skipping" >&2
+  exit 0
+fi
+
+# Parse YYYY.MM.DD-NNN format
+if [[ "$CURRENT" =~ ^([0-9]{4}\.[0-9]{2}\.[0-9]{2})-([0-9]+)$ ]]; then
+  DATE_PART="${BASH_REMATCH[1]}"
+  BUILD_PART="${BASH_REMATCH[2]}"
+else
+  echo "pre-push: unexpected version format '$CURRENT', skipping bump" >&2
+  exit 0
+fi
+
+NEW_BUILD=$(printf "%03d" $((10#$BUILD_PART + 1)))
+NEW_ID="${DATE_PART}-${NEW_BUILD}"
+
+echo "pre-push: bumping version $CURRENT → $NEW_ID"
+
+# Update services/release_info.py
+python3 - "$NEW_ID" <<'EOF'
+import re, sys
+new_id = sys.argv[1]
+path = "services/release_info.py"
+content = open(path).read()
+result = re.sub(r'(APP_RELEASE_ID\s*=\s*)"[^"]+"', rf'\1"{new_id}"', content)
+open(path, "w").write(result)
+EOF
+
+# Update docs/UPDATE_SUMMARY.md Release ID line
+if [[ -f "$SUMMARY_FILE" ]]; then
+  python3 - "$NEW_ID" <<'EOF'
+import re, sys
+new_id = sys.argv[1]
+path = "docs/UPDATE_SUMMARY.md"
+content = open(path).read()
+result = re.sub(r'(Release ID:\s*`)[^`]+(`)', rf'\1{new_id}\2', content)
+open(path, "w").write(result)
+EOF
+fi
+
+# Stage and amend the tip commit with the version bump
+git add "$RELEASE_FILE"
+[[ -f "$SUMMARY_FILE" ]] && git add "$SUMMARY_FILE"
+git commit --amend --no-edit
+
+echo "pre-push: version bumped and committed (amend)"
+exit 0

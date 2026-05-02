@@ -1394,15 +1394,30 @@ def register_system_admin_routes(app, deps):
         if not preview.get("ok"):
             return json_resp({"ok": False, "msg": preview.get("msg") or "更新預覽失敗", "preview": preview}), 400
         state = preview.get("state") or {}
+        stash_applied = False
+        stash_result = None
         if state.get("dirty"):
-            return json_resp({
-                "ok": False,
-                "msg": "目前工作目錄已有未提交變更，為避免覆蓋本地修改，請先處理後再更新。",
-                "dirty_files": state.get("dirty_files") or [],
-                "preview": preview,
-            }), 409
+            # Runtime servers always have modified files (logs, caches, db, etc.).
+            # Auto-stash instead of hard-blocking so the update can proceed.
+            stash_result = run_git_command(
+                ["stash", "push", "--include-untracked", "-m", "auto-stash before server update"],
+                timeout=30,
+            )
+            if not stash_result["ok"]:
+                return json_resp({
+                    "ok": False,
+                    "msg": "工作目錄有未提交變更，且自動暫存失敗，請先手動處理後再更新。",
+                    "dirty_files": state.get("dirty_files") or [],
+                    "stash_error": git_short_text(stash_result),
+                    "preview": preview,
+                }), 409
+            stash_applied = True
         recovery_points = prepare_server_update_recovery_points(actor, branch)
         if not recovery_points.get("ok"):
+            if stash_applied:
+                restore = run_git_command(["stash", "pop"], timeout=30)
+                if not restore.get("ok"):
+                    run_git_command(["stash", "drop"], timeout=15)
             audit(
                 "SERVER_UPDATE_PREPARE_FAILED",
                 get_client_ip(),
@@ -1419,6 +1434,12 @@ def register_system_admin_routes(app, deps):
             }), 500
         before_commit = state.get("current_commit") or ""
         merge_result = run_git_command(["merge", "--ff-only", f"origin/{branch}"], timeout=120)
+        # Restore stashed runtime files after merge (pop; drop on conflict to avoid blocking restart)
+        stash_pop_result = None
+        if stash_applied:
+            stash_pop_result = run_git_command(["stash", "pop"], timeout=30)
+            if not stash_pop_result.get("ok"):
+                run_git_command(["stash", "drop"], timeout=15)
         after_state = current_git_state(fetch=False)
         integrity_result = None
         restart_result = None
@@ -1437,6 +1458,8 @@ def register_system_admin_routes(app, deps):
             "after_commit": (after_state or {}).get("current_commit"),
             "success": bool(merge_result["ok"]),
             "merge_output": git_short_text(merge_result, limit=4000),
+            "stash_applied": stash_applied,
+            "stash_pop_ok": bool(stash_pop_result.get("ok")) if stash_pop_result else None,
             "recovery": recovery_points,
             "restart": restart_result,
             "warning": SERVER_UPDATE_WARNING,

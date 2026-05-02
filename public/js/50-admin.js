@@ -3072,7 +3072,7 @@ function renderServerUpdatePreview(preview) {
     `目前分支：${state.current_branch || "-"} @ ${state.current_commit || "-"}`,
     `目標分支：${preview.remote_ref || "-"}`,
     `本地 ahead：${summary.ahead ?? "-"}，遠端 ahead：${summary.behind ?? "-"}`,
-    `工作目錄：${state.dirty ? "有未提交變更，禁止套用" : "乾淨"}`,
+    `工作目錄：${state.dirty ? "有未提交變更（更新時將自動暫存）" : "乾淨"}`,
     "",
     "警告：",
     preview.warning || "此次更新未經驗證，請自行測試與 debug。",
@@ -3172,8 +3172,10 @@ async function applyServerUpdate() {
     const json = await res.json().catch(() => ({}));
     if (!json.ok) throw new Error(json.msg || `更新套用失敗（HTTP ${res.status}）`);
     const preview = json.preview || {};
-    preview.release_summary = json.release_summary || preview.release_summary || "";
+    const releaseSummary = json.release_summary || preview.release_summary || "";
+    preview.release_summary = releaseSummary;
     renderServerUpdatePreview(preview);
+    if (releaseSummary) renderServerUpdateSummary(releaseSummary);
     const integrity = json.integrity?.result?.summary || {};
     const snapshotId = json.recovery?.snapshot?.snapshot_id || "-";
     const backupId = json.recovery?.points_backup?.backup_id || "-";
