@@ -452,6 +452,36 @@ def register_system_admin_routes(app, deps):
         except Exception as exc:
             return {"ok": False, "msg": str(exc)}
 
+    def prepare_server_update_recovery_points(actor, branch):
+        if not snapshot_service:
+            return {"ok": False, "msg": "snapshot service unavailable"}
+        if not points_service:
+            return {"ok": False, "msg": "PointsChain service unavailable"}
+        snapshot = snapshot_service.create_snapshot(
+            snapshot_type="pre_update",
+            actor=actor,
+            notes=f"Before GitHub server update from origin/{branch}",
+        )
+        if not snapshot.ok:
+            return {
+                "ok": False,
+                "msg": "更新前 snapshot 建立失敗，已中止更新",
+                "snapshot": {"ok": False, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status, "error": snapshot.error},
+            }
+        backup = points_service.create_ledger_backup(reason=f"server_update_pre_apply:{branch}", kind="pre_server_update")
+        if not backup.get("ok"):
+            return {
+                "ok": False,
+                "msg": "更新前 PointsChain 備份驗證失敗，已中止更新",
+                "snapshot": {"ok": True, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status},
+                "points_backup": backup,
+            }
+        return {
+            "ok": True,
+            "snapshot": {"ok": True, "snapshot_id": snapshot.snapshot_id, "status": snapshot.status},
+            "points_backup": backup,
+        }
+
     def cloud_drive_storage_payload(settings):
         configured = str(settings.get("cloud_drive_storage_root") or "").strip()
         current = os.path.abspath(STORAGE_DIR) if STORAGE_DIR else ""
@@ -1371,16 +1401,34 @@ def register_system_admin_routes(app, deps):
                 "dirty_files": state.get("dirty_files") or [],
                 "preview": preview,
             }), 409
+        recovery_points = prepare_server_update_recovery_points(actor, branch)
+        if not recovery_points.get("ok"):
+            audit(
+                "SERVER_UPDATE_PREPARE_FAILED",
+                get_client_ip(),
+                user=actor["username"],
+                success=False,
+                ua=get_ua(),
+                detail=json.dumps({"branch": branch, "msg": recovery_points.get("msg"), "recovery": recovery_points}, ensure_ascii=False, sort_keys=True),
+            )
+            return json_resp({
+                "ok": False,
+                "msg": recovery_points.get("msg") or "更新前保護點建立失敗，已中止更新",
+                "preview": preview,
+                "recovery": recovery_points,
+            }), 500
         before_commit = state.get("current_commit") or ""
         merge_result = run_git_command(["merge", "--ff-only", f"origin/{branch}"], timeout=120)
         after_state = current_git_state(fetch=False)
         integrity_result = None
+        restart_result = None
         if merge_result["ok"]:
             integrity_result = run_integrity_scan_after_update(actor)
+            restart_result = schedule_server_restart(reason=f"server update from origin/{branch}", delay_seconds=1.25)
             _notify_root(
                 "server_update_unverified",
                 "伺服器已套用未驗證更新",
-                f"已從 origin/{branch} 套用更新。此更新尚未經本機測試驗證，請執行 smoke test、權限測試並處理 Integrity Guard pending findings。",
+                f"已從 origin/{branch} 套用更新，更新前已建立 snapshot 與 PointsChain backup，系統將自動重啟。此更新尚未經本機測試驗證，請執行 smoke test、權限測試並處理 Integrity Guard pending findings。",
                 link="/server",
             )
         detail = {
@@ -1389,6 +1437,8 @@ def register_system_admin_routes(app, deps):
             "after_commit": (after_state or {}).get("current_commit"),
             "success": bool(merge_result["ok"]),
             "merge_output": git_short_text(merge_result, limit=4000),
+            "recovery": recovery_points,
+            "restart": restart_result,
             "warning": SERVER_UPDATE_WARNING,
         }
         audit(
@@ -1405,15 +1455,18 @@ def register_system_admin_routes(app, deps):
                 "msg": "Git 更新套用失敗。通常是目標分支無法 fast-forward，請改用乾淨部署或手動合併。",
                 "preview": preview,
                 "merge": merge_result,
+                "recovery": recovery_points,
                 "warning": SERVER_UPDATE_WARNING,
             }), 409
         return json_resp({
             "ok": True,
-            "msg": "伺服器更新已套用；請重啟伺服器並自行執行測試與 debug。",
+            "msg": "伺服器更新已套用；已建立更新前 snapshot 與 PointsChain 備份，伺服器將自動重啟。重啟後請自行執行測試與 debug。",
             "preview": preview,
             "merge": merge_result,
             "state": after_state,
             "integrity": integrity_result,
+            "recovery": recovery_points,
+            "restart": restart_result,
             "release_summary": read_update_summary(),
             "warning": SERVER_UPDATE_WARNING,
             "restart_required": True,

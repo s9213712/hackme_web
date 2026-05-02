@@ -1,21 +1,20 @@
 # Update Summary
 
-Release ID: `2026.05.02-040`
+Release ID: `2026.05.02-041`
 
 ## Highlights
 
-- DCA trading bots now execute the first scheduled buy immediately after a
-  newly enabled bot is created.
-- Trading bot cards now show the next execution time and a live countdown, so
-  users can tell whether a bot is ready, cooling down, disabled, or exhausted.
-- Trading bot actions now return visible pending, success, and failure messages
-  instead of silently doing nothing when a backend operation fails.
-- Workflow strategy tooling now includes reusable base templates plus a more
-  complete node graph editor with visible edges and inline node parameter
-  editing.
-- The root GitHub update center now reads and displays this update summary when
-  previewing or applying an update, so operators can see the release notes in
-  the frontend after using the update button.
+- Root GitHub updates now create a `pre_update` server snapshot before applying
+  the selected remote branch.
+- Root GitHub updates now create and verify a `pre_server_update` PointsChain
+  ledger backup before merge.
+- If either the snapshot or PointsChain backup fails, the update is aborted
+  before touching the checked-out source.
+- Successful updates now automatically schedule a server restart.
+- The frontend update center now reports the snapshot id, PointsChain backup id,
+  and restart mode after applying an update.
+- Workflow bot conditions can now evaluate live/backtest unrealized PnL for
+  stop-loss and take-profit percentage rules.
 
 ## Operator Notes
 

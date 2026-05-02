@@ -30,6 +30,11 @@ The active project emphasizes:
 
 ## Current Economy Work
 
+Release `2026.05.02-041` makes the root GitHub update flow safer by creating a
+server snapshot and a PointsChain ledger backup before applying a fast-forward
+update, aborting if either protection point fails, and scheduling an automatic
+server restart after a successful update.
+
 Release `2026.05.02-040` keeps the active Economy workflow line focused on
 trading automation usability: DCA bots execute their first run immediately,
 bot cards show next-run countdowns, failed bot actions show visible reasons,

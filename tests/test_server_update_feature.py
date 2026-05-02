@@ -19,6 +19,10 @@ def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     assert "APPLY_UNVERIFIED_UPDATE" in system_admin
     assert "release_summary" in system_admin
     assert "read_update_summary_from_ref(remote_ref)" in system_admin
+    assert "prepare_server_update_recovery_points(actor, branch)" in system_admin
+    assert 'snapshot_type="pre_update"' in system_admin
+    assert 'kind="pre_server_update"' in system_admin
+    assert "schedule_server_restart(reason=f\"server update from origin/{branch}\"" in system_admin
     assert "run_integrity_scan_after_update(actor)" in system_admin
     assert "SERVER_UPDATE_WARNING" in system_admin
     assert "git reset --hard" not in system_admin
@@ -33,3 +37,5 @@ def test_server_update_frontend_displays_update_summary():
     assert "function renderServerUpdateSummary" in admin_js
     assert "docs/UPDATE_SUMMARY.md" in admin_js
     assert "preview.release_summary" in admin_js
+    assert "PointsChain backup" in admin_js
+    assert "伺服器將自動重啟" in admin_js

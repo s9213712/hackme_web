@@ -1240,9 +1240,18 @@ class TradingEngineService:
 
     def _workflow_live_context(self, conn, *, market, user_id, observed_price):
         position = self._position(conn, int(user_id), market["symbol"])
+        qty = int(position["quantity_units"] or 0)
+        locked = int(position["locked_quantity_units"] or 0)
+        avg_cost = int(position["avg_cost_points"] or 0)
+        has_pos = qty > locked
+        pnl_percent = None
+        if has_pos and avg_cost > 0 and observed_price and observed_price > 0:
+            pnl_percent = round((observed_price - avg_cost) * 100.0 / avg_cost, 4)
         context = {
             "price": observed_price,
-            "has_position": int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0),
+            "has_position": has_pos,
+            "avg_cost": avg_cost,
+            "pnl_percent": pnl_percent,
         }
         try:
             candles = self._fetch_indicator_candles(market["symbol"])
@@ -3092,6 +3101,12 @@ class TradingEngineService:
                 return context.get("bb_upper") is not None and price >= float(context["bb_upper"])
             if position == "below_lower":
                 return context.get("bb_lower") is not None and price <= float(context["bb_lower"])
+        if ctype == "stop_loss_percent":
+            pnl = context.get("pnl_percent")
+            return pnl is not None and bool(context.get("has_position")) and pnl <= -abs(value)
+        if ctype == "take_profit_percent":
+            pnl = context.get("pnl_percent")
+            return pnl is not None and bool(context.get("has_position")) and pnl >= abs(value)
         return False
 
     def _workflow_graph_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
@@ -3485,6 +3500,7 @@ class TradingEngineService:
         interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
         initial_cash = cash
         units = 0
+        avg_cost_bt = 0
         trades = []
         equity_curve = []
         peak_value = initial_cash
@@ -3509,6 +3525,8 @@ class TradingEngineService:
                 context = self._workflow_indicator_context(candles, index)
                 context["price"] = price
                 context["has_position"] = units > 0
+                context["avg_cost"] = avg_cost_bt
+                context["pnl_percent"] = round((price - avg_cost_bt) * 100.0 / avg_cost_bt, 4) if units > 0 and avg_cost_bt > 0 else None
                 decision = self._workflow_decision(workflow, context=context, run_count=len(trades), last_run_at=None, execution_state=workflow_state)
                 action = (decision or {}).get("action") or {}
                 atype = str(action.get("type") or "hold")
@@ -3533,6 +3551,8 @@ class TradingEngineService:
                     fee = fee_points(gross, fee_rate_percent)
                     cash += max(0, gross - fee)
                     units -= sell_units
+                    if units <= 0:
+                        avg_cost_bt = 0
                     trades.append({
                         "index": index,
                         "time": candle.get("time") or candle.get("time_iso") or index,
@@ -3573,7 +3593,10 @@ class TradingEngineService:
             if buy_units <= 0:
                 continue
             cash -= spend
+            prev_units = units
             units += buy_units
+            if units > 0:
+                avg_cost_bt = int((prev_units * avg_cost_bt + buy_units * price) // units)
             trades.append({
                 "index": index,
                 "time": candle.get("time") or candle.get("time_iso") or index,

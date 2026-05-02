@@ -3109,7 +3109,10 @@ async function applyServerUpdate() {
     preview.release_summary = json.release_summary || preview.release_summary || "";
     renderServerUpdatePreview(preview);
     const integrity = json.integrity?.result?.summary || {};
-    setServerUpdateStatus(`更新已套用，請重啟伺服器並自行測試；Integrity pending=${integrity.pending ?? "-"}`);
+    const snapshotId = json.recovery?.snapshot?.snapshot_id || "-";
+    const backupId = json.recovery?.points_backup?.backup_id || "-";
+    const restartMode = json.restart?.mode || "scheduled";
+    setServerUpdateStatus(`更新已套用，已建立 snapshot=${snapshotId}、PointsChain backup=${backupId}，伺服器將自動重啟（${restartMode}）；Integrity pending=${integrity.pending ?? "-"}`);
     if (typeof loadIntegrityGuard === "function") await loadIntegrityGuard();
   } catch (err) {
     setServerUpdateStatus(err.message || "更新套用失敗", false);
