@@ -14,6 +14,82 @@ function adminFormatPercent(value, fallback = 0) {
   return percent.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+const CLOUD_DRIVE_TRANSFER_LEVELS = [
+  { key: "newbie", label: "新手" },
+  { key: "normal", label: "一般" },
+  { key: "trusted", label: "可信任" },
+  { key: "vip", label: "VIP" },
+  { key: "restricted", label: "限制中" },
+  { key: "suspended", label: "停權" }
+];
+
+const DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS = {
+  newbie: { upload_kbps: 256, download_kbps: 512, priority: 20 },
+  normal: { upload_kbps: 512, download_kbps: 1024, priority: 40 },
+  trusted: { upload_kbps: 2048, download_kbps: 4096, priority: 70 },
+  vip: { upload_kbps: 8192, download_kbps: 16384, priority: 90 },
+  restricted: { upload_kbps: 128, download_kbps: 256, priority: 10 },
+  suspended: { upload_kbps: 0, download_kbps: 0, priority: 0 }
+};
+
+function parseCloudDriveTransferLimits(raw) {
+  if (!raw) return { ...DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS };
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const out = {};
+    CLOUD_DRIVE_TRANSFER_LEVELS.forEach(({ key }) => {
+      const value = parsed?.[key] || {};
+      out[key] = {
+        upload_kbps: Number.isFinite(Number(value.upload_kbps)) ? Math.max(0, parseInt(value.upload_kbps, 10)) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].upload_kbps,
+        download_kbps: Number.isFinite(Number(value.download_kbps)) ? Math.max(0, parseInt(value.download_kbps, 10)) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].download_kbps,
+        priority: Number.isFinite(Number(value.priority)) ? Math.min(100, Math.max(0, parseInt(value.priority, 10))) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].priority
+      };
+    });
+    return out;
+  } catch (_) {
+    return { ...DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS };
+  }
+}
+
+function renderCloudDriveTransferLimits(raw) {
+  const host = $("cloud-drive-transfer-limits-list");
+  if (!host) return;
+  const limits = parseCloudDriveTransferLimits(raw);
+  host.innerHTML = CLOUD_DRIVE_TRANSFER_LEVELS.map(({ key, label }) => {
+    const value = limits[key] || DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key];
+    return `
+      <div class="drive-transfer-limit-row" data-drive-transfer-level="${key}">
+        <div class="drive-transfer-limit-level">${label}</div>
+        <label>上傳 KB/s
+          <input type="number" min="0" step="1" data-drive-transfer-field="upload_kbps" value="${value.upload_kbps}" />
+        </label>
+        <label>下載 KB/s
+          <input type="number" min="0" step="1" data-drive-transfer-field="download_kbps" value="${value.download_kbps}" />
+        </label>
+        <label>優先序
+          <input type="number" min="0" max="100" step="1" data-drive-transfer-field="priority" value="${value.priority}" />
+        </label>
+      </div>
+    `;
+  }).join("");
+}
+
+function collectCloudDriveTransferLimits() {
+  const out = {};
+  CLOUD_DRIVE_TRANSFER_LEVELS.forEach(({ key }) => {
+    const row = document.querySelector(`[data-drive-transfer-level="${key}"]`);
+    const fallback = DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key];
+    out[key] = {};
+    ["upload_kbps", "download_kbps", "priority"].forEach((field) => {
+      const input = row?.querySelector(`[data-drive-transfer-field="${field}"]`);
+      const max = field === "priority" ? 100 : Number.MAX_SAFE_INTEGER;
+      const raw = parseInt(input?.value || `${fallback[field]}`, 10);
+      out[key][field] = Math.min(max, Math.max(0, Number.isFinite(raw) ? raw : fallback[field]));
+    });
+  });
+  return out;
+}
+
 function switchServerTab(tab) {
   currentServerTab = tab;
   if (tab !== "security") stopServerOutputPoll();
@@ -1626,6 +1702,8 @@ async function loadSettings() {
   if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
   if ($("s-comfyui-default-height")) $("s-comfyui-default-height").value = s.comfyui_default_height || 1024;
   if ($("s-cloud-drive-storage-root")) $("s-cloud-drive-storage-root").value = s.cloud_drive_storage_root || "";
+  if ($("s-cloud-drive-transfer-limits-enabled")) $("s-cloud-drive-transfer-limits-enabled").checked = !!s.cloud_drive_transfer_limits_enabled;
+  renderCloudDriveTransferLimits(s.cloud_drive_transfer_limits_json);
   if ($("s-storage-maintenance-auto-enabled")) $("s-storage-maintenance-auto-enabled").checked = !!s.storage_maintenance_auto_enabled;
   if ($("s-storage-maintenance-daily-time")) $("s-storage-maintenance-daily-time").value = s.storage_maintenance_daily_time || "04:00";
   if ($("s-storage-trash-retention-days")) $("s-storage-trash-retention-days").value = s.storage_trash_retention_days || 30;
@@ -2748,6 +2826,8 @@ async function saveSettings() {
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
     cloud_drive_storage_root: ($("s-cloud-drive-storage-root")?.value || "").trim(),
+    cloud_drive_transfer_limits_enabled: !!$("s-cloud-drive-transfer-limits-enabled")?.checked,
+    cloud_drive_transfer_limits_json: JSON.stringify(collectCloudDriveTransferLimits()),
     storage_maintenance_auto_enabled: !!$("s-storage-maintenance-auto-enabled")?.checked,
     storage_maintenance_daily_time: $("s-storage-maintenance-daily-time")?.value || "04:00",
     storage_trash_retention_days: parseInt($("s-storage-trash-retention-days")?.value || "30"),

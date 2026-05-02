@@ -1321,6 +1321,19 @@
       font-size: .78rem;
     }
 
+    .drive-remaining-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .55rem;
+      margin-top: .35rem;
+    }
+
+    .drive-remaining-row .drive-card-sub {
+      min-width: 0;
+      margin: 0;
+    }
+
     .drive-share-link {
       display: flex;
       align-items: center;
@@ -1465,6 +1478,36 @@
       font-size: .68rem;
     }
 
+    .drive-mode-choice-list {
+      display: grid;
+      gap: .55rem;
+      margin-top: .85rem;
+    }
+
+    .drive-mode-choice {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: .55rem;
+      align-items: start;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      padding: .7rem;
+      background: rgba(255,255,255,.035);
+      cursor: pointer;
+    }
+
+    .drive-mode-choice strong,
+    .drive-mode-choice small {
+      display: block;
+    }
+
+    .drive-mode-choice small {
+      margin-top: .15rem;
+      color: var(--muted);
+      font-size: .74rem;
+      line-height: 1.45;
+    }
+
     .drive-file-list {
       display: grid;
       gap: .55rem;
@@ -1472,7 +1515,7 @@
 
     .drive-file-preview-layout {
       display: grid;
-      grid-template-columns: minmax(360px, 1.05fr) minmax(320px, .95fr);
+      grid-template-columns: minmax(420px, 1.08fr) minmax(340px, .92fr);
       gap: 1rem;
       align-items: start;
       margin-top: 1rem;
@@ -1771,6 +1814,11 @@
       background: rgba(255,255,255,.035);
       margin-bottom: 1rem;
       overflow: hidden;
+    }
+
+    .storage-trash-inline {
+      margin-top: .85rem;
+      margin-bottom: 0;
     }
 
     .drive-collapsible-panel > summary {
@@ -4827,6 +4875,38 @@
 
       .session-countdown {
         max-width: 27vw;
+      }
+    }
+
+    .drive-transfer-limit-list {
+      display: grid;
+      gap: .55rem;
+    }
+
+    .drive-transfer-limit-row {
+      display: grid;
+      grid-template-columns: minmax(5.5rem, .8fr) repeat(3, minmax(5.5rem, 1fr));
+      gap: .5rem;
+      align-items: end;
+      padding: .65rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+    }
+
+    .drive-transfer-limit-level {
+      font-weight: 700;
+      color: var(--text);
+      padding-bottom: .55rem;
+    }
+
+    .drive-transfer-limit-row input {
+      width: 100%;
+    }
+
+    @media (max-width: 720px) {
+      .drive-transfer-limit-row {
+        grid-template-columns: 1fr 1fr;
       }
     }
   

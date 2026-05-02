@@ -156,7 +156,6 @@ function bindUiEvents() {
   const communityThreadSearch = $("community-thread-search");
   const driveRefreshBtn = $("drive-refresh-btn");
   const driveUploadBtn = $("drive-upload-btn");
-  const driveRemoteCapabilityBtn = $("drive-remote-capability-btn");
   const driveRemoteDownloadBtn = $("drive-remote-download-btn");
   const driveRemoteTorrentBtn = $("drive-remote-torrent-btn");
   const driveRemoteTorrentInlineBtn = $("drive-remote-torrent-inline-btn");
@@ -319,7 +318,6 @@ function bindUiEvents() {
   });
   if (driveRefreshBtn) driveRefreshBtn.addEventListener("click", loadDriveDashboard);
   if (driveUploadBtn) driveUploadBtn.addEventListener("click", uploadDriveFile);
-  if (driveRemoteCapabilityBtn) driveRemoteCapabilityBtn.addEventListener("click", loadRemoteDownloadCapabilities);
   if (driveRemoteDownloadBtn) driveRemoteDownloadBtn.addEventListener("click", promptRemoteDriveDownloadUrl);
   if (driveRemoteTorrentBtn) driveRemoteTorrentBtn.addEventListener("click", openRemoteTorrentPicker);
   if (driveRemoteTorrentInlineBtn) driveRemoteTorrentInlineBtn.addEventListener("click", openRemoteTorrentPicker);

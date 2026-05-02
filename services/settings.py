@@ -23,6 +23,8 @@ DEFAULT_SETTINGS = {
     "server_listen_port": 0,
     "server_ssl_enabled": True,
     "cloud_drive_storage_root": "",
+    "cloud_drive_transfer_limits_enabled": False,
+    "cloud_drive_transfer_limits_json": '{"newbie":{"upload_kbps":256,"download_kbps":512,"priority":20},"normal":{"upload_kbps":512,"download_kbps":1024,"priority":40},"trusted":{"upload_kbps":2048,"download_kbps":4096,"priority":70},"vip":{"upload_kbps":8192,"download_kbps":16384,"priority":90},"restricted":{"upload_kbps":128,"download_kbps":256,"priority":10},"suspended":{"upload_kbps":0,"download_kbps":0,"priority":0}}',
     "allow_register": True,
     "require_email_verification": False,
     "password_reset_mode": "admin_review",

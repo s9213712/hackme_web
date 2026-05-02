@@ -607,7 +607,10 @@
           <div class="drive-quota-bar" aria-label="雲端硬碟用量">
             <div id="drive-quota-bar-fill"></div>
           </div>
-          <div class="drive-card-sub" id="drive-remaining-label">剩餘容量：-</div>
+          <div class="drive-remaining-row">
+            <div class="drive-card-sub" id="drive-remaining-label">剩餘容量：-</div>
+            <button class="btn btn-sm" type="button" data-drive-action="open-storage-upgrade">選購方案</button>
+          </div>
           <div class="drive-card-sub" id="drive-limit-label">單檔限制：- · 每日上傳：-</div>
         </div>
 
@@ -634,111 +637,66 @@
       <div class="admin-toolbar" style="margin-top:.75rem;">
         <button class="btn btn-primary" id="drive-refresh-btn" type="button">重新整理雲端硬碟狀態</button>
       </div>
-      <details class="drive-collapsible-panel" id="drive-storage-upgrade-card" style="margin-top:1rem;">
-        <summary>
-          <span>
-            <span class="drive-card-title">容量加購</span>
-            <span class="drive-card-sub" id="drive-storage-upgrade-summary">讀取容量方案中...</span>
-          </span>
-        </summary>
-        <div class="drive-collapsible-body">
-          <div class="settings-option-grid">
-            <div class="field">
-              <label>加購方案</label>
-              <select id="drive-storage-upgrade-select"></select>
-            </div>
-            <div class="field">
-              <label>數量</label>
-              <input type="number" id="drive-storage-upgrade-quantity" min="1" max="20" value="1" />
-            </div>
-            <div class="field">
-              <label>操作</label>
-              <button class="btn btn-primary" type="button" data-drive-action="purchase-storage-upgrade">用積分購買容量</button>
-            </div>
-          </div>
-          <div id="drive-storage-upgrade-active-list" class="drive-summary"></div>
-        </div>
-      </details>
-      <details class="drive-collapsible-panel" style="margin-top:1rem;">
-        <summary>
-          <span>
-            <span class="drive-card-title">上傳與新增</span>
-            <span class="drive-card-sub">上傳檔案、E2EE 檔案或建立文字文檔。</span>
-          </span>
-        </summary>
-        <div class="drive-collapsible-body">
-          <div class="settings-option-grid">
-            <div class="field">
-              <label>選擇檔案</label>
-              <input type="file" id="drive-upload-file" />
-            </div>
-            <div class="field">
-              <label>隱私模式</label>
-              <select id="drive-upload-privacy-mode">
-                <option value="standard_plain">一般檔案（可掃毒、可預覽、可分享）</option>
-                <option value="server_encrypted">伺服器端加密（磁碟密文、下載明文）</option>
-                <option value="e2ee">端到端加密（站方無法讀取）</option>
-              </select>
-              <div class="field-help">非 E2EE 會讓伺服器取得明文以便掃毒與預覽；E2EE 需要自己保管檔案加密密碼，忘記後站方無法救回。</div>
-              <label class="inline-check"><input type="checkbox" id="drive-upload-client-scan-report" /> E2EE 上傳時附本機掃描回報</label>
-            </div>
-            <div class="field drive-e2ee-passphrase-field" id="drive-e2ee-passphrase-field" style="display:none;">
-              <label>E2EE 檔案加密密碼</label>
-              <input type="password" id="drive-e2ee-passphrase" autocomplete="new-password" placeholder="換電腦解密時也要輸入同一組密碼" />
-              <input type="password" id="drive-e2ee-passphrase-confirm" autocomplete="new-password" placeholder="再次輸入密碼" style="margin-top:.4rem;" />
-              <div class="field-help">密碼只在瀏覽器記憶體中用來加密 file key，不會送出明文，也不會存到 localStorage。</div>
-            </div>
-            <div class="field">
-              <label>&nbsp;</label>
-              <button class="btn btn-primary" id="drive-upload-btn" type="button">上傳雲端硬碟</button>
-            </div>
-          </div>
-          <div class="drive-card-sub">需要預覽與編輯選一般檔案；需要磁碟上加密但保留預覽能力選伺服器端加密；真正不想讓站方讀取內容才選端到端加密。</div>
-          <input type="file" id="storage-upload-file" hidden />
-          <input type="file" id="storage-upload-folder" hidden webkitdirectory directory multiple />
-        </div>
-      </details>
-      <details class="drive-collapsible-panel" style="margin-top:1rem;">
-        <summary>
-          <span>
-            <span class="drive-card-title">遠端下載到雲端硬碟</span>
-            <span class="drive-card-sub" id="drive-remote-download-status">支援 direct link、magnet；上傳 .torrent 需伺服器安裝 aria2c。</span>
-          </span>
-        </summary>
-        <div class="drive-collapsible-body">
-          <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
-            <button class="btn btn-sm" id="drive-remote-capability-btn" type="button">檢查能力</button>
-          </div>
-          <div class="settings-option-grid">
-            <div class="field">
-              <label>下載網址</label>
-              <input type="url" id="drive-remote-url" placeholder="https://example.com/file.zip 或 magnet:?" />
-            </div>
-            <div class="field">
-              <label>BT 種子檔</label>
-              <input type="file" id="drive-remote-torrent-file" accept=".torrent,application/x-bittorrent" hidden />
-              <button class="btn" id="drive-remote-torrent-btn" type="button">選擇 .torrent</button>
-            </div>
-            <div class="field">
-              <label>隱私模式</label>
-              <select id="drive-remote-privacy-mode">
-                <option value="standard_plain">一般檔案（可掃毒、可預覽）</option>
-                <option value="server_encrypted">伺服器端加密（磁碟密文、下載明文）</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>整理到資料夾（選填）</label>
-              <input type="text" id="drive-remote-virtual-path" placeholder="/Downloads/file.zip" />
-            </div>
-          </div>
-          <div class="drive-card-sub">貼網址後可按檔案清單上的「下載到雲端」；BT 種子檔可按「上傳 BT」。遠端下載會套用你的雲端硬碟配額與掃描政策；網址不接受 localhost、內網或本機檔案路徑。</div>
-        </div>
-      </details>
+      <input type="file" id="storage-upload-file" hidden />
+      <input type="file" id="storage-upload-folder" hidden webkitdirectory directory multiple />
+      <input type="url" id="drive-remote-url" hidden />
+      <input type="file" id="drive-remote-torrent-file" accept=".torrent,application/x-bittorrent" hidden />
+      <button id="drive-remote-torrent-btn" type="button" hidden>選擇 .torrent</button>
+      <select id="drive-upload-privacy-mode" hidden>
+        <option value="standard_plain">一般檔案（可掃毒、可預覽、可分享）</option>
+        <option value="server_encrypted">伺服器端加密（磁碟密文、下載明文）</option>
+        <option value="e2ee">端到端加密（站方無法讀取）</option>
+      </select>
+      <select id="drive-remote-privacy-mode" hidden>
+        <option value="standard_plain">一般檔案（可掃毒、可預覽）</option>
+        <option value="server_encrypted">伺服器端加密（磁碟密文、下載明文）</option>
+      </select>
+      <input type="text" id="drive-remote-virtual-path" hidden />
+      <input type="password" id="drive-e2ee-passphrase" hidden autocomplete="new-password" />
+      <input type="password" id="drive-e2ee-passphrase-confirm" hidden autocomplete="new-password" />
+      <input type="checkbox" id="drive-upload-client-scan-report" hidden />
+      <div class="field-help" hidden>非 E2EE 會讓伺服器取得明文以便掃毒與預覽；E2EE 需要自己保管檔案加密密碼，忘記後站方無法救回。</div>
       <div class="drive-file-preview-layout">
         <div class="drive-card">
-          <div class="drive-card-title">我的檔案</div>
-          <div class="drive-card-sub">高風險、E2EE 或未完整掃描檔案下載前會要求二次確認。圖片、影片、音樂、PDF、文字與 ZIP/TAR 可在通過安全政策後預覽。</div>
-          <div id="drive-file-list" class="drive-file-list"></div>
+          <div class="drive-card-heading">
+            <div>
+              <div class="drive-card-title">資料夾與檔案</div>
+              <div class="drive-card-sub" id="storage-selection-label">上傳、下載、整理與回收都在這裡處理。</div>
+            </div>
+            <div class="drive-file-actions">
+              <button class="btn btn-sm" id="storage-folder-create-btn" type="button">+ 資料夾</button>
+              <button class="btn btn-sm" type="button" data-drive-action="open-text-document-modal">新增文檔</button>
+              <button class="btn btn-sm" id="storage-upload-btn" type="button">上傳檔案</button>
+              <button class="btn btn-sm" id="drive-remote-download-btn" type="button">Direct link</button>
+              <button class="btn btn-sm" id="storage-folder-upload-btn" type="button">上傳資料夾</button>
+              <button class="btn btn-sm" id="drive-remote-torrent-inline-btn" type="button">BT / .torrent</button>
+              <button class="btn btn-sm" id="storage-refresh-btn" type="button">重新整理</button>
+            </div>
+          </div>
+          <input type="text" id="storage-upload-path" hidden />
+          <input type="text" id="storage-folder-path" hidden />
+          <input type="text" id="storage-organize-path" hidden />
+          <input type="text" id="storage-folder-move-old" hidden />
+          <input type="text" id="storage-folder-move-new" hidden />
+          <button class="btn" id="storage-folder-move-btn" type="button" hidden>移動資料夾</button>
+          <div class="drive-breadcrumb" id="storage-breadcrumb"></div>
+          <div class="drive-card-sub" id="drive-remote-download-status" style="margin-top:.6rem;">上傳會放進目前資料夾；Direct link 永遠可用，BT 功能會自動檢查伺服器能力。</div>
+          <div id="storage-browser-list" class="drive-file-list storage-browser-list" style="margin-top:.75rem;"></div>
+          <details class="drive-collapsible-panel storage-trash-inline">
+            <summary>
+              <span>
+                <span class="drive-card-title">回收筒</span>
+                <span class="drive-card-sub">還原或永久移除已刪除檔案。</span>
+              </span>
+            </summary>
+            <div class="drive-collapsible-body">
+              <div class="drive-file-actions">
+                <button class="btn" type="button" data-drive-action="restore-storage-trash">全部還原</button>
+                <button class="btn btn-danger" type="button" data-drive-action="purge-storage-trash">清空</button>
+              </div>
+              <div id="storage-trash-list" class="drive-file-list" style="margin-top:.75rem;"></div>
+            </div>
+          </details>
         </div>
         <div class="drive-card drive-preview-card" id="drive-preview-card">
           <div class="drive-card-heading">
@@ -752,49 +710,6 @@
             <div class="drive-empty">請從左側檔案清單選擇要預覽的檔案</div>
           </div>
         </div>
-      </div>
-      <div class="drive-dashboard-grid drive-storage-main-grid" style="margin-top:1rem;">
-        <div class="drive-card">
-          <div class="drive-card-heading">
-            <div>
-              <div class="drive-card-title">資料夾與檔案</div>
-              <div class="drive-card-sub" id="storage-selection-label">未選取檔案</div>
-            </div>
-            <div class="drive-file-actions">
-              <button class="btn btn-sm" id="storage-folder-create-btn" type="button">+ 資料夾</button>
-              <button class="btn btn-sm" type="button" data-drive-action="open-text-document-modal">新增文檔</button>
-              <button class="btn btn-sm" id="storage-upload-btn" type="button">上傳檔案</button>
-              <button class="btn btn-sm" id="drive-remote-download-btn" type="button">下載到雲端</button>
-              <button class="btn btn-sm" id="storage-folder-upload-btn" type="button">上傳資料夾</button>
-              <button class="btn btn-sm" id="drive-remote-torrent-inline-btn" type="button">上傳 BT</button>
-              <button class="btn btn-sm" id="storage-refresh-btn" type="button">重新整理</button>
-            </div>
-          </div>
-          <input type="text" id="storage-upload-path" hidden />
-          <input type="text" id="storage-folder-path" hidden />
-          <input type="text" id="storage-organize-path" hidden />
-          <input type="text" id="storage-folder-move-old" hidden />
-          <input type="text" id="storage-folder-move-new" hidden />
-          <button class="btn" id="storage-folder-move-btn" type="button" hidden>移動資料夾</button>
-          <div class="drive-breadcrumb" id="storage-breadcrumb"></div>
-          <div class="drive-card-sub" style="margin-top:.6rem;">上傳會放進目前資料夾；Storage 只整理路徑，不複製雲端硬碟實體檔案。</div>
-          <div id="storage-browser-list" class="drive-file-list storage-browser-list" style="margin-top:.75rem;"></div>
-        </div>
-        <details class="drive-collapsible-panel">
-          <summary>
-            <span>
-              <span class="drive-card-title">回收筒</span>
-              <span class="drive-card-sub">還原或永久移除已刪除檔案。</span>
-            </span>
-          </summary>
-          <div class="drive-collapsible-body">
-            <div class="drive-file-actions">
-              <button class="btn" type="button" data-drive-action="restore-storage-trash">全部還原</button>
-              <button class="btn btn-danger" type="button" data-drive-action="purge-storage-trash">清空</button>
-            </div>
-            <div id="storage-trash-list" class="drive-file-list" style="margin-top:.75rem;"></div>
-          </div>
-        </details>
       </div>
       <div id="drive-msg" class="msg"></div>
     </div>
@@ -2388,6 +2303,21 @@
             <details class="drive-collapsible-panel settings-collapse">
               <summary>
                 <div>
+                  <div class="drive-card-title">階級傳輸限速</div>
+                  <div class="drive-card-sub">依會員階級限制雲端硬碟上傳/下載速度與處理優先序。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="field">
+                  <label><input type="checkbox" id="s-cloud-drive-transfer-limits-enabled" /> 啟用階級傳輸限速</label>
+                </div>
+                <div class="small muted" style="margin:.25rem 0 .7rem;">速度單位為 KB/s；填 0 代表停用該方向傳輸。優先序 0-100，數字越大越優先。</div>
+                <div id="cloud-drive-transfer-limits-list" class="drive-transfer-limit-list"></div>
+              </div>
+            </details>
+            <details class="drive-collapsible-panel settings-collapse">
+              <summary>
+                <div>
                   <div class="drive-card-title">登入、密碼重設與 CAPTCHA</div>
                   <div class="drive-card-sub">低頻調整項目，預設收合。</div>
                 </div>
@@ -3236,6 +3166,78 @@
     <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap;margin-top:1rem;">
       <button class="btn btn-primary" type="button" data-drive-action="create-text-document">建立文檔</button>
       <button class="btn" type="button" data-drive-action="close-text-document-modal">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="drive-upload-mode-overlay" class="user-edit-overlay" aria-hidden="true">
+  <div class="user-edit-modal">
+    <h2 id="drive-upload-mode-title">選擇隱私模式</h2>
+    <div class="drive-card-sub">這個選擇會套用到本次上傳或遠端下載。</div>
+    <div class="drive-mode-choice-list">
+      <label class="drive-mode-choice">
+        <input type="radio" name="drive-upload-mode-choice" value="standard_plain" checked />
+        <span>
+          <strong>一般檔案</strong>
+          <small>可掃毒、可預覽、可分享，伺服器端可讀取明文。</small>
+        </span>
+      </label>
+      <label class="drive-mode-choice">
+        <input type="radio" name="drive-upload-mode-choice" value="server_encrypted" />
+        <span>
+          <strong>伺服器端加密</strong>
+          <small>磁碟與備份保存為密文，下載與預覽仍由伺服器解密處理。</small>
+        </span>
+      </label>
+      <label class="drive-mode-choice" id="drive-upload-mode-e2ee-choice">
+        <input type="radio" name="drive-upload-mode-choice" value="e2ee" />
+        <span>
+          <strong>端到端加密</strong>
+          <small>密碼只在瀏覽器使用，站方無法解密；忘記密碼無法救回。</small>
+        </span>
+      </label>
+    </div>
+    <div id="drive-upload-mode-e2ee-fields" style="display:none;">
+      <div class="field">
+        <label>E2EE 檔案加密密碼</label>
+        <input type="password" id="drive-upload-mode-passphrase" autocomplete="new-password" placeholder="至少 10 個字元" />
+      </div>
+      <div class="field">
+        <label>再次輸入密碼</label>
+        <input type="password" id="drive-upload-mode-passphrase-confirm" autocomplete="new-password" />
+      </div>
+      <label class="inline-check">
+        <input type="checkbox" id="drive-upload-mode-client-scan-report" />
+        附上本機掃描回報
+      </label>
+      <div class="drive-card-sub">E2EE 上傳時附本機掃描回報只會記錄瀏覽器端聲明；伺服器仍無法讀取明文。</div>
+    </div>
+    <div id="drive-upload-mode-msg" class="msg"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap;margin-top:1rem;">
+      <button class="btn btn-primary" type="button" id="drive-upload-mode-confirm-btn">確認</button>
+      <button class="btn" type="button" id="drive-upload-mode-cancel-btn">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="drive-storage-upgrade-overlay" class="user-edit-overlay" aria-hidden="true">
+  <div class="user-edit-modal" id="drive-storage-upgrade-card">
+    <h2>選購雲端硬碟容量</h2>
+    <div class="drive-card-sub" id="drive-storage-upgrade-summary">讀取容量方案中...</div>
+    <div class="settings-option-grid" style="margin-top:1rem;">
+      <div class="field">
+        <label>加購方案</label>
+        <select id="drive-storage-upgrade-select"></select>
+      </div>
+      <div class="field">
+        <label>數量</label>
+        <input type="number" id="drive-storage-upgrade-quantity" min="1" max="20" value="1" />
+      </div>
+    </div>
+    <div id="drive-storage-upgrade-active-list" class="drive-summary" style="margin-top:.75rem;"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap;margin-top:1rem;">
+      <button class="btn btn-primary" type="button" data-drive-action="purchase-storage-upgrade">用積分購買容量</button>
+      <button class="btn" type="button" data-drive-action="close-storage-upgrade">取消</button>
     </div>
   </div>
 </div>

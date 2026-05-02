@@ -100,6 +100,19 @@ BT/magnet/`.torrent` downloads require `aria2c` on the server. Downloaded files
 are saved through the same quota, scan, privacy-mode, and logical-folder
 pipeline as normal uploads.
 
+Root can configure per-member-level Cloud Drive transfer controls under
+`伺服器設定 -> 雲端硬碟 -> 階級傳輸限速`:
+
+- upload speed in KB/s
+- download speed in KB/s
+- priority from 0 to 100
+
+`0` disables that transfer direction for the level. Root is not throttled.
+Download throttling is applied while streaming files from Flask. Upload
+throttling is an application-layer admission delay because the HTTP request body
+has already reached Flask by the time route code runs; for strict network-layer
+upload QoS, deploy an nginx or reverse-proxy limit in front of the app.
+
 ### Albums
 
 Albums have their own page for gallery-style browsing. Albums are backed by the

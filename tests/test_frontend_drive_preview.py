@@ -275,6 +275,8 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "driveHighlightCode" in drive_js
     assert "需密碼預覽" in drive_js
     assert "解密預覽" in drive_js
+    assert "isDriveE2eeServerPreviewError" in drive_js
+    assert "return previewDriveE2eeFile(fileId);" in drive_js
     assert "root 上限：儲存磁碟可用空間 90%" in drive_js
     assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js

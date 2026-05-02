@@ -1,10 +1,12 @@
 import json
 import hashlib
+import mimetypes
 import os
 import shutil
 import sqlite3
 import tempfile
 import threading
+import time
 import uuid
 from io import BytesIO
 
@@ -87,7 +89,7 @@ from services.storage_quota_purchases import (
     record_storage_quota_purchase,
 )
 from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
-from flask import after_this_request, request, send_file
+from flask import Response, after_this_request, request, send_file, stream_with_context
 
 
 _REMOTE_DOWNLOAD_TASKS = {}
@@ -109,6 +111,7 @@ def register_file_routes(app, deps):
     storage_root = deps.get("STORAGE_DIR", ".")
     points_service = deps.get("points_service")
     server_file_fernet = deps.get("server_file_fernet")
+    get_system_settings = deps.get("get_system_settings", lambda: {})
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -155,18 +158,143 @@ def register_file_routes(app, deps):
 
         return temp_path, temp_path
 
-    def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False):
+    def _transfer_limits_settings():
+        settings = get_system_settings() or {}
+        if not settings.get("cloud_drive_transfer_limits_enabled", False):
+            return False, {}
+        raw = settings.get("cloud_drive_transfer_limits_json") or "{}"
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            parsed = {}
+        return True, parsed if isinstance(parsed, dict) else {}
+
+    def _actor_transfer_level(actor):
+        return (
+            _actor_value(actor, "effective_level")
+            or _actor_value(actor, "base_level")
+            or _actor_value(actor, "member_level")
+            or "normal"
+        )
+
+    def _actor_transfer_policy(actor):
+        if _is_root(actor):
+            return {"upload_kbps": 0, "download_kbps": 0, "priority": 100, "enabled": False, "level": "root"}
+        enabled, limits = _transfer_limits_settings()
+        level = _actor_transfer_level(actor)
+        raw = limits.get(level) or limits.get("normal") or {}
+        if not enabled:
+            return {"upload_kbps": 0, "download_kbps": 0, "priority": int(raw.get("priority") or 50), "enabled": False, "level": level}
+        def _nonnegative_int(name, default):
+            try:
+                return max(0, int(raw.get(name, default)))
+            except Exception:
+                return default
+        return {
+            "upload_kbps": _nonnegative_int("upload_kbps", 0),
+            "download_kbps": _nonnegative_int("download_kbps", 0),
+            "priority": min(100, _nonnegative_int("priority", 50)),
+            "enabled": True,
+            "level": level,
+        }
+
+    def _uploaded_size(file_storage):
+        length = getattr(file_storage, "content_length", None)
+        if length:
+            return int(length)
+        stream = getattr(file_storage, "stream", None)
+        if not stream:
+            return 0
+        try:
+            pos = stream.tell()
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(pos)
+            return int(size)
+        except Exception:
+            return 0
+
+    def _apply_upload_transfer_policy(actor, file_storage):
+        policy = _actor_transfer_policy(actor)
+        if not policy.get("enabled"):
+            return None
+        upload_kbps = int(policy.get("upload_kbps") or 0)
+        if upload_kbps <= 0:
+            return json_resp({"ok": False, "msg": "目前會員階級已停用雲端硬碟上傳", "error": "upload_rate_limited"}), 429
+        size = _uploaded_size(file_storage)
+        priority = int(policy.get("priority") or 50)
+        transfer_delay = (size / max(1, upload_kbps * 1024)) if size > 0 else 0
+        priority_delay = max(0, 60 - priority) / 120
+        delay = min(8.0, transfer_delay + priority_delay)
+        if delay > 0:
+            time.sleep(delay)
+        return None
+
+    def _throttled_bytes_response(chunks, *, as_attachment, download_name, mimetype, total_size, kbps):
+        chunk_size = max(8192, min(256 * 1024, int(kbps * 1024 / 4)))
+        sleep_seconds = chunk_size / max(1, kbps * 1024)
+
+        @stream_with_context
+        def _generate():
+            for chunk in chunks(chunk_size):
+                if not chunk:
+                    break
+                yield chunk
+                time.sleep(sleep_seconds)
+
+        response = Response(_generate(), mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream")
+        if total_size is not None:
+            response.headers["Content-Length"] = str(total_size)
+        response.headers.set("Content-Disposition", "attachment" if as_attachment else "inline", filename=download_name)
+        response.headers["X-Cloud-Drive-Rate-Limit-KBPS"] = str(kbps)
+        return response
+
+    def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False, actor=None):
         path = resolve_file_storage_path(storage_root, row)
         if not path.exists():
             return None
+        policy = _actor_transfer_policy(actor) if actor else {"download_kbps": 0}
+        download_kbps = int(policy.get("download_kbps") or 0)
         if is_server_encrypted_file(row):
             raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+            if download_kbps > 0:
+                def _chunks(chunk_size):
+                    bio = BytesIO(raw)
+                    while True:
+                        chunk = bio.read(chunk_size)
+                        if not chunk:
+                            break
+                        yield chunk
+                return _throttled_bytes_response(
+                    _chunks,
+                    as_attachment=as_attachment,
+                    download_name=download_name,
+                    mimetype=mimetype,
+                    total_size=len(raw),
+                    kbps=download_kbps,
+                )
             return send_file(
                 BytesIO(raw),
                 as_attachment=as_attachment,
                 download_name=download_name,
                 mimetype=mimetype,
                 conditional=False,
+            )
+        if download_kbps > 0:
+            def _file_chunks(chunk_size):
+                with open(path, "rb") as handle:
+                    while True:
+                        chunk = handle.read(chunk_size)
+                        if not chunk:
+                            break
+                        yield chunk
+            return _throttled_bytes_response(
+                _file_chunks,
+                as_attachment=as_attachment,
+                download_name=download_name,
+                mimetype=mimetype,
+                total_size=path.stat().st_size,
+                kbps=download_kbps,
             )
         return send_file(
             path,
@@ -563,6 +691,7 @@ def register_file_routes(app, deps):
             conn.close()
             conn = None
 
+            remote_rate_kbps = int(_actor_transfer_policy(actor).get("download_kbps") or 0)
             source_type = task.get("source_type") or "url"
             _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
             if source_type == "torrent_file":
@@ -572,6 +701,7 @@ def register_file_routes(app, deps):
                     timeout_seconds=task["timeout_seconds"],
                     max_bytes=max_bytes,
                     progress_callback=_remote_progress_updater(task_id),
+                    rate_limit_kbps=remote_rate_kbps or None,
                 )
             else:
                 downloaded = download_remote_url(
@@ -579,6 +709,7 @@ def register_file_routes(app, deps):
                     timeout_seconds=task["timeout_seconds"],
                     max_bytes=max_bytes,
                     progress_callback=_remote_progress_updater(task_id),
+                    rate_limit_kbps=remote_rate_kbps or None,
                 )
             _task_update(task_id, status="running", phase="saving", filename=downloaded.filename, msg="保存到雲端硬碟")
             file_storage = _DownloadedFileStorage(downloaded)
@@ -1196,6 +1327,9 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": True, "files": files, "storage": summary})
             if "file" not in request.files:
                 return json_resp({"ok": False, "msg": "缺少 file"}), 400
+            upload_policy_error = _apply_upload_transfer_policy(actor, request.files["file"])
+            if upload_policy_error:
+                return upload_policy_error
             rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
             upload_result, msg = store_cloud_upload(
                 conn,
@@ -1413,7 +1547,7 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             log_file_access(conn, file_id=storage_file["file_id"], actor_user_id=actor["id"], action="storage_download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            response = _send_readable_file(row, as_attachment=True, download_name=storage_file["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=True, download_name=storage_file["display_name"] or row["original_filename_plain_for_public"] or "download.bin", actor=actor)
             if response is None:
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             return response
@@ -1954,6 +2088,9 @@ def register_file_routes(app, deps):
             return err
         if "file" not in request.files:
             return json_resp({"ok": False, "msg": "缺少 file"}), 400
+        upload_policy_error = _apply_upload_transfer_policy(actor, request.files["file"])
+        if upload_policy_error:
+            return upload_policy_error
         privacy_mode = (request.form.get("privacy_mode") or "standard_plain").strip()
         context_type = (request.form.get("context_type") or "").strip()
         context_id = (request.form.get("context_id") or "").strip()
@@ -2296,7 +2433,8 @@ def register_file_routes(app, deps):
             conn.close()
             conn = None
 
-            downloaded = download_remote_url(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
+            remote_rate_kbps = int(_actor_transfer_policy(actor).get("download_kbps") or 0)
+            downloaded = download_remote_url(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes, rate_limit_kbps=remote_rate_kbps or None)
             file_storage = _DownloadedFileStorage(downloaded)
             conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
@@ -2576,6 +2714,7 @@ def register_file_routes(app, deps):
                 download_name=preview_row["original_filename_plain_for_public"] or "preview",
                 mimetype=mime_type,
                 conditional=True,
+                actor=actor,
             )
             if response is None:
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
@@ -2706,7 +2845,7 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            response = _send_readable_file(row, as_attachment=True, download_name=row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=True, download_name=row["original_filename_plain_for_public"] or "download.bin", actor=actor)
             if response is None:
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             return response
