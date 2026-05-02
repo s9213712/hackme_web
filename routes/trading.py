@@ -880,6 +880,12 @@ def register_trading_routes(app, deps):
             return err
         try:
             result = trading_service.save_trading_bot(actor=actor, payload=data, bot_uuid=bot_uuid)
+            bot = result.get("bot") or {}
+            if bot.get("bot_type") == "dca" and bot.get("enabled"):
+                try:
+                    result["initial_run"] = trading_service.run_trading_bot_once(actor=actor, bot_uuid=bot.get("bot_uuid"))
+                except Exception as run_exc:
+                    result["initial_run"] = {"ok": False, "scanned": 1, "triggered": [], "skipped": [], "failed": [{"bot_uuid": bot.get("bot_uuid"), "error": str(run_exc)}]}
             audit("TRADING_BOT_UPDATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"bot_uuid={bot_uuid}")
             return json_resp(result)
         except Exception as exc:

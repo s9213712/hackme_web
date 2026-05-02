@@ -1581,9 +1581,14 @@ function tradingBotNextRunInfo(row) {
     nextMs = Number.isNaN(lastMs) ? Date.now() : lastMs + (Number(row.cooldown_seconds || 0) * 1000);
   }
   const remaining = nextMs - Date.now();
-  if (remaining <= 0) return { text: "下次執行：可立即執行", ready: true };
+  if (remaining <= 0) {
+    const neverRan = !row.last_run_at && Number(row.run_count || 0) === 0;
+    return { text: neverRan ? "下次執行：等待首次執行…" : "下次執行：可立即執行", ready: true };
+  }
   const when = new Date(nextMs).toLocaleString("zh-TW", { hour12: false });
-  return { text: `下次執行：${formatTradingCountdown(remaining)} 後（${when}）`, ready: false };
+  const intervalHours = Number(row.interval_hours || 0);
+  const intervalText = intervalHours > 0 ? `　每 ${intervalHours} 小時定投` : "";
+  return { text: `下次執行：${formatTradingCountdown(remaining)} 後（${when}）${intervalText}`, ready: false };
 }
 
 function tradingBotNextRunText(row) {
@@ -2140,11 +2145,29 @@ async function toggleTradingBot(botUuid, enabled) {
   };
   try {
     tradingSetMsg(enabled ? "正在啟用機器人..." : "正在暫停機器人...");
-    await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
+    const json = await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}`, {
       method: "PUT",
       body: JSON.stringify(payload),
     });
-    tradingSetMsg(enabled ? "機器人已啟用" : "機器人已暫停");
+    if (!enabled) {
+      tradingSetMsg("機器人已暫停");
+    } else if (bot.bot_type === "dca") {
+      const initial = json.initial_run || null;
+      const failed   = Array.isArray(initial?.failed)   ? initial.failed   : [];
+      const triggered = Array.isArray(initial?.triggered) ? initial.triggered : [];
+      const skipped  = Array.isArray(initial?.skipped)  ? initial.skipped  : [];
+      if (failed.length) {
+        tradingSetMsg(`機器人已啟用，但首次執行失敗：${tradingErrorText(failed[0], "後端未提供錯誤原因")}`, false);
+      } else if (triggered.length) {
+        tradingSetMsg("機器人已啟用，已立即執行第一筆定投");
+      } else if (skipped.length && skipped[0]?.reason === "cooldown") {
+        tradingSetMsg("機器人已啟用，定投冷卻中，將依排程執行下一筆");
+      } else {
+        tradingSetMsg("機器人已啟用");
+      }
+    } else {
+      tradingSetMsg("機器人已啟用");
+    }
     await loadTradingDashboard();
   } catch (err) {
     tradingSetMsg(err.message || "機器人狀態更新失敗", false);
