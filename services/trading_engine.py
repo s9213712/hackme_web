@@ -597,6 +597,9 @@ def ensure_trading_schema(conn):
         ("trading.margin_maintenance_percent", "15"),
         ("trading.max_price_staleness_seconds", "900"),
         ("trading.price_source", "binance_public_api"),
+        ("trading.bot_auto_scan_enabled", "true"),
+        ("trading.bot_auto_scan_interval_seconds", "30"),
+        ("trading.bot_auto_scan_limit", "50"),
     ]
     for key, value in defaults:
         conn.execute(
@@ -900,6 +903,9 @@ class TradingEngineService:
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
             "price_source": raw.get("trading.price_source", "binance_public_api"),
             "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
+            "bot_auto_scan_enabled": str(raw.get("trading.bot_auto_scan_enabled", "true")).lower() in {"true", "1", "yes"},
+            "bot_auto_scan_interval_seconds": _to_int(raw.get("trading.bot_auto_scan_interval_seconds", "30"), name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600),
+            "bot_auto_scan_limit": _to_int(raw.get("trading.bot_auto_scan_limit", "50"), name="bot_auto_scan_limit", minimum=1, maximum=200),
             "raw": raw,
         }
 
@@ -932,6 +938,7 @@ class TradingEngineService:
                 "pvp_matching_enabled": "trading.pvp_matching_enabled",
                 "borrowing_enabled": "trading.borrowing_enabled",
                 "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
+                "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
             }
             for input_key, storage_key in bool_keys.items():
                 if input_key in settings:
@@ -980,6 +987,20 @@ class TradingEngineService:
                     ("trading.max_price_staleness_seconds", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.max_price_staleness_seconds"] = value
+            if "bot_auto_scan_interval_seconds" in settings:
+                value = str(_to_int(settings.get("bot_auto_scan_interval_seconds"), name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.bot_auto_scan_interval_seconds", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.bot_auto_scan_interval_seconds"] = value
+            if "bot_auto_scan_limit" in settings:
+                value = str(_to_int(settings.get("bot_auto_scan_limit"), name="bot_auto_scan_limit", minimum=1, maximum=200))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.bot_auto_scan_limit", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.bot_auto_scan_limit"] = value
             if "price_source" in settings:
                 value = str(settings.get("price_source") or "").strip()
                 if value not in {"binance_public_api", "manual_root"}:
@@ -3222,12 +3243,51 @@ class TradingEngineService:
         finally:
             conn.close()
 
+        return self._run_trading_bot_rows(rows)
+
+    def run_due_trading_bots(self, *, actor=None, limit=50):
+        limit = _to_int(limit or 50, name="limit", minimum=1, maximum=200)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            settings = self._settings_payload(conn)
+            if not settings.get("enabled", True):
+                return {"ok": True, "enabled": False, "reason": "trading_disabled", "scanned": 0, "triggered": [], "skipped": [], "failed": []}
+            if not settings.get("bot_auto_scan_enabled", True):
+                return {"ok": True, "enabled": False, "reason": "bot_auto_scan_disabled", "scanned": 0, "triggered": [], "skipped": [], "failed": []}
+            user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            active_clauses = []
+            if "status" in user_cols:
+                active_clauses.append("COALESCE(u.status, 'active') = 'active'")
+            if "deleted_at" in user_cols:
+                active_clauses.append("COALESCE(u.deleted_at, '') = ''")
+            active_sql = " AND ".join(active_clauses) if active_clauses else "1=1"
+            rows = conn.execute(
+                f"""
+                SELECT b.*, u.username, u.role
+                FROM trading_bots b
+                JOIN users u ON u.id=b.user_id
+                WHERE b.enabled=1 AND b.run_count < b.max_runs AND {active_sql}
+                ORDER BY b.id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        result = self._run_trading_bot_rows(rows)
+        result["enabled"] = True
+        return result
+
+    def _run_trading_bot_rows(self, rows):
         scanned = 0
         triggered = []
         skipped = []
         failed = []
         for row in rows:
             scanned += 1
+            price_conn = None
             now_dt = datetime.now()
             workflow_state = _json_loads(row["execution_state_json"], {}) if "execution_state_json" in row.keys() else {}
             if not isinstance(workflow_state, dict):
@@ -3268,6 +3328,7 @@ class TradingEngineService:
                     if not decision:
                         skipped_reason = "condition_not_met" if workflow.get("source") == "legacy_condition" else "workflow_not_matched"
                         price_conn.close()
+                        price_conn = None
                         self._record_bot_run(row, status="skipped", observed_price=observed_price, error=skipped_reason)
                         skipped.append({"bot_uuid": row["bot_uuid"], "reason": skipped_reason, "observed_price_points": observed_price})
                         continue
@@ -3281,10 +3342,12 @@ class TradingEngineService:
                     )
                     if not order_payload:
                         price_conn.close()
+                        price_conn = None
                         self._record_bot_run(row, status="skipped", observed_price=observed_price, error="workflow_hold")
                         skipped.append({"bot_uuid": row["bot_uuid"], "reason": "workflow_hold", "observed_price_points": observed_price})
                         continue
                 price_conn.close()
+                price_conn = None
                 if not workflow and not self._bot_trigger_hit(row, observed_price):
                     self._record_bot_run(row, status="skipped", observed_price=observed_price, error="condition_not_met")
                     skipped.append({"bot_uuid": row["bot_uuid"], "reason": "condition_not_met", "observed_price_points": observed_price})
@@ -3327,7 +3390,7 @@ class TradingEngineService:
                 self._record_bot_run(row, status="triggered", observed_price=observed_price, order_uuid=order_uuid, execution_state=workflow_state)
                 triggered.append({"bot_uuid": row["bot_uuid"], "order_uuid": order_uuid, "observed_price_points": observed_price, "executed": bool(result.get("executed"))})
             except Exception as exc:
-                if "price_conn" in locals():
+                if price_conn is not None:
                     try:
                         price_conn.close()
                     except Exception:

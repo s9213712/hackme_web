@@ -1553,6 +1553,52 @@ def start_trading_liquidation_worker():
     return worker
 
 
+def start_trading_bot_worker():
+    try:
+        fallback_interval = int(os.environ.get("HTML_LEARNING_TRADING_BOT_SCAN_INTERVAL_SECONDS", "30"))
+    except ValueError:
+        fallback_interval = 30
+    fallback_interval = max(10, min(fallback_interval, 3600))
+
+    def loop():
+        actor = {"username": "system", "role": "system"}
+        while True:
+            interval = fallback_interval
+            try:
+                settings = (trading_service.get_root_settings().get("settings") or {})
+                interval = max(10, min(int(settings.get("bot_auto_scan_interval_seconds") or fallback_interval), 3600))
+                if not settings.get("enabled", True) or not settings.get("bot_auto_scan_enabled", True):
+                    time.sleep(interval)
+                    continue
+                limit = max(1, min(int(settings.get("bot_auto_scan_limit") or 50), 200))
+                result = trading_service.run_due_trading_bots(actor=actor, limit=limit)
+                triggered = result.get("triggered") or []
+                failed = result.get("failed") or []
+                if triggered:
+                    audit(
+                        "TRADING_BOT_AUTO_SCAN_RUN",
+                        "0.0.0.0",
+                        user="system",
+                        success=True,
+                        detail=f"scanned={result.get('scanned')}, triggered={len(triggered)}",
+                    )
+                if failed:
+                    audit(
+                        "TRADING_BOT_AUTO_SCAN_ERRORS",
+                        "0.0.0.0",
+                        user="system",
+                        success=False,
+                        detail=json.dumps(failed[:5], ensure_ascii=False),
+                    )
+            except Exception as exc:
+                audit("TRADING_BOT_AUTO_SCAN_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+            time.sleep(interval)
+
+    worker = threading.Thread(target=loop, name="trading-bot-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 # ── Start ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     install_runtime_output_capture(SERVER_LOG_PATH)
@@ -1600,6 +1646,7 @@ if __name__ == "__main__":
     start_storage_maintenance_worker()
     start_points_chain_block_worker()
     start_trading_liquidation_worker()
+    start_trading_bot_worker()
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
     KEY_FILE  = os.path.join(BASE_DIR, "key.pem")

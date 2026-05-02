@@ -1529,7 +1529,7 @@
               <div class="drive-card-sub">顯示定投與自動化 Workflow 的最近掃描、觸發、跳過與錯誤。</div>
               <div id="trading-bot-run-list" class="drive-file-list" style="margin-top:.75rem;"></div>
             </div>
-            <div class="drive-card-sub" id="trading-bot-msg" style="margin-top:.45rem;">第一版採手動掃描執行，避免無人值守交易失控。</div>
+            <div class="drive-card-sub" id="trading-bot-msg" style="margin-top:.45rem;">已啟用的交易機器人會由後端定期自動掃描；按鈕可手動立即掃描一次。</div>
           </div>
         </details>
         <details class="drive-collapsible-panel" id="trading-margin-card" style="display:none;margin-top:.75rem;">
@@ -2850,6 +2850,19 @@
                   <div class="field">
                     <label><input type="checkbox" id="root-trading-liquidation-enabled" checked /> 啟用自動強平 / 清算排程</label>
                     <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-bot-auto-enabled" checked /> 啟用交易機器人自動掃描</label>
+                    <div class="field-hint">後端會定期掃描所有已啟用的交易機器人；仍受冷卻、次數上限、餘額與交易風控限制。</div>
+                  </div>
+                  <div class="field">
+                    <label>機器人掃描間隔秒數</label>
+                    <input type="number" id="root-trading-bot-auto-interval" min="10" max="3600" step="1" value="30" />
+                    <div class="field-hint">預設 30 秒，最短 10 秒。策略本身的冷卻時間仍會優先生效。</div>
+                  </div>
+                  <div class="field">
+                    <label>每輪最多掃描機器人數</label>
+                    <input type="number" id="root-trading-bot-auto-limit" min="1" max="200" step="1" value="50" />
                   </div>
                   <div class="field">
                     <label>維持保證金比例（%）</label>

@@ -1328,6 +1328,9 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-price-source")) $("root-trading-price-source").value = "binance_public_api";
   if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
   if ($("root-trading-liquidation-enabled")) $("root-trading-liquidation-enabled").checked = settings.margin_liquidation_enabled !== false;
+  if ($("root-trading-bot-auto-enabled")) $("root-trading-bot-auto-enabled").checked = settings.bot_auto_scan_enabled !== false;
+  if ($("root-trading-bot-auto-interval")) $("root-trading-bot-auto-interval").value = settings.bot_auto_scan_interval_seconds ?? 30;
+  if ($("root-trading-bot-auto-limit")) $("root-trading-bot-auto-limit").value = settings.bot_auto_scan_limit ?? 50;
   if ($("root-trading-maintenance-percent")) $("root-trading-maintenance-percent").value = adminPercentValue(settings.margin_maintenance_percent ?? 15, 15);
   if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
   if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
@@ -1406,6 +1409,9 @@ async function saveRootTradingSettings() {
       price_source: "binance_public_api",
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
+      bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
+      bot_auto_scan_interval_seconds: Number($("root-trading-bot-auto-interval")?.value || 30),
+      bot_auto_scan_limit: Number($("root-trading-bot-auto-limit")?.value || 50),
       margin_maintenance_percent: adminInputPercent($("root-trading-maintenance-percent")?.value || 0),
       futures_enabled: !!$("root-trading-futures-enabled")?.checked,
       pvp_matching_enabled: !!$("root-trading-pvp-enabled")?.checked,

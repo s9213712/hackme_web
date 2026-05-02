@@ -114,8 +114,12 @@ def test_root_security_event_creates_root_notification(tmp_path):
     try:
         note = conn.execute("SELECT * FROM notifications WHERE user_id=1 AND type='root_security_alert'").fetchone()
         assert note is not None
-        assert note["title"] == "安全警訊"
-        assert "csrf_fail" in note["body"]
+        assert note["title"] == "安全警訊：CSRF 安全驗證失敗"
+        assert "CSRF 安全驗證失敗" in note["body"]
+        assert "來源 IP：10.0.0.5" in note["body"]
+        assert "相關帳號：alice" in note["body"]
+        assert "請求：POST /api/example" in note["body"]
+        assert "csrf_fail" not in note["body"]
     finally:
         conn.close()
 

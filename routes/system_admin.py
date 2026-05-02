@@ -186,6 +186,40 @@ def register_system_admin_routes(app, deps):
         finally:
             conn.close()
 
+    def _security_signal_label(name):
+        return {
+            "audit_chain_broken": "審計鏈異常",
+            "maintenance_mode": "維護模式已開啟",
+            "pending_chat_reports": "待處理聊天檢舉過多",
+            "pending_appeals": "待處理申覆過多",
+            "pending_moderation_proposals": "待處理治理提案過多",
+            "quarantined_files": "隔離檔案過多",
+            "unknown_encrypted_files": "未知加密檔案過多",
+            "count_errors": "健康度統計讀取異常",
+        }.get(str(name or ""), str(name or "安全事件"))
+
+    def _format_security_signal_notification(item):
+        label = _security_signal_label(item.get("name"))
+        level = str(item.get("level") or "warning").lower()
+        level_label = "嚴重" if level == "critical" else "警告"
+        detail = str(item.get("detail") or "").strip()
+        value = item.get("value")
+        threshold = item.get("threshold")
+        lines = [f"{level_label}：{label}。"]
+        if value not in (None, ""):
+            lines.append(f"目前狀態：{value}")
+        if threshold not in (None, ""):
+            lines.append(f"判定門檻：{threshold}")
+        if detail:
+            lines.append(f"補充說明：{detail}")
+        if item.get("name") == "count_errors":
+            lines.append("建議處理：請到安全中心健康度頁面重新整理，若持續出現，代表部分資料表或統計查詢需要修復。")
+        elif item.get("name") == "audit_chain_broken":
+            lines.append("建議處理：請先停止高風險操作，進入安全中心查看審計鏈報告並執行鏈修復。")
+        else:
+            lines.append("建議處理：請到安全中心查看詳細資料並依事件類型處理。")
+        return f"安全警訊：{label}", "\n".join(lines)
+
     def default_schedule_server_restart(*, reason, delay_seconds=1.25):
         if app.testing:
             return {"mode": "testing", "pid": os.getpid(), "reason": reason}
@@ -751,10 +785,11 @@ def register_system_admin_routes(app, deps):
             if level_rank[item["level"]] > level_rank[status]:
                 status = item["level"]
             if item["level"] in {"warning", "critical"}:
+                title, body = _format_security_signal_notification(item)
                 _notify_root(
                     "root_security_alert",
-                    "安全警訊",
-                    f"{item['level'].upper()} · {item['name']}：目前值 {item['value']}，門檻 {item['threshold']}。{item.get('detail') or ''}",
+                    title,
+                    body,
                     link="/security",
                     once=True,
                 )

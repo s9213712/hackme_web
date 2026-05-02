@@ -226,6 +226,79 @@ def test_trading_bot_workflow_triggers_existing_order_path(tmp_path):
     assert dashboard["bot_runs"][0]["status"] == "triggered"
 
 
+def test_trading_bot_auto_scan_runs_due_bots_for_all_users(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "Alice ETH dip buyer",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_below",
+            "trigger_price_points": 5000,
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    trading.save_trading_bot(
+        actor=_actor(user_id=2, username="bob", role="manager"),
+        payload={
+            "name": "Bob ETH dip buyer",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_below",
+            "trigger_price_points": 5000,
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    scanned = trading.run_due_trading_bots(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert scanned["ok"] is True
+    assert scanned["enabled"] is True
+    assert scanned["scanned"] == 2
+    assert len(scanned["triggered"]) == 2
+    assert trading.user_dashboard(user_id=1)["bots"][0]["run_count"] == 1
+    assert trading.user_dashboard(user_id=2)["bots"][0]["run_count"] == 1
+
+
+def test_trading_bot_auto_scan_respects_root_setting(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "Disabled auto scan bot",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_below",
+            "trigger_price_points": 5000,
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    trading.update_root_settings(
+        actor=_actor(user_id=3, username="root", role="super_admin"),
+        settings={"bot_auto_scan_enabled": False},
+    )
+
+    scanned = trading.run_due_trading_bots(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert scanned["ok"] is True
+    assert scanned["enabled"] is False
+    assert scanned["reason"] == "bot_auto_scan_disabled"
+    assert trading.user_dashboard(user_id=1)["bots"][0]["run_count"] == 0
+
+
 def test_trading_bot_workflow_records_skipped_condition(tmp_path):
     _, trading = _services(tmp_path)
     trading.save_trading_bot(
