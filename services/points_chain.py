@@ -2088,6 +2088,8 @@ class PointsLedgerService:
                 raise ValueError("pending reward not found")
             if row["status"] != "pending":
                 raise ValueError("pending reward already reviewed")
+            if row["submitted_by"] is not None and int(row["submitted_by"]) == int(actor_value(actor, "id") or 0):
+                raise ValueError("cannot review your own pending reward")
             decision = str(decision or "").lower()
             if decision not in {"approve", "reject"}:
                 raise ValueError("decision must be approve or reject")

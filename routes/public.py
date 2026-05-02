@@ -698,6 +698,10 @@ def register_public_routes(app, deps):
     @require_csrf
     def password_reset_confirm():
         ip, ua = get_client_ip(), get_ua()
+        blocked, info = is_rate_limited(f"password-reset-confirm:{ip}", max_req=10, window_sec=3600)
+        if blocked:
+            audit("PASSWORD_RESET_CONFIRM_RATE_LIMITED", ip, ua=ua, success=False)
+            return json_resp({"ok": False, "msg": f"重設密碼確認嘗試過於頻繁（每小時最多 {info['limit']} 次）"}), 429
         try:
             data = request.get_json(force=True)
         except Exception:

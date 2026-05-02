@@ -521,6 +521,10 @@ def register_chat_routes(app, deps):
                 except Exception:
                     data = {}
                 password = str(data.get("password") or "")
+                blocked, info = check_user_rate_limit(actor_id, f"chat_join_password:{room_id}", max_req=10, window_sec=60)
+                if blocked:
+                    audit("CHAT_JOIN_RATE_LIMITED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},limit={info['limit']}")
+                    return json_resp({"ok":False,"msg":f"聊天室密碼嘗試過於頻繁（每分鐘最多 {info['limit']} 次）"}), 429
                 if not verify_chat_room_password(room["join_password_hash"], password):
                     audit("CHAT_JOIN_DENIED", get_client_ip(), user=actor["username"], detail=f"room_id={room_id},reason=bad_password")
                     return json_resp({"ok":False,"msg":"聊天室密碼錯誤"}), 403
@@ -944,7 +948,7 @@ def register_chat_routes(app, deps):
                 (msg["room_id"], actor["id"])
             ).fetchone()
             if not member:
-                return json_resp({"ok":False,"msg":"你不在此聊天室"}), 403
+                return json_resp({"ok":False,"msg":"找不到訊息"}), 404
             try:
                 conn.execute(
                     "INSERT INTO chat_message_reports "
