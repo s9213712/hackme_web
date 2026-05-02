@@ -5,7 +5,7 @@ Hardened edition: timing-noise, account-enumeration protection,
 CSRF tokens, strict CSP, full security headers, rate-limit amplification.
 """
 
-import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl
+import os, sqlite3, re, json, time, hashlib, secrets, hmac, threading, random, base64, fcntl, subprocess, signal, sys, platform, smtplib, ssl, urllib.parse
 from ipaddress import ip_address
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -536,6 +536,18 @@ def tester_token_username_from_request(req):
         token = auth_header[7:].strip()
     if not token:
         return None
+    raw_uri = (
+        req.environ.get("RAW_URI")
+        or req.environ.get("REQUEST_URI")
+        or req.full_path
+        or req.path
+        or ""
+    )
+    decoded_uri = urllib.parse.unquote(raw_uri)
+    suspicious_path = any(marker in raw_uri.lower() for marker in ("%2f", "%5c", "%2e")) or "\\" in decoded_uri or ".." in decoded_uri
+    if suspicious_path:
+        record_security_event("permission_denied", get_client_ip(), target_user="-", detail=f"tester_token_suspicious_path:path={raw_uri}")
+        return None
     conn = None
     try:
         conn = get_db()
@@ -781,7 +793,7 @@ def count_role(role):
 def get_user_by_username(username):
     conn = get_db()
     try:
-        return conn.execute(
+        row = conn.execute(
             "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
             "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
             "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
@@ -789,6 +801,9 @@ def get_user_by_username(username):
             "FROM users WHERE username=?",
             (username,)
         ).fetchone()
+        if not row:
+            return None
+        return row
     finally:
         conn.close()
 
@@ -883,6 +898,7 @@ def ensure_session_columns(conn):
         ("last_seen", "TEXT"),
         ("device_info", "TEXT"),
         ("ip_country", "TEXT"),
+        ("session_epoch", "INTEGER NOT NULL DEFAULT 0"),
     ]
     for name, ddl in additions:
         if name not in cols:
@@ -1778,6 +1794,14 @@ if __name__ == "__main__":
         reseal_audit_chain_if_required_on_startup()
     except Exception as exc:
         audit("AUDIT_CHAIN_STARTUP_RESEAL_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
+    try:
+        recovery = server_mode_service.recover_superweak_on_startup(actor={"id": 0, "username": "system-startup", "role": "system"})
+        if recovery.get("recovered"):
+            audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERED", "0.0.0.0", user="system", success=True, detail=json.dumps(recovery, ensure_ascii=False, sort_keys=True, default=str))
+        elif not recovery.get("ok"):
+            audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERY_FAILED", "0.0.0.0", user="system", success=False, detail=json.dumps(recovery, ensure_ascii=False, sort_keys=True, default=str))
+    except Exception as exc:
+        audit("SERVER_MODE_SUPERWEAK_STARTUP_RECOVERY_ERROR", "0.0.0.0", user="system", success=False, detail=str(exc))
     if os.environ.get("HTML_LEARNING_BOOTSTRAP_POINTS_CHAIN", "").strip().lower() in {"1", "true", "yes", "on"}:
         try:
             system_actor = {"username": "system", "role": "system"}

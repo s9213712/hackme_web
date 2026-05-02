@@ -22,7 +22,9 @@ async function loadUserAppeals() {
   }
 
   userAppeals = Array.isArray(json.appeals) ? json.appeals : [];
-  const violations = Array.isArray(json.violations) ? json.violations : [];
+  const allViolations = Array.isArray(json.violations) ? json.violations : [];
+  const governanceNotices = allViolations.filter(v => v.is_governance_notice);
+  const violations = allViolations.filter(v => !v.is_governance_notice);
   const activeViolations = violations.filter(v => !v.is_resolved);
   const resolvedViolations = violations.filter(v => v.is_resolved);
   const summaryEl = $("appeal-summary");
@@ -40,10 +42,6 @@ async function loadUserAppeals() {
 
   const listEl = $("appeal-entries");
   if (!listEl) return;
-  if (!violations.length) {
-    listEl.innerHTML = "<p style='color:var(--muted);'>尚無違規記錄</p>";
-    return;
-  }
   const statusText = {
     pending: "待審",
     approved: "已核准",
@@ -73,13 +71,44 @@ async function loadUserAppeals() {
       </div>
     `;
   }
+  function renderGovernanceNotice(v) {
+    const appeal = v.appeal || null;
+    const status = appeal ? appeal.status : "";
+    const color = status === "approved" ? "#4caf50" : status === "rejected" ? "#ff4f6d" : "#ffb74d";
+    const remaining = parseInt(v.remaining_seconds || 0, 10);
+    const canAppeal = !!v.can_appeal;
+    const appealStatus = appeal
+      ? `<div style="color:${color};">申覆狀態：${statusText[status] || status}${appeal.review_note ? ` · 備註：${sanitize(appeal.review_note || "")}` : ""}</div>`
+      : canAppeal
+        ? `<div style="color:#82b1ff;">剩餘申覆時間：${appealCountdownText(remaining)}</div>`
+        : `<div style="color:var(--muted);">不可申覆或已超過申覆期限</div>`;
+    const controls = canAppeal
+      ? `<textarea data-appeal-reason="${v.id}" rows="2" maxlength="200" placeholder="填寫申覆理由" style="margin-top:.45rem;"></textarea>
+         <button class="btn btn-primary" type="button" data-appeal-submit="${v.id}" style="margin-top:.35rem;width:auto;padding:.45rem .75rem;">提交申覆</button>`
+      : "";
+    return `
+      <div style="border-bottom:1px solid #222;padding:.55rem .25rem;word-break:break-all;">
+        <div><strong>管理通知 #${v.id}</strong> · ${sanitize(v.created_at || "")}</div>
+        <div style="color:#ffcc80;">${sanitize(v.reason || "")}</div>
+        ${appealStatus}
+        ${controls}
+      </div>
+    `;
+  }
   const activeHtml = activeViolations.length
     ? `<div style="color:var(--muted);font-size:.75rem;margin:.25rem 0;">目前有效違規</div>${activeViolations.map(renderAppealViolation).join("")}`
     : "<p style='color:var(--muted);'>目前無有效違規</p>";
   const historyHtml = resolvedViolations.length
     ? `<div style="color:var(--muted);font-size:.75rem;margin:.75rem 0 .25rem;">已撤銷歷史</div>${resolvedViolations.map(renderAppealViolation).join("")}`
     : "";
-  listEl.innerHTML = activeHtml + historyHtml;
+  const governanceHtml = governanceNotices.length
+    ? `<div style="color:var(--muted);font-size:.75rem;margin:1.25rem 0 .25rem;">會員權益變更通知（不計入違規點數）</div>${governanceNotices.map(renderGovernanceNotice).join("")}`
+    : "";
+  if (!violations.length && !governanceNotices.length) {
+    listEl.innerHTML = "<p style='color:var(--muted);'>尚無違規或治理通知記錄</p>";
+  } else {
+    listEl.innerHTML = activeHtml + historyHtml + governanceHtml;
+  }
   listEl.querySelectorAll("button[data-appeal-submit]").forEach((btn) => {
     btn.addEventListener("click", () => submitAppeal(parseInt(btn.getAttribute("data-appeal-submit"), 10)));
   });

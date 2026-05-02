@@ -335,9 +335,112 @@ CREATE TABLE IF NOT EXISTS server_modes (
     current_mode       TEXT NOT NULL,
     previous_mode      TEXT,
     active_snapshot_id TEXT,
+    checkpoint_id      TEXT,
     mode_changed_by    INTEGER,
     mode_changed_at    TEXT,
-    notes              TEXT
+    notes              TEXT,
+    reason             TEXT,
+    config_json        TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS server_checkpoints (
+    id                         TEXT PRIMARY KEY,
+    snapshot_id                TEXT NOT NULL,
+    checkpoint_type            TEXT NOT NULL,
+    from_mode                  TEXT,
+    target_mode                TEXT NOT NULL,
+    created_by                 INTEGER NOT NULL,
+    created_at                 TEXT NOT NULL,
+    status                     TEXT NOT NULL,
+    db_snapshot_hash           TEXT,
+    config_hash                TEXT,
+    security_settings_hash     TEXT,
+    points_chain_hash          TEXT,
+    cloud_drive_metadata_hash  TEXT,
+    integrity_manifest_hash    TEXT,
+    components_json            TEXT NOT NULL DEFAULT '{}',
+    error_message              TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mode_switch_logs (
+    id                  TEXT PRIMARY KEY,
+    event_uuid          TEXT,
+    from_mode           TEXT,
+    to_mode             TEXT NOT NULL,
+    actor_user_id       INTEGER,
+    actor_id            INTEGER,
+    actor_role          TEXT,
+    source_ip           TEXT,
+    user_agent          TEXT,
+    request_id          TEXT,
+    reason              TEXT,
+    checkpoint_id       TEXT,
+    snapshot_id         TEXT,
+    success             INTEGER NOT NULL DEFAULT 0,
+    error_message       TEXT,
+    config_diff_json    TEXT NOT NULL DEFAULT '{}',
+    restore_result_json TEXT NOT NULL DEFAULT '{}',
+    created_at          TEXT NOT NULL,
+    prev_hash           TEXT NOT NULL DEFAULT '',
+    row_hash            TEXT NOT NULL DEFAULT '',
+    server_boot_id      TEXT,
+    hmac_signature      TEXT,
+    key_version         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS security_keys (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    purpose     TEXT NOT NULL,
+    key_version TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    rotated_at  TEXT,
+    disabled_at TEXT,
+    status      TEXT NOT NULL,
+    UNIQUE(purpose, key_version)
+);
+
+CREATE TABLE IF NOT EXISTS tester_token_audit (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id         TEXT,
+    route            TEXT,
+    normalized_route TEXT,
+    method           TEXT,
+    allowed          INTEGER NOT NULL DEFAULT 0,
+    reason           TEXT,
+    source_ip        TEXT,
+    created_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tester_tokens (
+    id                      TEXT PRIMARY KEY,
+    token_hash              TEXT NOT NULL,
+    tester_user_id          INTEGER,
+    mode_scope_json         TEXT NOT NULL DEFAULT '["test","internal_test"]',
+    route_scope_json        TEXT NOT NULL DEFAULT '[]',
+    method_scope_json       TEXT NOT NULL DEFAULT '["GET","POST","PUT","PATCH","DELETE"]',
+    allowed_features_json   TEXT NOT NULL DEFAULT '[]',
+    allowed_routes_json     TEXT NOT NULL DEFAULT '[]',
+    expires_at              TEXT NOT NULL,
+    issued_at               TEXT,
+    nonce                   TEXT,
+    max_requests_per_minute INTEGER NOT NULL DEFAULT 60,
+    can_modify_own_role     INTEGER NOT NULL DEFAULT 0,
+    can_modify_own_points   INTEGER NOT NULL DEFAULT 0,
+    can_run_security_tests  INTEGER NOT NULL DEFAULT 0,
+    created_by              INTEGER NOT NULL,
+    created_at              TEXT NOT NULL,
+    revoked_at              TEXT,
+    hmac_signature          TEXT,
+    key_version             TEXT
+);
+
+CREATE TABLE IF NOT EXISTS superweak_dirty_writes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    sandbox_epoch TEXT NOT NULL,
+    table_name    TEXT,
+    operation     TEXT,
+    row_ref       TEXT,
+    created_at    TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS uploaded_files (
@@ -727,6 +830,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     is_revoked   INTEGER NOT NULL DEFAULT 0,
     revoked_at   TEXT,
     last_seen    TEXT,
+    session_epoch INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 

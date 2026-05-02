@@ -117,6 +117,7 @@ function gameSubtitle(game) {
 }
 
 function switchGameView(key) {
+  setGameMsg("", true);
   gameSelectedKey = key || "chess";
   const isChess = gameSelectedKey === "chess";
   const chessLobby = $("chess-lobby-panel");
@@ -995,9 +996,13 @@ function renderTetrisBoard() {
       });
     });
   }
-  board.innerHTML = view.flatMap((row, rowIndex) => row.map((cell, colIndex) => (
+  const cells = view.flatMap((row, rowIndex) => row.map((cell, colIndex) => (
     `<div class="tetris-cell ${cell ? `filled type-${sanitize(cell)}` : ""}" data-tetris-cell="${rowIndex}-${colIndex}"></div>`
   ))).join("");
+  const overlay = tetrisState.status === "finished"
+    ? `<div class="single-game-over-overlay">GAME OVER<br><small>分數 ${Number(tetrisState.score || 0).toLocaleString()} · 消除 ${tetrisState.lines || 0} 行</small></div>`
+    : "";
+  board.innerHTML = cells + overlay;
 }
 
 function updateTetrisStatus(prefix = "") {
@@ -1178,6 +1183,17 @@ function renderSpaceShooterBoard() {
     ctx.closePath();
     ctx.fill();
   });
+  if (state.status === "finished") {
+    ctx.fillStyle = "rgba(7,17,31,.72)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ff4f6d";
+    ctx.font = "bold 36px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 18);
+    ctx.fillStyle = "rgba(214,226,240,.85)";
+    ctx.font = "15px sans-serif";
+    ctx.fillText(`分數 ${Number(state.score || 0).toLocaleString()}`, canvas.width / 2, canvas.height / 2 + 18);
+  }
 }
 
 function updateSpaceShooterStatus(prefix = "") {

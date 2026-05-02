@@ -131,3 +131,123 @@ After each phase, report:
 - Test commands and results
 - Smoke test result
 - Known incomplete items
+
+## Current Automated Coverage
+
+The current implementation is covered by these focused tests:
+
+- `tests/test_snapshots.py`
+  - checkpoint-gated mode switch
+  - failed checkpoint to `incident_lockdown`
+  - production report gate APIs
+  - tester token APIs
+  - tester shadow role/wallet isolation
+  - superweak dirty-state discard
+- `tests/test_account_lockout.py`
+  - production same-IP and same-account conflict policies remain disabled by
+    default
+  - scoped tester token login for `internal_test`
+- `tests/test_upload_security.py`
+  - superweak Cloud Drive quota is forced to 10MB, including root
+- `tests/test_integrity_guard.py`
+  - production entry with high-risk integrity finding enters
+    `incident_lockdown`
+- frontend static tests
+  - server mode UI still exposes required controls and responsive layout checks
+- clean-environment smoke
+  - `security/server_mode_v2_clean_smoke.py` creates a new temporary DB/storage
+    runtime and switches through all canonical modes without touching the live
+    server data.
+  - The same smoke is available from `security/run_pentest.sh --only
+    server-mode-v2`.
+- adversarial validation
+  - `security/server_mode_v2_adversarial.py` creates a new temporary DB/storage
+    runtime and tries mode-switch log update/delete, snapshot log rollback,
+    tester-token traversal, shadow-role privilege escalation, fake/replayed
+    production reports, and incident-lockdown bypass.
+  - The same adversarial check is available from
+    `security/run_pentest.sh --only server-mode-v2-adversarial`.
+- enterprise sign-off validation
+  - `security/server_mode_v2_redteam_l2.py` layers HMAC signature tamper,
+    revoked-token replay, integrity-manifest tamper signal, and the full
+    adversarial suite into an evidence report.
+  - By itself this produces `production_readiness=CONDITIONAL_YES`, because it
+    does not drive the live Flask HTTP/session/cookie stack and does not kill a
+    real server process.
+- live HTTP sign-off validation
+  - `security/server_mode_v2_live_http_smoke.py` starts an isolated loopback
+    Flask server, logs in through real HTTP CSRF/session cookies, sends tester
+    token traversal payloads to live routes, enters superweak, kills the server
+    process with SIGKILL, restarts it, verifies rollback, enters
+    `incident_lockdown`, and verifies old sessions/tokens are blocked.
+  - This closes the local live-deployment coverage gap and emits
+    `production_readiness=YES` when all live checks pass.
+  - It still does not verify off-host append-only log replication or
+    filesystem-level immutable storage.
+  - The full enterprise bundle is available from
+    `security/run_pentest.sh --only server-mode-v2-enterprise`.
+  - Live HTTP smoke alone is available from
+    `security/run_pentest.sh --only server-mode-v2-live-http`.
+  - Red Team L2 alone is available from
+    `security/run_pentest.sh --only server-mode-v2-redteam-l2`.
+
+Required command set before merging this work:
+
+```bash
+PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 -m pytest \
+  /home/s92137/hackme_web_economy_fix/tests/test_snapshots.py \
+  /home/s92137/hackme_web_economy_fix/tests/test_account_lockout.py \
+  /home/s92137/hackme_web_economy_fix/tests/test_upload_security.py \
+  /home/s92137/hackme_web_economy_fix/tests/test_integrity_guard.py \
+  /home/s92137/hackme_web_economy_fix/tests/test_frontend_drive_preview.py \
+  /home/s92137/hackme_web_economy_fix/tests/test_release_policy.py \
+  /home/s92137/hackme_web_economy_fix/tests/test_mobile_responsive_layout.py
+
+PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 -m py_compile \
+  /home/s92137/hackme_web_economy_fix/server.py \
+  /home/s92137/hackme_web_economy_fix/services/auth.py \
+  /home/s92137/hackme_web_economy_fix/services/snapshots.py \
+  /home/s92137/hackme_web_economy_fix/routes/public.py \
+  /home/s92137/hackme_web_economy_fix/routes/system_admin.py \
+  /home/s92137/hackme_web_economy_fix/routes/economy.py \
+  /home/s92137/hackme_web_economy_fix/services/upload_security.py
+
+git -C /home/s92137/hackme_web_economy_fix diff --check
+
+PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
+  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_clean_smoke.py \
+  --out /home/s92137/hackme_web_economy_fix/security/reports
+
+PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
+  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_adversarial.py \
+  --out /home/s92137/hackme_web_economy_fix/security/reports
+
+PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
+  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_redteam_l2.py \
+  --out /home/s92137/hackme_web_economy_fix/security/reports
+
+PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
+  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_live_http_smoke.py \
+  --out /home/s92137/hackme_web_economy_fix/security/reports
+
+cd /home/s92137/hackme_web_economy_fix
+security/run_pentest.sh --only server-mode-v2 \
+  --target http://127.0.0.1:5000 \
+  --out security/reports
+
+security/run_pentest.sh --only server-mode-v2-adversarial \
+  --target http://127.0.0.1:5000 \
+  --out security/reports
+
+security/run_pentest.sh --only server-mode-v2-live-http \
+  --target http://127.0.0.1:5000 \
+  --out security/reports
+
+security/run_pentest.sh --only server-mode-v2-enterprise \
+  --target http://127.0.0.1:5000 \
+  --out security/reports
+
+security/run_pentest.sh --only server-mode-v2-redteam-l2 \
+  --target http://127.0.0.1:5000 \
+  --out security/reports
+```

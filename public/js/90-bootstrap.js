@@ -91,6 +91,8 @@ function bindUiEvents() {
   const serverUpdateApply = $("server-update-apply-btn");
   const internalTestTokenRefresh = $("internal-test-token-refresh-btn");
   const internalTestTokenRotate = $("internal-test-token-rotate-btn");
+  const testerTokenCreate = $("tester-token-create-btn");
+  const testerTokenList = $("tester-token-list-btn");
   const healthRefresh = $("health-refresh-btn");
   const integrityRefresh = $("integrity-refresh-btn");
   const integrityRescan = $("integrity-rescan-btn");
@@ -456,6 +458,8 @@ function bindUiEvents() {
   if (serverUpdateApply) serverUpdateApply.addEventListener("click", applyServerUpdate);
   if (internalTestTokenRefresh) internalTestTokenRefresh.addEventListener("click", loadInternalTestTokenStatus);
   if (internalTestTokenRotate) internalTestTokenRotate.addEventListener("click", rotateInternalTestToken);
+  if (testerTokenCreate) testerTokenCreate.addEventListener("click", createTesterToken);
+  if (testerTokenList) testerTokenList.addEventListener("click", loadTesterTokens);
   if (healthRefresh) healthRefresh.addEventListener("click", loadServerHealth);
   if (integrityRefresh) integrityRefresh.addEventListener("click", loadIntegrityGuard);
   if (integrityRescan) integrityRescan.addEventListener("click", rescanIntegrityGuard);

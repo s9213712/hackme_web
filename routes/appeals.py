@@ -44,6 +44,7 @@ def register_appeal_routes(app, deps):
     def _serialize_violation_row(r):
         if not r:
             return None
+        keys = r.keys() if hasattr(r, "keys") else {}
         return {
             "id": r["id"],
             "user_id": r["user_id"],
@@ -53,6 +54,7 @@ def register_appeal_routes(app, deps):
             "triggered_by": r["triggered_by"],
             "actor_username": r["actor_username"],
             "created_at": r["created_at"],
+            "is_governance_notice": bool(r["is_governance_notice"]) if "is_governance_notice" in keys else False,
         }
 
     @app.route("/api/appeals", methods=["GET"])
@@ -71,8 +73,11 @@ def register_appeal_routes(app, deps):
             ).fetchone()
             latest_violation = get_latest_violation(conn, user_id)
             violation_rows = conn.execute(
-                "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at "
-                "FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 50",
+                "SELECT sv.id, sv.user_id, sv.username, sv.points, sv.reason, sv.triggered_by, sv.actor_username, sv.created_at, "
+                "  CASE WHEN asc2.id IS NOT NULL THEN 1 ELSE 0 END AS is_governance_notice "
+                "FROM secure_violations sv "
+                "LEFT JOIN admin_sanction_appeal_contexts asc2 ON asc2.violation_id = sv.id "
+                "WHERE sv.user_id=? ORDER BY sv.id DESC LIMIT 50",
                 (user_id,)
             ).fetchall()
             rows = conn.execute(

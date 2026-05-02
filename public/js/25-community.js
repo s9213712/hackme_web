@@ -424,7 +424,7 @@ function renderCommunityAnnouncements() {
         ${(currentRole === "manager" || currentRole === "super_admin") ? `<button class="btn community-mini-btn" type="button" data-del-announcement="${item.id}">刪除</button>` : ""}
       </div>
       <div class="community-meta">${sanitize(item.author_username || "")} · ${sanitize(formatChatTime(item.created_at || ""))}</div>
-      <div class="community-body">${sanitize(item.content || "")}</div>
+      <div class="community-body markdown-rendered">${markdownToSafeHtml(item.content || "")}</div>
     </div>
   `).join("");
   list.querySelectorAll("button[data-del-announcement]").forEach((btn) => {

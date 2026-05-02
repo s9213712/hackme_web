@@ -29,6 +29,7 @@ let tradingTrialCountdownTimer = null;
 let tradingBtcSignalCountdownTimer = null;
 let tradingBotCountdownTimer = null;
 let tradingCurrentBotTab = "dca";
+const tradingGridExpandedBots = new Set();
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
 
 function tradingRequestId(prefix = "trading") {
@@ -509,6 +510,11 @@ function tradingMarginPositionRow(row, scope = "trading") {
   const interest = tradingNumber(row.risk?.interest_points ?? row.interest_points, 0);
   const paidInterest = tradingNumber(row.interest_paid_points, 0);
   const interestHours = tradingNumber(row.interest_accrued_hours, 0);
+  const totalElapsedHours = tradingNumber(row.total_elapsed_hours, 0);
+  const nextInterestAt = row.next_interest_at ? new Date(row.next_interest_at).getTime() : 0;
+  const nextInterestCountdown = (nextInterestAt && nextInterestAt > Date.now())
+    ? `下次付息 ${formatTradingDuration(nextInterestAt - Date.now())} 後`
+    : (totalElapsedHours > 0 ? "下次付息即將觸發" : "");
   const entry = tradingNumber(row.entry_price_points, 0);
   const currentPrice = tradingNumber(row.risk?.price_points ?? row.current_price_points, 0);
   const equity = tradingNumber(row.risk?.equity_after_points ?? row.equity_after_points, 0);
@@ -535,7 +541,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
           未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 逐倉估算強平價 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"} · 實際清算依全倉維持率
         </div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
-        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercent(row.interest_percent_daily || 0)}% · 已扣利息 ${formatTradingPointsValue(paidInterest)} · 持倉成本利息 ${formatTradingPointsValue(interest)} · 已計 ${formatTradingPointsValue(interestHours)} 小時 · ${sanitize(leverageHint)}</div>
+        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercent(row.interest_percent_daily || 0)}% · 已扣利息 ${formatTradingPointsValue(paidInterest)} · 持倉成本利息 ${formatTradingPointsValue(interest)} · 已持倉 ${totalElapsedHours} 小時 · 已計息 ${interestHours} 小時${nextInterestCountdown ? ` · ${sanitize(nextInterestCountdown)}` : ""} · ${sanitize(leverageHint)}</div>
         <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
       </div>
       <div class="trading-spot-actions">
@@ -1706,22 +1712,77 @@ function renderTradingBots(rows = [], runs = []) {
 
 let tradingGridBots = [];
 
+function gridComputeLevels(lower, upper, count, mode) {
+  if (count < 2 || lower <= 0 || upper <= lower) return [];
+  const levels = [];
+  if (mode === "geometric") {
+    const ratio = Math.pow(upper / lower, 1 / (count - 1));
+    for (let i = 0; i < count; i++) levels.push(Math.round(lower * Math.pow(ratio, i)));
+  } else {
+    const step = (upper - lower) / (count - 1);
+    for (let i = 0; i < count; i++) levels.push(Math.round(lower + step * i));
+  }
+  return levels;
+}
+
 function renderGridBotPreview() {
   const upper = Number($("trading-grid-upper-price")?.value || 0);
   const lower = Number($("trading-grid-lower-price")?.value || 0);
   const count = Number($("trading-grid-count")?.value || 10);
   const amount = Number($("trading-grid-order-amount")?.value || 0);
+  const mode = $("trading-grid-spacing-mode")?.value || "arithmetic";
   const preview = $("trading-grid-preview");
   if (!preview) return;
-  if (!upper || !lower || upper <= lower || count < 2) {
-    preview.textContent = "";
+  if (!upper || !lower || upper <= lower || count < 2 || amount < 1) {
+    preview.innerHTML = "";
     return;
   }
-  const step = (upper - lower) / (count - 1);
-  const levels = count;
-  const totalCost = amount * levels;
-  const stepPct = ((step / lower) * 100).toFixed(2);
-  preview.textContent = `${levels} 個網格，間距 ${formatTradingPointsValue(Math.round(step))} 點（約 ${stepPct}%），預估最大投入約 ${formatTradingPointsValue(totalCost)} 點`;
+  const levels = gridComputeLevels(lower, upper, count, mode);
+  if (levels.length < 2) { preview.innerHTML = ""; return; }
+
+  // Fee analysis: grid trading gets 50% discount
+  const market = (tradingState.markets || []).find((m) => m.symbol === ($("trading-grid-bot-market")?.value || ""));
+  const feeRatePct = market ? Number(market.fee_rate_percent || 0) : 0;
+  const gridFeeRatePct = feeRatePct * 0.5;
+  // Round-trip fee per grid (buy + sell) as percentage of amount
+  const roundTripFeePct = gridFeeRatePct * 2;
+  // Step spacing as percentage (use minimum step for geometric)
+  const minStep = Math.min(...levels.slice(1).map((p, i) => p - levels[i]));
+  const minStepPct = (minStep / levels[0]) * 100;
+  const maxStep = Math.max(...levels.slice(1).map((p, i) => p - levels[i]));
+  const maxStepPct = (maxStep / levels[0]) * 100;
+  const hasArbitrage = roundTripFeePct > 0 ? minStepPct > roundTripFeePct : true;
+  const feePerTrade = amount * gridFeeRatePct / 100;
+  const roundTripFee = amount * roundTripFeePct / 100;
+
+  // Estimate current price from market or use midpoint
+  const marketPrice = market ? Number(market.manual_price_points || 0) : 0;
+  const refPrice = marketPrice || Math.round((upper + lower) / 2);
+  const buyLevels = levels.filter((p) => p < refPrice);
+  const sellLevels = levels.filter((p) => p > refPrice);
+  const buyCost = buyLevels.length * amount;
+  const sellCost = sellLevels.length * amount;
+  // Spot needed for sell orders (points worth of spot at each sell level)
+  const spotUnitsNeeded = sellLevels.reduce((sum, p) => sum + (p > 0 ? amount / p : 0), 0);
+  const spotDisplay = spotUnitsNeeded > 0 ? `約 ${spotUnitsNeeded.toFixed(6)} 個 ${market ? tradingDisplaySymbol(market.symbol).split("/")[0] : "資產"}` : "0";
+
+  const stepInfo = mode === "geometric"
+    ? `間距約 ${minStepPct.toFixed(2)}%–${maxStepPct.toFixed(2)}%（等比）`
+    : `間距 ${formatTradingPointsValue(minStep)} 點（約 ${minStepPct.toFixed(2)}%，等差）`;
+
+  let feeHtml = "";
+  if (feeRatePct > 0) {
+    const color = hasArbitrage ? "#4caf50" : "#ff4f6d";
+    const sign = hasArbitrage ? "✓ 有套利空間" : "✗ 間距不足，建議加大間距或減少網格數";
+    feeHtml = `<div style="color:${color};margin-top:.25rem;">手續費：單筆 ${formatTradingPointsValue(Math.round(feePerTrade))} 點（網格優惠 50%，費率 ${gridFeeRatePct.toFixed(4)}%），來回 ${formatTradingPointsValue(Math.round(roundTripFee))} 點 &nbsp;·&nbsp; ${sign}</div>`;
+  }
+
+  preview.innerHTML = `
+    <div>${count} 格，${stepInfo}，每格 ${formatTradingPointsValue(amount)} 點</div>
+    <div>買單 ${buyLevels.length} 格（投入 ${formatTradingPointsValue(buyCost)} 點），賣單 ${sellLevels.length} 格（需現有底倉 ${spotDisplay}）</div>
+    <div>預估最大資金投入約 ${formatTradingPointsValue(buyCost + sellCost)} 點（不含已持現貨）</div>
+    ${feeHtml}
+  `.trim();
 }
 
 function renderGridBotVisual(bot, currentPrice) {
@@ -1729,7 +1790,9 @@ function renderGridBotVisual(bot, currentPrice) {
   if (!levels.length) return `<div class="drive-card-sub">（無網格層）</div>`;
   const orders = Array.isArray(bot.orders) ? bot.orders : [];
   const orderByLevel = {};
-  for (const o of orders) {
+  // Sort by id ascending so the highest id (most recent) wins per level
+  const sortedOrders = [...orders].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+  for (const o of sortedOrders) {
     orderByLevel[o.level_index] = o;
   }
   const cp = Number(currentPrice || bot.initial_price_points || 0);
@@ -1764,6 +1827,15 @@ function renderGridBotVisual(bot, currentPrice) {
   return `<div class="grid-visual">${rows.join("")}</div>`;
 }
 
+function renderGridBotFills(fills) {
+  if (!fills.length) return `<div class="drive-card-sub">尚無成交紀錄</div>`;
+  return fills.slice().reverse().slice(0, 30).map((o) => {
+    const side = o.side === "buy" ? "買入" : "賣出";
+    const cls = o.side === "buy" ? "grid-buy-count" : "grid-sell-count";
+    return `<div class="drive-card-sub" style="white-space:nowrap;"><span class="${cls}">${side}</span> ${formatTradingPointsValue(o.price_points)} 點 · 第 ${Number(o.level_index) + 1} 層${o.updated_at ? " · " + sanitize(String(o.updated_at).slice(0, 16).replace("T", " ")) : ""}</div>`;
+  }).join("");
+}
+
 function renderGridBotList(bots, currentPriceMap) {
   const container = $("trading-grid-bot-list");
   if (!container) return;
@@ -1774,13 +1846,29 @@ function renderGridBotList(bots, currentPriceMap) {
   container.innerHTML = bots.map((bot) => {
     const cp = (currentPriceMap || {})[bot.market_symbol] || bot.initial_price_points || 0;
     const symbol = sanitize(tradingDisplaySymbol(bot.market_symbol || ""));
+    const assetSymbol = sanitize((tradingDisplaySymbol(bot.market_symbol || "") || "").split("/")[0] || "資產");
     const profit = Number(bot.total_profit_points || 0);
     const profitClass = profit >= 0 ? "positive" : "negative";
     const orders = Array.isArray(bot.orders) ? bot.orders : [];
     const openOrders = orders.filter((o) => o.status === "open");
+    const filledOrders = orders.filter((o) => o.status === "filled");
     const buyOrders = openOrders.filter((o) => o.side === "buy");
     const sellOrders = openOrders.filter((o) => o.side === "sell");
     const levels = Array.isArray(bot.grid_levels) ? bot.grid_levels : [];
+    const SCALE = 100_000_000;
+    // Net inventory: buy fills - sell fills (in asset units from filled_quantity_units)
+    const buyFillUnits = filledOrders.filter((o) => o.side === "buy").reduce((s, o) => s + Number(o.filled_quantity_units || 0), 0);
+    const sellFillUnits = filledOrders.filter((o) => o.side === "sell").reduce((s, o) => s + Number(o.filled_quantity_units || 0), 0);
+    const netInventoryUnits = buyFillUnits - sellFillUnits;
+    const netInventoryDisplay = (netInventoryUnits / SCALE).toFixed(6);
+    // Open orders locked value
+    const buyLockedPoints = buyOrders.length * Number(bot.order_amount_points || 0);
+    const sellLockedUnits = sellOrders.reduce((s, o) => s + (o.price_points > 0 ? Number(bot.order_amount_points || 0) / o.price_points : 0), 0);
+    // Fee estimate: total trades × amount × grid_fee_rate (50% discount); market fee_rate from tradingState
+    const marketObj = (tradingState.markets || []).find((m) => m.symbol === bot.market_symbol);
+    const feeRatePct = marketObj ? Number(marketObj.fee_rate_percent || 0) : 0;
+    const totalTrades = Number(bot.total_trades || 0);
+    const estimatedFee = totalTrades * Number(bot.order_amount_points || 0) * feeRatePct * 0.5 / 100;
     return `<div class="drive-file-row grid-bot-card" data-grid-bot-uuid="${sanitize(bot.bot_uuid || "")}">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
@@ -1791,13 +1879,25 @@ function renderGridBotList(bots, currentPriceMap) {
           區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 每格 ${formatTradingPointsValue(bot.order_amount_points)} 點
         </div>
         <div class="drive-card-sub">
-          現價 ${formatTradingPointsValue(cp)} · 掛單：<span class="grid-buy-count">買 ${buyOrders.length}</span> / <span class="grid-sell-count">賣 ${sellOrders.length}</span> · 已成交 ${Number(bot.total_trades || 0)} 次 · 累計損益 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
+          現價 ${formatTradingPointsValue(cp)} · 底倉 ${netInventoryDisplay} ${assetSymbol} · 掛單：<span class="grid-buy-count">買 ${buyOrders.length} 格（${formatTradingPointsValue(buyLockedPoints)} 點）</span> / <span class="grid-sell-count">賣 ${sellOrders.length} 格（約 ${sellLockedUnits.toFixed(6)} ${assetSymbol}）</span>
+        </div>
+        <div class="drive-card-sub">
+          已成交 ${totalTrades} 次 · 估計手續費支出 ${formatTradingPointsValue(Math.round(estimatedFee))} 點 · 累計盈虧 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
         </div>
         ${bot.last_error ? `<div class="drive-card-sub negative">錯誤：${sanitize(bot.last_error)}</div>` : ""}
-        <details class="grid-visual-details">
-          <summary class="drive-card-sub" style="cursor:pointer;user-select:none;">展開網格掛單圖（共 ${levels.length} 層）</summary>
-          ${renderGridBotVisual(bot, cp)}
-        </details>
+        <button class="btn btn-sm" type="button" style="margin-top:.35rem;" data-grid-visual-toggle="${sanitize(bot.bot_uuid || "")}">${tradingGridExpandedBots.has(bot.bot_uuid || "") ? "收起掛單圖" : `展開掛單圖（${levels.length} 層）`}</button>
+        <div class="grid-visual-details" data-grid-visual-panel="${sanitize(bot.bot_uuid || "")}" style="display:${tradingGridExpandedBots.has(bot.bot_uuid || "") ? "" : "none"};margin-top:.5rem;">
+          <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
+            <div style="flex:0 0 auto;">
+              <div class="drive-card-sub" style="margin-bottom:.25rem;font-weight:600;">掛單層級</div>
+              ${renderGridBotVisual(bot, cp)}
+            </div>
+            <div style="flex:1;min-width:160px;">
+              <div class="drive-card-sub" style="margin-bottom:.25rem;font-weight:600;">成交紀錄（${orders.filter((o) => o.status === "filled").length} 筆）</div>
+              ${renderGridBotFills(orders.filter((o) => o.status === "filled"))}
+            </div>
+          </div>
+        </div>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
@@ -1838,9 +1938,28 @@ function renderGridBotList(bots, currentPriceMap) {
         const json = await res.json().catch(() => ({}));
         if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "刪除失敗", false); return; }
         tradingSetMsg("網格機器人已刪除");
+        tradingGridExpandedBots.delete(uuid);
         await loadGridBots();
       } catch (e) { tradingSetMsg(e.message || "網格機器人刪除失敗", false); }
       finally { btn.disabled = false; }
+    });
+  });
+  // Visual toggle buttons
+  container.querySelectorAll("[data-grid-visual-toggle]").forEach((btn) => {
+    const uuid = btn.dataset.gridVisualToggle;
+    const panel = container.querySelector(`[data-grid-visual-panel="${CSS.escape(uuid)}"]`);
+    if (!panel) return;
+    btn.addEventListener("click", () => {
+      const expanded = panel.style.display !== "none";
+      if (expanded) {
+        panel.style.display = "none";
+        tradingGridExpandedBots.delete(uuid);
+        btn.textContent = `展開掛單圖`;
+      } else {
+        panel.style.display = "";
+        tradingGridExpandedBots.add(uuid);
+        btn.textContent = "收起掛單圖";
+      }
     });
   });
 }
@@ -1868,6 +1987,7 @@ async function createGridBot() {
   const lower = Number($("trading-grid-lower-price")?.value || 0);
   const count = Number($("trading-grid-count")?.value || 10);
   const amount = Number($("trading-grid-order-amount")?.value || 0);
+  const spacingMode = $("trading-grid-spacing-mode")?.value || "arithmetic";
   if (!name) { tradingSetMsg("請填寫機器人名稱", false); return; }
   if (!marketSymbol) { tradingSetMsg("請選擇交易市場", false); return; }
   if (!upper || !lower || upper <= lower) { tradingSetMsg("上限價格必須大於下限價格", false); return; }
@@ -1881,7 +2001,7 @@ async function createGridBot() {
     const res = await apiFetch(`${API}/trading/grid-bots`, {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-      body: JSON.stringify({ name, market_symbol: marketSymbol, upper_price_points: upper, lower_price_points: lower, grid_count: count, order_amount_points: amount }),
+      body: JSON.stringify({ name, market_symbol: marketSymbol, upper_price_points: upper, lower_price_points: lower, grid_count: count, order_amount_points: amount, spacing_mode: spacingMode }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "網格建立失敗", false); return; }
@@ -2908,6 +3028,10 @@ function bindTradingEvents() {
     const el = $(id);
     if (el) el.addEventListener("input", renderGridBotPreview);
   });
+  const gridSpacingMode = $("trading-grid-spacing-mode");
+  if (gridSpacingMode) gridSpacingMode.addEventListener("change", renderGridBotPreview);
+  const gridMarketSelect = $("trading-grid-bot-market");
+  if (gridMarketSelect) gridMarketSelect.addEventListener("change", renderGridBotPreview);
   document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       switchTradingBotTab(btn.dataset.tradingBotTab || "dca");

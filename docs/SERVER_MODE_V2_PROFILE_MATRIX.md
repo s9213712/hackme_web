@@ -92,3 +92,48 @@ points, and trading data, but only through:
 
 The shadow layer must not affect production wallet balances, production
 PointsChain, production leaderboards, or production trading positions.
+
+## Token Types
+
+Server Mode v2 uses two different token classes. They are intentionally not
+interchangeable:
+
+| Token | Where it is used | Purpose | Authority |
+| --- | --- | --- | --- |
+| `internal_test` login token | `POST /api/login` payload field `internal_test_token` | Lets a root-approved tester log in while the server is in `internal_test` mode. | Login gate only. It does not grant API scopes by itself. |
+| Server Mode v2 tester token | `X-Tester-Token` or `Authorization: Bearer ...` | Lets a tester call scoped `/api/tester/*` automation/shadow APIs in `test` or `internal_test`. | Route/method/mode scoped, rate-limited, expiring, revocable, HMAC-signed. It cannot access root/admin/server-mode/snapshot/integrity/audit APIs. |
+
+The login token is a door key. The tester token is a scoped test API key. A
+user may need one or both depending on whether the task is simply entering
+`internal_test` or actively running shadow-state/API tests.
+
+## Root APIs
+
+| API | Purpose |
+| --- | --- |
+| `GET /api/root/server-mode` | Read current mode, profiles, production gate status, and incident summary. |
+| `POST /api/root/server-mode/checkpoint` | Create a checkpoint before a planned mode operation. |
+| `POST /api/root/server-mode/restore-check` | Validate current state against a stored checkpoint. |
+| `POST /api/root/server-mode/switch` | Switch mode after confirmation phrase and checkpoint gate. |
+| `GET /api/root/server-mode/requirements` | Read production gate report requirements. |
+| `GET /api/root/server-mode/logs` | Read independent mode-switch log rows. |
+| `POST /api/root/production-report/upload` | Upload a production-entry-compatible report record. |
+| `GET /api/root/production-report/status` | Read production report status. |
+| `POST /api/root/production/enter` | Shortcut for production entry using the same gate as mode switch. |
+| `POST /api/root/tester-token/create` | Create a scoped tester token. |
+| `POST /api/root/tester-token/revoke` | Revoke a tester token. |
+| `GET /api/root/tester-token/list` | List tester token metadata. Token secret is never returned after creation. |
+| `POST /api/root/incident/enter` | Manually enter incident lockdown. |
+| `GET /api/root/incident/status` | Read open incident status. |
+| `POST /api/root/incident/resolve` | Resolve the open incident after root confirmation. |
+
+## Tester APIs
+
+Tester APIs require `X-Tester-Token` or `Authorization: Bearer <token>`.
+State-changing tester APIs still use the normal CSRF protection.
+
+| API | Purpose | Formal data mutation |
+| --- | --- | --- |
+| `GET /api/tester/shadow-state` | Read tester shadow role, wallet, transactions, and test chain rows. | No |
+| `POST /api/tester/shadow-role` | Change own role inside shadow layer. | No |
+| `POST /api/tester/shadow-wallet` | Add/subtract own shadow points inside shadow layer. | No |

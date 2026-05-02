@@ -487,10 +487,20 @@ function renderDriveGroupedStats(targetId, grouped, emptyText, labelFn) {
 }
 
 function storageUpgradeLabel(item) {
-  const price = Number(item.base_price || 0);
   const bytes = formatDriveBytes(item.storage_bytes || 0);
   const days = Number(item.duration_days || 0);
-  return `${item.label || item.item_name || item.item_key} · ${bytes} / ${days} 天 · ${price} 點`;
+  return `${item.label || item.item_name || item.item_key} · ${bytes} / ${days} 天`;
+}
+
+function storageUpgradePricePreviewHtml(item) {
+  if (!item) return "";
+  const effective = Number(item.effective_price ?? item.base_price ?? 0);
+  const base = Number(item.base_price || 0);
+  const tierMultiplier = Number(item.tier_multiplier || 1);
+  if (tierMultiplier > 1) {
+    return `<span style="color:var(--warning,#e6a817)">本次定價：<strong>${effective} 積分</strong>（基礎 ${base} × ${tierMultiplier.toFixed(1)} 階梯加價）</span>`;
+  }
+  return `本次定價：<strong>${effective} 積分</strong>`;
 }
 
 function renderStorageUpgrade(payload) {
@@ -515,8 +525,17 @@ function renderStorageUpgrade(payload) {
     button.textContent = driveStorageUpgradeCanPurchase ? "用積分購買容量" : (isRoot ? "root 不需要購買容量" : "容量方案不可購買");
     button.title = driveStorageUpgradeCanPurchase ? "用積分購買所選雲端硬碟容量" : (driveStorageUpgradeMessage || "目前沒有可購買的容量方案");
   }
-  const quantity = $("drive-storage-upgrade-quantity");
-  if (quantity) quantity.disabled = !canPurchase || !driveStorageUpgradeCatalog.length;
+  const pricePreview = $("drive-storage-upgrade-price-preview");
+  const updatePricePreview = () => {
+    if (!pricePreview) return;
+    const key = select.value;
+    const item = driveStorageUpgradeCatalog.find((i) => i.item_key === key);
+    pricePreview.innerHTML = item ? storageUpgradePricePreviewHtml(item) : "";
+  };
+  select.removeEventListener("change", select._upgradePriceHandler);
+  select._upgradePriceHandler = updatePricePreview;
+  select.addEventListener("change", updatePricePreview);
+  updatePricePreview();
 
   const usage = payload?.usage || {};
   const purchased = Number(usage.purchased_extra_bytes || 0);
@@ -3307,13 +3326,8 @@ async function purchaseStorageUpgrade() {
     return;
   }
   const itemKey = $("drive-storage-upgrade-select")?.value || "";
-  const quantity = Number($("drive-storage-upgrade-quantity")?.value || 1);
   if (!itemKey) {
     if (msg) flash(msg, "請先選擇容量方案", false);
-    return;
-  }
-  if (!Number.isFinite(quantity) || quantity < 1 || quantity > 20) {
-    if (msg) flash(msg, "購買數量需介於 1 到 20", false);
     return;
   }
   const button = document.querySelector("[data-drive-action='purchase-storage-upgrade']");
@@ -3325,7 +3339,7 @@ async function purchaseStorageUpgrade() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-      body: JSON.stringify({ item_key: itemKey, quantity }),
+      body: JSON.stringify({ item_key: itemKey }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) {

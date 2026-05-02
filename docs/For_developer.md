@@ -5,7 +5,7 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.05.02-044`
+- Release ID: `2026.05.02-045`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`

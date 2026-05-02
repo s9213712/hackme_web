@@ -1261,12 +1261,37 @@ def register_file_routes(app, deps):
                 if can_purchase and not catalog:
                     can_purchase = False
                     message = "Host 磁碟可承諾容量不足，目前不能購買更多雲端容量"
+            user_id = _actor_value(actor, "id")
+            active_purchases = active_storage_quota_purchases(conn, user_id)
+            owned_bytes = sum(int(p.get("purchased_bytes") or 0) for p in active_purchases)
+            GB = 1024 ** 3
+            if owned_bytes < 2 * GB:
+                tier_multiplier = 1.0
+            elif owned_bytes < 5 * GB:
+                tier_multiplier = 1.5
+            elif owned_bytes < 10 * GB:
+                tier_multiplier = 2.0
+            elif owned_bytes < 20 * GB:
+                tier_multiplier = 3.0
+            else:
+                tier_multiplier = 4.0
+            enriched_catalog = []
+            for item in catalog:
+                entry = dict(item)
+                base = int(item.get("base_price") or 0)
+                min_p = int(item.get("min_price") or 0)
+                max_p = int(item.get("max_price") or 0) or 999999
+                effective = max(min_p, min(max_p, round(base * tier_multiplier)))
+                entry["effective_price"] = effective
+                entry["tier_multiplier"] = tier_multiplier
+                entry["owned_bytes"] = owned_bytes
+                enriched_catalog.append(entry)
             return json_resp({
                 "ok": True,
                 "can_purchase": can_purchase,
                 "message": message,
-                "catalog": catalog,
-                "active_purchases": active_storage_quota_purchases(conn, _actor_value(actor, "id")),
+                "catalog": enriched_catalog,
+                "active_purchases": active_purchases,
                 "usage": usage,
                 "storage_capacity": capacity_audit,
             })
@@ -1287,19 +1312,13 @@ def register_file_routes(app, deps):
         if err:
             return err, status
         item_key = str(data.get("item_key") or "").strip()
-        try:
-            quantity = int(data.get("quantity") or 1)
-        except Exception:
-            return json_resp({"ok": False, "msg": "購買數量必須是整數"}), 400
-        if quantity < 1 or quantity > 20:
-            return json_resp({"ok": False, "msg": "單次購買數量需介於 1 到 20"}), 400
         conn = get_db()
         try:
             catalog = _storage_upgrade_catalog(conn)
             product = next((item for item in catalog if item.get("item_key") == item_key), None)
             if not product:
                 return json_resp({"ok": False, "msg": "容量商品未啟用"}), 400
-            additional_bytes = int(product["storage_bytes"]) * quantity
+            additional_bytes = int(product["storage_bytes"])
             capacity_ok, capacity_msg, capacity_audit = can_allocate_storage_bytes(conn, storage_root, additional_bytes)
             if not capacity_ok:
                 return json_resp({
@@ -1307,21 +1326,42 @@ def register_file_routes(app, deps):
                     "msg": capacity_msg,
                     "storage_capacity": capacity_audit,
                 }), 409
+            user_id = _actor_value(actor, "id")
+            active_purchases = active_storage_quota_purchases(conn, user_id)
+            owned_bytes = sum(int(p.get("purchased_bytes") or 0) for p in active_purchases)
+            GB = 1024 ** 3
+            if owned_bytes < 2 * GB:
+                tier_multiplier = 1.0
+            elif owned_bytes < 5 * GB:
+                tier_multiplier = 1.5
+            elif owned_bytes < 10 * GB:
+                tier_multiplier = 2.0
+            elif owned_bytes < 20 * GB:
+                tier_multiplier = 3.0
+            else:
+                tier_multiplier = 4.0
+            base = int(product.get("base_price") or 0)
+            min_p = int(product.get("min_price") or 0)
+            max_p = int(product.get("max_price") or 0) or 999999
+            effective_price = max(min_p, min(max_p, round(base * tier_multiplier)))
         finally:
             conn.close()
         try:
             spend = points_service.spend_points(
                 user_id=_actor_value(actor, "id"),
                 item_key=item_key,
-                quantity=quantity,
+                quantity=1,
                 reference_type="cloud_storage_upgrade",
                 reference_id=item_key,
                 idempotency_key=f"cloud_storage_upgrade:{_actor_value(actor, 'id')}:{uuid.uuid4().hex}",
                 metadata={
                     "storage_bytes": additional_bytes,
                     "duration_days": int(product["duration_days"]),
+                    "tier_multiplier": tier_multiplier,
+                    "effective_price": effective_price,
                 },
                 actor=actor,
+                override_amount=effective_price,
             )
         except Exception as exc:
             return _points_error(exc)
@@ -1349,8 +1389,8 @@ def register_file_routes(app, deps):
                 conn,
                 user_id=_actor_value(actor, "id"),
                 item_key=item_key,
-                quantity=quantity,
-                points_spent=ledger.get("amount") or (spend.get("item") or {}).get("base_price", 0) * quantity,
+                quantity=1,
+                points_spent=ledger.get("amount") or effective_price,
                 ledger_uuid=ledger.get("ledger_uuid"),
             )
             level = _actor_value(actor, "effective_level") or _actor_value(actor, "member_level") or "newbie"
@@ -1363,7 +1403,7 @@ def register_file_routes(app, deps):
                 user=_actor_value(actor, "username"),
                 success=True,
                 ua=get_ua(),
-                detail=f"item_key={item_key}, quantity={quantity}, bytes={purchase['purchased_bytes']}",
+                detail=f"item_key={item_key}, effective_price={effective_price}, tier_multiplier={tier_multiplier}, bytes={purchase['purchased_bytes']}",
             )
             return json_resp({"ok": True, "purchase": purchase, "wallet": spend.get("wallet"), "usage": usage})
         except Exception:
@@ -2275,9 +2315,21 @@ def register_file_routes(app, deps):
         raw_name = str(data.get("filename") or "untitled.txt").strip() or "untitled.txt"
         filename = safe_public_filename(raw_name)
         lower_name = filename.lower()
+        _TEXT_EXTENSIONS = {
+            ".txt", ".md", ".markdown", ".rst", ".tex",
+            ".json", ".jsonl", ".ndjson",
+            ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
+            ".csv", ".tsv",
+            ".xml", ".html", ".htm", ".svg",
+            ".css", ".scss", ".less",
+            ".js", ".mjs", ".ts", ".jsx", ".tsx",
+            ".py", ".rb", ".sh", ".bash", ".zsh", ".fish",
+            ".c", ".h", ".cpp", ".cc", ".cs", ".java", ".go", ".rs", ".php",
+            ".sql", ".log", ".diff", ".patch",
+        }
         _, ext = os.path.splitext(lower_name)
-        if ext and ext not in {".txt", ".md", ".markdown"}:
-            return json_resp({"ok": False, "msg": "新增文檔只支援 .txt、.md，或不帶副檔名的純文字檔"}), 400
+        if ext and ext not in _TEXT_EXTENSIONS:
+            return json_resp({"ok": False, "msg": "新增文檔僅支援文字類型的副檔名（txt、md、json、yaml、csv、html、js、py 等），或不帶副檔名的純文字檔"}), 400
         content = data.get("content", "")
         if not isinstance(content, str):
             return json_resp({"ok": False, "msg": "content 必須是文字"}), 400
@@ -2287,7 +2339,22 @@ def register_file_routes(app, deps):
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         if privacy_mode not in {"standard_plain", "server_encrypted"}:
             return json_resp({"ok": False, "msg": "線上新增文檔只支援一般檔案或伺服器端加密；E2EE 請用上傳檔案"}), 400
-        mimetype = "text/markdown" if lower_name.endswith((".md", ".markdown")) else "text/plain"
+        if lower_name.endswith((".md", ".markdown")):
+            mimetype = "text/markdown"
+        elif lower_name.endswith((".html", ".htm")):
+            mimetype = "text/html"
+        elif lower_name.endswith((".json", ".jsonl", ".ndjson")):
+            mimetype = "application/json"
+        elif lower_name.endswith((".yaml", ".yml")):
+            mimetype = "application/x-yaml"
+        elif lower_name.endswith(".csv"):
+            mimetype = "text/csv"
+        elif lower_name.endswith(".xml"):
+            mimetype = "text/xml"
+        elif lower_name.endswith(".svg"):
+            mimetype = "image/svg+xml"
+        else:
+            mimetype = "text/plain"
         file_storage = _MemoryFileStorage(filename=filename, mimetype=mimetype, data=raw)
         conn = get_db()
         try:

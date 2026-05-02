@@ -300,6 +300,58 @@ def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
     assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
 
 
+def test_tester_token_shadow_layer_does_not_mutate_formal_user_or_points_chain(tmp_path):
+    audit_log = []
+    service, db_path, _uploads = _service(tmp_path, audit_log)
+    conn = _db(db_path)
+    conn.execute(
+        "INSERT INTO users (id, username, role, status, member_level, base_level, effective_level) VALUES (2, 'tester', 'user', 'active', 'normal', 'normal', 'normal')"
+    )
+    conn.commit()
+    conn.close()
+    mode = ServerModeService(snapshot_service=service, get_db=lambda: _db(db_path), audit=lambda *args, **kwargs: audit_log.append((args, kwargs)))
+    actor = {"id": 1, "username": "root"}
+
+    token = mode.create_tester_token(
+        actor=actor,
+        tester_user_id=2,
+        allowed_routes=["/api/tester"],
+        expires_at="2099-01-01T00:00:00",
+        can_modify_own_role=True,
+        can_modify_own_points=True,
+    )
+    assert token["ok"] is True
+    tester_actor = {"id": 2, "username": "tester", "role": "user"}
+
+    role_result = mode.set_tester_shadow_role(
+        actor=tester_actor,
+        token=token["token"],
+        shadow_role="manager",
+        route="/api/tester/shadow-role",
+    )
+    wallet_result = mode.adjust_tester_shadow_wallet(
+        actor=tester_actor,
+        token=token["token"],
+        delta_points=500,
+        reason="qa balance",
+        route="/api/tester/shadow-wallet",
+    )
+    state = mode.tester_shadow_state(actor=tester_actor, token=token["token"], route="/api/tester/shadow-state")
+
+    assert role_result["ok"] is True
+    assert role_result["formal_users_table_changed"] is False
+    assert wallet_result["ok"] is True
+    assert wallet_result["formal_points_chain_changed"] is False
+    assert state["shadow_role"]["shadow_role"] == "manager"
+    assert state["shadow_wallet"]["balance_points"] == 500
+    conn = _db(db_path)
+    formal = conn.execute("SELECT role FROM users WHERE id=2").fetchone()
+    points_tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='points_ledger'").fetchone()
+    conn.close()
+    assert formal["role"] == "user"
+    assert points_tables is None
+
+
 def _insert_passing_production_reports(db_path):
     from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES
 
@@ -774,6 +826,15 @@ class _FakeServerModeService:
     def list_tester_tokens(self):
         return [{"id": "tester_token_test", "tester_user_id": 2, "revoked_at": None}]
 
+    def tester_shadow_state(self, **kwargs):
+        return {"ok": True, "shadow_wallet": {"balance_points": 0}, "shadow_role": None}
+
+    def set_tester_shadow_role(self, **kwargs):
+        return {"ok": True, "shadow_role": kwargs.get("shadow_role")}
+
+    def adjust_tester_shadow_wallet(self, **kwargs):
+        return {"ok": True, "balance_points": int(kwargs.get("delta_points") or 0), "formal_points_chain_changed": False}
+
 
 def _build_admin_app(actor_box, snapshot_service, restart_calls=None):
     app = Flask(__name__)
@@ -986,6 +1047,15 @@ def test_server_mode_v2_root_api_is_root_only_and_exposes_requirements():
     tokens = client.get("/api/root/tester-token/list")
     assert tokens.status_code == 200
     assert tokens.get_json()["tokens"][0]["id"] == "tester_token_test"
+
+    actor_box["actor"] = {"id": 2, "username": "test", "role": "user"}
+    shadow_state = client.get("/api/tester/shadow-state", headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_state.status_code == 200
+    shadow_role = client.post("/api/tester/shadow-role", json={"role": "manager"}, headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_role.status_code == 200
+    shadow_wallet = client.post("/api/tester/shadow-wallet", json={"delta_points": 10}, headers={"X-Tester-Token": "hmt_test"})
+    assert shadow_wallet.status_code == 200
+    assert shadow_wallet.get_json()["formal_points_chain_changed"] is False
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.get("/api/root/server-mode")

@@ -378,10 +378,6 @@
     .grid-visual-details {
       margin-top: .5rem;
     }
-    .grid-visual-details summary {
-      list-style: none;
-    }
-    .grid-visual-details summary::-webkit-details-marker { display: none; }
     .grid-visual {
       margin-top: .4rem;
       border: 1px solid rgba(255,255,255,.08);

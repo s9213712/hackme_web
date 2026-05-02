@@ -302,6 +302,13 @@ The trading page separates bots into:
 New enabled DCA bots execute their first run immediately after creation. Later
 runs depend on the bot interval/cooldown and the bot scanner.
 
+Grid Trading Bot is not enabled yet. Its proposed spot-only design is tracked
+as a research report at
+[Grid Trading Bot Design Report](research_reports/GRID_TRADING_BOT_DESIGN_REPORT.md).
+The intended first version should reuse the existing spot order path,
+PointsChain accounting, audit events, and backtest candle downloader instead of
+creating a second trading engine.
+
 ### DCA Bot
 
 DCA bots repeatedly buy a fixed POINTS budget.

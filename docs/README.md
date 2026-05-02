@@ -10,6 +10,8 @@ short [README](../README.md) plus GitHub-required metadata such as
 - [Web UI Guide](WEB.md): user-facing pages and feature behavior
 - [Trading System And Bots](TRADING.md): spot exchange, borrow trading,
   trading bots, workflow editor, backtesting, and validation scripts
+- [Grid Trading Bot Design Report](research_reports/GRID_TRADING_BOT_DESIGN_REPORT.md):
+  research-only design for a future spot grid trading bot
 - [Developer Guide](For_developer.md): API, deployment, runtime state, and
   operator notes
 - [Version Story](VERSION_STORY.md): project history, branch decisions, and
@@ -40,6 +42,10 @@ short [README](../README.md) plus GitHub-required metadata such as
   release ID policy
 - [Pre-release Checklist](security/PRE_RELEASE_CHECKLIST.md): blocking checks
   before production release
+- [Production Sign-off Checklist](security/PRODUCTION_SIGNOFF_CHECKLIST.md):
+  final Server Mode v2 production approval gate
+- [Server Mode v2 Red Team Playbook](security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md):
+  adversarial test plan for mode, token, snapshot, and lockdown controls
 - [Secrets Scanning](security/secrets_scanning.md): secret scanning policy and
   allowlist handling
 
@@ -50,6 +56,8 @@ short [README](../README.md) plus GitHub-required metadata such as
   test runner usage
 - [Functional Permission Pentest](security/FUNCTIONAL_PERMISSION_PENTEST.md):
   role-based permission pentest usage
+- [Server Mode v2 Test Plan](SERVER_MODE_V2_TEST_PLAN.md): includes clean
+  smoke, adversarial, Red Team L2, and live HTTP/session/kill-9 smoke commands
 - [Deployment And Operations Scripts](DEPLOYMENT.md): includes functional smoke,
   permission pentest, traffic stress test, and pre-push validation commands
 - [Trading Stress Pentest](security/TRADING_STRESS_PENTEST.md): controlled spot

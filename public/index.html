@@ -1471,6 +1471,7 @@
                 <div class="field"><label>下限價格（點）</label><input type="number" id="trading-grid-lower-price" min="1" step="1" placeholder="例如 45000" /></div>
                 <div class="field"><label>網格數量</label><input type="number" id="trading-grid-count" min="2" max="200" step="1" value="10" /></div>
                 <div class="field"><label>每格金額（點）</label><input type="number" id="trading-grid-order-amount" min="1" step="1" value="100" /></div>
+                <div class="field"><label>間距模式</label><select id="trading-grid-spacing-mode"><option value="arithmetic">等差（均勻間距）</option><option value="geometric">等比（百分比間距）</option></select></div>
                 <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-bot-create-btn" type="button">建立網格</button></div>
               </div>
               <div id="trading-grid-preview" class="drive-card-sub" style="margin-top:.5rem;"></div>
@@ -3655,7 +3656,7 @@
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
-<script src="/js/56-trading.js?v=20260501-margin-policy" defer></script>
+<script src="/js/56-trading.js?v=20260502-grid-bugfixes" defer></script>
 <script src="/js/90-bootstrap.js?v=20260430-trading-page-split" defer></script>
 </body>
 </html>

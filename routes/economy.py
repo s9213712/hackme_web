@@ -20,6 +20,7 @@ def register_economy_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     points_service = deps["points_service"]
+    server_mode_service = deps.get("server_mode_service")
 
     def actor_value(actor, key, default=None):
         if not actor:
@@ -489,7 +490,18 @@ def register_economy_routes(app, deps):
         if err:
             return err
         result = points_service.verify_chain()
-        return json_resp({"ok": result["ok"], "verification": result})
+        incident = None
+        if not result.get("ok") and server_mode_service and hasattr(server_mode_service, "enter_incident_lockdown"):
+            try:
+                incident = server_mode_service.enter_incident_lockdown(
+                    actor=actor,
+                    trigger_type="points_chain_verify_failed",
+                    reason="PointsChain verification failed",
+                    verification=result,
+                )
+            except Exception as exc:
+                incident = {"ok": False, "msg": str(exc)}
+        return json_resp({"ok": result["ok"], "verification": result, "incident": incident})
 
     @app.route("/api/root/points/chain/recovery", methods=["GET"])
     @require_csrf_safe

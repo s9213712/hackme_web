@@ -56,3 +56,6 @@ architecture_scan.md
 notes/
 security/reports/*
 !security/reports/.gitkeep
+security/audit_exports/
+.server_mode_log_hmac_key
+.*_hmac_key

@@ -7,7 +7,7 @@ from flask import Flask, jsonify, make_response
 
 from routes.system_admin import register_system_admin_routes
 from services.integrity_guard import CONFIRM_APPROVE, IntegrityGuard, ensure_integrity_schema
-from services.snapshots import ServerModeService, ensure_snapshot_schema
+from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES, ServerModeService, ensure_snapshot_schema
 
 
 def _json_resp(payload, status=200):
@@ -135,15 +135,7 @@ def test_production_mode_high_risk_integrity_finding_enters_incident_lockdown(tm
         conn.row_factory = sqlite3.Row
         ensure_snapshot_schema(conn)
         now = datetime.now().isoformat()
-        for report_type in (
-            "stress",
-            "permission",
-            "functional",
-            "pentest",
-            "snapshot_restore",
-            "points_chain_consistency",
-            "cloud_drive_quota_permission",
-        ):
+        for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO production_entry_reports

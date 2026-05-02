@@ -2352,6 +2352,27 @@ def register_system_admin_routes(app, deps):
             limit = 50
         return json_resp({"ok": True, "logs": server_mode_service.mode_switch_logs(limit=limit)})
 
+    @app.route("/api/server-mode/logs/verify", methods=["GET"])
+    @app.route("/api/root/server-mode/logs/verify", methods=["GET"])
+    @require_csrf_safe
+    def root_server_mode_logs_verify():
+        if not server_mode_service or not hasattr(server_mode_service, "verify_mode_switch_logs"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        result = server_mode_service.verify_mode_switch_logs()
+        return json_resp({
+            "ok": bool(result.get("ok")),
+            "chain_length": result.get("chain_length", result.get("count", 0)),
+            "broken_links": result.get("broken_links", len(result.get("mismatches") or [])),
+            "invalid_signatures": result.get("invalid_signatures", []),
+            "first_hash": result.get("first_hash", ""),
+            "last_hash": result.get("last_hash", result.get("latest_hash", "")),
+            "result": result.get("result", "PASS" if result.get("ok") else "FAIL"),
+            "details": result,
+        }), (200 if result.get("ok") else 409)
+
     @app.route("/api/root/production-report/upload", methods=["POST"])
     @require_csrf
     def root_production_report_upload():
@@ -2474,6 +2495,82 @@ def register_system_admin_routes(app, deps):
         if error:
             return error
         return json_resp({"ok": True, "tokens": server_mode_service.list_tester_tokens()})
+
+    def _tester_token_from_request():
+        token = request.headers.get("X-Tester-Token", "") or request.headers.get("Authorization", "")
+        if token.lower().startswith("bearer "):
+            token = token[7:]
+        return str(token or "").strip()
+
+    def _require_tester_actor():
+        actor = get_current_user_ctx()
+        if not actor:
+            return None, (json_resp({"ok":False,"msg":"未登入或 tester token 無效"}), 401)
+        if actor["username"] == "root":
+            return None, (json_resp({"ok":False,"msg":"root 不使用 tester shadow layer"}), 403)
+        return actor, None
+
+    @app.route("/api/tester/shadow-state", methods=["GET"])
+    def tester_shadow_state():
+        if not server_mode_service or not hasattr(server_mode_service, "tester_shadow_state"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = _require_tester_actor()
+        if error:
+            return error
+        result = server_mode_service.tester_shadow_state(
+            actor=actor,
+            token=_tester_token_from_request(),
+            route=request.path,
+            ip_address=get_client_ip(),
+        )
+        return json_resp(result), (200 if result.get("ok") else 403)
+
+    @app.route("/api/tester/shadow-role", methods=["POST"])
+    @require_csrf
+    def tester_shadow_role():
+        if not server_mode_service or not hasattr(server_mode_service, "set_tester_shadow_role"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = _require_tester_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.set_tester_shadow_role(
+            actor=actor,
+            token=_tester_token_from_request(),
+            shadow_role=data.get("shadow_role") or data.get("role"),
+            route=request.path,
+            ip_address=get_client_ip(),
+        )
+        return json_resp(result), (200 if result.get("ok") else 403)
+
+    @app.route("/api/tester/shadow-wallet", methods=["POST"])
+    @require_csrf
+    def tester_shadow_wallet():
+        if not server_mode_service or not hasattr(server_mode_service, "adjust_tester_shadow_wallet"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = _require_tester_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.adjust_tester_shadow_wallet(
+            actor=actor,
+            token=_tester_token_from_request(),
+            delta_points=data.get("delta_points") or data.get("delta"),
+            reason=data.get("reason") or "",
+            route=request.path,
+            ip_address=get_client_ip(),
+        )
+        return json_resp(result), (200 if result.get("ok") else 403)
 
     @app.route("/api/root/incident/enter", methods=["POST"])
     @require_csrf

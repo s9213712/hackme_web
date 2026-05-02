@@ -1946,6 +1946,17 @@ class TradingEngineService:
         item["interest_capitalized_points"] = int(item.get("interest_points") or 0)
         item["interest_paid_points"] = int(item.get("interest_paid_points") or 0)
         item["interest_accrued_hours"] = int(item.get("interest_accrued_hours") or 0)
+        # Compute total elapsed hours and next interest tick
+        try:
+            opened_at_dt = datetime.fromisoformat(str(item.get("opened_at") or ""))
+            now_dt = datetime.fromisoformat(_now())
+            elapsed_sec = max(0.0, (now_dt - opened_at_dt).total_seconds())
+            total_hours = max(1, int(math.ceil(elapsed_sec / 3600.0))) if elapsed_sec > 0 else 0
+            item["total_elapsed_hours"] = total_hours
+            item["next_interest_at"] = (opened_at_dt + timedelta(seconds=total_hours * 3600)).isoformat() if total_hours > 0 else None
+        except Exception:
+            item["total_elapsed_hours"] = 0
+            item["next_interest_at"] = None
         return item
 
     def _margin_trade_records(self, conn, user_id, *, limit=50):
@@ -3103,12 +3114,16 @@ class TradingEngineService:
 
     # ── Grid Trading Bot ────────────────────────────────────────────────────
 
-    def _grid_levels(self, lower, upper, count):
+    def _grid_levels(self, lower, upper, count, spacing_mode="arithmetic"):
         count = max(2, int(count))
+        lower, upper = int(lower), int(upper)
         if count == 2:
-            return [int(lower), int(upper)]
-        step = (int(upper) - int(lower)) / (count - 1)
-        return [int(round(int(lower) + step * i)) for i in range(count)]
+            return [lower, upper]
+        if spacing_mode == "geometric":
+            ratio = (upper / lower) ** (1 / (count - 1))
+            return [int(round(lower * (ratio ** i))) for i in range(count)]
+        step = (upper - lower) / (count - 1)
+        return [int(round(lower + step * i)) for i in range(count)]
 
     def _grid_quantity_units(self, amount_points, price_points):
         amount = int(amount_points or 0)
@@ -3141,15 +3156,26 @@ class TradingEngineService:
             raise ValueError("upper_price_points must be greater than lower_price_points")
         grid_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
         order_amount = _to_int(payload.get("order_amount_points"), name="order_amount_points", minimum=1)
+        spacing_mode = str(payload.get("spacing_mode") or "arithmetic").strip()
+        if spacing_mode not in ("arithmetic", "geometric"):
+            spacing_mode = "arithmetic"
+
+        # Phase 1: validate market and get current price (read-only)
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             market = self._market(conn, market_symbol)
             current_price, _ = self._current_market_price_points(conn, market)
-            grid_levels = self._grid_levels(lower_price, upper_price, grid_count)
-            now = _now()
-            bot_uuid = str(uuid.uuid4())
-            conn.commit()
+        finally:
+            conn.close()
+
+        grid_levels = self._grid_levels(lower_price, upper_price, grid_count, spacing_mode)
+        now = _now()
+        bot_uuid = str(uuid.uuid4())
+
+        # Phase 2: insert bot row (commit immediately before placing orders)
+        conn = self.get_db()
+        try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
@@ -3166,32 +3192,52 @@ class TradingEngineService:
             grid_bot_id = conn.execute(
                 "SELECT id FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)
             ).fetchone()["id"]
-            bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
-            placed = []
-            errors = []
-            for i, level_price in enumerate(grid_levels):
-                if level_price < current_price:
-                    side = "buy"
-                elif level_price > current_price:
-                    side = "sell"
-                else:
-                    continue
-                qty_units = self._grid_quantity_units(order_amount, level_price)
-                if qty_units <= 0:
-                    errors.append(f"level {i} price {level_price}: 金額不足以買入最小單位")
-                    continue
-                qty_text = units_to_quantity(qty_units)
-                try:
-                    order_result = self.place_order(
-                        actor=bot_actor,
-                        market_symbol=market_symbol,
-                        side=side,
-                        order_type="limit",
-                        quantity=qty_text,
-                        limit_price_points=level_price,
-                    )
-                    trading_order_uuid = (order_result.get("order") or {}).get("order_uuid")
-                    grid_order_uuid = str(uuid.uuid4())
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+        else:
+            conn.close()
+
+        # Phase 3: place limit orders for each level (each call opens its own connection)
+        bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
+        placed = []
+        errors = []
+        for i, level_price in enumerate(grid_levels):
+            if level_price < current_price:
+                side = "buy"
+            elif level_price > current_price:
+                side = "sell"
+            else:
+                continue
+            qty_units = self._grid_quantity_units(order_amount, level_price)
+            if qty_units <= 0:
+                errors.append(f"level {i} price {level_price}: 金額不足以買入最小單位")
+                continue
+            qty_text = units_to_quantity(qty_units)
+            try:
+                order_result = self.place_order(
+                    actor=bot_actor,
+                    market_symbol=market_symbol,
+                    side=side,
+                    order_type="limit",
+                    quantity=qty_text,
+                    limit_price_points=level_price,
+                    is_grid_order=True,
+                )
+                trading_order_uuid = (order_result.get("order") or {}).get("order_uuid")
+                placed.append({"level_index": i, "price_points": level_price, "side": side,
+                               "trading_order_uuid": trading_order_uuid, "qty_units": qty_units})
+            except Exception as exc:
+                errors.append(f"level {i} price {level_price}: {exc}")
+
+        # Phase 4: record grid_orders for placed orders (single commit)
+        if placed:
+            conn = self.get_db()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                for p in placed:
                     conn.execute(
                         """
                         INSERT INTO trading_grid_orders
@@ -3199,23 +3245,31 @@ class TradingEngineService:
                            trading_order_uuid, status, created_at, updated_at)
                         VALUES (?,?,?,?,?,?,?,'open',?,?)
                         """,
-                        (grid_order_uuid, grid_bot_id, user_id, i, level_price, side,
-                         trading_order_uuid, now, now),
+                        (str(uuid.uuid4()), grid_bot_id, user_id,
+                         p["level_index"], p["price_points"], p["side"],
+                         p["trading_order_uuid"], now, now),
                     )
-                    placed.append({"level_index": i, "price_points": level_price, "side": side, "trading_order_uuid": trading_order_uuid})
-                except Exception as exc:
-                    errors.append(f"level {i} price {level_price}: {exc}")
-            self._audit_event(conn, "GRID_BOT_CREATED", "grid trading bot created", actor=actor, target_user_id=user_id, market_symbol=market_symbol, metadata={"bot_uuid": bot_uuid, "grid_count": grid_count, "placed": len(placed)})
-            conn.commit()
-            bot_row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)).fetchone()
-            orders = conn.execute("SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC", (grid_bot_id,)).fetchall()
-            return {"ok": True, "bot": self._grid_bot_payload(bot_row, [dict(o) for o in orders]), "placed": placed, "errors": errors, "current_price_points": current_price}
-        except Exception:
-            try:
-                conn.rollback()
+                self._audit_event(conn, "GRID_BOT_CREATED", "grid trading bot created", actor=actor,
+                                  target_user_id=user_id, market_symbol=market_symbol,
+                                  metadata={"bot_uuid": bot_uuid, "grid_count": grid_count, "placed": len(placed)})
+                conn.commit()
             except Exception:
-                pass
-            raise
+                conn.rollback()
+                conn.close()
+                raise
+            else:
+                conn.close()
+
+        # Phase 5: read back final state
+        conn = self.get_db()
+        try:
+            bot_row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)).fetchone()
+            orders = conn.execute(
+                "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC",
+                (grid_bot_id,),
+            ).fetchall()
+            return {"ok": True, "bot": self._grid_bot_payload(bot_row, [dict(o) for o in orders]),
+                    "placed": placed, "errors": errors, "current_price_points": current_price}
         finally:
             conn.close()
 
@@ -3229,7 +3283,7 @@ class TradingEngineService:
             bots = []
             for row in conn.execute("SELECT * FROM trading_grid_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall():
                 orders = conn.execute(
-                    "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC",
+                    "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC, id ASC",
                     (row["id"],),
                 ).fetchall()
                 bots.append(self._grid_bot_payload(row, [dict(o) for o in orders]))
@@ -3394,9 +3448,11 @@ class TradingEngineService:
                                     order_type="limit",
                                     quantity=qty_text,
                                     limit_price_points=counter_price,
+                                    is_grid_order=True,
                                 )
                                 t_order_uuid = (order_result.get("order") or {}).get("order_uuid")
                                 grid_order_uuid = str(uuid.uuid4())
+                                conn.execute("BEGIN IMMEDIATE")
                                 conn.execute(
                                     """
                                     INSERT INTO trading_grid_orders
@@ -3410,6 +3466,7 @@ class TradingEngineService:
                                 conn.commit()
                                 counter_orders_placed.append({"level_index": counter_level_idx, "side": counter_side, "price_points": counter_price})
                             except Exception as exc:
+                                conn.rollback()
                                 pass
             if profit_delta or trades_delta:
                 conn.execute(
@@ -4266,7 +4323,7 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False):
+    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False, is_grid_order=False):
         user_id = self._actor_id(actor)
         if not user_id:
             raise ValueError("login required")
@@ -4277,6 +4334,7 @@ class TradingEngineService:
         if order_type not in {"market", "limit"}:
             raise ValueError("order_type must be market or limit")
         emergency_close = bool(emergency_close)
+        is_grid_order = bool(is_grid_order)
         if emergency_close and (side != "sell" or order_type != "market"):
             raise ValueError("emergency close only supports market sell")
         quantity_units = quantity_to_units(quantity)
@@ -4298,7 +4356,13 @@ class TradingEngineService:
                 limit_price = None
             check_price = int(limit_price or current_price)
             estimated_notional = notional_points(quantity_units, check_price)
-            effective_fee_rate_percent = float(market["fee_rate_percent"] or 0) * (2 if emergency_close else 1)
+            base_fee_rate = float(market["fee_rate_percent"] or 0)
+            if emergency_close:
+                effective_fee_rate_percent = base_fee_rate * 2
+            elif is_grid_order:
+                effective_fee_rate_percent = base_fee_rate * 0.5
+            else:
+                effective_fee_rate_percent = base_fee_rate
             fee = fee_points(estimated_notional, effective_fee_rate_percent)
             total_points = estimated_notional + fee
             if estimated_notional < int(market["min_order_points"]):
@@ -4345,7 +4409,12 @@ class TradingEngineService:
                 if int(trial_position["quantity_units"] or 0) > 0:
                     funding_mode = "trial_mixed"
             frozen_points = total_points if side == "buy" else 0
-            order_reason = "EMERGENCY_MARKET_CLOSE" if emergency_close else ""
+            if emergency_close:
+                order_reason = "EMERGENCY_MARKET_CLOSE"
+            elif is_grid_order:
+                order_reason = "GRID_ORDER"
+            else:
+                order_reason = ""
             cur = conn.execute(
                 """
                 INSERT INTO trading_orders (
@@ -4531,8 +4600,16 @@ class TradingEngineService:
         quantity_units = int(order["quantity_units"])
         price = int(order["execution_price_points"] or market["manual_price_points"])
         notional = notional_points(quantity_units, price)
-        emergency_close = str(order["reason"] or "") == "EMERGENCY_MARKET_CLOSE"
-        effective_fee_rate_percent = float(market["fee_rate_percent"] or 0) * (2 if emergency_close else 1)
+        order_reason = str(order["reason"] or "")
+        emergency_close = order_reason == "EMERGENCY_MARKET_CLOSE"
+        is_grid_order = order_reason == "GRID_ORDER"
+        base_fee_rate = float(market["fee_rate_percent"] or 0)
+        if emergency_close:
+            effective_fee_rate_percent = base_fee_rate * 2
+        elif is_grid_order:
+            effective_fee_rate_percent = base_fee_rate * 0.5
+        else:
+            effective_fee_rate_percent = base_fee_rate
         fee = fee_points(notional, effective_fee_rate_percent)
         total = notional + fee
         ledger_uuids = []

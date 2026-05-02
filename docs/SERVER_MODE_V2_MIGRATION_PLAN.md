@@ -173,3 +173,39 @@ Exit criteria:
   UI fully migrates to `/api/root/server-mode`.
 - Existing `maintenance_mode` setting remains an implementation detail of the
   formal `maintenance` and `incident_lockdown` modes.
+
+## Current Implementation Status
+
+Implemented:
+
+- Canonical modes and `preprod` to `dev_ready` normalization.
+- Checkpoint-gated mode switch with mode-specific confirmation phrases.
+- Independent DB-backed `mode_switch_logs`; no delete endpoint is exposed.
+- Formal `maintenance` and `incident_lockdown` runtime gates.
+- Production report gate and root-only production report upload/status APIs.
+- Superweak checkpoint restore on exit and forced 10MB Cloud Drive quota for all
+  users including root.
+- Tester token registry, request rate logging, route allow-list enforcement, and
+  root API denial.
+- Tester shadow role and shadow wallet APIs:
+  - `GET /api/tester/shadow-state`
+  - `POST /api/tester/shadow-role`
+  - `POST /api/tester/shadow-wallet`
+- PointsChain manual verification failure enters `incident_lockdown`.
+- Root UI can switch modes, show production gate state, and show recent switch
+  logs.
+
+Known limitations:
+
+- Shadow layer is implemented for tester self role/points changes. Existing
+  production trading and leaderboard flows are protected from these shadow
+  writes, but not every old testing workflow has been re-routed to shadow tables
+  yet.
+- Mode switch logs are independent of audit chain, but they are still stored in
+  the application DB. A full DB restore can roll back earlier mode-switch rows;
+  the restore/exit path writes a fresh post-restore log. A future hardening pass
+  should add an append-only external mode-switch journal.
+- `incident_lockdown` auto-trigger is wired for mode-switch/checkpoint failures,
+  superweak restore validation failure, production high-risk integrity findings,
+  and root PointsChain verify failure. Other background verifier failures should
+  gradually call the same incident entry API.

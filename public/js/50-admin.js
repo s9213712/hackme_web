@@ -1662,7 +1662,8 @@ async function loadServerMode() {
   const json = await res.json().catch(() => ({}));
   if (!json.ok) {
     if (status) {
-      status.textContent = json.msg || "伺服器模式讀取失敗";
+      const detail = json.msg || json.error || `HTTP ${res.status}`;
+      status.textContent = `伺服器模式讀取失敗：${detail}`;
       status.style.color = "#ff4f6d";
     }
     return;
@@ -1680,6 +1681,7 @@ async function loadServerMode() {
   renderServerModeRequirements(json.production_requirements || {});
   await loadServerModeLogs();
   await loadInternalTestTokenStatus();
+  await loadTesterTokens();
 }
 
 function serverModeConfirmPhrase(mode) {
@@ -1751,6 +1753,109 @@ async function loadInternalTestTokenStatus() {
     status.textContent = err.message || "內測 token 狀態讀取失敗";
     status.style.color = "#ff4f6d";
   }
+}
+
+function testerTokenMsg(text, ok = true) {
+  const msg = $("tester-token-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function testerTokenListMarkup(tokens) {
+  if (!Array.isArray(tokens) || !tokens.length) return `<div class="drive-empty">尚無 Server Mode v2 tester token</div>`;
+  return tokens.map((token) => {
+    const revoked = !!token.revoked_at;
+    const routes = Array.isArray(token.allowed_routes) ? token.allowed_routes.join(", ") : "-";
+    return `<div class="drive-file-row">
+      <div>
+        <strong>${sanitize(token.id || "-")}</strong>
+        <div class="drive-card-sub">user #${sanitize(String(token.tester_user_id || "-"))} · 到期 ${sanitize(token.expires_at || "-")} · ${revoked ? "已撤銷" : "有效"}</div>
+        <div class="drive-card-sub">routes: ${sanitize(routes || "-")} · rpm ${sanitize(String(token.max_requests_per_minute || "-"))}</div>
+      </div>
+      ${revoked ? "" : `<button class="btn" type="button" data-revoke-tester-token="${sanitize(token.id || "")}">撤銷</button>`}
+    </div>`;
+  }).join("");
+}
+
+async function loadTesterTokens() {
+  if (currentUser !== "root" || !$("tester-token-list")) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/tester-token/list", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    testerTokenMsg(json.msg || "tester token 清單讀取失敗", false);
+    return;
+  }
+  const list = $("tester-token-list");
+  list.innerHTML = testerTokenListMarkup(json.tokens || []);
+  list.querySelectorAll("[data-revoke-tester-token]").forEach((btn) => {
+    btn.addEventListener("click", () => revokeTesterToken(btn.dataset.revokeTesterToken || ""));
+  });
+}
+
+async function createTesterToken() {
+  if (currentUser !== "root") return;
+  const userId = Number($("tester-token-user-id")?.value || 0);
+  const expiresAt = $("tester-token-expires-at")?.value || "";
+  if (!userId || !expiresAt) {
+    testerTokenMsg("請填測試員 user id 與到期時間", false);
+    return;
+  }
+  const routes = ($("tester-token-routes")?.value || "/api/tester")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/tester-token/create", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({
+      tester_user_id: userId,
+      expires_at: expiresAt,
+      allowed_routes: routes,
+      max_requests_per_minute: Number($("tester-token-rpm")?.value || 60),
+      can_modify_own_role: !!$("tester-token-can-role")?.checked,
+      can_modify_own_points: !!$("tester-token-can-points")?.checked,
+      can_run_security_tests: !!$("tester-token-can-security")?.checked
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) {
+    testerTokenMsg(json.msg || "建立 tester token 失敗", false);
+    return;
+  }
+  const wrap = $("tester-token-created-wrap");
+  const out = $("tester-token-created");
+  if (wrap) wrap.style.display = "block";
+  if (out) {
+    out.value = json.token || "";
+    out.focus();
+    out.select();
+  }
+  testerTokenMsg(`tester token 已建立：${json.token_id || "-"}`, true);
+  await loadTesterTokens();
+}
+
+async function revokeTesterToken(tokenId) {
+  if (currentUser !== "root" || !tokenId) return;
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/root/tester-token/revoke", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+    body: JSON.stringify({ token_id: tokenId, reason: "root revoked from UI" })
+  });
+  const json = await res.json().catch(() => ({}));
+  testerTokenMsg(json.ok ? "tester token 已撤銷" : (json.msg || "撤銷失敗"), !!json.ok);
+  await loadTesterTokens();
 }
 
 async function rotateInternalTestToken() {

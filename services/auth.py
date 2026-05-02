@@ -15,6 +15,7 @@ from services.security_events import record_security_event
 SESSION_TTL = 3600 * 4
 CSRF_TOKEN_TTL = SESSION_TTL
 SESSION_IDLE_TIMEOUT = 10 * 60
+SESSION_LAST_SEEN_REFRESH_INTERVAL = 20
 MIN_DELAY = 0.25
 MAX_DELAY = 0.90
 CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -191,6 +192,14 @@ def _device_info_from_user_agent(ua):
     return json.dumps({"browser": browser, "os": os_name, "device": device}, ensure_ascii=False)
 
 
+def _current_security_epoch(conn):
+    try:
+        row = conn.execute("SELECT value FROM system_settings WHERE key='server_security_epoch'").fetchone()
+        return int((row["value"] if row else 0) or 0)
+    except Exception:
+        return 0
+
+
 def timing_delay():
     time.sleep(MIN_DELAY + random.uniform(0, MAX_DELAY - MIN_DELAY))
 
@@ -363,11 +372,18 @@ def db_save_session(user_id, token, ip, ua):
     now = datetime.now().isoformat()
     expires = (datetime.now() + timedelta(seconds=_STATE["session_ttl"])).isoformat()
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    session_epoch = _current_security_epoch(conn)
     if "device_info" in cols:
-        conn.execute(
-            "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now)
-        )
+        if "session_epoch" in cols:
+            conn.execute(
+                "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen, session_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now, session_epoch)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, device_info, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, _hash_token(token), ip, ua, _device_info_from_user_agent(ua), expires, now)
+            )
     else:
         conn.execute(
             "INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
@@ -420,8 +436,13 @@ def db_get_user_from_token(token):
     try:
         now = datetime.now()
         now_iso = now.isoformat()
+        try:
+            session_cols = {item["name"] for item in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        except Exception:
+            session_cols = set()
+        session_epoch_expr = "s.session_epoch" if "session_epoch" in session_cols else "0"
         row = conn.execute(
-            "SELECT s.id, s.last_seen, u.username FROM sessions s "
+            f"SELECT s.id, s.last_seen, COALESCE({session_epoch_expr}, 0) AS session_epoch, u.username FROM sessions s "
             "JOIN users u ON u.id=s.user_id "
             "WHERE s.token_hash=? AND s.expires_at>? AND COALESCE(s.is_revoked, 0)=0 "
             "AND u.status='active'",
@@ -429,24 +450,44 @@ def db_get_user_from_token(token):
         ).fetchone()
         if not row:
             return None
+        current_epoch = _current_security_epoch(conn)
+        if int(row["session_epoch"] or 0) < current_epoch:
+            try:
+                conn.execute(
+                    "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
+                    (now_iso, row["id"])
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                conn.rollback()
+            record_security_event("session_revoked", "-", target_user=row["username"], detail="security_epoch_rotated")
+            return None
 
         last_seen = row["last_seen"]
+        idle_seconds = 0
         if last_seen:
             try:
                 idle_seconds = (now - datetime.fromisoformat(last_seen)).total_seconds()
             except Exception:
                 idle_seconds = 0
             if idle_seconds > int(_STATE["session_idle_timeout"]):
-                conn.execute(
-                    "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
-                    (now_iso, row["id"])
-                )
-                conn.commit()
+                try:
+                    conn.execute(
+                        "UPDATE sessions SET is_revoked=1, revoked_at=? WHERE id=?",
+                        (now_iso, row["id"])
+                    )
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    conn.rollback()
                 record_security_event("session_revoked", "-", target_user=row["username"], detail="idle_timeout")
                 return None
 
-        conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))
-        conn.commit()
+        if idle_seconds >= SESSION_LAST_SEEN_REFRESH_INTERVAL:
+            try:
+                conn.execute("UPDATE sessions SET last_seen=? WHERE id=?", (now_iso, row["id"]))
+                conn.commit()
+            except sqlite3.OperationalError:
+                conn.rollback()
         return row["username"]
     finally:
         conn.close()

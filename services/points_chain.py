@@ -1972,7 +1972,7 @@ class PointsLedgerService:
                 except Exception:
                     pass
 
-    def spend_points(self, *, user_id, item_key, quantity=1, reference_type=None, reference_id=None, idempotency_key=None, metadata=None, actor=None):
+    def spend_points(self, *, user_id, item_key, quantity=1, reference_type=None, reference_id=None, idempotency_key=None, metadata=None, actor=None, override_amount=None):
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -1983,7 +1983,10 @@ class PointsLedgerService:
             if not item:
                 raise ValueError("price catalog item not found or disabled")
             quantity = max(1, int(quantity or 1))
-            amount = int(item["base_price"]) * quantity
+            if override_amount is not None:
+                amount = int(override_amount)
+            else:
+                amount = int(item["base_price"]) * quantity
             spend_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
             row, created = self._record_transaction(
                 conn,
