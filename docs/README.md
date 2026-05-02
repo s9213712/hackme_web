@@ -18,6 +18,12 @@ short [README](../README.md) plus GitHub-required metadata such as
   GitHub update center
 - [Runtime Reset And Recovery](RUNTIME_RESET_AND_RECOVERY.md): reset,
   snapshot/restore, and PointsChain recovery boundaries
+- [Server Mode v2 Profile Matrix](SERVER_MODE_V2_PROFILE_MATRIX.md): canonical
+  modes, safety matrix, confirmation phrases, and production gate reports
+- [Server Mode v2 Migration Plan](SERVER_MODE_V2_MIGRATION_PLAN.md): six-phase
+  migration plan for checkpointed mode switching and test data isolation
+- [Server Mode v2 Test Plan](SERVER_MODE_V2_TEST_PLAN.md): unit, integration,
+  security, and smoke checks for the mode redesign
 - [Deployment And Operations Scripts](DEPLOYMENT.md): one-command deployment,
   functional smoke, permission pentest, and stress test usage
 - [Release Layout](RELEASE_LAYOUT.md): tracked source, runtime data, generated

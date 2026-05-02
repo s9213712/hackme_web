@@ -2266,14 +2266,16 @@
               <label>目前 / 目標模式</label>
               <select id="server-mode-select">
                 <option value="production">production（上線）</option>
-                <option value="preprod">preprod（準上線）</option>
+                <option value="dev_ready">dev ready（準上線）</option>
+                <option value="test">test（安全測試 / QA）</option>
                 <option value="internal_test">internal test（內測）</option>
-                <option value="test">test（測試）</option>
+                <option value="maintenance">maintenance（維護）</option>
+                <option value="incident_lockdown">incident lockdown（事故封鎖）</option>
                 <option value="superweak">superweak（弱化測試）</option>
               </select>
             </div>
             <div class="field">
-              <label>確認字串（production 需 GO_LIVE；superweak 需 ENABLE_SUPERWEAK）</label>
+              <label>確認字串</label>
               <input type="text" id="server-mode-confirm" placeholder="需要時輸入確認字串" />
             </div>
             <div class="field">
@@ -2286,6 +2288,8 @@
             </div>
           </div>
           <div id="server-mode-status" style="font-size:.78rem;color:var(--muted);margin-top:.45rem;"></div>
+          <div id="server-mode-requirements" class="security-profile-preview"></div>
+          <div id="server-mode-logs" class="security-profile-preview"></div>
           <div id="server-mode-profile-preview" class="security-profile-preview"></div>
           <details class="drive-collapsible-panel settings-collapse">
             <summary>

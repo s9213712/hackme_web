@@ -27,6 +27,7 @@ _STATE = {
     "session_ttl": SESSION_TTL,
     "csrf_token_ttl": CSRF_TOKEN_TTL,
     "session_idle_timeout": SESSION_IDLE_TIMEOUT,
+    "tester_token_user_lookup": None,
 }
 
 _hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536,
@@ -42,6 +43,7 @@ def configure_auth_service(
     session_ttl=SESSION_TTL,
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT,
+    tester_token_user_lookup=None,
 ):
     _STATE.update({
         "get_db": get_db,
@@ -51,6 +53,7 @@ def configure_auth_service(
         "session_ttl": session_ttl,
         "csrf_token_ttl": csrf_token_ttl,
         "session_idle_timeout": session_idle_timeout,
+        "tester_token_user_lookup": tester_token_user_lookup,
     })
 
 
@@ -451,9 +454,14 @@ def db_get_user_from_token(token):
 
 def get_current_user_ctx():
     tok = request.cookies.get("session_token")
-    if not tok:
-        return None
-    username = db_get_user_from_token(tok)
+    username = db_get_user_from_token(tok) if tok else None
+    if not username:
+        lookup = _STATE.get("tester_token_user_lookup")
+        if callable(lookup):
+            try:
+                username = lookup(request)
+            except Exception:
+                username = None
     if not username:
         return None
     return _STATE["get_user_by_username"](username)

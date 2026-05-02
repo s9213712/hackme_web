@@ -4,6 +4,7 @@ import sqlite3
 import time
 import zipfile
 
+import pytest
 from cryptography.fernet import Fernet
 from flask import Flask, jsonify, make_response
 
@@ -13,6 +14,19 @@ from services.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.member_levels import ensure_member_level_rules_schema
 from services.storage_albums import ensure_storage_album_schema
 from services.upload_security import ensure_upload_security_schema, update_cloud_drive_security_policy
+
+
+@pytest.fixture(autouse=True)
+def _clear_remote_download_globals():
+    """Reset module-level remote-download state before every test so tests don't bleed into each other."""
+    with files_routes._REMOTE_DOWNLOAD_TASKS_LOCK:
+        files_routes._REMOTE_DOWNLOAD_TASKS.clear()
+        files_routes._REMOTE_DOWNLOAD_ACTIVE_USERS.clear()
+    yield
+    # Also clear after the test so lingering background threads don't affect later tests.
+    with files_routes._REMOTE_DOWNLOAD_TASKS_LOCK:
+        files_routes._REMOTE_DOWNLOAD_TASKS.clear()
+        files_routes._REMOTE_DOWNLOAD_ACTIVE_USERS.clear()
 
 
 def _json_resp(payload, status=200):
@@ -1635,6 +1649,13 @@ def test_remote_download_task_list_restores_refresh_state(tmp_path, monkeypatch)
     tasks = listed.get_json()["tasks"]
     assert any(task["id"] == task_id for task in tasks)
 
+    # Wait for background thread to finish so user slot is released before next test.
+    for _ in range(50):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+        if status.get_json()["task"]["status"] != "running":
+            break
+        time.sleep(0.02)
+
 
 def test_remote_download_stale_running_task_does_not_block_new_task(tmp_path, monkeypatch):
     db_path = tmp_path / "drive.db"
@@ -1691,6 +1712,7 @@ def test_remote_download_stale_running_task_does_not_block_new_task(tmp_path, mo
         },
     )
     assert created.status_code == 202
+    fresh_task_id = created.get_json()["task"]["id"]
 
     listed = client.get("/api/cloud-drive/remote-download/tasks")
     assert listed.status_code == 200
@@ -1703,6 +1725,14 @@ def test_remote_download_stale_running_task_does_not_block_new_task(tmp_path, mo
     assert removed.get_json()["removed"] is True
     listed_after_remove = client.get("/api/cloud-drive/remote-download/tasks")
     assert all(task["id"] != "stale-task" for task in listed_after_remove.get_json()["tasks"])
+
+    # Wait for the fresh task's background thread to finish so it releases
+    # the user slot in _REMOTE_DOWNLOAD_ACTIVE_USERS before the next test runs.
+    for _ in range(50):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{fresh_task_id}")
+        if status.get_json()["task"]["status"] != "running":
+            break
+        time.sleep(0.02)
 
 
 def test_remote_download_task_accepts_uploaded_torrent_file(tmp_path, monkeypatch):

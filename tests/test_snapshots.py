@@ -12,8 +12,9 @@ from services.upload_security import ensure_upload_security_schema
 
 
 def _db(path):
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
@@ -263,9 +264,8 @@ def test_superweak_keep_dirty_state_requires_root_confirmation(tmp_path):
         reason="intentional",
     )
 
-    assert kept["ok"] is True
-    assert "warning" in kept
-    assert any(call[0][0] == "SUPERWEAK_EXIT_KEEP_DIRTY_STATE" for call in audit_log)
+    assert kept["ok"] is False
+    assert "禁止保留" in kept["msg"]
 
 
 def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
@@ -291,13 +291,33 @@ def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
     assert saved["ok"] is True
     assert saved["profile"]["is_builtin"] is False
 
-    switched = mode.switch_mode(target_mode="staging_lockdown", actor=actor, confirm="", notes="test custom")
+    switched = mode.switch_mode(target_mode="staging_lockdown", actor=actor, confirm="SWITCH_CUSTOM_MODE", notes="test custom")
 
     assert switched["ok"] is True
     assert switched["mode"]["current_mode"] == "staging_lockdown"
     assert saved_settings[-1]["ip_blocking_enabled"] is True
     assert saved_settings[-1]["security_pending_chat_reports_threshold"] == 3
     assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
+
+
+def _insert_passing_production_reports(db_path):
+    from services.snapshots import PRODUCTION_REQUIRED_REPORT_TYPES
+
+    conn = _db(db_path)
+    ensure_snapshot_schema(conn)
+    now = datetime.now().isoformat()
+    for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
+        conn.execute(
+            """
+            INSERT INTO production_entry_reports
+            (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
+             pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature, created_at)
+            VALUES (?, ?, ?, 'test-commit', 'test-branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', '', ?)
+            """,
+            (f"rep_{report_type}", report_type, f"hash_{report_type}", now),
+        )
+    conn.commit()
+    conn.close()
 
 
 def test_builtin_security_profiles_refresh_and_close_superweak_controls(tmp_path):
@@ -351,6 +371,11 @@ def test_production_mode_requires_confirmation_and_hardens_accounts(tmp_path):
     assert denied["ok"] is False
     assert "GO_LIVE" in denied["msg"]
 
+    blocked = mode.switch_mode(target_mode="production", actor=actor, confirm="GO_LIVE", notes="go live")
+    assert blocked["ok"] is False
+    assert "production gate" in blocked["msg"]
+
+    _insert_passing_production_reports(db_path)
     switched = mode.switch_mode(target_mode="production", actor=actor, confirm="GO_LIVE", notes="go live")
     assert switched["ok"] is True
     assert switched["mode"]["current_mode"] == "production"
@@ -400,7 +425,7 @@ def test_internal_test_mode_disables_open_registration_and_revokes_non_root_sess
     switched = mode.switch_mode(
         target_mode="internal_test",
         actor={"id": 1, "username": "root"},
-        confirm="",
+        confirm="SWITCH_TO_INTERNAL_TEST",
         notes="invite-only test",
     )
 
@@ -414,6 +439,70 @@ def test_internal_test_mode_disables_open_registration_and_revokes_non_root_sess
     conn.close()
     assert sessions[1] == 0
     assert sessions[2] == 1
+
+
+def test_mode_switch_checkpoint_gate_and_independent_log(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+    saved_settings = []
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        save_settings=lambda data: saved_settings.append(dict(data)) or dict(data),
+    )
+
+    switched = mode.switch_mode(
+        target_mode="maintenance",
+        actor={"id": 1, "username": "root"},
+        confirm="ENTER_MAINTENANCE",
+        notes="migration window",
+    )
+
+    assert switched["ok"] is True
+    assert switched["checkpoint"]["checkpoint_id"].startswith("chk_")
+    assert switched["mode"]["current_mode"] == "maintenance"
+    conn = _db(db_path)
+    log = conn.execute("SELECT from_mode, to_mode, success, checkpoint_id FROM mode_switch_logs ORDER BY created_at DESC LIMIT 1").fetchone()
+    checkpoint = conn.execute("SELECT status, target_mode FROM server_checkpoints WHERE id=?", (log["checkpoint_id"],)).fetchone()
+    conn.close()
+    assert log["from_mode"] == "test"
+    assert log["to_mode"] == "maintenance"
+    assert log["success"] == 1
+    assert checkpoint["status"] == "ready"
+    assert checkpoint["target_mode"] == "maintenance"
+
+
+def test_mode_switch_checkpoint_failure_blocks_switch_and_logs_failure(tmp_path):
+    audit_log = []
+    service, db_path, uploads = _service(tmp_path, audit_log)
+
+    def fail_snapshot(**kwargs):
+        return type("Result", (), {"ok": False, "snapshot_id": "snap_20260427_153000_abcdef", "status": "failed", "error": "disk full", "metadata": {}})()
+
+    service.create_snapshot = fail_snapshot
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+        save_settings=lambda data: data,
+    )
+
+    result = mode.switch_mode(
+        target_mode="maintenance",
+        actor={"id": 1, "username": "root"},
+        confirm="ENTER_MAINTENANCE",
+        notes="migration window",
+    )
+
+    assert result["ok"] is False
+    conn = _db(db_path)
+    current = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()["current_mode"]
+    log = conn.execute("SELECT to_mode, success, error_message FROM mode_switch_logs ORDER BY created_at DESC LIMIT 1").fetchone()
+    conn.close()
+    assert current == "incident_lockdown"
+    assert log["to_mode"] == "incident_lockdown"
+    assert log["success"] == 1
 
 
 def test_daily_snapshot_runs_once_after_configured_time(tmp_path):
@@ -652,6 +741,39 @@ class _FakeServerModeService:
     def exit_superweak(self, **kwargs):
         return {"ok": True, "mode": {"current_mode": "preprod"}}
 
+    def create_mode_checkpoint(self, **kwargs):
+        return {"ok": True, "checkpoint_id": "chk_test", "snapshot_id": "snap_20260427_153000_abcdef"}
+
+    def validate_checkpoint_restore(self, **kwargs):
+        return {"ok": True, "checkpoint_id": kwargs.get("checkpoint_id"), "checks": {"snapshot_verified": True}}
+
+    def production_requirements(self):
+        return {"ok": False, "missing": ["stress"], "failed": [], "required": ["stress"], "reports": {}}
+
+    def mode_switch_logs(self, **kwargs):
+        return [{"id": "mode_test", "from_mode": "test", "to_mode": "maintenance", "success": 1}]
+
+    def upload_production_report(self, **kwargs):
+        return {"ok": True, "report_id": "prodrep_test"}
+
+    def enter_incident_lockdown(self, **kwargs):
+        return {"ok": True, "incident_id": "incident_test", "mode": {"current_mode": "incident_lockdown"}}
+
+    def incident_status(self):
+        return {"ok": True, "incident": None, "mode": {"current_mode": "test"}}
+
+    def resolve_incident(self, **kwargs):
+        return {"ok": True, "incident_id": "incident_test"}
+
+    def create_tester_token(self, **kwargs):
+        return {"ok": True, "token_id": "tester_token_test", "token": "hmt_test"}
+
+    def revoke_tester_token(self, **kwargs):
+        return {"ok": True, "token_id": kwargs.get("token_id")}
+
+    def list_tester_tokens(self):
+        return [{"id": "tester_token_test", "tester_user_id": 2, "revoked_at": None}]
+
 
 def _build_admin_app(actor_box, snapshot_service, restart_calls=None):
     app = Flask(__name__)
@@ -822,6 +944,52 @@ def test_security_profile_api_validates_and_server_mode_lists_profiles():
     })
     assert saved.status_code == 200
     assert saved.get_json()["profile"]["settings"]["ip_blocking_enabled"] is True
+
+
+def test_server_mode_v2_root_api_is_root_only_and_exposes_requirements():
+    snapshot_service = _FakeSnapshotService()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    client = _build_admin_app(actor_box, snapshot_service).test_client()
+
+    status = client.get("/api/root/server-mode")
+    assert status.status_code == 200
+    assert status.get_json()["production_requirements"]["missing"] == ["stress"]
+
+    checkpoint = client.post("/api/root/server-mode/checkpoint", json={"target_mode": "maintenance", "reason": "test"})
+    assert checkpoint.status_code == 200
+    assert checkpoint.get_json()["checkpoint_id"] == "chk_test"
+
+    report = client.post("/api/root/production-report/upload", json={
+        "report_type": "stress",
+        "report_hash": "hash",
+        "passed": True,
+    })
+    assert report.status_code == 200
+    assert report.get_json()["report_id"] == "prodrep_test"
+
+    logs = client.get("/api/root/server-mode/logs")
+    assert logs.status_code == 200
+    assert logs.get_json()["logs"][0]["id"] == "mode_test"
+
+    restore_check = client.post("/api/root/server-mode/restore-check", json={"checkpoint_id": "chk_test"})
+    assert restore_check.status_code == 200
+    assert restore_check.get_json()["checks"]["snapshot_verified"] is True
+
+    token = client.post("/api/root/tester-token/create", json={
+        "tester_user_id": 2,
+        "expires_at": "2026-05-03T00:00:00",
+        "allowed_routes": ["/api/me"],
+    })
+    assert token.status_code == 200
+    assert token.get_json()["token_id"] == "tester_token_test"
+
+    tokens = client.get("/api/root/tester-token/list")
+    assert tokens.status_code == 200
+    assert tokens.get_json()["tokens"][0]["id"] == "tester_token_test"
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
+    denied = client.get("/api/root/server-mode")
+    assert denied.status_code == 403
 
 
 def test_security_center_and_server_output_are_root_only():

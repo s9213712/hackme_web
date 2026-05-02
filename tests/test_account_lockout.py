@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 
 from flask import Flask, jsonify, make_response
@@ -264,6 +265,53 @@ def test_internal_test_mode_requires_root_issued_token_for_non_root_login(tmp_pa
     assert root_allowed.status_code == 200
 
 
+def test_internal_test_mode_accepts_scoped_tester_token_table(tmp_path):
+    db_path = tmp_path / "internal-test-v2.db"
+    _seed_db(db_path)
+    token = "tester-token-v2"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL
+        );
+        CREATE TABLE tester_tokens (
+            id TEXT PRIMARY KEY,
+            token_hash TEXT NOT NULL UNIQUE,
+            tester_user_id INTEGER,
+            allowed_features_json TEXT NOT NULL DEFAULT '[]',
+            allowed_routes_json TEXT NOT NULL DEFAULT '[]',
+            expires_at TEXT NOT NULL,
+            max_requests_per_minute INTEGER NOT NULL DEFAULT 60,
+            can_modify_own_role INTEGER NOT NULL DEFAULT 0,
+            can_modify_own_points INTEGER NOT NULL DEFAULT 0,
+            can_run_security_tests INTEGER NOT NULL DEFAULT 0,
+            created_by INTEGER,
+            created_at TEXT NOT NULL,
+            revoked_at TEXT
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'internal_test');
+        """
+    )
+    conn.execute(
+        "INSERT INTO tester_tokens (id, token_hash, tester_user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("tester_token_1", hashlib.sha256(token.encode("utf-8")).hexdigest(), 1, "2999-01-01T00:00:00", "2026-01-01T00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+    ).test_client()
+
+    denied = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": "bad"})
+    allowed = client.post("/api/login", json={"username": "alice", "password": "correct", "internal_test_token": token})
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+
+
 def test_production_mode_rejects_same_ip_using_different_account(tmp_path):
     db_path = tmp_path / "production-ip-conflict.db"
     _seed_db(db_path)
@@ -290,7 +338,7 @@ def test_production_mode_rejects_same_ip_using_different_account(tmp_path):
     conn.close()
     client = _build_app(
         str(db_path),
-        {"max_login_failures": 3, "block_duration_minutes": 10},
+        {"max_login_failures": 3, "block_duration_minutes": 10, "production_single_ip_account_lock_enabled": True},
         ip_box={"ip": "10.0.0.1"},
     ).test_client()
 
@@ -298,6 +346,36 @@ def test_production_mode_rejects_same_ip_using_different_account(tmp_path):
 
     assert denied.status_code == 403
     assert "同一 IP" in denied.get_json()["msg"]
+
+
+def test_production_mode_session_conflict_policy_is_disabled_by_default(tmp_path):
+    db_path = tmp_path / "production-conflict-disabled.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE server_modes (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mode TEXT NOT NULL
+        );
+        INSERT INTO server_modes (id, current_mode) VALUES (1, 'production');
+        INSERT INTO users (id, username, status, role) VALUES (2, 'bob', 'active', 'user');
+        INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (2, 'correct', '2026-01-01T00:00:00');
+        INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at, is_revoked)
+        VALUES (2, 'bob-session', '10.0.0.1', 'test-agent', '2999-01-01T00:00:00', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+    client = _build_app(
+        str(db_path),
+        {"max_login_failures": 3, "block_duration_minutes": 10},
+        ip_box={"ip": "10.0.0.1"},
+    ).test_client()
+
+    allowed = client.post("/api/login", json={"username": "alice", "password": "correct"})
+
+    assert allowed.status_code == 200
 
 
 def test_production_mode_rejects_same_account_from_different_ip(tmp_path):
@@ -324,7 +402,7 @@ def test_production_mode_rejects_same_account_from_different_ip(tmp_path):
     conn.close()
     client = _build_app(
         str(db_path),
-        {"max_login_failures": 3, "block_duration_minutes": 10},
+        {"max_login_failures": 3, "block_duration_minutes": 10, "production_single_account_ip_lock_enabled": True},
         ip_box={"ip": "10.0.0.1"},
     ).test_client()
 

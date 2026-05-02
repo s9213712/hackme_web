@@ -101,64 +101,91 @@ def register_public_routes(app, deps):
     def current_server_mode(conn):
         try:
             row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
-            return str(row["current_mode"] or "test") if row else "test"
+            mode = str(row["current_mode"] or "test").strip().lower() if row else "test"
+            return "dev_ready" if mode == "preprod" else mode
         except Exception:
             return "test"
 
-    def internal_test_login_allowed(settings, data):
+    def tester_token_login_allowed(conn, token, user_id):
+        token = str(token or "").strip()
+        if not token:
+            return False
+        try:
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM tester_tokens
+                WHERE token_hash=?
+                  AND tester_user_id=?
+                  AND revoked_at IS NULL
+                  AND expires_at>?
+                LIMIT 1
+                """,
+                (token_hash, int(user_id), datetime.now().isoformat()),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return False
+
+    def internal_test_login_allowed(conn, settings, data, user_id):
         token = (
             str(data.get("internal_test_token") or "").strip()
             or str(data.get("login_token") or "").strip()
             or request.headers.get("X-Internal-Test-Token", "").strip()
         )
+        if tester_token_login_allowed(conn, token, user_id):
+            return True
         return verify_internal_test_token(
             token,
             settings.get("internal_test_login_token_hash", ""),
             settings.get("internal_test_login_token_expires_at", ""),
         )
 
-    def production_login_conflict(conn, user_id, ip, now_iso):
+    def production_login_conflict(conn, user_id, ip, now_iso, settings):
         if current_server_mode(conn) != "production":
             return None
         try:
-            ip_conflict = conn.execute(
-                """
-                SELECT s.user_id, u.username
-                FROM sessions s
-                LEFT JOIN users u ON u.id=s.user_id
-                WHERE COALESCE(s.is_revoked, 0)=0
-                  AND s.expires_at>?
-                  AND s.ip_address=?
-                  AND s.user_id<>?
-                LIMIT 1
-                """,
-                (now_iso, ip, user_id),
-            ).fetchone()
-            if ip_conflict:
-                return {
-                    "kind": "ip_reused_by_other_account",
-                    "msg": "正式上線模式禁止同一 IP 同時登入多個帳號，請先登出原帳號",
-                    "detail": f"active_user_id={ip_conflict['user_id']},active_username={ip_conflict['username'] or '-'}",
-                }
-            account_conflict = conn.execute(
-                """
-                SELECT ip_address
-                FROM sessions
-                WHERE user_id=?
-                  AND COALESCE(is_revoked, 0)=0
-                  AND expires_at>?
-                  AND ip_address IS NOT NULL
-                  AND ip_address<>?
-                LIMIT 1
-                """,
-                (user_id, now_iso, ip),
-            ).fetchone()
-            if account_conflict:
-                return {
-                    "kind": "account_active_from_other_ip",
-                    "msg": "正式上線模式禁止同一帳號同時從不同 IP 登入，請先登出其他裝置",
-                    "detail": f"active_ip={account_conflict['ip_address']}",
-                }
+            if bool(settings.get("production_single_ip_account_lock_enabled", False)):
+                ip_conflict = conn.execute(
+                    """
+                    SELECT s.user_id, u.username
+                    FROM sessions s
+                    LEFT JOIN users u ON u.id=s.user_id
+                    WHERE COALESCE(s.is_revoked, 0)=0
+                      AND s.expires_at>?
+                      AND s.ip_address=?
+                      AND s.user_id<>?
+                    LIMIT 1
+                    """,
+                    (now_iso, ip, user_id),
+                ).fetchone()
+                if ip_conflict:
+                    return {
+                        "kind": "ip_reused_by_other_account",
+                        "msg": "正式上線模式禁止同一 IP 同時登入多個帳號，請先登出原帳號",
+                        "detail": f"active_user_id={ip_conflict['user_id']},active_username={ip_conflict['username'] or '-'}",
+                    }
+            if bool(settings.get("production_single_account_ip_lock_enabled", False)):
+                account_conflict = conn.execute(
+                    """
+                    SELECT ip_address
+                    FROM sessions
+                    WHERE user_id=?
+                      AND COALESCE(is_revoked, 0)=0
+                      AND expires_at>?
+                      AND ip_address IS NOT NULL
+                      AND ip_address<>?
+                    LIMIT 1
+                    """,
+                    (user_id, now_iso, ip),
+                ).fetchone()
+                if account_conflict:
+                    return {
+                        "kind": "account_active_from_other_ip",
+                        "msg": "正式上線模式禁止同一帳號同時從不同 IP 登入，請先登出其他裝置",
+                        "detail": f"active_ip={account_conflict['ip_address']}",
+                    }
         except Exception as exc:
             return {
                 "kind": "session_policy_check_failed",
@@ -541,7 +568,7 @@ def register_public_routes(app, deps):
                     audit("LOGIN_EMAIL_UNVERIFIED", ip, username, ua=ua, success=False)
                     return json_resp({"ok":False,"msg":"登入失敗（帳號或密碼錯誤）"}), 401
                 if current_server_mode(conn) == "internal_test" and user_row["username"] != "root":
-                    if not internal_test_login_allowed(settings, data):
+                    if not internal_test_login_allowed(conn, settings, data, user_row["id"]):
                         conn.execute(
                             "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",
                             (user_row["id"], ip, ua, now),
@@ -550,7 +577,7 @@ def register_public_routes(app, deps):
                         audit("LOGIN_INTERNAL_TEST_TOKEN_REQUIRED", ip, username, ua=ua, success=False)
                         return json_resp({"ok":False,"msg":"目前是內測模式，請輸入 root 提供的內測 token"}), 403
 
-                conflict = production_login_conflict(conn, user_row["id"], ip, now)
+                conflict = production_login_conflict(conn, user_row["id"], ip, now, settings)
                 if conflict:
                     conn.execute(
                         "INSERT INTO login_attempts (user_id, ip_address, user_agent, success, attempted_at) VALUES (?, ?, ?, 0, ?)",

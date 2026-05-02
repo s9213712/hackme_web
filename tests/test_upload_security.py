@@ -294,6 +294,27 @@ def test_cloud_drive_usage_reports_used_and_remaining_quota():
         conn.close()
 
 
+def test_superweak_forces_cloud_drive_quota_to_10mb_even_for_root(tmp_path):
+    conn = _conn()
+    try:
+        conn.execute("CREATE TABLE server_modes (id INTEGER PRIMARY KEY CHECK (id = 1), current_mode TEXT NOT NULL)")
+        conn.execute("INSERT INTO server_modes (id, current_mode) VALUES (1, 'superweak')")
+        admin = {"id": 1, "username": "root", "role": "super_admin", "effective_level": "vip", "sanction_status": "none"}
+        set_storage_quota_override(conn, 1, enabled=True, quota_bytes=1024 * 1024 * 1024, reason="should not bypass superweak")
+        usage = get_user_cloud_drive_usage(
+            conn,
+            admin,
+            member_rule={"can_upload_attachment": True, "attachment_quota_mb": 9999, "max_attachment_size_mb": 9999},
+            storage_root=tmp_path,
+        )
+
+        assert usage["quota_source"] == "server_mode_superweak_forced_10mb"
+        assert usage["total_bytes"] == 10 * 1024 * 1024
+        assert usage["max_file_size_bytes"] == 10 * 1024 * 1024
+    finally:
+        conn.close()
+
+
 def test_cloud_drive_safety_summary_restricted_user_cannot_upload():
     conn = _conn()
     try:

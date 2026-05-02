@@ -514,6 +514,13 @@ def register_file_routes(app, deps):
                 return
             task.update(changes)
             task["updated_at"] = datetime.now().isoformat()
+            # Release the user slot atomically with the terminal status write so
+            # _user_has_active_remote_download never sees a completed/failed task
+            # while the user is still marked active.
+            if changes.get("status") in {"completed", "failed"}:
+                owner = task.get("owner_user_id")
+                if owner is not None:
+                    _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(int(owner))
 
     def _task_snapshot(task):
         public = {

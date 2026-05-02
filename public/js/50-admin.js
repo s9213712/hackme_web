@@ -1655,7 +1655,7 @@ async function loadServerMode() {
   if (!$("server-mode-select")) return;
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await apiFetch(API + "/admin/server-mode", {
+  const res = await apiFetch(API + "/root/server-mode", {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrf || "" }
   });
@@ -1668,14 +1668,64 @@ async function loadServerMode() {
     return;
   }
   const mode = json.mode || {};
-  populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "preprod");
+  populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "dev_ready");
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
     const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
-    status.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
-    status.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
+    const checkpoint = mode.checkpoint_id ? `，checkpoint：${mode.checkpoint_id}` : "";
+    const phrase = serverModeConfirmPhrase(mode.current_mode || "dev_ready");
+    status.textContent = `目前模式：${mode.current_mode || "dev_ready"}${previous}${snapshot}${checkpoint}。切換此模式需輸入：${phrase}`;
+    status.style.color = mode.current_mode === "superweak" || mode.current_mode === "incident_lockdown" ? "#ff4f6d" : "var(--muted)";
   }
+  renderServerModeRequirements(json.production_requirements || {});
+  await loadServerModeLogs();
   await loadInternalTestTokenStatus();
+}
+
+function serverModeConfirmPhrase(mode) {
+  const key = String(mode || "").trim();
+  return {
+    production: "GO_LIVE",
+    preprod: "SWITCH_TO_DEV_READY",
+    dev_ready: "SWITCH_TO_DEV_READY",
+    test: "SWITCH_TO_TEST",
+    internal_test: "SWITCH_TO_INTERNAL_TEST",
+    maintenance: "ENTER_MAINTENANCE",
+    incident_lockdown: "ENTER_INCIDENT_LOCKDOWN",
+    superweak: "ENABLE_SUPERWEAK"
+  }[key] || "SWITCH_CUSTOM_MODE";
+}
+
+function renderServerModeRequirements(requirements) {
+  const host = $("server-mode-requirements");
+  if (!host) return;
+  const missing = Array.isArray(requirements.missing) ? requirements.missing : [];
+  const failed = Array.isArray(requirements.failed) ? requirements.failed : [];
+  const required = Array.isArray(requirements.required) ? requirements.required : [];
+  host.innerHTML = `
+    <div><strong>Production gate</strong>：${requirements.ok ? "已通過" : "未通過"}</div>
+    <div>必要報告：${required.join(", ") || "-"}</div>
+    <div>缺少：${missing.join(", ") || "無"}；失敗：${failed.join(", ") || "無"}</div>
+  `;
+}
+
+async function loadServerModeLogs() {
+  const host = $("server-mode-logs");
+  if (!host || currentUser !== "root") return;
+  try {
+    const res = await apiFetch(API + "/root/server-mode/logs?limit=5", { credentials: "same-origin" });
+    const json = await res.json().catch(() => ({}));
+    if (!json.ok) throw new Error(json.msg || "讀取失敗");
+    const logs = Array.isArray(json.logs) ? json.logs : [];
+    host.innerHTML = `
+      <div><strong>最近模式切換</strong></div>
+      ${logs.length ? logs.map((row) => `
+        <div>${row.created_at || "-"}：${row.from_mode || "-"} → ${row.to_mode || "-"} · ${row.success ? "成功" : "失敗"} · ${row.reason || ""}</div>
+      `).join("") : "<div>尚無紀錄</div>"}
+    `;
+  } catch (err) {
+    host.textContent = `模式切換紀錄讀取失敗：${err.message || "未知錯誤"}`;
+  }
 }
 
 async function loadInternalTestTokenStatus() {
@@ -1738,20 +1788,17 @@ async function rotateInternalTestToken() {
 }
 
 async function applyServerMode() {
-  const target = $("server-mode-select")?.value || "preprod";
+  const target = $("server-mode-select")?.value || "dev_ready";
   const confirmText = $("server-mode-confirm")?.value || "";
   const notes = $("server-mode-notes")?.value || "";
-  if (target === "production" && confirmText !== "GO_LIVE") {
-    alert("進入 production 上線模式必須在確認欄輸入 GO_LIVE");
-    return;
-  }
-  if (target === "superweak" && confirmText !== "ENABLE_SUPERWEAK") {
-    alert("進入 superweak 必須在確認欄輸入 ENABLE_SUPERWEAK");
+  const expectedConfirm = serverModeConfirmPhrase(target);
+  if (confirmText !== expectedConfirm) {
+    alert(`切換到 ${target} 必須在確認欄輸入 ${expectedConfirm}`);
     return;
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const res = await apiFetch(API + "/admin/server-mode", {
+  const res = await apiFetch(API + "/root/server-mode/switch", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },

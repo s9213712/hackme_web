@@ -15,9 +15,28 @@ from services.release_info import APP_RELEASE_ID
 from services.settings import MANAGEMENT_ONLY_RESET_SETTINGS
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_\d{8}_\d{6}_[a-f0-9]{6}$")
-SNAPSHOT_TYPES = {"manual", "before_superweak", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
+SNAPSHOT_TYPES = {"manual", "before_superweak", "mode_checkpoint", "scheduled", "pre_restore", "pre_reset", "pre_migration", "emergency"}
 RESTORE_MODES = {"full", "db_only", "files_only", "config_only", "dry_run"}
-SERVER_MODES = {"production", "preprod", "internal_test", "test", "superweak"}
+SERVER_MODES = {"production", "preprod", "dev_ready", "internal_test", "test", "superweak", "maintenance", "incident_lockdown"}
+MODE_CONFIRM_PHRASES = {
+    "superweak": "ENABLE_SUPERWEAK",
+    "test": "SWITCH_TO_TEST",
+    "internal_test": "SWITCH_TO_INTERNAL_TEST",
+    "dev_ready": "SWITCH_TO_DEV_READY",
+    "preprod": "SWITCH_TO_DEV_READY",
+    "production": "GO_LIVE",
+    "maintenance": "ENTER_MAINTENANCE",
+    "incident_lockdown": "ENTER_INCIDENT_LOCKDOWN",
+}
+PRODUCTION_REQUIRED_REPORT_TYPES = (
+    "stress",
+    "permission",
+    "functional",
+    "pentest",
+    "snapshot_restore",
+    "points_chain_consistency",
+    "cloud_drive_quota_permission",
+)
 PORTABLE_SNAPSHOT_FILES = ("metadata.json", "checksums.sha256", "db.sqlite3.backup", "uploads.tar.gz", "config.tar.gz", "manifest.json")
 DEFAULT_ACCOUNT_NAMES = ("root", "admin", "test")
 TEST_ACCOUNT_NAMES = ("test",)
@@ -36,6 +55,8 @@ BUILTIN_SECURITY_PROFILES = {
             "root_ip_whitelist_enabled": False,
             "root_ip_whitelist": "",
             "browser_only_mode_enabled": True,
+            "production_single_ip_account_lock_enabled": False,
+            "production_single_account_ip_lock_enabled": False,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": True,
             "feature_account_security_enabled": True,
@@ -60,21 +81,22 @@ BUILTIN_SECURITY_PROFILES = {
     },
     "preprod": {
         "label": "preprod（準上線）",
-        "description": "接近正式部署的安全設定檔，要求完整性檢查通過。",
+        "description": "舊版準上線別名；新名稱為 dev_ready。",
         "settings": {
             "maintenance_mode": False,
             "server_ssl_enabled": True,
-            "audit_chain_enabled": True,
-            "ip_blocking_enabled": True,
-            "login_violation_enabled": True,
+            "audit_chain_enabled": False,
+            "ip_blocking_enabled": False,
+            "login_violation_enabled": False,
             "rate_limit_violation_enabled": True,
             "root_ip_whitelist_enabled": False,
             "root_ip_whitelist": "",
-            "browser_only_mode_enabled": True,
-            "integrity_guard_enabled": True,
-            "integrity_guard_strict_mode": True,
+            "browser_only_mode_enabled": False,
+            "integrity_guard_enabled": False,
+            "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": True,
-            "feature_economy_enabled": True,
+            "feature_economy_enabled": False,
+            "feature_trading_enabled": False,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 10,
@@ -83,6 +105,35 @@ BUILTIN_SECURITY_PROFILES = {
             "security_quarantined_files_threshold": 0,
             "security_unknown_encrypted_files_threshold": 50,
         },
+        "color": "blue",
+    },
+    "dev_ready": {
+        "label": "dev ready（準上線 / 開發就緒）",
+        "description": "平時開發與準上線驗證模式；保留基本登入、root 權限與 CSRF，但暫停 production audit chain 與 integrity guard。",
+        "settings": {
+            "maintenance_mode": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": False,
+            "ip_blocking_enabled": False,
+            "login_violation_enabled": False,
+            "rate_limit_violation_enabled": True,
+            "root_ip_whitelist_enabled": False,
+            "root_ip_whitelist": "",
+            "browser_only_mode_enabled": False,
+            "integrity_guard_enabled": False,
+            "integrity_guard_strict_mode": False,
+            "feature_audit_log_enabled": True,
+            "feature_economy_enabled": False,
+            "feature_trading_enabled": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 10,
+            "security_pending_appeals_threshold": 10,
+            "security_pending_moderation_proposals_threshold": 10,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 50,
+        },
+        "color": "blue",
     },
     "internal_test": {
         "label": "internal test（內測）",
@@ -112,6 +163,7 @@ BUILTIN_SECURITY_PROFILES = {
             "security_quarantined_files_threshold": 0,
             "security_unknown_encrypted_files_threshold": 25,
         },
+        "color": "orange",
     },
     "test": {
         "label": "test（測試）",
@@ -130,6 +182,7 @@ BUILTIN_SECURITY_PROFILES = {
             "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            "feature_trading_enabled": False,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 20,
@@ -138,6 +191,7 @@ BUILTIN_SECURITY_PROFILES = {
             "security_quarantined_files_threshold": 0,
             "security_unknown_encrypted_files_threshold": 100,
         },
+        "color": "orange",
     },
     "superweak": {
         "label": "superweak（弱化測試）",
@@ -156,6 +210,7 @@ BUILTIN_SECURITY_PROFILES = {
             "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": False,
             "feature_economy_enabled": False,
+            "feature_trading_enabled": False,
             "captcha_mode": "none",
         },
         "thresholds": {
@@ -165,6 +220,63 @@ BUILTIN_SECURITY_PROFILES = {
             "security_quarantined_files_threshold": 10,
             "security_unknown_encrypted_files_threshold": 250,
         },
+        "color": "red",
+    },
+    "maintenance": {
+        "label": "maintenance（維護）",
+        "description": "更新、修復、migration、備份與 PointsChain 維護用模式；普通使用者不可正常操作。",
+        "settings": {
+            "maintenance_mode": True,
+            "allow_register": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": False,
+            "feature_audit_log_enabled": True,
+            "feature_economy_enabled": True,
+            "feature_trading_enabled": False,
+            "feature_comfyui_enabled": False,
+            "feature_games_enabled": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 10,
+            "security_pending_appeals_threshold": 10,
+            "security_pending_moderation_proposals_threshold": 10,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 25,
+        },
+        "color": "purple",
+    },
+    "incident_lockdown": {
+        "label": "incident lockdown（事故封鎖）",
+        "description": "疑似入侵、restore 失敗、PointsChain 或 integrity 異常時的強制封鎖模式。",
+        "settings": {
+            "maintenance_mode": True,
+            "allow_register": False,
+            "server_ssl_enabled": True,
+            "audit_chain_enabled": True,
+            "ip_blocking_enabled": True,
+            "login_violation_enabled": True,
+            "rate_limit_violation_enabled": True,
+            "integrity_guard_enabled": True,
+            "integrity_guard_strict_mode": True,
+            "feature_audit_log_enabled": True,
+            "feature_economy_enabled": True,
+            "feature_trading_enabled": False,
+            "feature_comfyui_enabled": False,
+            "feature_games_enabled": False,
+        },
+        "thresholds": {
+            "security_pending_chat_reports_threshold": 1,
+            "security_pending_appeals_threshold": 1,
+            "security_pending_moderation_proposals_threshold": 1,
+            "security_quarantined_files_threshold": 0,
+            "security_unknown_encrypted_files_threshold": 0,
+        },
+        "color": "black_red",
     },
 }
 PROFILE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
@@ -279,17 +391,185 @@ def ensure_snapshot_schema(conn):
             current_mode       TEXT NOT NULL,
             previous_mode      TEXT,
             active_snapshot_id TEXT,
+            checkpoint_id      TEXT,
             mode_changed_by    INTEGER,
             mode_changed_at    TEXT,
-            notes              TEXT
+            notes              TEXT,
+            reason             TEXT,
+            config_json        TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    server_mode_cols = {row["name"] for row in conn.execute("PRAGMA table_info(server_modes)").fetchall()}
+    for col, ddl in (
+        ("previous_mode", "ALTER TABLE server_modes ADD COLUMN previous_mode TEXT"),
+        ("active_snapshot_id", "ALTER TABLE server_modes ADD COLUMN active_snapshot_id TEXT"),
+        ("checkpoint_id", "ALTER TABLE server_modes ADD COLUMN checkpoint_id TEXT"),
+        ("mode_changed_by", "ALTER TABLE server_modes ADD COLUMN mode_changed_by INTEGER"),
+        ("mode_changed_at", "ALTER TABLE server_modes ADD COLUMN mode_changed_at TEXT"),
+        ("notes", "ALTER TABLE server_modes ADD COLUMN notes TEXT"),
+        ("reason", "ALTER TABLE server_modes ADD COLUMN reason TEXT"),
+        ("config_json", "ALTER TABLE server_modes ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if col not in server_mode_cols:
+            conn.execute(ddl)
+    conn.execute(
+        "INSERT OR IGNORE INTO server_modes "
+        "(id, current_mode, previous_mode, active_snapshot_id, checkpoint_id, mode_changed_by, mode_changed_at, notes, reason, config_json) "
+        "VALUES (1, 'test', NULL, NULL, NULL, NULL, ?, '', '', '{}')",
+        (datetime.now().isoformat(),),
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS server_checkpoints (
+            id                         TEXT PRIMARY KEY,
+            snapshot_id                TEXT NOT NULL,
+            checkpoint_type            TEXT NOT NULL,
+            from_mode                  TEXT,
+            target_mode                TEXT NOT NULL,
+            created_by                 INTEGER NOT NULL,
+            created_at                 TEXT NOT NULL,
+            status                     TEXT NOT NULL,
+            db_snapshot_hash           TEXT,
+            config_hash                TEXT,
+            security_settings_hash     TEXT,
+            points_chain_hash          TEXT,
+            cloud_drive_metadata_hash  TEXT,
+            integrity_manifest_hash    TEXT,
+            components_json            TEXT NOT NULL DEFAULT '{}',
+            error_message              TEXT
         )
         """
     )
     conn.execute(
-        "INSERT OR IGNORE INTO server_modes "
-        "(id, current_mode, previous_mode, active_snapshot_id, mode_changed_by, mode_changed_at, notes) "
-        "VALUES (1, 'test', NULL, NULL, NULL, ?, '')",
-        (datetime.now().isoformat(),),
+        """
+        CREATE TABLE IF NOT EXISTS mode_switch_logs (
+            id                 TEXT PRIMARY KEY,
+            from_mode          TEXT,
+            to_mode            TEXT NOT NULL,
+            actor_user_id      INTEGER,
+            reason             TEXT,
+            checkpoint_id      TEXT,
+            snapshot_id        TEXT,
+            success            INTEGER NOT NULL DEFAULT 0,
+            error_message      TEXT,
+            config_diff_json   TEXT NOT NULL DEFAULT '{}',
+            restore_result_json TEXT NOT NULL DEFAULT '{}',
+            created_at         TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tester_tokens (
+            id                       TEXT PRIMARY KEY,
+            token_hash               TEXT NOT NULL,
+            tester_user_id           INTEGER,
+            allowed_features_json    TEXT NOT NULL DEFAULT '[]',
+            allowed_routes_json      TEXT NOT NULL DEFAULT '[]',
+            expires_at               TEXT NOT NULL,
+            max_requests_per_minute  INTEGER NOT NULL DEFAULT 60,
+            can_modify_own_role      INTEGER NOT NULL DEFAULT 0,
+            can_modify_own_points    INTEGER NOT NULL DEFAULT 0,
+            can_run_security_tests   INTEGER NOT NULL DEFAULT 0,
+            created_by               INTEGER NOT NULL,
+            created_at               TEXT NOT NULL,
+            revoked_at               TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tester_token_request_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_id     TEXT NOT NULL,
+            route        TEXT NOT NULL,
+            ip_address   TEXT,
+            created_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_shadow_roles (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            tester_user_id  INTEGER NOT NULL,
+            original_role   TEXT,
+            shadow_role     TEXT NOT NULL,
+            token_id        TEXT,
+            created_at      TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_shadow_wallets (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            tester_user_id  INTEGER NOT NULL,
+            balance_points  INTEGER NOT NULL DEFAULT 0,
+            token_id        TEXT,
+            updated_at      TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_shadow_transactions (
+            id              TEXT PRIMARY KEY,
+            tester_user_id  INTEGER NOT NULL,
+            delta_points    INTEGER NOT NULL,
+            reason          TEXT,
+            token_id        TEXT,
+            created_at      TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_chain_blocks (
+            id              TEXT PRIMARY KEY,
+            prev_hash       TEXT,
+            block_hash      TEXT NOT NULL,
+            transactions_json TEXT NOT NULL DEFAULT '[]',
+            created_at      TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS production_entry_reports (
+            id                      TEXT PRIMARY KEY,
+            report_type             TEXT NOT NULL,
+            report_hash             TEXT NOT NULL,
+            target_commit           TEXT,
+            target_branch           TEXT,
+            server_mode             TEXT,
+            test_result             TEXT,
+            pass                    INTEGER NOT NULL DEFAULT 0,
+            critical_findings_count INTEGER NOT NULL DEFAULT 0,
+            high_findings_count     INTEGER NOT NULL DEFAULT 0,
+            unresolved_findings_json TEXT NOT NULL DEFAULT '[]',
+            tester                  TEXT,
+            signature               TEXT,
+            created_at              TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS incident_reports (
+            id                  TEXT PRIMARY KEY,
+            status              TEXT NOT NULL,
+            trigger_type        TEXT NOT NULL,
+            reason              TEXT,
+            entered_by          INTEGER,
+            entered_at          TEXT NOT NULL,
+            resolved_by         INTEGER,
+            resolved_at         TEXT,
+            resolution_notes    TEXT,
+            verification_json   TEXT NOT NULL DEFAULT '{}'
+        )
+        """
     )
     conn.execute(
         """
@@ -347,6 +627,10 @@ def ensure_snapshot_schema(conn):
         )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_type_status ON snapshots(type, status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_restore_events_snapshot ON snapshot_restore_events(snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mode_switch_logs_created ON mode_switch_logs(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_server_checkpoints_target ON server_checkpoints(target_mode, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_production_reports_type ON production_entry_reports(report_type, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tester_token_request_log_token_time ON tester_token_request_log(token_id, created_at)")
 
 
 def _sha256_file(path):
@@ -1262,7 +1546,357 @@ class ServerModeService:
                 data[key.replace("_json", "")] = {}
             data.pop(key, None)
         data["is_builtin"] = bool(data.get("is_builtin"))
+        data["color"] = BUILTIN_SECURITY_PROFILES.get(data.get("name"), {}).get("color", "")
         return data
+
+    def _normalize_mode(self, mode):
+        value = str(mode or "").strip().lower()
+        if value == "preprod":
+            return "dev_ready"
+        return value
+
+    def _actor_id(self, actor):
+        try:
+            return int(actor.get("id") if hasattr(actor, "get") else actor["id"])
+        except Exception:
+            return 0
+
+    def _actor_name(self, actor):
+        try:
+            return str(actor.get("username") if hasattr(actor, "get") else actor["username"])
+        except Exception:
+            return "unknown"
+
+    def _stable_hash(self, payload):
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+    def _table_exists(self, conn, table):
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        return bool(row)
+
+    def _settings_snapshot(self, conn):
+        if not self._table_exists(conn, "system_settings"):
+            return {}
+        rows = conn.execute("SELECT key, value FROM system_settings ORDER BY key").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+    def _points_chain_checkpoint(self, conn):
+        payload = {"ledger_count": 0, "block_count": 0, "latest_block_hash": "", "latest_ledger_hash": ""}
+        if self._table_exists(conn, "points_ledger"):
+            try:
+                row = conn.execute("SELECT COUNT(*) AS c FROM points_ledger").fetchone()
+                payload["ledger_count"] = int(row["c"] or 0)
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(points_ledger)").fetchall()}
+                if "entry_hash" in cols:
+                    latest = conn.execute("SELECT entry_hash FROM points_ledger ORDER BY id DESC LIMIT 1").fetchone()
+                    payload["latest_ledger_hash"] = latest["entry_hash"] if latest else ""
+            except Exception as exc:
+                payload["ledger_error"] = str(exc)
+        if self._table_exists(conn, "points_chain_blocks"):
+            try:
+                row = conn.execute("SELECT COUNT(*) AS c FROM points_chain_blocks").fetchone()
+                payload["block_count"] = int(row["c"] or 0)
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(points_chain_blocks)").fetchall()}
+                hash_col = "block_hash" if "block_hash" in cols else ("hash" if "hash" in cols else "")
+                if hash_col:
+                    latest = conn.execute(f"SELECT {hash_col} AS h FROM points_chain_blocks ORDER BY id DESC LIMIT 1").fetchone()
+                    payload["latest_block_hash"] = latest["h"] if latest else ""
+            except Exception as exc:
+                payload["block_error"] = str(exc)
+        payload["hash"] = self._stable_hash(payload)
+        return payload
+
+    def _cloud_drive_metadata_checkpoint(self, conn):
+        tables = ["storage_files", "storage_folders", "storage_share_links", "cloud_file_refs", "uploaded_files"]
+        payload = {}
+        for table in tables:
+            if not self._table_exists(conn, table):
+                payload[table] = {"exists": False, "count": 0}
+                continue
+            try:
+                count = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+                payload[table] = {"exists": True, "count": int(count or 0)}
+            except Exception as exc:
+                payload[table] = {"exists": True, "error": str(exc)}
+        payload["hash"] = self._stable_hash(payload)
+        return payload
+
+    def _integrity_manifest_hash(self):
+        path = getattr(self.integrity_guard, "manifest_path", None) if self.integrity_guard else None
+        if not path:
+            return ""
+        try:
+            path_obj = Path(path)
+            return _sha256_file(path_obj) if path_obj.is_file() else ""
+        except Exception:
+            return ""
+
+    def _config_diff(self, current_settings, target_settings):
+        diff = {}
+        for key, after in (target_settings or {}).items():
+            before = current_settings.get(key)
+            if str(before) != str(after):
+                diff[key] = {"before": before, "after": after}
+        return diff
+
+    def _record_mode_switch(
+        self,
+        conn,
+        *,
+        from_mode,
+        to_mode,
+        actor,
+        reason="",
+        checkpoint_id=None,
+        snapshot_id=None,
+        success=False,
+        error_message="",
+        config_diff=None,
+        restore_result=None,
+    ):
+        log_id = f"mode_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+        conn.execute(
+            """
+            INSERT INTO mode_switch_logs
+            (id, from_mode, to_mode, actor_user_id, reason, checkpoint_id, snapshot_id, success, error_message, config_diff_json, restore_result_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                log_id,
+                from_mode,
+                to_mode,
+                self._actor_id(actor),
+                reason or "",
+                checkpoint_id,
+                snapshot_id,
+                1 if success else 0,
+                error_message or "",
+                json.dumps(config_diff or {}, ensure_ascii=False, sort_keys=True),
+                json.dumps(restore_result or {}, ensure_ascii=False, sort_keys=True),
+                datetime.now().isoformat(),
+            ),
+        )
+        return log_id
+
+    def _enter_incident_lockdown_on_conn(self, conn, *, actor, trigger_type, reason, verification=None):
+        now = datetime.now().isoformat()
+        current_row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+        current = current_row["current_mode"] if current_row else None
+        incident_id = f"incident_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+        conn.execute(
+            """
+            INSERT INTO incident_reports
+            (id, status, trigger_type, reason, entered_by, entered_at, verification_json)
+            VALUES (?, 'open', ?, ?, ?, ?, ?)
+            """,
+            (
+                incident_id,
+                str(trigger_type or "manual"),
+                str(reason or ""),
+                self._actor_id(actor),
+                now,
+                json.dumps(verification or {}, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        profile = BUILTIN_SECURITY_PROFILES["incident_lockdown"]
+        now_updated_by = f"server_mode:{self._actor_name(actor)}"
+        if self._table_exists(conn, "system_settings"):
+            for key, value in (profile.get("settings") or {}).items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    (key, str(value), now, now_updated_by),
+                )
+        conn.execute(
+            """
+            UPDATE server_modes
+            SET previous_mode=?, current_mode='incident_lockdown', checkpoint_id=NULL, active_snapshot_id=NULL,
+                mode_changed_by=?, mode_changed_at=?, notes=?, reason=?, config_json=?
+            WHERE id=1
+            """,
+            (
+                current,
+                self._actor_id(actor),
+                now,
+                reason or "",
+                reason or "",
+                json.dumps(profile, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        self._record_mode_switch(
+            conn,
+            from_mode=current,
+            to_mode="incident_lockdown",
+            actor=actor,
+            reason=reason or trigger_type or "",
+            success=True,
+            config_diff={"trigger_type": trigger_type, "verification": verification or {}},
+        )
+        return incident_id
+
+    def create_mode_checkpoint(self, *, actor, target_mode, reason="", snapshot_type="mode_checkpoint", from_mode=None):
+        target_mode = self._normalize_mode(target_mode)
+        if target_mode not in SERVER_MODES and not self.get_profile(target_mode):
+            return {"ok": False, "msg": "server mode 錯誤"}
+        if not self.snapshot_service:
+            return {"ok": False, "msg": "snapshot service unavailable"}
+        snapshot = self.snapshot_service.create_snapshot(
+            snapshot_type=snapshot_type,
+            actor=actor,
+            notes=f"server mode checkpoint before {target_mode}: {reason or ''}",
+        )
+        checkpoint_id = f"chk_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            current_settings = self._settings_snapshot(conn)
+            security_settings = {
+                key: current_settings.get(key)
+                for key in sorted(current_settings)
+                if key.startswith("feature_")
+                or key in {
+                    "audit_chain_enabled",
+                    "ip_blocking_enabled",
+                    "login_violation_enabled",
+                    "rate_limit_violation_enabled",
+                    "integrity_guard_enabled",
+                    "integrity_guard_strict_mode",
+                    "maintenance_mode",
+                    "captcha_mode",
+                }
+            }
+            points = self._points_chain_checkpoint(conn)
+            cloud = self._cloud_drive_metadata_checkpoint(conn)
+            integrity_hash = self._integrity_manifest_hash()
+            db_hash = ""
+            try:
+                if snapshot.ok and snapshot.snapshot_id:
+                    snapshot_row = self.snapshot_service.get_snapshot(snapshot_id=snapshot.snapshot_id, actor=actor)
+                    db_dump_path = Path(snapshot_row.get("db_dump_path") or "")
+                    if db_dump_path.is_file():
+                        db_hash = _sha256_file(db_dump_path)
+            except Exception:
+                db_hash = ""
+            components = {
+                "db_snapshot": {"snapshot_id": snapshot.snapshot_id, "hash": db_hash},
+                "config": current_settings,
+                "security_settings": security_settings,
+                "points_chain": points,
+                "cloud_drive_metadata": cloud,
+                "integrity_manifest": {"hash": integrity_hash},
+            }
+            conn.execute(
+                """
+                INSERT INTO server_checkpoints
+                (id, snapshot_id, checkpoint_type, from_mode, target_mode, created_by, created_at, status,
+                 db_snapshot_hash, config_hash, security_settings_hash, points_chain_hash,
+                 cloud_drive_metadata_hash, integrity_manifest_hash, components_json, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint_id,
+                    snapshot.snapshot_id,
+                    snapshot_type,
+                    from_mode,
+                    target_mode,
+                    self._actor_id(actor),
+                    datetime.now().isoformat(),
+                    "ready" if snapshot.ok else "failed",
+                    db_hash,
+                    self._stable_hash(current_settings),
+                    self._stable_hash(security_settings),
+                    points.get("hash", ""),
+                    cloud.get("hash", ""),
+                    integrity_hash,
+                    json.dumps(components, ensure_ascii=False, sort_keys=True),
+                    snapshot.error if not snapshot.ok else "",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        if not snapshot.ok:
+            return {"ok": False, "msg": "mode checkpoint snapshot 建立失敗", "checkpoint_id": checkpoint_id, "error": snapshot.error}
+        return {
+            "ok": True,
+            "checkpoint_id": checkpoint_id,
+            "snapshot_id": snapshot.snapshot_id,
+            "components": components,
+        }
+
+    def _checkpoint_record(self, conn, checkpoint_id):
+        row = conn.execute("SELECT * FROM server_checkpoints WHERE id=?", (checkpoint_id,)).fetchone()
+        return dict(row) if row else None
+
+    def validate_checkpoint_restore(self, *, checkpoint_id, expected_checkpoint=None):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            checkpoint = expected_checkpoint or self._checkpoint_record(conn, checkpoint_id)
+            if not checkpoint:
+                return {"ok": False, "msg": "找不到 checkpoint", "checkpoint_id": checkpoint_id}
+            try:
+                components = json.loads(checkpoint.get("components_json") or "{}")
+            except Exception:
+                components = {}
+            snapshot_id = checkpoint.get("snapshot_id")
+            snapshot_verification = {"ok": False, "msg": "snapshot unavailable"}
+            if snapshot_id:
+                try:
+                    snapshot_verification = self.snapshot_service.verify_snapshot(snapshot_id=snapshot_id)
+                except Exception as exc:
+                    snapshot_verification = {"ok": False, "msg": str(exc)}
+
+            current_settings = self._settings_snapshot(conn)
+            security_settings = {
+                key: current_settings.get(key)
+                for key in sorted(current_settings)
+                if key.startswith("feature_")
+                or key in {
+                    "audit_chain_enabled",
+                    "ip_blocking_enabled",
+                    "login_violation_enabled",
+                    "rate_limit_violation_enabled",
+                    "integrity_guard_enabled",
+                    "integrity_guard_strict_mode",
+                    "maintenance_mode",
+                    "captcha_mode",
+                }
+            }
+            current = {
+                "config_hash": self._stable_hash(current_settings),
+                "security_settings_hash": self._stable_hash(security_settings),
+                "points_chain_hash": self._points_chain_checkpoint(conn).get("hash", ""),
+                "cloud_drive_metadata_hash": self._cloud_drive_metadata_checkpoint(conn).get("hash", ""),
+                "integrity_manifest_hash": self._integrity_manifest_hash(),
+            }
+            checks = {
+                "snapshot_verified": bool(snapshot_verification.get("ok")),
+                "config": current["config_hash"] == checkpoint.get("config_hash"),
+                "security_settings": current["security_settings_hash"] == checkpoint.get("security_settings_hash"),
+                "points_chain": current["points_chain_hash"] == checkpoint.get("points_chain_hash"),
+                "cloud_drive_metadata": current["cloud_drive_metadata_hash"] == checkpoint.get("cloud_drive_metadata_hash"),
+                "integrity_manifest": current["integrity_manifest_hash"] == (checkpoint.get("integrity_manifest_hash") or ""),
+            }
+            mismatches = [name for name, ok in checks.items() if not ok]
+            return {
+                "ok": not mismatches,
+                "checkpoint_id": checkpoint_id,
+                "snapshot_id": snapshot_id,
+                "checks": checks,
+                "mismatches": mismatches,
+                "snapshot_verification": snapshot_verification,
+                "expected": {
+                    "config_hash": checkpoint.get("config_hash"),
+                    "security_settings_hash": checkpoint.get("security_settings_hash"),
+                    "points_chain_hash": checkpoint.get("points_chain_hash"),
+                    "cloud_drive_metadata_hash": checkpoint.get("cloud_drive_metadata_hash"),
+                    "integrity_manifest_hash": checkpoint.get("integrity_manifest_hash"),
+                    "components": components,
+                },
+                "current": current,
+            }
+        finally:
+            conn.close()
 
     def list_profiles(self):
         conn = self.get_db()
@@ -1276,10 +1910,11 @@ class ServerModeService:
             conn.close()
 
     def get_profile(self, name):
+        profile_name = self._normalize_mode(name)
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            row = conn.execute("SELECT * FROM security_profiles WHERE name=?", (str(name or ""),)).fetchone()
+            row = conn.execute("SELECT * FROM security_profiles WHERE name=?", (profile_name,)).fetchone()
             return self._decode_profile(row)
         finally:
             conn.close()
@@ -1337,6 +1972,499 @@ class ServerModeService:
             self.ensure_schema(conn)
             row = conn.execute("SELECT * FROM server_modes WHERE id=1").fetchone()
             return dict(row)
+        finally:
+            conn.close()
+
+    def mode_switch_logs(self, *, limit=50):
+        limit = max(1, min(int(limit or 50), 200))
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT * FROM mode_switch_logs ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def production_requirements(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            reports = {}
+            for report_type in PRODUCTION_REQUIRED_REPORT_TYPES:
+                row = conn.execute(
+                    """
+                    SELECT * FROM production_entry_reports
+                    WHERE report_type=?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (report_type,),
+                ).fetchone()
+                reports[report_type] = dict(row) if row else None
+            missing = [key for key, row in reports.items() if not row]
+            failed = [
+                key
+                for key, row in reports.items()
+                if row
+                and (
+                    not bool(row["pass"])
+                    or int(row["critical_findings_count"] or 0) > 0
+                    or int(row["high_findings_count"] or 0) > 0
+                    or not row["report_hash"]
+                )
+            ]
+            return {
+                "ok": not missing and not failed,
+                "required": list(PRODUCTION_REQUIRED_REPORT_TYPES),
+                "missing": missing,
+                "failed": failed,
+                "reports": reports,
+            }
+        finally:
+            conn.close()
+
+    def upload_production_report(
+        self,
+        *,
+        actor,
+        report_type,
+        report_hash,
+        target_commit="",
+        target_branch="",
+        server_mode="",
+        test_result="",
+        passed=False,
+        critical_findings_count=0,
+        high_findings_count=0,
+        unresolved_findings=None,
+        tester="",
+        signature="",
+    ):
+        report_type = str(report_type or "").strip()
+        if report_type not in PRODUCTION_REQUIRED_REPORT_TYPES:
+            return {"ok": False, "msg": "report_type 不在 production gate 清單"}
+        report_hash = str(report_hash or "").strip()
+        if not report_hash:
+            return {"ok": False, "msg": "report_hash 必填"}
+        report_id = f"prodrep_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO production_entry_reports
+                (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
+                 pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    report_type,
+                    report_hash,
+                    target_commit or "",
+                    target_branch or "",
+                    server_mode or "",
+                    test_result or "",
+                    1 if passed else 0,
+                    int(critical_findings_count or 0),
+                    int(high_findings_count or 0),
+                    json.dumps(unresolved_findings or [], ensure_ascii=False, sort_keys=True),
+                    tester or self._actor_name(actor),
+                    signature or "",
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+            return {"ok": True, "report_id": report_id, "requirements": self.production_requirements()}
+        finally:
+            conn.close()
+
+    def create_tester_token(
+        self,
+        *,
+        actor,
+        tester_user_id,
+        allowed_features=None,
+        allowed_routes=None,
+        expires_at,
+        max_requests_per_minute=60,
+        can_modify_own_role=False,
+        can_modify_own_points=False,
+        can_run_security_tests=False,
+    ):
+        try:
+            tester_user_id = int(tester_user_id)
+        except Exception:
+            return {"ok": False, "msg": "tester_user_id 必須是數字"}
+        expires_at = str(expires_at or "").strip()
+        if not expires_at:
+            return {"ok": False, "msg": "expires_at 必填"}
+        token = f"hmt_{secrets.token_urlsafe(32)}"
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        token_id = f"tester_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+        rpm = max(1, min(int(max_requests_per_minute or 60), 600))
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO tester_tokens
+                (id, token_hash, tester_user_id, allowed_features_json, allowed_routes_json, expires_at,
+                 max_requests_per_minute, can_modify_own_role, can_modify_own_points, can_run_security_tests,
+                 created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    token_id,
+                    token_hash,
+                    tester_user_id,
+                    json.dumps(allowed_features or [], ensure_ascii=False, sort_keys=True),
+                    json.dumps(allowed_routes or [], ensure_ascii=False, sort_keys=True),
+                    expires_at,
+                    rpm,
+                    1 if can_modify_own_role else 0,
+                    1 if can_modify_own_points else 0,
+                    1 if can_run_security_tests else 0,
+                    self._actor_id(actor),
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "token_id": token_id,
+                "token": token,
+                "expires_at": expires_at,
+                "max_requests_per_minute": rpm,
+                "warning": "token 只會回傳一次，請交給測試員後妥善保存",
+            }
+        finally:
+            conn.close()
+
+    def revoke_tester_token(self, *, actor, token_id, reason=""):
+        token_id = str(token_id or "").strip()
+        if not token_id:
+            return {"ok": False, "msg": "token_id 必填"}
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            cur = conn.execute(
+                "UPDATE tester_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
+                (datetime.now().isoformat(), token_id),
+            )
+            conn.commit()
+            return {"ok": bool(cur.rowcount), "token_id": token_id, "reason": reason or ""}
+        finally:
+            conn.close()
+
+    def list_tester_tokens(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT id, tester_user_id, allowed_features_json, allowed_routes_json, expires_at,
+                       max_requests_per_minute, can_modify_own_role, can_modify_own_points,
+                       can_run_security_tests, created_by, created_at, revoked_at
+                FROM tester_tokens
+                ORDER BY created_at DESC
+                LIMIT 200
+                """
+            ).fetchall()
+            tokens = []
+            for row in rows:
+                item = dict(row)
+                for key in ("allowed_features_json", "allowed_routes_json"):
+                    try:
+                        item[key.replace("_json", "")] = json.loads(item.pop(key) or "[]")
+                    except Exception:
+                        item[key.replace("_json", "")] = []
+                for key in ("can_modify_own_role", "can_modify_own_points", "can_run_security_tests"):
+                    item[key] = bool(item.get(key))
+                tokens.append(item)
+            return tokens
+        finally:
+            conn.close()
+
+    def active_tester_token(self, *, token, route="", ip_address="", log_request=False):
+        token = str(token or "").strip()
+        if not token:
+            return {"ok": False, "msg": "tester token required"}
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            mode_row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+            current_mode = self._normalize_mode(mode_row["current_mode"] if mode_row else "test")
+            if current_mode not in {"test", "internal_test"}:
+                return {"ok": False, "msg": "tester token 只能在 test / internal_test 模式使用"}
+            row = conn.execute(
+                """
+                SELECT t.*, u.username, u.role, u.status
+                FROM tester_tokens t
+                JOIN users u ON u.id=t.tester_user_id
+                WHERE t.token_hash=?
+                  AND t.revoked_at IS NULL
+                  AND t.expires_at>?
+                  AND u.status='active'
+                LIMIT 1
+                """,
+                (token_hash, datetime.now().isoformat()),
+            ).fetchone()
+            if not row:
+                return {"ok": False, "msg": "tester token 無效、過期或已撤銷"}
+            path = str(route or "")
+            if path.startswith("/api/root/") or path == "/api/root":
+                return {"ok": False, "msg": "tester token 不允許操作 root API"}
+            try:
+                allowed_routes = json.loads(row["allowed_routes_json"] or "[]")
+            except Exception:
+                allowed_routes = []
+            if allowed_routes and path and not any(path == route or path.startswith(str(route).rstrip("/") + "/") for route in allowed_routes):
+                return {"ok": False, "msg": "tester token 不允許操作此路由"}
+            window_start = (datetime.now().replace(microsecond=0)).isoformat()
+            # keep the window simple and deterministic: compare to one minute ago
+            try:
+                from datetime import timedelta
+                window_start = (datetime.now() - timedelta(seconds=60)).isoformat()
+            except Exception:
+                pass
+            recent = conn.execute(
+                "SELECT COUNT(*) AS c FROM tester_token_request_log WHERE token_id=? AND created_at>?",
+                (row["id"], window_start),
+            ).fetchone()
+            max_rpm = max(1, int(row["max_requests_per_minute"] or 60))
+            if int(recent["c"] or 0) >= max_rpm:
+                return {"ok": False, "msg": "tester token 已超過每分鐘請求上限"}
+            if log_request and path:
+                conn.execute(
+                    "INSERT INTO tester_token_request_log (token_id, route, ip_address, created_at) VALUES (?, ?, ?, ?)",
+                    (row["id"], path, ip_address or "", datetime.now().isoformat()),
+                )
+                conn.commit()
+            item = dict(row)
+            for key in ("allowed_features_json", "allowed_routes_json"):
+                try:
+                    item[key.replace("_json", "")] = json.loads(item.pop(key) or "[]")
+                except Exception:
+                    item[key.replace("_json", "")] = []
+            for key in ("can_modify_own_role", "can_modify_own_points", "can_run_security_tests"):
+                item[key] = bool(item.get(key))
+            item.pop("token_hash", None)
+            return {"ok": True, "token": item, "mode": current_mode}
+        finally:
+            conn.close()
+
+    def tester_shadow_state(self, *, actor, token, route="", ip_address=""):
+        token_result = self.active_tester_token(token=token, route=route, ip_address=ip_address, log_request=True)
+        if not token_result.get("ok"):
+            return token_result
+        token_row = token_result["token"]
+        tester_user_id = int(token_row["tester_user_id"])
+        if tester_user_id != self._actor_id(actor):
+            return {"ok": False, "msg": "tester token 與目前帳號不一致"}
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            role_row = conn.execute(
+                "SELECT * FROM test_shadow_roles WHERE tester_user_id=? ORDER BY id DESC LIMIT 1",
+                (tester_user_id,),
+            ).fetchone()
+            wallet_row = conn.execute(
+                "SELECT * FROM test_shadow_wallets WHERE tester_user_id=?",
+                (tester_user_id,),
+            ).fetchone()
+            tx_rows = conn.execute(
+                "SELECT * FROM test_shadow_transactions WHERE tester_user_id=? ORDER BY created_at DESC LIMIT 100",
+                (tester_user_id,),
+            ).fetchall()
+            chain_rows = conn.execute(
+                "SELECT id, prev_hash, block_hash, created_at FROM test_chain_blocks ORDER BY created_at DESC LIMIT 20"
+            ).fetchall()
+            return {
+                "ok": True,
+                "mode": token_result.get("mode"),
+                "token": {
+                    "id": token_row["id"],
+                    "expires_at": token_row["expires_at"],
+                    "can_modify_own_role": bool(token_row["can_modify_own_role"]),
+                    "can_modify_own_points": bool(token_row["can_modify_own_points"]),
+                    "can_run_security_tests": bool(token_row["can_run_security_tests"]),
+                },
+                "shadow_role": dict(role_row) if role_row else None,
+                "shadow_wallet": dict(wallet_row) if wallet_row else {"tester_user_id": tester_user_id, "balance_points": 0},
+                "shadow_transactions": [dict(row) for row in tx_rows],
+                "test_chain": [dict(row) for row in chain_rows],
+            }
+        finally:
+            conn.close()
+
+    def set_tester_shadow_role(self, *, actor, token, shadow_role, route="", ip_address=""):
+        token_result = self.active_tester_token(token=token, route=route, ip_address=ip_address, log_request=True)
+        if not token_result.get("ok"):
+            return token_result
+        token_row = token_result["token"]
+        tester_user_id = int(token_row["tester_user_id"])
+        if tester_user_id != self._actor_id(actor):
+            return {"ok": False, "msg": "tester token 與目前帳號不一致"}
+        if not token_row.get("can_modify_own_role"):
+            return {"ok": False, "msg": "此 tester token 未允許修改自己的 shadow role"}
+        shadow_role = str(shadow_role or "").strip()
+        if shadow_role not in {"user", "manager"}:
+            return {"ok": False, "msg": "shadow_role 只能是 user 或 manager；tester 不可升成 root"}
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            user = conn.execute("SELECT role FROM users WHERE id=?", (tester_user_id,)).fetchone()
+            if not user:
+                return {"ok": False, "msg": "找不到 tester user"}
+            conn.execute(
+                """
+                INSERT INTO test_shadow_roles
+                (tester_user_id, original_role, shadow_role, token_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tester_user_id, user["role"], shadow_role, token_row["id"], datetime.now().isoformat()),
+            )
+            conn.commit()
+            return {"ok": True, "shadow_role": shadow_role, "original_role": user["role"], "formal_users_table_changed": False}
+        finally:
+            conn.close()
+
+    def adjust_tester_shadow_wallet(self, *, actor, token, delta_points, reason="", route="", ip_address=""):
+        token_result = self.active_tester_token(token=token, route=route, ip_address=ip_address, log_request=True)
+        if not token_result.get("ok"):
+            return token_result
+        token_row = token_result["token"]
+        tester_user_id = int(token_row["tester_user_id"])
+        if tester_user_id != self._actor_id(actor):
+            return {"ok": False, "msg": "tester token 與目前帳號不一致"}
+        if not token_row.get("can_modify_own_points"):
+            return {"ok": False, "msg": "此 tester token 未允許修改自己的 shadow points"}
+        try:
+            delta = int(delta_points)
+        except Exception:
+            return {"ok": False, "msg": "delta_points 必須是整數"}
+        if delta == 0:
+            return {"ok": False, "msg": "delta_points 不可為 0"}
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute(
+                "SELECT * FROM test_shadow_wallets WHERE tester_user_id=?",
+                (tester_user_id,),
+            ).fetchone()
+            current = int(row["balance_points"] or 0) if row else 0
+            next_balance = current + delta
+            if next_balance < 0:
+                return {"ok": False, "msg": "shadow wallet 不可變成負數"}
+            now = datetime.now().isoformat()
+            if row:
+                conn.execute(
+                    "UPDATE test_shadow_wallets SET balance_points=?, token_id=?, updated_at=? WHERE tester_user_id=?",
+                    (next_balance, token_row["id"], now, tester_user_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO test_shadow_wallets (tester_user_id, balance_points, token_id, updated_at) VALUES (?, ?, ?, ?)",
+                    (tester_user_id, next_balance, token_row["id"], now),
+                )
+            tx_id = f"shadow_tx_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+            conn.execute(
+                """
+                INSERT INTO test_shadow_transactions
+                (id, tester_user_id, delta_points, reason, token_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (tx_id, tester_user_id, delta, str(reason or "")[:500], token_row["id"], now),
+            )
+            prev = conn.execute(
+                "SELECT block_hash FROM test_chain_blocks ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = prev["block_hash"] if prev else "GENESIS"
+            block_id = f"testblk_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
+            tx_payload = {
+                "tx_id": tx_id,
+                "tester_user_id": tester_user_id,
+                "delta_points": delta,
+                "balance_after": next_balance,
+                "reason": reason or "",
+            }
+            block_hash = self._stable_hash({"id": block_id, "prev_hash": prev_hash, "tx": tx_payload, "created_at": now})
+            conn.execute(
+                """
+                INSERT INTO test_chain_blocks
+                (id, prev_hash, block_hash, transactions_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (block_id, prev_hash, block_hash, json.dumps([tx_payload], ensure_ascii=False, sort_keys=True), now),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "transaction_id": tx_id,
+                "test_block_id": block_id,
+                "balance_points": next_balance,
+                "formal_points_chain_changed": False,
+            }
+        finally:
+            conn.close()
+
+    def enter_incident_lockdown(self, *, actor, trigger_type, reason, verification=None):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            incident_id = self._enter_incident_lockdown_on_conn(
+                conn,
+                actor=actor,
+                trigger_type=trigger_type,
+                reason=reason,
+                verification=verification or {},
+            )
+            conn.commit()
+            self.audit("SERVER_MODE_INCIDENT_LOCKDOWN_ENTER", "-", user=self._actor_name(actor), success=True, detail=f"incident_id={incident_id},trigger={trigger_type},reason={reason}")
+            return {"ok": True, "incident_id": incident_id, "mode": self.get_current_mode()}
+        finally:
+            conn.close()
+
+    def incident_status(self):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute("SELECT * FROM incident_reports WHERE status='open' ORDER BY entered_at DESC LIMIT 1").fetchone()
+            return {"ok": True, "incident": dict(row) if row else None, "mode": self.get_current_mode()}
+        finally:
+            conn.close()
+
+    def resolve_incident(self, *, actor, confirm, notes="", verification=None):
+        if confirm != "RESOLVE_INCIDENT":
+            return {"ok": False, "msg": "confirm 必須等於 RESOLVE_INCIDENT"}
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            row = conn.execute("SELECT * FROM incident_reports WHERE status='open' ORDER BY entered_at DESC LIMIT 1").fetchone()
+            if not row:
+                return {"ok": False, "msg": "目前沒有 open incident"}
+            now = datetime.now().isoformat()
+            conn.execute(
+                """
+                UPDATE incident_reports
+                SET status='resolved', resolved_by=?, resolved_at=?, resolution_notes=?, verification_json=?
+                WHERE id=?
+                """,
+                (
+                    self._actor_id(actor),
+                    now,
+                    notes or "",
+                    json.dumps(verification or {}, ensure_ascii=False, sort_keys=True),
+                    row["id"],
+                ),
+            )
+            conn.commit()
+            return {"ok": True, "incident_id": row["id"], "resolved_at": now}
         finally:
             conn.close()
 
@@ -1499,110 +2627,305 @@ class ServerModeService:
             conn.close()
 
     def switch_mode(self, *, target_mode, actor, confirm, notes=None):
-        target_mode = str(target_mode or "").strip().lower()
+        original_target = str(target_mode or "").strip().lower()
+        target_mode = self._normalize_mode(original_target)
         profile = self.get_profile(target_mode)
         if not profile:
             return {"ok": False, "msg": "server mode 錯誤"}
-        if target_mode == "production" and confirm != "GO_LIVE":
-            return {"ok": False, "msg": "進入 production 上線模式必須在確認欄輸入 GO_LIVE"}
-        if target_mode in {"preprod", "production"} and self.integrity_guard:
-            allowed, high_risk_count = self.integrity_guard.can_enter_preprod()
-            if not allowed:
+        expected_confirm = MODE_CONFIRM_PHRASES.get(target_mode, "SWITCH_CUSTOM_MODE")
+        if confirm != expected_confirm:
+            return {"ok": False, "msg": f"confirm 必須等於 {expected_confirm}"}
+        if target_mode == "production":
+            requirements = self.production_requirements()
+            if not requirements.get("ok"):
                 return {
                     "ok": False,
-                    "msg": "存在 pending/rejected high risk Integrity Guard finding，不允許進入準上線或上線模式",
-                    "high_risk_count": high_risk_count,
+                    "msg": "production gate 未通過，缺少報告或仍有 critical/high finding",
+                    "requirements": requirements,
                 }
-        if target_mode == "superweak":
-            return self.enter_superweak(actor=actor, confirm=confirm, notes=notes)
+            if self.integrity_guard:
+                try:
+                    allowed, high_risk_count = self.integrity_guard.can_enter_preprod()
+                except Exception:
+                    allowed, high_risk_count = False, 1
+                if not allowed:
+                    conn = self.get_db()
+                    try:
+                        self.ensure_schema(conn)
+                        current_row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+                        self._record_mode_switch(
+                            conn,
+                            from_mode=(current_row["current_mode"] if current_row else "test"),
+                            to_mode="production",
+                            actor=actor,
+                            reason=notes or "",
+                            success=False,
+                            error_message="integrity guard high risk finding",
+                            config_diff={"high_risk_count": high_risk_count},
+                        )
+                        self._enter_incident_lockdown_on_conn(
+                            conn,
+                            actor=actor,
+                            trigger_type="integrity_high_risk",
+                            reason="production entry blocked by high risk Integrity Guard finding",
+                            verification={"high_risk_count": high_risk_count},
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    return {
+                        "ok": False,
+                        "msg": "Integrity Guard 存在高風險異常，不允許進入 production，已進入 incident_lockdown",
+                        "high_risk_count": high_risk_count,
+                        "incident_lockdown": True,
+                    }
         applied_settings = {}
-        if self.save_settings:
-            updates = {}
-            updates.update(profile.get("settings") or {})
-            updates.update(profile.get("thresholds") or {})
-            applied_settings = self.save_settings(updates) if updates else {}
         production_result = None
-        if target_mode == "production":
-            production_result = self._apply_production_hardening(actor=actor)
-            if not production_result.get("ok"):
-                return production_result
         internal_test_result = None
-        if target_mode == "internal_test":
-            internal_test_result = self._apply_internal_test_hardening()
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            current = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()["current_mode"]
+            current_row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+            current = self._normalize_mode(current_row["current_mode"] if current_row else "test")
+            if current == "incident_lockdown" and target_mode == "superweak":
+                self._record_mode_switch(
+                    conn,
+                    from_mode=current,
+                    to_mode=target_mode,
+                    actor=actor,
+                    reason=notes or "",
+                    success=False,
+                    error_message="incident_lockdown 不允許切換到 superweak",
+                )
+                conn.commit()
+                return {"ok": False, "msg": "incident_lockdown 不允許切換到 superweak"}
+            current_settings = self._settings_snapshot(conn)
+            config_diff = self._config_diff(current_settings, {**(profile.get("settings") or {}), **(profile.get("thresholds") or {})})
+        finally:
+            conn.close()
+
+        checkpoint = self.create_mode_checkpoint(
+            actor=actor,
+            target_mode=target_mode,
+            reason=notes or "",
+            snapshot_type="before_superweak" if target_mode == "superweak" else "mode_checkpoint",
+            from_mode=current,
+        )
+        if not checkpoint.get("ok"):
+            conn = self.get_db()
+            try:
+                self.ensure_schema(conn)
+                self._record_mode_switch(
+                    conn,
+                    from_mode=current,
+                    to_mode=target_mode,
+                    actor=actor,
+                    reason=notes or "",
+                    success=False,
+                    error_message=checkpoint.get("msg") or checkpoint.get("error") or "checkpoint failed",
+                )
+                self._enter_incident_lockdown_on_conn(
+                    conn,
+                    actor=actor,
+                    trigger_type="mode_switch_failed",
+                    reason=f"checkpoint before {target_mode} failed",
+                    verification=checkpoint,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return {**checkpoint, "msg": checkpoint.get("msg") or "checkpoint 建立失敗，已進入 incident_lockdown", "incident_lockdown": True}
+
+        try:
+            if self.save_settings:
+                updates = {}
+                updates.update(profile.get("settings") or {})
+                updates.update(profile.get("thresholds") or {})
+                applied_settings = self.save_settings(updates) if updates else {}
+            if target_mode == "production":
+                production_result = self._apply_production_hardening(actor=actor)
+                if not production_result.get("ok"):
+                    raise RuntimeError(production_result.get("msg") or "production hardening failed")
+            if target_mode == "internal_test":
+                internal_test_result = self._apply_internal_test_hardening()
+        except Exception as exc:
+            conn = self.get_db()
+            try:
+                self.ensure_schema(conn)
+                self._record_mode_switch(
+                    conn,
+                    from_mode=current,
+                    to_mode=target_mode,
+                    actor=actor,
+                    reason=notes or "",
+                    checkpoint_id=checkpoint.get("checkpoint_id"),
+                    snapshot_id=checkpoint.get("snapshot_id"),
+                    success=False,
+                    error_message=str(exc),
+                    config_diff=config_diff,
+                )
+                self._enter_incident_lockdown_on_conn(
+                    conn,
+                    actor=actor,
+                    trigger_type="mode_switch_failed",
+                    reason=f"mode switch to {target_mode} failed: {exc}",
+                    verification={"checkpoint": checkpoint, "target_mode": target_mode},
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return {"ok": False, "msg": "模式切換套用設定失敗，已進入 incident_lockdown", "error": str(exc), "checkpoint": checkpoint}
+
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            now = datetime.now().isoformat()
             conn.execute(
-                "UPDATE server_modes SET previous_mode=?, current_mode=?, active_snapshot_id=NULL, mode_changed_by=?, mode_changed_at=?, notes=? WHERE id=1",
-                (current, target_mode, int(actor["id"]), datetime.now().isoformat(), notes or ""),
+                """
+                UPDATE server_modes
+                SET previous_mode=?, current_mode=?, active_snapshot_id=?, checkpoint_id=?,
+                    mode_changed_by=?, mode_changed_at=?, notes=?, reason=?, config_json=?
+                WHERE id=1
+                """,
+                (
+                    current,
+                    target_mode,
+                    checkpoint.get("snapshot_id") if target_mode == "superweak" else None,
+                    checkpoint.get("checkpoint_id"),
+                    self._actor_id(actor),
+                    now,
+                    notes or "",
+                    notes or "",
+                    json.dumps(profile, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            self._record_mode_switch(
+                conn,
+                from_mode=current,
+                to_mode=target_mode,
+                actor=actor,
+                reason=notes or "",
+                checkpoint_id=checkpoint.get("checkpoint_id"),
+                snapshot_id=checkpoint.get("snapshot_id"),
+                success=True,
+                config_diff=config_diff,
+                restore_result={},
             )
             conn.commit()
-            self.audit("SERVER_MODE_CHANGE", "-", user=actor["username"], success=True, detail=f"old_value={current},new_value={target_mode},profile={profile['name']},settings={applied_settings},production={production_result or {}},internal_test={internal_test_result or {}},reason={notes or ''}")
-            return {"ok": True, "mode": self.get_current_mode(), "profile": profile, "applied_settings": applied_settings, "production": production_result, "internal_test": internal_test_result}
+            event = "SUPERWEAK_ENTER" if target_mode == "superweak" else "SERVER_MODE_CHANGE"
+            self.audit(event, "-", user=self._actor_name(actor), success=True, detail=f"old_value={current},new_value={target_mode},profile={profile['name']},checkpoint={checkpoint.get('checkpoint_id')},snapshot={checkpoint.get('snapshot_id')},settings={applied_settings},production={production_result or {}},internal_test={internal_test_result or {}},reason={notes or ''}")
+            return {"ok": True, "mode": self.get_current_mode(), "profile": profile, "applied_settings": applied_settings, "production": production_result, "internal_test": internal_test_result, "checkpoint": checkpoint}
         finally:
             conn.close()
 
     def enter_superweak(self, *, actor, confirm, notes=None):
-        if confirm != "ENABLE_SUPERWEAK":
-            return {"ok": False, "msg": "confirm 必須等於 ENABLE_SUPERWEAK"}
         current = self.get_current_mode()
-        if current["current_mode"] == "superweak":
+        if self._normalize_mode(current.get("current_mode")) == "superweak":
             return {"ok": False, "msg": "目前已是 superweak 模式"}
-        snap = self.snapshot_service.create_snapshot(snapshot_type="before_superweak", actor=actor, notes=notes or "Before enabling superweak")
-        if not snap.ok:
-            return {"ok": False, "msg": "before_superweak snapshot 建立失敗", "error": snap.error}
-        conn = self.get_db()
-        try:
-            self.ensure_schema(conn)
-            conn.execute(
-                "UPDATE server_modes SET previous_mode=?, current_mode='superweak', active_snapshot_id=?, mode_changed_by=?, mode_changed_at=?, notes=? WHERE id=1",
-                (current["current_mode"], snap.snapshot_id, int(actor["id"]), datetime.now().isoformat(), notes or ""),
-            )
-            conn.commit()
-            self.audit("SUPERWEAK_ENTER", "-", user=actor["username"], success=True, detail=f"snapshot_id={snap.snapshot_id},old_value={current['current_mode']},new_value=superweak")
-            return {"ok": True, "mode": self.get_current_mode(), "snapshot_id": snap.snapshot_id}
-        finally:
-            conn.close()
+        return self.switch_mode(target_mode="superweak", actor=actor, confirm=confirm, notes=notes)
 
     def exit_superweak(self, *, actor, action, confirm, reason):
         current = self.get_current_mode()
-        if current["current_mode"] != "superweak":
+        if self._normalize_mode(current.get("current_mode")) != "superweak":
             return {"ok": False, "msg": "目前不是 superweak 模式"}
+        if action == "keep_dirty_state":
+            return {"ok": False, "msg": "Server Mode v2 禁止保留 superweak dirty state；離開 superweak 必須還原 checkpoint"}
         if action == "restore":
             if confirm != "RESTORE_BEFORE_SUPERWEAK":
                 return {"ok": False, "msg": "confirm 必須等於 RESTORE_BEFORE_SUPERWEAK"}
             snapshot_id = current["active_snapshot_id"]
+            checkpoint_id = current.get("checkpoint_id")
+            expected_checkpoint = None
+            if checkpoint_id:
+                conn = self.get_db()
+                try:
+                    self.ensure_schema(conn)
+                    expected_checkpoint = self._checkpoint_record(conn, checkpoint_id)
+                finally:
+                    conn.close()
             result = self.snapshot_service.restore_snapshot(snapshot_id=snapshot_id, actor=actor, reason=reason or "exit superweak", dry_run=False)
             if not result.get("ok"):
-                return result
-            previous = current["previous_mode"] or "preprod"
+                conn = self.get_db()
+                try:
+                    self.ensure_schema(conn)
+                    self._record_mode_switch(
+                        conn,
+                        from_mode="superweak",
+                        to_mode=current["previous_mode"] or "test",
+                        actor=actor,
+                        reason=reason or "",
+                        checkpoint_id=checkpoint_id,
+                        snapshot_id=snapshot_id,
+                        success=False,
+                        error_message=result.get("msg") or result.get("error") or "restore failed",
+                        restore_result=result,
+                    )
+                    self._enter_incident_lockdown_on_conn(
+                        conn,
+                        actor=actor,
+                        trigger_type="restore_validation_failed",
+                        reason="exit superweak restore failed",
+                        verification=result,
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                return {**result, "incident_lockdown": True}
+            validation = self.validate_checkpoint_restore(checkpoint_id=checkpoint_id, expected_checkpoint=expected_checkpoint) if checkpoint_id else {"ok": False, "msg": "missing checkpoint_id"}
+            if not validation.get("ok"):
+                conn = self.get_db()
+                try:
+                    self.ensure_schema(conn)
+                    self._record_mode_switch(
+                        conn,
+                        from_mode="superweak",
+                        to_mode=current["previous_mode"] or "test",
+                        actor=actor,
+                        reason=reason or "",
+                        checkpoint_id=checkpoint_id,
+                        snapshot_id=snapshot_id,
+                        success=False,
+                        error_message="checkpoint restore validation failed",
+                        restore_result=validation,
+                    )
+                    self._enter_incident_lockdown_on_conn(
+                        conn,
+                        actor=actor,
+                        trigger_type="restore_validation_failed",
+                        reason="superweak checkpoint restore validation failed",
+                        verification=validation,
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                return {"ok": False, "msg": "superweak 還原驗證失敗，已進入 incident_lockdown", "restore": result, "validation": validation, "incident_lockdown": True}
+            previous = self._normalize_mode(current["previous_mode"] or "test")
             conn = self.get_db()
             try:
                 self.ensure_schema(conn)
                 conn.execute(
-                    "UPDATE server_modes SET current_mode=?, previous_mode='superweak', active_snapshot_id=NULL, mode_changed_by=?, mode_changed_at=?, notes=? WHERE id=1",
-                    (previous, int(actor["id"]), datetime.now().isoformat(), reason or ""),
+                    """
+                    UPDATE server_modes
+                    SET current_mode=?, previous_mode='superweak', active_snapshot_id=NULL, checkpoint_id=NULL,
+                        mode_changed_by=?, mode_changed_at=?, notes=?, reason=?
+                    WHERE id=1
+                    """,
+                    (previous, self._actor_id(actor), datetime.now().isoformat(), reason or "", reason or ""),
+                )
+                self._record_mode_switch(
+                    conn,
+                    from_mode="superweak",
+                    to_mode=previous,
+                    actor=actor,
+                    reason=reason or "",
+                    checkpoint_id=checkpoint_id,
+                    snapshot_id=snapshot_id,
+                    success=True,
+                    restore_result={"restore": result, "validation": validation},
                 )
                 conn.commit()
             finally:
                 conn.close()
-            self.audit("SUPERWEAK_EXIT_RESTORE", "-", user=actor["username"], success=True, detail=f"restored_snapshot={snapshot_id},new_value={previous},reason={reason}")
-            return {"ok": True, "mode": self.get_current_mode(), **result}
-        if action == "keep_dirty_state":
-            if confirm != "KEEP_DIRTY_SUPERWEAK_STATE":
-                return {"ok": False, "msg": "confirm 必須等於 KEEP_DIRTY_SUPERWEAK_STATE"}
-            previous = current["previous_mode"] or "preprod"
-            conn = self.get_db()
-            try:
-                self.ensure_schema(conn)
-                conn.execute(
-                    "UPDATE server_modes SET current_mode=?, previous_mode='superweak', active_snapshot_id=NULL, mode_changed_by=?, mode_changed_at=?, notes=? WHERE id=1",
-                    (previous, int(actor["id"]), datetime.now().isoformat(), reason or ""),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-            self.audit("SUPERWEAK_EXIT_KEEP_DIRTY_STATE", "-", user=actor["username"], success=True, detail=f"warning=dirty_state_kept,reason={reason}")
-            return {"ok": True, "warning": "已保留 superweak 期間的 dirty state；此操作具高風險", "mode": self.get_current_mode()}
+            self.audit("SUPERWEAK_EXIT_RESTORE", "-", user=self._actor_name(actor), success=True, detail=f"restored_snapshot={snapshot_id},checkpoint={checkpoint_id},new_value={previous},reason={reason}")
+            return {"ok": True, "mode": self.get_current_mode(), "validation": validation, **result}
         return {"ok": False, "msg": "action 錯誤"}

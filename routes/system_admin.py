@@ -2247,6 +2247,290 @@ def register_system_admin_routes(app, deps):
             )
         return json_resp(result), (200 if result.get("ok") else 400)
 
+    @app.route("/api/root/server-mode", methods=["GET"])
+    @require_csrf_safe
+    def root_server_mode_status():
+        if not server_mode_service:
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        payload = {
+            "ok": True,
+            "mode": server_mode_service.get_current_mode(),
+            "profiles": server_mode_service.list_profiles(),
+        }
+        if hasattr(server_mode_service, "production_requirements"):
+            payload["production_requirements"] = server_mode_service.production_requirements()
+        if hasattr(server_mode_service, "incident_status"):
+            payload["incident"] = server_mode_service.incident_status().get("incident")
+        return json_resp(payload)
+
+    @app.route("/api/root/server-mode/checkpoint", methods=["POST"])
+    @require_csrf
+    def root_server_mode_checkpoint():
+        if not server_mode_service:
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.create_mode_checkpoint(
+            actor=actor,
+            target_mode=data.get("target_mode") or data.get("mode"),
+            reason=data.get("reason") or data.get("notes") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/server-mode/restore-check", methods=["POST"])
+    @require_csrf
+    def root_server_mode_restore_check():
+        if not server_mode_service or not hasattr(server_mode_service, "validate_checkpoint_restore"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.validate_checkpoint_restore(checkpoint_id=data.get("checkpoint_id"))
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/server-mode/switch", methods=["POST"])
+    @require_csrf
+    def root_server_mode_switch():
+        if not server_mode_service:
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.switch_mode(
+            target_mode=data.get("mode") or data.get("target_mode"),
+            actor=actor,
+            confirm=data.get("confirm"),
+            notes=data.get("reason") or data.get("notes") or "",
+        )
+        if result.get("ok"):
+            result["points_block"] = _force_points_block("server_mode_change", actor)
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/server-mode/requirements", methods=["GET"])
+    @require_csrf_safe
+    def root_server_mode_requirements():
+        if not server_mode_service or not hasattr(server_mode_service, "production_requirements"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        return json_resp(server_mode_service.production_requirements())
+
+    @app.route("/api/root/server-mode/logs", methods=["GET"])
+    @require_csrf_safe
+    def root_server_mode_logs():
+        if not server_mode_service or not hasattr(server_mode_service, "mode_switch_logs"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            limit = int(request.args.get("limit") or 50)
+        except Exception:
+            limit = 50
+        return json_resp({"ok": True, "logs": server_mode_service.mode_switch_logs(limit=limit)})
+
+    @app.route("/api/root/production-report/upload", methods=["POST"])
+    @require_csrf
+    def root_production_report_upload():
+        if not server_mode_service or not hasattr(server_mode_service, "upload_production_report"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.upload_production_report(
+            actor=actor,
+            report_type=data.get("report_type"),
+            report_hash=data.get("report_hash"),
+            target_commit=data.get("target_commit") or "",
+            target_branch=data.get("target_branch") or "",
+            server_mode=data.get("server_mode") or "",
+            test_result=data.get("test_result") or "",
+            passed=bool(data.get("pass") if "pass" in data else data.get("passed")),
+            critical_findings_count=data.get("critical_findings_count") or 0,
+            high_findings_count=data.get("high_findings_count") or 0,
+            unresolved_findings=data.get("unresolved_findings") or [],
+            tester=data.get("tester") or actor["username"],
+            signature=data.get("signature") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/production-report/status", methods=["GET"])
+    @require_csrf_safe
+    def root_production_report_status():
+        if not server_mode_service or not hasattr(server_mode_service, "production_requirements"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        return json_resp(server_mode_service.production_requirements())
+
+    @app.route("/api/root/production/enter", methods=["POST"])
+    @require_csrf
+    def root_production_enter():
+        if not server_mode_service:
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.switch_mode(
+            target_mode="production",
+            actor=actor,
+            confirm=data.get("confirm"),
+            notes=data.get("reason") or data.get("notes") or "",
+        )
+        if result.get("ok"):
+            result["points_block"] = _force_points_block("server_mode_change", actor)
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/tester-token/create", methods=["POST"])
+    @require_csrf
+    def root_tester_token_create():
+        if not server_mode_service or not hasattr(server_mode_service, "create_tester_token"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.create_tester_token(
+            actor=actor,
+            tester_user_id=data.get("tester_user_id"),
+            allowed_features=data.get("allowed_features") or [],
+            allowed_routes=data.get("allowed_routes") or [],
+            expires_at=data.get("expires_at"),
+            max_requests_per_minute=data.get("max_requests_per_minute") or 60,
+            can_modify_own_role=bool(data.get("can_modify_own_role")),
+            can_modify_own_points=bool(data.get("can_modify_own_points")),
+            can_run_security_tests=bool(data.get("can_run_security_tests")),
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/tester-token/revoke", methods=["POST"])
+    @require_csrf
+    def root_tester_token_revoke():
+        if not server_mode_service or not hasattr(server_mode_service, "revoke_tester_token"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.revoke_tester_token(
+            actor=actor,
+            token_id=data.get("token_id"),
+            reason=data.get("reason") or "",
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/tester-token/list", methods=["GET"])
+    @require_csrf_safe
+    def root_tester_token_list():
+        if not server_mode_service or not hasattr(server_mode_service, "list_tester_tokens"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        return json_resp({"ok": True, "tokens": server_mode_service.list_tester_tokens()})
+
+    @app.route("/api/root/incident/enter", methods=["POST"])
+    @require_csrf
+    def root_incident_enter():
+        if not server_mode_service or not hasattr(server_mode_service, "enter_incident_lockdown"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        if data.get("confirm") != "ENTER_INCIDENT_LOCKDOWN":
+            return json_resp({"ok":False,"msg":"confirm 必須等於 ENTER_INCIDENT_LOCKDOWN"}), 400
+        result = server_mode_service.enter_incident_lockdown(
+            actor=actor,
+            trigger_type=data.get("trigger_type") or "manual",
+            reason=data.get("reason") or "",
+            verification=data.get("verification") or {},
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
+    @app.route("/api/root/incident/status", methods=["GET"])
+    @require_csrf_safe
+    def root_incident_status():
+        if not server_mode_service or not hasattr(server_mode_service, "incident_status"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        return json_resp(server_mode_service.incident_status())
+
+    @app.route("/api/root/incident/resolve", methods=["POST"])
+    @require_csrf
+    def root_incident_resolve():
+        if not server_mode_service or not hasattr(server_mode_service, "resolve_incident"):
+            return json_resp({"ok":False,"msg":"server mode service unavailable"}), 503
+        actor, error = require_root_actor()
+        if error:
+            return error
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        result = server_mode_service.resolve_incident(
+            actor=actor,
+            confirm=data.get("confirm"),
+            notes=data.get("notes") or "",
+            verification=data.get("verification") or {},
+        )
+        return json_resp(result), (200 if result.get("ok") else 400)
+
     @app.route("/api/admin/server-mode/exit-superweak", methods=["POST"])
     @require_csrf
     def admin_exit_superweak():

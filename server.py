@@ -511,6 +511,131 @@ def has_valid_maintenance_bypass(settings=None):
     )
 
 
+def get_runtime_server_mode():
+    conn = None
+    try:
+        conn = get_db()
+        row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+        mode = str(row["current_mode"] or "test").strip().lower() if row else "test"
+        return "dev_ready" if mode == "preprod" else mode
+    except Exception:
+        return "test"
+    finally:
+        if conn:
+            conn.close()
+
+
+def tester_token_username_from_request(req):
+    token = (
+        req.headers.get("X-Tester-Token", "")
+        or req.headers.get("X-Internal-Test-Token", "")
+        or ""
+    ).strip()
+    auth_header = req.headers.get("Authorization", "")
+    if not token and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        return None
+    conn = None
+    try:
+        conn = get_db()
+        ensure_snapshot_schema(conn)
+        mode = get_runtime_server_mode()
+        if mode not in {"test", "internal_test"}:
+            return None
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        row = conn.execute(
+            """
+            SELECT t.*, u.username, u.status
+            FROM tester_tokens t
+            JOIN users u ON u.id=t.tester_user_id
+            WHERE t.token_hash=?
+              AND t.revoked_at IS NULL
+              AND t.expires_at>?
+              AND u.status='active'
+            LIMIT 1
+            """,
+            (token_hash, datetime.now().isoformat()),
+        ).fetchone()
+        if not row:
+            return None
+        path = req.path or ""
+        if path.startswith("/api/root/") or path in {"/api/root"}:
+            record_security_event("permission_denied", get_client_ip(), target_user=row["username"], detail=f"tester_token_root_api:path={path}")
+            return None
+        forbidden_prefixes = (
+            "/api/admin/server-mode",
+            "/api/admin/snapshots",
+            "/api/admin/integrity",
+            "/api/admin/settings",
+            "/api/admin/features",
+        )
+        if any(path == prefix or path.startswith(prefix) for prefix in forbidden_prefixes):
+            record_security_event("permission_denied", get_client_ip(), target_user=row["username"], detail=f"tester_token_forbidden_admin_api:path={path}")
+            return None
+        try:
+            allowed_routes = json.loads(row["allowed_routes_json"] or "[]")
+        except Exception:
+            allowed_routes = []
+        if allowed_routes and not any(path == route or path.startswith(str(route).rstrip("/") + "/") for route in allowed_routes):
+            record_security_event("permission_denied", get_client_ip(), target_user=row["username"], detail=f"tester_token_route_not_allowed:path={path}")
+            return None
+        window_start = (datetime.now() - timedelta(seconds=60)).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) AS c FROM tester_token_request_log WHERE token_id=? AND created_at>?",
+            (row["id"], window_start),
+        ).fetchone()
+        max_rpm = max(1, int(row["max_requests_per_minute"] or 60))
+        if int(recent["c"] or 0) >= max_rpm:
+            record_security_event("rate_limited", get_client_ip(), target_user=row["username"], detail=f"tester_token_rate_limit:token_id={row['id']}")
+            return None
+        conn.execute(
+            "INSERT INTO tester_token_request_log (token_id, route, ip_address, created_at) VALUES (?, ?, ?, ?)",
+            (row["id"], path, get_client_ip(), datetime.now().isoformat()),
+        )
+        conn.commit()
+        return row["username"]
+    except Exception:
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def path_is_root_recovery_allowed_during_lockdown(path):
+    allowed_exact = {
+        "/api/csrf-token",
+        "/api/logout",
+        "/api/session/idle-timeout",
+        "/api/me",
+        "/api/version",
+        "/api/site-config",
+        "/api/captcha/challenge",
+    }
+    if path in allowed_exact:
+        return True
+    allowed_prefixes = (
+        "/api/root/server-mode",
+        "/api/root/incident/",
+        "/api/admin/server-mode",
+        "/api/admin/snapshots",
+        "/api/admin/integrity",
+        "/api/admin/health",
+        "/api/admin/server-output",
+        "/api/admin/server-log",
+        "/api/admin/settings",
+        "/api/admin/features",
+        "/api/root/points-chain",
+        "/api/root/storage/users",
+    )
+    return any(path == prefix or path.startswith(prefix) for prefix in allowed_prefixes)
+
+
 def root_ip_is_allowed(settings=None):
     settings = settings or get_system_settings()
     if not settings.get("root_ip_whitelist_enabled", False):
@@ -869,6 +994,7 @@ configure_auth_service(
     session_ttl=SESSION_TTL,
     csrf_token_ttl=CSRF_TOKEN_TTL,
     session_idle_timeout=SESSION_IDLE_TIMEOUT_SECONDS,
+    tester_token_user_lookup=tester_token_username_from_request,
 )
 configure_audit_service(
     get_db=get_db,
@@ -1118,7 +1244,9 @@ def restrict_cors():
             return ("", 204)
 
     settings = get_system_settings()
-    if not settings.get("maintenance_mode", False):
+    runtime_mode = get_runtime_server_mode()
+    mode_blocks_writes = runtime_mode in {"maintenance", "incident_lockdown"}
+    if not mode_blocks_writes and not settings.get("maintenance_mode", False):
         return None
     if has_valid_maintenance_bypass(settings):
         return None
@@ -1131,27 +1259,55 @@ def restrict_cors():
         username = normalize_text(data.get("username")) if isinstance(data, dict) else ""
         if username == "root":
             return None
+        if runtime_mode == "maintenance":
+            return None
         return json_resp(maintenance_bypass_required_payload(
-            "系統進入緊急維護模式，僅允許最高管理者登入；維護腳本可由 root 提供維護旁路 token。"
+            "系統進入事故封鎖模式，僅允許最高管理者登入修復。"
+            if runtime_mode == "incident_lockdown"
+            else "系統進入緊急維護模式，僅允許最高管理者登入；維護腳本可由 root 提供維護旁路 token。"
         )), 503
 
     actor = get_current_user_ctx()
     if actor and actor["username"] == "root":
+        if runtime_mode == "incident_lockdown" and not path_is_root_recovery_allowed_during_lockdown(request.path):
+            return json_resp({
+                "ok": False,
+                "msg": "事故封鎖模式中，root 只能操作修復、檢查、snapshot、server mode 與 incident API",
+                "server_mode": runtime_mode,
+            }), 503
         return None
+    if actor and runtime_mode == "maintenance":
+        if request.method == "GET" and request.path in {"/api/me", "/api/version", "/api/site-config", "/api/admin/health"}:
+            return None
+        return json_resp({
+            "ok": False,
+            "msg": "系統維護中，非 root 帳號只能查看狀態，不能執行操作。",
+            "server_mode": runtime_mode,
+        }), 503
     if actor:
         try:
             revoke_user_sessions(actor["id"])
-            audit("MAINTENANCE_FORCED_LOGOUT", get_client_ip(), user=actor["username"], success=True, detail=f"path={request.path}")
+            audit(
+                "INCIDENT_FORCED_LOGOUT" if runtime_mode == "incident_lockdown" else "MAINTENANCE_FORCED_LOGOUT",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                detail=f"path={request.path},mode={runtime_mode}",
+            )
         except Exception:
             pass
         resp = json_resp(maintenance_bypass_required_payload(
-            "系統進入緊急維護模式，非 root 帳號已強制登出。"
+            "系統進入事故封鎖模式，非 root 帳號已強制登出。"
+            if runtime_mode == "incident_lockdown"
+            else "系統進入緊急維護模式，非 root 帳號已強制登出。"
         ), 503)
         resp.delete_cookie("session_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
         resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
         return resp
     return json_resp(maintenance_bypass_required_payload(
-        "系統進入緊急維護模式，請等待最高管理者處理，或由 root 提供維護旁路 token。"
+        "系統進入事故封鎖模式，請等待 root 修復。"
+        if runtime_mode == "incident_lockdown"
+        else "系統進入緊急維護模式，請等待最高管理者處理，或由 root 提供維護旁路 token。"
     )), 503
 
 

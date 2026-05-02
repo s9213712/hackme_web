@@ -8,7 +8,7 @@ def test_main_app_has_mobile_responsive_overrides():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/styles.css?v=20260501-mobile-sidebar" in index_html
+    assert "/styles.css?v=20260502-mobile-bugfixes" in index_html
     assert "Mobile ergonomics pass" in css
     assert "@media (max-width: 860px)" in css
     assert "@media (max-width: 720px)" in css

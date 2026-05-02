@@ -123,7 +123,7 @@ def test_approve_updates_manifest_and_reject_does_not(tmp_path):
     assert any("INTEGRITY_FINDING_APPROVED" in args for args, _ in audit_log)
 
 
-def test_preprod_mode_is_blocked_by_pending_high_risk_integrity_finding(tmp_path):
+def test_production_mode_high_risk_integrity_finding_enters_incident_lockdown(tmp_path):
     guard, base, _ = _guard(tmp_path)
     guard.scan(actor="system")
     (base / "server.py").write_text("print('danger')\n", encoding="utf-8")
@@ -134,13 +134,37 @@ def test_preprod_mode_is_blocked_by_pending_high_risk_integrity_finding(tmp_path
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         ensure_snapshot_schema(conn)
+        now = datetime.now().isoformat()
+        for report_type in (
+            "stress",
+            "permission",
+            "functional",
+            "pentest",
+            "snapshot_restore",
+            "points_chain_consistency",
+            "cloud_drive_quota_permission",
+        ):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO production_entry_reports
+                (id, report_type, report_hash, target_commit, target_branch, server_mode, test_result,
+                 pass, critical_findings_count, high_findings_count, unresolved_findings_json, tester, signature, created_at)
+                VALUES (?, ?, ?, 'commit', 'branch', 'test', 'pass', 1, 0, 0, '[]', 'pytest', '', ?)
+                """,
+                (f"rep_{report_type}", report_type, f"hash_{report_type}", now),
+            )
         conn.commit()
         return conn
 
     mode = ServerModeService(snapshot_service=None, get_db=get_db, audit=lambda *args, **kwargs: None, integrity_guard=guard)
-    result = mode.switch_mode(target_mode="preprod", actor={"id": 1, "username": "root"}, confirm="", notes="")
+    result = mode.switch_mode(target_mode="production", actor={"id": 1, "username": "root"}, confirm="GO_LIVE", notes="")
     assert result["ok"] is False
     assert result["high_risk_count"] >= 1
+    assert result["incident_lockdown"] is True
+    conn = get_db()
+    current = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()["current_mode"]
+    conn.close()
+    assert current == "incident_lockdown"
 
 
 def test_low_risk_integrity_findings_auto_approve_after_one_day(tmp_path):

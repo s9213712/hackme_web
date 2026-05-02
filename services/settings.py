@@ -15,6 +15,8 @@ DEFAULT_SETTINGS = {
     "root_ip_whitelist_enabled": False,
     "root_ip_whitelist": "",
     "browser_only_mode_enabled": False,
+    "production_single_ip_account_lock_enabled": False,
+    "production_single_account_ip_lock_enabled": False,
     "maintenance_bypass_token_hash": "",
     "maintenance_bypass_token_expires_at": "",
     "internal_test_login_token_hash": "",

@@ -28,6 +28,7 @@ RISK_LEVELS = {"low", "medium", "high", "blocked", "unknown_encrypted"}
 ADMIN_DISK_QUOTA_RATIO = 0.9
 ADMIN_DISK_WARNING_RATIO = 0.8
 MANAGER_CLOUD_DRIVE_QUOTA_BYTES = 1024 * 1024 * 1024
+SUPERWEAK_CLOUD_DRIVE_QUOTA_BYTES = 10 * 1024 * 1024
 SCAN_STATUSES = {
     "not_required",
     "pending",
@@ -896,6 +897,11 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
     max_file_size_mb = int(rule.get("max_attachment_size_mb") or 0)
     upload_rate_limit_per_day = int(rule.get("upload_rate_limit_per_day") or 0)
     can_upload = admin_actor or (bool(rule.get("can_upload_attachment")) and sanction_status not in {"restricted", "suspended"})
+    try:
+        mode_row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
+        server_mode = str(mode_row["current_mode"] or "test").strip().lower() if mode_row else "test"
+    except Exception:
+        server_mode = "test"
 
     used_bytes, file_count = _sum_uploaded_file_bytes(conn, user_id)
     purchased_summary = purchased_storage_summary(conn, user_id) if user_id and not root_actor else {
@@ -956,7 +962,23 @@ def get_user_cloud_drive_usage(conn, user, member_rule=None, storage_root=None):
         "by_risk_level": _count_grouped(conn, user_id, "risk_level"),
         "by_scan_status": _count_grouped(conn, user_id, "scan_status"),
     }
-    return apply_storage_quota_override(usage, get_storage_quota_override(conn, user_id))
+    usage = apply_storage_quota_override(usage, get_storage_quota_override(conn, user_id))
+    if server_mode == "superweak":
+        total_bytes = SUPERWEAK_CLOUD_DRIVE_QUOTA_BYTES
+        remaining_bytes = max(0, total_bytes - used_bytes)
+        usage.update({
+            "quota_source": "server_mode_superweak_forced_10mb",
+            "base_quota_bytes": total_bytes,
+            "purchased_extra_bytes": 0,
+            "total_bytes": total_bytes,
+            "remaining_bytes": remaining_bytes,
+            "max_file_size_bytes": remaining_bytes,
+            "warning_threshold_percent": None,
+            "warning_threshold_bytes": None,
+            "warning_active": False,
+            "percent_used": min(100.0, round((used_bytes / total_bytes) * 100, 2)) if total_bytes else 0.0,
+        })
+    return usage
 
 
 def storage_root_can_accept_bytes(storage_root, size_bytes):
