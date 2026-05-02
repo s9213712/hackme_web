@@ -542,7 +542,7 @@ function tradingSignalBoolLabel(value) {
 
 function tradingBtcSignalCountdownText(signal) {
   const nextAt = signal?.next_prediction_at ? new Date(signal.next_prediction_at).getTime() : 0;
-  if (!Number.isFinite(nextAt) || nextAt <= 0) return "下次預測時間未提供";
+  if (!Number.isFinite(nextAt) || nextAt <= 0) return "";
   const remainingMs = Math.max(0, nextAt - Date.now());
   return remainingMs > 0
     ? `下次預測倒數 ${formatTradingDuration(remainingMs)}`
@@ -558,7 +558,8 @@ function updateTradingBtcSignalMeta() {
   const updatedAt = signal.updated_at ? new Date(signal.updated_at) : null;
   const updated = updatedAt && Number.isFinite(updatedAt.getTime()) ? updatedAt.toLocaleString() : "-";
   const ageMs = updatedAt && Number.isFinite(updatedAt.getTime()) ? Math.max(0, Date.now() - updatedAt.getTime()) : Number(signal.age_seconds || 0) * 1000;
-  meta.textContent = `來源 BTC_trade · 週期 ${signal.timeframe || "4h"} · 更新 ${updated}${ageMs ? ` · 約 ${formatTradingDuration(ageMs)} 前` : ""} · ${tradingBtcSignalCountdownText(signal)}`;
+  const countdown = tradingBtcSignalCountdownText(signal);
+  meta.textContent = `來源 BTC_trade · 週期 ${signal.timeframe || "4h"} · 更新 ${updated}${ageMs ? ` · 約 ${formatTradingDuration(ageMs)} 前` : ""}${countdown ? ` · ${countdown}` : ""}`;
 }
 
 function renderTradingBtcSignal(payload = null) {
@@ -593,7 +594,7 @@ function renderTradingBtcSignal(payload = null) {
       <div><span class="drive-card-sub">七條件信號</span><strong>${sanitize(tradingSignalBoolLabel(signal.signal_ok))}</strong><small>${signalOk ? "可進場觀察" : "未全滿足"}</small></div>
       <div><span class="drive-card-sub">ML 過濾</span><strong>${sanitize(tradingSignalBoolLabel(signal.ml_ok))}</strong><small>${sanitize(ml.situation || (ml.blocked ? "已阻擋" : "未提供"))}</small></div>
       <div><span class="drive-card-sub">BTC_trade 持倉</span><strong>${sanitize(signal.position || signal.portfolio?.position || "空手")}</strong><small>${sanitize(signal.last_trade?.action || "無最新交易")}</small></div>
-      <div><span class="drive-card-sub">下次預測</span><strong>${sanitize(tradingBtcSignalCountdownText(signal).replace("下次預測", "").trim())}</strong><small>${signal.next_prediction_at ? sanitize(new Date(signal.next_prediction_at).toLocaleString()) : "未提供"}</small></div>
+      ${signal.next_prediction_at ? `<div><span class="drive-card-sub">下次預測</span><strong>${sanitize(tradingBtcSignalCountdownText(signal).replace("下次預測", "").trim())}</strong><small>${sanitize(new Date(signal.next_prediction_at).toLocaleString())}</small></div>` : ""}
     `;
   }
   if (checks) {
