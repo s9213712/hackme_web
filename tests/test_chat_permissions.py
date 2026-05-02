@@ -254,6 +254,28 @@ def test_group_chat_create_invite_password_join_and_export(tmp_path):
     assert payload["messages"][0]["content"] == "hello group"
 
 
+def test_chat_message_strips_html_before_storage(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    sent = client.post(
+        "/api/chat/rooms/1/messages",
+        json={"content": '<script>alert(1)</script><img src=x onerror=alert(2)>hello'},
+    )
+
+    assert sent.status_code == 200
+    conn = sqlite3.connect(db_path)
+    try:
+        content = conn.execute("SELECT content FROM chat_messages ORDER BY id DESC LIMIT 1").fetchone()[0]
+    finally:
+        conn.close()
+    assert "<script" not in content.lower()
+    assert "<img" not in content.lower()
+    assert "hello" in content
+
+
 def test_chat_room_invite_creates_notification(tmp_path):
     db_path = tmp_path / "chat.db"
     _seed_chat_db(db_path)

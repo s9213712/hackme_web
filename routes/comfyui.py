@@ -77,6 +77,12 @@ def register_comfyui_routes(app, deps):
             return None, json_resp({"ok": False, "msg": "只有 root 可執行此操作"}, 403)
         return actor, None
 
+    def _can_interrupt(actor):
+        return (
+            _actor_value(actor, "username") == "root"
+            or _actor_value(actor, "role") in {"manager", "super_admin"}
+        )
+
     def _validate_comfyui_host(value):
         host = str(value or "").strip().strip("[]")
         if not host:
@@ -739,6 +745,16 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
+        if not _can_interrupt(actor):
+            audit(
+                "COMFYUI_INTERRUPT_DENIED",
+                get_client_ip(),
+                user=actor["username"],
+                success=False,
+                ua=get_ua(),
+                detail="non privileged interrupt denied",
+            )
+            return json_resp({"ok": False, "msg": "只有 root 或管理員可以中斷全域 ComfyUI 產圖任務"}), 403
         active_client = _client()
         try:
             if not hasattr(active_client, "interrupt"):
