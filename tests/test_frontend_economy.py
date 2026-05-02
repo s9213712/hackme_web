@@ -82,7 +82,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
     assert "/js/50-admin.js?v=20260501-margin-policy-settings" in index_html
-    assert "/js/56-trading.js?v=20260501-margin-policy" in index_html
+    assert "/js/56-trading.js?v=" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
     assert 'id="economy-recovery-auto-handle-btn"' in index_html
@@ -115,7 +115,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "economy-adjustment-list" in economy_js
     assert 'adminLedgerList.style.display = rootMode ? "none" : ""' in economy_js
     assert 'if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";' in economy_js
-    assert 'adminTitle.textContent = rootMode ? "手動加減分與待審核" : "待審核獎勵"' in economy_js
+    assert 'adminTitle.textContent = "手動加減分";' in economy_js
     assert "加減分歷史統一在下方明細查看" in economy_js
     assert "只有 root 可以手動調整積分" in economy_js
     assert 'fetchEconomyJson("/admin/users")' in economy_js

@@ -1339,10 +1339,12 @@ def enforce_feature_flags():
     if not feature_key or is_feature_enabled(feature_key):
         return None
     actor = get_current_user_ctx()
+    if not actor:
+        return json_resp({"ok": False, "msg": "未登入"}), 401
     record_security_event(
         "feature_disabled",
         get_client_ip(),
-        target_user=(actor["username"] if actor else "-"),
+        target_user=actor["username"],
         detail=f"path={request.path},feature={feature_key}",
     )
     return json_resp({

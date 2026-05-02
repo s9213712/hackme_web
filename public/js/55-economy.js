@@ -13,6 +13,14 @@ let economyActivePage = (() => {
   }
 })();
 
+function toggleWalletCard(bodyId, btn) {
+  const body = $(bodyId);
+  if (!body) return;
+  const hidden = body.style.display === "none";
+  body.style.display = hidden ? "" : "none";
+  if (btn) btn.textContent = hidden ? "▾" : "▸";
+}
+
 function economySetMsg(text, ok = true) {
   const el = $("economy-msg");
   if (!el) return;
@@ -486,11 +494,15 @@ async function loadEconomyAdmin() {
   if (!canManageEconomyPoints()) return;
   try {
     const rootMode = currentUser === "root";
-    const [ledger, pending, userList] = await Promise.all([
+    const fetches = [
       fetchEconomyJson("/admin/points/ledger?limit=50"),
-      fetchEconomyJson("/admin/points/pending-rewards?status=pending"),
       fetchEconomyJson("/admin/users"),
-    ]);
+    ];
+    if (rootMode) fetches.splice(1, 0, fetchEconomyJson("/admin/points/pending-rewards?status=pending"));
+    const results = await Promise.all(fetches);
+    const ledger = results[0];
+    const pending = rootMode ? results[1] : null;
+    const userList = rootMode ? results[2] : results[1];
     renderEconomyAdjustUserOptions(userList.users || []);
     const adminTitle = $("economy-admin-card-title");
     const adminSub = $("economy-admin-card-sub");
@@ -498,11 +510,11 @@ async function loadEconomyAdmin() {
     const adjustPanel = $("economy-adjust-panel");
     if (adjustPanel) adjustPanel.style.display = rootMode ? "" : "none";
     setEconomyRootLayout(rootMode);
-    if (adminTitle) adminTitle.textContent = rootMode ? "手動加減分與待審核" : "待審核獎勵";
+    if (adminTitle) adminTitle.textContent = "手動加減分";
     if (adminSub) {
       adminSub.textContent = rootMode
         ? "這裡只負責送出補償、扣回與審核；加減分歷史統一在下方明細查看"
-        : "manager 可處理待審核獎勵；手動加減分只允許 root 操作";
+        : "manager 可查看加減分紀錄；手動加減分只允許 root 操作";
     }
     if (adminLedgerList) {
       adminLedgerList.style.display = rootMode ? "none" : "";
@@ -514,22 +526,27 @@ async function loadEconomyAdmin() {
     }
     const pendingList = $("economy-pending-list");
     if (pendingList) {
-      const rows = pending.pending_rewards || [];
-      pendingList.innerHTML = rows.length ? rows.map((row) => `
-        <div class="drive-file-row">
-          <div>
-            <strong>#${Number(row.id)} · user ${Number(row.user_id)} · ${Number(row.amount)} ${formatPointsCurrency(row.currency_type)}</strong>
-            <div class="drive-card-sub">${sanitize(row.action_type || "-")} · ${sanitize(row.created_at || "")}</div>
+      if (rootMode && pending) {
+        const rows = pending.pending_rewards || [];
+        pendingList.innerHTML = rows.length ? rows.map((row) => `
+          <div class="drive-file-row">
+            <div>
+              <strong>#${Number(row.id)} · user ${Number(row.user_id)} · ${Number(row.amount)} ${formatPointsCurrency(row.currency_type)}</strong>
+              <div class="drive-card-sub">${sanitize(row.action_type || "-")} · ${sanitize(row.created_at || "")}</div>
+            </div>
+            <div class="drive-file-actions">
+              <button class="btn" type="button" data-pending-review="${Number(row.id)}" data-decision="approve">通過</button>
+              <button class="btn btn-danger" type="button" data-pending-review="${Number(row.id)}" data-decision="reject">拒絕</button>
+            </div>
           </div>
-          <div class="drive-file-actions">
-            <button class="btn" type="button" data-pending-review="${Number(row.id)}" data-decision="approve">通過</button>
-            <button class="btn btn-danger" type="button" data-pending-review="${Number(row.id)}" data-decision="reject">拒絕</button>
-          </div>
-        </div>
-      `).join("") : `<div class="drive-empty">沒有待審核獎勵</div>`;
-      pendingList.querySelectorAll("[data-pending-review]").forEach((btn) => {
-        btn.addEventListener("click", () => reviewEconomyPendingReward(btn.dataset.pendingReview, btn.dataset.decision));
-      });
+        `).join("") : `<div class="drive-empty">沒有待審核獎勵</div>`;
+        pendingList.querySelectorAll("[data-pending-review]").forEach((btn) => {
+          btn.addEventListener("click", () => reviewEconomyPendingReward(btn.dataset.pendingReview, btn.dataset.decision));
+        });
+      } else {
+        pendingList.innerHTML = "";
+        pendingList.style.display = "none";
+      }
     }
   } catch (err) {
     const select = $("economy-adjust-user-id");

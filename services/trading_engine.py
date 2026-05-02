@@ -1951,9 +1951,11 @@ class TradingEngineService:
             opened_at_dt = datetime.fromisoformat(str(item.get("opened_at") or ""))
             now_dt = datetime.fromisoformat(_now())
             elapsed_sec = max(0.0, (now_dt - opened_at_dt).total_seconds())
-            total_hours = max(1, int(math.ceil(elapsed_sec / 3600.0))) if elapsed_sec > 0 else 0
-            item["total_elapsed_hours"] = total_hours
-            item["next_interest_at"] = (opened_at_dt + timedelta(seconds=total_hours * 3600)).isoformat() if total_hours > 0 else None
+            # Display: floor (actual full hours elapsed)
+            item["total_elapsed_hours"] = int(elapsed_sec / 3600)
+            # Next interest tick: ceiling (next hourly billing point)
+            next_billing_hours = max(1, int(math.ceil(elapsed_sec / 3600.0))) if elapsed_sec > 0 else 0
+            item["next_interest_at"] = (opened_at_dt + timedelta(seconds=next_billing_hours * 3600)).isoformat() if next_billing_hours > 0 else None
         except Exception:
             item["total_elapsed_hours"] = 0
             item["next_interest_at"] = None
@@ -2655,10 +2657,16 @@ class TradingEngineService:
                 key=lambda item: str(item.get("created_at") or ""),
                 reverse=True,
             )[:50]
-            bots = [
-                self._bot_payload(row)
-                for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
-            ]
+            _market_prices = {m["symbol"]: int(m.get("manual_price_points") or 0) for m in markets}
+            bots = []
+            for _row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall():
+                _bot = self._bot_payload(_row)
+                _cp = _market_prices.get(str(_bot.get("market_symbol") or ""), 0)
+                try:
+                    _bot["condition_checks"] = self._bot_condition_checks(_bot, _cp)
+                except Exception:
+                    _bot["condition_checks"] = []
+                bots.append(_bot)
             bot_runs = [
                 self._bot_run_payload(row)
                 for row in conn.execute("SELECT * FROM trading_bot_runs WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
@@ -3317,26 +3325,36 @@ class TradingEngineService:
         user_id = self._actor_id(actor)
         if not user_id:
             raise ValueError("login required")
+        # Phase 1: read-only — fetch bot and open order UUIDs
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?", (str(bot_uuid or ""), user_id)).fetchone()
             if not row:
                 raise ValueError("grid bot not found")
-            open_orders = conn.execute(
-                "SELECT trading_order_uuid FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
-                (row["id"],),
-            ).fetchall()
-            bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
-            for go in open_orders:
-                if go["trading_order_uuid"]:
-                    try:
-                        self.cancel_order(actor=bot_actor, order_uuid=go["trading_order_uuid"])
-                    except Exception:
-                        pass
-            conn.execute("DELETE FROM trading_grid_bots WHERE id=?", (row["id"],))
+            open_order_uuids = [
+                go["trading_order_uuid"]
+                for go in conn.execute(
+                    "SELECT trading_order_uuid FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
+                    (row["id"],),
+                ).fetchall()
+                if go["trading_order_uuid"]
+            ]
+            bot_id = row["id"]
+        finally:
+            conn.close()
+        # Phase 2: cancel each open limit order (each cancel_order uses its own connection)
+        bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
+        for order_uuid in open_order_uuids:
+            try:
+                self.cancel_order(actor=bot_actor, order_uuid=order_uuid)
+            except Exception:
+                pass
+        # Phase 3: delete the bot row (CASCADE removes grid_orders)
+        conn = self.get_db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM trading_grid_bots WHERE id=?", (bot_id,))
             conn.commit()
             return {"ok": True, "bot_uuid": bot_uuid}
         except Exception:

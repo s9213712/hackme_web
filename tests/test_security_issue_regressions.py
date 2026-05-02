@@ -277,6 +277,17 @@ def test_trading_stress_pentest_covers_margin_risk_controls():
     assert "maintenance_margin_points" in script
 
 
+def test_latest_password_lookup_uses_monotonic_id_not_timestamp_text_order():
+    bootstrap = (ROOT / "services" / "bootstrap.py").read_text(encoding="utf-8")
+    public = (ROOT / "routes" / "public.py").read_text(encoding="utf-8")
+    users = (ROOT / "routes" / "users.py").read_text(encoding="utf-8")
+
+    combined = "\n".join([bootstrap, public, users])
+    assert "FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1" in combined
+    assert "FROM user_passwords WHERE user_id=? ORDER BY created_at DESC LIMIT 1" not in combined
+    assert "FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1" not in combined
+
+
 def test_trading_bot_tables_are_snapshot_scoped():
     snapshots = (ROOT / "services" / "snapshots.py").read_text(encoding="utf-8")
     trading = (ROOT / "services" / "trading_engine.py").read_text(encoding="utf-8")

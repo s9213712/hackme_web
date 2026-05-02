@@ -81,7 +81,7 @@ def _password_history_limit():
 def _trim_password_history(conn, user_id):
     conn.execute(
         "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
-        "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+        "SELECT id FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT ?"
         ")",
         (user_id, user_id, _password_history_limit())
     )
@@ -117,7 +117,7 @@ def _mark_default_account_if_password_matches(conn, user_id, raw_password, now):
     if not raw_password:
         return
     row = conn.execute(
-        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+        "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
         (user_id,),
     ).fetchone()
     if not row:

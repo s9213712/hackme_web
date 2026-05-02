@@ -74,7 +74,7 @@ def register_user_routes(app, deps):
     def trim_password_history(conn, user_id):
         conn.execute(
             "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
-            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT ?"
             ")",
             (user_id, user_id, PASSWORD_HISTORY_LIMIT)
         )
@@ -224,7 +224,7 @@ def register_user_routes(app, deps):
         else:
             strength = score_password_strength(password)
         current_row = conn.execute(
-            "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+            "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
             (request_row["user_id"],),
         ).fetchone()
         if current_row and verify_password(current_row["password_hash"], password):
@@ -824,7 +824,7 @@ def register_user_routes(app, deps):
                 if pw_confirm != pw:
                     return json_resp({"ok":False,"msg":"兩次密碼輸入不一致"}), 400
                 current_row = conn.execute(
-                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
                     (user_id,)
                 ).fetchone()
                 if is_self:

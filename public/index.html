@@ -1138,8 +1138,11 @@
             <div class="drive-card-title">我的帳本</div>
             <div class="drive-card-sub">append-only ledger；封塊後可產生 Merkle proof</div>
           </div>
+          <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-ledger-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
         </div>
-        <div id="economy-ledger-list" class="drive-file-list"></div>
+        <div id="economy-ledger-body">
+          <div id="economy-ledger-list" class="drive-file-list"></div>
+        </div>
       </div>
       <div class="drive-card" id="economy-root-virtual-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
@@ -1147,12 +1150,17 @@
             <div class="drive-card-title">root 虛擬積分</div>
             <div class="drive-card-sub">只用於交易模擬；不寫入 PointsChain，也不影響帳戶實際積分。</div>
           </div>
-          <button class="btn" id="economy-root-virtual-open-btn" type="button">開啟交易所</button>
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-root-virtual-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
+            <button class="btn" id="economy-root-virtual-open-btn" type="button">開啟交易所</button>
+          </div>
         </div>
-        <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值</small></div>
-          <div><span class="drive-card-sub">剩餘積分</span><strong id="economy-root-virtual-available">-</strong><small id="economy-root-virtual-locked">鎖定 -</small></div>
-          <div><span class="drive-card-sub">現貨估值</span><strong id="economy-root-virtual-spot-value">-</strong><small id="economy-root-virtual-spot-summary">尚無現貨</small></div>
+        <div id="economy-root-virtual-body">
+          <div class="settings-option-grid economy-wallet-grid">
+            <div><span class="drive-card-sub">目前總價值</span><strong id="economy-root-virtual-total">-</strong><small>剩餘積分 + 現貨估值</small></div>
+            <div><span class="drive-card-sub">剩餘積分</span><strong id="economy-root-virtual-available">-</strong><small id="economy-root-virtual-locked">鎖定 -</small></div>
+            <div><span class="drive-card-sub">現貨估值</span><strong id="economy-root-virtual-spot-value">-</strong><small id="economy-root-virtual-spot-summary">尚無現貨</small></div>
+          </div>
         </div>
       </div>
       <div class="drive-card" id="economy-trading-summary-card" style="margin-top:.75rem;">
@@ -1161,7 +1169,10 @@
             <div class="drive-card-title">現貨、進階、合約與交易明細</div>
             <div class="drive-card-sub">錢包頁顯示目前現貨、融資 / 借券、合約狀態、訂單與成交明細；下單請到積分交易所。</div>
           </div>
-          <button class="btn" id="economy-trading-open-btn" type="button">開啟交易所</button>
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-trading-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
+            <button class="btn" id="economy-trading-open-btn" type="button">開啟交易所</button>
+          </div>
         </div>
         <div id="economy-trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
@@ -1170,32 +1181,34 @@
           <div><span class="drive-card-sub">合約持倉</span><strong id="economy-contract-position-count">0</strong><small id="economy-contract-position-summary">未開放</small></div>
           <div><span class="drive-card-sub">交易明細</span><strong id="economy-trading-fill-count">0</strong><small id="economy-trading-order-count">訂單 0</small></div>
         </div>
-        <div class="drive-card" style="margin-top:.75rem;">
-          <div class="drive-card-heading compact-heading">
-            <div>
-              <div class="drive-card-title">現貨明細</div>
-              <div class="drive-card-sub">BTC/USDT、ETH/USDT 分開顯示；可限價賣出或用市價平倉。</div>
+        <div id="economy-trading-body">
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-heading compact-heading">
+              <div>
+                <div class="drive-card-title">現貨明細</div>
+                <div class="drive-card-sub">BTC/USDT、ETH/USDT 分開顯示；可限價賣出或用市價平倉。</div>
+              </div>
             </div>
+            <div id="economy-spot-position-detail-list" class="trading-spot-detail-list"></div>
           </div>
-          <div id="economy-spot-position-detail-list" class="trading-spot-detail-list"></div>
-        </div>
-        <div class="drive-card" style="margin-top:.75rem;">
-          <div class="drive-card-heading compact-heading">
-            <div>
-              <div class="drive-card-title">進階倉位明細</div>
-              <div class="drive-card-sub">融資買入與借券放空分開列出；顯示本金、原始保證金、維持保證金與日息。</div>
+          <div class="drive-card" style="margin-top:.75rem;">
+            <div class="drive-card-heading compact-heading">
+              <div>
+                <div class="drive-card-title">進階倉位明細</div>
+                <div class="drive-card-sub">融資買入與借券放空分開列出；顯示本金、原始保證金、維持保證金與日息。</div>
+              </div>
             </div>
+            <div id="economy-margin-position-detail-list" class="drive-file-list"></div>
           </div>
-          <div id="economy-margin-position-detail-list" class="drive-file-list"></div>
-        </div>
-        <div class="settings-option-grid" style="margin-top:.75rem;">
-          <div>
-            <div class="drive-card-title">訂單</div>
-            <div id="economy-trading-order-list" class="drive-file-list"></div>
-          </div>
-          <div>
-            <div class="drive-card-title">成交</div>
-            <div id="economy-trading-fill-list" class="drive-file-list"></div>
+          <div class="settings-option-grid" style="margin-top:.75rem;">
+            <div>
+              <div class="drive-card-title">訂單</div>
+              <div id="economy-trading-order-list" class="drive-file-list"></div>
+            </div>
+            <div>
+              <div class="drive-card-title">成交</div>
+              <div id="economy-trading-fill-list" class="drive-file-list"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -1427,13 +1440,19 @@
           </summary>
           <div class="drive-collapsible-body">
             <div class="segmented-control compact-segments trading-bot-tabs" aria-label="交易機器人分頁">
-              <button class="active" type="button" data-trading-bot-tab="dca">定投機器人</button>
+              <button class="active" type="button" data-trading-bot-tab="mybots">我的機器人</button>
+              <button type="button" data-trading-bot-tab="dca">定投機器人</button>
               <button type="button" data-trading-bot-tab="grid">網格交易</button>
               <button type="button" data-trading-bot-tab="strategy">自動化 Workflow</button>
               <button type="button" data-trading-bot-tab="backtest">回測分析</button>
               <button type="button" data-trading-bot-tab="records">紀錄</button>
             </div>
-            <div class="trading-bot-panel trading-bot-tab-panel active" id="trading-bot-tab-dca">
+            <div class="trading-bot-panel trading-bot-tab-panel active" id="trading-bot-tab-mybots">
+                <div class="drive-card-title">我的機器人</div>
+                <div class="drive-card-sub">所有交易機器人一覽，點選任一機器人可在上方圖表顯示標記。</div>
+                <div id="trading-my-bots-list" class="drive-file-list" style="margin-top:.65rem;"></div>
+            </div>
+            <div class="trading-bot-panel trading-bot-tab-panel" id="trading-bot-tab-dca">
                 <div class="drive-card-title">定投機器人</div>
                 <div class="drive-card-sub">固定時間、固定金額、長期買入；不混入條件策略。</div>
                 <div class="settings-option-grid" style="margin-top:.65rem;">
@@ -1475,6 +1494,7 @@
                 <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-bot-create-btn" type="button">建立網格</button></div>
               </div>
               <div id="trading-grid-preview" class="drive-card-sub" style="margin-top:.5rem;"></div>
+              <div id="trading-grid-spot-confirm" style="display:none;"></div>
               <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:1rem;">
                 <div class="drive-card-title" style="margin:0;flex:1">我的網格機器人</div>
                 <button class="btn btn-sm" id="trading-grid-scan-btn" type="button">掃描更新</button>
@@ -1661,6 +1681,7 @@
             <label><input type="checkbox" id="trading-indicator-ema12"> EMA12</label>
             <label><input type="checkbox" id="trading-indicator-ema26"> EMA26</label>
             <label><input type="checkbox" id="trading-indicator-bollinger"> 布林線</label>
+            <button class="btn btn-sm" id="trading-chart-clear-overlay-btn" type="button" style="display:none;font-size:.75rem;padding:.15rem .45rem;">清除標記</button>
           </div>
           <div class="trading-reference-chart-wrap">
             <canvas id="trading-reference-chart" class="trading-reference-chart" width="920" height="260" aria-label="Binance 參考價格蠟燭圖"></canvas>
@@ -3656,7 +3677,7 @@
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
-<script src="/js/56-trading.js?v=20260502-grid-bugfixes" defer></script>
+<script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
 <script src="/js/90-bootstrap.js?v=20260430-trading-page-split" defer></script>
 </body>
 </html>

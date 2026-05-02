@@ -143,6 +143,55 @@ Whole-site production still requires separate passing evidence for:
 - cloud_drive_quota_permission
 - off-host append-only audit backup / immutable log replication
 
+The aggregate check is:
+
+```bash
+PYTHONPATH=. security/run_pentest.sh \
+  --target http://127.0.0.1:5000 \
+  --only whole-site-production-gate
+```
+
+The aggregate report must end with:
+
+```text
+WHOLE_SITE_PRODUCTION_GATE_SUMMARY:
+- result: PASS
+- production_readiness: YES
+- critical_findings: 0
+- high_findings: 0
+```
+
+Latest local release evidence for `2026.05.02-046`:
+
+```text
+security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.md
+security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.json
+```
+
+Result:
+
+```text
+modules_total: 12
+modules_passed: 12
+modules_failed: 0
+critical_findings: 0
+high_findings: 0
+medium_findings: 0
+production_readiness: YES
+```
+
+Implementation notes from this sign-off:
+
+- Password history lookups use monotonic `user_passwords.id DESC` rather than
+  textual `created_at` ordering, so mixed timestamp formats cannot select an
+  older password as the active one.
+- Disabled feature gates authenticate first for anonymous API requests, so
+  unauthenticated callers receive `401` instead of a misleading
+  feature-disabled `503`.
+- Whole-site gate targets must use initialized test credentials. The trading
+  stress runner does not rotate root's password unless `--root-new-password`
+  is passed explicitly.
+
 ## Final Decision
 
 Production is allowed only when every item above is checked.

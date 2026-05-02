@@ -381,6 +381,17 @@ def validation_scenarios():
             quantity="1",
             collateral_points=1000,
         )
+        long_wallet = points.get_wallet(1)
+        long_available = int(long_wallet["points_balance"])
+        if long_available > 5:
+            points.record_transaction(
+                user_id=1,
+                currency_type="points",
+                direction="debit",
+                amount=long_available - 5,
+                action_type="validation_cross_margin_spend",
+                actor=root,
+            )
         prices.set("ETH/POINTS", 3000)
         scan_long = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=50)
         ok(
@@ -391,6 +402,14 @@ def validation_scenarios():
         )
 
         prices.set("ETH/POINTS", 5000)
+        points.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="credit",
+            amount=2500,
+            action_type="validation_short_funding",
+            actor=root,
+        )
         margin_short = trading.open_margin_position(
             actor=alice,
             market_symbol="ETH/POINTS",
@@ -398,6 +417,17 @@ def validation_scenarios():
             quantity="0.5",
             collateral_points=1500,
         )
+        short_wallet = points.get_wallet(1)
+        short_available = int(short_wallet["points_balance"])
+        if short_available > 5:
+            points.record_transaction(
+                user_id=1,
+                currency_type="points",
+                direction="debit",
+                amount=short_available - 5,
+                action_type="validation_cross_margin_spend",
+                actor=root,
+            )
         prices.set("ETH/POINTS", 10000)
         scan_short = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=50)
         ok(
@@ -481,11 +511,12 @@ def summarize(results):
     }
 
 
-def write_reports(summary):
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+def write_reports(summary, out_dir=REPORT_DIR):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    json_path = REPORT_DIR / f"trading_exchange_validation_{stamp}.json"
-    md_path = REPORT_DIR / f"trading_exchange_validation_{stamp}.md"
+    json_path = out_dir / f"trading_exchange_validation_{stamp}.json"
+    md_path = out_dir / f"trading_exchange_validation_{stamp}.md"
     json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     lines = [
         "# Trading Exchange and Wallet Validation Report",
@@ -518,6 +549,7 @@ def write_reports(summary):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="print JSON summary")
+    parser.add_argument("--out", default=str(REPORT_DIR), help="report output directory")
     args = parser.parse_args()
     try:
         summary = summarize(validation_scenarios())
@@ -531,7 +563,7 @@ def main():
             "results": [],
             "price_source_notes": [],
         }
-    json_path, md_path = write_reports(summary)
+    json_path, md_path = write_reports(summary, args.out)
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"reports: {json_path} {md_path}")

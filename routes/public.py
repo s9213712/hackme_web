@@ -215,7 +215,7 @@ def register_public_routes(app, deps):
     def trim_password_history(conn, user_id, limit=5):
         conn.execute(
             "DELETE FROM user_passwords WHERE user_id=? AND id NOT IN ("
-            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?"
+            "SELECT id FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT ?"
             ")",
             (user_id, user_id, int(limit)),
         )
@@ -519,7 +519,7 @@ def register_public_routes(app, deps):
             pw_hash = None
             if user_row:
                 pw_row = conn.execute(
-                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
+                    "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
                     (user_row["id"],)
                 ).fetchone()
                 if pw_row:
@@ -763,7 +763,7 @@ def register_public_routes(app, deps):
             else:
                 strength = score_password_strength(password)
             current_row = conn.execute(
-                "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
                 (token_row["user_id"],),
             ).fetchone()
             if current_row and verify_password(current_row["password_hash"], password):

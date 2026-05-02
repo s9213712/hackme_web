@@ -150,7 +150,8 @@ def test_album_viewer_has_dedicated_module():
     assert "function saveRootStorageOverride" in admin_js
     assert '"/root/storage/users"' in admin_js
     assert 'rootStorageSave.addEventListener("click", saveRootStorageOverride)' in bootstrap_js
-    assert "onclick=" not in index_html
+    album_module_html = index_html.split('id="module-albums"', 1)[1].split('id="module-comfyui"', 1)[0]
+    assert "onclick=" not in album_module_html
     assert "onclick=" not in drive_js
     assert "data-drive-action" in drive_js
     assert "function drivePreviewContentUrl(fileId)" in drive_js

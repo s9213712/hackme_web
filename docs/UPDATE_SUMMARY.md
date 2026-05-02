@@ -1,40 +1,45 @@
 # Update Summary
 
-Release ID: `2026.05.02-045`
+Release ID: `2026.05.02-047`
 
 ## Highlights
 
-- Server Mode v2 enterprise sign-off now has a live HTTP smoke test:
-  `security/server_mode_v2_live_http_smoke.py`.
-- The live smoke starts an isolated loopback Flask server, logs in through the
-  real CSRF/session-cookie stack, probes tester-token traversal payloads, enters
-  superweak, kills the server process with SIGKILL, restarts it, validates
-  rollback, enters `incident_lockdown`, and verifies old sessions/tokens are
-  blocked.
-- Server Mode v2 sign-off is now `production_readiness=YES` when clean smoke,
-  adversarial, Red Team L2, and live HTTP smoke all pass with zero breaches and
-  zero critical/high findings.
-- Session lookups no longer write `sessions.last_seen` on every request. The
-  refresh is throttled to reduce SQLite write-lock contention during high
-  frontend polling or mode-test traffic.
-- The server mode UI now reports the actual HTTP/error detail when mode loading
-  fails instead of only showing a generic failure message.
-- Documentation now distinguishes the `internal_test` login token from the
-  Server Mode v2 tester API token.
+- Whole-site production gate is now available through
+  `security/whole_site_production_gate.py` and
+  `security/run_pentest.sh --only whole-site-production-gate`.
+- Latest local gate evidence passed against `http://127.0.0.1:5000`:
+  12/12 modules PASS, `critical_findings=0`, `high_findings=0`,
+  `medium_findings=0`, `production_readiness=YES`.
+- Latest evidence files:
+  `security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.json`
+  and
+  `security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.md`.
+- The gate aggregates Server Mode v2, auth/session, RBAC, snapshot/restore,
+  PointsChain/economy, Cloud Drive, trading, forum/community/reporting,
+  integrity, audit/logs, stress/reliability, pytest, `py_compile`, generated
+  report policy, and `git diff --check`.
+- Latest-password lookup now uses the monotonic `user_passwords.id` order
+  instead of textual `created_at` ordering, avoiding stale-password selection
+  when timestamp formats differ.
+- Feature-disabled API gates now return unauthenticated requests as `401`
+  before reporting feature-disabled `503`, so permission tests see the real
+  authorization boundary.
+- `functional_permission_pentest.py` now accepts `PENTEST_USER_PASSWORD` in
+  addition to the legacy `PENTEST_TEST_PASSWORD`.
+- `trading_stress_pentest.py` no longer rotates root's password by default;
+  production-gate targets must use already-initialized test credentials or pass
+  `--root-new-password` explicitly.
 
 ## Operator Notes
 
-- Before switching to production, keep `server_mode_v2_adversarial.py`,
-  `server_mode_v2_redteam_l2.py`, and `server_mode_v2_live_http_smoke.py`
-  evidence together. The first two prove model-level controls; the live smoke
-  proves the Flask HTTP/session process path.
-- Server Mode v2 production_ready does not mean the whole site is
-  production_ready. Whole-site production still needs stress, permission,
-  functional, pentest, snapshot_restore, points_chain_consistency,
-  cloud_drive_quota_permission, and off-host append-only audit backup /
-  immutable log replication evidence.
+- Keep the whole-site gate evidence together with the Server Mode v2
+  adversarial, Red Team L2, and live HTTP reports. The whole-site gate is the
+  aggregate production decision; the Server Mode v2 reports remain its
+  control-plane evidence.
+- Server Mode v2 production_ready is narrower than whole-site
+  production_ready. The whole-site gate must be run before production sign-off.
 - Off-host append-only log replication / filesystem-level immutable storage is
-  still a deployment-environment control and is not verified by local smoke
-  tests.
+  still a deployment-environment control; the local gate records it as an
+  unresolved deployment risk unless verified separately.
 - Runtime logs, generated reports, SQLite databases, pycache, and local keys are
   generated artifacts. They should remain ignored and must not be committed.

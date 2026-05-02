@@ -310,11 +310,12 @@ def compare_results(engine_result, replay_result):
     return mismatches
 
 
-def write_reports(report):
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+def write_reports(report, out_dir=REPORT_DIR):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    json_path = REPORT_DIR / f"workflow_template_validation_{stamp}.json"
-    md_path = REPORT_DIR / f"workflow_template_validation_{stamp}.md"
+    json_path = out_dir / f"workflow_template_validation_{stamp}.json"
+    md_path = out_dir / f"workflow_template_validation_{stamp}.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = [
         "# Workflow Template Validation Report",
@@ -341,6 +342,7 @@ def main():
     parser.add_argument("--interval", default="15m", choices=["5m", "15m", "1h", "4h", "1d"])
     parser.add_argument("--limit", type=int, default=500)
     parser.add_argument("--no-download", action="store_true", help="Use synthetic candles only.")
+    parser.add_argument("--out", default=str(REPORT_DIR), help="report output directory")
     args = parser.parse_args()
     if args.limit < 2 or args.limit > 1000:
         raise SystemExit("--limit must be between 2 and 1000 for one provider request")
@@ -418,7 +420,7 @@ def main():
             if not ok:
                 report["ok"] = False
 
-        json_path, md_path = write_reports(report)
+        json_path, md_path = write_reports(report, args.out)
         print(json.dumps({
             "ok": report["ok"],
             "templates": len(report["templates"]),

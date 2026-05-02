@@ -43,7 +43,7 @@ short [README](../README.md) plus GitHub-required metadata such as
 - [Pre-release Checklist](security/PRE_RELEASE_CHECKLIST.md): blocking checks
   before production release
 - [Production Sign-off Checklist](security/PRODUCTION_SIGNOFF_CHECKLIST.md):
-  final Server Mode v2 production approval gate
+  Server Mode v2 sign-off, whole-site gate command, and final readiness criteria
 - [Server Mode v2 Red Team Playbook](security/SERVER_MODE_V2_RED_TEAM_PLAYBOOK.md):
   adversarial test plan for mode, token, snapshot, and lockdown controls
 - [Secrets Scanning](security/secrets_scanning.md): secret scanning policy and
@@ -51,7 +51,8 @@ short [README](../README.md) plus GitHub-required metadata such as
 
 ## Test Script Guides
 
-- [Pentest Runner](security/PENTEST.md): security test runner usage
+- [Pentest Runner](security/PENTEST.md): security test runner usage, including
+  `--only whole-site-production-gate`
 - [Functional Smoke Runner](security/FUNCTIONAL_SMOKE.md): full feature smoke
   test runner usage
 - [Functional Permission Pentest](security/FUNCTIONAL_PERMISSION_PENTEST.md):
