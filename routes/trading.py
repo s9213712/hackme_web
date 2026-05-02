@@ -1,12 +1,12 @@
 import json
-import os
 import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from flask import request
+
+from services.btc_trade_bridge import btc_trade_status, expand_server_path
 
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
@@ -60,148 +60,6 @@ GEMINI_TIMEFRAMES = {"5m": "5m", "15m": "15m", "1h": "1hr", "1d": "1day"}
 BITSTAMP_STEP_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
-BTC_TRADE_SIGNAL_KEYS = {"bar_ts", "signal_ok", "ml_ok", "position", "current_price", "entry_checks", "ml_status"}
-BTC_TRADE_TIMEFRAME_SECONDS = {"4h": 4 * 60 * 60}
-
-
-def _expand_server_path(raw_path):
-    value = str(raw_path or "").strip()
-    if not value:
-        return None
-    return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
-
-
-def _load_json_file(path):
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-def _parse_btc_trade_time(value):
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _btc_trade_next_prediction(signal, *, timeframe="4h", fallback_updated_at=None):
-    interval = BTC_TRADE_TIMEFRAME_SECONDS.get(str(timeframe or "4h").lower(), 4 * 60 * 60)
-    base = _parse_btc_trade_time(signal.get("bar_ts")) or _parse_btc_trade_time(fallback_updated_at)
-    if not base:
-        return None
-    now = datetime.now(timezone.utc)
-    next_at = base + timedelta(seconds=interval)
-    while next_at <= now:
-        next_at += timedelta(seconds=interval)
-    return {
-        "next_prediction_at": next_at.isoformat(),
-        "next_prediction_seconds": max(0, int((next_at - now).total_seconds())),
-        "prediction_interval_seconds": interval,
-    }
-
-
-def btc_trade_status(project_dir):
-    root = _expand_server_path(project_dir)
-    if not root:
-        return {
-            "configured": False,
-            "available": False,
-            "needs_initialization": True,
-            "message": "root 尚未設定 BTC_trade 專案資料夾",
-        }
-    runtime = root / "runtime"
-    report_path = runtime / "report_log_4h.jsonl"
-    portfolio_path = runtime / "portfolio_state_4h.json"
-    trade_log_path = runtime / "trade_log_4h.json"
-    checks = {
-        "project_dir": root.is_dir(),
-        "hourly_check": (root / "hourly_check.py").is_file(),
-        "update_data": (root / "update_data.py").is_file(),
-        "backtest_report": (root / "backtest_report.py").is_file(),
-        "runtime_dir": runtime.is_dir(),
-        "report_log": report_path.is_file(),
-    }
-    missing = [name for name, ok in checks.items() if not ok]
-    payload = {
-        "configured": True,
-        "available": False,
-        "needs_initialization": bool(missing),
-        "checks": checks,
-        "missing": missing,
-        "message": "",
-        "commands": [
-            "python3 update_data.py",
-            "python3 hourly_check.py --timeframe 4h",
-            "python3 backtest_report.py --timeframe 4h",
-        ],
-    }
-    if missing:
-        payload["message"] = "BTC_trade 專案尚未可用，請先在該資料夾執行初始化或產生信號報告"
-        return payload
-    latest_line = ""
-    try:
-        with open(report_path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                if line.strip():
-                    latest_line = line.strip()
-        if not latest_line:
-            raise ValueError("empty report log")
-        latest = json.loads(latest_line)
-        if not isinstance(latest, dict):
-            raise ValueError("latest report is not an object")
-    except Exception as exc:
-        payload["needs_initialization"] = True
-        payload["message"] = f"BTC_trade 信號報告無法讀取：{exc.__class__.__name__}"
-        return payload
-    signal = {key: latest.get(key) for key in BTC_TRADE_SIGNAL_KEYS if key in latest}
-    signal["timeframe"] = "4h"
-    signal["source"] = "BTC_trade/report_log_4h.jsonl"
-    try:
-        stat = report_path.stat()
-        signal["updated_at"] = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-        signal["age_seconds"] = max(0, int(time.time() - stat.st_mtime))
-    except Exception:
-        pass
-    if portfolio_path.is_file():
-        try:
-            portfolio = _load_json_file(portfolio_path)
-            if isinstance(portfolio, dict):
-                signal["portfolio"] = {
-                    "position": portfolio.get("position"),
-                    "cash": portfolio.get("cash"),
-                    "btc": portfolio.get("btc"),
-                    "updated_at": portfolio.get("updated_at") or portfolio.get("timestamp"),
-                }
-        except Exception:
-            pass
-    if trade_log_path.is_file():
-        try:
-            trades = _load_json_file(trade_log_path)
-            if isinstance(trades, list) and trades:
-                last_trade = trades[-1] if isinstance(trades[-1], dict) else {}
-                signal["last_trade"] = {
-                    "action": last_trade.get("action"),
-                    "timestamp": last_trade.get("timestamp"),
-                    "pnl_pct": last_trade.get("pnl_pct"),
-                    "exit_reason": last_trade.get("exit_reason"),
-                }
-        except Exception:
-            pass
-    next_prediction = _btc_trade_next_prediction(signal, timeframe=signal["timeframe"], fallback_updated_at=signal.get("updated_at"))
-    if next_prediction:
-        signal.update(next_prediction)
-    payload["available"] = True
-    payload["needs_initialization"] = False
-    payload["message"] = "BTC_trade 信號可用"
-    payload["signal"] = signal
-    return payload
 
 
 def register_trading_routes(app, deps):
@@ -937,7 +795,7 @@ def register_trading_routes(app, deps):
         project_dir = data.get("project_dir")
         try:
             status = btc_trade_status(project_dir)
-            root = _expand_server_path(project_dir)
+            root = expand_server_path(project_dir)
             if root:
                 status["project_dir"] = str(root)
             return json_resp({"ok": True, "status": status})

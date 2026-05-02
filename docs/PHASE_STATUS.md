@@ -1,6 +1,6 @@
 # Phase 狀態
 
-最後更新：2026-05-01
+最後更新：2026-05-02
 
 ## Phase 12 前完成狀態
 
@@ -10,7 +10,7 @@
 
 ## Phase 12 後待處理
 
-- Economy Phase 2 交易引擎基礎已完成第一版現貨 MVP：BTC/POINTS、ETH/POINTS 內部市場、BTC/USDT、ETH/USDT 前台顯示、市價/限價、取消訂單、限價單掃描撮合、Binance/OKX/Coinbase/Kraken/Gemini/Bitstamp/CoinGecko 公開行情 fallback、last-good-price fallback、保守資金池、PointsChain 結算、交易審計、現貨成本/已實現/未實現損益報表、snapshot/restore 一致性檢查與 `security/trading_stress_pentest.py`。交易 UI 以 `1 POINT = 1 USDT` 顯示，參考圖預設 15 分線，可切換其他週期。交易機器人已分為 DCA、節點式 Workflow 策略與回測，Workflow Editor 輸出 `nodes`/`edges` graph 並支援 TRUE/FALSE、nested AND/OR/NOT、cooldown 與 step 控制。期貨與 PVP 撮合仍屬高風險功能，除 root 模擬與實驗性借貸測試外，不對一般用戶開放。
+- Economy Phase 2 交易引擎基礎已完成第一版現貨 MVP：BTC/POINTS、ETH/POINTS 內部市場、BTC/USDT、ETH/USDT 前台顯示、市價/限價、取消訂單、限價單掃描撮合、Binance/OKX/Coinbase/Kraken/Gemini/Bitstamp/CoinGecko 公開行情 fallback、last-good-price fallback、保守資金池、PointsChain 結算、交易審計、現貨成本/已實現/未實現損益報表、snapshot/restore 一致性檢查與 `security/trading_stress_pentest.py`。交易 UI 以 `1 POINT = 1 USDT` 顯示，參考圖預設 15 分線，可切換其他週期。交易機器人已分為 DCA、節點式 Workflow 策略與回測，Workflow Editor 輸出 `nodes`/`edges` graph 並支援 TRUE/FALSE、nested AND/OR/NOT、cooldown 與 step 控制。BTC_trade 屬軟性整合，交易頁可讀取 root 設定資料夾中的 runtime 報告，顯示 BTC-only 信號、權益、PnL 與下次預測倒數；橋接交易事件的腳本已移入本專案。期貨與 PVP 撮合仍屬高風險功能，除 root 模擬與實驗性借貸測試外，不對一般用戶開放。
 - 完整 `AuthLayout` 重構待後續處理；目前登入頁先保留可操作的最小復原 UI。
 - 真實 SMTP 或外部寄信服務待後續部署整合；目前 mail adapter 會把 token 信件寫入資料庫 `mail_outbox`，足以支援本機測試與部署端接線。
 - WebSocket 即時通知與 Email 通知摘要待後續處理。

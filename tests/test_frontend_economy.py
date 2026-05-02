@@ -293,6 +293,10 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function updateTradingBtcSignalMeta" in trading_js
     assert "next_prediction_at" in trading_js
     assert "下次預測倒數" in trading_js
+    assert "策略版本" in trading_js
+    assert "BTC_trade 權益" in trading_js
+    assert "fear_greed" in trading_js
+    assert "total_equity" in trading_js
     assert "/trading/btc-signal" in trading_js
     assert "function rootVirtualSpotValue" in trading_js
     assert "function renderEconomySpotPositionDetails" in trading_js

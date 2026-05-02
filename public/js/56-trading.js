@@ -594,6 +594,8 @@ function renderTradingBtcSignal(payload = null) {
       <div><span class="drive-card-sub">七條件信號</span><strong>${sanitize(tradingSignalBoolLabel(signal.signal_ok))}</strong><small>${signalOk ? "可進場觀察" : "未全滿足"}</small></div>
       <div><span class="drive-card-sub">ML 過濾</span><strong>${sanitize(tradingSignalBoolLabel(signal.ml_ok))}</strong><small>${sanitize(ml.situation || (ml.blocked ? "已阻擋" : "未提供"))}</small></div>
       <div><span class="drive-card-sub">BTC_trade 持倉</span><strong>${sanitize(signal.position || signal.portfolio?.position || "空手")}</strong><small>${sanitize(signal.last_trade?.action || "無最新交易")}</small></div>
+      <div><span class="drive-card-sub">策略版本</span><strong>${sanitize(signal.strategy_version || "-")}</strong><small>Fear & Greed ${sanitize(signal.fear_greed ?? "-")}</small></div>
+      <div><span class="drive-card-sub">BTC_trade 權益</span><strong>${sanitize(tradingReferenceLabel(signal.total_equity || signal.portfolio?.total_equity || signal.capital || signal.portfolio?.capital))}</strong><small>PNL ${sanitize(signal.total_pnl_pct == null ? "-" : `${Number(signal.total_pnl_pct).toFixed(2)}%`)}</small></div>
       ${signal.next_prediction_at ? `<div><span class="drive-card-sub">下次預測</span><strong>${sanitize(tradingBtcSignalCountdownText(signal).replace("下次預測", "").trim())}</strong><small>${sanitize(new Date(signal.next_prediction_at).toLocaleString())}</small></div>` : ""}
     `;
   }

@@ -142,6 +142,9 @@ The trading page can optionally show a BTC-only signal panel from the separate
   on it.
 - If the folder or report file is missing, the signal panel stays hidden and
   the trading page continues to work normally.
+- The bridge helper now lives in this project at
+  `scripts/btc_signal_bridge.py`; the external `BTC_trade` project only needs
+  to produce runtime files.
 
 To enable it:
 
@@ -179,6 +182,29 @@ It can also show a compact portfolio/last-trade summary when these files exist:
 runtime/portfolio_state_4h.json
 runtime/trade_log_4h.json
 ```
+
+The current reader understands the newer BTC_trade report fields, including
+`generated_at`, `strategy_version`, `report_title`, `fear_greed`, `capital`,
+`btc`, `total_equity`, `total_pnl_pct`, `report_text`, `telegram_text`, and
+`timeframe`.
+
+To bridge BTC_trade trade events into hackme_web simulated spot orders, run the
+hackme_web-owned bridge script after BTC_trade generates `trade_log_4h.json`:
+
+```bash
+cd /path/to/hackme_web
+python3 scripts/btc_signal_bridge.py --btc-trade-dir /home/s92137/NN/BTC_trade --status
+python3 scripts/btc_signal_bridge.py --btc-trade-dir /home/s92137/NN/BTC_trade --dry-run
+python3 scripts/btc_signal_bridge.py --btc-trade-dir /home/s92137/NN/BTC_trade
+```
+
+The bridge expects a normal hackme_web user named `btc_bridge` by default. You
+can override this with `--bridge-username` or `BTC_TRADE_BRIDGE_USERNAME`. It
+uses the configured market `BTC/USDT` by default and maps BTC_trade events as:
+
+- `ENTRY`: buy the BTC amount from the event, multiplied by `--quantity-scale`.
+- `PARTIAL_EXIT`: sell one third of the bridge account's current BTC position.
+- `FULL_EXIT`: sell the bridge account's full BTC position.
 
 If the root check reports initialization is needed, run the commands shown in
 the root UI from inside the `BTC_trade` directory, then check again.

@@ -222,6 +222,13 @@ before execution:
 - See [Trading System And Bots](TRADING.md) for the full trading, bot,
   workflow editor, backtest, and validation guide.
 
+When `root` configures a local BTC_trade project folder, the BTC market can also
+show a BTC-only signal panel. This integration is soft: missing BTC_trade files
+hide the panel instead of breaking trading. The panel understands the newer
+BTC_trade runtime report fields, including strategy version, fear/greed,
+portfolio equity, PnL, report text, and next prediction countdown. The optional
+bridge script is owned by this project at `scripts/btc_signal_bridge.py`.
+
 Trading funds are separated by account type:
 
 - Normal users trade with the POINTS they actually own in their PointsChain

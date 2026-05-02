@@ -28,6 +28,16 @@ The active project emphasizes:
 - full-feature smoke testing and role-based functional pentesting
 - practical install scripts that reduce manual host debugging
 
+## Current Economy Work
+
+Release `2026.05.02-039` keeps the active Economy workflow line focused on
+simulated trading correctness and operator-visible behavior. BTC_trade is a
+soft integration: hackme_web can read runtime signal files from a configured
+BTC_trade folder, but missing files keep the signal panel hidden instead of
+breaking the exchange. The bridge helper lives in hackme_web as
+`scripts/btc_signal_bridge.py` so the external BTC_trade project does not need
+to carry hackme_web-specific helper code.
+
 ## Abandoned WebTerminal Branches
 
 Two WebTerminal branches are intentionally preserved but abandoned:

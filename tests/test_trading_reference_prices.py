@@ -4,6 +4,7 @@ from flask import Flask, jsonify
 
 import routes.trading as trading_routes
 from routes.trading import register_trading_routes
+from services.btc_trade_bridge import BtcTradeBridge
 
 
 class _FakeBinanceResponse:
@@ -126,13 +127,24 @@ def test_btc_trade_signal_reads_latest_report(tmp_path):
         "\n".join([
             json.dumps({"bar_ts": "old", "signal_ok": False, "current_price": 1}),
             json.dumps({
+                "generated_at": "2026-05-02T12:02:01.706619",
                 "bar_ts": "2026-05-02T00:00:00",
+                "strategy_version": "V15b+",
+                "report_title": "BTC 週期報告",
                 "signal_ok": True,
                 "ml_ok": True,
                 "position": "LONG",
                 "current_price": 77059.5,
+                "fear_greed": 39,
+                "capital": 9784.28,
+                "btc": 0.05,
+                "total_equity": 10020.5,
+                "total_pnl_pct": 0.2,
                 "entry_checks": {"MA50": True},
                 "ml_status": {"situation": "三多", "blocked": False},
+                "report_text": "full report",
+                "telegram_text": "short report",
+                "timeframe": "4h",
             }),
         ]),
         encoding="utf-8",
@@ -150,6 +162,14 @@ def test_btc_trade_signal_reads_latest_report(tmp_path):
     assert payload["hidden"] is False
     assert payload["signal"]["current_price"] == 77059.5
     assert payload["signal"]["signal_ok"] is True
+    assert payload["signal"]["strategy_version"] == "V15b+"
+    assert payload["signal"]["report_title"] == "BTC 週期報告"
+    assert payload["signal"]["fear_greed"] == 39
+    assert payload["signal"]["capital"] == 9784.28
+    assert payload["signal"]["btc"] == 0.05
+    assert payload["signal"]["total_equity"] == 10020.5
+    assert payload["signal"]["report_text"] == "full report"
+    assert payload["signal"]["telegram_text"] == "short report"
     assert payload["signal"]["ml_status"]["situation"] == "三多"
     assert payload["signal"]["portfolio"]["position"] == "LONG"
     assert payload["signal"]["last_trade"]["action"] == "ENTRY"
@@ -169,6 +189,36 @@ def test_root_btc_trade_check_reports_initialization_needed(tmp_path):
     assert payload["status"]["available"] is False
     assert payload["status"]["needs_initialization"] is True
     assert "hourly_check" in payload["status"]["missing"]
+
+
+def test_btc_trade_bridge_script_lives_in_hackme_project():
+    script = trading_routes.__file__.rsplit("/routes/", 1)[0] + "/scripts/btc_signal_bridge.py"
+    text = open(script, encoding="utf-8").read()
+
+    assert "BtcTradeBridge" in text
+    assert "--btc-trade-dir" in text
+    assert "/home/s92137/NN/BTC_trade/btc_signal_bridge.py" not in text
+
+
+def test_btc_trade_bridge_dry_run_does_not_advance_state(tmp_path):
+    project = tmp_path / "BTC_trade"
+    runtime = project / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "trade_log_4h.json").write_text(
+        json.dumps([{"action": "ENTRY", "btc": 0.01, "timestamp": "2026-05-02T00:00:00"}]),
+        encoding="utf-8",
+    )
+    bridge = BtcTradeBridge(
+        hackme_dir=tmp_path / "hackme",
+        btc_trade_dir=project,
+        state_path=runtime / "bridge_state.json",
+    )
+
+    result = bridge.run(dry_run=True)
+
+    assert result["ok"] is True
+    assert result["orders"][0]["dry_run"] is True
+    assert not (runtime / "bridge_state.json").exists()
 
 
 def test_trading_reference_prices_defaults_to_15m_chart_interval(monkeypatch):
