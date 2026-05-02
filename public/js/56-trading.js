@@ -1152,10 +1152,14 @@ function updateTradingMarginEstimate() {
   const positionType = $("trading-margin-type")?.value || "margin_long";
   const marginLongFinancingRatePercent = tradingNumber(tradingState.settings?.margin_long_financing_percent, 90);
   const shortCollateralRatePercent = tradingNumber(tradingState.settings?.short_collateral_percent, 60);
-  const minCollateral = positionType === "short"
+  const feeRatePercent = tradingNumber(market.fee_rate_percent, 0);
+  const maintenancePercent = tradingNumber(tradingState.settings?.margin_maintenance_percent, 15);
+  const baseMinCollateral = positionType === "short"
     ? Math.ceil(notional * shortCollateralRatePercent / 100)
     : Math.ceil(notional * Math.max(0, 100 - marginLongFinancingRatePercent) / 100);
-  const fee = Math.ceil(notional * tradingNumber(market.fee_rate_percent, 0) / 100);
+  const safetyMinCollateral = Math.ceil(notional * Math.max(0, maintenancePercent + feeRatePercent) / 100) + 1;
+  const minCollateral = Math.max(baseMinCollateral, safetyMinCollateral);
+  const fee = Math.ceil(notional * feeRatePercent / 100);
   const available = tradingNumber(tradingState.funding?.available_points, 0);
   const principal = positionType === "short" ? notional : Math.max(0, notional - collateral);
   const fundingPool = tradingState.fundingPool || {};

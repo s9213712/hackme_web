@@ -1867,14 +1867,19 @@ class TradingEngineService:
             raise ValueError("borrow trading is disabled")
         return settings
 
-    def _minimum_margin_collateral_points(self, conn, *, position_type, notional):
+    def _minimum_margin_collateral_points(self, conn, *, position_type, notional, fee_rate_percent=0.0):
         settings = self._settings_payload(conn)
         notional = int(notional or 0)
+        maintenance_percent = float(settings.get("margin_maintenance_percent") or 0)
+        fee_rate_percent = float(fee_rate_percent or 0)
+        safety_minimum = int(math.ceil(notional * max(0.0, maintenance_percent + fee_rate_percent) / 100.0)) + 1
         if position_type == "margin_long":
             financing_percent = float(settings.get("margin_long_financing_percent") or MARGIN_LONG_FINANCING_RATE_PERCENT)
-            return int(math.ceil(notional * max(0.0, 100.0 - financing_percent) / 100.0))
+            base_minimum = int(math.ceil(notional * max(0.0, 100.0 - financing_percent) / 100.0))
+            return max(base_minimum, safety_minimum)
         short_percent = float(settings.get("short_collateral_percent") or SHORT_COLLATERAL_RATE_PERCENT)
-        return int(math.ceil(notional * short_percent / 100.0))
+        base_minimum = int(math.ceil(notional * short_percent / 100.0))
+        return max(base_minimum, safety_minimum)
 
     def _margin_interest_total_hours(self, row, now_text=None):
         principal = int(row["principal_points"] or 0)
@@ -2240,6 +2245,66 @@ class TradingEngineService:
                 ),
                 link="/trading",
             )
+        except Exception:
+            pass
+
+    def _has_unread_margin_alert(self, conn, *, user_id, alert_type, position_uuid):
+        try:
+            row = conn.execute(
+                """
+                SELECT id FROM notifications
+                WHERE user_id=? AND type=? AND is_read=0 AND body LIKE ?
+                LIMIT 1
+                """,
+                (int(user_id), str(alert_type or ""), f"%{str(position_uuid or '')}%"),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return False
+
+    def _notify_margin_risk_alerts(self, conn, *, position, risk, market):
+        try:
+            user_id = int(position["user_id"])
+            position_uuid = str(position["position_uuid"])
+            market_symbol = str(position["market_symbol"])
+            position_label = "融資做多" if position["position_type"] == "margin_long" else "借券放空"
+            price = int(risk.get("price_points") or 0)
+            entry_price = int(position["entry_price_points"] or 0)
+            ratio = risk.get("maintenance_ratio_percent")
+            liquidation_price = risk.get("liquidation_price_points")
+            if not risk.get("liquidation_required") and ratio is not None and float(ratio) <= 150.0:
+                alert_type = "trading_margin_near_liquidation"
+                if not self._has_unread_margin_alert(conn, user_id=user_id, alert_type=alert_type, position_uuid=position_uuid):
+                    create_notification_if_enabled(
+                        conn,
+                        user_id=user_id,
+                        type=alert_type,
+                        title="進階交易接近強平",
+                        body=(
+                            f"{market_symbol} {position_label} 倉位接近強平，"
+                            f"目前價 {price}，強平價 {liquidation_price or '-'}，"
+                            f"整戶維持率 {ratio}%。倉位 {position_uuid}"
+                        ),
+                        link="/trading",
+                    )
+            if entry_price > 0 and price > 0:
+                move_percent = abs(price - entry_price) * 100.0 / entry_price
+                threshold = float(market["max_price_jump_percent"] or 10)
+                if move_percent >= threshold:
+                    alert_type = "trading_margin_price_jump"
+                    if not self._has_unread_margin_alert(conn, user_id=user_id, alert_type=alert_type, position_uuid=position_uuid):
+                        direction = "上漲" if price > entry_price else "下跌"
+                        create_notification_if_enabled(
+                            conn,
+                            user_id=user_id,
+                            type=alert_type,
+                            title="進階交易價格大幅波動",
+                            body=(
+                                f"{market_symbol} {position_label} 參考價較開倉價{direction} {move_percent:.2f}%，"
+                                f"開倉價 {entry_price}，目前價 {price}。倉位 {position_uuid}"
+                            ),
+                            link="/trading",
+                        )
         except Exception:
             pass
 
@@ -4026,7 +4091,12 @@ class TradingEngineService:
             market = self._market(conn, market_symbol)
             price, price_source = self._current_market_price_points(conn, market)
             notional = notional_points(quantity_units, price)
-            min_collateral = self._minimum_margin_collateral_points(conn, position_type=position_type, notional=notional)
+            min_collateral = self._minimum_margin_collateral_points(
+                conn,
+                position_type=position_type,
+                notional=notional,
+                fee_rate_percent=float(market["fee_rate_percent"] or 0),
+            )
             if collateral < min_collateral:
                 raise ValueError(f"collateral below minimum {min_collateral}")
             fee = fee_points(notional, float(market["fee_rate_percent"] or 0))
@@ -4539,6 +4609,8 @@ class TradingEngineService:
                 try:
                     position = self._accrue_margin_interest(conn, position, actor=actor)
                     risk = self._margin_risk_payload(conn, position)
+                    market = self._market(conn, position["market_symbol"])
+                    self._notify_margin_risk_alerts(conn, position=position, risk=risk, market=market)
                     if risk.get("liquidation_required"):
                         candidates.append({
                             "position_uuid": position["position_uuid"],

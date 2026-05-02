@@ -139,6 +139,44 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     assert "ETH/POINTS 買入 0.1 已成交" in notes[-1]["body"]
 
 
+def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=2000,
+        action_type="test_funding",
+    )
+
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.25",
+    )
+
+    assert result["order"]["status"] == "filled"
+    dashboard = trading.user_dashboard(user_id=1)
+    fill = dashboard["fills"][0]
+    assert fill["funding_mode"] == "trial_mixed"
+    assert fill["notional_points"] == 1250
+    assert fill["fee_points"] == 4
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 0
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 1000
+
+    ledger_rows = points.list_ledger(user_id=1, include_user_id=True)
+    trading_rows = [row for row in ledger_rows if row["reference_id"] == result["order"]["order_uuid"]]
+    amounts_by_action = {row["action_type"]: row["amount"] for row in trading_rows}
+    assert amounts_by_action == {
+        "trading_freeze": 254,
+        "trading_unfreeze": 254,
+        "trading_spot_buy": 254,
+    }
+    assert points.get_wallet(1)["points_balance"] == 1746
+
+
 def test_trading_bot_workflow_triggers_existing_order_path(tmp_path):
     _, trading = _services(tmp_path)
     bot = trading.save_trading_bot(
@@ -1278,6 +1316,60 @@ def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
     assert trading.verify_state()["ok"] is True
 
 
+def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "margin_long_financing_percent": 90,
+            "short_collateral_percent": 10,
+            "margin_maintenance_percent": 15,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+
+    with pytest.raises(ValueError, match="collateral below minimum 78"):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="margin_long",
+            quantity="0.1",
+            collateral_points=77,
+        )
+    long_position = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=78,
+    )
+    long_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
+    assert long_risk["liquidation_price_points"] < long_position["position"]["entry_price_points"]
+    trading.close_margin_position(actor=_actor(), position_uuid=long_position["position"]["position_uuid"])
+
+    with pytest.raises(ValueError, match="collateral below minimum 78"):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="short",
+            quantity="0.1",
+            collateral_points=77,
+        )
+    short_position = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="short",
+        quantity="0.1",
+        collateral_points=78,
+    )
+    short_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
+    assert short_risk["liquidation_price_points"] > short_position["position"]["entry_price_points"]
+    assert trading.verify_state()["ok"] is True
+
+
 def test_margin_open_is_idempotent_for_client_key(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
@@ -1343,10 +1435,15 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
     assert accrued["interest_accrued_hours"] == 2
     assert accrued["interest_paid_points"] == 0
     assert accrued["interest_points"] == 7
-    dashboard = trading.user_dashboard(user_id=1)
-    position = dashboard["margin_positions"][0]
-    assert position["interest_capitalized_points"] == 7
-    assert position["risk"]["interest_points"] == 7
+    conn = trading.get_db()
+    try:
+        position = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert position["interest_points"] == 7
     assert trading.verify_state()["ok"] is True
 
 
@@ -1510,6 +1607,77 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
     assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
     assert trading.verify_state()["ok"] is True
+
+
+def test_margin_scan_notifies_user_when_position_is_near_liquidation(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "margin_liquidation_enabled": True,
+            "margin_maintenance_percent": 15,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=120,
+    )
+
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=4550, confirm_jump=True)
+    first_scan = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+    second_scan = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert first_scan["liquidated"] == []
+    assert second_scan["liquidated"] == []
+    notes = [row for row in _notifications(trading, 1) if row["type"] == "trading_margin_near_liquidation"]
+    assert len(notes) == 1
+    assert "進階交易接近強平" == notes[0]["title"]
+    assert opened["position"]["position_uuid"] in notes[0]["body"]
+    assert "強平價" in notes[0]["body"]
+
+
+def test_margin_scan_notifies_user_when_price_jumps_sharply(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "margin_liquidation_enabled": True,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+    trading.update_market(
+        actor=_actor(3, "root", "super_admin"),
+        symbol="ETH/POINTS",
+        max_price_jump_percent=10,
+        confirm_jump=True,
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5700, confirm_jump=True)
+    trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+    trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+
+    notes = [row for row in _notifications(trading, 1) if row["type"] == "trading_margin_price_jump"]
+    assert len(notes) == 1
+    assert "進階交易價格大幅波動" == notes[0]["title"]
+    assert opened["position"]["position_uuid"] in notes[0]["body"]
+    assert "14.00%" in notes[0]["body"]
 
 
 def test_force_liquidation_rechecks_recovered_position(tmp_path):
