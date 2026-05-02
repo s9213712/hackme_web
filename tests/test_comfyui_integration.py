@@ -150,6 +150,27 @@ def _actor():
     }
 
 
+def _generate_preview(client):
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "a quiet test image",
+            "width": 512,
+            "height": 512,
+            "steps": 12,
+            "cfg": 6.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "seed": 123,
+            "batch_size": 1,
+            "confirm_billing": True,
+        },
+    )
+    assert generated.status_code == 200
+    return generated.get_json()["image"]
+
+
 class OfflineComfyUIClient:
     base_url = "http://fake-offline"
 
@@ -511,11 +532,12 @@ def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
     storage_root.mkdir()
     _init_db(db_path)
     client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(client)
 
     saved = client.post(
         "/api/comfyui/save",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "image_ref": preview["image_ref"],
             "virtual_path": "/ComfyUI/smoke.png",
         },
     )
@@ -530,17 +552,44 @@ def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
     assert list(storage_root.glob("users/1/*/hackme_web_00001_.png"))
 
 
+def test_comfyui_image_ref_is_bound_to_generating_user(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    alice_client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(alice_client)
+    bob_actor = {
+        "id": 2,
+        "username": "bob",
+        "role": "user",
+        "member_level": "trusted",
+        "effective_level": "trusted",
+        "sanction_status": "none",
+    }
+    bob_client = _build_app(db_path, storage_root, actor=lambda: bob_actor).test_client()
+
+    stolen = bob_client.post(
+        "/api/comfyui/save",
+        json={"image_ref": preview["image_ref"], "virtual_path": "/ComfyUI/stolen.png"},
+    )
+
+    assert stolen.status_code == 404
+    assert "找不到" in stolen.get_json()["msg"]
+
+
 def test_comfyui_save_defaults_to_output_folder_and_album(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
     client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(client)
 
     saved = client.post(
         "/api/comfyui/save",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "image_ref": preview["image_ref"],
         },
     )
 
@@ -655,11 +704,12 @@ def test_output_album_prunes_files_moved_out_of_output_folder(tmp_path):
     storage_root.mkdir()
     _init_db(db_path)
     client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(client)
 
     saved = client.post(
         "/api/comfyui/save",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "image_ref": preview["image_ref"],
         },
     )
     assert saved.status_code == 200
@@ -693,12 +743,13 @@ def test_comfyui_discard_deletes_original_comfyui_file(tmp_path):
     storage_root.mkdir()
     _init_db(db_path)
     client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(client)
 
     discarded = client.post(
         "/api/comfyui/discard",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
-            "prompt_id": "prompt-1",
+            "image_ref": preview["image_ref"],
+            "prompt_id": preview["prompt_id"],
         },
     )
 
@@ -748,7 +799,7 @@ def test_comfyui_discard_tolerates_plain_text_history_response(tmp_path, monkeyp
 
 
 def test_comfyui_discard_without_file_delete_endpoint_clears_preview_with_warning(tmp_path):
-    class UnsupportedDeleteClient:
+    class UnsupportedDeleteClient(FakeComfyUIClient):
         def discard_image(self, image_ref, *, prompt_id=None):
             return {
                 "file_deleted": False,
@@ -762,12 +813,13 @@ def test_comfyui_discard_without_file_delete_endpoint_clears_preview_with_warnin
     storage_root.mkdir()
     _init_db(db_path)
     client = _build_app(db_path, storage_root, comfyui_client=UnsupportedDeleteClient()).test_client()
+    preview = _generate_preview(client)
 
     discarded = client.post(
         "/api/comfyui/discard",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
-            "prompt_id": "prompt-1",
+            "image_ref": preview["image_ref"],
+            "prompt_id": preview["prompt_id"],
         },
     )
 
@@ -849,11 +901,12 @@ def test_comfyui_save_can_add_generated_image_to_album(tmp_path):
     conn.commit()
     conn.close()
     client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(client)
 
     saved = client.post(
         "/api/comfyui/save",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "image_ref": preview["image_ref"],
             "virtual_path": "/ComfyUI/album.png",
             "album_id": album["id"],
         },
@@ -885,11 +938,12 @@ def test_comfyui_share_creates_comfyui_thread_with_preview_grant(tmp_path):
     conn.commit()
     conn.close()
     client = _build_app(db_path, storage_root).test_client()
+    preview = _generate_preview(client)
 
     shared = client.post(
         "/api/comfyui/share",
         json={
-            "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
+            "image_ref": preview["image_ref"],
             "virtual_path": "/ComfyUI/share.png",
             "album_id": album["id"],
             "title": "My ComfyUI share",

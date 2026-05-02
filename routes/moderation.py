@@ -109,6 +109,13 @@ def register_moderation_routes(app, deps):
             return False, "權限不足", 403
         return True, "", 200
 
+    def can_govern_target(actor, target):
+        if not actor or not target:
+            return False
+        if actor_value(actor, "username") == "root":
+            return actor_value(target, "username") != "root"
+        return role_rank(actor_role(target)) < role_rank(actor_role(actor))
+
     def proposal_payload(conn, row):
         proposal = proposal_row_to_dict(row)
         if not proposal:
@@ -136,6 +143,8 @@ def register_moderation_routes(app, deps):
             return None, "找不到目標帳號", None
         if target["username"] == "root":
             return None, "不可對 root 執行治理提案", None
+        if not can_govern_target(actor, target):
+            return None, "不可對同級或更高權限帳號執行治理提案", None
 
         action_type = proposal["action_type"]
         action_value = proposal["action_value"]
@@ -380,6 +389,8 @@ def register_moderation_routes(app, deps):
                 return json_resp({"ok":False,"msg":"不可對自己建立治理提案"}), 403
             if target["username"] == "root":
                 return json_resp({"ok":False,"msg":"不可對 root 建立治理提案"}), 403
+            if not can_govern_target(actor, target):
+                return json_resp({"ok":False,"msg":"不可對同級或更高權限帳號建立治理提案"}), 403
             policy = governance_policy_for_action(action_type, target["role"])
             proposal, err = create_moderation_proposal(
                 conn,

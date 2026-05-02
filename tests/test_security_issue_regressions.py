@@ -157,6 +157,23 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1" not in economy
 
 
+def test_pending_reward_review_enforces_maker_checker():
+    points_chain = (ROOT / "services" / "points_chain.py").read_text(encoding="utf-8")
+    review = points_chain.split("def review_pending_reward", 1)[1].split("def rollback_ledger", 1)[0]
+
+    assert 'row["submitted_by"] is not None' in review
+    assert "cannot review your own pending reward" in review
+
+
+def test_comfyui_image_refs_are_owner_bound():
+    comfyui = (ROOT / "routes" / "comfyui.py").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS comfyui_image_refs" in comfyui
+    assert "_register_comfyui_image_refs" in comfyui
+    assert "_verify_comfyui_image_ref_owner" in comfyui
+    assert "COMFYUI_IMAGE_REF_DENIED" in comfyui
+
+
 def test_appeal_approval_rolls_back_points_before_committing_review():
     appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
     review = appeals.split("def admin_violation_appeal_review", 1)[1].split("def ", 1)[0]

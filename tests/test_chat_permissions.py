@@ -23,7 +23,7 @@ def _parse_positive_int(value, default=None, min_value=None, max_value=None):
     return parsed
 
 
-def _build_app(db_path, actor_box):
+def _build_app(db_path, actor_box, rate_limit=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -44,7 +44,7 @@ def _build_app(db_path, actor_box):
         "add_violation": lambda *args, **kwargs: ("warn", "noop", 0),
         "append_chat_record": lambda *args, **kwargs: True,
         "audit": lambda *args, **kwargs: None,
-        "check_user_rate_limit": lambda *args, **kwargs: (False, {"limit": 20}),
+        "check_user_rate_limit": rate_limit or (lambda *args, **kwargs: (False, {"limit": 20})),
         "db_get_user_from_token": lambda *args, **kwargs: None,
         "db_get_user_role": lambda *args, **kwargs: "user",
         "delete_csrf_token": lambda *args, **kwargs: None,
@@ -274,6 +274,54 @@ def test_chat_message_strips_html_before_storage(tmp_path):
     assert "<script" not in content.lower()
     assert "<img" not in content.lower()
     assert "hello" in content
+
+
+def test_chat_room_password_join_is_rate_limited(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+    created = client.post("/api/chat/rooms", json={"name": "locked room", "join_password": "room-pass"})
+    assert created.status_code == 200
+    room_id = created.get_json()["room"]["id"]
+
+    def rate_limit(user_id, action, max_req, window_sec):
+        if action == f"chat_join_password:{room_id}":
+            return True, {"limit": max_req}
+        return False, {"limit": max_req}
+
+    actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager", "member_level": "normal"}
+    limited_client = _build_app(db_path, actor_box, rate_limit=rate_limit).test_client()
+    joined = limited_client.post(f"/api/chat/rooms/{room_id}/join", json={"password": "guess"})
+
+    assert joined.status_code == 429
+    assert "過於頻繁" in joined.get_json()["msg"]
+
+
+def test_chat_report_does_not_reveal_inaccessible_message_existence(tmp_path):
+    db_path = tmp_path / "chat.db"
+    _seed_chat_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO chat_rooms (id, name, owner_user_id, is_private, is_active, created_at) VALUES (2, 'private', 3, 1, 1, '2026-01-01T00:00:00')"
+        )
+        conn.execute("INSERT INTO chat_room_members (room_id, user_id, joined_at) VALUES (2, 3, '2026-01-01T00:00:00')")
+        conn.execute(
+            "INSERT INTO chat_messages (id, room_id, sender_id, content, is_blocked, blocked_reason, created_at) VALUES (10, 2, 3, 'secret', 0, NULL, '2026-01-01T00:00:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    actor_box = {"actor": {"id": 4, "username": "bob", "role": "user", "member_level": "normal"}}
+    client = _build_app(db_path, actor_box).test_client()
+
+    inaccessible = client.post("/api/chat/messages/10/report", json={"reason": "probe"})
+    missing = client.post("/api/chat/messages/999/report", json={"reason": "probe"})
+
+    assert inaccessible.status_code == 404
+    assert missing.status_code == 404
+    assert inaccessible.get_json()["msg"] == missing.get_json()["msg"] == "找不到訊息"
 
 
 def test_chat_room_invite_creates_notification(tmp_path):
