@@ -403,7 +403,7 @@ CREATE TABLE IF NOT EXISTS file_type_policies (
     category TEXT PRIMARY KEY,
     extensions_json TEXT NOT NULL,
     public_allowed INTEGER NOT NULL,
-    private_scannable_allowed INTEGER NOT NULL,
+    server_readable_allowed INTEGER NOT NULL,
     e2ee_allowed INTEGER NOT NULL,
     default_risk_level TEXT NOT NULL,
     allow_public_share INTEGER NOT NULL,

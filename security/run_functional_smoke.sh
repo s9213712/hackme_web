@@ -227,7 +227,7 @@ upload_file() {
   local code
   code="$(curl "${CURL_TLS_ARGS[@]}" -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o "$out" -w "%{http_code}" \
     -H "X-CSRF-Token: $CSRF_TOKEN" \
-    -F "privacy_mode=public_attachment" \
+    -F "privacy_mode=standard_plain" \
     -F "file=@${file_path};type=text/plain" \
     "$BASE_URL$path" || true)"
   if expect_code "$code" "$expected"; then
@@ -645,8 +645,8 @@ run_checks() {
   fi
   request "files privacy modes" "GET" "/api/files/privacy-modes" "200"
   request "cloud drive remote downloader capabilities" "GET" "/api/cloud-drive/remote-download/capabilities" "200"
-  request "cloud drive remote downloader rejects local file" "POST" "/api/cloud-drive/remote-download" "400" '{"url":"file:///etc/passwd","privacy_mode":"private_scannable"}'
-  request "cloud drive remote downloader task rejects local file" "POST" "/api/cloud-drive/remote-download/tasks" "400" '{"url":"file:///etc/passwd","privacy_mode":"private_scannable"}'
+  request "cloud drive remote downloader rejects local file" "POST" "/api/cloud-drive/remote-download" "400" '{"url":"file:///etc/passwd","privacy_mode":"standard_plain"}'
+  request "cloud drive remote downloader task rejects local file" "POST" "/api/cloud-drive/remote-download/tasks" "400" '{"url":"file:///etc/passwd","privacy_mode":"standard_plain"}'
   request "comfyui status" "GET" "/api/comfyui/status" "200"
   request "comfyui models" "GET" "/api/comfyui/models" "200,503"
   if [[ "$(json_expr 'data.get("ok", False)' "$(latest_raw "comfyui models")" || echo false)" == "true" ]]; then

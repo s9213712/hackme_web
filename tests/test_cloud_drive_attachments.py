@@ -4,6 +4,7 @@ import sqlite3
 import time
 import zipfile
 
+from cryptography.fernet import Fernet
 from flask import Flask, jsonify, make_response
 
 from routes.files import register_file_routes
@@ -49,6 +50,7 @@ def _build_app(db_path, storage_root, actor_box, points_service=None):
         "require_csrf_safe": _passthrough,
         "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
         "points_service": points_service,
+        "server_file_fernet": Fernet(Fernet.generate_key()),
     })
     return app
 
@@ -117,13 +119,14 @@ def test_privacy_modes_explain_server_readability_and_e2ee_tradeoffs(tmp_path):
     assert res.status_code == 200
     body = res.get_json()
     modes = body["modes"]
-    assert modes["private_scannable"]["server_can_read"] is True
-    assert "不是端到端加密" in modes["private_scannable"]["warning"]
-    assert modes["public_attachment"]["server_can_read"] is True
-    assert modes["e2ee_vault"]["server_can_read"] is False
-    assert "vault key" in modes["e2ee_vault"]["warning"]
-    assert modes["e2ee_vault_with_client_scan"]["server_scan"] == "client_report_untrusted"
-    assert "不可完全信任" in modes["e2ee_vault_with_client_scan"]["warning"]
+    assert modes["standard_plain"]["server_can_read"] is True
+    assert modes["standard_plain"]["stored_at_rest"] == "plaintext"
+    assert modes["server_encrypted"]["server_can_read"] == "decryptable"
+    assert modes["server_encrypted"]["stored_at_rest"] == "encrypted"
+    assert "不是端到端加密" in modes["server_encrypted"]["warning"]
+    assert modes["e2ee"]["server_can_read"] is False
+    assert modes["e2ee"]["stored_at_rest"] == "encrypted"
+    assert "vault key" in modes["e2ee"]["warning"]
 
 
 def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_path):
@@ -197,7 +200,7 @@ def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
 
     res = client.post(
         "/api/cloud-drive/upload",
-        data={"file": (io.BytesIO(b"cipher"), "vault.bin"), "privacy_mode": "e2ee_vault"},
+        data={"file": (io.BytesIO(b"cipher"), "vault.bin"), "privacy_mode": "e2ee"},
         content_type="multipart/form-data",
     )
 
@@ -206,6 +209,39 @@ def test_cloud_drive_upload_failure_returns_specific_reason(tmp_path):
     assert body["ok"] is False
     assert "encrypted_file_key is required" in body["msg"]
     assert body["error_code"] == "ValueError"
+
+
+def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"secret note"), "note.txt"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    file_id = res.get_json()["file"]["file_id"]
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
+    conn.close()
+    assert row["privacy_mode"] == "server_encrypted"
+    stored = storage_root / row["storage_path"]
+    assert stored.read_bytes() != b"secret note"
+
+    preview = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert preview.status_code == 200
+    assert preview.get_json()["preview"]["text"] == "secret note"
+
+    download = client.get(f"/api/cloud-drive/files/{file_id}/download")
+    assert download.status_code == 200
+    assert download.data == b"secret note"
 
 
 def test_cloud_drive_upload_repairs_legacy_uploaded_files_schema(tmp_path):
@@ -740,7 +776,7 @@ def test_cloud_drive_text_and_archive_preview(tmp_path):
         "/api/cloud-drive/upload",
         data={
             "file": (zip_buffer, "bundle.zip"),
-            "privacy_mode": "private_scannable",
+            "privacy_mode": "standard_plain",
         },
         content_type="multipart/form-data",
     )
@@ -756,7 +792,7 @@ def test_cloud_drive_text_and_archive_preview(tmp_path):
         "/api/cloud-drive/upload",
         data={
             "file": (io.BytesIO(gzip.compress(b"compressed preview")), "single.txt.gz"),
-            "privacy_mode": "private_scannable",
+            "privacy_mode": "standard_plain",
         },
         content_type="multipart/form-data",
     )
@@ -782,7 +818,7 @@ def test_cloud_drive_pdf_preview_content_and_e2ee_denied(tmp_path):
         "/api/cloud-drive/upload",
         data={
             "file": (io.BytesIO(pdf_bytes), "manual.pdf"),
-            "privacy_mode": "private_scannable",
+            "privacy_mode": "standard_plain",
         },
         content_type="multipart/form-data",
     )
@@ -804,7 +840,7 @@ def test_cloud_drive_pdf_preview_content_and_e2ee_denied(tmp_path):
         "/api/cloud-drive/upload",
         data={
             "file": (io.BytesIO(pdf_bytes), "sealed.pdf"),
-            "privacy_mode": "e2ee_vault",
+            "privacy_mode": "e2ee",
             "encrypted_metadata": "sealed:metadata",
             "encrypted_file_key": "sealed:owner-key",
             "wrapped_by": "browser_local_vault_key",
@@ -1204,7 +1240,7 @@ def test_legacy_files_api_upload_status_and_download_alias(tmp_path):
     assert status.status_code == 200
     payload = status.get_json()["file"]
     assert payload["id"] == file_id
-    assert payload["privacy_mode"] == "public_attachment"
+    assert payload["privacy_mode"] == "standard_plain"
 
     download = client.get(f"/api/files/{file_id}/download")
     assert download.status_code == 200
@@ -1223,7 +1259,7 @@ def test_e2ee_share_and_revoke_controls_download_grant(tmp_path):
         "/api/files/upload",
         data={
             "file": (io.BytesIO(b"ciphertext"), "vault.bin"),
-            "privacy_mode": "e2ee_vault",
+            "privacy_mode": "e2ee",
             "encrypted_metadata": "sealed:filename",
             "encrypted_file_key": "sealed:owner-key",
             "ciphertext_sha256": "a" * 64,
@@ -1278,7 +1314,7 @@ def test_e2ee_key_endpoint_returns_only_recipient_key(tmp_path):
         "/api/cloud-drive/upload",
         data={
             "file": (io.BytesIO(b"cipher"), "vault.bin"),
-            "privacy_mode": "e2ee_vault",
+            "privacy_mode": "e2ee",
             "encrypted_metadata": "sealed:metadata",
             "encrypted_file_key": "sealed:owner-key",
             "wrapped_by": "browser_local_vault_key",
@@ -1320,14 +1356,14 @@ def test_remote_download_capabilities_and_rejects_local_paths(tmp_path):
 
     blocked = client.post(
         "/api/cloud-drive/remote-download",
-        json={"url": "file:///etc/passwd", "privacy_mode": "private_scannable"},
+        json={"url": "file:///etc/passwd", "privacy_mode": "standard_plain"},
     )
     assert blocked.status_code == 400
     assert "http" in blocked.get_json()["msg"]
 
     blocked_task = client.post(
         "/api/cloud-drive/remote-download/tasks",
-        json={"url": "file:///etc/passwd", "privacy_mode": "private_scannable"},
+        json={"url": "file:///etc/passwd", "privacy_mode": "standard_plain"},
     )
     assert blocked_task.status_code == 400
     assert "http" in blocked_task.get_json()["msg"]
@@ -1360,7 +1396,7 @@ def test_remote_download_saves_to_cloud_drive_and_storage(tmp_path, monkeypatch)
         "/api/cloud-drive/remote-download",
         json={
             "url": "https://example.test/remote.txt",
-            "privacy_mode": "private_scannable",
+            "privacy_mode": "standard_plain",
             "virtual_path": "/Downloads/remote.txt",
         },
     )
@@ -1400,7 +1436,7 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
         "/api/cloud-drive/remote-download/tasks",
         json={
             "url": "https://93.184.216.34/remote-task.txt",
-            "privacy_mode": "private_scannable",
+            "privacy_mode": "standard_plain",
             "virtual_path": "/Downloads/remote-task.txt",
         },
     )
@@ -1454,7 +1490,7 @@ def test_remote_download_task_accepts_uploaded_torrent_file(tmp_path, monkeypatc
         "/api/cloud-drive/remote-download/torrent-tasks",
         data={
             "torrent_file": (io.BytesIO(b"d8:announce0:e"), "sample.torrent"),
-            "privacy_mode": "private_scannable",
+            "privacy_mode": "standard_plain",
             "virtual_path": "/Downloads/torrent-result.txt",
         },
     )

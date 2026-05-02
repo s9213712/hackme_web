@@ -255,7 +255,7 @@ def run_functional_suite(base_url):
     upload = user.multipart_request(
         "POST",
         "/api/cloud-drive/upload",
-        fields={"privacy_mode": "private_scannable"},
+        fields={"privacy_mode": "standard_plain"},
         files=[("file", "chat-smoke.txt", b"chat attachment smoke", "text/plain")],
         headers={"X-CSRF-Token": csrf},
     )

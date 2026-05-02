@@ -109,7 +109,7 @@ def test_file_quota_endpoint_returns_user_usage(tmp_path):
     ensure_upload_security_schema(conn)
     conn.execute(
         "INSERT INTO uploaded_files (id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status, size_bytes, created_at) "
-        "VALUES ('f1', 1, 'storage/f1', 'public_attachment', 'low', 'clean', 1024, '2026-01-01T00:00:00')"
+        "VALUES ('f1', 1, 'storage/f1', 'standard_plain', 'low', 'clean', 1024, '2026-01-01T00:00:00')"
     )
     conn.commit()
     conn.close()

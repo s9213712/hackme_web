@@ -134,7 +134,7 @@ def test_executable_public_upload_is_blocked():
         decision = evaluate_upload_policy(
             conn,
             filename="tool.exe",
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             user={"effective_level": "vip"},
         )
         assert decision.allowed is False
@@ -150,7 +150,7 @@ def test_newbie_cannot_upload_archive_even_when_archive_policy_allows_others():
         decision = evaluate_upload_policy(
             conn,
             filename="backup.zip",
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             user={"effective_level": "newbie"},
         )
         assert decision.allowed is False
@@ -166,7 +166,7 @@ def test_e2ee_record_does_not_store_plaintext_filename_or_file_key():
             conn,
             owner_user_id=1,
             storage_path="storage/e2ee/blob.bin",
-            privacy_mode="e2ee_vault",
+            privacy_mode="e2ee",
             size_bytes=12,
             original_filename="secret-tax.pdf",
             encrypted_metadata="sealed:metadata",
@@ -202,7 +202,7 @@ def test_uploaded_file_record_stores_safe_public_mime_type():
             conn,
             owner_user_id=1,
             storage_path="storage/public/blob",
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=10,
             original_filename="pwn.html",
             mime_type="text/html",
@@ -224,7 +224,7 @@ def test_cloud_drive_usage_reports_used_and_remaining_quota():
             conn,
             owner_user_id=1,
             storage_path="storage/public/a.txt",
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=256,
             original_filename="a.txt",
             user={"effective_level": "trusted"},
@@ -233,7 +233,7 @@ def test_cloud_drive_usage_reports_used_and_remaining_quota():
             conn,
             owner_user_id=1,
             storage_path="storage/e2ee/blob.bin",
-            privacy_mode="e2ee_vault",
+            privacy_mode="e2ee",
             size_bytes=512,
             encrypted_metadata="sealed",
             encrypted_file_key="sealed-key",
@@ -247,8 +247,8 @@ def test_cloud_drive_usage_reports_used_and_remaining_quota():
         assert usage["used_bytes"] == 768
         assert usage["total_bytes"] == 1024 * 1024
         assert usage["remaining_bytes"] == 1024 * 1024 - 768
-        assert usage["by_privacy_mode"]["public_attachment"]["count"] == 1
-        assert usage["by_privacy_mode"]["e2ee_vault"]["count"] == 1
+        assert usage["by_privacy_mode"]["standard_plain"]["count"] == 1
+        assert usage["by_privacy_mode"]["e2ee"]["count"] == 1
     finally:
         conn.close()
 
@@ -295,7 +295,7 @@ def test_root_role_uses_disk_backed_quota(tmp_path, monkeypatch):
             conn,
             owner_user_id=1,
             storage_path="storage/admin/large.txt",
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=7_300,
             original_filename="large.txt",
             user=admin,
@@ -308,7 +308,7 @@ def test_root_role_uses_disk_backed_quota(tmp_path, monkeypatch):
         decision = evaluate_upload_policy(
             conn,
             filename="backup.zip",
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             user={"id": 1, "username": "admin", "role": "manager", "effective_level": "newbie"},
         )
         assert decision.allowed is True
@@ -528,7 +528,7 @@ def test_e2ee_upload_requires_encrypted_file_key():
                 conn,
                 owner_user_id=1,
                 storage_path="storage/e2ee/blob.bin",
-                privacy_mode="e2ee_vault",
+                privacy_mode="e2ee",
                 size_bytes=12,
                 encrypted_metadata="sealed:metadata",
                 user={"effective_level": "vip"},
@@ -641,7 +641,7 @@ def test_scan_uploaded_file_records_image_reencode_result(tmp_path):
             conn,
             owner_user_id=1,
             storage_path=str(image_path),
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=image_path.stat().st_size,
             original_filename="avatar.jpg",
             mime_type="image/jpeg",
@@ -674,7 +674,7 @@ def test_scan_uploaded_file_records_clean_clamav_result(tmp_path, monkeypatch):
             conn,
             owner_user_id=1,
             storage_path=str(sample),
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=sample.stat().st_size,
             original_filename="note.txt",
             mime_type="text/plain",
@@ -706,7 +706,7 @@ def test_scan_uploaded_file_quarantines_infected_clamav_result(tmp_path, monkeyp
             conn,
             owner_user_id=1,
             storage_path=str(sample),
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=sample.stat().st_size,
             original_filename="payload.txt",
             user={"effective_level": "trusted"},
@@ -733,7 +733,7 @@ def test_scan_uploaded_file_soft_skips_when_clamav_missing(tmp_path, monkeypatch
             conn,
             owner_user_id=1,
             storage_path=str(sample),
-            privacy_mode="public_attachment",
+            privacy_mode="standard_plain",
             size_bytes=sample.stat().st_size,
             original_filename="note.txt",
             user={"effective_level": "trusted"},

@@ -1,6 +1,8 @@
 import json
 import os
+import tempfile
 import uuid
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +12,8 @@ from services.upload_security import (
     create_uploaded_file_record,
     get_cloud_drive_security_policy,
     get_user_cloud_drive_usage,
+    is_e2ee_privacy_mode,
+    is_server_encrypted_privacy_mode,
     safe_public_filename,
     scan_uploaded_file,
     storage_root_can_accept_bytes,
@@ -78,6 +82,22 @@ def ensure_cloud_drive_attachment_schema(conn):
 
 def _now():
     return datetime.now().isoformat()
+
+
+def is_e2ee_file(row_or_mode):
+    mode = row_or_mode["privacy_mode"] if hasattr(row_or_mode, "keys") and "privacy_mode" in row_or_mode.keys() else row_or_mode
+    return is_e2ee_privacy_mode(mode)
+
+
+def is_server_encrypted_file(row_or_mode):
+    mode = row_or_mode["privacy_mode"] if hasattr(row_or_mode, "keys") and "privacy_mode" in row_or_mode.keys() else row_or_mode
+    return is_server_encrypted_privacy_mode(mode)
+
+
+def decrypt_server_encrypted_bytes(path, server_file_fernet):
+    if not server_file_fernet:
+        raise ValueError("server-side file encryption key is unavailable")
+    return server_file_fernet.decrypt(Path(path).read_bytes())
 
 
 def _actor_value(actor, key, default=None):
@@ -215,7 +235,7 @@ def store_cloud_upload(
     member_rule,
     storage_root,
     file_storage,
-    privacy_mode="public_attachment",
+    privacy_mode="standard_plain",
     encrypted_metadata=None,
     encrypted_file_key=None,
     wrapped_by="user_public_key",
@@ -225,6 +245,7 @@ def store_cloud_upload(
     nonce=None,
     client_scan_report=None,
     scan_now=True,
+    server_file_fernet=None,
 ):
     ensure_cloud_drive_attachment_schema(conn)
     filename = safe_public_filename(getattr(file_storage, "filename", "") or "upload.bin")
@@ -253,6 +274,13 @@ def store_cloud_upload(
             if not chunk:
                 break
             out.write(chunk)
+    server_encrypted = is_server_encrypted_privacy_mode(privacy_mode)
+    if server_encrypted and server_file_fernet is None:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise ValueError("server_file_encryption_key is required for server_encrypted uploads")
     result = create_uploaded_file_record(
         conn,
         owner_user_id=actor["id"],
@@ -266,8 +294,8 @@ def store_cloud_upload(
         mime_type=getattr(file_storage, "mimetype", None),
         ciphertext_sha256=ciphertext_sha256,
         plaintext_sha256=None,
-        encryption_algorithm=encryption_algorithm,
-        encryption_version=encryption_version,
+        encryption_algorithm="Fernet" if server_encrypted else encryption_algorithm,
+        encryption_version="server-side-v1" if server_encrypted else encryption_version,
         nonce=nonce,
         client_scan_report=client_scan_report,
         user=actor,
@@ -284,6 +312,22 @@ def store_cloud_upload(
         result["scan_status"] = scan_result["scan_status"]
         result["risk_level"] = scan_result["risk_level"]
         result["scan_result"] = scan_result
+    if server_encrypted:
+        plaintext = target.read_bytes()
+        ciphertext = server_file_fernet.encrypt(plaintext)
+        target.write_bytes(ciphertext)
+        digest = hashlib.sha256(ciphertext).hexdigest()
+        conn.execute(
+            """
+            UPDATE uploaded_files
+            SET ciphertext_sha256=?, encryption_algorithm=?, encryption_version=?, updated_at=?
+            WHERE id=?
+            """,
+            (digest, "Fernet", "server-side-v1", _now(), result["file_id"]),
+        )
+        result["ciphertext_sha256"] = digest
+        result["encryption_algorithm"] = "Fernet"
+        result["encryption_version"] = "server-side-v1"
     return result, None
 
 
@@ -318,7 +362,7 @@ def get_file_status(conn, *, actor, file_id):
         (file_id,),
     ).fetchall()
     keys = []
-    if row["privacy_mode"].startswith("e2ee") and (
+    if is_e2ee_file(row) and (
         int(row["owner_user_id"]) == int(actor["id"]) or is_manager_or_root(actor)
     ):
         keys = conn.execute(
@@ -354,7 +398,7 @@ def share_e2ee_file(
         return None, "找不到檔案或檔案已刪除"
     if int(row["owner_user_id"]) != int(actor["id"]):
         return None, "只能分享自己的 E2EE 檔案"
-    if not row["privacy_mode"].startswith("e2ee"):
+    if not is_e2ee_file(row):
         return None, "只有 E2EE 檔案需要加密金鑰分享"
     try:
         recipient_user_id = int(recipient_user_id)
@@ -530,7 +574,7 @@ def _scan_allows_download(conn, row):
     policy = get_cloud_drive_security_policy(conn)
     if not policy["block_unclean_downloads"]:
         return True
-    if row["privacy_mode"].startswith("e2ee"):
+    if is_e2ee_file(row):
         return True
     return row["scan_status"] in {"clean", "not_required"}
 
@@ -552,7 +596,7 @@ def create_announcement_attachment_request(conn, *, actor, file_id, announcement
     row = _file_row(conn, file_id)
     if not row or row["deleted_at"]:
         return None, "找不到檔案或檔案已刪除"
-    if row["privacy_mode"].startswith("e2ee"):
+    if is_e2ee_file(row):
         return None, "E2EE 檔案不可作為公告附件"
     req_id = uuid.uuid4().hex
     conn.execute(

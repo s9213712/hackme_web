@@ -19,6 +19,7 @@ It does:
 - remove local deployment-generated secrets and manifests:
   - `.chain_seed`
   - `.csrfkey`
+  - `.filekey`
   - `.fkey`
   - `.fley`
   - `.integrity_key`
@@ -46,7 +47,7 @@ It includes:
 - manifest, checksums, metadata, and snapshot audit events
 
 It excludes deployment secrets. Snapshot metadata records
-`secrets_excluded: true`. Restoring a snapshot does not restore `.fkey`,
+`secrets_excluded: true`. Restoring a snapshot does not restore `.fkey`, `.filekey`,
 `.csrfkey`, `.chain_seed`, `.integrity_key`, `cert.pem`, or `key.pem`.
 
 Server restore should be used for whole-server rollback, migration, or

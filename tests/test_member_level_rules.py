@@ -294,7 +294,7 @@ def test_quota_reduction_level_change_warns_user_with_notification(tmp_path):
             INSERT INTO uploaded_files (
                 id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
                 size_bytes, created_at
-            ) VALUES ('f1', 9, 'users/9/f1/a.bin', 'private_scannable', 'low', 'clean', ?, ?)
+            ) VALUES ('f1', 9, 'users/9/f1/a.bin', 'standard_plain', 'low', 'clean', ?, ?)
             """,
             (150 * 1024 * 1024, datetime.now().isoformat()),
         )

@@ -26,6 +26,7 @@ Generated runtime files remain local and must not be committed:
 
 - `.env`
 - `.fkey`
+- `.filekey`
 - `.csrfkey`
 - `.chain_seed`
 - `.integrity_key`

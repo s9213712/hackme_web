@@ -9,6 +9,7 @@ database/app.db
 .rate_limit.json
 .attack_log.json
 .chain_seed
+.filekey
 .fkey
 .csrfkey
 .integrity_key

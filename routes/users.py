@@ -602,7 +602,7 @@ def register_user_routes(app, deps):
                 member_rule=rule,
                 storage_root=storage_root,
                 file_storage=file_storage,
-                privacy_mode="public_attachment",
+                privacy_mode="standard_plain",
                 scan_now=True,
             )
             if msg:
@@ -662,7 +662,7 @@ def register_user_routes(app, deps):
             ).fetchone()
             if not row or row["deleted_at"]:
                 return json_resp({"ok": False, "msg": "尚未設定頭像"}), 404
-            if not row["privacy_mode"].startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
+            if row["privacy_mode"] != "e2ee" and row["scan_status"] not in {"clean", "not_required"}:
                 return json_resp({"ok": False, "msg": "頭像尚未通過安全掃描"}), 403
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists() or not path.is_file():

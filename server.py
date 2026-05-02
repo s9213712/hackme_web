@@ -308,6 +308,12 @@ SECRET_KEY = _load_or_create_text_secret(
     generator=lambda: secrets.token_hex(32),
 )
 
+SERVER_FILE_ENCRYPTION_KEY = _load_or_create_text_secret(
+    "SERVER_FILE_ENCRYPTION_KEY",
+    os.path.join(BASE_DIR, ".filekey"),
+    generator=lambda: Fernet.generate_key().decode("utf-8"),
+)
+
 _INTEGRITY_KEY = _load_or_create_binary_secret(
     "INTEGRITY_SECRET_KEY",
     os.path.join(BASE_DIR, ".integrity_key"),
@@ -327,6 +333,7 @@ def _build_fernet(secret):
 
 
 fernet = _build_fernet(SECRET_KEY)
+server_file_fernet = _build_fernet(SERVER_FILE_ENCRYPTION_KEY)
 
 # ── JSON helpers ──────────────────────────────────────────────────────────────
 def load_json(path):
@@ -933,6 +940,7 @@ snapshot_service = SnapshotService(
     runtime_secret_files=[
         os.path.join(BASE_DIR, ".chain_seed"),
         os.path.join(BASE_DIR, ".csrfkey"),
+        os.path.join(BASE_DIR, ".filekey"),
         os.path.join(BASE_DIR, ".fkey"),
         os.path.join(BASE_DIR, ".fley"),
         os.path.join(BASE_DIR, ".integrity_key"),
@@ -1371,6 +1379,7 @@ register_operation_routes(app, {
     "save_settings": save_settings,
     "secure_add_violation": secure_add_violation,
     "server_mode_service": server_mode_service,
+    "server_file_fernet": server_file_fernet,
     "snapshot_service": snapshot_service,
     "integrity_guard": integrity_guard,
     "verify_audit_integrity": verify_audit_integrity,

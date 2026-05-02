@@ -8,55 +8,45 @@ function formatDriveBytes(bytes) {
 }
 
 const DRIVE_PRIVACY_MODE_LABELS = {
-  private_scannable: "一般私密檔案",
-  public_attachment: "附件/分享用",
-  e2ee_vault: "端到端加密",
-  e2ee_vault_with_client_scan: "端到端加密 + 本機掃描",
+  standard_plain: "一般檔案",
+  server_encrypted: "伺服器端加密",
+  e2ee: "端到端加密",
 };
 
 const DRIVE_PRIVACY_MODE_DESCRIPTIONS = {
-  private_scannable: "伺服器可讀明文並掃毒，適合一般個人檔案",
-  public_attachment: "伺服器可讀明文並掃毒，適合附件、相簿或分享",
-  e2ee_vault: "瀏覽器端加密，站方無法讀取，預覽與掃毒受限",
-  e2ee_vault_with_client_scan: "瀏覽器端加密，附本機掃描回報但不可完全信任",
+  standard_plain: "伺服器可讀明文並掃毒，預覽與分享支援最完整",
+  server_encrypted: "磁碟上是密文，伺服器可暫時解密掃毒、預覽與下載明文",
+  e2ee: "瀏覽器端加密，站方無法讀取，預覽與掃毒受限",
 };
 
 const DRIVE_PRIVACY_MODE_COMPARISON = [
   {
-    mode: "private_scannable",
-    bestFor: "一般雲端硬碟檔案",
-    serverAccess: "可讀明文",
-    scan: "伺服器掃毒",
-    preview: "通過政策後可預覽",
-    keyRisk: "無本機金鑰風險",
-  },
-  {
-    mode: "public_attachment",
-    bestFor: "附件、分享、相簿展示",
+    mode: "standard_plain",
+    bestFor: "一般檔案、附件、相簿、分享",
     serverAccess: "可讀明文",
     scan: "伺服器掃毒",
     preview: "最完整",
     keyRisk: "無本機金鑰風險",
   },
   {
-    mode: "e2ee_vault",
-    bestFor: "高度私密保存",
-    serverAccess: "不可讀明文",
-    scan: "只能檢查密文/metadata",
-    preview: "不提供伺服器預覽",
-    keyRisk: "清除瀏覽器金鑰後可能無法解密",
+    mode: "server_encrypted",
+    bestFor: "降低磁碟或備份外洩風險",
+    serverAccess: "可暫時解密",
+    scan: "解密後伺服器掃毒",
+    preview: "通過政策後可預覽",
+    keyRisk: "伺服器金鑰遺失會影響復原",
   },
   {
-    mode: "e2ee_vault_with_client_scan",
-    bestFor: "私密保存 + 使用者自檢回報",
+    mode: "e2ee",
+    bestFor: "高度私密保存",
     serverAccess: "不可讀明文",
-    scan: "本機回報，伺服器不可完全信任",
+    scan: "只能檢查密文/metadata；可附本機回報",
     preview: "不提供伺服器預覽",
     keyRisk: "清除瀏覽器金鑰後可能無法解密",
   },
 ];
 
-const DRIVE_E2EE_VAULT_KEY_STORAGE = "hackme_drive_e2ee_vault_key_v1";
+const DRIVE_E2EE_KEY_STORAGE = "hackme_drive_e2ee_key_v1";
 const ATTACHMENT_FILE_SELECT_IDS = [
   "chat-attachment-existing-file-id",
   "dm-attachment-existing-file-id",
@@ -108,7 +98,7 @@ function renderDrivePrivacyModeComparison() {
         </tbody>
       </table>
     </div>
-    <div class="drive-card-sub">結論：要預覽、掃毒、分享就用「一般私密檔案」或「附件/分享用」；真正不想讓站方讀內容才用 E2EE，但要自己保管本機金鑰。</div>
+    <div class="drive-card-sub">結論：要預覽、掃毒、分享就用「一般檔案」；要防磁碟/備份外洩但保留伺服器功能用「伺服器端加密」；真正不想讓站方讀內容才用 E2EE。</div>
   `;
 }
 
@@ -177,7 +167,7 @@ async function ensureAttachmentFileOptionsLoaded({ force = false } = {}) {
 }
 
 function isDriveE2eeMode(mode) {
-  return String(mode || "").startsWith("e2ee");
+  return String(mode || "") === "e2ee";
 }
 
 function driveBytesToBase64(bytes) {
@@ -208,17 +198,17 @@ async function getDriveE2eeVaultKey() {
   if (!window.crypto?.subtle) {
     throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
   }
-  const existing = localStorage.getItem(DRIVE_E2EE_VAULT_KEY_STORAGE);
+  const existing = localStorage.getItem(DRIVE_E2EE_KEY_STORAGE);
   if (existing) {
     try {
       return await window.crypto.subtle.importKey("jwk", JSON.parse(existing), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
     } catch (err) {
-      localStorage.removeItem(DRIVE_E2EE_VAULT_KEY_STORAGE);
+      localStorage.removeItem(DRIVE_E2EE_KEY_STORAGE);
     }
   }
   const key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
   const jwk = await window.crypto.subtle.exportKey("jwk", key);
-  localStorage.setItem(DRIVE_E2EE_VAULT_KEY_STORAGE, JSON.stringify(jwk));
+  localStorage.setItem(DRIVE_E2EE_KEY_STORAGE, JSON.stringify(jwk));
   return key;
 }
 
@@ -287,7 +277,7 @@ async function decryptDriveE2eeBlob(blob, e2ee) {
   };
 }
 
-async function prepareDriveE2eeUpload(file, mode) {
+async function prepareDriveE2eeUpload(file, includeClientScanReport = false) {
   if (!window.crypto?.subtle) {
     throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
   }
@@ -314,7 +304,7 @@ async function prepareDriveE2eeUpload(file, mode) {
     encryption_algorithm: "AES-GCM",
     encryption_version: "browser-local-v1",
     nonce: driveBytesToBase64(nonce),
-    client_scan_report: mode === "e2ee_vault_with_client_scan" ? {
+    client_scan_report: includeClientScanReport ? {
       ok: false,
       mode: "browser_e2ee_upload",
       note: "檔案已在瀏覽器端加密；伺服器無法驗證本機掃描結果。",
@@ -628,12 +618,13 @@ async function uploadDriveFile() {
   });
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
-  const privacyMode = $("drive-upload-privacy-mode")?.value || "private_scannable";
+  const privacyMode = $("drive-upload-privacy-mode")?.value || "standard_plain";
   const form = new FormData();
   try {
     if (isDriveE2eeMode(privacyMode)) {
       updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
-      const encrypted = await prepareDriveE2eeUpload(file, privacyMode);
+      const includeClientScanReport = !!$("drive-upload-client-scan-report")?.checked;
+      const encrypted = await prepareDriveE2eeUpload(file, includeClientScanReport);
       form.append("file", encrypted.blob, encrypted.filename);
       form.append("encrypted_metadata", encrypted.encrypted_metadata);
       form.append("encrypted_file_key", encrypted.encrypted_file_key);
@@ -758,7 +749,7 @@ async function startRemoteDriveDownload() {
     if (torrentFile) {
       const form = new FormData();
       form.append("torrent_file", torrentFile);
-      form.append("privacy_mode", $("drive-remote-privacy-mode")?.value || "private_scannable");
+      form.append("privacy_mode", $("drive-remote-privacy-mode")?.value || "standard_plain");
       form.append("virtual_path", $("drive-remote-virtual-path")?.value || "");
       res = await apiFetch(API + "/cloud-drive/remote-download/torrent-tasks", {
         method: "POST",
@@ -773,7 +764,7 @@ async function startRemoteDriveDownload() {
         headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
         body: JSON.stringify({
           url,
-          privacy_mode: $("drive-remote-privacy-mode")?.value || "private_scannable",
+          privacy_mode: $("drive-remote-privacy-mode")?.value || "standard_plain",
           virtual_path: $("drive-remote-virtual-path")?.value || ""
         })
       });
@@ -1337,7 +1328,7 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
   const csrf = getCsrfToken();
   const form = new FormData();
   form.append("file", input.files[0]);
-  form.append("privacy_mode", "private_scannable");
+  form.append("privacy_mode", "standard_plain");
   form.append("context_type", contextType);
   form.append("context_id", String(contextId));
   grantUserIds.forEach((id) => form.append("grant_user_ids", String(id)));
@@ -1391,7 +1382,7 @@ async function uploadPendingChatAttachment() {
   const csrf = getCsrfToken();
   const form = new FormData();
   form.append("file", input.files[0]);
-  form.append("privacy_mode", "private_scannable");
+  form.append("privacy_mode", "standard_plain");
   const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",
@@ -1500,7 +1491,7 @@ async function uploadAnnouncementAttachmentRequest() {
   const csrf = getCsrfToken();
   const form = new FormData();
   form.append("file", input.files[0]);
-  form.append("privacy_mode", "private_scannable");
+  form.append("privacy_mode", "standard_plain");
   const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",

@@ -626,7 +626,7 @@
           <div class="drive-card-title">隱私模式</div>
           <div id="drive-mode-summary" class="drive-summary"></div>
           <details class="drive-mode-details">
-            <summary>四種模式怎麼選</summary>
+            <summary>三種模式怎麼選</summary>
             <div id="drive-privacy-mode-comparison" class="drive-privacy-mode-comparison"></div>
           </details>
         </div>
@@ -663,12 +663,12 @@
           <div class="field">
             <label>隱私模式</label>
             <select id="drive-upload-privacy-mode">
-              <option value="private_scannable">一般私密檔案（可掃毒、可預覽）</option>
-              <option value="public_attachment">附件/分享用（可預覽、可授權分享）</option>
-              <option value="e2ee_vault">端到端加密（站方無法讀取）</option>
-              <option value="e2ee_vault_with_client_scan">端到端加密（附本機掃描回報）</option>
+              <option value="standard_plain">一般檔案（可掃毒、可預覽、可分享）</option>
+              <option value="server_encrypted">伺服器端加密（磁碟密文、下載明文）</option>
+              <option value="e2ee">端到端加密（站方無法讀取）</option>
             </select>
             <div class="field-help">非 E2EE 會讓伺服器取得明文以便掃毒與預覽；E2EE 則要自己保管瀏覽器本機金鑰。</div>
+            <label class="inline-check"><input type="checkbox" id="drive-upload-client-scan-report" /> E2EE 上傳時附本機掃描回報</label>
           </div>
           <div class="field">
             <label>&nbsp;</label>
@@ -697,8 +697,8 @@
           <div class="field">
             <label>隱私模式</label>
             <select id="drive-remote-privacy-mode">
-              <option value="private_scannable">私密檔案（伺服器掃毒後保存）</option>
-              <option value="public_attachment">公開附件（可預覽、可分享）</option>
+              <option value="standard_plain">一般檔案（可掃毒、可預覽）</option>
+              <option value="server_encrypted">伺服器端加密（磁碟密文、下載明文）</option>
             </select>
           </div>
           <div class="field">

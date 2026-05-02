@@ -152,7 +152,7 @@
 
 - [x] 隱私分級上傳 Phase 1：`uploaded_files` / `encrypted_file_keys` / `file_scan_results` / `file_access_logs`
 - [x] 檔案類型政策 table：`file_type_policies`
-- [x] 上傳模式政策：`public_attachment` / `private_scannable` / `e2ee_vault` / `e2ee_vault_with_client_scan`
+- [x] 上傳模式政策：`standard_plain` / `server_encrypted` / `e2ee`
 - [x] 風險分級基礎：`low` / `medium` / `high` / `blocked` / `unknown_encrypted`
 - [x] root 功能開關：`feature_privacy_uploads_enabled`
 - [x] 雲端硬碟安全政策：scan-before-download / block unclean / high-risk warning / E2EE 不宣稱伺服器掃毒

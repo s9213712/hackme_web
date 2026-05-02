@@ -43,7 +43,7 @@ Ignored runtime state includes:
 - `storage/`
 - `chats/*.jsonl`
 - `anchors/*.json` and `anchors/*.jsonl`
-- `.fkey`, `.csrfkey`, `.integrity_key`, `.chain_seed`
+- `.fkey`, `.filekey`, `.csrfkey`, `.integrity_key`, `.chain_seed`
 - `cert.pem`, `key.pem`
 - `integrity_manifest.json`
 - `reports/bugs/`

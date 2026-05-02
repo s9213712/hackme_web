@@ -38,7 +38,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | `secure_backups/` | Legacy local PointsChain backup path; ignored. |
 | `<runtime>/points_chain_backups/` | Current PointsChain ledger backup location when configured by runtime env. |
 | `cert.pem`, `key.pem` | Local TLS files generated on first start. |
-| `.chain_seed`, `.csrfkey`, `.fkey`, `.integrity_key`, `integrity_manifest.json` | Runtime secrets and integrity state generated locally. |
+| `.chain_seed`, `.csrfkey`, `.fkey`, `.filekey`, `.integrity_key`, `integrity_manifest.json` | Runtime secrets and integrity state generated locally. |
 
 Tracked placeholder files such as `.gitkeep` are allowed only where an empty
 directory needs to exist in a fresh checkout.

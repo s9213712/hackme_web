@@ -197,7 +197,7 @@ def _seed_uploaded_file(db_path, file_id="file-1", owner_user_id=3):
             id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
             size_bytes, original_filename_plain_for_public, mime_type_plain_for_public,
             deleted_at, created_at
-        ) VALUES (?, ?, ?, 'private_scannable', 'low', 'clean', 12, 'chat-note.txt', 'text/plain', NULL, '2026-01-01T00:00:00')
+        ) VALUES (?, ?, ?, 'standard_plain', 'low', 'clean', 12, 'chat-note.txt', 'text/plain', NULL, '2026-01-01T00:00:00')
         """,
         (file_id, owner_user_id, f"users/{owner_user_id}/{file_id}/chat-note.txt"),
     )

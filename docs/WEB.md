@@ -71,14 +71,15 @@ end-to-end encrypted:
 
 | Mode | Best for | Server can read plaintext | Scan / preview | Main risk |
 |---|---|---:|---|---|
-| `private_scannable` | Normal personal cloud-drive files | Yes | Server scan and preview after policy allows | Not E2EE; server-side code can process the file |
-| `public_attachment` | Attachments, album display, shared files | Yes | Best preview/share compatibility | Not for confidential material |
-| `e2ee_vault` | Highly private storage | No | Server can only inspect ciphertext/metadata; preview is limited | Browser-local vault key loss can make the file unrecoverable |
-| `e2ee_vault_with_client_scan` | Highly private storage with a browser-side scan report | No | Client report is informational and not fully trusted by the server | Same key-loss risk; scan report is not authoritative |
+| `standard_plain` | Normal files, attachments, album display, shared files | Yes | Best scan/preview/share compatibility | Stored as plaintext on the server filesystem |
+| `server_encrypted` | Reducing disk/backup exposure while keeping server features | Yes, by temporary server-side decrypt | Server decrypts for scan, preview, and plaintext download | Not E2EE; server/root can decrypt |
+| `e2ee` | Highly private storage | No | Server can only inspect ciphertext/metadata; browser may attach a client scan report | Browser-local vault key loss can make the file unrecoverable |
 
-Use `private_scannable` when users need normal cloud-drive behavior. Use E2EE
-only when confidentiality is more important than server-side preview, scanning,
-and recovery support.
+Use `standard_plain` when users need normal cloud-drive behavior. Use
+`server_encrypted` when protecting at-rest storage is useful but server-side
+scan/preview/download support is still required. Use E2EE only when
+confidentiality is more important than server-side preview, scanning, and
+recovery support.
 
 Remote downloads are integrated into Cloud Drive:
 

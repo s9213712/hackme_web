@@ -249,15 +249,15 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
 
-    assert 'value="private_scannable">一般私密檔案（可掃毒、可預覽）' in index_html
-    assert 'value="public_attachment">附件/分享用（可預覽、可授權分享）' in index_html
-    assert 'value="e2ee_vault">端到端加密（站方無法讀取）' in index_html
-    assert 'value="e2ee_vault_with_client_scan">端到端加密（附本機掃描回報）' in index_html
-    assert "四種模式怎麼選" in index_html
+    assert 'value="standard_plain">一般檔案（可掃毒、可預覽、可分享）' in index_html
+    assert 'value="server_encrypted">伺服器端加密（磁碟密文、下載明文）' in index_html
+    assert 'value="e2ee">端到端加密（站方無法讀取）' in index_html
+    assert "三種模式怎麼選" in index_html
     assert "非 E2EE 會讓伺服器取得明文" in index_html
+    assert "E2EE 上傳時附本機掃描回報" in index_html
     assert "drivePrivacyModeLabel(file.privacy_mode)" in drive_js
     assert "DRIVE_PRIVACY_MODE_COMPARISON" in drive_js
-    assert "一般私密檔案" in drive_js
+    assert "伺服器端加密" in drive_js
     assert "站方無法讀取" in drive_js
     assert "root 上限：儲存磁碟可用空間 90%" in drive_js
     assert "manager 上限：1 GB" in drive_js
@@ -306,7 +306,7 @@ def test_core_api_fetch_refreshes_csrf_once():
 def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
 
-    assert "async function prepareDriveE2eeUpload(file, mode)" in drive_js
+    assert "async function prepareDriveE2eeUpload(file, includeClientScanReport = false)" in drive_js
     assert "window.crypto.subtle.generateKey" in drive_js
     assert "encrypted_file_key" in drive_js
     assert 'form.append("encrypted_file_key", encrypted.encrypted_file_key)' in drive_js

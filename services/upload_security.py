@@ -20,10 +20,9 @@ from services.storage_quota_purchases import purchased_storage_summary
 
 
 UPLOAD_PRIVACY_MODES = {
-    "public_attachment",
-    "private_scannable",
-    "e2ee_vault",
-    "e2ee_vault_with_client_scan",
+    "standard_plain",
+    "server_encrypted",
+    "e2ee",
 }
 RISK_LEVELS = {"low", "medium", "high", "blocked", "unknown_encrypted"}
 ADMIN_DISK_QUOTA_RATIO = 0.9
@@ -54,7 +53,7 @@ DEFAULT_FILE_TYPE_POLICIES = {
     "executable": {
         "extensions": sorted(EXECUTABLE_EXTENSIONS),
         "public_allowed": False,
-        "private_scannable_allowed": False,
+        "server_readable_allowed": False,
         "e2ee_allowed": True,
         "default_risk_level": "high",
         "allow_public_share": False,
@@ -65,7 +64,7 @@ DEFAULT_FILE_TYPE_POLICIES = {
     "archive": {
         "extensions": sorted(ARCHIVE_EXTENSIONS),
         "public_allowed": True,
-        "private_scannable_allowed": True,
+        "server_readable_allowed": True,
         "e2ee_allowed": True,
         "default_risk_level": "medium",
         "allow_public_share": False,
@@ -76,7 +75,7 @@ DEFAULT_FILE_TYPE_POLICIES = {
     "office": {
         "extensions": sorted(OFFICE_EXTENSIONS - MACRO_OFFICE_EXTENSIONS),
         "public_allowed": True,
-        "private_scannable_allowed": True,
+        "server_readable_allowed": True,
         "e2ee_allowed": True,
         "default_risk_level": "medium",
         "allow_public_share": True,
@@ -87,7 +86,7 @@ DEFAULT_FILE_TYPE_POLICIES = {
     "office_macro": {
         "extensions": sorted(MACRO_OFFICE_EXTENSIONS),
         "public_allowed": True,
-        "private_scannable_allowed": True,
+        "server_readable_allowed": True,
         "e2ee_allowed": True,
         "default_risk_level": "high",
         "allow_public_share": False,
@@ -98,7 +97,7 @@ DEFAULT_FILE_TYPE_POLICIES = {
     "default": {
         "extensions": [],
         "public_allowed": True,
-        "private_scannable_allowed": True,
+        "server_readable_allowed": True,
         "e2ee_allowed": True,
         "default_risk_level": "low",
         "allow_public_share": True,
@@ -337,7 +336,7 @@ def ensure_upload_security_schema(conn):
             category TEXT PRIMARY KEY,
             extensions_json TEXT NOT NULL,
             public_allowed INTEGER NOT NULL,
-            private_scannable_allowed INTEGER NOT NULL,
+            server_readable_allowed INTEGER NOT NULL,
             e2ee_allowed INTEGER NOT NULL,
             default_risk_level TEXT NOT NULL,
             allow_public_share INTEGER NOT NULL,
@@ -406,7 +405,7 @@ def _ensure_uploaded_files_columns(conn):
     definitions = {
         "owner_user_id": "INTEGER NOT NULL DEFAULT 0",
         "storage_path": "TEXT NOT NULL DEFAULT ''",
-        "privacy_mode": "TEXT NOT NULL DEFAULT 'public_attachment'",
+        "privacy_mode": "TEXT NOT NULL DEFAULT 'standard_plain'",
         "risk_level": "TEXT NOT NULL DEFAULT 'medium'",
         "scan_status": "TEXT NOT NULL DEFAULT 'pending'",
         "original_filename_encrypted": "TEXT",
@@ -513,7 +512,7 @@ def seed_default_file_type_policies(conn):
         conn.execute(
             """
             INSERT INTO file_type_policies (
-                category, extensions_json, public_allowed, private_scannable_allowed, e2ee_allowed,
+                category, extensions_json, public_allowed, server_readable_allowed, e2ee_allowed,
                 default_risk_level, allow_public_share, requires_scan, warn_on_download,
                 notes, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -522,7 +521,7 @@ def seed_default_file_type_policies(conn):
                 category,
                 json.dumps(policy["extensions"], ensure_ascii=False),
                 1 if policy["public_allowed"] else 0,
-                1 if policy["private_scannable_allowed"] else 0,
+                1 if policy["server_readable_allowed"] else 0,
                 1 if policy["e2ee_allowed"] else 0,
                 policy["default_risk_level"],
                 1 if policy["allow_public_share"] else 0,
@@ -594,6 +593,21 @@ def normalize_privacy_mode(value):
     return mode
 
 
+def canonical_privacy_mode(value):
+    try:
+        return normalize_privacy_mode(value)
+    except Exception:
+        return str(value or "")
+
+
+def is_e2ee_privacy_mode(value):
+    return canonical_privacy_mode(value) == "e2ee"
+
+
+def is_server_encrypted_privacy_mode(value):
+    return canonical_privacy_mode(value) == "server_encrypted"
+
+
 def normalize_scan_status(value):
     status = str(value or "").strip()
     if status not in SCAN_STATUSES:
@@ -648,7 +662,7 @@ def get_file_type_policy(conn, category):
         "category": "default",
         "extensions_json": json.dumps(fallback["extensions"], ensure_ascii=False),
         "public_allowed": 1,
-        "private_scannable_allowed": 1,
+        "server_readable_allowed": 1,
         "e2ee_allowed": 1,
         "default_risk_level": fallback["default_risk_level"],
         "allow_public_share": 1,
@@ -944,10 +958,9 @@ def get_cloud_drive_safety_summary(conn, user, member_rule=None, storage_root=No
         restrictions.append("root 雲端硬碟使用量已超過磁碟安全警示線 80%，請清理檔案或擴充儲存空間")
 
     modes = {
-        "public_attachment": "附件/分享用，伺服器可讀明文並掃描，不適合機密資料",
-        "private_scannable": "一般私密檔案，伺服器可讀明文並掃描，靠權限控管存取",
-        "e2ee_vault": "瀏覽器端加密後上傳，server/root/admin 不可讀，掃毒與預覽受限",
-        "e2ee_vault_with_client_scan": "瀏覽器端加密後上傳，附本機掃描回報；回報不可完全信任",
+        "standard_plain": "一般檔案，伺服器可讀明文並掃描，預覽/分享支援最完整",
+        "server_encrypted": "伺服器端加密保存，磁碟上是密文；伺服器可暫時解密掃描、預覽與下載",
+        "e2ee": "端到端加密，server/root/admin 不可讀；掃毒、預覽與救援受限",
     }
     return {
         "policy": policy,
@@ -990,11 +1003,11 @@ def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_byte
     reason = "allowed"
     risk_level = policy["default_risk_level"] if policy["default_risk_level"] in RISK_LEVELS else "medium"
 
-    if mode == "public_attachment" and not policy["public_allowed"]:
-        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for public uploads", tuple(warnings))
-    if mode == "private_scannable" and not policy["private_scannable_allowed"]:
-        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for private scannable uploads", tuple(warnings))
-    if mode.startswith("e2ee") and not policy["e2ee_allowed"]:
+    if mode == "standard_plain" and not (policy["public_allowed"] and policy["server_readable_allowed"]):
+        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for standard plaintext uploads", tuple(warnings))
+    if mode == "server_encrypted" and not policy["server_readable_allowed"]:
+        return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for server-side encrypted uploads", tuple(warnings))
+    if mode == "e2ee" and not policy["e2ee_allowed"]:
         return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "file type is blocked for encrypted vault uploads", tuple(warnings))
 
     if not _user_is_admin(user):
@@ -1004,9 +1017,9 @@ def evaluate_upload_policy(conn, *, filename, privacy_mode, user=None, size_byte
         if effective_level == "newbie" and category in {"executable", "archive", "office_macro"}:
             return UploadPolicyDecision(False, mode, "blocked", "quarantined", category, "newbie users cannot upload this high-risk file type", tuple(warnings))
 
-    if mode.startswith("e2ee"):
+    if mode == "e2ee":
         risk_level = "unknown_encrypted" if category != "executable" else "high"
-        scan_status = "unknown_encrypted" if mode == "e2ee_vault" else "skipped_e2ee"
+        scan_status = "unknown_encrypted"
         warnings.append("server cannot fully scan end-to-end encrypted content")
         if category in {"archive", "office_macro", "executable"}:
             warnings.append("download must show high-risk warning")
@@ -1456,7 +1469,7 @@ def scan_uploaded_file(conn, *, file_id, file_path, filename=None, declared_mime
         raise ValueError("uploaded file not found")
     policy = get_cloud_drive_security_policy(conn)
     privacy_mode = row["privacy_mode"]
-    if privacy_mode.startswith("e2ee"):
+    if is_e2ee_privacy_mode(privacy_mode):
         _record_scan_result(
             conn,
             file_id=file_id,
@@ -1624,7 +1637,7 @@ def create_uploaded_file_record(
     )
     file_id = uuid.uuid4().hex
     now = datetime.now().isoformat()
-    is_e2ee = decision.privacy_mode.startswith("e2ee")
+    is_e2ee = is_e2ee_privacy_mode(decision.privacy_mode)
     if is_e2ee and not encrypted_file_key:
         raise ValueError("encrypted_file_key is required for e2ee uploads")
     conn.execute(

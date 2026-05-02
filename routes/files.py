@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import threading
 import uuid
+from io import BytesIO
 
 from services.upload_security import (
     get_cloud_drive_safety_summary,
@@ -20,8 +21,11 @@ from services.cloud_drive import (
     attach_existing_file,
     can_download_file,
     create_announcement_attachment_request,
+    decrypt_server_encrypted_bytes,
     ensure_cloud_drive_attachment_schema,
     get_file_status,
+    is_e2ee_file,
+    is_server_encrypted_file,
     list_cloud_files,
     resolve_file_storage_path,
     review_announcement_attachment_request,
@@ -83,7 +87,7 @@ from services.storage_quota_purchases import (
     record_storage_quota_purchase,
 )
 from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
-from flask import request, send_file
+from flask import after_this_request, request, send_file
 
 
 _REMOTE_DOWNLOAD_TASKS = {}
@@ -104,6 +108,7 @@ def register_file_routes(app, deps):
     role_rank = deps.get("role_rank", lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0))
     storage_root = deps.get("STORAGE_DIR", ".")
     points_service = deps.get("points_service")
+    server_file_fernet = deps.get("server_file_fernet")
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -125,6 +130,51 @@ def register_file_routes(app, deps):
     def _is_manager(actor):
         role = "super_admin" if actor and _actor_value(actor, "username") == "root" else _actor_value(actor, "role", "user")
         return role_rank(role) >= role_rank("manager")
+
+    def _readable_file_path(row):
+        path = resolve_file_storage_path(storage_root, row)
+        if not is_server_encrypted_file(row):
+            return path, None
+        raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+        handle = tempfile.NamedTemporaryFile(prefix="cloud-drive-plain-", delete=False)
+        try:
+            handle.write(raw)
+            temp_path = handle.name
+        finally:
+            handle.close()
+
+        @after_this_request
+        def _cleanup_temp_file(response):
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            return response
+
+        return temp_path, temp_path
+
+    def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False):
+        path = resolve_file_storage_path(storage_root, row)
+        if not path.exists():
+            return None
+        if is_server_encrypted_file(row):
+            raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+            return send_file(
+                BytesIO(raw),
+                as_attachment=as_attachment,
+                download_name=download_name,
+                mimetype=mimetype,
+                conditional=False,
+            )
+        return send_file(
+            path,
+            as_attachment=as_attachment,
+            download_name=download_name,
+            mimetype=mimetype,
+            conditional=conditional,
+        )
 
     def _manager_or_403():
         actor, err = _actor_or_401()
@@ -258,7 +308,7 @@ def register_file_routes(app, deps):
         return row["risk_level"] in {"high", "blocked", "unknown_encrypted"} or row["scan_status"] in {"infected", "quarantined", "failed", "unknown_encrypted"}
 
     def _preview_allowed_by_policy(policy, row):
-        if row["privacy_mode"].startswith("e2ee"):
+        if is_e2ee_file(row):
             return False, "E2EE 檔案無法由伺服器預覽"
         if policy.get("block_unclean_downloads") and row["scan_status"] not in {"clean", "not_required"}:
             return False, "檔案尚未通過安全檢查"
@@ -537,6 +587,7 @@ def register_file_routes(app, deps):
                 file_storage=file_storage,
                 privacy_mode=task["privacy_mode"],
                 scan_now=True,
+                server_file_fernet=server_file_fernet,
             )
             if msg:
                 conn.rollback()
@@ -1145,7 +1196,7 @@ def register_file_routes(app, deps):
                 member_rule=rule,
                 storage_root=storage_root,
                 file_storage=request.files["file"],
-                privacy_mode=(request.form.get("privacy_mode") or "private_scannable").strip(),
+                privacy_mode=(request.form.get("privacy_mode") or "standard_plain").strip(),
                 encrypted_metadata=(request.form.get("encrypted_metadata") or "").strip() or None,
                 encrypted_file_key=(request.form.get("encrypted_file_key") or "").strip() or None,
                 wrapped_by=(request.form.get("wrapped_by") or "user_public_key").strip() or "user_public_key",
@@ -1155,6 +1206,7 @@ def register_file_routes(app, deps):
                 nonce=(request.form.get("nonce") or "").strip() or None,
                 client_scan_report=_form_json_value("client_scan_report"),
                 scan_now=True,
+                server_file_fernet=server_file_fernet,
             )
             if msg:
                 conn.rollback()
@@ -1354,7 +1406,10 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             log_file_access(conn, file_id=storage_file["file_id"], actor_user_id=actor["id"], action="storage_download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            return send_file(path, as_attachment=True, download_name=storage_file["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=True, download_name=storage_file["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            if response is None:
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            return response
         finally:
             conn.close()
 
@@ -1653,7 +1708,7 @@ def register_file_routes(app, deps):
             if not row:
                 return json_resp({"ok": False, "msg": "分享連結不存在或已失效", "reason": reason}), 404
             policy = get_cloud_drive_security_policy(conn)
-            if policy.get("block_unclean_downloads") and not str(row["privacy_mode"]).startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
+            if policy.get("block_unclean_downloads") and not is_e2ee_file(row) and row["scan_status"] not in {"clean", "not_required"}:
                 return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
             if _requires_download_warning(policy, row):
                 confirmed = (
@@ -1674,7 +1729,10 @@ def register_file_routes(app, deps):
             mark_share_link_accessed(conn, row["id"])
             log_file_access(conn, file_id=row["file_id"], actor_user_id=None, action="storage_share_download", result="allowed", reason="share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            return send_file(path, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=True, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            if response is None:
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            return response
         finally:
             conn.close()
 
@@ -1851,7 +1909,7 @@ def register_file_routes(app, deps):
             share = resolved["share"]
             row = resolved["file"]
             policy = get_cloud_drive_security_policy(conn)
-            if policy.get("block_unclean_downloads") and not str(row["privacy_mode"]).startswith("e2ee") and row["scan_status"] not in {"clean", "not_required"}:
+            if policy.get("block_unclean_downloads") and not is_e2ee_file(row) and row["scan_status"] not in {"clean", "not_required"}:
                 return json_resp({"ok": False, "msg": "檔案尚未通過安全檢查"}), 403
             if _requires_download_warning(policy, row):
                 confirmed = (
@@ -1873,7 +1931,10 @@ def register_file_routes(app, deps):
             log_file_access(conn, file_id=row["id"], actor_user_id=None, action="album_share_download", result="allowed", reason="album_share_link", ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             inline = request.args.get("inline") == "1"
-            return send_file(path, as_attachment=not inline, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=not inline, download_name=row["display_name"] or row["original_filename_plain_for_public"] or "download.bin")
+            if response is None:
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            return response
         finally:
             conn.close()
 
@@ -1886,7 +1947,7 @@ def register_file_routes(app, deps):
             return err
         if "file" not in request.files:
             return json_resp({"ok": False, "msg": "缺少 file"}), 400
-        privacy_mode = (request.form.get("privacy_mode") or "public_attachment").strip()
+        privacy_mode = (request.form.get("privacy_mode") or "standard_plain").strip()
         context_type = (request.form.get("context_type") or "").strip()
         context_id = (request.form.get("context_id") or "").strip()
         grant_user_ids = []
@@ -1917,6 +1978,7 @@ def register_file_routes(app, deps):
                     nonce=(request.form.get("nonce") or "").strip() or None,
                     client_scan_report=_form_json_value("client_scan_report"),
                     scan_now=True,
+                    server_file_fernet=server_file_fernet,
                 )
             except ValueError as exc:
                 conn.rollback()
@@ -1985,7 +2047,7 @@ def register_file_routes(app, deps):
             return json_resp({"ok": False, "msg": str(exc)}), 400
         if _user_has_active_remote_download(_actor_value(actor, "id")):
             return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
-        privacy_mode = str(data.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
+        privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         virtual_path = str(data.get("virtual_path") or "").strip()
         task_id = uuid.uuid4().hex
         try:
@@ -2064,7 +2126,7 @@ def register_file_routes(app, deps):
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
 
-            privacy_mode = str(request.form.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
+            privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
             virtual_path = str(request.form.get("virtual_path") or "").strip()
             task_id = uuid.uuid4().hex
             try:
@@ -2140,7 +2202,7 @@ def register_file_routes(app, deps):
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         data = data if isinstance(data, dict) else {}
         url = str(data.get("url") or "").strip()
-        privacy_mode = str(data.get("privacy_mode") or "private_scannable").strip() or "private_scannable"
+        privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         virtual_path = str(data.get("virtual_path") or "").strip()
         timeout_seconds = 1800 if url.startswith("magnet:?") else 120
 
@@ -2176,6 +2238,7 @@ def register_file_routes(app, deps):
                 file_storage=file_storage,
                 privacy_mode=privacy_mode,
                 scan_now=True,
+                server_file_fernet=server_file_fernet,
             )
             if msg:
                 conn.rollback()
@@ -2385,8 +2448,9 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            readable_path, _ = _readable_file_path(row)
             preview_row = _preview_row_with_storage_fallback(conn, actor, row)
-            preview = build_preview_metadata(preview_row, path)
+            preview = build_preview_metadata(preview_row, readable_path)
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return json_resp({"ok": True, "preview": preview})
@@ -2418,19 +2482,23 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            readable_path, _ = _readable_file_path(row)
             preview_row = _preview_row_with_storage_fallback(conn, actor, row)
             category, mime_type = preview_category(preview_row)
             if category not in {"audio", "video", "image", "pdf"}:
                 return json_resp({"ok": False, "msg": "此檔案類型不支援 inline content preview"}), 415
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_content", result="allowed", reason=category, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            return send_file(
-                path,
+            response = _send_readable_file(
+                row,
                 as_attachment=False,
                 download_name=preview_row["original_filename_plain_for_public"] or "preview",
                 mimetype=mime_type,
                 conditional=True,
             )
+            if response is None:
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            return response
         finally:
             conn.close()
 
@@ -2458,7 +2526,7 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "找不到檔案或檔案已刪除"}), 404
             if int(row["owner_user_id"]) != int(actor["id"]):
                 return json_resp({"ok": False, "msg": "只能修改自己的雲端硬碟檔案"}), 403
-            if str(row["privacy_mode"] or "").startswith("e2ee"):
+            if is_e2ee_file(row):
                 return json_resp({"ok": False, "msg": "E2EE 檔案不可由伺服器線上修改"}), 400
             category, _ = preview_category(row)
             if category != "text":
@@ -2470,24 +2538,49 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            with open(path, "wb") as handle:
-                handle.write(raw)
+            scan_path = path
+            if is_server_encrypted_file(row):
+                if server_file_fernet is None:
+                    return json_resp({"ok": False, "msg": "伺服器端加密金鑰尚未設定"}), 500
+                temp = tempfile.NamedTemporaryFile(prefix="cloud-drive-edit-", delete=False)
+                try:
+                    temp.write(raw)
+                    scan_path = temp.name
+                finally:
+                    temp.close()
+                path.write_bytes(server_file_fernet.encrypt(raw))
+            else:
+                with open(path, "wb") as handle:
+                    handle.write(raw)
             now = datetime.now().isoformat()
             conn.execute(
                 """
                 UPDATE uploaded_files
-                SET size_bytes=?, plaintext_sha256=?, updated_at=?
+                SET size_bytes=?, plaintext_sha256=?, ciphertext_sha256=?, updated_at=?
                 WHERE id=?
                 """,
-                (len(raw), hashlib.sha256(raw).hexdigest(), now, file_id),
+                (
+                    len(raw),
+                    None if is_server_encrypted_file(row) else hashlib.sha256(raw).hexdigest(),
+                    hashlib.sha256(path.read_bytes()).hexdigest() if is_server_encrypted_file(row) else None,
+                    now,
+                    file_id,
+                ),
             )
-            scan_result = scan_uploaded_file(
-                conn,
-                file_id=file_id,
-                file_path=path,
-                filename=row["original_filename_plain_for_public"],
-                declared_mime=row["mime_type_plain_for_public"],
-            )
+            try:
+                scan_result = scan_uploaded_file(
+                    conn,
+                    file_id=file_id,
+                    file_path=scan_path,
+                    filename=row["original_filename_plain_for_public"],
+                    declared_mime=row["mime_type_plain_for_public"],
+                )
+            finally:
+                if scan_path != path:
+                    try:
+                        os.unlink(scan_path)
+                    except Exception:
+                        pass
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="text_edit", result="allowed", reason=scan_result.get("scan_status"), ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return json_resp({"ok": True, "file_id": file_id, "scan_result": scan_result, "size_bytes": len(raw)})
@@ -2532,7 +2625,10 @@ def register_file_routes(app, deps):
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="download", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            return send_file(path, as_attachment=True, download_name=row["original_filename_plain_for_public"] or "download.bin")
+            response = _send_readable_file(row, as_attachment=True, download_name=row["original_filename_plain_for_public"] or "download.bin")
+            if response is None:
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            return response
         finally:
             conn.close()
 
@@ -2548,7 +2644,7 @@ def register_file_routes(app, deps):
             row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (file_id,)).fetchone()
             if not row or row["deleted_at"]:
                 return json_resp({"ok": False, "msg": "找不到檔案"}), 404
-            if not str(row["privacy_mode"] or "").startswith("e2ee"):
+            if not is_e2ee_file(row):
                 return json_resp({"ok": False, "msg": "此檔案不是端到端加密檔案"}), 400
             key = conn.execute(
                 """
@@ -2754,45 +2850,38 @@ def register_file_routes(app, deps):
             return json_resp({
                 "ok": True,
                 "modes": {
-                    "public_attachment": {
-                        "label": "附件/分享用",
+                    "standard_plain": {
+                        "label": "一般檔案",
                         "server_can_read": True,
                         "server_scan": "required",
+                        "stored_at_rest": "plaintext",
                         "e2ee": False,
-                        "best_for": "討論區附件、公告附件、需要預覽或分享的低敏感檔案。",
+                        "best_for": "一般雲端檔案、附件、相簿、分享。",
                         "preview": "支援圖片、影片、音樂、PDF、文字與壓縮檔預覽。",
                         "download": "通過掃描後可下載；高風險檔案下載前會要求確認。",
-                        "warning": "伺服器與管理權限可處理明文，請勿上傳需要端到端保密的資料。",
+                        "warning": "檔案以明文存在伺服器儲存區，請勿上傳需要端到端保密的資料。",
                     },
-                    "private_scannable": {
-                        "label": "一般私密檔案",
-                        "server_can_read": True,
+                    "server_encrypted": {
+                        "label": "伺服器端加密",
+                        "server_can_read": "decryptable",
                         "server_scan": "required",
+                        "stored_at_rest": "encrypted",
                         "e2ee": False,
-                        "best_for": "個人雲端硬碟的一般檔案，需要預覽、掃毒與完整平台功能時使用。",
-                        "preview": "通過掃描與風險政策後可預覽。",
-                        "download": "通過掃描後可下載；可由權限、聊天室、相簿或分享流程授權。",
-                        "warning": "這不是端到端加密；伺服器會收到明文以便掃描與預覽。",
+                        "best_for": "想降低磁碟或備份外洩風險，同時保留掃毒、預覽與下載明文。",
+                        "preview": "伺服器暫時解密後，通過掃描與風險政策即可預覽。",
+                        "download": "通過掃描後下載明文；磁碟上的實體檔仍是密文。",
+                        "warning": "這不是端到端加密；伺服器/root 仍有解密能力。",
                     },
-                    "e2ee_vault": {
-                        "label": "端到端加密保險庫",
+                    "e2ee": {
+                        "label": "端到端加密",
                         "server_can_read": False,
                         "server_scan": "metadata_only",
+                        "stored_at_rest": "encrypted",
                         "e2ee": True,
                         "best_for": "高度私密檔案，只需要保存與本人下載解密，不依賴伺服器預覽。",
                         "preview": "伺服器不能預覽明文；下載後由瀏覽器用本機金鑰解密。",
-                        "download": "會下載密文並在瀏覽器解密；換瀏覽器或清除本機金鑰後可能無法解密。",
-                        "warning": "站方無法讀取內容，也無法完整掃毒；遺失本機 vault key 可能無法救回。",
-                    },
-                    "e2ee_vault_with_client_scan": {
-                        "label": "E2EE + 本機檢查",
-                        "server_can_read": False,
-                        "server_scan": "client_report_untrusted",
-                        "e2ee": True,
-                        "best_for": "需要端到端保密，但使用者願意附上瀏覽器端檢查回報的檔案。",
-                        "preview": "伺服器不能預覽明文；本機回報只提供安全提示。",
-                        "download": "和端到端加密保險庫相同，需本機金鑰解密。",
-                        "warning": "本機掃描回報不可完全信任，伺服器仍無法驗證全部內容。",
+                        "download": "下載時瀏覽器會嘗試用本機金鑰解密；換瀏覽器或清除本機金鑰後可能無法解密。",
+                        "warning": "站方無法讀取內容，也無法完整掃毒；遺失本機 vault key 可能無法救回，本機掃描回報也不可完全信任。",
                     },
                 },
                 "policy": policy,

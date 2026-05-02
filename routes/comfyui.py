@@ -413,7 +413,7 @@ def register_comfyui_routes(app, deps):
             member_rule=rule,
             storage_root=storage_root,
             file_storage=memory_file,
-            privacy_mode="private_scannable",
+            privacy_mode="standard_plain",
             scan_now=True,
         )
         if msg:
