@@ -395,7 +395,14 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
   const list = $("economy-spot-position-detail-list");
   if (!list) return;
   const positionMap = new Map(positions.map((row) => [row.market_symbol, row]));
-  const rows = economySpotMarkets(markets);
+  const allRows = economySpotMarkets(markets);
+  const rows = allRows.filter((market) => {
+    const pos = positionMap.get(market.symbol) || null;
+    const qty = spotPositionNumber(pos, "quantity") + spotPositionNumber(pos, "locked_quantity");
+    return qty > 0;
+  });
+  const card = list.closest(".drive-card");
+  if (card) card.style.display = rows.length ? "" : "none";
   list.innerHTML = rows.map((market) => {
     const symbol = market.symbol;
     const position = positionMap.get(symbol) || null;
@@ -552,6 +559,7 @@ function renderTradingMarketOptions() {
     $("trading-auto-bot-market"),
     $("trading-dca-bot-market"),
     $("trading-backtest-market"),
+    $("trading-grid-bot-market"),
   ];
   const options = tradingState.markets.length
     ? tradingState.markets.map((market) => `<option value="${sanitize(market.symbol)}">${sanitize(tradingDisplaySymbol(market.symbol))}</option>`).join("")
@@ -1148,6 +1156,9 @@ async function loadTradingReferencePrices(options = {}) {
       if ($("trading-current-price")) $("trading-current-price").textContent = String(Number(market.manual_price_points || 0));
       if ($("trading-current-market")) $("trading-current-market").textContent = `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "binance_public_api"}`;
       updateTradingOrderEstimate();
+      if (currentModuleTab === "economy" && tradingState.positions.length) {
+        renderEconomySpotPositionDetails(tradingState.positions, tradingState.markets);
+      }
     }
     if (!isPriceOnly && tradingReferencePayloadHasCandles(tradingState.referencePrices)) {
       renderTradingReferenceChart(tradingState.referencePrices);
@@ -1177,10 +1188,11 @@ function renderTradingOrders(rows, targetId = "trading-order-list", allowCancel 
   list.innerHTML = rows.map((row) => {
     const canCancel = row.status === "open" || row.status === "partially_filled";
     const price = row.order_type === "limit" ? row.limit_price_points : row.execution_price_points;
+    const botTag = row.bot_name ? `<span class="trading-bot-tag">🤖 ${sanitize(row.bot_name)}</span>` : "";
     return `
       <div class="drive-file-row">
         <div>
-          <strong>${sanitize(row.side)} · ${sanitize(row.order_type)} · ${sanitize(row.status)}</strong>
+          <strong>${sanitize(row.side)} · ${sanitize(row.order_type)} · ${sanitize(row.status)}${botTag ? ` ${botTag}` : ""}</strong>
           <div class="drive-card-sub">${sanitize(tradingDisplaySymbol(row.market_symbol))} · 數量 ${sanitize(row.quantity)} · 價格 ${sanitize(price || "-")} · 凍結 ${Number(row.frozen_points || 0)}</div>
           <div class="economy-ledger-hash">${sanitize(row.order_uuid || "")}</div>
         </div>
@@ -1207,10 +1219,11 @@ function renderTradingFills(rows, targetId = "trading-fill-list") {
     const extra = isMargin
       ? `${pnl == null ? "" : ` · 損益 ${pnl >= 0 ? "+" : ""}${pnl} 點`}${interest ? ` · 利息 ${interest} 點` : ""}`
       : "";
+    const botTag = row.bot_name ? `<span class="trading-bot-tag">🤖 ${sanitize(row.bot_name)}</span>` : "";
     return `
       <div class="drive-file-row">
         <div>
-          <strong>${sanitize(row.side)} · ${sanitize(tradingDisplaySymbol(row.market_symbol))} · ${sanitize(row.quantity)}</strong>
+          <strong>${sanitize(row.side)} · ${sanitize(tradingDisplaySymbol(row.market_symbol))} · ${sanitize(row.quantity)}${botTag ? ` ${botTag}` : ""}</strong>
           <div class="drive-card-sub">${isMargin ? "進階交易" : "現貨成交"} · 價格 ${Number(row.price_points || 0) || "-"} · 成交 ${Number(row.notional_points || 0)} 點 · 手續費 ${Number(row.fee_points || 0)}${extra}</div>
           <div class="drive-card-sub">${sanitize(row.created_at || "")}</div>
           ${row.position_uuid ? `<div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>` : ""}
@@ -1446,6 +1459,7 @@ async function loadTradingWorkflowTemplates({ force = false } = {}) {
     const json = await fetchTradingJson("/trading/workflow-templates");
     tradingState.workflowTemplates = Array.isArray(json.templates) ? json.templates : [];
     renderTradingWorkflowTemplateOptions();
+    populateBacktestWorkflowTemplates();
     if (Array.isArray(json.errors) && json.errors.length) {
       tradingSetMsg(`部分 Workflow 模板載入失敗：${json.errors[0].error || "未知錯誤"}`, false);
     }
@@ -1616,7 +1630,12 @@ function renderTradingBots(rows = [], runs = []) {
   const dcaList = $("trading-dca-bot-list");
   const strategyList = $("trading-strategy-bot-list");
   const runList = $("trading-bot-run-list");
-  const renderRows = (items, emptyText) => items.length ? items.map((row) => `
+  const renderRows = (items, emptyText) => items.length ? items.map((row) => {
+    const checks = Array.isArray(row.condition_checks) ? row.condition_checks : [];
+    const condHtml = checks.length
+      ? `<div class="drive-card-sub trading-bot-conditions">${checks.map((c) => `<span class="${c.met ? "trading-condition-met" : "trading-condition-unmet"}">${sanitize(c.label)}</span>`).join("")}</div>`
+      : "";
+    return `
         <div class="drive-file-row">
           <div>
             <strong>${sanitize(row.name || "未命名機器人")} · ${sanitize(tradingDisplaySymbol(row.market_symbol || ""))}</strong>
@@ -1627,6 +1646,7 @@ function renderTradingBots(rows = [], runs = []) {
             <div class="drive-card-sub">
               狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${Number(row.max_runs || 1)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
             </div>
+            ${condHtml}
             <div class="drive-card-sub" data-trading-bot-next-run="${sanitize(row.bot_uuid || "")}">${sanitize(tradingBotNextRunText(row))}</div>
             ${row.last_error ? `<div class="drive-card-sub negative">上次錯誤：${sanitize(row.last_error)}</div>` : ""}
           </div>
@@ -1636,7 +1656,8 @@ function renderTradingBots(rows = [], runs = []) {
             <button class="btn btn-danger" type="button" data-trading-bot-delete="${sanitize(row.bot_uuid || "")}">刪除</button>
           </div>
         </div>
-      `).join("") : `<div class="drive-empty">${sanitize(emptyText)}</div>`;
+      `;
+  }).join("") : `<div class="drive-empty">${sanitize(emptyText)}</div>`;
   if (dcaList) dcaList.innerHTML = renderRows(rows.filter((row) => row.bot_type === "dca"), "尚無定投機器人");
   if (strategyList) strategyList.innerHTML = renderRows(rows.filter((row) => row.bot_type !== "dca"), "尚無自動化 Workflow");
   [dcaList, strategyList].forEach((list) => {
@@ -1680,6 +1701,225 @@ function renderTradingBots(rows = [], runs = []) {
   }
   restartTradingBotCountdown();
 }
+
+// ── Grid Trading Bot ────────────────────────────────────────────────────────
+
+let tradingGridBots = [];
+
+function renderGridBotPreview() {
+  const upper = Number($("trading-grid-upper-price")?.value || 0);
+  const lower = Number($("trading-grid-lower-price")?.value || 0);
+  const count = Number($("trading-grid-count")?.value || 10);
+  const amount = Number($("trading-grid-order-amount")?.value || 0);
+  const preview = $("trading-grid-preview");
+  if (!preview) return;
+  if (!upper || !lower || upper <= lower || count < 2) {
+    preview.textContent = "";
+    return;
+  }
+  const step = (upper - lower) / (count - 1);
+  const levels = count;
+  const totalCost = amount * levels;
+  const stepPct = ((step / lower) * 100).toFixed(2);
+  preview.textContent = `${levels} 個網格，間距 ${formatTradingPointsValue(Math.round(step))} 點（約 ${stepPct}%），預估最大投入約 ${formatTradingPointsValue(totalCost)} 點`;
+}
+
+function renderGridBotVisual(bot, currentPrice) {
+  const levels = Array.isArray(bot.grid_levels) ? bot.grid_levels : [];
+  if (!levels.length) return `<div class="drive-card-sub">（無網格層）</div>`;
+  const orders = Array.isArray(bot.orders) ? bot.orders : [];
+  const orderByLevel = {};
+  for (const o of orders) {
+    orderByLevel[o.level_index] = o;
+  }
+  const cp = Number(currentPrice || bot.initial_price_points || 0);
+  const rows = [...levels].reverse().map((price, revIdx) => {
+    const idx = levels.length - 1 - revIdx;
+    const order = orderByLevel[idx];
+    const isCurrent = cp > 0 && Math.abs(price - cp) / cp < 0.005;
+    let statusClass = "grid-level-empty";
+    let statusText = "—";
+    let sideLabel = "";
+    if (order) {
+      if (order.status === "open") {
+        if (order.side === "buy") { statusClass = "grid-level-buy"; statusText = "掛買"; sideLabel = "BUY"; }
+        else { statusClass = "grid-level-sell"; statusText = "掛賣"; sideLabel = "SELL"; }
+      } else if (order.status === "filled") {
+        statusClass = "grid-level-filled";
+        statusText = order.side === "buy" ? "買入成交" : "賣出成交";
+        sideLabel = order.side === "buy" ? "BUY✓" : "SELL✓";
+      } else {
+        statusClass = "grid-level-cancelled";
+        statusText = "已取消";
+      }
+    }
+    const currentMark = isCurrent ? `<span class="grid-current-price-mark">◀ 現價</span>` : "";
+    return `<div class="grid-level-row ${statusClass}${isCurrent ? " grid-current-price-row" : ""}">
+      <span class="grid-level-price">${formatTradingPointsValue(price)}</span>
+      <span class="grid-level-side">${sideLabel}</span>
+      <span class="grid-level-status">${statusText}</span>
+      ${currentMark}
+    </div>`;
+  });
+  return `<div class="grid-visual">${rows.join("")}</div>`;
+}
+
+function renderGridBotList(bots, currentPriceMap) {
+  const container = $("trading-grid-bot-list");
+  if (!container) return;
+  if (!bots.length) {
+    container.innerHTML = `<div class="drive-empty">尚無網格機器人，在上方建立第一個網格</div>`;
+    return;
+  }
+  container.innerHTML = bots.map((bot) => {
+    const cp = (currentPriceMap || {})[bot.market_symbol] || bot.initial_price_points || 0;
+    const symbol = sanitize(tradingDisplaySymbol(bot.market_symbol || ""));
+    const profit = Number(bot.total_profit_points || 0);
+    const profitClass = profit >= 0 ? "positive" : "negative";
+    const orders = Array.isArray(bot.orders) ? bot.orders : [];
+    const openOrders = orders.filter((o) => o.status === "open");
+    const buyOrders = openOrders.filter((o) => o.side === "buy");
+    const sellOrders = openOrders.filter((o) => o.side === "sell");
+    const levels = Array.isArray(bot.grid_levels) ? bot.grid_levels : [];
+    return `<div class="drive-file-row grid-bot-card" data-grid-bot-uuid="${sanitize(bot.bot_uuid || "")}">
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+          <strong>${sanitize(bot.name || "網格機器人")} · ${symbol}</strong>
+          <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
+        </div>
+        <div class="drive-card-sub">
+          區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 每格 ${formatTradingPointsValue(bot.order_amount_points)} 點
+        </div>
+        <div class="drive-card-sub">
+          現價 ${formatTradingPointsValue(cp)} · 掛單：<span class="grid-buy-count">買 ${buyOrders.length}</span> / <span class="grid-sell-count">賣 ${sellOrders.length}</span> · 已成交 ${Number(bot.total_trades || 0)} 次 · 累計損益 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
+        </div>
+        ${bot.last_error ? `<div class="drive-card-sub negative">錯誤：${sanitize(bot.last_error)}</div>` : ""}
+        <details class="grid-visual-details">
+          <summary class="drive-card-sub" style="cursor:pointer;user-select:none;">展開網格掛單圖（共 ${levels.length} 層）</summary>
+          ${renderGridBotVisual(bot, cp)}
+        </details>
+      </div>
+      <div class="drive-file-actions" style="flex-shrink:0;">
+        <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
+        <button class="btn btn-sm btn-danger" type="button" data-grid-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
+      </div>
+    </div>`;
+  }).join("");
+  container.querySelectorAll("[data-grid-toggle]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const uuid = btn.dataset.gridToggle;
+      const enable = btn.dataset.gridEnabled === "1";
+      btn.disabled = true;
+      try {
+        const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+        const res = await apiFetch(`${API}/trading/grid-bots/${uuid}/toggle`, {
+          method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+          body: JSON.stringify({ enabled: enable }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "狀態更新失敗", false); return; }
+        await loadGridBots();
+      } catch (e) { tradingSetMsg(e.message || "網格機器人狀態更新失敗", false); }
+      finally { btn.disabled = false; }
+    });
+  });
+  container.querySelectorAll("[data-grid-delete]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("確定刪除網格機器人？這會取消所有掛單並移除機器人。")) return;
+      const uuid = btn.dataset.gridDelete;
+      btn.disabled = true;
+      try {
+        const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+        const res = await apiFetch(`${API}/trading/grid-bots/${uuid}`, {
+          method: "DELETE", credentials: "same-origin",
+          headers: { "X-CSRF-Token": csrf || "" },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "刪除失敗", false); return; }
+        tradingSetMsg("網格機器人已刪除");
+        await loadGridBots();
+      } catch (e) { tradingSetMsg(e.message || "網格機器人刪除失敗", false); }
+      finally { btn.disabled = false; }
+    });
+  });
+}
+
+async function loadGridBots() {
+  try {
+    const res = await apiFetch(`${API}/trading/grid-bots`, { credentials: "same-origin" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) return;
+    tradingGridBots = Array.isArray(json.bots) ? json.bots : [];
+    const priceMap = {};
+    for (const m of (tradingState.markets || [])) {
+      priceMap[m.symbol] = m.manual_price_points || 0;
+    }
+    renderGridBotList(tradingGridBots, priceMap);
+  } catch (e) {
+    // silent
+  }
+}
+
+async function createGridBot() {
+  const name = $("trading-grid-bot-name")?.value?.trim() || "";
+  const marketSymbol = $("trading-grid-bot-market")?.value || "";
+  const upper = Number($("trading-grid-upper-price")?.value || 0);
+  const lower = Number($("trading-grid-lower-price")?.value || 0);
+  const count = Number($("trading-grid-count")?.value || 10);
+  const amount = Number($("trading-grid-order-amount")?.value || 0);
+  if (!name) { tradingSetMsg("請填寫機器人名稱", false); return; }
+  if (!marketSymbol) { tradingSetMsg("請選擇交易市場", false); return; }
+  if (!upper || !lower || upper <= lower) { tradingSetMsg("上限價格必須大於下限價格", false); return; }
+  if (count < 2) { tradingSetMsg("網格數量至少為 2", false); return; }
+  if (amount < 1) { tradingSetMsg("每格金額必須大於 0", false); return; }
+  const btn = $("trading-grid-bot-create-btn");
+  if (btn) btn.disabled = true;
+  tradingSetMsg("正在建立網格機器人並掛單...");
+  try {
+    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const res = await apiFetch(`${API}/trading/grid-bots`, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ name, market_symbol: marketSymbol, upper_price_points: upper, lower_price_points: lower, grid_count: count, order_amount_points: amount }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "網格建立失敗", false); return; }
+    const placed = (json.placed || []).length;
+    const errors = json.errors || [];
+    let msg = `網格機器人已建立，成功掛單 ${placed} 筆`;
+    if (errors.length) msg += `，${errors.length} 個層級失敗`;
+    tradingSetMsg(msg, !errors.length);
+    if ($("trading-grid-bot-name")) $("trading-grid-bot-name").value = "";
+    await loadGridBots();
+    await loadTradingDashboard();
+  } catch (e) { tradingSetMsg(e.message || "網格機器人建立失敗", false); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function scanGridBots() {
+  tradingSetMsg("掃描網格機器人中...");
+  const btn = $("trading-grid-scan-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const csrf = getCsrfToken() || await fetchCsrfToken({ force: true });
+    const res = await apiFetch(`${API}/trading/grid-bots/scan`, {
+      method: "POST", credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) { tradingSetMsg(json.msg || "掃描失敗", false); return; }
+    const results = json.results || [];
+    const fills = results.reduce((s, r) => s + (r.fills_processed || []).length, 0);
+    const placed = results.reduce((s, r) => s + (r.counter_orders_placed || []).length, 0);
+    tradingSetMsg(`網格掃描完成：${json.scanned} 個機器人，處理 ${fills} 筆成交，新掛 ${placed} 筆反向單`);
+    await loadGridBots();
+    await loadTradingDashboard();
+  } catch (e) { tradingSetMsg(e.message || "掃描失敗", false); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+// ── End Grid Trading Bot ────────────────────────────────────────────────────
 
 function renderTradingWalletSummary(payload = {}) {
   const positions = Array.isArray(payload.positions) ? payload.positions : [];
@@ -1848,6 +2088,7 @@ async function loadTradingDashboard() {
     renderTradingOrders(tradingState.orders);
     renderTradingFills(tradingState.fills);
     renderTradingBots(tradingState.bots, tradingState.botRuns);
+    loadGridBots().catch(() => {});
     renderTradingContracts(payload.futures_positions || []);
     renderTradingMarginPositions(tradingState.marginPositions);
     renderTradingMarginAccountSummary(tradingState.marginSummary);
@@ -2000,56 +2241,110 @@ async function saveTradingDcaBot() {
   }
 }
 
+const BACKTEST_BATCH_SIZE = 5000;
+
+function downloadBacktestTrades(trades, marketSymbol) {
+  if (!trades || !trades.length) return;
+  const header = "時間,方向,數量,價格（點）,金額（點）,手續費（點）";
+  const rows = trades.map((r) => [
+    `"${String(r.time || "").replace(/"/g, '""')}"`,
+    r.side === "sell" ? "賣出" : "買入",
+    r.quantity || "0",
+    r.price_points || 0,
+    r.spend_points || 0,
+    r.fee_points || 0,
+  ].join(","));
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `backtest_${(marketSymbol || "trades").replace(/\//g, "-")}_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
 async function backtestTradingBot() {
   const result = $("trading-bot-backtest-result");
   const marketSymbol = $("trading-backtest-market")?.value || selectedTradingMarket()?.symbol || "";
-  const candles = tradingState.referencePrices?.candles || tradingState.referencePrices?.points || [];
+  let allCandles = tradingState.referencePrices?.candles || tradingState.referencePrices?.points || [];
   if (!marketSymbol) {
     tradingSetMsg("請先選擇回測市場", false);
     return;
   }
   const botUuid = $("trading-backtest-bot-select")?.value || "";
   const selectedBot = botUuid ? tradingState.bots.find((row) => row.bot_uuid === botUuid) : null;
-  const botType = selectedBot ? (selectedBot.bot_type === "dca" ? "dca" : "workflow") : ($("trading-backtest-strategy")?.value || "dca");
+  const botType = $("trading-backtest-strategy")?.value || (selectedBot ? (selectedBot.bot_type === "dca" ? "dca" : "workflow") : "dca");
   let workflow = null;
   if (botType === "workflow") {
     try {
-      workflow = selectedBot?.workflow || parseTradingWorkflowInput();
+      const wfRaw = $("trading-backtest-workflow-json")?.value?.trim() || "";
+      workflow = wfRaw ? JSON.parse(wfRaw) : (selectedBot?.workflow || parseTradingWorkflowInput());
     } catch (err) {
       tradingSetMsg(err.message || "Workflow JSON 格式錯誤", false);
       return;
     }
   }
-  const payload = {
+  const orderPoints = botType === "workflow"
+    ? Number($("trading-backtest-workflow-order-points")?.value || 100)
+    : Number($("trading-backtest-order-points")?.value || 100);
+  const intervalCandles = botType === "dca"
+    ? Math.max(1, Number($("trading-backtest-interval-candles")?.value || 1))
+    : Math.max(1, Math.ceil(Number(selectedBot?.interval_hours ? selectedBot.interval_hours / 0.25 : 1)));
+  const basePayload = {
     market_symbol: marketSymbol,
     strategy: botType,
     workflow_json: workflow,
     initial_cash_points: Number($("trading-backtest-initial-cash")?.value || 10000),
-    order_points: selectedBot?.budget_points || Number($("trading-backtest-order-points")?.value || 100),
-    interval_candles: Math.max(1, Math.ceil(Number(selectedBot?.interval_hours ? selectedBot.interval_hours / 0.25 : 1))),
+    order_points: orderPoints,
+    interval_candles: intervalCandles,
     timeframe: $("trading-backtest-timeframe")?.value || "15m",
     start_time: $("trading-backtest-start")?.value || "",
     end_time: $("trading-backtest-end")?.value || "",
     slippage_percent: Number($("trading-backtest-slippage-percent")?.value || 0),
   };
-  if (Array.isArray(candles) && candles.length >= 2) {
-    payload.candles = candles;
-    payload.data_source = tradingState.referencePrices?.source || "browser_loaded_chart";
-    payload.provider_symbol = tradingState.referencePrices?.symbol || "";
-  } else {
-    payload.candle_limit = 500;
+  const hasCandleData = Array.isArray(allCandles) && allCandles.length >= 2;
+  if (!hasCandleData) {
+    basePayload.candle_limit = 500;
     tradingSetMsg("未載入圖表，正在由後端下載歷史 K 線後回測...");
+  } else {
+    basePayload.data_source = tradingState.referencePrices?.source || "browser_loaded_chart";
+    basePayload.provider_symbol = tradingState.referencePrices?.symbol || "";
   }
   try {
-    const json = await fetchTradingJson("/trading/bots/backtest", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    const sourceText = json.data_source ? `，資料 ${sanitize(json.data_source)} ${Number(json.candle_count || 0)} 根` : "";
-    const text = `回測完成：交易 ${Number(json.trade_count || 0)} 次，期末 ${formatTradingPointsValue(json.final_value_points)} 點，損益 ${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)} 點，報酬 ${formatTradingPointsValue(json.return_percent)}%${sourceText}`;
+    let combinedJson = null;
+    let allTrades = [];
+    let totalCandles = 0;
+    if (hasCandleData && allCandles.length > BACKTEST_BATCH_SIZE) {
+      const batches = [];
+      for (let i = 0; i < allCandles.length; i += BACKTEST_BATCH_SIZE) {
+        batches.push(allCandles.slice(i, i + BACKTEST_BATCH_SIZE));
+      }
+      tradingSetMsg(`K 線共 ${allCandles.length} 根，自動分 ${batches.length} 批回測中...`);
+      let carryUnits = 0, carryCash = basePayload.initial_cash_points, carryAvgCost = 0;
+      for (let bi = 0; bi < batches.length; bi++) {
+        const batchPayload = { ...basePayload, candles: batches[bi], initial_cash_points: carryCash, initial_units: carryUnits, initial_avg_cost: carryAvgCost };
+        if (result) result.textContent = `分批回測中…第 ${bi + 1}/${batches.length} 批`;
+        const batchJson = await fetchTradingJson("/trading/bots/backtest", { method: "POST", body: JSON.stringify(batchPayload) });
+        allTrades = allTrades.concat(Array.isArray(batchJson.trades) ? batchJson.trades : []);
+        totalCandles += Number(batchJson.candle_count || 0);
+        carryUnits = batchJson.end_units ?? 0;
+        carryCash = batchJson.end_cash_points ?? carryCash;
+        carryAvgCost = batchJson.end_avg_cost ?? 0;
+        combinedJson = { ...batchJson, candle_count: totalCandles, trades: allTrades, trade_count: allTrades.length };
+      }
+    } else {
+      if (hasCandleData) basePayload.candles = allCandles;
+      combinedJson = await fetchTradingJson("/trading/bots/backtest", { method: "POST", body: JSON.stringify(basePayload) });
+      allTrades = Array.isArray(combinedJson.trades) ? combinedJson.trades : [];
+    }
+    const sourceText = combinedJson.data_source ? `，資料 ${sanitize(combinedJson.data_source)} ${Number(combinedJson.candle_count || 0)} 根` : "";
+    const batchNote = hasCandleData && allCandles.length > BACKTEST_BATCH_SIZE ? `（分 ${Math.ceil(allCandles.length / BACKTEST_BATCH_SIZE)} 批）` : "";
+    const text = `回測完成${batchNote}：交易 ${Number(combinedJson.trade_count || 0)} 次，期末 ${formatTradingPointsValue(combinedJson.final_value_points)} 點，損益 ${Number(combinedJson.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(combinedJson.pnl_points)} 點，報酬 ${formatTradingPointsValue(combinedJson.return_percent)}%${sourceText}`;
     if (result) result.textContent = text;
-    renderTradingBacktestResult(json);
-    tradingSetMsg(text, Number(json.pnl_points || 0) >= 0);
+    renderTradingBacktestResult(combinedJson);
+    tradingSetMsg(text, Number(combinedJson.pnl_points || 0) >= 0);
   } catch (err) {
     const text = err.message || "回測失敗";
     if (result) result.textContent = text;
@@ -2060,6 +2355,14 @@ async function backtestTradingBot() {
 function renderTradingBacktestResult(json) {
   const metrics = $("trading-backtest-metrics");
   const trades = $("trading-backtest-trades");
+  const warnings = $("trading-backtest-warnings");
+  if (warnings) {
+    const rangeWarns = Array.isArray(json.range_warnings) ? json.range_warnings : [];
+    warnings.innerHTML = rangeWarns.length
+      ? rangeWarns.map((w) => `<div class="trading-backtest-warning">⚠ ${sanitize(w)}</div>`).join("")
+      : "";
+    warnings.style.display = rangeWarns.length ? "" : "none";
+  }
   if (metrics) {
     metrics.innerHTML = `
       <div><span class="drive-card-sub">初始資金</span><strong>${formatTradingPointsValue(json.initial_cash_points)}</strong><small>POINTS</small></div>
@@ -2067,21 +2370,75 @@ function renderTradingBacktestResult(json) {
       <div><span class="drive-card-sub">總損益</span><strong>${Number(json.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(json.pnl_points)}</strong><small>${formatTradingPointsValue(json.return_percent)}%</small></div>
       <div><span class="drive-card-sub">交易次數</span><strong>${Number(json.trade_count || 0)}</strong><small>回測未修改帳本</small></div>
       <div><span class="drive-card-sub">資料來源</span><strong>${sanitize(json.data_source || "-")}</strong><small>${Number(json.candle_count || 0)} 根 K 線</small></div>
-      <div><span class="drive-card-sub">資料範圍</span><strong>${sanitize(String(json.first_candle_time || "-"))}</strong><small>${sanitize(String(json.last_candle_time || "-"))}</small></div>
-      <div><span class="drive-card-sub">回測上限</span><strong>${Number(json.max_backtest_candles || 0).toLocaleString()} 根</strong><small>自動下載單次最多 ${Number(json.provider_candle_limit || json.download_candle_limit || 0).toLocaleString()} 根</small></div>
+      <div><span class="drive-card-sub">資料範圍</span><strong>${sanitize(String(json.first_candle_time || "-"))}</strong><small>～ ${sanitize(String(json.last_candle_time || "-"))}</small></div>
+      <div><span class="drive-card-sub">回測上限</span><strong>${Number(json.max_backtest_candles || 0).toLocaleString()} 根</strong><small>已使用 ${Number(json.candle_count || 0).toLocaleString()} 根</small></div>
     `;
   }
   if (trades) {
     const rows = Array.isArray(json.trades) ? json.trades : [];
-    trades.innerHTML = rows.length ? rows.slice(-20).map((row) => `
+    const dlBtn = rows.length ? `<button class="btn btn-sm" type="button" id="trading-backtest-download-btn" style="margin-bottom:.5rem;">下載成交記錄 CSV（${rows.length} 筆）</button>` : "";
+    trades.innerHTML = dlBtn + (rows.length ? rows.map((row) => `
       <div class="drive-file-row">
         <div>
-          <strong>${sanitize(row.side || "buy")} · ${sanitize(row.quantity || "0")}</strong>
-          <div class="drive-card-sub">${sanitize(row.time || "")} · 價格 ${formatTradingPointsValue(row.price_points)} · 金額 ${formatTradingPointsValue(row.spend_points)} · 費用 ${formatTradingPointsValue(row.fee_points)}</div>
+          <strong>${sanitize(row.time || "-")}</strong>
+          <div class="drive-card-sub">${sanitize(row.side === "sell" ? "賣出" : "買入")} ${sanitize(row.quantity || "0")} · 價格 ${formatTradingPointsValue(row.price_points)} · 金額 ${formatTradingPointsValue(row.spend_points)} · 手續費 ${formatTradingPointsValue(row.fee_points)}</div>
         </div>
       </div>
-    `).join("") : `<div class="drive-empty">回測期間沒有交易</div>`;
+    `).join("") : `<div class="drive-empty">回測期間沒有交易</div>`);
+    if (rows.length) {
+      const dlBtnEl = $("trading-backtest-download-btn");
+      if (dlBtnEl) dlBtnEl.addEventListener("click", () => downloadBacktestTrades(rows, json.market_symbol));
+    }
   }
+}
+
+function updateBacktestStrategyUI() {
+  const strategy = $("trading-backtest-strategy")?.value || "dca";
+  const dcaOpts = $("trading-backtest-dca-options");
+  const wfOpts = $("trading-backtest-workflow-options");
+  if (dcaOpts) dcaOpts.style.display = strategy === "dca" ? "" : "none";
+  if (wfOpts) wfOpts.style.display = strategy === "workflow" ? "" : "none";
+  const botUuid = $("trading-backtest-bot-select")?.value || "";
+  if (botUuid) {
+    const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
+    if (bot) {
+      const isWf = bot.bot_type !== "dca";
+      if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = isWf ? "workflow" : "dca";
+      if (dcaOpts) dcaOpts.style.display = isWf ? "none" : "";
+      if (wfOpts) wfOpts.style.display = isWf ? "" : "none";
+      if (!isWf) {
+        if ($("trading-backtest-order-points")) $("trading-backtest-order-points").value = bot.budget_points || 100;
+        if ($("trading-backtest-interval-candles")) {
+          const intervalCandles = Math.max(1, Math.ceil(Number(bot.interval_hours ? bot.interval_hours / 0.25 : 1)));
+          $("trading-backtest-interval-candles").value = intervalCandles;
+        }
+      } else {
+        if ($("trading-backtest-workflow-order-points")) $("trading-backtest-workflow-order-points").value = bot.budget_points || 100;
+        if (bot.workflow && $("trading-backtest-workflow-json")) $("trading-backtest-workflow-json").value = JSON.stringify(bot.workflow, null, 2);
+      }
+    }
+  }
+  populateBacktestWorkflowTemplates();
+}
+
+function populateBacktestWorkflowTemplates() {
+  const sel = $("trading-backtest-workflow-template");
+  if (!sel) return;
+  const templates = Array.isArray(tradingState.workflowTemplates) ? tradingState.workflowTemplates : [];
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">自訂（JSON 編輯器）</option>` +
+    templates.map((t) => `<option value="${sanitize(String(t.id || ""))}">${sanitize(t.label || t.id || "")}</option>`).join("");
+  if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  sel.removeEventListener("change", sel._backtestTemplateHandler);
+  sel._backtestTemplateHandler = () => {
+    const tid = sel.value;
+    if (!tid) return;
+    const tmpl = templates.find((t) => String(t.id) === tid);
+    if (tmpl && tmpl.workflow && $("trading-backtest-workflow-json")) {
+      $("trading-backtest-workflow-json").value = JSON.stringify(tmpl.workflow, null, 2);
+    }
+  };
+  sel.addEventListener("change", sel._backtestTemplateHandler);
 }
 
 function prepareTradingBacktestFromBot(botUuid) {
@@ -2092,9 +2449,8 @@ function prepareTradingBacktestFromBot(botUuid) {
   }
   switchTradingBotTab("backtest");
   if ($("trading-backtest-bot-select")) $("trading-backtest-bot-select").value = botUuid;
-  if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = bot.bot_type === "dca" ? "dca" : "workflow";
   if ($("trading-backtest-market")) $("trading-backtest-market").value = bot.market_symbol || "";
-  if (bot.workflow && $("trading-auto-workflow-json")) $("trading-auto-workflow-json").value = JSON.stringify(bot.workflow, null, 2);
+  updateBacktestStrategyUI();
   tradingSetMsg("已帶入機器人回測設定，請確認時間範圍後執行回測");
 }
 
@@ -2538,6 +2894,20 @@ function bindTradingEvents() {
   });
   const workflowTemplateSelect = $("trading-workflow-template-select");
   if (workflowTemplateSelect) workflowTemplateSelect.addEventListener("change", renderTradingWorkflowTemplateExplanation);
+  const backtestStrategy = $("trading-backtest-strategy");
+  if (backtestStrategy) backtestStrategy.addEventListener("change", updateBacktestStrategyUI);
+  const backtestBotSelect = $("trading-backtest-bot-select");
+  if (backtestBotSelect) backtestBotSelect.addEventListener("change", updateBacktestStrategyUI);
+  updateBacktestStrategyUI();
+  // Grid bot wiring
+  const gridCreateBtn = $("trading-grid-bot-create-btn");
+  if (gridCreateBtn) bindTradingActionButton(gridCreateBtn, createGridBot, "正在建立網格機器人...", "網格機器人建立失敗");
+  const gridScanBtn = $("trading-grid-scan-btn");
+  if (gridScanBtn) bindTradingActionButton(gridScanBtn, scanGridBots, "掃描網格機器人中...", "網格掃描失敗");
+  ["trading-grid-upper-price", "trading-grid-lower-price", "trading-grid-count", "trading-grid-order-amount"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("input", renderGridBotPreview);
+  });
   document.querySelectorAll("[data-trading-bot-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       switchTradingBotTab(btn.dataset.tradingBotTab || "dca");
@@ -2554,10 +2924,10 @@ function bindTradingEvents() {
       tradingSetMsg(dcaPreset.value === "custom" ? "已切換為自訂定投間隔" : `已選擇每 ${dcaPreset.value} 小時定投`);
     });
   }
-  const backtestBotSelect = $("trading-backtest-bot-select");
-  if (backtestBotSelect) {
-    backtestBotSelect.addEventListener("change", () => {
-      if (backtestBotSelect.value) prepareTradingBacktestFromBot(backtestBotSelect.value);
+  const backtestBotSelectEl = $("trading-backtest-bot-select");
+  if (backtestBotSelectEl) {
+    backtestBotSelectEl.addEventListener("change", () => {
+      if (backtestBotSelectEl.value) prepareTradingBacktestFromBot(backtestBotSelectEl.value);
       else tradingSetMsg("已切換為使用目前表單設定回測");
     });
   }

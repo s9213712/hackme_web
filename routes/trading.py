@@ -932,6 +932,82 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    # ── Grid Bot Routes ────────────────────────────────────────────────────
+
+    @app.route("/api/trading/grid-bots", methods=["GET"])
+    @require_csrf_safe
+    def trading_grid_bots_list():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            return json_resp(trading_service.list_grid_bots(actor=actor))
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/grid-bots", methods=["POST"])
+    @require_csrf
+    def trading_grid_bots_create():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.create_grid_bot(actor=actor, payload=data)
+            audit("GRID_BOT_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"bot_uuid={(result.get('bot') or {}).get('bot_uuid')}, placed={len(result.get('placed') or [])}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/grid-bots/<bot_uuid>/toggle", methods=["POST"])
+    @require_csrf
+    def trading_grid_bots_toggle(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        enabled = bool(data.get("enabled", True))
+        try:
+            result = trading_service.toggle_grid_bot(actor=actor, bot_uuid=bot_uuid, enabled=enabled)
+            audit("GRID_BOT_TOGGLED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"bot_uuid={bot_uuid}, enabled={enabled}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/grid-bots/<bot_uuid>", methods=["DELETE"])
+    @require_csrf
+    def trading_grid_bots_delete(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            result = trading_service.delete_grid_bot(actor=actor, bot_uuid=bot_uuid)
+            audit("GRID_BOT_DELETED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"bot_uuid={bot_uuid}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/trading/grid-bots/scan", methods=["POST"])
+    @require_csrf
+    def trading_grid_bots_scan():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        try:
+            result = trading_service.scan_grid_bots(actor=actor)
+            audit("GRID_BOT_SCAN", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
+                  detail=f"scanned={result.get('scanned')}")
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/margin/open", methods=["POST"])
     @require_csrf
     def trading_margin_open():

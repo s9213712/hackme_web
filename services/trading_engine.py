@@ -167,6 +167,32 @@ def units_to_quantity(units):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _condition_label(cond):
+    if not isinstance(cond, dict):
+        return str(cond)
+    if "AND" in cond:
+        parts = cond["AND"] if isinstance(cond["AND"], list) else []
+        return "AND(" + ", ".join(_condition_label(p) for p in parts) + ")"
+    if "OR" in cond:
+        parts = cond["OR"] if isinstance(cond["OR"], list) else []
+        return "OR(" + ", ".join(_condition_label(p) for p in parts) + ")"
+    if "NOT" in cond:
+        return "NOT(" + _condition_label(cond["NOT"]) + ")"
+    ctype = str(cond.get("type") or "always")
+    value = cond.get("value")
+    period = cond.get("period")
+    position = cond.get("position")
+    labels = {
+        "always": "無條件", "price_above": f"價格≥{value}", "price_below": f"價格≤{value}",
+        "rsi_above": f"RSI≥{value}", "rsi_below": f"RSI≤{value}",
+        "kd_above": f"KD≥{value}", "kd_below": f"KD≤{value}",
+        "ma_position": f"MA{period}{' 上方' if position == 'above' else ' 下方'}",
+        "bb_position": f"BB {position}", "has_position": f"持倉={'是' if value else '否'}",
+        "stop_loss_percent": f"止損≤-{value}%", "take_profit_percent": f"止盈≥{value}%",
+    }
+    return labels.get(ctype, ctype)
+
+
 def notional_points(quantity_units, price_points):
     quantity_units = int(quantity_units)
     price_points = int(price_points)
@@ -537,6 +563,49 @@ def ensure_trading_schema(conn):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_grid_bots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_uuid TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            market_symbol TEXT NOT NULL REFERENCES trading_markets(symbol),
+            upper_price_points INTEGER NOT NULL CHECK (upper_price_points > 0),
+            lower_price_points INTEGER NOT NULL CHECK (lower_price_points > 0),
+            grid_count INTEGER NOT NULL CHECK (grid_count >= 2 AND grid_count <= 200),
+            order_amount_points INTEGER NOT NULL CHECK (order_amount_points > 0),
+            enabled INTEGER NOT NULL DEFAULT 1,
+            total_profit_points INTEGER NOT NULL DEFAULT 0,
+            total_trades INTEGER NOT NULL DEFAULT 0,
+            initial_price_points INTEGER NOT NULL DEFAULT 0,
+            grid_levels_json TEXT,
+            last_scan_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (upper_price_points > lower_price_points)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_grid_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_uuid TEXT NOT NULL UNIQUE,
+            grid_bot_id INTEGER NOT NULL REFERENCES trading_grid_bots(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            level_index INTEGER NOT NULL,
+            price_points INTEGER NOT NULL,
+            side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+            trading_order_uuid TEXT,
+            filled_quantity_units INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'filled', 'cancelled')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     now = _now()
     conn.execute(
         "INSERT OR IGNORE INTO trading_reserve_pool (id, balance_points, updated_at) VALUES (1, 0, ?)",
@@ -688,6 +757,12 @@ class TradingEngineService:
             return str(actor.get("username") if hasattr(actor, "get") else actor["username"])
         except Exception:
             return ""
+
+    def _actor_role(self, actor):
+        try:
+            return str(actor.get("role") if hasattr(actor, "get") else actor["role"]) or "user"
+        except Exception:
+            return "user"
 
     def _is_root_actor(self, actor):
         return self._actor_username(actor) == "root"
@@ -2516,10 +2591,25 @@ class TradingEngineService:
                 for row in conn.execute("SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
             conn.commit()
-            orders = [
-                self._order_payload(row)
-                for row in conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
-            ]
+            bot_order_map = {
+                row["order_uuid"]: row["bot_name"]
+                for row in conn.execute(
+                    """
+                    SELECT r.order_uuid, b.name AS bot_name
+                    FROM trading_bot_runs r
+                    JOIN trading_bots b ON b.id = r.bot_id
+                    WHERE r.user_id=? AND r.order_uuid IS NOT NULL
+                    """,
+                    (int(user_id),),
+                ).fetchall()
+            }
+            raw_orders = conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
+            orders = []
+            for row in raw_orders:
+                item = self._order_payload(row)
+                if item.get("order_uuid") in bot_order_map:
+                    item["bot_name"] = bot_order_map[item["order_uuid"]]
+                orders.append(item)
             fill_rows = conn.execute("SELECT * FROM trading_fills WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             pnl_by_fill = {
                 row["fill_id"]: row
@@ -2534,7 +2624,20 @@ class TradingEngineService:
                     (int(user_id), int(user_id)),
                 ).fetchall()
             }
-            fills = [self._fill_payload(row, realized=pnl_by_fill.get(row["id"])) for row in fill_rows]
+            fill_order_uuid_map = {
+                row["id"]: row["order_uuid"]
+                for row in conn.execute(
+                    "SELECT f.id, o.order_uuid FROM trading_fills f JOIN trading_orders o ON o.id=f.order_id WHERE f.user_id=? ORDER BY f.id DESC LIMIT 50",
+                    (int(user_id),),
+                ).fetchall()
+            }
+            fills = []
+            for row in fill_rows:
+                item = self._fill_payload(row, realized=pnl_by_fill.get(row["id"]))
+                order_uuid = fill_order_uuid_map.get(row["id"])
+                if order_uuid and order_uuid in bot_order_map:
+                    item["bot_name"] = bot_order_map[order_uuid]
+                fills.append(item)
             margin_trade_records = self._margin_trade_records(conn, user_id)
             combined_fills = sorted(
                 [*fills, *margin_trade_records],
@@ -2887,10 +2990,19 @@ class TradingEngineService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            bots = [
-                self._bot_payload(row)
-                for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
-            ]
+            market_prices = {
+                row["symbol"]: int(row["manual_price_points"] or 0)
+                for row in conn.execute("SELECT symbol, manual_price_points FROM trading_markets").fetchall()
+            }
+            bots = []
+            for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall():
+                bot = self._bot_payload(row)
+                current_price = market_prices.get(str(bot.get("market_symbol") or ""), 0)
+                try:
+                    bot["condition_checks"] = self._bot_condition_checks(bot, current_price)
+                except Exception:
+                    bot["condition_checks"] = []
+                bots.append(bot)
             runs = [
                 self._bot_run_payload(row)
                 for row in conn.execute("SELECT * FROM trading_bot_runs WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
@@ -2988,6 +3100,331 @@ class TradingEngineService:
             raise
         finally:
             conn.close()
+
+    # ── Grid Trading Bot ────────────────────────────────────────────────────
+
+    def _grid_levels(self, lower, upper, count):
+        count = max(2, int(count))
+        if count == 2:
+            return [int(lower), int(upper)]
+        step = (int(upper) - int(lower)) / (count - 1)
+        return [int(round(int(lower) + step * i)) for i in range(count)]
+
+    def _grid_quantity_units(self, amount_points, price_points):
+        amount = int(amount_points or 0)
+        price = int(price_points or 0)
+        if amount <= 0 or price <= 0:
+            return 0
+        return int((amount * ASSET_SCALE) // price)
+
+    def _grid_bot_payload(self, row, orders=None):
+        item = dict(row)
+        item["enabled"] = bool(item["enabled"])
+        item["grid_levels"] = _json_loads(item.get("grid_levels_json"), [])
+        item["orders"] = orders or []
+        return item
+
+    def create_grid_bot(self, *, actor, payload):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        payload = payload or {}
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise ValueError("grid bot name is required")
+        if len(name) > 80:
+            raise ValueError("grid bot name too long")
+        market_symbol = str(payload.get("market_symbol") or "").strip().upper()
+        upper_price = _to_int(payload.get("upper_price_points"), name="upper_price_points", minimum=1)
+        lower_price = _to_int(payload.get("lower_price_points"), name="lower_price_points", minimum=1)
+        if upper_price <= lower_price:
+            raise ValueError("upper_price_points must be greater than lower_price_points")
+        grid_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
+        order_amount = _to_int(payload.get("order_amount_points"), name="order_amount_points", minimum=1)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = self._market(conn, market_symbol)
+            current_price, _ = self._current_market_price_points(conn, market)
+            grid_levels = self._grid_levels(lower_price, upper_price, grid_count)
+            now = _now()
+            bot_uuid = str(uuid.uuid4())
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO trading_grid_bots
+                  (bot_uuid, user_id, name, market_symbol, upper_price_points, lower_price_points,
+                   grid_count, order_amount_points, enabled, initial_price_points, grid_levels_json,
+                   created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?)
+                """,
+                (bot_uuid, user_id, name, market_symbol, upper_price, lower_price,
+                 grid_count, order_amount, current_price,
+                 json.dumps(grid_levels), now, now),
+            )
+            grid_bot_id = conn.execute(
+                "SELECT id FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)
+            ).fetchone()["id"]
+            bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
+            placed = []
+            errors = []
+            for i, level_price in enumerate(grid_levels):
+                if level_price < current_price:
+                    side = "buy"
+                elif level_price > current_price:
+                    side = "sell"
+                else:
+                    continue
+                qty_units = self._grid_quantity_units(order_amount, level_price)
+                if qty_units <= 0:
+                    errors.append(f"level {i} price {level_price}: 金額不足以買入最小單位")
+                    continue
+                qty_text = units_to_quantity(qty_units)
+                try:
+                    order_result = self.place_order(
+                        actor=bot_actor,
+                        market_symbol=market_symbol,
+                        side=side,
+                        order_type="limit",
+                        quantity=qty_text,
+                        limit_price_points=level_price,
+                    )
+                    trading_order_uuid = (order_result.get("order") or {}).get("order_uuid")
+                    grid_order_uuid = str(uuid.uuid4())
+                    conn.execute(
+                        """
+                        INSERT INTO trading_grid_orders
+                          (order_uuid, grid_bot_id, user_id, level_index, price_points, side,
+                           trading_order_uuid, status, created_at, updated_at)
+                        VALUES (?,?,?,?,?,?,?,'open',?,?)
+                        """,
+                        (grid_order_uuid, grid_bot_id, user_id, i, level_price, side,
+                         trading_order_uuid, now, now),
+                    )
+                    placed.append({"level_index": i, "price_points": level_price, "side": side, "trading_order_uuid": trading_order_uuid})
+                except Exception as exc:
+                    errors.append(f"level {i} price {level_price}: {exc}")
+            self._audit_event(conn, "GRID_BOT_CREATED", "grid trading bot created", actor=actor, target_user_id=user_id, market_symbol=market_symbol, metadata={"bot_uuid": bot_uuid, "grid_count": grid_count, "placed": len(placed)})
+            conn.commit()
+            bot_row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)).fetchone()
+            orders = conn.execute("SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC", (grid_bot_id,)).fetchall()
+            return {"ok": True, "bot": self._grid_bot_payload(bot_row, [dict(o) for o in orders]), "placed": placed, "errors": errors, "current_price_points": current_price}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def list_grid_bots(self, *, actor):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            bots = []
+            for row in conn.execute("SELECT * FROM trading_grid_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall():
+                orders = conn.execute(
+                    "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? ORDER BY level_index ASC",
+                    (row["id"],),
+                ).fetchall()
+                bots.append(self._grid_bot_payload(row, [dict(o) for o in orders]))
+            return {"ok": True, "bots": bots}
+        finally:
+            conn.close()
+
+    def toggle_grid_bot(self, *, actor, bot_uuid, enabled):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?", (str(bot_uuid or ""), user_id)).fetchone()
+            if not row:
+                raise ValueError("grid bot not found")
+            now = _now()
+            conn.execute("UPDATE trading_grid_bots SET enabled=?, updated_at=? WHERE id=?", (1 if enabled else 0, now, row["id"]))
+            conn.commit()
+            return {"ok": True, "bot_uuid": bot_uuid, "enabled": bool(enabled)}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def delete_grid_bot(self, *, actor, bot_uuid):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM trading_grid_bots WHERE bot_uuid=? AND user_id=?", (str(bot_uuid or ""), user_id)).fetchone()
+            if not row:
+                raise ValueError("grid bot not found")
+            open_orders = conn.execute(
+                "SELECT trading_order_uuid FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
+                (row["id"],),
+            ).fetchall()
+            bot_actor = {"id": int(user_id), "username": self._actor_username(actor), "role": self._actor_role(actor)}
+            for go in open_orders:
+                if go["trading_order_uuid"]:
+                    try:
+                        self.cancel_order(actor=bot_actor, order_uuid=go["trading_order_uuid"])
+                    except Exception:
+                        pass
+            conn.execute("DELETE FROM trading_grid_bots WHERE id=?", (row["id"],))
+            conn.commit()
+            return {"ok": True, "bot_uuid": bot_uuid}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def scan_grid_bots(self, *, actor):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            bots = conn.execute(
+                "SELECT * FROM trading_grid_bots WHERE user_id=? AND enabled=1 ORDER BY id ASC",
+                (user_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        results = []
+        for bot in bots:
+            try:
+                r = self._scan_one_grid_bot(bot, actor=actor)
+                results.append(r)
+            except Exception as exc:
+                conn2 = self.get_db()
+                try:
+                    conn2.execute("UPDATE trading_grid_bots SET last_error=?, updated_at=? WHERE id=?", (str(exc)[:500], _now(), bot["id"]))
+                    conn2.commit()
+                except Exception:
+                    pass
+                finally:
+                    conn2.close()
+                results.append({"bot_uuid": bot["bot_uuid"], "error": str(exc)})
+        return {"ok": True, "scanned": len(bots), "results": results}
+
+    def _scan_one_grid_bot(self, bot, *, actor):
+        user_id = int(bot["user_id"])
+        bot_id = int(bot["id"])
+        bot_actor = {"id": user_id, "username": self._actor_username(actor), "role": self._actor_role(actor)}
+        now = _now()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = self._market(conn, bot["market_symbol"])
+            current_price, _ = self._current_market_price_points(conn, market)
+            grid_levels = _json_loads(bot["grid_levels_json"], [])
+            if not grid_levels:
+                grid_levels = self._grid_levels(bot["lower_price_points"], bot["upper_price_points"], bot["grid_count"])
+            open_grid_orders = conn.execute(
+                "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? AND status='open' ORDER BY level_index ASC",
+                (bot_id,),
+            ).fetchall()
+            fills_processed = []
+            counter_orders_placed = []
+            profit_delta = 0
+            trades_delta = 0
+            for go in open_grid_orders:
+                if not go["trading_order_uuid"]:
+                    continue
+                t_order = conn.execute(
+                    "SELECT * FROM trading_orders WHERE order_uuid=?",
+                    (go["trading_order_uuid"],),
+                ).fetchone()
+                if not t_order:
+                    continue
+                if t_order["status"] not in ("filled", "partially_filled"):
+                    continue
+                filled_units = int(t_order["filled_quantity_units"] or 0)
+                if filled_units <= 0:
+                    continue
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE trading_grid_orders SET status='filled', filled_quantity_units=?, updated_at=? WHERE id=?",
+                    (filled_units, now, go["id"]),
+                )
+                conn.commit()
+                fills_processed.append({"level_index": go["level_index"], "side": go["side"], "price_points": go["price_points"]})
+                level_idx = int(go["level_index"])
+                side = str(go["side"])
+                filled_price = int(go["price_points"])
+                if side == "buy":
+                    counter_level_idx = level_idx + 1
+                    counter_side = "sell"
+                else:
+                    counter_level_idx = level_idx - 1
+                    counter_side = "buy"
+                    buy_price = grid_levels[level_idx - 1] if level_idx > 0 else filled_price
+                    profit_delta += int(round((filled_price - buy_price) * filled_units / ASSET_SCALE))
+                    trades_delta += 1
+                if 0 <= counter_level_idx < len(grid_levels):
+                    counter_price = int(grid_levels[counter_level_idx])
+                    existing = conn.execute(
+                        "SELECT id FROM trading_grid_orders WHERE grid_bot_id=? AND level_index=? AND status='open'",
+                        (bot_id, counter_level_idx),
+                    ).fetchone()
+                    if not existing:
+                        qty_units = filled_units if counter_side == "sell" else self._grid_quantity_units(int(bot["order_amount_points"]), counter_price)
+                        if qty_units > 0:
+                            qty_text = units_to_quantity(qty_units)
+                            try:
+                                order_result = self.place_order(
+                                    actor=bot_actor,
+                                    market_symbol=bot["market_symbol"],
+                                    side=counter_side,
+                                    order_type="limit",
+                                    quantity=qty_text,
+                                    limit_price_points=counter_price,
+                                )
+                                t_order_uuid = (order_result.get("order") or {}).get("order_uuid")
+                                grid_order_uuid = str(uuid.uuid4())
+                                conn.execute(
+                                    """
+                                    INSERT INTO trading_grid_orders
+                                      (order_uuid, grid_bot_id, user_id, level_index, price_points, side,
+                                       trading_order_uuid, status, created_at, updated_at)
+                                    VALUES (?,?,?,?,?,?,?,'open',?,?)
+                                    """,
+                                    (grid_order_uuid, bot_id, user_id, counter_level_idx, counter_price,
+                                     counter_side, t_order_uuid, now, now),
+                                )
+                                conn.commit()
+                                counter_orders_placed.append({"level_index": counter_level_idx, "side": counter_side, "price_points": counter_price})
+                            except Exception as exc:
+                                pass
+            if profit_delta or trades_delta:
+                conn.execute(
+                    "UPDATE trading_grid_bots SET total_profit_points=total_profit_points+?, total_trades=total_trades+?, last_scan_at=?, last_error=NULL, updated_at=? WHERE id=?",
+                    (profit_delta, trades_delta, now, now, bot_id),
+                )
+                conn.commit()
+            else:
+                conn.execute("UPDATE trading_grid_bots SET last_scan_at=?, updated_at=? WHERE id=?", (now, now, bot_id))
+                conn.commit()
+            return {"bot_uuid": bot["bot_uuid"], "current_price_points": current_price, "fills_processed": fills_processed, "counter_orders_placed": counter_orders_placed, "profit_delta": profit_delta}
+        finally:
+            conn.close()
+
+    # ── End Grid Trading Bot ─────────────────────────────────────────────────
 
     def _bot_trigger_hit(self, bot, observed_price):
         if str(bot["bot_type"] or "conditional") == "dca":
@@ -3132,6 +3569,71 @@ class TradingEngineService:
             pnl = context.get("pnl_percent")
             return pnl is not None and bool(context.get("has_position")) and pnl >= abs(value)
         return False
+
+    def _bot_condition_checks(self, bot, current_price):
+        checks = []
+        bot_type = str(bot.get("bot_type") or "conditional")
+        if bot_type == "dca":
+            interval = int(bot.get("interval_hours") or 24)
+            last_run = bot.get("last_run_at")
+            if last_run:
+                try:
+                    next_dt = datetime.fromisoformat(str(last_run)) + timedelta(hours=interval)
+                    met = datetime.now() >= next_dt
+                    checks.append({"label": f"距上次定投已滿 {interval}h", "met": met})
+                except Exception:
+                    checks.append({"label": f"定投間隔 {interval}h", "met": True})
+            else:
+                checks.append({"label": f"定投間隔 {interval}h（尚未執行過）", "met": True})
+            return checks
+        workflow = bot.get("workflow")
+        if workflow and isinstance(workflow, dict):
+            branches = workflow.get("branches") or []
+            if branches:
+                for i, branch in enumerate(branches):
+                    cond = branch.get("condition")
+                    if cond:
+                        ctx = {"price": float(current_price or 0)}
+                        met = self._workflow_condition_hit(cond, ctx)
+                        label = _condition_label(cond)
+                        checks.append({"label": f"分支{i + 1}: {label}", "met": met})
+                return checks
+            nodes = workflow.get("nodes") or []
+            for node in nodes:
+                if node.get("type") == "condition":
+                    cond = node.get("condition")
+                    if cond:
+                        ctx = {"price": float(current_price or 0)}
+                        met = self._workflow_condition_hit(cond, ctx)
+                        label = _condition_label(cond)
+                        checks.append({"label": f"節點 {node.get('id', '')}: {label}", "met": met})
+            if not checks:
+                checks.append({"label": "Workflow（無條件節點）", "met": True})
+            return checks
+        trigger_type = str(bot.get("trigger_type") or "always")
+        if trigger_type == "always":
+            checks.append({"label": "無條件觸發", "met": True})
+        elif trigger_type == "price_above":
+            threshold = int(bot.get("trigger_price_points") or 0)
+            met = int(current_price or 0) >= threshold
+            checks.append({"label": f"價格 ≥ {threshold} 點（現價 {int(current_price or 0)}）", "met": met})
+        elif trigger_type == "price_below":
+            threshold = int(bot.get("trigger_price_points") or 0)
+            met = int(current_price or 0) <= threshold
+            checks.append({"label": f"價格 ≤ {threshold} 點（現價 {int(current_price or 0)}）", "met": met})
+        if bot.get("run_count") is not None and bot.get("max_runs") is not None:
+            run_count = int(bot["run_count"])
+            max_runs = int(bot["max_runs"])
+            checks.append({"label": f"執行次數 {run_count}/{max_runs}", "met": run_count < max_runs})
+        cooldown = int(bot.get("cooldown_seconds") or 0)
+        if cooldown > 0 and bot.get("last_run_at"):
+            try:
+                next_dt = datetime.fromisoformat(str(bot["last_run_at"])) + timedelta(seconds=cooldown)
+                met = datetime.now() >= next_dt
+                checks.append({"label": f"冷卻 {cooldown}s（{'已解除' if met else '冷卻中'}）", "met": met})
+            except Exception:
+                pass
+        return checks
 
     def _workflow_graph_decision(self, workflow, *, context, run_count=0, last_run_at=None, execution_state=None):
         nodes = {node["id"]: node for node in workflow.get("nodes") or []}
@@ -3523,8 +4025,8 @@ class TradingEngineService:
         trigger_price = int(payload.get("trigger_price_points") or 0)
         interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
         initial_cash = cash
-        units = 0
-        avg_cost_bt = 0
+        units = int(payload.get("initial_units") or 0)
+        avg_cost_bt = int(payload.get("initial_avg_cost") or 0)
         trades = []
         equity_curve = []
         peak_value = initial_cash
@@ -3652,6 +4154,18 @@ class TradingEngineService:
                 continue
         position_value = notional_points(units, last_price) if last_price else 0
         final_value = cash + position_value
+        range_warnings = []
+        all_candles_raw = payload.get("candles") or []
+        if start_time and all_candles_raw:
+            first_raw = str(all_candles_raw[0].get("time_iso") or all_candles_raw[0].get("time") or "")
+            if first_raw and start_time < first_raw:
+                range_warnings.append(f"請求起始時間 {start_time} 早於資料最早 K 線 {first_raw}，實際回測從 {first_raw} 開始")
+        if end_time and all_candles_raw:
+            last_raw = str(all_candles_raw[-1].get("time_iso") or all_candles_raw[-1].get("time") or "")
+            if last_raw and end_time > last_raw:
+                range_warnings.append(f"請求結束時間 {end_time} 晚於資料最新 K 線 {last_raw}，實際回測至 {last_raw}")
+        if len(all_candles_raw) >= MAX_BACKTEST_CANDLES:
+            range_warnings.append(f"K 線數量達到上限 {MAX_BACKTEST_CANDLES} 根，更早的歷史資料可能未被包含")
         return {
             "ok": True,
             "strategy": strategy,
@@ -3677,6 +4191,10 @@ class TradingEngineService:
             "equity_curve": equity_curve,
             "start_time": start_time,
             "end_time": end_time,
+            "range_warnings": range_warnings,
+            "end_units": units,
+            "end_avg_cost": avg_cost_bt,
+            "end_cash_points": cash,
         }
 
     def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error="", execution_state=None):

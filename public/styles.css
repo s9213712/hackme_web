@@ -311,6 +311,139 @@
       overflow-wrap: anywhere;
     }
 
+    .trading-bot-tag {
+      display: inline-block;
+      font-size: .72rem;
+      font-weight: 400;
+      padding: .1rem .38rem;
+      border-radius: 3px;
+      background: rgba(77,125,255,.18);
+      color: #7da8ff;
+      vertical-align: middle;
+      margin-left: .25rem;
+    }
+
+    .trading-bot-conditions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .3rem;
+      margin-top: .25rem;
+    }
+    .trading-condition-met,
+    .trading-condition-unmet {
+      font-size: .76rem;
+      padding: .1rem .4rem;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+    .trading-condition-met {
+      background: rgba(46,160,67,.15);
+      color: #3fb950;
+    }
+    .trading-condition-unmet {
+      background: rgba(248,81,73,.15);
+      color: #f85149;
+    }
+
+    .trading-backtest-warning {
+      padding: .4rem .7rem;
+      background: rgba(230,168,23,.12);
+      color: #e6a817;
+      border-left: 3px solid #e6a817;
+      border-radius: 4px;
+      font-size: .86rem;
+      margin-bottom: .3rem;
+    }
+
+    /* Grid Trading Bot */
+    .grid-bot-card {
+      align-items: flex-start;
+    }
+    .grid-status-badge {
+      font-size: .72rem;
+      padding: .1rem .4rem;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+    .grid-status-running {
+      background: rgba(46,160,67,.15);
+      color: #3fb950;
+    }
+    .grid-status-stopped {
+      background: rgba(139,148,158,.15);
+      color: #8b949e;
+    }
+    .grid-buy-count { color: #3fb950; font-weight: 600; }
+    .grid-sell-count { color: #f85149; font-weight: 600; }
+    .grid-visual-details {
+      margin-top: .5rem;
+    }
+    .grid-visual-details summary {
+      list-style: none;
+    }
+    .grid-visual-details summary::-webkit-details-marker { display: none; }
+    .grid-visual {
+      margin-top: .4rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 6px;
+      overflow: hidden;
+      font-size: .8rem;
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .grid-level-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      gap: .5rem;
+      align-items: center;
+      padding: .25rem .6rem;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+    }
+    .grid-level-row:last-child { border-bottom: none; }
+    .grid-level-buy {
+      background: rgba(46,160,67,.08);
+    }
+    .grid-level-sell {
+      background: rgba(248,81,73,.08);
+    }
+    .grid-level-filled {
+      background: rgba(125,168,255,.07);
+    }
+    .grid-level-cancelled {
+      opacity: .45;
+    }
+    .grid-level-empty {
+      opacity: .55;
+    }
+    .grid-current-price-row {
+      outline: 1px solid rgba(230,168,23,.4);
+    }
+    .grid-level-price {
+      font-family: monospace;
+      font-size: .82rem;
+    }
+    .grid-level-side {
+      font-size: .72rem;
+      font-weight: 600;
+      min-width: 4rem;
+      text-align: right;
+    }
+    .grid-level-buy .grid-level-side { color: #3fb950; }
+    .grid-level-sell .grid-level-side { color: #f85149; }
+    .grid-level-filled .grid-level-side { color: #7da8ff; }
+    .grid-level-status {
+      font-size: .72rem;
+      color: var(--muted);
+      min-width: 5rem;
+      text-align: right;
+    }
+    .grid-current-price-mark {
+      font-size: .7rem;
+      color: #e6a817;
+      white-space: nowrap;
+    }
+    /* End Grid Trading Bot */
+
     .sidebar-toggle {
       display: inline-grid;
       place-items: center;
@@ -1933,7 +2066,7 @@
     }
 
     .drive-gallery-grid.album-thumb-large {
-      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
     }
 
     .drive-gallery-tile {
@@ -2016,8 +2149,8 @@
       font-size: .68rem;
     }
 
-    .album-thumb-large .drive-gallery-thumb {
-      aspect-ratio: 16 / 10;
+    .album-thumb-large .drive-gallery-tile {
+      min-height: 180px;
     }
 
     .chat-friend-panel {
@@ -3741,6 +3874,30 @@
     .tetris-board .single-game-placeholder {
       grid-column: 1 / -1;
       grid-row: 1 / -1;
+    }
+    .single-game-over-overlay {
+      grid-column: 1 / -1;
+      grid-row: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7,17,31,.72);
+      color: #ff4f6d;
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-align: center;
+      border-radius: 6px;
+      z-index: 2;
+    }
+    .single-game-over-overlay small {
+      display: block;
+      margin-top: .35rem;
+      font-size: .8rem;
+      font-weight: 400;
+      color: rgba(214,226,240,.85);
+      letter-spacing: 0;
     }
     .tetris-cell {
       min-width: 0;
