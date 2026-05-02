@@ -52,6 +52,47 @@ def test_upload_security_schema_seeds_file_type_policies():
         conn.close()
 
 
+def test_upload_security_schema_migrates_old_file_type_policy_columns():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+        conn.execute(
+            """
+            CREATE TABLE file_type_policies (
+                category TEXT PRIMARY KEY,
+                extensions_json TEXT NOT NULL,
+                public_allowed INTEGER NOT NULL,
+                private_scannable_allowed INTEGER NOT NULL,
+                e2ee_allowed INTEGER NOT NULL,
+                default_risk_level TEXT NOT NULL,
+                allow_public_share INTEGER NOT NULL,
+                requires_scan INTEGER NOT NULL,
+                warn_on_download INTEGER NOT NULL,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO file_type_policies (
+                category, extensions_json, public_allowed, private_scannable_allowed,
+                e2ee_allowed, default_risk_level, allow_public_share, requires_scan,
+                warn_on_download, notes, created_at, updated_at
+            ) VALUES ('default', '[]', 1, 0, 1, 'low', 1, 1, 0, '', '2026-01-01', '2026-01-01')
+            """
+        )
+        ensure_upload_security_schema(conn)
+        row = conn.execute("SELECT * FROM file_type_policies WHERE category='default'").fetchone()
+        assert row["server_readable_allowed"] == 0
+        decision = evaluate_upload_policy(conn, filename="note.txt", privacy_mode="server_encrypted", user={"effective_level": "vip"})
+        assert decision.allowed is False
+    finally:
+        conn.close()
+
+
 def test_cloud_drive_security_policy_defaults_are_safe():
     conn = _conn()
     try:
@@ -159,7 +200,7 @@ def test_newbie_cannot_upload_archive_even_when_archive_policy_allows_others():
         conn.close()
 
 
-def test_e2ee_record_does_not_store_plaintext_filename_or_file_key():
+def test_e2ee_record_preserves_display_filename_but_not_file_key():
     conn = _conn()
     try:
         result = create_uploaded_file_record(
@@ -178,10 +219,10 @@ def test_e2ee_record_does_not_store_plaintext_filename_or_file_key():
         key_row = conn.execute("SELECT * FROM encrypted_file_keys WHERE file_id=?", (result["file_id"],)).fetchone()
         assert row["risk_level"] == "unknown_encrypted"
         assert row["scan_status"] == "unknown_encrypted"
-        assert row["original_filename_plain_for_public"] is None
+        assert row["original_filename_plain_for_public"] == "secret-tax.pdf"
         assert row["plaintext_sha256"] is None
         assert key_row["encrypted_file_key"] == "sealed:file-key"
-        assert "secret-tax.pdf" not in str(dict(row))
+        assert "sealed:file-key" not in str(dict(row))
     finally:
         conn.close()
 

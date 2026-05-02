@@ -366,6 +366,12 @@ def register_file_routes(app, deps):
             except Exception:
                 pass
 
+    class _MemoryFileStorage:
+        def __init__(self, *, filename, mimetype, data):
+            self.filename = filename
+            self.mimetype = mimetype
+            self.stream = BytesIO(data)
+
     def _task_update(task_id, **changes):
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
@@ -609,7 +615,8 @@ def register_file_routes(app, deps):
                     conn.rollback()
                     _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
                     return
-            source_label = "BT 下載" if source_type == "torrent_file" or str(task.get("url") or "").startswith("magnet:?") else "遠端下載"
+            task_url = str(task.get("url") or "")
+            source_label = "BT 下載" if source_type == "torrent_file" or task_url.startswith("magnet:?") or task_url.lower().split("?", 1)[0].endswith(".torrent") else "遠端下載"
             create_notification_if_enabled(
                 conn,
                 user_id=owner_user_id,
@@ -2019,6 +2026,70 @@ def register_file_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/cloud-drive/files/text", methods=["POST"])
+    @require_csrf
+    def cloud_drive_create_text_file():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        raw_name = str(data.get("filename") or "untitled.txt").strip() or "untitled.txt"
+        filename = safe_public_filename(raw_name)
+        lower_name = filename.lower()
+        _, ext = os.path.splitext(lower_name)
+        if ext and ext not in {".txt", ".md", ".markdown"}:
+            return json_resp({"ok": False, "msg": "新增文檔只支援 .txt、.md，或不帶副檔名的純文字檔"}), 400
+        content = data.get("content", "")
+        if not isinstance(content, str):
+            return json_resp({"ok": False, "msg": "content 必須是文字"}), 400
+        raw = content.encode("utf-8")
+        if len(raw) > 512 * 1024:
+            return json_resp({"ok": False, "msg": "新增文檔目前限制 512KB 以內"}), 400
+        privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
+        if privacy_mode not in {"standard_plain", "server_encrypted"}:
+            return json_resp({"ok": False, "msg": "線上新增文檔只支援一般檔案或伺服器端加密；E2EE 請用上傳檔案"}), 400
+        mimetype = "text/markdown" if lower_name.endswith((".md", ".markdown")) else "text/plain"
+        file_storage = _MemoryFileStorage(filename=filename, mimetype=mimetype, data=raw)
+        conn = get_db()
+        try:
+            ensure_cloud_drive_attachment_schema(conn)
+            rule = get_member_level_rule(conn, _actor_value(actor, "effective_level") or _actor_value(actor, "member_level"))
+            try:
+                result, msg = store_cloud_upload(
+                    conn,
+                    actor=actor,
+                    member_rule=rule,
+                    storage_root=storage_root,
+                    file_storage=file_storage,
+                    privacy_mode=privacy_mode,
+                    scan_now=True,
+                    server_file_fernet=server_file_fernet,
+                )
+            except ValueError as exc:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": f"新增文檔失敗：{str(exc) or exc.__class__.__name__}", "error_code": exc.__class__.__name__}), 400
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            create_notification_if_enabled(
+                conn,
+                user_id=_actor_value(actor, "id"),
+                type="cloud_drive_upload_completed",
+                title="雲端文檔已建立",
+                body=f"文檔「{filename}」已建立。",
+                link="/drive",
+            )
+            conn.commit()
+            audit("CLOUD_DRIVE_TEXT_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={result['file_id']},filename={filename}")
+            return json_resp({"ok": True, "file": {**result, "filename": filename}})
+        finally:
+            conn.close()
+
     @app.route("/api/cloud-drive/remote-download/capabilities", methods=["GET"])
     @require_csrf_safe
     def cloud_drive_remote_download_capabilities():
@@ -2076,7 +2147,7 @@ def register_file_routes(app, deps):
             "actor": actor_snapshot,
             "privacy_mode": privacy_mode,
             "virtual_path": virtual_path,
-            "timeout_seconds": 1800 if url.startswith("magnet:?") else 120,
+            "timeout_seconds": 1800 if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else 120,
             "loaded_bytes": 0,
             "total_bytes": None,
             "progress_percent": 0,
@@ -2204,7 +2275,7 @@ def register_file_routes(app, deps):
         url = str(data.get("url") or "").strip()
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         virtual_path = str(data.get("virtual_path") or "").strip()
-        timeout_seconds = 1800 if url.startswith("magnet:?") else 120
+        timeout_seconds = 1800 if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else 120
 
         conn = None
         downloaded = None
@@ -2258,7 +2329,7 @@ def register_file_routes(app, deps):
                 if msg:
                     conn.rollback()
                     return json_resp({"ok": False, "msg": msg}), 400
-            source_label = "BT 下載" if url.startswith("magnet:?") else "遠端下載"
+            source_label = "BT 下載" if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else "遠端下載"
             create_notification_if_enabled(
                 conn,
                 user_id=_actor_value(actor, "id"),
@@ -2475,13 +2546,23 @@ def register_file_routes(app, deps):
                 if reason == "deleted":
                     return json_resp({"ok": False, "msg": "找不到檔案"}), 404
                 return json_resp({"ok": False, "msg": "沒有預覽權限或檔案尚未通過安全檢查", "reason": reason}), 403
+            path = resolve_file_storage_path(storage_root, row)
+            if not path.exists():
+                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
+            if is_e2ee_file(row):
+                log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="e2ee_preview_ciphertext", result="allowed", reason=reason, ip=get_client_ip(), user_agent=get_ua())
+                conn.commit()
+                return send_file(
+                    path,
+                    as_attachment=False,
+                    download_name=row["original_filename_plain_for_public"] or "e2ee.bin",
+                    mimetype="application/octet-stream",
+                    conditional=True,
+                )
             policy = get_cloud_drive_security_policy(conn)
             ok, msg = _preview_allowed_by_policy(policy, row)
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), 403
-            path = resolve_file_storage_path(storage_root, row)
-            if not path.exists():
-                return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             readable_path, _ = _readable_file_path(row)
             preview_row = _preview_row_with_storage_fallback(conn, actor, row)
             category, mime_type = preview_category(preview_row)
@@ -2879,9 +2960,9 @@ def register_file_routes(app, deps):
                         "stored_at_rest": "encrypted",
                         "e2ee": True,
                         "best_for": "高度私密檔案，只需要保存與本人下載解密，不依賴伺服器預覽。",
-                        "preview": "伺服器不能預覽明文；下載後由瀏覽器用本機金鑰解密。",
-                        "download": "下載時瀏覽器會嘗試用本機金鑰解密；換瀏覽器或清除本機金鑰後可能無法解密。",
-                        "warning": "站方無法讀取內容，也無法完整掃毒；遺失本機 vault key 可能無法救回，本機掃描回報也不可完全信任。",
+                        "preview": "伺服器不能預覽明文；下載後由瀏覽器用使用者輸入的 E2EE 密碼解密。",
+                        "download": "下載時輸入上傳時設定的 E2EE 密碼；換電腦仍可解密，但忘記密碼無法救回。",
+                        "warning": "站方無法讀取內容，也無法完整掃毒；遺失 E2EE 密碼無法救回，本機掃描回報也不可完全信任。",
                     },
                 },
                 "policy": policy,

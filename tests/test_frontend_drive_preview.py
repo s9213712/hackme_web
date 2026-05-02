@@ -21,8 +21,10 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "function renderDriveArchiveEntries(entries)" in drive_js
     assert '".7z", ".rar", ".tar", ".gz"' in drive_js
     assert "closeDrivePreview()" in drive_js
-    assert 'data-drive-action="preview" data-file-id="${sanitize(file.id)}"' in drive_js
-    assert 'data-drive-action="preview" data-file-id="${sanitize(file.file_id)}"' in drive_js
+    assert "async function previewDriveE2eeFile(fileId)" in drive_js
+    assert "decryptDriveE2eeFileForSession" in drive_js
+    assert "driveE2eeSessionPassphrases" in drive_js
+    assert "clearDriveE2eeSessionPassphrases" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
     assert 'preview.category === "video"' in drive_js
     assert 'preview.category === "audio"' in drive_js
@@ -41,12 +43,14 @@ def test_filemanager_and_albummanager_ui_are_wired():
 
     assert 'id="storage-upload-file"' in index_html
     assert 'id="storage-folder-upload-btn"' in index_html
+    assert 'id="drive-remote-download-btn"' in index_html
+    assert 'id="drive-remote-torrent-inline-btn"' in index_html
     assert 'id="storage-upload-folder"' in index_html
     assert "webkitdirectory" in index_html
     assert 'id="storage-folder-path"' in index_html
-    assert 'id="storage-folder-list"' in index_html
+    assert 'id="storage-browser-list"' in index_html
     assert 'id="storage-organize-path"' in index_html
-    assert 'id="storage-file-list"' in index_html
+    assert 'id="storage-file-list"' not in index_html
     assert 'id="storage-trash-list"' in index_html
     assert 'id="album-create-title"' in index_html
     assert 'id="album-create-description"' in index_html
@@ -99,6 +103,8 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'storageFolderUploadBtn.addEventListener("click", openStorageFolderUploadPicker)' in bootstrap_js
     assert 'storageUploadFile.addEventListener("change", uploadStorageFile)' in bootstrap_js
     assert 'storageUploadFolder.addEventListener("change", uploadStorageFolder)' in bootstrap_js
+    assert 'driveRemoteDownloadBtn.addEventListener("click", promptRemoteDriveDownloadUrl)' in bootstrap_js
+    assert 'driveRemoteTorrentFile.addEventListener("change", () => startRemoteDriveDownload({ source: "torrent"' in bootstrap_js
     assert 'storageFolderCreateBtn.addEventListener("click", createStorageFolder)' in bootstrap_js
     assert 'storageFolderMoveBtn.addEventListener("click", moveStorageFolder)' in bootstrap_js
     assert 'albumCreateBtn.addEventListener("click", createAlbum)' in bootstrap_js
@@ -161,7 +167,11 @@ def test_album_viewer_has_dedicated_module():
     assert "driveTransferRows" in drive_js
     assert "xhrUploadWithProgress" in drive_js
     assert "/cloud-drive/remote-download/tasks" in drive_js
+    assert "function classifyRemoteDownloadInput(rawUrl)" in drive_js
+    assert "function promptRemoteDriveDownloadUrl()" in drive_js
+    assert "function openRemoteTorrentPicker()" in drive_js
     assert 'id="drive-remote-torrent-file"' in index_html
+    assert 'id="drive-remote-torrent-btn"' in index_html
     assert "/cloud-drive/remote-download/torrent-tasks" in drive_js
     assert "FormData" in drive_js
     assert "async function loadAlbumGallery()" in drive_js
@@ -255,10 +265,16 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "三種模式怎麼選" in index_html
     assert "非 E2EE 會讓伺服器取得明文" in index_html
     assert "E2EE 上傳時附本機掃描回報" in index_html
+    assert "新增文檔" in index_html
+    assert 'data-drive-action="create-text-document"' in index_html
     assert "drivePrivacyModeLabel(file.privacy_mode)" in drive_js
     assert "DRIVE_PRIVACY_MODE_COMPARISON" in drive_js
     assert "伺服器端加密" in drive_js
     assert "站方無法讀取" in drive_js
+    assert "driveRenderTextPreview" in drive_js
+    assert "driveHighlightCode" in drive_js
+    assert "需密碼預覽" in drive_js
+    assert "解密預覽" in drive_js
     assert "root 上限：儲存磁碟可用空間 90%" in drive_js
     assert "manager 上限：1 GB" in drive_js
     assert "warning_active" in drive_js
@@ -306,8 +322,10 @@ def test_core_api_fetch_refreshes_csrf_once():
 def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
 
-    assert "async function prepareDriveE2eeUpload(file, includeClientScanReport = false)" in drive_js
+    assert "async function prepareDriveE2eeUpload(file, passphrase, includeClientScanReport = false)" in drive_js
     assert "window.crypto.subtle.generateKey" in drive_js
+    assert "deriveDriveE2eePassphraseKey" in drive_js
+    assert "PBKDF2" in drive_js
     assert "encrypted_file_key" in drive_js
     assert 'form.append("encrypted_file_key", encrypted.encrypted_file_key)' in drive_js
     assert 'form.append("encrypted_metadata", encrypted.encrypted_metadata)' in drive_js
@@ -316,17 +334,24 @@ def test_cloud_drive_e2ee_upload_prepares_required_crypto_fields():
     assert 'form.append("encryption_version", encrypted.encryption_version)' in drive_js
     assert 'form.append("nonce", encrypted.nonce)' in drive_js
     assert 'form.append("file", encrypted.blob, encrypted.filename)' in drive_js
-    assert "browser_local_vault_key" in drive_js
+    assert 'const originalName = file.name || "未命名檔案";' in drive_js
+    assert "filename: originalName" in drive_js
+    assert "vault.bin" not in drive_js
+    assert "browser_passphrase_pbkdf2_v2" in drive_js
+    assert "localStorage.getItem(DRIVE_E2EE" not in drive_js
     assert "此瀏覽器不支援端到端加密上傳" in drive_js
 
 
 def test_cloud_drive_e2ee_download_decrypts_in_browser():
     drive_js = (ROOT / "public" / "js" / "35-drive.js").read_text(encoding="utf-8")
 
-    assert "async function unwrapDriveFileKey(encryptedFileKey)" in drive_js
-    assert "async function decryptDriveE2eeBlob(blob, e2ee)" in drive_js
+    assert "async function unwrapDriveFileKey(encryptedFileKey, passphrase)" in drive_js
+    assert "async function decryptDriveE2eeBlob(blob, e2ee, passphrase)" in drive_js
     assert "/e2ee-key" in drive_js
-    assert "const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee);" in drive_js
+    assert "/preview/content" in drive_js
+    assert "askDriveE2eePassphrase" in drive_js
+    assert "getDriveE2eeSessionPassphrase" in drive_js
+    assert "const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);" in drive_js
     assert "outputBlob = decrypted.blob" in drive_js
     assert "name = decrypted.filename || name" in drive_js
-    assert "原本的本地 vault key 已不存在" in drive_js
+    assert "伺服器無法重設或找回此密碼" in drive_js

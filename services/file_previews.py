@@ -6,7 +6,8 @@ from pathlib import Path
 
 TEXT_EXTENSIONS = {
     ".css", ".csv", ".htm", ".html", ".ini", ".js", ".json", ".log", ".md",
-    ".py", ".sql", ".text", ".toml", ".txt", ".xml", ".yaml", ".yml",
+    ".c", ".cc", ".cpp", ".cs", ".go", ".java", ".jsx", ".php", ".py", ".rs",
+    ".sh", ".sql", ".text", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
 }
 AUDIO_EXTENSIONS = {
     ".aac", ".aif", ".aiff", ".amr", ".flac", ".m4a", ".mid", ".midi",
@@ -62,7 +63,7 @@ def preview_category(row):
         return "pdf", "application/pdf"
     if ext in ARCHIVE_EXTENSIONS:
         return "archive", mime
-    if mime.startswith("text/") or ext in TEXT_EXTENSIONS:
+    if mime.startswith("text/") or ext in TEXT_EXTENSIONS or not ext:
         return "text", mime if mime != "application/octet-stream" else "text/plain"
     return "metadata", mime
 

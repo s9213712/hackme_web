@@ -184,6 +184,8 @@ def validate_remote_url(raw_url):
         raise RemoteDownloadError("只支援 http、https direct link 或 magnet link")
     if not _host_is_public(parsed.hostname):
         raise RemoteDownloadError("下載網址不可指向 localhost、內網或保留位址")
+    if parsed.path.lower().endswith(".torrent"):
+        return {"kind": "torrent_url", "url": url}
     return {"kind": "direct", "url": url}
 
 
@@ -454,4 +456,25 @@ def download_remote_url(url, *, timeout_seconds=120, max_bytes=None, progress_ca
     parsed = validate_remote_url(url)
     if parsed["kind"] == "magnet":
         return download_magnet_with_aria2(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback)
+    if parsed["kind"] == "torrent_url":
+        torrent_limit = 2 * 1024 * 1024
+        if max_bytes is not None:
+            torrent_limit = min(torrent_limit, int(max_bytes))
+        torrent_file = download_direct_link(
+            parsed["url"],
+            timeout_seconds=min(int(timeout_seconds or 120), 120),
+            max_bytes=torrent_limit,
+            progress_callback=progress_callback,
+        )
+        try:
+            return download_torrent_file_with_aria2(
+                torrent_file.path,
+                display_name=torrent_file.filename,
+                timeout_seconds=timeout_seconds,
+                max_bytes=max_bytes,
+                progress_callback=progress_callback,
+            )
+        finally:
+            if torrent_file.cleanup_dir:
+                shutil.rmtree(torrent_file.cleanup_dir, ignore_errors=True)
     return download_direct_link(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback)

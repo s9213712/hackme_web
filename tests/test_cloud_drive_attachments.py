@@ -126,7 +126,7 @@ def test_privacy_modes_explain_server_readability_and_e2ee_tradeoffs(tmp_path):
     assert "不是端到端加密" in modes["server_encrypted"]["warning"]
     assert modes["e2ee"]["server_can_read"] is False
     assert modes["e2ee"]["stored_at_rest"] == "encrypted"
-    assert "vault key" in modes["e2ee"]["warning"]
+    assert "E2EE 密碼" in modes["e2ee"]["warning"]
 
 
 def test_storage_upgrade_catalog_falls_back_when_points_schema_is_locked(tmp_path):
@@ -843,10 +843,10 @@ def test_cloud_drive_pdf_preview_content_and_e2ee_denied(tmp_path):
             "privacy_mode": "e2ee",
             "encrypted_metadata": "sealed:metadata",
             "encrypted_file_key": "sealed:owner-key",
-            "wrapped_by": "browser_local_vault_key",
+            "wrapped_by": "browser_passphrase_pbkdf2_v2",
             "ciphertext_sha256": "a" * 64,
             "encryption_algorithm": "AES-GCM",
-            "encryption_version": "browser-local-v1",
+            "encryption_version": "browser-passphrase-v2",
             "nonce": "nonce",
         },
         content_type="multipart/form-data",
@@ -856,6 +856,10 @@ def test_cloud_drive_pdf_preview_content_and_e2ee_denied(tmp_path):
     denied = client.get(f"/api/cloud-drive/files/{encrypted_file_id}/preview")
     assert denied.status_code == 403
     assert "E2EE" in denied.get_json()["msg"]
+    encrypted_content = client.get(f"/api/cloud-drive/files/{encrypted_file_id}/preview/content")
+    assert encrypted_content.status_code == 200
+    assert encrypted_content.data == pdf_bytes
+    assert encrypted_content.mimetype == "application/octet-stream"
 
 
 def test_cloud_drive_text_file_can_be_edited_online(tmp_path):
@@ -884,6 +888,29 @@ def test_cloud_drive_text_file_can_be_edited_online(tmp_path):
     actor_box["actor"] = _actor(2, "bob")
     denied = client.put(f"/api/cloud-drive/files/{file_id}/text", json={"content": "take over"})
     assert denied.status_code == 403
+
+
+def test_cloud_drive_can_create_text_document_and_preview_extensionless_file(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    created = client.post(
+        "/api/cloud-drive/files/text",
+        json={"filename": "notes", "content": "# hello\nbody", "privacy_mode": "standard_plain"},
+    )
+    assert created.status_code == 200
+    file_id = created.get_json()["file"]["file_id"]
+    preview = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert preview.status_code == 200
+    body = preview.get_json()["preview"]
+    assert body["filename"] == "notes"
+    assert body["render_mode"] == "text"
+    assert body["mime_type"] == "text/plain"
+    assert "# hello" in body["text"]
 
 
 def test_cloud_drive_delete_file_from_ui_api_invalidates_download(tmp_path):
@@ -1317,10 +1344,10 @@ def test_e2ee_key_endpoint_returns_only_recipient_key(tmp_path):
             "privacy_mode": "e2ee",
             "encrypted_metadata": "sealed:metadata",
             "encrypted_file_key": "sealed:owner-key",
-            "wrapped_by": "browser_local_vault_key",
+            "wrapped_by": "browser_passphrase_pbkdf2_v2",
             "ciphertext_sha256": "a" * 64,
             "encryption_algorithm": "AES-GCM",
-            "encryption_version": "browser-local-v1",
+            "encryption_version": "browser-passphrase-v2",
             "nonce": "nonce",
         },
         content_type="multipart/form-data",
@@ -1334,7 +1361,7 @@ def test_e2ee_key_endpoint_returns_only_recipient_key(tmp_path):
     assert body["ok"] is True
     assert body["e2ee"]["encrypted_file_key"] == "sealed:owner-key"
     assert body["e2ee"]["encrypted_metadata"] == "sealed:metadata"
-    assert body["e2ee"]["wrapped_by"] == "browser_local_vault_key"
+    assert body["e2ee"]["wrapped_by"] == "browser_passphrase_pbkdf2_v2"
 
     actor_box["actor"] = _actor(3, "mallory")
     denied = client.get(f"/api/cloud-drive/files/{file_id}/e2ee-key")

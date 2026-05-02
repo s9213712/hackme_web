@@ -1182,6 +1182,7 @@ function resetAuthState() {
   stopInactivityTimer();
   stopChatPoll();
   if (typeof stopNotificationPoll === "function") stopNotificationPoll();
+  if (typeof clearDriveE2eeSessionPassphrases === "function") clearDriveE2eeSessionPassphrases();
   hideUserEditDialog();
   const welcomeMsg = $("welcome-msg");
   if (welcomeMsg) {

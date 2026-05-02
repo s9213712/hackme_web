@@ -2083,8 +2083,63 @@
       font-size: .78rem;
     }
 
+    .drive-code-preview {
+      white-space: pre;
+      line-height: 1.55;
+    }
+
+    .drive-code-keyword {
+      color: #7dd3fc;
+      font-weight: 700;
+    }
+
+    .drive-code-string {
+      color: #bef264;
+    }
+
+    .drive-code-number,
+    .drive-code-literal {
+      color: #fbbf24;
+    }
+
+    .drive-code-key {
+      color: #c4b5fd;
+      font-weight: 600;
+    }
+
+    .drive-markdown-preview {
+      max-height: 360px;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 10px;
+      background: rgba(255,255,255,.045);
+      padding: .85rem;
+      line-height: 1.65;
+    }
+
+    .drive-markdown-preview h1,
+    .drive-markdown-preview h2,
+    .drive-markdown-preview h3 {
+      margin: .2rem 0 .5rem;
+      font-size: 1rem;
+    }
+
+    .drive-markdown-preview code {
+      padding: .1rem .25rem;
+      border-radius: 6px;
+      background: rgba(0,0,0,.28);
+    }
+
+    .drive-source-details summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: .82rem;
+      margin-bottom: .45rem;
+    }
+
     .album-full-preview-body .drive-preview-text,
-    .album-full-preview-body .drive-preview-archive {
+    .album-full-preview-body .drive-preview-archive,
+    .album-full-preview-body .drive-markdown-preview {
       width: min(96vw, 1180px);
       max-height: 82vh;
     }
@@ -3026,6 +3081,18 @@
     .user-edit-modal textarea {
       max-width: 100%;
       min-width: 0;
+    }
+
+    .drive-new-doc-modal {
+      width: min(760px, calc(100vw - 2.4rem));
+    }
+
+    .drive-new-doc-modal textarea {
+      min-height: 220px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .86rem;
+      line-height: 1.5;
     }
 
     .edit-user-actions {

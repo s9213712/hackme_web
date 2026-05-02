@@ -7,10 +7,13 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**目前 Release ID：`2026.05.01-037`**
+**目前 Release ID：`2026.05.01-038`**
 
 `hackme_web` 是一個以安全性為核心的 Flask Web 應用，用來研究認證、
 RBAC、moderation workflow、審計能力與單機服務防護。
+
+`2026.05.01-038` 版新增瀏覽器端 E2EE 預覽、整合雲端硬碟檔案工具列，
+並改善 direct link / BT 遠端下載判斷與入口。
 
 `2026.05.01-037` 版新增 root 專用的一鍵處理異常 PointsChain、整理伺服器
 健康度儀表板，並同步更新功能 smoke、越權滲透、交易壓力測試與 pre-push

@@ -46,7 +46,9 @@ const DRIVE_PRIVACY_MODE_COMPARISON = [
   },
 ];
 
-const DRIVE_E2EE_KEY_STORAGE = "hackme_drive_e2ee_key_v1";
+const DRIVE_E2EE_PASSPHRASE_WRAPPER = "browser_passphrase_pbkdf2_v2";
+const DRIVE_E2EE_PBKDF2_ITERATIONS = 310000;
+const driveE2eeSessionPassphrases = new Map();
 const ATTACHMENT_FILE_SELECT_IDS = [
   "chat-attachment-existing-file-id",
   "dm-attachment-existing-file-id",
@@ -194,22 +196,77 @@ function driveRandomNonce(length = 12) {
   return nonce;
 }
 
-async function getDriveE2eeVaultKey() {
+function driveE2eeModeSelected() {
+  return isDriveE2eeMode($("drive-upload-privacy-mode")?.value || "");
+}
+
+function updateDriveE2eePassphraseVisibility() {
+  const field = $("drive-e2ee-passphrase-field");
+  const clientScan = $("drive-upload-client-scan-report");
+  const isE2ee = driveE2eeModeSelected();
+  if (field) field.style.display = isE2ee ? "" : "none";
+  if (clientScan) clientScan.closest?.("label")?.classList.toggle("muted", !isE2ee);
+}
+
+function getDriveE2eeUploadPassphrase() {
+  const passphrase = $("drive-e2ee-passphrase")?.value || "";
+  const confirm = $("drive-e2ee-passphrase-confirm")?.value || "";
+  if (!passphrase) throw new Error("請輸入 E2EE 檔案加密密碼");
+  if (passphrase.length < 10) throw new Error("E2EE 檔案加密密碼至少 10 個字元");
+  if (passphrase !== confirm) throw new Error("兩次輸入的 E2EE 檔案加密密碼不一致");
+  return passphrase;
+}
+
+function clearDriveE2eeUploadPassphrase() {
+  if ($("drive-e2ee-passphrase")) $("drive-e2ee-passphrase").value = "";
+  if ($("drive-e2ee-passphrase-confirm")) $("drive-e2ee-passphrase-confirm").value = "";
+}
+
+function driveE2eeSessionKey(fileId) {
+  return `${currentUserId || "anon"}:${String(fileId || "")}`;
+}
+
+function clearDriveE2eeSessionPassphrases() {
+  driveE2eeSessionPassphrases.clear();
+}
+
+function forgetDriveE2eeSessionPassphrase(fileId) {
+  driveE2eeSessionPassphrases.delete(driveE2eeSessionKey(fileId));
+}
+
+async function getDriveE2eeSessionPassphrase(fileId, promptText, { force = false } = {}) {
+  const key = driveE2eeSessionKey(fileId);
+  if (!force && driveE2eeSessionPassphrases.has(key)) {
+    return driveE2eeSessionPassphrases.get(key);
+  }
+  const passphrase = await askDriveE2eePassphrase(promptText);
+  if (passphrase) driveE2eeSessionPassphrases.set(key, passphrase);
+  return passphrase || "";
+}
+
+async function deriveDriveE2eePassphraseKey(passphrase, salt, iterations = DRIVE_E2EE_PBKDF2_ITERATIONS) {
   if (!window.crypto?.subtle) {
     throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
   }
-  const existing = localStorage.getItem(DRIVE_E2EE_KEY_STORAGE);
-  if (existing) {
-    try {
-      return await window.crypto.subtle.importKey("jwk", JSON.parse(existing), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
-    } catch (err) {
-      localStorage.removeItem(DRIVE_E2EE_KEY_STORAGE);
-    }
-  }
-  const key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-  const jwk = await window.crypto.subtle.exportKey("jwk", key);
-  localStorage.setItem(DRIVE_E2EE_KEY_STORAGE, JSON.stringify(jwk));
-  return key;
+  const material = await window.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase || ""),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt: salt instanceof Uint8Array ? salt : driveBase64ToBytes(salt),
+      iterations: Math.max(100000, Number(iterations || DRIVE_E2EE_PBKDF2_ITERATIONS)),
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
 }
 
 async function encryptDriveJsonMetadata(fileKey, payload) {
@@ -224,29 +281,33 @@ async function encryptDriveJsonMetadata(fileKey, payload) {
   });
 }
 
-async function wrapDriveFileKey(fileKey) {
-  const vaultKey = await getDriveE2eeVaultKey();
+async function wrapDriveFileKey(fileKey, passphrase) {
   const rawKey = await window.crypto.subtle.exportKey("raw", fileKey);
+  const salt = driveRandomNonce(16);
   const nonce = driveRandomNonce();
-  const wrapped = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, vaultKey, rawKey);
+  const wrappingKey = await deriveDriveE2eePassphraseKey(passphrase, salt);
+  const wrapped = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, wrappingKey, rawKey);
   return JSON.stringify({
     alg: "AES-GCM",
-    v: 1,
-    wrapped_by: "browser_local_vault_key",
+    v: 2,
+    wrapped_by: DRIVE_E2EE_PASSPHRASE_WRAPPER,
+    kdf: "PBKDF2-SHA256",
+    iterations: DRIVE_E2EE_PBKDF2_ITERATIONS,
+    salt: driveBytesToBase64(salt),
     nonce: driveBytesToBase64(nonce),
     ciphertext: driveBytesToBase64(wrapped),
   });
 }
 
-async function unwrapDriveFileKey(encryptedFileKey) {
+async function unwrapDriveFileKey(encryptedFileKey, passphrase) {
   const envelope = JSON.parse(encryptedFileKey || "{}");
-  if (envelope.wrapped_by !== "browser_local_vault_key") {
-    throw new Error("此檔案使用不同金鑰包裝方式，這個瀏覽器目前無法解密。");
+  if (envelope.wrapped_by !== DRIVE_E2EE_PASSPHRASE_WRAPPER || !envelope.salt) {
+    throw new Error("此檔案使用舊版本機 vault key 包裝，無法用密碼解密；請重新上傳為新版 E2EE。");
   }
-  const vaultKey = await getDriveE2eeVaultKey();
+  const wrappingKey = await deriveDriveE2eePassphraseKey(passphrase, envelope.salt, envelope.iterations);
   const rawKey = await window.crypto.subtle.decrypt(
     { name: "AES-GCM", iv: driveBase64ToBytes(envelope.nonce) },
-    vaultKey,
+    wrappingKey,
     driveBase64ToBytes(envelope.ciphertext)
   );
   return window.crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
@@ -263,8 +324,8 @@ async function decryptDriveJsonMetadata(fileKey, encryptedMetadata) {
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
 
-async function decryptDriveE2eeBlob(blob, e2ee) {
-  const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key);
+async function decryptDriveE2eeBlob(blob, e2ee, passphrase) {
+  const fileKey = await unwrapDriveFileKey(e2ee.encrypted_file_key, passphrase);
   const plaintext = await window.crypto.subtle.decrypt(
     { name: "AES-GCM", iv: driveBase64ToBytes(e2ee.nonce) },
     fileKey,
@@ -277,32 +338,33 @@ async function decryptDriveE2eeBlob(blob, e2ee) {
   };
 }
 
-async function prepareDriveE2eeUpload(file, includeClientScanReport = false) {
+async function prepareDriveE2eeUpload(file, passphrase, includeClientScanReport = false) {
   if (!window.crypto?.subtle) {
     throw new Error("此瀏覽器不支援端到端加密上傳，請改用私密檔案或換用支援 WebCrypto 的瀏覽器。");
   }
+  const originalName = file.name || "未命名檔案";
   const plaintext = await file.arrayBuffer();
   const fileKey = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
   const nonce = driveRandomNonce();
   const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, fileKey, plaintext);
   const encryptedBlob = new Blob([ciphertext], { type: "application/octet-stream" });
   const encryptedMetadata = await encryptDriveJsonMetadata(fileKey, {
-    filename: file.name,
+    filename: originalName,
     mime_type: file.type || "application/octet-stream",
     size_bytes: file.size,
     encrypted_at: new Date().toISOString(),
   });
-  const encryptedFileKey = await wrapDriveFileKey(fileKey);
+  const encryptedFileKey = await wrapDriveFileKey(fileKey, passphrase);
   const ciphertextHash = await window.crypto.subtle.digest("SHA-256", ciphertext);
   return {
     blob: encryptedBlob,
-    filename: "vault.bin",
+    filename: originalName,
     encrypted_metadata: encryptedMetadata,
     encrypted_file_key: encryptedFileKey,
-    wrapped_by: "browser_local_vault_key",
+    wrapped_by: DRIVE_E2EE_PASSPHRASE_WRAPPER,
     ciphertext_sha256: driveBufferToHex(ciphertextHash),
     encryption_algorithm: "AES-GCM",
-    encryption_version: "browser-local-v1",
+    encryption_version: "browser-passphrase-v2",
     nonce: driveBytesToBase64(nonce),
     client_scan_report: includeClientScanReport ? {
       ok: false,
@@ -450,6 +512,10 @@ function driveFileExtension(name) {
   return dot >= 0 ? lower.slice(dot) : "";
 }
 
+function driveFileIsE2ee(file) {
+  return String(file?.privacy_mode || "") === "e2ee";
+}
+
 function driveFileCategory(file) {
   const name = file?.display_name || file?.virtual_path || file?.original_filename_plain_for_public || file?.storage_path || "";
   const mime = String(file?.mime_type_plain_for_public || file?.mime_type || "").toLowerCase();
@@ -458,7 +524,7 @@ function driveFileCategory(file) {
   if (mime.startsWith("video/") || [".m4v", ".mov", ".mp4", ".ogv", ".webm"].includes(ext)) return "video";
   if (mime.startsWith("image/") || [".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(ext)) return "image";
   if (mime === "application/pdf" || ext === ".pdf") return "pdf";
-  if (mime.startsWith("text/") || [".css", ".csv", ".htm", ".html", ".ini", ".js", ".json", ".log", ".md", ".py", ".sql", ".text", ".toml", ".txt", ".xml", ".yaml", ".yml"].includes(ext)) return "text";
+  if (mime.startsWith("text/") || [".c", ".cc", ".cpp", ".cs", ".css", ".csv", ".go", ".htm", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".log", ".md", ".php", ".py", ".rs", ".sh", ".sql", ".text", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml"].includes(ext) || !ext) return "text";
   if ([".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"].includes(ext)) return "archive";
   return "metadata";
 }
@@ -467,7 +533,81 @@ function driveFileIsImage(file) {
   return driveFileCategory(file) === "image";
 }
 
+function driveTextLanguage(filename = "") {
+  const ext = driveFileExtension(filename);
+  const map = {
+    ".c": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cs": "csharp",
+    ".css": "css",
+    ".go": "go",
+    ".html": "html",
+    ".htm": "html",
+    ".java": "java",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".json": "json",
+    ".md": "markdown",
+    ".php": "php",
+    ".py": "python",
+    ".rs": "rust",
+    ".sh": "shell",
+    ".sql": "sql",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+  };
+  return map[ext] || "text";
+}
+
+function driveHighlightCode(text = "", filename = "") {
+  const language = driveTextLanguage(filename);
+  let html = sanitize(text || "");
+  if (language === "markdown") return html;
+  if (["javascript", "typescript", "python", "cpp", "c", "csharp", "java", "go", "rust", "php", "shell"].includes(language)) {
+    html = html.replace(/(&quot;.*?&quot;|&#39;.*?&#39;|".*?"|'.*?')/g, '<span class="drive-code-string">$1</span>');
+    html = html.replace(/\b(function|return|const|let|var|if|else|for|while|class|def|import|from|try|except|catch|public|private|protected|static|void|int|float|double|char|bool|string|auto|struct|namespace|using|new|delete|async|await|yield|match|enum|impl|fn|mut|package|func|go|defer|echo|then|fi)\b/g, '<span class="drive-code-keyword">$1</span>');
+    html = html.replace(/\b(true|false|null|None|nil|nullptr|self|this)\b/g, '<span class="drive-code-literal">$1</span>');
+    html = html.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="drive-code-number">$1</span>');
+  } else if (["json", "yaml", "toml"].includes(language)) {
+    html = html.replace(/(&quot;[^&]*?&quot;)(\s*:)/g, '<span class="drive-code-key">$1</span>$2');
+    html = html.replace(/\b(true|false|null)\b/g, '<span class="drive-code-literal">$1</span>');
+    html = html.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="drive-code-number">$1</span>');
+  } else if (["html", "xml"].includes(language)) {
+    html = html.replace(/(&lt;\/?[\w:-]+|\/?&gt;)/g, '<span class="drive-code-keyword">$1</span>');
+    html = html.replace(/\b([\w:-]+)=/g, '<span class="drive-code-key">$1</span>=');
+  } else if (language === "css") {
+    html = html.replace(/([.#]?[a-zA-Z_][\w-]*)(\s*\{)/g, '<span class="drive-code-key">$1</span>$2');
+    html = html.replace(/\b([a-z-]+)(\s*:)/g, '<span class="drive-code-keyword">$1</span>$2');
+  }
+  return html;
+}
+
+function driveRenderTextPreview(preview) {
+  const filename = preview?.filename || "";
+  const text = preview?.text || "";
+  const language = driveTextLanguage(filename);
+  if (language === "markdown" && typeof markdownToSafeHtml === "function") {
+    return `
+      <div class="drive-markdown-preview">${markdownToSafeHtml(text)}</div>
+      <details class="drive-source-details">
+        <summary>查看 Markdown 原始碼</summary>
+        <pre class="drive-preview-text"><code>${sanitize(text)}</code></pre>
+      </details>
+    `;
+  }
+  const languageLabel = language === "text" ? "純文字" : language;
+  return `
+    <div class="drive-card-sub">語言：${sanitize(languageLabel)}</div>
+    <pre class="drive-preview-text drive-code-preview language-${sanitize(language)}"><code>${driveHighlightCode(text, filename)}</code></pre>
+  `;
+}
+
 function drivePrimaryAction(file) {
+  if (driveFileIsE2ee(file)) return { action: "preview", label: "解密預覽" };
   const category = driveFileCategory(file);
   if (category === "text") return { action: "edit-text", label: "編輯" };
   if (category === "audio" || category === "video") return { action: "preview", label: "串流" };
@@ -560,14 +700,16 @@ function renderDriveFiles(files) {
     const name = file.original_filename_plain_for_public || file.id || "download.bin";
     const warn = driveFileNeedsWarning(file);
     const primary = drivePrimaryAction(file);
+    const e2eeNote = driveFileIsE2ee(file) ? " · 需密碼預覽" : "";
+    const rowAction = ` data-drive-action="preview"`;
     const albumButton = driveFileIsImage(file)
       ? `<button class="btn" type="button" data-drive-action="add-cloud-to-album" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">加入相簿</button>`
       : "";
     return `
-      <div class="drive-file-row" data-drive-action="preview" data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">
+      <div class="drive-file-row"${rowAction} data-file-id="${sanitize(file.id)}" data-name="${sanitize(name)}">
         <div>
           <strong>${sanitize(name)}</strong>
-          <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(drivePrivacyModeLabel(file.privacy_mode))}${drivePrivacyModeDescription(file.privacy_mode) ? `（${sanitize(drivePrivacyModeDescription(file.privacy_mode))}）` : ""} · ${sanitize(driveFileCategory(file))} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}</div>
+          <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(drivePrivacyModeLabel(file.privacy_mode))}${drivePrivacyModeDescription(file.privacy_mode) ? `（${sanitize(drivePrivacyModeDescription(file.privacy_mode))}）` : ""} · ${sanitize(driveFileCategory(file))}${sanitize(e2eeNote)} · risk=${sanitize(file.risk_level || "-")} · scan=${sanitize(file.scan_status || "-")}</div>
         </div>
         <div class="drive-file-actions">
           <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.id)}">${sanitize(primary.label)}</button>
@@ -580,6 +722,56 @@ function renderDriveFiles(files) {
     `;
   }).join("");
   list.innerHTML = transferHtml + fileHtml;
+}
+
+function askDriveE2eePassphrase(promptText = "請輸入此檔案的 E2EE 加密密碼。") {
+  return new Promise((resolve) => {
+    const overlay = $("drive-e2ee-passphrase-overlay");
+    const input = $("drive-e2ee-passphrase-input");
+    const msg = $("drive-e2ee-passphrase-msg");
+    const label = $("drive-e2ee-passphrase-prompt");
+    const confirmBtn = $("drive-e2ee-passphrase-confirm-btn");
+    const cancelBtn = $("drive-e2ee-passphrase-cancel-btn");
+    if (!overlay || !input || !confirmBtn || !cancelBtn) {
+      resolve(window.prompt(promptText) || "");
+      return;
+    }
+    let done = false;
+    const cleanup = (value) => {
+      if (done) return;
+      done = true;
+      overlay.classList.remove("show");
+      overlay.setAttribute("aria-hidden", "true");
+      const anyOverlayOpen = document.querySelector(".user-edit-overlay.show, .album-full-preview-overlay.show");
+      if (!anyOverlayOpen) document.body.classList.remove("modal-open");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+      input.removeEventListener("keydown", onKeydown);
+      input.value = "";
+      if (msg) msg.textContent = "";
+      resolve(value || "");
+    };
+    const onConfirm = () => {
+      if (!input.value) {
+        if (msg) flash(msg, "請輸入 E2EE 加密密碼", false);
+        return;
+      }
+      cleanup(input.value);
+    };
+    const onCancel = () => cleanup("");
+    const onKeydown = (event) => {
+      if (event.key === "Enter") onConfirm();
+      if (event.key === "Escape") onCancel();
+    };
+    if (label) label.textContent = promptText;
+    overlay.classList.add("show");
+    overlay.setAttribute("aria-hidden", "false");
+    document.body.classList.add("modal-open");
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+    input.addEventListener("keydown", onKeydown);
+    setTimeout(() => input.focus(), 0);
+  });
 }
 
 async function loadDriveFiles(csrf) {
@@ -624,7 +816,7 @@ async function uploadDriveFile() {
     if (isDriveE2eeMode(privacyMode)) {
       updateDriveTransferRow(transferId, { phase: "encrypting", msg: "瀏覽器端加密中", progress_percent: null });
       const includeClientScanReport = !!$("drive-upload-client-scan-report")?.checked;
-      const encrypted = await prepareDriveE2eeUpload(file, includeClientScanReport);
+      const encrypted = await prepareDriveE2eeUpload(file, getDriveE2eeUploadPassphrase(), includeClientScanReport);
       form.append("file", encrypted.blob, encrypted.filename);
       form.append("encrypted_metadata", encrypted.encrypted_metadata);
       form.append("encrypted_file_key", encrypted.encrypted_file_key);
@@ -663,6 +855,7 @@ async function uploadDriveFile() {
     }
     updateDriveTransferRow(transferId, { status: "completed", phase: "completed", msg: "上傳完成", progress_percent: 100, loaded_bytes: file.size, total_bytes: file.size });
     input.value = "";
+    if (isDriveE2eeMode(privacyMode)) clearDriveE2eeUploadPassphrase();
     await loadDriveDashboard();
     removeDriveTransferRow(transferId);
   } catch (err) {
@@ -717,16 +910,59 @@ async function loadRemoteDownloadCapabilities() {
   }
 }
 
-async function startRemoteDriveDownload() {
-  const url = ($("drive-remote-url")?.value || "").trim();
+function classifyRemoteDownloadInput(rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!url) return { ok: false, kind: "", label: "", msg: "請輸入 direct link 或 magnet link" };
+  if (url.startsWith("magnet:?")) return { ok: true, kind: "magnet", label: "BT magnet" };
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_) {
+    return { ok: false, kind: "", label: "", msg: "網址格式不正確，只接受 http、https direct link 或 magnet link" };
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return { ok: false, kind: "", label: "", msg: "只接受 http、https direct link 或 magnet link" };
+  }
+  if (parsed.pathname.toLowerCase().endsWith(".torrent")) {
+    return { ok: true, kind: "torrent_url", label: "BT torrent URL" };
+  }
+  return { ok: true, kind: "direct", label: "direct link" };
+}
+
+function promptRemoteDriveDownloadUrl() {
+  const input = $("drive-remote-url");
+  const current = (input?.value || "").trim();
+  const value = window.prompt("輸入 direct link、magnet link 或 .torrent 網址", current);
+  if (value === null) return;
+  if (input) input.value = value.trim();
   const torrentInput = $("drive-remote-torrent-file");
-  const torrentFile = torrentInput?.files?.[0] || null;
+  if (torrentInput) torrentInput.value = "";
+  startRemoteDriveDownload({ source: "url", triggerButton: $("drive-remote-download-btn") });
+}
+
+function openRemoteTorrentPicker() {
+  const input = $("drive-remote-torrent-file");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+async function startRemoteDriveDownload({ source = "auto", triggerButton = null } = {}) {
+  const url = source === "torrent" ? "" : ($("drive-remote-url")?.value || "").trim();
+  const torrentInput = $("drive-remote-torrent-file");
+  const torrentFile = source === "url" ? null : (torrentInput?.files?.[0] || null);
   if (!url && !torrentFile) {
+    if (source === "auto") return promptRemoteDriveDownloadUrl();
     alert("請輸入下載網址，或上傳 .torrent BT 種子檔");
     return;
   }
   if (url && torrentFile) {
     alert("下載網址和 BT 種子檔請擇一使用");
+    return;
+  }
+  const detected = url ? classifyRemoteDownloadInput(url) : { ok: true, kind: "torrent_file", label: "BT torrent file" };
+  if (!detected.ok) {
+    alert(detected.msg || "下載網址格式不正確");
     return;
   }
   const transferId = addDriveTransferRow({
@@ -735,9 +971,9 @@ async function startRemoteDriveDownload() {
     loaded_bytes: 0,
     total_bytes: null,
     progress_percent: 0,
-    msg: "建立下載任務",
+    msg: `建立${detected.label || "遠端"}下載任務`,
   });
-  const button = $("drive-remote-download-btn");
+  const button = triggerButton || $("drive-remote-download-btn");
   const oldText = button ? button.textContent : "";
   if (button) {
     button.disabled = true;
@@ -758,6 +994,8 @@ async function startRemoteDriveDownload() {
         body: form
       });
     } else {
+      const status = $("drive-remote-download-status");
+      if (status) status.textContent = `偵測為 ${detected.label}，正在建立下載任務...`;
       res = await apiFetch(API + "/cloud-drive/remote-download/tasks", {
         method: "POST",
         credentials: "same-origin",
@@ -866,11 +1104,14 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
     const keyJson = await keyRes.json().catch(() => ({}));
     if (keyJson.ok && keyJson.e2ee) {
       try {
-        const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee);
+        const passphrase = await getDriveE2eeSessionPassphrase(fileId, "請輸入此 E2EE 檔案的加密密碼。密碼不會送到伺服器；本次登入期間會暫存在瀏覽器記憶體。");
+        if (!passphrase) return;
+        const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);
         outputBlob = decrypted.blob;
         name = decrypted.filename || name;
       } catch (err) {
-        alert(`${err.message || "端到端加密檔案解密失敗"}\n\n如果這是在其他瀏覽器或清除過瀏覽器資料後下載，原本的本地 vault key 已不存在，無法解密。`);
+        forgetDriveE2eeSessionPassphrase(fileId);
+        alert(`${err.message || "端到端加密檔案解密失敗"}\n\n請確認輸入的是上傳此檔案時設定的 E2EE 加密密碼；伺服器無法重設或找回此密碼。`);
         return;
       }
     }
@@ -972,6 +1213,103 @@ function drivePreviewContentUrl(fileId) {
   return `${API}/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`;
 }
 
+function findKnownDriveFile(fileId) {
+  const target = String(fileId || "");
+  const sources = [
+    ...(Array.isArray(lastDriveFiles) ? lastDriveFiles : []),
+    ...(Array.isArray(storageFilesCache) ? storageFilesCache : []),
+    ...(Array.isArray(albumPreviewSequence) ? albumPreviewSequence : []),
+  ];
+  return sources.find((file) => String(file?.id || file?.file_id || "") === target || String(file?.file_id || "") === target) || null;
+}
+
+async function fetchDriveE2eeKey(fileId, csrf) {
+  const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/e2ee-key`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok || !json.e2ee) throw new Error(json.msg || "E2EE 解密資訊讀取失敗");
+  return json.e2ee;
+}
+
+async function fetchDriveE2eeCiphertext(fileId, csrf) {
+  const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content`, {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrf || "" }
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.msg || "E2EE 密文讀取失敗");
+  }
+  return res.blob();
+}
+
+async function decryptDriveE2eeFileForSession(fileId, csrf, promptText) {
+  const e2ee = await fetchDriveE2eeKey(fileId, csrf);
+  const ciphertext = await fetchDriveE2eeCiphertext(fileId, csrf);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: attempt > 0 });
+    if (!passphrase) return null;
+    try {
+      return await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
+    } catch (err) {
+      forgetDriveE2eeSessionPassphrase(fileId);
+      if (attempt > 0) throw err;
+      alert("E2EE 密碼不正確或檔案已損壞，請重新輸入。");
+    }
+  }
+  return null;
+}
+
+async function buildDriveE2eePreview(fileId, csrf) {
+  const decrypted = await decryptDriveE2eeFileForSession(
+    fileId,
+    csrf,
+    "請輸入此 E2EE 檔案的加密密碼。密碼不會送到伺服器；本次登入期間會暫存在瀏覽器記憶體。"
+  );
+  if (!decrypted) return null;
+  const known = findKnownDriveFile(fileId) || {};
+  const filename = decrypted.filename || known.display_name || known.original_filename_plain_for_public || "download";
+  const fileLike = {
+    ...known,
+    id: fileId,
+    display_name: filename,
+    original_filename_plain_for_public: filename,
+    mime_type_plain_for_public: decrypted.blob.type || known.mime_type_plain_for_public || "",
+    privacy_mode: "e2ee",
+    size_bytes: decrypted.blob.size,
+    risk_level: known.risk_level || "unknown_encrypted",
+    scan_status: known.scan_status || "skipped_e2ee",
+  };
+  const category = driveFileCategory(fileLike);
+  const preview = {
+    file_id: fileId,
+    filename,
+    size_bytes: decrypted.blob.size,
+    privacy_mode: "e2ee",
+    risk_level: fileLike.risk_level,
+    scan_status: fileLike.scan_status,
+    category,
+    mime_type: decrypted.blob.type || fileLike.mime_type_plain_for_public || "application/octet-stream",
+    render_mode: "metadata",
+    previewable: ["audio", "video", "image", "pdf", "text"].includes(category),
+    e2ee_browser_decrypted: true,
+  };
+  if (["audio", "video", "image", "pdf"].includes(category)) {
+    preview.render_mode = "media";
+    return { preview, blob: decrypted.blob };
+  }
+  if (category === "text") {
+    const maxBytes = 65536;
+    preview.render_mode = "text";
+    preview.truncated = decrypted.blob.size > maxBytes;
+    preview.text = await decrypted.blob.slice(0, maxBytes).text();
+    return { preview, blob: decrypted.blob };
+  }
+  return { preview, blob: decrypted.blob };
+}
+
 function clearAlbumFullPreviewUrl() {
   if (currentAlbumFullPreviewUrl) {
     URL.revokeObjectURL(currentAlbumFullPreviewUrl);
@@ -996,6 +1334,23 @@ async function fetchDrivePreviewContent(fileId, csrf) {
   clearDrivePreviewUrl();
   currentDrivePreviewUrl = URL.createObjectURL(blob);
   return currentDrivePreviewUrl;
+}
+
+function renderDriveDecryptedPreviewMedia(preview, blob, { fullscreen = false } = {}) {
+  const url = URL.createObjectURL(blob);
+  const title = sanitize(preview.filename || "E2EE preview");
+  if (fullscreen) {
+    clearAlbumFullPreviewUrl();
+    currentAlbumFullPreviewUrl = url;
+  } else {
+    clearDrivePreviewUrl();
+    currentDrivePreviewUrl = url;
+  }
+  if (preview.category === "audio") return `<audio controls ${fullscreen ? "autoplay " : ""}src="${url}"></audio>`;
+  if (preview.category === "video") return `<video controls ${fullscreen ? "autoplay " : ""}src="${url}"></video>`;
+  if (preview.category === "image") return `<img src="${url}" alt="${title}" />`;
+  if (preview.category === "pdf") return `<iframe src="${url}" title="${title}"></iframe>`;
+  return `<div class="drive-empty">此 E2EE 檔案已在瀏覽器解密，但目前不支援 inline 預覽。</div>`;
 }
 
 function closeDrivePreview() {
@@ -1086,6 +1441,13 @@ function renderDriveArchiveEntries(entries) {
 }
 
 async function previewDriveFile(fileId, options = {}) {
+  const knownFile = findKnownDriveFile(fileId);
+  if (driveFileIsE2ee(knownFile)) {
+    if (shouldOpenDriveFullscreen(fileId, options)) {
+      return previewAlbumFileFullscreen(fileId, options.fileName || "");
+    }
+    return previewDriveE2eeFile(fileId);
+  }
   if (shouldOpenDriveFullscreen(fileId, options)) {
     return previewAlbumFileFullscreen(fileId, options.fileName || "");
   }
@@ -1106,7 +1468,7 @@ async function previewDriveFile(fileId, options = {}) {
     if (!panel) return;
     panel.innerHTML = renderDrivePreviewMetadata(preview, fileId);
     if (preview.render_mode === "text") {
-      panel.innerHTML += `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+      panel.innerHTML += `${driveRenderTextPreview(preview)}${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
       return;
     }
     if (preview.render_mode === "archive") {
@@ -1127,6 +1489,33 @@ async function previewDriveFile(fileId, options = {}) {
   } catch (err) {
     clearDrivePreviewUrl();
     if (panel) panel.innerHTML = `<div class="drive-empty">${sanitize(err.message || "預覽失敗")}</div>`;
+  }
+}
+
+async function previewDriveE2eeFile(fileId) {
+  const panel = $("drive-preview-panel");
+  const card = $("drive-preview-card");
+  if (card) card.style.display = "";
+  if (panel) panel.innerHTML = `<div class="drive-empty">等待 E2EE 密碼並在瀏覽器解密中...</div>`;
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const decrypted = await buildDriveE2eePreview(fileId, csrf);
+    if (!decrypted || !panel) return;
+    const { preview, blob } = decrypted;
+    panel.innerHTML = renderDrivePreviewMetadata(preview, fileId);
+    if (preview.render_mode === "text") {
+      panel.innerHTML += `${driveRenderTextPreview(preview)}${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+      return;
+    }
+    if (preview.render_mode === "media") {
+      panel.innerHTML += renderDriveDecryptedPreviewMedia(preview, blob);
+      return;
+    }
+    panel.innerHTML += `<div class="drive-empty">此 E2EE 檔案已在瀏覽器解密，但目前只提供 metadata 預覽。</div>`;
+  } catch (err) {
+    clearDrivePreviewUrl();
+    if (panel) panel.innerHTML = `<div class="drive-empty">${sanitize(err.message || "E2EE 預覽失敗")}</div>`;
   }
 }
 
@@ -1154,6 +1543,26 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
+    const knownFile = findKnownDriveFile(fileId);
+    if (driveFileIsE2ee(knownFile)) {
+      const decrypted = await buildDriveE2eePreview(fileId, csrf);
+      if (!decrypted) return;
+      const { preview, blob } = decrypted;
+      if (title) title.textContent = preview.filename || fileName || "E2EE 預覽";
+      const countLabel = albumPreviewCurrentCountLabel();
+      const baseMeta = `${countLabel ? `${countLabel} · ` : ""}${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || blob.type || "-"} · E2EE 瀏覽器解密`;
+      if (meta) meta.textContent = baseMeta;
+      if (preview.render_mode === "text") {
+        body.innerHTML = `${driveRenderTextPreview(preview)}${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+        return;
+      }
+      if (preview.render_mode === "media") {
+        body.innerHTML = renderDriveDecryptedPreviewMedia(preview, blob, { fullscreen: true });
+        return;
+      }
+      body.innerHTML = `<div class="drive-empty">此 E2EE 檔案已在瀏覽器解密，但目前只提供 metadata 預覽。</div>`;
+      return;
+    }
     const res = await apiFetch(API + `/cloud-drive/files/${encodeURIComponent(fileId)}/preview`, {
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -1166,7 +1575,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     const baseMeta = `${countLabel ? `${countLabel} · ` : ""}${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · scan=${preview.scan_status || "-"}`;
     if (preview.render_mode === "text") {
       if (meta) meta.textContent = baseMeta;
-      body.innerHTML = `<pre class="drive-preview-text">${sanitize(preview.text || "")}</pre>${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
+      body.innerHTML = `${driveRenderTextPreview(preview)}${preview.truncated ? '<div class="drive-card-sub">內容過長，已截斷顯示。</div>' : ""}`;
       return;
     }
     if (preview.render_mode === "archive") {
@@ -1249,6 +1658,56 @@ async function saveDriveTextFile(fileId) {
     await previewDriveFile(fileId, { skipRepeatCheck: true });
   } catch (err) {
     alert(err.message || "儲存失敗");
+  }
+}
+
+function openDriveTextDocumentModal() {
+  const overlay = $("drive-new-doc-overlay");
+  if (!overlay) return;
+  overlay.classList.add("show");
+  overlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  const msg = $("drive-new-doc-msg");
+  if (msg) msg.textContent = "";
+  setTimeout(() => $("drive-new-doc-name")?.focus?.(), 0);
+}
+
+function closeDriveTextDocumentModal({ clear = false } = {}) {
+  const overlay = $("drive-new-doc-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("show");
+  overlay.setAttribute("aria-hidden", "true");
+  const anyOverlayOpen = document.querySelector(".user-edit-overlay.show, .album-full-preview-overlay.show");
+  if (!anyOverlayOpen) document.body.classList.remove("modal-open");
+  const msg = $("drive-new-doc-msg");
+  if (msg) msg.textContent = "";
+  if (clear) {
+    if ($("drive-new-doc-name")) $("drive-new-doc-name").value = "";
+    if ($("drive-new-doc-content")) $("drive-new-doc-content").value = "";
+  }
+}
+
+async function createDriveTextDocument() {
+  const filename = ($("drive-new-doc-name")?.value || "").trim() || "untitled.txt";
+  const content = $("drive-new-doc-content")?.value || "";
+  const privacyMode = $("drive-new-doc-privacy-mode")?.value || "standard_plain";
+  const msg = $("drive-new-doc-msg");
+  try {
+    const json = await storageAction("/cloud-drive/files/text", "POST", {
+      filename,
+      content,
+      privacy_mode: privacyMode,
+    });
+    if ($("drive-new-doc-name")) $("drive-new-doc-name").value = "";
+    if ($("drive-new-doc-content")) $("drive-new-doc-content").value = "";
+    if (msg) flash(msg, "文檔已建立", true);
+    await loadDriveDashboard();
+    closeDriveTextDocumentModal({ clear: true });
+    const fileId = json.file?.file_id || json.file?.id;
+    if (fileId) await previewDriveFile(fileId, { skipRepeatCheck: true });
+  } catch (err) {
+    if (msg) flash(msg, err.message || "建立文檔失敗", false);
+    else alert(err.message || "建立文檔失敗");
   }
 }
 
@@ -1579,28 +2038,71 @@ function setStorageSelection(id = "", path = "") {
 
 function renderStorageBrowser() {
   renderStorageBreadcrumb();
-  renderStorageFolders(storageFoldersCache);
-  renderStorageFiles(storageFilesCache);
+  const list = $("storage-browser-list");
+  if (!list) return;
+  const rows = [];
+  if (currentStoragePath !== "/") {
+    rows.push(storageParentRow());
+  }
+  rows.push(...storageFolderRows(storageFoldersCache));
+  rows.push(...storageFileRows(storageFilesCache));
+  list.innerHTML = rows.length ? rows.join("") : `<div class="drive-empty">這個資料夾沒有檔案或資料夾</div>`;
 }
 
-function renderStorageFiles(files) {
-  const list = $("storage-file-list");
-  if (!list) return;
-  const visibleFiles = (Array.isArray(files) ? files : []).filter((file) => storageDirName(file.virtual_path || file.display_name || "") === currentStoragePath);
-  if (!visibleFiles.length) {
-    list.innerHTML = `<div class="drive-empty">這個資料夾沒有檔案</div>`;
-    return;
-  }
-  list.innerHTML = visibleFiles.map((file) => {
-    const primary = drivePrimaryAction(file);
-    const albumButton = driveFileIsImage(file)
-      ? `<button class="btn" type="button" data-drive-action="add-storage-to-album" data-storage-file-id="${sanitize(file.id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">加入相簿</button>`
-      : "";
-    return `
-    <div class="drive-file-row" data-drive-action="preview" data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">
+function storageParentRow() {
+  return `
+    <div class="drive-file-row storage-browser-row storage-browser-folder">
+      <div>
+        <strong>上一層</strong>
+        <div class="drive-card-sub">資料夾 · ${sanitize(storageDirName(currentStoragePath))}</div>
+      </div>
+      <div class="drive-file-actions">
+        <button class="btn" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(storageDirName(currentStoragePath))}">開啟</button>
+      </div>
+    </div>
+  `;
+}
+
+function storageFolderRows(folders) {
+  return (Array.isArray(folders) ? folders : [])
+    .filter((folder) => {
+      const path = normalizeStoragePath(folder.virtual_path || folder.display_name || "");
+      return path !== "/" && storageDirName(path) === currentStoragePath;
+    })
+    .map((folder) => {
+      const name = storageBaseName(folder.virtual_path || folder.display_name || "folder");
+      return `
+        <div class="drive-file-row storage-browser-row storage-browser-folder">
+          <div>
+            <strong>${sanitize(name)}</strong>
+            <div class="drive-card-sub">資料夾 · ${folder.is_explicit ? "已建立" : "由檔案路徑產生"} · 直接 ${Number(folder.file_count || 0)} 個 · 含子資料夾 ${Number(folder.recursive_file_count || 0)} 個</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn btn-primary" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">開啟</button>
+            <button class="btn" type="button" data-drive-action="folder-to-album" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(name)}">設為相簿</button>
+            <button class="btn" type="button" data-drive-action="select-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">移動</button>
+            <button class="btn btn-danger" type="button" data-drive-action="trash-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">刪除</button>
+          </div>
+        </div>
+      `;
+    });
+}
+
+function storageFileRows(files) {
+  return (Array.isArray(files) ? files : [])
+    .filter((file) => storageDirName(file.virtual_path || file.display_name || "") === currentStoragePath)
+    .map((file) => {
+      const primary = drivePrimaryAction(file);
+      const e2ee = driveFileIsE2ee(file);
+      const rowAction = ` data-drive-action="preview"`;
+      const albumButton = driveFileIsImage(file)
+        ? `<button class="btn" type="button" data-drive-action="add-storage-to-album" data-storage-file-id="${sanitize(file.id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">加入相簿</button>`
+        : "";
+      return `
+    <div class="drive-file-row storage-browser-row storage-browser-file"${rowAction} data-file-id="${sanitize(file.file_id)}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">
       <div>
         <strong>${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}</strong>
-        <div class="drive-card-sub">${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(driveFileCategory(file))} · scan=${sanitize(file.scan_status || "-")} · ${sanitize(file.virtual_path || "-")}</div>
+        <div class="drive-card-sub">檔案 · ${formatDriveBytes(file.size_bytes || 0)} · ${sanitize(driveFileCategory(file))}${e2ee ? " · 需密碼預覽" : ""} · scan=${sanitize(file.scan_status || "-")} · ${sanitize(file.virtual_path || "-")}</div>
       </div>
       <div class="drive-file-actions">
         <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.file_id)}">${sanitize(primary.label)}</button>
@@ -1611,49 +2113,7 @@ function renderStorageFiles(files) {
       </div>
     </div>
   `;
-  }).join("");
-}
-
-function renderStorageFolders(folders) {
-  const list = $("storage-folder-list");
-  if (!list) return;
-  const visibleFolders = (Array.isArray(folders) ? folders : []).filter((folder) => {
-    const path = normalizeStoragePath(folder.virtual_path || folder.display_name || "");
-    return path !== "/" && storageDirName(path) === currentStoragePath;
-  });
-  const rows = [];
-  if (currentStoragePath !== "/") {
-    rows.push(`
-      <div class="drive-file-row">
-        <div>
-          <strong>上一層</strong>
-          <div class="drive-card-sub">${sanitize(storageDirName(currentStoragePath))}</div>
-        </div>
-        <div class="drive-file-actions">
-          <button class="btn" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(storageDirName(currentStoragePath))}">開啟</button>
-        </div>
-      </div>
-    `);
-  }
-  if (!visibleFolders.length && !rows.length) {
-    list.innerHTML = `<div class="drive-empty">尚無資料夾</div>`;
-    return;
-  }
-  rows.push(...visibleFolders.map((folder) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(storageBaseName(folder.virtual_path || folder.display_name || "folder"))}</strong>
-        <div class="drive-card-sub">${folder.is_explicit ? "已建立" : "由檔案路徑產生"} · 直接 ${Number(folder.file_count || 0)} 個 · 含子資料夾 ${Number(folder.recursive_file_count || 0)} 個</div>
-      </div>
-      <div class="drive-file-actions">
-        <button class="btn btn-primary" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">開啟</button>
-        <button class="btn" type="button" data-drive-action="folder-to-album" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(storageBaseName(folder.virtual_path || folder.display_name || "folder"))}">設為相簿</button>
-        <button class="btn" type="button" data-drive-action="select-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">移動</button>
-        <button class="btn btn-danger" type="button" data-drive-action="trash-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">刪除</button>
-      </div>
-    </div>
-  `));
-  list.innerHTML = rows.join("");
+    });
 }
 
 function updateAlbumTargetSelect(albums) {
@@ -2420,6 +2880,7 @@ async function openAlbumViewer(id, options = {}) {
 
 async function loadDriveDashboard() {
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
+  updateDriveE2eePassphraseVisibility();
   const msg = $("drive-msg");
   try {
     await fetchCsrfToken({ force: true });
@@ -2557,6 +3018,9 @@ document.addEventListener("click", (event) => {
     if (action === "album-preview-prev") return stepAlbumPreview(-1);
     if (action === "album-preview-next") return stepAlbumPreview(1);
     if (action === "purchase-storage-upgrade") return purchaseStorageUpgrade();
+    if (action === "open-text-document-modal") return openDriveTextDocumentModal();
+    if (action === "close-text-document-modal") return closeDriveTextDocumentModal();
+    if (action === "create-text-document") return createDriveTextDocument();
     if (action === "edit-text") return editDriveTextFile(fileId);
     if (action === "save-text") return saveDriveTextFile(fileId);
     if (action === "download") return downloadDriveFile(fileId, warn);
@@ -2597,10 +3061,22 @@ document.addEventListener("focusin", (event) => {
   }
 });
 
+document.addEventListener("change", (event) => {
+  if (event.target?.id === "drive-upload-privacy-mode") {
+    updateDriveE2eePassphraseVisibility();
+  }
+});
+
 document.addEventListener("keydown", (event) => {
   const overlayOpen = $("album-full-preview-overlay")?.classList.contains("show");
+  const docOverlayOpen = $("drive-new-doc-overlay")?.classList.contains("show");
+  const e2eePromptOpen = $("drive-e2ee-passphrase-overlay")?.classList.contains("show");
   if (event.key === "Escape" && overlayOpen) {
     closeAlbumFullPreview();
+  } else if (event.key === "Escape" && docOverlayOpen) {
+    closeDriveTextDocumentModal();
+  } else if (event.key === "Escape" && e2eePromptOpen) {
+    $("drive-e2ee-passphrase-cancel-btn")?.click?.();
   } else if (overlayOpen && event.key === "ArrowLeft") {
     event.preventDefault();
     stepAlbumPreview(-1);

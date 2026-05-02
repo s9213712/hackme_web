@@ -73,13 +73,22 @@ end-to-end encrypted:
 |---|---|---:|---|---|
 | `standard_plain` | Normal files, attachments, album display, shared files | Yes | Best scan/preview/share compatibility | Stored as plaintext on the server filesystem |
 | `server_encrypted` | Reducing disk/backup exposure while keeping server features | Yes, by temporary server-side decrypt | Server decrypts for scan, preview, and plaintext download | Not E2EE; server/root can decrypt |
-| `e2ee` | Highly private storage | No | Server can only inspect ciphertext/metadata; browser may attach a client scan report | Browser-local vault key loss can make the file unrecoverable |
+| `e2ee` | Highly private storage | No | Browser-side decrypt preview after the user enters the E2EE password; server can only inspect ciphertext/metadata | Losing the user-chosen E2EE file password makes the file unrecoverable |
 
 Use `standard_plain` when users need normal cloud-drive behavior. Use
 `server_encrypted` when protecting at-rest storage is useful but server-side
-scan/preview/download support is still required. Use E2EE only when
-confidentiality is more important than server-side preview, scanning, and
-recovery support.
+scan/preview/download support is still required. Use E2EE when confidentiality
+is more important than server-side scanning and recovery support. E2EE files can
+still be previewed by the browser after the user enters the file password.
+
+E2EE uses a user-entered file encryption password in the browser. The browser
+derives a wrapping key with PBKDF2-SHA256 and uses it to encrypt the per-file
+key before upload. The server stores only ciphertext, encrypted metadata, salt,
+nonce, and the wrapped file key; it does not receive the plaintext password or a
+decryptable master key. A user can decrypt on another computer by entering the
+same E2EE password, but the server cannot reset or recover forgotten E2EE
+passwords. During preview, the password is cached only in browser memory for
+the current logged-in page session and is cleared on logout or browser close.
 
 Remote downloads are integrated into Cloud Drive:
 

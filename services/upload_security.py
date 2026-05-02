@@ -386,6 +386,7 @@ def ensure_upload_security_schema(conn):
     _ensure_encrypted_file_keys_columns(conn)
     _ensure_file_scan_results_columns(conn)
     _ensure_file_access_logs_columns(conn)
+    _ensure_file_type_policy_columns(conn)
     _ensure_cloud_drive_policy_columns(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner ON uploaded_files(owner_user_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_risk ON uploaded_files(risk_level, scan_status)")
@@ -462,6 +463,36 @@ def _ensure_file_scan_results_columns(conn):
             conn.execute(f"ALTER TABLE file_scan_results ADD COLUMN {column} {definition}")
 
 
+def _ensure_file_type_policy_columns(conn):
+    columns = _table_columns(conn, "file_type_policies")
+    definitions = {
+        "extensions_json": "TEXT NOT NULL DEFAULT '[]'",
+        "public_allowed": "INTEGER NOT NULL DEFAULT 1",
+        "server_readable_allowed": "INTEGER NOT NULL DEFAULT 1",
+        "e2ee_allowed": "INTEGER NOT NULL DEFAULT 1",
+        "default_risk_level": "TEXT NOT NULL DEFAULT 'medium'",
+        "allow_public_share": "INTEGER NOT NULL DEFAULT 1",
+        "requires_scan": "INTEGER NOT NULL DEFAULT 1",
+        "warn_on_download": "INTEGER NOT NULL DEFAULT 0",
+        "notes": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'",
+        "updated_at": "TEXT",
+    }
+    for column, definition in definitions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE file_type_policies ADD COLUMN {column} {definition}")
+    columns = _table_columns(conn, "file_type_policies")
+    if "private_scannable_allowed" in columns:
+        conn.execute(
+            """
+            UPDATE file_type_policies
+            SET server_readable_allowed=COALESCE(private_scannable_allowed, server_readable_allowed, 1),
+                updated_at=COALESCE(updated_at, ?)
+            """,
+            (datetime.now().isoformat(),),
+        )
+
+
 def _ensure_file_access_logs_columns(conn):
     columns = _table_columns(conn, "file_access_logs")
     definitions = {
@@ -506,16 +537,24 @@ def _ensure_cloud_drive_policy_columns(conn):
 def seed_default_file_type_policies(conn):
     now = datetime.now().isoformat()
     existing = {row["category"] for row in conn.execute("SELECT category FROM file_type_policies").fetchall()}
+    columns = _table_columns(conn, "file_type_policies")
     for category, policy in DEFAULT_FILE_TYPE_POLICIES.items():
         if category in existing:
             continue
+        legacy_columns = ""
+        legacy_placeholders = ""
+        legacy_values = ()
+        if "private_scannable_allowed" in columns:
+            legacy_columns = ", private_scannable_allowed"
+            legacy_placeholders = ", ?"
+            legacy_values = (1 if policy["server_readable_allowed"] else 0,)
         conn.execute(
-            """
+            f"""
             INSERT INTO file_type_policies (
                 category, extensions_json, public_allowed, server_readable_allowed, e2ee_allowed,
                 default_risk_level, allow_public_share, requires_scan, warn_on_download,
-                notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                notes, created_at, updated_at{legacy_columns}
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{legacy_placeholders})
             """,
             (
                 category,
@@ -530,6 +569,7 @@ def seed_default_file_type_policies(conn):
                 policy["notes"],
                 now,
                 now,
+                *legacy_values,
             ),
         )
 
@@ -1658,7 +1698,7 @@ def create_uploaded_file_record(
             decision.risk_level,
             decision.scan_status,
             encrypted_metadata if is_e2ee else None,
-            None if is_e2ee else safe_public_filename(original_filename),
+            safe_public_filename(original_filename),
             encrypted_metadata if is_e2ee else None,
             None if is_e2ee else safe_public_mime_type(original_filename, mime_type),
             int(size_bytes or 0),

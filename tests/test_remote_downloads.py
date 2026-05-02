@@ -87,6 +87,16 @@ def test_magnet_trackers_reject_private_hosts(monkeypatch):
         validate_remote_url("magnet:?xt=urn:btih:abc&tr=http%3A%2F%2Flocalhost%3A8080%2Fannounce")
 
 
+def test_torrent_url_is_classified_as_bt(monkeypatch):
+    def fake_getaddrinfo(host, port=None, **kwargs):
+        return [(2, 1, 6, "", ("8.8.8.8", int(port or 80)))]
+
+    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+
+    parsed = validate_remote_url("https://downloads.example/file.torrent?token=abc")
+    assert parsed["kind"] == "torrent_url"
+
+
 def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):
     def fake_getaddrinfo(host, port, **kwargs):
         return [(2, 1, 6, "", ("10.0.0.5", int(port or 80)))]
