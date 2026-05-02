@@ -149,6 +149,7 @@ function switchModuleTab(tab) {
   const canAccessChat = !!currentUser && canAccessModule("chat");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
   const canAccessAlbums = canAccessDrive;
+  const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
   const canAccessComfyui = !!currentUser && canAccessModule("comfyui") && canUseComfyuiTab;
@@ -156,13 +157,14 @@ function switchModuleTab(tab) {
   const canAccessTrading = canAccessEconomy && canAccessModule("trading");
 
   let normTab = tab;
-  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat")))))));
+  const fallbackModule = () => canAccessChat ? "chat" : (canAccessCommunity ? "community" : (canAccessDrive ? "drive" : (canAccessVideos ? "videos" : (canAccessGames ? "games" : (canAccessComfyui ? "comfyui" : (canAccessEconomy ? "economy" : (canAccessAppeals ? "appeals" : (canAccessAccounts ? "accounts" : "chat"))))))));
   if (tab === "chat" && !canAccessChat) normTab = fallbackModule();
   if (tab === "dm") normTab = fallbackModule();
   if (tab === "announcements" && !canAccessAnnouncements) normTab = fallbackModule();
   if (tab === "community" && !canAccessCommunity) normTab = fallbackModule();
   if (tab === "drive" && !canAccessDrive) normTab = fallbackModule();
   if (tab === "albums" && !canAccessAlbums) normTab = fallbackModule();
+  if (tab === "videos" && !canAccessVideos) normTab = fallbackModule();
   if (tab === "games" && !canAccessGames) normTab = fallbackModule();
   if (tab === "comfyui" && !canAccessComfyui) normTab = fallbackModule();
   if (tab === "economy" && !canAccessEconomy) normTab = fallbackModule();
@@ -177,6 +179,7 @@ function switchModuleTab(tab) {
   const modCommunity = $("module-community");
   const modDrive = $("module-drive");
   const modAlbums = $("module-albums");
+  const modVideos = $("module-videos");
   const modGames = $("module-games");
   const modComfyui = $("module-comfyui");
   const modEconomy = $("module-economy");
@@ -189,6 +192,7 @@ function switchModuleTab(tab) {
   const mCommunity = $("tab-module-community");
   const mDrive = $("tab-module-drive");
   const mAlbums = $("tab-module-albums");
+  const mVideos = $("tab-module-videos");
   const mGames = $("tab-module-games");
   const mComfyui = $("tab-module-comfyui");
   const mEconomy = $("tab-module-economy");
@@ -202,6 +206,7 @@ function switchModuleTab(tab) {
   if (modCommunity) modCommunity.classList.toggle("active", normTab === "community");
   if (modDrive) modDrive.classList.toggle("active", normTab === "drive");
   if (modAlbums) modAlbums.classList.toggle("active", normTab === "albums");
+  if (modVideos) modVideos.classList.toggle("active", normTab === "videos");
   if (modGames) modGames.classList.toggle("active", normTab === "games");
   if (modComfyui) modComfyui.classList.toggle("active", normTab === "comfyui");
   if (modEconomy) modEconomy.classList.toggle("active", normTab === "economy");
@@ -214,6 +219,7 @@ function switchModuleTab(tab) {
   if (mCommunity) mCommunity.classList.toggle("active", normTab === "community");
   if (mDrive) mDrive.classList.toggle("active", normTab === "drive");
   if (mAlbums) mAlbums.classList.toggle("active", normTab === "albums");
+  if (mVideos) mVideos.classList.toggle("active", normTab === "videos");
   if (mGames) mGames.classList.toggle("active", normTab === "games");
   if (mComfyui) mComfyui.classList.toggle("active", normTab === "comfyui");
   if (mEconomy) mEconomy.classList.toggle("active", normTab === "economy");
@@ -237,6 +243,9 @@ function switchModuleTab(tab) {
   }
   if (normTab === "albums" && canAccessAlbums) {
     loadAlbumGallery();
+  }
+  if (normTab === "videos" && canAccessVideos && typeof loadVideoPlatform === "function") {
+    loadVideoPlatform();
   }
   if (normTab === "games" && canAccessGames && typeof loadGameZone === "function") {
     loadGameZone();
@@ -2004,6 +2013,9 @@ async function loadSettings() {
   if ($("s-module-accounts-min-role")) $("s-module-accounts-min-role").value = s.module_accounts_min_role || "manager";
   if ($("s-module-comfyui-min-role")) $("s-module-comfyui-min-role").value = s.module_comfyui_min_role || "user";
   if ($("s-module-games-min-role")) $("s-module-games-min-role").value = s.module_games_min_role || "user";
+  if ($("s-module-videos-min-role")) $("s-module-videos-min-role").value = s.module_videos_min_role || "user";
+  if ($("s-video-tip-fee-percent")) $("s-video-tip-fee-percent").value = s.video_tip_fee_percent ?? 5;
+  if ($("s-video-tip-min-points")) $("s-video-tip-min-points").value = s.video_tip_min_points ?? 1;
   if ($("s-site-bg")) $("s-site-bg").value = s.site_bg || "#0f0f1a";
   if ($("s-site-surface")) $("s-site-surface").value = s.site_surface || "#1a1a2e";
   if ($("s-site-accent")) $("s-site-accent").value = s.site_accent || "#6c63ff";
@@ -2047,7 +2059,8 @@ const FEATURE_SETTING_KEYS = [
   "feature_comfyui_enabled",
   "feature_economy_enabled",
   "feature_trading_enabled",
-  "feature_games_enabled"
+  "feature_games_enabled",
+  "feature_videos_enabled"
 ];
 
 function featureSettingInputId(key) {
@@ -2100,6 +2113,7 @@ const SECURITY_FIELD_LABELS = {
   integrity_guard_enabled: "Integrity Guard",
   integrity_guard_strict_mode: "Integrity strict mode",
   feature_economy_enabled: "PointsChain / 積分私有鏈",
+  feature_videos_enabled: "影音分享模組",
   max_login_failures: "登入失敗鎖定次數",
   block_duration_minutes: "封鎖時長（分鐘）",
   security_pending_chat_reports_threshold: "待審聊天室檢舉警戒",
@@ -3105,6 +3119,9 @@ async function saveSettings() {
     module_accounts_min_role: $("s-module-accounts-min-role")?.value || "manager",
     module_comfyui_min_role: $("s-module-comfyui-min-role")?.value || "user",
     module_games_min_role: $("s-module-games-min-role")?.value || "user",
+    module_videos_min_role: $("s-module-videos-min-role")?.value || "user",
+    video_tip_fee_percent: Number($("s-video-tip-fee-percent")?.value || 5),
+    video_tip_min_points: parseInt($("s-video-tip-min-points")?.value || "1"),
     site_bg: $("s-site-bg")?.value || "#0f0f1a",
     site_surface: $("s-site-surface")?.value || "#1a1a2e",
     site_accent: $("s-site-accent")?.value || "#6c63ff",

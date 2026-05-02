@@ -1,13 +1,14 @@
 # Update Summary
 
-Release ID: `2026.05.02-047`
+P26.05.02-048`
 
 ## Highlights
 
 - Whole-site production gate is now available through
   `security/whole_site_production_gate.py` and
   `security/run_pentest.sh --only whole-site-production-gate`.
-- Latest local gate evidence passed against `http://127.0.0.1:5000`:
+- Latest local gate evidence before the Video Platform module passed against
+  `http://127.0.0.1:5000`:
   12/12 modules PASS, `critical_findings=0`, `high_findings=0`,
   `medium_findings=0`, `production_readiness=YES`.
 - Latest evidence files:
@@ -15,7 +16,7 @@ Release ID: `2026.05.02-047`
   and
   `security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.md`.
 - The gate aggregates Server Mode v2, auth/session, RBAC, snapshot/restore,
-  PointsChain/economy, Cloud Drive, trading, forum/community/reporting,
+  PointsChain/economy, Cloud Drive, Video Platform, trading, forum/community/reporting,
   integrity, audit/logs, stress/reliability, pytest, `py_compile`, generated
   report policy, and `git diff --check`.
 - Latest-password lookup now uses the monotonic `user_passwords.id` order

@@ -1497,6 +1497,9 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     assert body["status"] == "completed"
     assert body["progress_percent"] == 100
     assert body["file"]["filename"] == "remote-task.txt"
+    assert body["file"]["size_bytes"] == len(source.read_bytes())
+    assert body["loaded_bytes"] == len(source.read_bytes())
+    assert body["total_bytes"] == len(source.read_bytes())
     assert body["storage_file"]["virtual_path"] == "/Downloads/remote-task.txt"
 
 

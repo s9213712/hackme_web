@@ -249,7 +249,18 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=max(args.timeout, 420)))
     modules.append(drive)
 
-    trading = ModuleResult("G. Trading / Virtual Exchange")
+    videos = ModuleResult("G. Video Platform")
+    videos.add(pytest_check([
+        "test_video_publish.py",
+        "test_video_permission.py",
+        "test_video_tips.py",
+        "test_video_comments.py",
+        "test_video_security.py",
+    ], timeout=args.timeout))
+    videos.add(script_check("security/video_module_pentest.py", ["--out", str(out_dir)], timeout=args.timeout))
+    modules.append(videos)
+
+    trading = ModuleResult("H. Trading / Virtual Exchange")
     trading.add(pytest_check([
         "test_trading_engine.py",
         "test_trading_reference_prices.py",
@@ -276,7 +287,7 @@ def build_modules(args) -> list[ModuleResult]:
         ], timeout=max(args.timeout, 360)))
     modules.append(trading)
 
-    forum = ModuleResult("H. Forum / Community / Report")
+    forum = ModuleResult("I. Forum / Community / Report")
     forum.add(pytest_check([
         "test_community_permissions.py",
         "test_reports_notifications.py",
@@ -286,7 +297,7 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(forum)
 
-    integrity = ModuleResult("I. Integrity Guard")
+    integrity = ModuleResult("J. Integrity Guard")
     integrity.add(pytest_check([
         "test_integrity_guard.py",
         "test_integrity_repair.py",
@@ -294,12 +305,12 @@ def build_modules(args) -> list[ModuleResult]:
     ], timeout=args.timeout))
     modules.append(integrity)
 
-    audit = ModuleResult("J. Audit / Logs")
+    audit = ModuleResult("K. Audit / Logs")
     audit.add(pytest_check(["test_security_events.py", "test_settings_audit_reseal.py"], timeout=args.timeout))
     audit.add(script_check("security/server_mode_v2_adversarial.py", ["--out", str(out_dir)], timeout=args.timeout))
     modules.append(audit)
 
-    stress = ModuleResult("K. Stress / Reliability")
+    stress = ModuleResult("L. Stress / Reliability")
     if args.base_url:
         stress.add(run_command([
             sys.executable, str(ROOT / "security" / "stress_test.py"),
@@ -317,7 +328,7 @@ def build_modules(args) -> list[ModuleResult]:
         ))
     modules.append(stress)
 
-    full_suite = ModuleResult("L. Full Test Suite")
+    full_suite = ModuleResult("M. Full Test Suite")
     full_suite.add(py_compile_all())
     full_suite.add(git_diff_check())
     full_suite.add(reports_output_policy_check())

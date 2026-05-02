@@ -77,6 +77,7 @@ const SIDEBAR_ICON_PATHS = {
   forum: '<path d="M5 5h14v9H8l-3 3z"/><path d="M8 8h8M8 11h5"/>',
   drive: '<path d="M4 8h16l-2 10H6z"/><path d="m7 8 2-3h6l2 3"/>',
   image: '<path d="M5 5h14v14H5z"/><path d="m7 16 4-4 3 3 2-2 2 3"/><path d="M8.5 8.5h.01"/>',
+  video: '<path d="M5 5h11v14H5z"/><path d="m16 9 5-3v12l-5-3z"/><path d="M8 9h5M8 13h3"/>',
   game: '<path d="M8 4h8v4h-3v3h3v3h-3v6h-2v-6H8v-3h3V8H8z"/><path d="M5 20h14"/>',
   spark: '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/>',
   wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H19v14H6.5A2.5 2.5 0 0 1 4 16.5z"/><path d="M16 11h4v4h-4z"/><path d="M7 5V3.8L17 5"/>',
@@ -111,6 +112,7 @@ const SIDEBAR_MENU_CONFIG = [
     ],
   },
   { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },
+  { tabId: "tab-module-videos", module: "videos", tab: "videos", icon: "video", label: "影音", group: "工具" },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
   { tabId: "tab-module-economy", module: "economy", tab: "economy", icon: "wallet", label: "積分錢包", group: "工具" },
@@ -1089,6 +1091,7 @@ function setAuthState(json, showLoginHero = false) {
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAlbums = $("tab-module-albums");
+  const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
@@ -1105,6 +1108,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
   if (tabModuleAlbums) tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none";
+  if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
   if (tabModuleEconomy) tabModuleEconomy.style.display = canAccessModule("economy") ? "" : "none";
@@ -1141,21 +1145,26 @@ function setAuthState(json, showLoginHero = false) {
   if (currentRole !== "super_admin") {
     loadUserAppeals();
   }
-  const initialModule = canAccessModule("accounts")
+  const requestedInitialModule = ((location.pathname === "/videos" || (location.hash || "").startsWith("#videos/")) && canAccessModule("videos"))
+    ? "videos"
+    : "";
+  const initialModule = requestedInitialModule || (canAccessModule("accounts")
     ? "accounts"
     : canAccessModule("chat")
       ? "chat"
       : canAccessModule("community")
           ? "community"
-          : canAccessModule("privacy_uploads")
-            ? "drive"
-            : canAccessModule("comfyui")
-              ? "comfyui"
-              : canAccessModule("games")
-                ? "games"
-                : canAccessModule("economy")
-                  ? "economy"
-                  : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat";
+            : canAccessModule("privacy_uploads")
+              ? "drive"
+              : canAccessModule("videos")
+                ? "videos"
+                : canAccessModule("comfyui")
+                  ? "comfyui"
+                  : canAccessModule("games")
+                    ? "games"
+                    : canAccessModule("economy")
+                      ? "economy"
+                      : (currentRole !== "super_admin" && canAccessModule("appeals")) ? "appeals" : "chat");
   switchModuleTab(initialModule);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   if (typeof refreshComfyuiStatus === "function" && canAccessModule("comfyui")) {
@@ -1193,6 +1202,7 @@ function resetAuthState() {
   const moduleCommunity = $("module-community");
   const moduleDrive = $("module-drive");
   const moduleAlbums = $("module-albums");
+  const moduleVideos = $("module-videos");
   const moduleGames = $("module-games");
   const moduleComfyui = $("module-comfyui");
   const moduleEconomy = $("module-economy");
@@ -1205,6 +1215,7 @@ function resetAuthState() {
   if (moduleCommunity) moduleCommunity.classList.remove("active");
   if (moduleDrive) moduleDrive.classList.remove("active");
   if (moduleAlbums) moduleAlbums.classList.remove("active");
+  if (moduleVideos) moduleVideos.classList.remove("active");
   if (moduleGames) moduleGames.classList.remove("active");
   if (moduleComfyui) moduleComfyui.classList.remove("active");
   if (moduleEconomy) moduleEconomy.classList.remove("active");

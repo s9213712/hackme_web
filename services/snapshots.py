@@ -487,6 +487,11 @@ RESETTABLE_TABLES = {
     "trading_spot_positions",
     "uploaded_files",
     "user_storage",
+    "video_comments",
+    "video_likes",
+    "video_tips",
+    "video_views",
+    "videos",
     "user_mod_notes",
     "violations",
 }
@@ -2085,7 +2090,7 @@ class ServerModeService:
         return payload
 
     def _cloud_drive_metadata_checkpoint(self, conn):
-        tables = ["storage_files", "storage_folders", "storage_share_links", "cloud_file_refs", "uploaded_files"]
+        tables = ["storage_files", "storage_folders", "storage_share_links", "cloud_file_refs", "uploaded_files", "videos"]
         payload = {}
         for table in tables:
             if not self._table_exists(conn, table):

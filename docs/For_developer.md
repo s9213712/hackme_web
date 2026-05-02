@@ -5,7 +5,7 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.05.02-045`
+- Release ID: `2026.05.02-047`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -201,6 +201,27 @@ Admin storage APIs:
 - `POST /api/admin/storage/sync-quota`
 - `POST /api/admin/storage/maintenance`
 - `POST /api/admin/storage/trash/purge`
+
+### Video Platform
+
+Video Platform v1 uses existing Cloud Drive files as source media. It never
+accepts or returns a raw storage path.
+
+- `POST /api/videos/publish`
+- `GET /api/videos`
+- `GET /api/videos/{id}`
+- `GET /api/videos/{id}/stream`
+- `POST /api/videos/{id}/view`
+- `POST /api/videos/{id}/like`
+- `DELETE /api/videos/{id}/like`
+- `GET /api/videos/{id}/comments`
+- `POST /api/videos/{id}/comments`
+- `POST /api/videos/{id}/tip`
+
+Tips are PointsChain ledger operations. The viewer is debited for the gross
+amount, the uploader receives the net amount, and the official `root` fee
+account receives the platform fee. All rows are written in one database
+transaction, and retry protection uses `Idempotency-Key` when supplied.
 
 ### ComfyUI
 

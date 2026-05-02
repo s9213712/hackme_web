@@ -124,6 +124,22 @@ Open the album detail or preview panel and use the `複製` button next to
 have an optional password; the password is stored as a hash and must be shared
 out of band with the recipient.
 
+### Video Platform
+
+The `影音` page publishes videos already stored in Cloud Drive. It does not
+upload to a separate filesystem.
+
+- owner selects one of their own Cloud Drive video files
+- visibility can be public, unlisted, or private
+- playback uses `/api/videos/<id>/stream`, not a raw storage path
+- users can like, comment, and tip
+- tips are recorded through PointsChain
+
+E2EE files are intentionally not publishable as server-streamed videos because
+the server cannot safely preview or stream plaintext without receiving
+decryptable material. Use normal or server-encrypted Cloud Drive modes for
+videos meant to be watched in the web player.
+
 ### ComfyUI
 
 The AI image page checks whether the configured ComfyUI API is reachable. If the

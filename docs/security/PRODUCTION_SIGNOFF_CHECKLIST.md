@@ -161,7 +161,7 @@ WHOLE_SITE_PRODUCTION_GATE_SUMMARY:
 - high_findings: 0
 ```
 
-Latest local release evidence for `2026.05.02-046`:
+Latest local release evidence before the Video Platform module for `2026.05.02-046`:
 
 ```text
 security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.md
@@ -179,6 +179,9 @@ high_findings: 0
 medium_findings: 0
 production_readiness: YES
 ```
+
+The current gate also includes Video Platform checks. Re-run the whole-site
+gate after video-module changes before treating a deployment as signed off.
 
 Implementation notes from this sign-off:
 

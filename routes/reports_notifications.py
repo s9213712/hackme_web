@@ -368,6 +368,14 @@ def register_reports_notification_routes(app, deps):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
+        requested_user_id = request.args.get("user_id")
+        if requested_user_id not in (None, ""):
+            try:
+                requested_user_id_int = int(requested_user_id)
+            except Exception:
+                return json_resp({"ok": False, "msg": "user_id 格式錯誤"}), 400
+            if requested_user_id_int != int(actor["id"]):
+                return json_resp({"ok": False, "msg": "不可讀取其他使用者通知"}), 403
         unread_only = request.args.get("unread") in {"1", "true", "yes"}
         limit = parse_positive_int(request.args.get("limit", 30), default=30, min_value=1, max_value=100)
         conn = get_db()

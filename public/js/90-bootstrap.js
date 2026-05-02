@@ -7,6 +7,7 @@ function bindUiEvents() {
   const tabModuleCommunity = $("tab-module-community");
   const tabModuleDrive = $("tab-module-drive");
   const tabModuleAlbums = $("tab-module-albums");
+  const tabModuleVideos = $("tab-module-videos");
   const tabModuleGames = $("tab-module-games");
   const tabModuleComfyui = $("tab-module-comfyui");
   const tabModuleEconomy = $("tab-module-economy");
@@ -205,6 +206,7 @@ function bindUiEvents() {
   if (tabModuleCommunity) tabModuleCommunity.addEventListener("click", () => switchModuleTab("community"));
   if (tabModuleDrive) tabModuleDrive.addEventListener("click", () => switchModuleTab("drive"));
   if (tabModuleAlbums) tabModuleAlbums.addEventListener("click", () => switchModuleTab("albums"));
+  if (tabModuleVideos) tabModuleVideos.addEventListener("click", () => switchModuleTab("videos"));
   if (tabModuleGames) tabModuleGames.addEventListener("click", () => switchModuleTab("games"));
   if (tabModuleComfyui) tabModuleComfyui.addEventListener("click", () => switchModuleTab("comfyui"));
   if (tabModuleEconomy) tabModuleEconomy.addEventListener("click", () => switchModuleTab("economy"));

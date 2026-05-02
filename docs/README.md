@@ -10,6 +10,8 @@ short [README](../README.md) plus GitHub-required metadata such as
 - [Web UI Guide](WEB.md): user-facing pages and feature behavior
 - [Trading System And Bots](TRADING.md): spot exchange, borrow trading,
   trading bots, workflow editor, backtesting, and validation scripts
+- [Video Platform v1](VIDEO_PLATFORM.md): Cloud Drive backed video publishing,
+  playback, comments, likes, and PointsChain tips
 - [Grid Trading Bot Design Report](research_reports/GRID_TRADING_BOT_DESIGN_REPORT.md):
   research-only design for a future spot grid trading bot
 - [Developer Guide](For_developer.md): API, deployment, runtime state, and
@@ -63,3 +65,5 @@ short [README](../README.md) plus GitHub-required metadata such as
   permission pentest, traffic stress test, and pre-push validation commands
 - [Trading Stress Pentest](security/TRADING_STRESS_PENTEST.md): controlled spot
   and borrow-trading stress/security validation
+- [Video Module Pentest](VIDEO_PLATFORM.md#security-tests): Cloud Drive video
+  permission and PointsChain tip validation

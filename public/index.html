@@ -218,6 +218,7 @@
         <button class="tab" id="tab-module-community">討論區</button>
         <button class="tab" id="tab-module-drive" style="display:none;">雲端硬碟</button>
         <button class="tab" id="tab-module-albums" style="display:none;">相簿</button>
+        <button class="tab" id="tab-module-videos" style="display:none;">影音</button>
         <button class="tab" id="tab-module-games" style="display:none;">遊戲區</button>
         <button class="tab" id="tab-module-comfyui" style="display:none;">AI 產圖</button>
         <button class="tab" id="tab-module-economy" style="display:none;">積分系統</button>
@@ -830,6 +831,67 @@
     </div>
   </div>
 
+  <div class="module-section" id="module-videos">
+    <div class="admin-tools video-platform">
+      <div class="drive-card-heading">
+        <div>
+          <div class="mini-title">影音</div>
+          <div class="drive-card-sub">從自己的雲端硬碟發布影片，其他人可觀看、按讚、留言與投幣。</div>
+        </div>
+        <div class="drive-file-actions">
+          <button class="btn" id="video-refresh-btn" type="button">刷新</button>
+          <button class="btn btn-primary" id="video-publish-open-btn" type="button">發布影片</button>
+        </div>
+      </div>
+      <details class="drive-collapsible-panel" id="video-publish-panel">
+        <summary>
+          <span>
+            <span class="drive-card-title">發布雲端硬碟影片</span>
+            <span class="drive-card-sub">只會使用 cloud_file_id 串接，不公開 storage path。</span>
+          </span>
+        </summary>
+        <div class="drive-collapsible-body">
+          <div class="settings-option-grid">
+            <div class="field">
+              <label>雲端硬碟影片</label>
+              <select id="video-publish-file"></select>
+            </div>
+            <div class="field">
+              <label>標題</label>
+              <input type="text" id="video-publish-title" maxlength="120" placeholder="影片標題" />
+            </div>
+            <div class="field">
+              <label>可見性</label>
+              <select id="video-publish-visibility">
+                <option value="public">公開</option>
+                <option value="unlisted">不列出，持連結可看</option>
+                <option value="private">私人</option>
+              </select>
+            </div>
+            <div class="field" style="grid-column:1/-1;">
+              <label>描述</label>
+              <textarea id="video-publish-description" rows="3" maxlength="2000" placeholder="影片說明、章節或注意事項"></textarea>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn btn-primary" id="video-publish-btn" type="button">發布</button>
+            </div>
+          </div>
+        </div>
+      </details>
+      <div class="drive-card-heading" style="margin-top:1rem;">
+        <div class="drive-file-actions">
+          <button class="btn btn-sm" type="button" data-video-sort="new">最新</button>
+          <button class="btn btn-sm" type="button" data-video-sort="hot">熱門</button>
+          <button class="btn btn-sm" type="button" data-video-sort="trending">趨勢</button>
+        </div>
+      </div>
+      <div id="video-list" class="video-grid"></div>
+      <div id="video-detail" class="video-detail" style="display:none;"></div>
+      <div id="video-msg" class="msg"></div>
+    </div>
+  </div>
+
   <div class="module-section" id="module-games">
     <div class="admin-tools game-zone">
       <div class="drive-card-heading">
@@ -1132,18 +1194,6 @@
           </div>
         </div>
       </div>
-      <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
-        <div class="drive-card-heading">
-          <div>
-            <div class="drive-card-title">我的帳本</div>
-            <div class="drive-card-sub">append-only ledger；封塊後可產生 Merkle proof</div>
-          </div>
-          <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-ledger-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
-        </div>
-        <div id="economy-ledger-body">
-          <div id="economy-ledger-list" class="drive-file-list"></div>
-        </div>
-      </div>
       <div class="drive-card" id="economy-root-virtual-card" style="display:none;margin-top:.75rem;">
         <div class="drive-card-heading">
           <div>
@@ -1210,6 +1260,21 @@
               <div id="economy-trading-fill-list" class="drive-file-list"></div>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="drive-card" id="economy-user-ledger-card" style="margin-top:.75rem;">
+        <div class="drive-card-heading">
+          <div>
+            <div class="drive-card-title">我的帳本</div>
+            <div class="drive-card-sub">append-only ledger；封塊後可產生 Merkle proof</div>
+          </div>
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" type="button" id="economy-ledger-export-btn" style="font-size:.8rem;padding:.2rem .5rem;">匯出 CSV</button>
+            <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-ledger-body',this)" style="font-size:.8rem;padding:.2rem .5rem;" data-collapsed="1">▸</button>
+          </div>
+        </div>
+        <div id="economy-ledger-body" style="display:none;">
+          <div id="economy-ledger-list" class="drive-file-list"></div>
         </div>
       </div>
       </div>
@@ -1490,14 +1555,19 @@
                 <div class="field"><label>下限價格（點）</label><input type="number" id="trading-grid-lower-price" min="1" step="1" placeholder="例如 45000" /></div>
                 <div class="field"><label>網格數量</label><input type="number" id="trading-grid-count" min="2" max="200" step="1" value="10" /></div>
                 <div class="field"><label>每格金額（點）</label><input type="number" id="trading-grid-order-amount" min="1" step="1" value="100" /></div>
-                <div class="field"><label>間距模式</label><select id="trading-grid-spacing-mode"><option value="arithmetic">等差（均勻間距）</option><option value="geometric">等比（百分比間距）</option></select></div>
+                <div class="field"><label>間距模式</label><select id="trading-grid-spacing-mode"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
                 <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-grid-bot-create-btn" type="button">建立網格</button></div>
               </div>
               <div id="trading-grid-preview" class="drive-card-sub" style="margin-top:.5rem;"></div>
+              <div class="drive-card-sub" style="margin-top:.4rem;font-size:.82em;color:var(--muted);line-height:1.55;">
+                <b>等差</b>：每格間隔固定點數，適合窄幅震盪、幣價變化不大的行情；高價格區每格利潤比例較低。<br>
+                <b>等比</b>：每格間隔固定百分比，低價到高價每格利潤率均等，適合跨越大價差或長期持有的寬幅行情。<br>
+                <b>資金凍結說明</b>：買單凍結<b>積分（現金）</b>；賣單需凍結<b>現貨底倉</b>（若帳戶無足夠現貨，需先購入）。
+              </div>
               <div id="trading-grid-spot-confirm" style="display:none;"></div>
               <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:1rem;">
                 <div class="drive-card-title" style="margin:0;flex:1">我的網格機器人</div>
-                <button class="btn btn-sm" id="trading-grid-scan-btn" type="button">掃描更新</button>
+                <button class="btn btn-sm" id="trading-grid-scan-btn" type="button">立即掃描</button>
               </div>
               <div id="trading-grid-bot-list" style="margin-top:.5rem;"></div>
             </div>
@@ -1564,7 +1634,7 @@
                 </div>
                 <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
                   <button class="btn btn-primary" id="trading-auto-bot-save-btn" type="button">儲存 Workflow Bot</button>
-                  <button class="btn" id="trading-bot-scan-btn" type="button">掃描執行已啟用機器人</button>
+                  <button class="btn" id="trading-bot-scan-btn" type="button">立即掃描</button>
                 </div>
                 <div class="drive-card-title" style="margin-top:.85rem;">自動化列表</div>
                 <div id="trading-strategy-bot-list" class="drive-file-list"></div>
@@ -1578,6 +1648,7 @@
                   <select id="trading-backtest-strategy">
                     <option value="dca">定投機器人</option>
                     <option value="workflow">自動化 Workflow</option>
+                    <option value="grid">網格交易</option>
                   </select>
                 </div>
                 <div class="field"><label>選擇已儲存 Bot</label><select id="trading-backtest-bot-select"><option value="">使用目前表單設定</option></select></div>
@@ -1592,6 +1663,17 @@
               <div id="trading-backtest-dca-options" class="settings-option-grid" style="margin-top:.4rem;">
                 <div class="field"><label>每次定投金額（點）</label><input type="number" id="trading-backtest-order-points" min="1" step="1" value="100" /></div>
                 <div class="field"><label>定投間隔（K 線根數）</label><input type="number" id="trading-backtest-interval-candles" min="1" step="1" value="1" /></div>
+              </div>
+              <!-- 網格選項 -->
+              <div id="trading-backtest-grid-options" class="settings-option-grid" style="display:none;margin-top:.4rem;">
+                <div class="field"><label>下限價格（點）</label><input type="number" id="trading-backtest-grid-lower" min="1" step="1" placeholder="例如 80000" /></div>
+                <div class="field"><label>上限價格（點）</label><input type="number" id="trading-backtest-grid-upper" min="1" step="1" placeholder="例如 120000" /></div>
+                <div class="field"><label>網格數量</label><input type="number" id="trading-backtest-grid-count" min="2" max="500" step="1" value="10" /></div>
+                <div class="field"><label>每格金額（點）</label><input type="number" id="trading-backtest-grid-amount" min="1" step="1" value="100" /></div>
+                <div class="field"><label>間距模式</label><select id="trading-backtest-grid-spacing"><option value="arithmetic">等差（固定點數間距）</option><option value="geometric">等比（固定百分比間距）</option></select></div>
+              </div>
+              <div class="drive-card-sub" id="trading-backtest-grid-hint" style="display:none;margin-top:.3rem;font-size:.81em;color:var(--muted);line-height:1.5;">
+                等差：每格固定點數，適合窄幅震盪行情。&nbsp;&nbsp;等比：每格固定百分比，適合跨越大價差的寬幅行情。
               </div>
               <!-- Workflow 選項 -->
               <div id="trading-backtest-workflow-options" style="display:none;margin-top:.4rem;">
@@ -1620,7 +1702,7 @@
               <div class="drive-card-sub">顯示定投與自動化 Workflow 的最近掃描、觸發、跳過與錯誤。</div>
               <div id="trading-bot-run-list" class="drive-file-list" style="margin-top:.75rem;"></div>
             </div>
-            <div class="drive-card-sub" id="trading-bot-msg" style="margin-top:.45rem;">已啟用的交易機器人會由後端定期自動掃描；按鈕可手動立即掃描一次。</div>
+            <div class="drive-card-sub" id="trading-bot-msg" style="margin-top:.45rem;">已啟用的交易機器人由後端定期全自動掃描執行。</div>
           </div>
         </details>
         <details class="drive-collapsible-panel" id="trading-margin-card" style="display:none;margin-top:.75rem;">
@@ -2629,6 +2711,7 @@
             <div class="field"><label><input type="checkbox" id="s-feature-reports-notifications-enabled" /> 檢舉 / 申訴 / 通知新版</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-attachments-enabled" /> 附件 / 頭像 / CAPTCHA</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-storage-albums-enabled" /> Storage / 相簿</label></div>
+            <div class="field"><label><input type="checkbox" id="s-feature-videos-enabled" /> 影音分享</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-games-enabled" /> 遊戲區 / 西洋棋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
@@ -2873,6 +2956,14 @@
                 <option value="super_admin">最高管理者</option>
               </select>
             </div>
+            <div class="field">
+              <label>影音頁最低可用角色</label>
+              <select id="s-module-videos-min-role">
+                <option value="user">一般用戶</option>
+                <option value="manager">管理者</option>
+                <option value="super_admin">最高管理者</option>
+              </select>
+            </div>
               </div>
             </details>
           </div>
@@ -2886,6 +2977,16 @@
               </summary>
               <div class="drive-collapsible-body">
             <div style="font-size:.75rem;color:var(--muted);margin-bottom:.75rem;">ComfyUI、雲端容量、發文、遊戲等服務都從後端 catalog 讀取價格。</div>
+            <div class="settings-option-grid billing-editor-grid" style="margin-bottom:.85rem;">
+              <div class="field">
+                <label>影音投幣平台抽成（%）</label>
+                <input type="number" id="s-video-tip-fee-percent" min="0" max="80" step="1" value="5" />
+              </div>
+              <div class="field">
+                <label>影音投幣最低點數</label>
+                <input type="number" id="s-video-tip-min-points" min="1" step="1" value="1" />
+              </div>
+            </div>
             <div class="settings-option-grid billing-editor-grid">
               <div class="field">
                 <label>項目 key</label>
@@ -3670,10 +3771,11 @@
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
+<script src="/js/35-drive.js?v=20260503-remote-download-stable" defer></script>
 <script src="/js/36-comfyui.js?v=20260502-progressive-batch" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
+<script src="/js/39-videos.js?v=20260502-video-platform" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>

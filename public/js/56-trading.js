@@ -1701,12 +1701,7 @@ function renderTradingBots(rows = [], runs = []) {
       bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
     });
   });
-  const botSelect = $("trading-backtest-bot-select");
-  if (botSelect) {
-    const previous = botSelect.value;
-    botSelect.innerHTML = `<option value="">使用目前表單設定</option>` + rows.map((row) => `<option value="${sanitize(row.bot_uuid || "")}">${sanitize(row.bot_type === "dca" ? "定投" : "Workflow")} · ${sanitize(row.name || row.market_symbol || "")}</option>`).join("");
-    if (previous && Array.from(botSelect.options).some((option) => option.value === previous)) botSelect.value = previous;
-  }
+  refreshBacktestBotSelect();
   if (runList) {
     if (!runs.length) {
       runList.innerHTML = `<div class="drive-empty">尚無執行紀錄</div>`;
@@ -1725,6 +1720,29 @@ function renderTradingBots(rows = [], runs = []) {
   }
   restartTradingBotCountdown();
   renderMyBotsList();
+}
+
+function tradingWorkflowBotDetail(bot) {
+  const parts = [];
+  const wf = bot.workflow;
+  if (wf && typeof wf === "object") {
+    const branches = Array.isArray(wf.branches) ? wf.branches : [];
+    const nodes = Array.isArray(wf.nodes) ? wf.nodes : [];
+    if (branches.length) parts.push(`Workflow ${branches.length} 個分支`);
+    else if (nodes.length) parts.push(`Workflow 圖（${nodes.length} 個節點）`);
+    else parts.push("Workflow（無條件）");
+  } else {
+    const price = formatTradingPointsValue(bot.trigger_price_points || 0);
+    if (bot.trigger_type === "price_above") parts.push(`價格 ≥ ${price} 點時觸發`);
+    else if (bot.trigger_type === "price_below") parts.push(`價格 ≤ ${price} 點時觸發`);
+    else parts.push("每次掃描觸發");
+  }
+  const action = bot.side === "sell" ? "賣出" : "買入";
+  const order = bot.order_type === "limit" ? `限價 ${formatTradingPointsValue(bot.limit_price_points)} 點` : "市價單";
+  parts.push(`${action} · ${order}`);
+  if (bot.quantity_text) parts.push(`數量：${bot.quantity_text}`);
+  if (Number(bot.cooldown_seconds || 0) > 0) parts.push(`冷卻 ${bot.cooldown_seconds}s`);
+  return parts.join(" · ");
 }
 
 function renderMyBotsList() {
@@ -1787,7 +1805,7 @@ function renderMyBotsList() {
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>詳細設定</summary>
-          <div class="drive-card-sub">${sanitize(tradingBotTriggerLabel(bot))} 時 ${sanitize(bot.side === "sell" ? "賣出" : "買入")} ${sanitize(bot.quantity_text || "workflow 決定")}</div>
+          <div class="drive-card-sub">${sanitize(tradingWorkflowBotDetail(bot))}</div>
         </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
@@ -2018,28 +2036,47 @@ function renderGridBotPreview() {
   const refPrice = marketPrice || Math.round((upper + lower) / 2);
   const buyLevels = levels.filter((p) => p < refPrice);
   const sellLevels = levels.filter((p) => p > refPrice);
-  // Buy orders freeze: amount + fee per order; sell orders freeze 0 points (need spot only)
+  // Buy orders: freeze amount + fee per level
   const buyOrderCost = amount + feePerTrade;
   const buyCostTotal = buyLevels.length * buyOrderCost;
-  // Spot needed for sell orders
+  // Sell orders: need spot inventory (asset units); estimate cost at current price
   const spotUnitsNeeded = sellLevels.reduce((sum, p) => sum + (p > 0 ? amount / p : 0), 0);
-  const spotDisplay = spotUnitsNeeded > 0 ? `約 ${spotUnitsNeeded.toFixed(6)} 個 ${market ? tradingDisplaySymbol(market.symbol).split("/")[0] : "資產"}` : "0";
+  const assetLabel = market ? tradingDisplaySymbol(market.symbol).split("/")[0] : "資產";
+  const spotDisplay = spotUnitsNeeded > 0 ? `約 ${spotUnitsNeeded.toFixed(6)} 個 ${assetLabel}` : "0";
+  // Spot acquisition cost at current price + buy fee (full rate, not grid discount)
+  const spotValueAtRefPrice = spotUnitsNeeded * refPrice;
+  const spotBuyFee = spotValueAtRefPrice * feeRatePct / 100;
+  const spotTotalCost = Math.ceil(spotValueAtRefPrice + spotBuyFee);
+  // Total capital if opening ALL orders from scratch (buy frozen + spot acquisition)
+  const totalCapital = Math.ceil(buyCostTotal) + spotTotalCost;
+  // Fee reserve: one full round-trip per grid level
+  const feeReserve = Math.ceil(roundTripFee * levels.length);
 
+  const fmtFee = (n) => n < 1 ? n.toFixed(3) : formatTradingPointsValue(Math.round(n));
+  const arithmeticStep = Math.round((upper - lower) / (count - 1));
   const stepInfo = mode === "geometric"
-    ? `間距約 ${minStepPct.toFixed(2)}%（等比）`
-    : `間距 ${formatTradingPointsValue(minStep)} 點（${minStepPct.toFixed(2)}%–${maxStepPct.toFixed(2)}%，等差）`;
+    ? `固定間距 ${minStepPct.toFixed(2)}%（等比）`
+    : `固定間距 ${formatTradingPointsValue(arithmeticStep)} 點（等差）`;
+  const midStepPct = ((upper - lower) / (count - 1) / ((upper + lower) / 2) * 100).toFixed(2);
 
   let feeHtml = "";
   if (feeRatePct > 0) {
     const color = hasArbitrage ? "#4caf50" : "#ff4f6d";
     const sign = hasArbitrage ? "✓ 有套利空間" : "✗ 間距不足，建議加大間距或減少網格數";
-    feeHtml = `<div style="color:${color};margin-top:.25rem;">手續費：單筆 ${formatTradingPointsValue(Math.round(feePerTrade))} 點（網格優惠 50%，費率 ${gridFeeRatePct.toFixed(4)}%），來回 ${formatTradingPointsValue(Math.round(roundTripFee))} 點 &nbsp;·&nbsp; ${sign}</div>`;
+    feeHtml = `<div style="color:${color};margin-top:.25rem;">手續費：單筆 ${fmtFee(feePerTrade)} 點（網格優惠 50%，費率 ${gridFeeRatePct.toFixed(4)}%），來回 ${fmtFee(roundTripFee)} 點 &nbsp;·&nbsp; ${sign}</div>`;
   }
 
+  const capitalBreakdown = refPrice > 0
+    ? `買單凍結 ${formatTradingPointsValue(Math.ceil(buyCostTotal))} ＋ 賣單底倉 ${formatTradingPointsValue(spotTotalCost)}（以現價購入含手續費）${feeReserve > 0 ? ` ＋ 手續費預留 ${formatTradingPointsValue(feeReserve)}` : ""}`
+    : `買單凍結 ${formatTradingPointsValue(Math.ceil(buyCostTotal))}（賣單需現有底倉 ${spotDisplay}，無現價無法估算購入成本）`;
+  const totalLine = refPrice > 0
+    ? `<div style="margin-top:.35rem;font-weight:600;">預估開單所需總資金：${formatTradingPointsValue(totalCapital + feeReserve)} 點</div><div style="color:var(--muted);font-size:.82em;">${capitalBreakdown}</div>`
+    : `<div style="margin-top:.35rem;">買單 ${buyLevels.length} 格需 ${formatTradingPointsValue(Math.ceil(buyCostTotal))} 點，賣單 ${sellLevels.length} 格需底倉 ${spotDisplay}</div>`;
+
   preview.innerHTML = `
-    <div>${count} 格，${stepInfo}，每格 ${formatTradingPointsValue(amount)} 點</div>
-    <div>買單 ${buyLevels.length} 格（需凍結 ${formatTradingPointsValue(Math.round(buyCostTotal))} 點含手續費），賣單 ${sellLevels.length} 格（需現有底倉 ${spotDisplay}）</div>
-    <div>預估凍結積分約 ${formatTradingPointsValue(Math.round(buyCostTotal))} 點（賣單需持有現貨，不另凍結積分）</div>
+    <div>${count} 格，${stepInfo}（中間位約 ${midStepPct}%），每格 ${formatTradingPointsValue(amount)} 點</div>
+    <div>買單 ${buyLevels.length} 格（凍結積分），賣單 ${sellLevels.length} 格（需底倉 ${spotDisplay}）</div>
+    ${totalLine}
     ${feeHtml}
   `.trim();
 }
@@ -2234,6 +2271,7 @@ async function loadGridBots() {
     }
     renderGridBotList(tradingGridBots, priceMap);
     renderMyBotsList();
+    refreshBacktestBotSelect();
   } catch (e) {
     // silent
   }
@@ -2773,8 +2811,27 @@ async function backtestTradingBot() {
     return;
   }
   const botUuid = $("trading-backtest-bot-select")?.value || "";
-  const selectedBot = botUuid ? tradingState.bots.find((row) => row.bot_uuid === botUuid) : null;
-  const botType = $("trading-backtest-strategy")?.value || (selectedBot ? (selectedBot.bot_type === "dca" ? "dca" : "workflow") : "dca");
+  const selectedGridBot = botUuid ? (tradingGridBots || []).find((g) => g.bot_uuid === botUuid) : null;
+  const selectedBot = botUuid && !selectedGridBot ? (tradingState.bots || []).find((row) => row.bot_uuid === botUuid) : null;
+  const botType = $("trading-backtest-strategy")?.value || (selectedGridBot ? "grid" : (selectedBot ? (selectedBot.bot_type === "dca" ? "dca" : "workflow") : "dca"));
+
+  // Grid-specific params
+  let gridParams = {};
+  if (botType === "grid") {
+    const src = selectedGridBot || {};
+    gridParams = {
+      lower_price_points: Number($("trading-backtest-grid-lower")?.value || src.lower_price_points || 0),
+      upper_price_points: Number($("trading-backtest-grid-upper")?.value || src.upper_price_points || 0),
+      grid_count: Number($("trading-backtest-grid-count")?.value || src.grid_count || 10),
+      order_amount_points: Number($("trading-backtest-grid-amount")?.value || src.order_amount_points || 100),
+      spacing_mode: $("trading-backtest-grid-spacing")?.value || src.spacing_mode || "arithmetic",
+    };
+    if (!gridParams.lower_price_points || !gridParams.upper_price_points || gridParams.upper_price_points <= gridParams.lower_price_points) {
+      tradingSetMsg("請填寫正確的網格上下限價格（下限 < 上限）", false);
+      return;
+    }
+  }
+
   let workflow = null;
   if (botType === "workflow") {
     try {
@@ -2802,6 +2859,7 @@ async function backtestTradingBot() {
     start_time: $("trading-backtest-start")?.value || "",
     end_time: $("trading-backtest-end")?.value || "",
     slippage_percent: Number($("trading-backtest-slippage-percent")?.value || 0),
+    ...gridParams,
   };
   const hasCandleData = Array.isArray(allCandles) && allCandles.length >= 2;
   if (!hasCandleData) {
@@ -2815,7 +2873,7 @@ async function backtestTradingBot() {
     let combinedJson = null;
     let allTrades = [];
     let totalCandles = 0;
-    if (hasCandleData && allCandles.length > BACKTEST_BATCH_SIZE) {
+    if (botType !== "grid" && hasCandleData && allCandles.length > BACKTEST_BATCH_SIZE) {
       const batches = [];
       for (let i = 0; i < allCandles.length; i += BACKTEST_BATCH_SIZE) {
         batches.push(allCandles.slice(i, i + BACKTEST_BATCH_SIZE));
@@ -2891,29 +2949,63 @@ function renderTradingBacktestResult(json) {
   }
 }
 
+function refreshBacktestBotSelect() {
+  const sel = $("trading-backtest-bot-select");
+  if (!sel) return;
+  const prev = sel.value;
+  const dcaWfOpts = (tradingState.bots || []).map((row) =>
+    `<option value="${sanitize(row.bot_uuid || "")}">${sanitize(row.bot_type === "dca" ? "定投" : "Workflow")} · ${sanitize(row.name || row.market_symbol || "")}</option>`
+  ).join("");
+  const gridOpts = (tradingGridBots || []).map((g) =>
+    `<option value="${sanitize(g.bot_uuid || "")}">${sanitize(`網格 · ${g.name || g.market_symbol || ""}`)}</option>`
+  ).join("");
+  sel.innerHTML = `<option value="">使用目前表單設定</option>` + dcaWfOpts + gridOpts;
+  if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+}
+
 function updateBacktestStrategyUI() {
   const strategy = $("trading-backtest-strategy")?.value || "dca";
   const dcaOpts = $("trading-backtest-dca-options");
   const wfOpts = $("trading-backtest-workflow-options");
+  const gridOpts = $("trading-backtest-grid-options");
   if (dcaOpts) dcaOpts.style.display = strategy === "dca" ? "" : "none";
   if (wfOpts) wfOpts.style.display = strategy === "workflow" ? "" : "none";
+  if (gridOpts) gridOpts.style.display = strategy === "grid" ? "" : "none";
+  const gridHint = $("trading-backtest-grid-hint");
+  if (gridHint) gridHint.style.display = strategy === "grid" ? "" : "none";
   const botUuid = $("trading-backtest-bot-select")?.value || "";
   if (botUuid) {
-    const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
-    if (bot) {
-      const isWf = bot.bot_type !== "dca";
-      if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = isWf ? "workflow" : "dca";
-      if (dcaOpts) dcaOpts.style.display = isWf ? "none" : "";
-      if (wfOpts) wfOpts.style.display = isWf ? "" : "none";
-      if (!isWf) {
-        if ($("trading-backtest-order-points")) $("trading-backtest-order-points").value = bot.budget_points || 100;
-        if ($("trading-backtest-interval-candles")) {
-          const intervalCandles = Math.max(1, Math.ceil(Number(bot.interval_hours ? bot.interval_hours / 0.25 : 1)));
-          $("trading-backtest-interval-candles").value = intervalCandles;
+    const gridBot = (tradingGridBots || []).find((g) => g.bot_uuid === botUuid);
+    if (gridBot) {
+      if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = "grid";
+      if (dcaOpts) dcaOpts.style.display = "none";
+      if (wfOpts) wfOpts.style.display = "none";
+      if (gridOpts) gridOpts.style.display = "";
+      if ($("trading-backtest-grid-hint")) $("trading-backtest-grid-hint").style.display = "";
+      if ($("trading-backtest-grid-lower")) $("trading-backtest-grid-lower").value = gridBot.lower_price_points || "";
+      if ($("trading-backtest-grid-upper")) $("trading-backtest-grid-upper").value = gridBot.upper_price_points || "";
+      if ($("trading-backtest-grid-count")) $("trading-backtest-grid-count").value = gridBot.grid_count || 10;
+      if ($("trading-backtest-grid-amount")) $("trading-backtest-grid-amount").value = gridBot.order_amount_points || 100;
+      if ($("trading-backtest-grid-spacing")) $("trading-backtest-grid-spacing").value = gridBot.spacing_mode || "arithmetic";
+      if ($("trading-backtest-market")) $("trading-backtest-market").value = gridBot.market_symbol || "";
+    } else {
+      const bot = (tradingState.bots || []).find((row) => row.bot_uuid === botUuid);
+      if (bot) {
+        const isWf = bot.bot_type !== "dca";
+        if ($("trading-backtest-strategy")) $("trading-backtest-strategy").value = isWf ? "workflow" : "dca";
+        if (dcaOpts) dcaOpts.style.display = isWf ? "none" : "";
+        if (wfOpts) wfOpts.style.display = isWf ? "" : "none";
+        if (gridOpts) gridOpts.style.display = "none";
+        if ($("trading-backtest-grid-hint")) $("trading-backtest-grid-hint").style.display = "none";
+        if (!isWf) {
+          if ($("trading-backtest-order-points")) $("trading-backtest-order-points").value = bot.budget_points || 100;
+          if ($("trading-backtest-interval-candles")) {
+            $("trading-backtest-interval-candles").value = Math.max(1, Math.ceil(Number(bot.interval_hours ? bot.interval_hours / 0.25 : 1)));
+          }
+        } else {
+          if ($("trading-backtest-workflow-order-points")) $("trading-backtest-workflow-order-points").value = bot.budget_points || 100;
+          if (bot.workflow && $("trading-backtest-workflow-json")) $("trading-backtest-workflow-json").value = JSON.stringify(bot.workflow, null, 2);
         }
-      } else {
-        if ($("trading-backtest-workflow-order-points")) $("trading-backtest-workflow-order-points").value = bot.budget_points || 100;
-        if (bot.workflow && $("trading-backtest-workflow-json")) $("trading-backtest-workflow-json").value = JSON.stringify(bot.workflow, null, 2);
       }
     }
   }
@@ -2941,7 +3033,15 @@ function populateBacktestWorkflowTemplates() {
 }
 
 function prepareTradingBacktestFromBot(botUuid) {
-  const bot = tradingState.bots.find((row) => row.bot_uuid === botUuid);
+  const gridBot = (tradingGridBots || []).find((g) => g.bot_uuid === botUuid);
+  if (gridBot) {
+    switchTradingBotTab("backtest");
+    if ($("trading-backtest-bot-select")) $("trading-backtest-bot-select").value = botUuid;
+    updateBacktestStrategyUI();
+    tradingSetMsg("已帶入網格機器人回測設定，請確認時間範圍後執行回測");
+    return;
+  }
+  const bot = (tradingState.bots || []).find((row) => row.bot_uuid === botUuid);
   if (!bot) {
     tradingSetMsg("找不到要回測的交易機器人", false);
     return;

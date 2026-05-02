@@ -1,0 +1,147 @@
+# Video Platform v1
+
+Video Platform v1 is a display and interaction layer on top of the existing
+Cloud Drive. It does not create a second storage system.
+
+## Architecture
+
+- Cloud Drive is the storage layer.
+- `videos` metadata is the presentation layer.
+- PointsChain is the economic layer for tips.
+- Server Mode / feature flags control whether the module is exposed.
+
+## Feature Flag
+
+The module is controlled by:
+
+```text
+feature_videos_enabled
+module_videos_min_role
+```
+
+When disabled, `/api/videos*` is blocked by the same feature gate used by other
+optional modules.
+
+## User Flow
+
+1. User uploads a video file through Cloud Drive.
+2. User opens the `影音` page.
+3. User selects one of their own Cloud Drive video files and publishes it.
+4. Other users can watch public videos, open unlisted videos by link, or only
+   view private videos when they are the owner or a manager/root account.
+5. Logged-in users can like, comment, and tip.
+
+## Cloud Drive Rules
+
+Publishing uses `cloud_file_id` only.
+
+The server never exposes `storage_path` to the browser. Playback goes through:
+
+```text
+GET /api/videos/<id>/stream
+```
+
+The stream endpoint resolves the file with the existing Cloud Drive safe path
+resolver, so path traversal, absolute paths, and storage-root escape are handled
+by the Cloud Drive safety layer.
+
+Rules:
+
+- Only the file owner can publish a Cloud Drive file.
+- The file MIME type must start with `video/`.
+- E2EE files cannot be published as server-streamed videos.
+- Blocked or quarantined files cannot be published.
+- Private videos require owner or manager/root access.
+- Unlisted videos are not listed publicly but can be opened by direct link.
+
+## PointsChain Tips
+
+Tips use PointsChain and do not directly update wallet balances.
+
+For each tip:
+
+1. Viewer wallet gets a PointsChain debit.
+2. Uploader wallet gets a PointsChain credit for the net amount.
+3. The official fee account (`root`) gets a PointsChain credit for the platform fee.
+4. The request can provide an idempotency key to avoid double-spend on retry.
+
+`video_tips` records `fee_points`, `fee_user_id`, `ledger_debit_uuid`,
+`ledger_credit_uuid`, and `ledger_fee_uuid`, so the gross payment, uploader
+revenue, and official platform fee can all be audited from PointsChain.
+
+Current setting:
+
+```text
+video_tip_fee_percent
+video_tip_min_points
+```
+
+## API
+
+```text
+POST   /api/videos/publish
+GET    /api/videos?sort=new|hot|trending&page=1
+GET    /api/videos/<id>
+GET    /api/videos/<id>/stream
+POST   /api/videos/<id>/view
+POST   /api/videos/<id>/like
+DELETE /api/videos/<id>/like
+GET    /api/videos/<id>/comments
+POST   /api/videos/<id>/comments
+POST   /api/videos/<id>/comment
+POST   /api/videos/<id>/tip
+```
+
+State-changing requests require CSRF through the shared `apiFetch()` wrapper.
+
+## Tables
+
+```text
+videos
+video_views
+video_likes
+video_comments
+video_tips
+```
+
+These tables are reset with runtime data and are covered by snapshot/restore
+because the database snapshot includes application tables. Video metadata is
+also included in the Cloud Drive metadata checkpoint hash.
+
+## Security Tests
+
+Run:
+
+```bash
+security/run_pentest.sh --only video-module
+```
+
+The script validates:
+
+- owner-only Cloud Drive publish
+- non-video MIME rejection
+- private video access control
+- comment XSS rejection
+- watch-count dedupe
+- PointsChain tip debit/credit
+- idempotency against double spend
+- insufficient-balance rejection
+
+Pytest coverage:
+
+```text
+tests/test_video_publish.py
+tests/test_video_permission.py
+tests/test_video_tips.py
+tests/test_video_comments.py
+tests/test_video_security.py
+```
+
+## Explicit Non-Goals For v1
+
+- No transcoding.
+- No CDN.
+- No recommendation algorithm.
+- No subscription/follow system.
+- No livestreaming.
+- No advertising revenue split.

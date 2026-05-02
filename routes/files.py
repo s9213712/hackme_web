@@ -1427,6 +1427,14 @@ def register_file_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
+        requested_user_id = request.args.get("user_id")
+        if requested_user_id not in (None, ""):
+            try:
+                requested_user_id_int = int(requested_user_id)
+            except Exception:
+                return json_resp({"ok": False, "msg": "user_id 格式錯誤"}), 400
+            if requested_user_id_int != int(actor["id"]):
+                return json_resp({"ok": False, "msg": "不可讀取其他使用者雲端硬碟"}), 403
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)

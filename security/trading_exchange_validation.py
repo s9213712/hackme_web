@@ -355,6 +355,82 @@ def validation_scenarios():
             backtest=workflow_backtest,
         )
 
+        # Grid bot live lifecycle: create initial limit orders, match one buy,
+        # then scan the bot so it places the next sell level.
+        points.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="credit",
+            amount=1200,
+            action_type="validation_grid_funding",
+            actor=root,
+        )
+        trading.place_order(
+            actor=alice,
+            market_symbol="ETH/POINTS",
+            side="buy",
+            order_type="market",
+            quantity="1",
+        )
+        grid_bot = trading.create_grid_bot(
+            actor=alice,
+            payload={
+                "name": "validation grid",
+                "market_symbol": "ETH/POINTS",
+                "lower_price_points": 800,
+                "upper_price_points": 1200,
+                "grid_count": 5,
+                "order_amount_points": 100,
+            },
+        )
+        prices.set("ETH/POINTS", 900)
+        matched_grid = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, market_symbol="ETH/POINTS", limit=20)
+        scanned_grid = trading.scan_grid_bots(actor=alice)
+        ok(
+            results,
+            "grid bot creates orders, processes a fill, and places next counter order",
+            grid_bot["ok"] is True
+            and len(grid_bot["placed"]) == 4
+            and any(row["side"] == "buy" and row["execution_price_points"] == 900 for row in matched_grid["matched"])
+            and any(
+                item["fills_processed"]
+                and any(order["side"] == "sell" and order["price_points"] == 1000 for order in item["counter_orders_placed"])
+                for item in scanned_grid["results"]
+            ),
+            grid_bot=grid_bot,
+            matched=matched_grid,
+            scanned=scanned_grid,
+        )
+
+        grid_backtest = trading.backtest_trading_bot(
+            actor=alice,
+            payload={
+                "strategy": "grid",
+                "market_symbol": "ETH/POINTS",
+                "initial_cash_points": 1000,
+                "lower_price_points": 80,
+                "upper_price_points": 120,
+                "grid_count": 5,
+                "order_amount_points": 100,
+                "candles": [
+                    {"time": 1, "open_points": 100, "high_points": 100, "low_points": 100, "close_points": 100},
+                    {"time": 2, "open_points": 100, "high_points": 100, "low_points": 90, "close_points": 90},
+                    {"time": 3, "open_points": 90, "high_points": 110, "low_points": 90, "close_points": 110},
+                    {"time": 4, "open_points": 110, "high_points": 120, "low_points": 80, "close_points": 100},
+                ],
+            },
+        )
+        ok(
+            results,
+            "grid backtest follows adjacent-level lifecycle and avoids same-candle churn",
+            grid_backtest["strategy"] == "grid"
+            and grid_backtest["trade_count"] == 7
+            and grid_backtest["final_value_points"] == 1065
+            and [row["side"] for row in grid_backtest["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
+            and all(not (row["index"] == 0 and row["price_points"] == 100) for row in grid_backtest["trades"]),
+            backtest=grid_backtest,
+        )
+
         # Margin liquidation with extreme move. First prove the market guard
         # rejects an abrupt live-price jump, then loosen it for deterministic
         # liquidation validation.
@@ -528,8 +604,8 @@ def write_reports(summary, out_dir=REPORT_DIR):
         "",
         "- Spot buy/sell, fees, reserve pool, positions, and wallet non-negative invariant.",
         "- Abnormal inputs: oversell, zero quantity, negative quantity.",
-        "- DCA bot, conditional automation bot, and workflow bot nested condition/scaling behavior.",
-        "- DCA and workflow backtest outputs against deterministic expected values.",
+        "- DCA bot, conditional automation bot, workflow bot, and grid bot lifecycle behavior.",
+        "- DCA, workflow, and grid backtest outputs against deterministic expected values.",
         "- Margin long and short liquidation under controlled extreme price moves.",
         "- Trading state verification, PointsChain verification, block sealing, ledger backup creation.",
         "- PointsChain safe mode blocking new exchange writes.",

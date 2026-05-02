@@ -560,7 +560,7 @@ run_checks() {
   request "security center update thresholds" "PUT" "/api/admin/security-center/thresholds" "200" '{"security_pending_chat_reports_threshold":12,"security_pending_appeals_threshold":12,"security_pending_moderation_proposals_threshold":12,"security_quarantined_files_threshold":0,"security_unknown_encrypted_files_threshold":80,"security_log_tail_lines":120,"max_login_failures":3,"block_duration_minutes":10}'
   request "security center update controls" "PUT" "/api/admin/security-center/controls" "200" '{"ip_blocking_enabled":true,"login_violation_enabled":true,"rate_limit_violation_enabled":true,"integrity_guard_enabled":true,"integrity_guard_strict_mode":false,"browser_only_mode_enabled":false}'
   request "security center create custom profile" "POST" "/api/admin/security-center/profiles" "200" "{\"name\":\"smoke_profile_${RUN_ID,,}\",\"label\":\"Smoke Profile\",\"description\":\"functional smoke custom security profile\",\"settings\":{\"ip_blocking_enabled\":true,\"integrity_guard_strict_mode\":false},\"thresholds\":{\"security_pending_chat_reports_threshold\":7}}"
-  request "security center apply custom profile" "POST" "/api/admin/server-mode" "200" "{\"mode\":\"smoke_profile_${RUN_ID,,}\",\"confirm\":\"\",\"notes\":\"functional smoke custom profile\"}"
+  request "security center apply custom profile" "POST" "/api/admin/server-mode" "200" "{\"mode\":\"smoke_profile_${RUN_ID,,}\",\"confirm\":\"SWITCH_CUSTOM_MODE\",\"notes\":\"functional smoke custom profile\"}"
   request "integrity guard status" "GET" "/api/root/integrity/status" "200"
   request "integrity guard pending findings" "GET" "/api/root/integrity/findings?status=pending" "200"
 

@@ -239,6 +239,7 @@ def register_public_routes(app, deps):
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
 
     @app.route("/")
+    @app.route("/videos")
     def index():
         resp = make_response(send_from_directory(PUBLIC_DIR, "index.html"))
         tok = request.cookies.get("session_token")

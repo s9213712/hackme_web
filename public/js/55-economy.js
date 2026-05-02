@@ -1,4 +1,5 @@
 let economyLedgerOffset = 0;
+let economyLedgerCache = [];
 let economyBlockCountdownTimer = null;
 let economyBlockSchedule = null;
 let economyInlineEventsBound = false;
@@ -213,7 +214,34 @@ function renderEconomyCatalog(items) {
   });
 }
 
+function exportEconomyLedgerCsv() {
+  const rows = economyLedgerCache;
+  if (!rows || !rows.length) { economySetMsg("尚無帳本資料可匯出", false); return; }
+  const header = ["時間", "方向", "金額", "幣種", "類型", "Ledger UUID", "Ledger Hash"];
+  const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [header.map(escape).join(",")];
+  for (const row of rows) {
+    lines.push([
+      row.created_at || "",
+      row.direction || "",
+      row.amount ?? "",
+      row.currency_type || "",
+      row.action_type || "",
+      row.ledger_uuid || "",
+      row.ledger_hash || "",
+    ].map(escape).join(","));
+  }
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ledger_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function renderEconomyLedger(rows, targetId = "economy-ledger-list") {
+  if (targetId === "economy-ledger-list") economyLedgerCache = Array.isArray(rows) ? rows : [];
   const list = $(targetId);
   if (!list) return;
   if (!rows || !rows.length) {
@@ -868,6 +896,7 @@ function bindEconomyInlineEvents() {
   economyInlineEventsBound = true;
   const bindings = [
     ["economy-refresh-btn", loadEconomyDashboard],
+    ["economy-ledger-export-btn", exportEconomyLedgerCsv],
     ["economy-admin-refresh-btn", loadEconomyAdmin],
     ["economy-adjust-btn", submitEconomyAdjustment],
     ["economy-account-query-btn", loadEconomyAccountLookup],

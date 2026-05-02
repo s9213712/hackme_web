@@ -15,10 +15,11 @@
   `breaches_total=0`、live HTTP smoke 6/6 PASS、critical/high findings 皆為
   0。此處的 `production_readiness=YES` 僅代表 Server Mode v2 控制面完成，
   不等於整站已可正式上線。
-- 整站 production gate 已落地並通過最新本機證據：
+- 整站 production gate 已落地。上一輪本機證據：
   `security/reports/20260502T150309Z/raw/whole_site_production_gate_20260502_230524.json`
-  與同名 `.md`。結果為 12/12 模組 PASS、critical/high/medium findings
-  皆為 0、`production_readiness=YES`。整站 gate 聚合腳本為
+  與同名 `.md`。該輪結果為 12/12 模組 PASS、critical/high/medium findings
+  皆為 0、`production_readiness=YES`。目前 gate 已新增 Video Platform 模組，
+  下一次整站 sign-off 需重新產生最新證據。整站 gate 聚合腳本為
   `security/whole_site_production_gate.py`，也可透過
   `security/run_pentest.sh --target http://127.0.0.1:5000 --only whole-site-production-gate`
   執行。仍需在實際部署端另外驗證 off-host append-only audit backup /

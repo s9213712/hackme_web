@@ -4089,8 +4089,8 @@ class TradingEngineService:
         strategy = str(payload.get("strategy") or payload.get("bot_type") or "conditional").strip().lower()
         if strategy == "strategy":
             strategy = "workflow"
-        if strategy not in {"conditional", "dca", "workflow"}:
-            raise ValueError("backtest strategy must be conditional, workflow, or dca")
+        if strategy not in {"conditional", "dca", "workflow", "grid"}:
+            raise ValueError("backtest strategy must be conditional, workflow, dca, or grid")
         workflow = None
         if strategy == "workflow":
             workflow = self._validate_workflow(payload.get("workflow_json") or payload.get("workflow"))
@@ -4109,6 +4109,69 @@ class TradingEngineService:
         wins = 0
         sells = 0
         workflow_state = {"executed_action_ids": set(), "branch_step_counts": {}}
+
+        # ── Grid backtest setup ──────────────────────────────────────────────
+        grid_state = {}  # level_price -> "buy" | "sell" | None
+        grid_levels = []
+        grid_order_amount = 0
+        grid_fee_rate = fee_rate_percent * 0.5
+        if strategy == "grid":
+            g_lower = _to_int(payload.get("lower_price_points", 0), name="lower_price_points", minimum=1)
+            g_upper = _to_int(payload.get("upper_price_points", 0), name="upper_price_points", minimum=2)
+            g_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=500)
+            grid_order_amount = _to_int(payload.get("order_amount_points", 100), name="order_amount_points", minimum=1)
+            g_mode = str(payload.get("spacing_mode") or "arithmetic").strip().lower()
+            if g_upper <= g_lower:
+                raise ValueError("upper_price_points must be greater than lower_price_points")
+            # Build levels
+            if g_mode == "geometric":
+                g_ratio = (g_upper / g_lower) ** (1 / (g_count - 1))
+                for i in range(g_count):
+                    grid_levels.append(round(g_lower * (g_ratio ** i)))
+            else:
+                g_step = (g_upper - g_lower) / (g_count - 1)
+                for i in range(g_count):
+                    grid_levels.append(round(g_lower + g_step * i))
+            # Starting price from first valid candle
+            g_start = 0
+            for _c in candles:
+                try:
+                    g_start = int(round(float(_c.get("close_points") or _c.get("price_points") or _c.get("close_usdt") or _c.get("price_usdt") or 0)))
+                    if g_start > 0:
+                        break
+                except Exception:
+                    pass
+            if g_start <= 0:
+                raise ValueError("no valid starting price in candles for grid backtest")
+            # Spot needed for sell levels
+            sell_lvls = [p for p in grid_levels if p > g_start]
+            buy_lvls = [p for p in grid_levels if p < g_start]
+            spot_units_needed = sum(int((grid_order_amount * ASSET_SCALE) // p) for p in sell_lvls if p > 0)
+            spot_cost = notional_points(spot_units_needed, g_start)
+            spot_fee_cost = fee_points(spot_cost, fee_rate_percent)
+            spot_total = spot_cost + spot_fee_cost
+            buy_fee_per = fee_points(grid_order_amount, grid_fee_rate)
+            buy_total = len(buy_lvls) * (grid_order_amount + buy_fee_per)
+            # Allocate initial capital
+            if cash >= spot_total + buy_total:
+                cash -= spot_total
+                units = spot_units_needed
+            else:
+                affordable_spot = max(0, cash - buy_total)
+                if affordable_spot > 0 and g_start > 0:
+                    units = int(affordable_spot * ASSET_SCALE // g_start)
+                    cash -= notional_points(units, g_start) + fee_points(notional_points(units, g_start), fee_rate_percent)
+                    if cash < 0:
+                        cash = 0
+            # Assign initial grid state
+            for p in grid_levels:
+                if p < g_start:
+                    grid_state[p] = "buy"
+                elif p > g_start:
+                    grid_state[p] = "sell"
+                else:
+                    grid_state[p] = None
+
         for index, candle in enumerate(candles):
             try:
                 price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
@@ -4116,6 +4179,70 @@ class TradingEngineService:
                 continue
             if price <= 0:
                 continue
+
+            # ── Grid candle simulation ───────────────────────────────────────
+            if strategy == "grid":
+                try:
+                    low_p = int(round(float(candle.get("low_points") or candle.get("low_usdt") or price)))
+                    high_p = int(round(float(candle.get("high_points") or candle.get("high_usdt") or price)))
+                except Exception:
+                    low_p = high_p = price
+                # Process only orders that existed at candle open. Counter orders
+                # created by a fill are not eligible until the next candle; this
+                # keeps the simulation aligned with the live grid scanner.
+                state_at_open = dict(grid_state)
+                # Process sell crossings first (price rose above sell level)
+                for lvl in sorted(state_at_open):
+                    if state_at_open[lvl] == "sell" and high_p >= lvl:
+                        sell_u = int((grid_order_amount * ASSET_SCALE) // lvl)
+                        if units >= sell_u > 0:
+                            gross = notional_points(sell_u, lvl)
+                            fee = fee_points(gross, grid_fee_rate)
+                            net = max(0, gross - fee)
+                            cash += net
+                            units -= sell_u
+                            trades.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "side": "sell", "price_points": lvl, "spend_points": 0, "fee_points": fee, "quantity": units_to_quantity(sell_u)})
+                            grid_state[lvl] = None
+                            try:
+                                counter_idx = grid_levels.index(lvl) - 1
+                            except ValueError:
+                                counter_idx = -1
+                            if counter_idx >= 0:
+                                counter_lvl = grid_levels[counter_idx]
+                                if grid_state.get(counter_lvl) is None:
+                                    grid_state[counter_lvl] = "buy"
+                            sells += 1
+                            wins += 1
+                # Process buy crossings (price dropped to or below buy level)
+                for lvl in sorted(state_at_open, reverse=True):
+                    if state_at_open[lvl] == "buy" and low_p <= lvl:
+                        fee = fee_points(grid_order_amount, grid_fee_rate)
+                        spend = grid_order_amount + fee
+                        if cash >= spend:
+                            buy_u = int((grid_order_amount * ASSET_SCALE) // lvl)
+                            if buy_u > 0:
+                                cash -= spend
+                                prev_u = units
+                                units += buy_u
+                                if units > 0:
+                                    avg_cost_bt = int((prev_u * avg_cost_bt + buy_u * lvl) // units)
+                                trades.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "side": "buy", "price_points": lvl, "spend_points": spend, "fee_points": fee, "quantity": units_to_quantity(buy_u)})
+                                grid_state[lvl] = None
+                                try:
+                                    counter_idx = grid_levels.index(lvl) + 1
+                                except ValueError:
+                                    counter_idx = len(grid_levels)
+                                if counter_idx < len(grid_levels):
+                                    counter_lvl = grid_levels[counter_idx]
+                                    if grid_state.get(counter_lvl) is None:
+                                        grid_state[counter_lvl] = "sell"
+                eq = cash + notional_points(units, price)
+                peak_value = max(peak_value, eq)
+                if peak_value > 0:
+                    max_drawdown_percent = max(max_drawdown_percent, round((peak_value - eq) * 100 / peak_value, 4))
+                equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": eq, "price_points": price})
+                continue
+
             should_buy = False
             should_sell = False
             workflow_spend = order_points

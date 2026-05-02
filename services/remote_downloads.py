@@ -75,10 +75,23 @@ def _host_is_public(hostname):
 def _resolve_public_endpoint(hostname, port):
     if not hostname:
         raise RemoteDownloadError("下載網址缺少主機名稱")
+    # If hostname is a literal IP address, block private ones directly
+    try:
+        literal_ip = ipaddress.ip_address(hostname)
+        if not _ip_is_public(str(literal_ip)):
+            raise RemoteDownloadError(f"下載網址不可指向 localhost、內網或保留位址（{hostname}）")
+        family = socket.AF_INET6 if isinstance(literal_ip, ipaddress.IPv6Address) else socket.AF_INET
+        return (family, socket.SOCK_STREAM, 0, (hostname, port))
+    except RemoteDownloadError:
+        raise
+    except ValueError:
+        pass  # Not a literal IP — it's a domain name, proceed with DNS
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise RemoteDownloadError("下載網址無法解析") from exc
+    if not infos:
+        raise RemoteDownloadError("下載網址無法解析")
     candidates = []
     blocked = []
     for family, socktype, proto, _, sockaddr in infos:
@@ -373,6 +386,14 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         raise RemoteDownloadError("BT 下載需要先安裝 aria2c")
     tmpdir = tempfile.mkdtemp(prefix="hackme_bt_")
     log_path = os.path.join(tmpdir, "aria2.log")
+    # Public trackers to supplement DHT for better magnet-link peer discovery
+    _PUBLIC_TRACKERS = ",".join([
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.demonii.com:1337/announce",
+        "udp://tracker.openbittorrent.com:6969/announce",
+        "udp://exodus.desync.com:6969/announce",
+        "udp://tracker.torrent.eu.org:451/announce",
+    ])
     cmd = [
         aria2c,
         "--dir", tmpdir,
@@ -383,6 +404,7 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         "--bt-enable-lpd=false",
         "--enable-dht=true",
         "--enable-peer-exchange=true",
+        f"--bt-tracker={_PUBLIC_TRACKERS}",
         "--max-tries=2",
         "--max-file-not-found=2",
         "--file-allocation=none",

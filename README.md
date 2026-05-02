@@ -13,14 +13,16 @@
 authentication, RBAC, moderation workflows, auditability, and operational
 hardening in a compact single-node deployment.
 
-Release `2026.05.02-047` adds the whole-site production gate and passes the
-local aggregate sign-off evidence: 12/12 modules PASS, `critical/high/medium`
-findings all 0, and `production_readiness=YES`. The gate now aggregates Server
-Mode v2, auth/session, RBAC, snapshot/restore, PointsChain, Cloud Drive,
-trading, community/reporting, integrity, audit/log, stress/reliability, pytest,
-`py_compile`, and `git diff --check`. This release also fixes latest-password
-lookup to use monotonic password-history IDs and makes disabled-feature API
-gates return login/permission failures before feature-disabled 503 responses.
+Release `2026.05.02-047` adds the whole-site production gate. The latest local
+sign-off evidence before the Video Platform module passed 12/12 modules with
+`critical/high/medium` findings all 0 and `production_readiness=YES`; rerun the
+gate after video-module changes before using it as final release evidence. The
+gate aggregates Server Mode v2, auth/session, RBAC, snapshot/restore,
+PointsChain, Cloud Drive, Video Platform, trading, community/reporting,
+integrity, audit/log, stress/reliability, pytest, `py_compile`, and `git diff
+--check`. This release also fixes latest-password lookup to use monotonic
+password-history IDs and makes disabled-feature API gates return
+login/permission failures before feature-disabled 503 responses.
 
 Release `2026.05.02-045` hardens Server Mode v2 enterprise sign-off: live HTTP
 smoke now drives the real Flask session/cookie/CSRF stack, tester-token

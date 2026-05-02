@@ -328,6 +328,7 @@ def store_cloud_upload(
         result["ciphertext_sha256"] = digest
         result["encryption_algorithm"] = "Fernet"
         result["encryption_version"] = "server-side-v1"
+    result["size_bytes"] = int(size_bytes or 0)
     return result, None
 
 

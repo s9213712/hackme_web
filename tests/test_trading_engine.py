@@ -692,6 +692,37 @@ def test_dca_backtest_reports_metrics_and_equity_curve(tmp_path):
     assert result["last_candle_time"] == "2026-01-01T00:45:00+00:00"
 
 
+def test_grid_backtest_matches_live_grid_order_lifecycle(tmp_path):
+    _, trading = _services(tmp_path)
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "grid",
+            "initial_cash_points": 1000,
+            "lower_price_points": 80,
+            "upper_price_points": 120,
+            "grid_count": 5,
+            "order_amount_points": 100,
+            "candles": [
+                {"time": 1, "open_points": 100, "high_points": 100, "low_points": 100, "close_points": 100},
+                {"time": 2, "open_points": 100, "high_points": 100, "low_points": 90, "close_points": 90},
+                {"time": 3, "open_points": 90, "high_points": 110, "low_points": 90, "close_points": 110},
+                {"time": 4, "open_points": 110, "high_points": 120, "low_points": 80, "close_points": 100},
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["strategy"] == "grid"
+    assert result["trade_count"] == 7
+    assert result["final_value_points"] == 1065
+    assert result["trades"][0]["index"] == 1
+    assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
+    assert all(not (row["index"] == 0 and row["price_points"] == 100) for row in result["trades"])
+    assert len(result["equity_curve"]) == 4
+
+
 def test_workflow_backtest_supports_take_profit_and_stop_loss_percent(tmp_path):
     _, trading = _services(tmp_path)
     workflow = {

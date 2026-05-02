@@ -793,7 +793,11 @@ function renderDriveTransferRow(item) {
   const label = percent === null ? "計算中" : `${Math.round(percent)}%`;
   const bytes = item.total_bytes
     ? `${formatDriveBytes(item.loaded_bytes || 0)} / ${formatDriveBytes(item.total_bytes)}`
-    : (item.loaded_bytes ? formatDriveBytes(item.loaded_bytes) : "等待資料");
+    : (
+      item.loaded_bytes
+        ? formatDriveBytes(item.loaded_bytes)
+        : (item.status === "completed" ? "已保存" : "等待資料")
+    );
   const statusClass = item.status === "failed" ? "failed" : item.status === "completed" ? "completed" : "running";
   const statusText = item.status === "failed"
     ? "下載失敗"
@@ -1198,6 +1202,7 @@ async function startRemoteDriveDownload({ source = "auto", downloadMode = "direc
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載失敗（HTTP ${res.status}）`);
     const task = json.task || {};
+    if (!task.id) throw new Error("遠端下載任務建立失敗");
     updateDriveTransferRow(transferId, {
       id: transferId,
       task_id: task.id,
@@ -1205,12 +1210,10 @@ async function startRemoteDriveDownload({ source = "auto", downloadMode = "direc
       phase: task.phase || "queued",
       msg: task.msg || "已加入下載佇列",
     });
-    await pollRemoteDownloadTask(task.id, transferId);
     if ($("drive-remote-url")) $("drive-remote-url").value = "";
     if (torrentInput) torrentInput.value = "";
-    flash($("drive-msg"), json.msg || "遠端下載已保存", true);
-    await loadDriveDashboard();
-    setTimeout(() => removeDriveTransferRow(transferId), DRIVE_TRANSFER_COMPLETED_VISIBLE_MS);
+    flash($("drive-msg"), json.msg || "遠端下載任務已建立，可繼續操作頁面", true);
+    resumeRemoteDownloadTaskPolling(task);
   } catch (err) {
     updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: err.message || "遠端下載失敗", progress_percent: 100 });
     setTimeout(() => dismissRemoteDownloadTask("", transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
@@ -1255,7 +1258,9 @@ async function pollRemoteDownloadTask(taskId, transferId) {
       if (consecutiveStatusErrors < DRIVE_REMOTE_STATUS_RETRY_LIMIT) {
         continue;
       }
-      throw new Error(err.message || "遠端下載狀態連續讀取失敗");
+      const statusError = new Error(err.message || "遠端下載狀態連續讀取失敗");
+      statusError.remoteStatusTransient = true;
+      throw statusError;
     }
     const task = json.task || {};
     updateDriveTransferRow(transferId, {
@@ -1274,7 +1279,11 @@ async function pollRemoteDownloadTask(taskId, transferId) {
       status.textContent = `${task.msg || "遠端下載中"} · ${percent}`;
     }
     if (task.status === "completed") return task;
-    if (task.status === "failed") throw new Error(task.error || task.msg || "遠端下載失敗");
+    if (task.status === "failed") {
+      const failedError = new Error(task.error || task.msg || "遠端下載失敗");
+      failedError.remoteTaskFailed = true;
+      throw failedError;
+    }
   }
 }
 
@@ -1312,13 +1321,28 @@ function resumeRemoteDownloadTaskPolling(task) {
       setTimeout(() => removeDriveTransferRow(transferId), DRIVE_TRANSFER_COMPLETED_VISIBLE_MS);
     })
     .catch((err) => {
+      if (err?.remoteStatusTransient) {
+        updateDriveTransferRow(transferId, {
+          status: "running",
+          phase: "status_retry_paused",
+          msg: `${err.message || "狀態暫時讀取失敗"}；任務仍保留，稍後自動重試`,
+          progress_percent: null,
+        });
+        setTimeout(() => {
+          driveRemotePollingTaskIds.delete(task.id);
+          resumeRemoteDownloadTaskPolling({ ...task, status: "running" });
+        }, 5000);
+        return;
+      }
       updateDriveTransferRow(transferId, {
         status: "failed",
         phase: "failed",
         msg: err.message || "遠端下載失敗",
         progress_percent: 100,
       });
-      setTimeout(() => dismissRemoteDownloadTask(task.id, transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
+      if (err?.remoteTaskFailed) {
+        setTimeout(() => dismissRemoteDownloadTask(task.id, transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
+      }
     })
     .finally(() => {
       driveRemotePollingTaskIds.delete(task.id);
