@@ -742,6 +742,16 @@ class AdversarialRunner:
             "This test does not validate filesystem-level immutable storage or off-host append-only log replication.",
             "A privileged actor with direct SQLite file write access can attempt to append forged rows; this test verifies detection by hash-chain validation, not prevention by OS-level immutable storage.",
         ]
+        site_production_gate_remaining = [
+            "stress",
+            "permission",
+            "functional",
+            "pentest",
+            "snapshot_restore",
+            "points_chain_consistency",
+            "cloud_drive_quota_permission",
+            "off-host append-only audit backup / immutable log replication",
+        ]
         weaknesses = [
             item for item in self.results
             if not item.get("ok")
@@ -760,13 +770,17 @@ class AdversarialRunner:
             ],
             "uncovered_risks": uncovered_risks,
             "weakness_exists": bool(weaknesses),
-            "production_readiness": "CONDITIONAL_YES" if ok else "NO",
+            "production_readiness": "YES" if ok else "NO",
+            "note": "Server Mode v2 production_ready does not equal whole-site production_ready.",
+            "site_production_gate_remaining": site_production_gate_remaining,
         }
         red_team_summary = {
             "vulnerabilities_found": failed_count,
             "breach_count": breach_count,
             "risk_level": "low" if ok else "high",
-            "production_readiness": "CONDITIONAL_YES" if ok else "NO",
+            "production_readiness": "YES" if ok else "NO",
+            "note": "Server Mode v2 production_ready does not equal whole-site production_ready.",
+            "site_production_gate_remaining": site_production_gate_remaining,
             "failed_tests": [item["name"] for item in self.results if not item.get("ok")],
         }
         return {

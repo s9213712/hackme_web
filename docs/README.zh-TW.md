@@ -15,8 +15,10 @@ RBAC、moderation workflow、審計能力與單機服務防護。
 `2026.05.02-045` 版強化 Server Mode v2 企業級上線驗收：新增 live HTTP
 smoke，實際走 Flask session/cookie/CSRF、測試員 token traversal、superweak
 狀態下 kill -9 後重啟 rollback、incident_lockdown 後舊 session/token 失效，
-以及 live mode log 驗證。另降低 SQLite session `last_seen` 更新造成的鎖定
-機率，並補清楚模式 token 文件。
+以及 live mode log 驗證。Server Mode v2 控制面已標記
+`production_readiness=YES`，但整站正式上線仍需完成剩餘 production gate。
+另降低 SQLite session `last_seen` 更新造成的鎖定機率，並補清楚模式 token
+文件。
 
 `2026.05.02-044` 版新增更新時自動 stash 運行中檔案、pre-push 版號自動遞增
 hook、DCA 機器人首次扣款修正、Binance 回測分頁取得最多 5000 根 K 棒，及

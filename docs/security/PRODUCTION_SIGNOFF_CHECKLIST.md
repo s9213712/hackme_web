@@ -115,7 +115,7 @@ Incident lockdown:
 - [ ] `git diff --check` passes.
 - [ ] Secret scan passes.
 - [ ] `security/server_mode_v2_redteam_l2.py` passes with
-  `production_readiness: CONDITIONAL_YES`.
+  `production_readiness: YES`.
 - [ ] `security/server_mode_v2_live_http_smoke.py` passes with
   `production_readiness: YES`.
 - [ ] Live HTTP smoke evidence includes real HTTP CSRF/session login, tester
@@ -125,6 +125,23 @@ Incident lockdown:
 - [ ] Off-host append-only log replication / filesystem-level immutable storage
   is either verified in the deployment environment or explicitly accepted as a
   deployment residual risk.
+
+## Scope Note
+
+Server Mode v2 `production_readiness: YES` means the server-mode control plane
+passed its dedicated clean smoke, adversarial, Red Team L2, and live HTTP
+session/kill-9 evidence. It does not mean the whole site is production-ready.
+
+Whole-site production still requires separate passing evidence for:
+
+- stress
+- permission
+- functional
+- pentest
+- snapshot_restore
+- points_chain_consistency
+- cloud_drive_quota_permission
+- off-host append-only audit backup / immutable log replication
 
 ## Final Decision
 

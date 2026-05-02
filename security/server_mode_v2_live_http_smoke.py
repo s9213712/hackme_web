@@ -503,6 +503,16 @@ class LiveHttpRunner:
 
     def report(self):
         breaches = [item for item in self.results if not item["ok"]]
+        site_production_gate_remaining = [
+            "stress",
+            "permission",
+            "functional",
+            "pentest",
+            "snapshot_restore",
+            "points_chain_consistency",
+            "cloud_drive_quota_permission",
+            "off-host append-only audit backup / immutable log replication",
+        ]
         return {
             "ok": not breaches,
             "generated_at": datetime.now().isoformat(),
@@ -527,6 +537,8 @@ class LiveHttpRunner:
                     "off-host append-only log replication / filesystem immutable storage is still not verified",
                 ],
                 "production_readiness": "YES" if not breaches else "NO",
+                "note": "Server Mode v2 production_ready does not equal whole-site production_ready.",
+                "site_production_gate_remaining": site_production_gate_remaining,
             },
         }
 

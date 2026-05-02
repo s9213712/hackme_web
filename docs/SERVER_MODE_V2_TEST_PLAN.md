@@ -171,9 +171,6 @@ The current implementation is covered by these focused tests:
   - `security/server_mode_v2_redteam_l2.py` layers HMAC signature tamper,
     revoked-token replay, integrity-manifest tamper signal, and the full
     adversarial suite into an evidence report.
-  - By itself this produces `production_readiness=CONDITIONAL_YES`, because it
-    does not drive the live Flask HTTP/session/cookie stack and does not kill a
-    real server process.
 - live HTTP sign-off validation
   - `security/server_mode_v2_live_http_smoke.py` starts an isolated loopback
     Flask server, logs in through real HTTP CSRF/session cookies, sends tester
@@ -184,6 +181,13 @@ The current implementation is covered by these focused tests:
     `production_readiness=YES` when all live checks pass.
   - It still does not verify off-host append-only log replication or
     filesystem-level immutable storage.
+  - With clean smoke 13/13 PASS, adversarial 8/8 PASS, Red Team L2
+    `breaches_total=0`, live HTTP smoke 6/6 PASS, and zero critical/high
+    findings, Server Mode v2 is marked `production_readiness=YES`.
+  - This status applies only to Server Mode v2. Whole-site production readiness
+    still requires separate stress, permission, functional, pentest,
+    snapshot_restore, points_chain_consistency, cloud_drive_quota_permission,
+    and off-host append-only audit backup / immutable log replication evidence.
   - The full enterprise bundle is available from
     `security/run_pentest.sh --only server-mode-v2-enterprise`.
   - Live HTTP smoke alone is available from

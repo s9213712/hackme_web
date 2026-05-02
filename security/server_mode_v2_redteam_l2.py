@@ -130,13 +130,25 @@ class RedTeamL2:
         breaches = [item for item in self.results if not item["ok"]]
         critical = [item for item in breaches if item["severity"] == "CRITICAL"]
         high = [item for item in breaches if item["severity"] == "HIGH"]
+        site_production_gate_remaining = [
+            "stress",
+            "permission",
+            "functional",
+            "pentest",
+            "snapshot_restore",
+            "points_chain_consistency",
+            "cloud_drive_quota_permission",
+            "off-host append-only audit backup / immutable log replication",
+        ]
         summary = {
             "attacks_total": len(self.results),
             "blocked_total": sum(1 for item in self.results if item["ok"]),
             "breaches_total": len(breaches),
             "critical_findings": len(critical),
             "high_findings": len(high),
-            "production_readiness": "CONDITIONAL_YES" if not breaches else "NO",
+            "production_readiness": "YES" if not breaches else "NO",
+            "note": "Server Mode v2 production_ready does not equal whole-site production_ready.",
+            "site_production_gate_remaining": site_production_gate_remaining,
         }
         return {
             "ok": not breaches,

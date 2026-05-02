@@ -11,9 +11,9 @@ Release ID: `2026.05.02-045`
   superweak, kills the server process with SIGKILL, restarts it, validates
   rollback, enters `incident_lockdown`, and verifies old sessions/tokens are
   blocked.
-- Adversarial and Red Team L2 reports now mark their standalone readiness as
-  `CONDITIONAL_YES`; production readiness becomes `YES` only after the live HTTP
-  smoke also passes.
+- Server Mode v2 sign-off is now `production_readiness=YES` when clean smoke,
+  adversarial, Red Team L2, and live HTTP smoke all pass with zero breaches and
+  zero critical/high findings.
 - Session lookups no longer write `sessions.last_seen` on every request. The
   refresh is throttled to reduce SQLite write-lock contention during high
   frontend polling or mode-test traffic.
@@ -28,6 +28,11 @@ Release ID: `2026.05.02-045`
   `server_mode_v2_redteam_l2.py`, and `server_mode_v2_live_http_smoke.py`
   evidence together. The first two prove model-level controls; the live smoke
   proves the Flask HTTP/session process path.
+- Server Mode v2 production_ready does not mean the whole site is
+  production_ready. Whole-site production still needs stress, permission,
+  functional, pentest, snapshot_restore, points_chain_consistency,
+  cloud_drive_quota_permission, and off-host append-only audit backup /
+  immutable log replication evidence.
 - Off-host append-only log replication / filesystem-level immutable storage is
   still a deployment-environment control and is not verified by local smoke
   tests.

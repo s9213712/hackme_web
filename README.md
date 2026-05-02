@@ -16,9 +16,11 @@ hardening in a compact single-node deployment.
 Release `2026.05.02-045` hardens Server Mode v2 enterprise sign-off: live HTTP
 smoke now drives the real Flask session/cookie/CSRF stack, tester-token
 traversal probes, superweak SIGKILL rollback, incident-lockdown old
-session/token rejection, and live mode-log verification. It also reduces
-SQLite session-write contention by throttling `last_seen` refreshes and
-clarifies mode-token documentation.
+session/token rejection, and live mode-log verification. Server Mode v2 is now
+marked `production_readiness=YES` for its own control plane; whole-site
+production still requires the remaining production gate checks. This release
+also reduces SQLite session-write contention by throttling `last_seen`
+refreshes and clarifies mode-token documentation.
 
 Release `2026.05.02-044` adds smart server update (auto-stash runtime files
 before merge, pop after), pre-push version-bump hook, DCA bot first-deduction
