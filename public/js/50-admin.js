@@ -1335,6 +1335,9 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
   if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
   if ($("root-trading-reserve-pool")) $("root-trading-reserve-pool").textContent = `${Number(reserve.balance_points || 0)} POINTS`;
+  if ($("root-trading-btc-trade-enabled")) $("root-trading-btc-trade-enabled").checked = !!settings.btc_trade_enabled;
+  if ($("root-trading-btc-trade-repo")) $("root-trading-btc-trade-repo").value = settings.btc_trade_repo_url || "https://github.com/s9213712/BTC_trade.git";
+  if ($("root-trading-btc-trade-branch")) $("root-trading-btc-trade-branch").value = settings.btc_trade_branch || "strategy/v15b-plus";
   if ($("root-trading-btc-trade-path")) $("root-trading-btc-trade-path").value = settings.btc_trade_project_dir || "";
   const list = $("root-trading-market-settings");
   if (!list) return;
@@ -1396,6 +1399,8 @@ function collectRootTradingMarketSettings() {
 async function saveRootTradingSettings() {
   if (currentUser !== "root") return;
   const saveBtn = $("root-trading-settings-save-btn");
+  const wasBtcTradeEnabled = rootTradingSettingsCache?.settings?.btc_trade_enabled === true;
+  const willBtcTradeEnable = !!$("root-trading-btc-trade-enabled")?.checked;
   if (saveBtn) saveBtn.disabled = true;
   rootTradingSettingsMsg("交易所參數儲存中...");
   const payload = {
@@ -1415,6 +1420,9 @@ async function saveRootTradingSettings() {
       margin_maintenance_percent: adminInputPercent($("root-trading-maintenance-percent")?.value || 0),
       futures_enabled: !!$("root-trading-futures-enabled")?.checked,
       pvp_matching_enabled: !!$("root-trading-pvp-enabled")?.checked,
+      btc_trade_enabled: willBtcTradeEnable,
+      btc_trade_repo_url: ($("root-trading-btc-trade-repo")?.value || "").trim(),
+      btc_trade_branch: ($("root-trading-btc-trade-branch")?.value || "").trim(),
       btc_trade_project_dir: ($("root-trading-btc-trade-path")?.value || "").trim(),
     },
     markets: collectRootTradingMarketSettings(),
@@ -1437,6 +1445,9 @@ async function saveRootTradingSettings() {
       rootTradingSettingsCache = json;
       renderRootTradingSettings(json);
       if (typeof loadTradingDashboard === "function") loadTradingDashboard();
+      if (willBtcTradeEnable && !wasBtcTradeEnabled) {
+        await setupRootBtcTrade({ automatic: true });
+      }
     }
   } catch (err) {
     rootTradingSettingsMsg(err.message || "交易所參數儲存請求失敗", false);
@@ -1476,6 +1487,61 @@ async function checkRootBtcTradeStatus() {
   } catch (err) {
     if (status) {
       status.textContent = err.message || "BTC_trade 狀態檢查失敗";
+      status.style.color = "#ff4f6d";
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function formatBtcTradeStepResult(step) {
+  if (!step || typeof step !== "object") return "";
+  const label = step.label || step.command || "step";
+  const state = step.ok ? "成功" : "失敗";
+  const detail = step.message || step.error || (step.stderr_tail ? step.stderr_tail.split("\n").filter(Boolean).slice(-1)[0] : "");
+  return `${label}${state}${detail ? `：${detail}` : ""}`;
+}
+
+async function setupRootBtcTrade(options = {}) {
+  if (currentUser !== "root") return;
+  const status = $("root-trading-btc-trade-status");
+  const button = $("root-trading-btc-trade-setup-btn");
+  const projectDir = ($("root-trading-btc-trade-path")?.value || "").trim();
+  const repoUrl = ($("root-trading-btc-trade-repo")?.value || "").trim();
+  const branch = ($("root-trading-btc-trade-branch")?.value || "").trim();
+  if (button) button.disabled = true;
+  if (status) {
+    status.textContent = options.automatic ? "已啟用 BTC_trade，開始自動下載/更新並建置..." : "BTC_trade 下載/更新並建置中，可能需要數分鐘...";
+    status.style.color = "var(--muted)";
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/root/trading/btc-trade/setup", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+      body: JSON.stringify({ project_dir: projectDir, repo_url: repoUrl, branch }),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    const result = json.result || {};
+    if (json.project_dir && $("root-trading-btc-trade-path") && !$("root-trading-btc-trade-path").value.trim()) {
+      $("root-trading-btc-trade-path").value = json.project_dir;
+    }
+    if (status) {
+      const steps = Array.isArray(result.steps) && result.steps.length
+        ? `；步驟：${result.steps.map(formatBtcTradeStepResult).join(" / ")}`
+        : "";
+      status.textContent = res.ok && json.ok
+        ? `${json.setup_ok ? "建置完成" : "建置未完成"}：${json.message || result.message || "-"}${steps}`
+        : (json.msg || `HTTP ${res.status}`);
+      status.style.color = res.ok && json.ok && json.setup_ok ? "#4caf50" : "#ffb74d";
+    }
+    if (res.ok && json.ok && json.setup_ok && typeof loadTradingDashboard === "function") {
+      loadTradingDashboard();
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "BTC_trade 建置請求失敗，請自行建置後再檢查";
       status.style.color = "#ff4f6d";
     }
   } finally {

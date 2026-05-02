@@ -597,6 +597,9 @@ def ensure_trading_schema(conn):
         ("trading.margin_maintenance_percent", "15"),
         ("trading.max_price_staleness_seconds", "900"),
         ("trading.price_source", "binance_public_api"),
+        ("trading.btc_trade_enabled", "false"),
+        ("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
+        ("trading.btc_trade_branch", "strategy/v15b-plus"),
         ("trading.bot_auto_scan_enabled", "true"),
         ("trading.bot_auto_scan_interval_seconds", "30"),
         ("trading.bot_auto_scan_limit", "50"),
@@ -912,7 +915,10 @@ class TradingEngineService:
             "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
             "price_source": raw.get("trading.price_source", "binance_public_api"),
+            "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
             "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
+            "btc_trade_repo_url": raw.get("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
+            "btc_trade_branch": raw.get("trading.btc_trade_branch", "strategy/v15b-plus"),
             "bot_auto_scan_enabled": str(raw.get("trading.bot_auto_scan_enabled", "true")).lower() in {"true", "1", "yes"},
             "bot_auto_scan_interval_seconds": _to_int(raw.get("trading.bot_auto_scan_interval_seconds", "30"), name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600),
             "bot_auto_scan_limit": _to_int(raw.get("trading.bot_auto_scan_limit", "50"), name="bot_auto_scan_limit", minimum=1, maximum=200),
@@ -949,6 +955,7 @@ class TradingEngineService:
                 "borrowing_enabled": "trading.borrowing_enabled",
                 "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
                 "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
+                "btc_trade_enabled": "trading.btc_trade_enabled",
             }
             for input_key, storage_key in bool_keys.items():
                 if input_key in settings:
@@ -1029,6 +1036,23 @@ class TradingEngineService:
                     ("trading.btc_trade_project_dir", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.btc_trade_project_dir"] = value
+            for input_key, storage_key in (
+                ("btc_trade_repo_url", "trading.btc_trade_repo_url"),
+                ("btc_trade_branch", "trading.btc_trade_branch"),
+            ):
+                if input_key in settings:
+                    value = str(settings.get(input_key) or "").strip()
+                    if input_key == "btc_trade_repo_url" and not value:
+                        value = "https://github.com/s9213712/BTC_trade.git"
+                    if input_key == "btc_trade_branch" and not value:
+                        value = "strategy/v15b-plus"
+                    if len(value) > 500:
+                        raise ValueError(f"{input_key} too long")
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                        (storage_key, value, now, self._actor_id(actor)),
+                    )
+                    setting_changes[storage_key] = value
             changed_markets = []
             for row in market_updates:
                 if not isinstance(row, dict):

@@ -79,6 +79,7 @@ function bindUiEvents() {
   const rootTradingSettingsRefresh = $("root-trading-settings-refresh-btn");
   const rootTradingSettingsSave = $("root-trading-settings-save-btn");
   const rootTradingBtcTradeCheck = $("root-trading-btc-trade-check-btn");
+  const rootTradingBtcTradeSetup = $("root-trading-btc-trade-setup-btn");
   const rootStorageRefresh = $("root-storage-refresh-btn");
   const rootStorageSave = $("root-storage-save-btn");
   const rootStorageClear = $("root-storage-clear-btn");
@@ -351,6 +352,7 @@ function bindUiEvents() {
   if (rootTradingSettingsRefresh) rootTradingSettingsRefresh.addEventListener("click", loadRootTradingSettings);
   if (rootTradingSettingsSave) rootTradingSettingsSave.addEventListener("click", saveRootTradingSettings);
   if (rootTradingBtcTradeCheck) rootTradingBtcTradeCheck.addEventListener("click", checkRootBtcTradeStatus);
+  if (rootTradingBtcTradeSetup) rootTradingBtcTradeSetup.addEventListener("click", setupRootBtcTrade);
   if (typeof bindComfyuiDraftPersistence === "function") bindComfyuiDraftPersistence();
   if (typeof bindEconomyInlineEvents === "function") bindEconomyInlineEvents();
   if (sidebarToggle) sidebarToggle.addEventListener("click", () => {

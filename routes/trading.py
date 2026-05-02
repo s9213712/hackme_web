@@ -8,7 +8,14 @@ from urllib.request import Request, urlopen
 
 from flask import request
 
-from services.btc_trade_bridge import btc_trade_status, expand_server_path
+from services.btc_trade_bridge import (
+    DEFAULT_BTC_TRADE_BRANCH,
+    DEFAULT_BTC_TRADE_REPO_URL,
+    btc_trade_setup,
+    btc_trade_status,
+    default_btc_trade_project_dir,
+    expand_server_path,
+)
 from services.trading_engine import MAX_BACKTEST_CANDLES
 
 
@@ -61,9 +68,12 @@ COINBASE_GRANULARITY_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "1d": 86400}
 KRAKEN_INTERVAL_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 GEMINI_TIMEFRAMES = {"5m": "5m", "15m": "15m", "1h": "1hr", "1d": "1day"}
 BITSTAMP_STEP_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+INTERVAL_MILLISECONDS = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+INTERVAL_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+BINANCE_MAX_CANDLES_PER_REQUEST = 1000
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
-BACKTEST_PROVIDER_CANDLE_LIMIT = 1000
+BACKTEST_PROVIDER_CANDLE_LIMIT = 5000
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1] / "workflows"
 WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "system"
 WORKFLOW_CUSTOM_DIR = WORKFLOW_ROOT / "custom"
@@ -289,17 +299,49 @@ def register_trading_routes(app, deps):
         }
 
     def fetch_binance_reference_candles(binance_symbol, interval, limit, *, start_ms=None, end_ms=None):
-        query_data = {"symbol": binance_symbol, "interval": interval, "limit": limit}
+        interval_ms = INTERVAL_MILLISECONDS.get(interval)
+        if not interval_ms:
+            raise ValueError(f"fetch_binance_reference_candles: unsupported interval {interval!r}")
+        raw_pages = []
         if start_ms is not None:
-            query_data["startTime"] = int(start_ms)
-        if end_ms is not None:
-            query_data["endTime"] = int(end_ms)
-        query = urlencode(query_data)
-        payload = fetch_json_url(f"{BINANCE_KLINES_URL}?{query}")
-        if not isinstance(payload, list):
-            raise ValueError("Binance 參考價格格式錯誤")
+            # Forward pagination from start_ms
+            cur_start = int(start_ms)
+            remaining = limit
+            while remaining > 0:
+                page_limit = min(remaining, BINANCE_MAX_CANDLES_PER_REQUEST)
+                query_data = {"symbol": binance_symbol, "interval": interval, "limit": page_limit, "startTime": cur_start}
+                if end_ms is not None:
+                    query_data["endTime"] = int(end_ms)
+                payload = fetch_json_url(f"{BINANCE_KLINES_URL}?{urlencode(query_data)}")
+                if not isinstance(payload, list) or not payload:
+                    break
+                raw_pages.extend(payload)
+                remaining -= len(payload)
+                if len(payload) < page_limit:
+                    break
+                cur_start = int(payload[-1][0]) + interval_ms
+                if end_ms is not None and cur_start > int(end_ms):
+                    break
+        else:
+            # Backward pagination from end_ms (or current time) to collect most-recent limit candles
+            cur_end = int(end_ms) if end_ms is not None else None
+            remaining = limit
+            while remaining > 0:
+                page_limit = min(remaining, BINANCE_MAX_CANDLES_PER_REQUEST)
+                query_data = {"symbol": binance_symbol, "interval": interval, "limit": page_limit}
+                if cur_end is not None:
+                    query_data["endTime"] = cur_end
+                payload = fetch_json_url(f"{BINANCE_KLINES_URL}?{urlencode(query_data)}")
+                if not isinstance(payload, list) or not payload:
+                    break
+                raw_pages = payload + raw_pages   # prepend so order stays chronological
+                remaining -= len(payload)
+                if len(payload) < page_limit:
+                    break
+                # set end for the next (earlier) page to just before the oldest candle we have
+                cur_end = int(payload[0][0]) - 1
         candles = []
-        for item in payload:
+        for item in raw_pages[-limit:]:
             try:
                 candle = candle_payload(int(item[0]), item[1], item[2], item[3], item[4])
             except Exception:
@@ -472,12 +514,32 @@ def register_trading_routes(app, deps):
         interval = str(data.get("timeframe") or data.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
             raise ValueError("unsupported backtest interval")
-        try:
-            limit = int(data.get("limit") or data.get("candle_limit") or 500)
-        except Exception:
-            raise ValueError("backtest candle limit is invalid")
+        mins_per_candle = INTERVAL_MINUTES.get(interval, 15)
+        max_days_for_interval = round(MAX_BACKTEST_CANDLES * mins_per_candle / 1440, 1)
+        # Accept either candle count (limit/candle_limit) or human-readable days
+        days_raw = data.get("days") or data.get("backtest_days")
+        limit_raw = data.get("limit") or data.get("candle_limit")
+        if days_raw is not None:
+            try:
+                days_val = float(days_raw)
+            except Exception:
+                raise ValueError("backtest days 格式錯誤，請輸入數字（例如 30）")
+            if days_val <= 0:
+                raise ValueError("backtest days 必須大於 0")
+            import math as _math
+            limit = min(_math.ceil(days_val * 1440 / mins_per_candle), MAX_BACKTEST_CANDLES)
+        elif limit_raw is not None:
+            try:
+                limit = int(limit_raw)
+            except Exception:
+                raise ValueError("backtest candle limit 格式錯誤")
+        else:
+            limit = min(500, MAX_BACKTEST_CANDLES)
         if limit > MAX_BACKTEST_CANDLES:
-            raise ValueError(f"backtest candle limit must be <= {MAX_BACKTEST_CANDLES}")
+            raise ValueError(
+                f"回測長度超過上限：{MAX_BACKTEST_CANDLES} 根 K 棒"
+                f"（{interval} 間隔最多可回測 {max_days_for_interval} 天）"
+            )
         download_limit = max(2, min(limit, BACKTEST_PROVIDER_CANDLE_LIMIT))
         start_ms = parse_time_ms(data.get("start_time"))
         end_ms = parse_time_ms(data.get("end_time"))
@@ -497,12 +559,19 @@ def register_trading_routes(app, deps):
         candles = provider_result.get("candles") or []
         if len(candles) < 2:
             raise ValueError("backtest price provider returned too few candles")
+        actual_days = round(len(candles) * mins_per_candle / 1440, 1)
         return {
             "source": provider_result.get("source") or "unknown_price_provider",
             "symbol": provider_result.get("symbol") or market_symbol,
             "candles": candles,
             "requested_limit": limit,
             "download_limit": download_limit,
+            "interval": interval,
+            "mins_per_candle": mins_per_candle,
+            "actual_candle_count": len(candles),
+            "actual_days": actual_days,
+            "max_backtest_candles": MAX_BACKTEST_CANDLES,
+            "max_backtest_days": max_days_for_interval,
         }
 
     @app.route("/api/trading/markets", methods=["GET"])
@@ -532,7 +601,10 @@ def register_trading_routes(app, deps):
             return json_resp({"ok": True, "available": False, "hidden": True, "msg": "僅 BTC/USDT 顯示 BTC_trade 信號"})
         try:
             settings = trading_service.get_root_settings().get("settings", {})
-            status = btc_trade_status(settings.get("btc_trade_project_dir"))
+            if not settings.get("btc_trade_enabled"):
+                return json_resp({"ok": True, "available": False, "hidden": True, "msg": "BTC_trade 信號目前未啟用"})
+            project_dir = settings.get("btc_trade_project_dir") or str(default_btc_trade_project_dir(Path(__file__).resolve().parents[1]))
+            status = btc_trade_status(project_dir)
         except Exception:
             return json_resp({"ok": True, "available": False, "hidden": True, "msg": "BTC_trade 信號暫不可用"})
         return json_resp({
@@ -751,6 +823,7 @@ def register_trading_routes(app, deps):
         if err:
             return err
         try:
+            fetched_meta = {}
             if not isinstance(data.get("candles"), list) or len(data.get("candles") or []) < 2:
                 fetched = fetch_reference_candles_for_backtest(data)
                 data["candles"] = fetched["candles"]
@@ -758,6 +831,14 @@ def register_trading_routes(app, deps):
                 data["provider_symbol"] = fetched["symbol"]
                 data["requested_candle_limit"] = fetched.get("requested_limit")
                 data["download_candle_limit"] = fetched.get("download_limit")
+                fetched_meta = {
+                    "interval": fetched.get("interval"),
+                    "mins_per_candle": fetched.get("mins_per_candle"),
+                    "actual_candle_count": fetched.get("actual_candle_count"),
+                    "actual_backtest_days": fetched.get("actual_days"),
+                    "max_backtest_candles": fetched.get("max_backtest_candles"),
+                    "max_backtest_days": fetched.get("max_backtest_days"),
+                }
             result = trading_service.backtest_trading_bot(actor=actor, payload=data)
             result["data_source"] = result.get("data_source") or data.get("data_source") or ("browser_loaded_chart" if isinstance((data or {}).get("candles"), list) else "")
             result["provider_symbol"] = result.get("provider_symbol") or data.get("provider_symbol") or ""
@@ -765,6 +846,17 @@ def register_trading_routes(app, deps):
             result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
             result["requested_candle_limit"] = data.get("requested_candle_limit") or data.get("candle_limit") or data.get("limit") or len(data.get("candles") or [])
             result["download_candle_limit"] = data.get("download_candle_limit") or len(data.get("candles") or [])
+            # Interval and window info (auto-calculated so the caller never has to compute candle counts)
+            interval_key = fetched_meta.get("interval") or str(data.get("timeframe") or data.get("interval") or "15m").strip()
+            mins_per_candle = fetched_meta.get("mins_per_candle") or INTERVAL_MINUTES.get(interval_key, 15)
+            n_candles = result.get("candle_count") or len(data.get("candles") or [])
+            result["interval"] = interval_key
+            result["backtest_window_days"] = round(n_candles * mins_per_candle / 1440, 1)
+            result["max_backtest_days"] = fetched_meta.get("max_backtest_days") or round(MAX_BACKTEST_CANDLES * mins_per_candle / 1440, 1)
+            result["backtest_limits"] = {
+                iv: {"max_candles": MAX_BACKTEST_CANDLES, "max_days": round(MAX_BACKTEST_CANDLES * m / 1440, 1)}
+                for iv, m in INTERVAL_MINUTES.items()
+            }
             audit(
                 "TRADING_BOT_BACKTEST",
                 get_client_ip(),
@@ -949,7 +1041,8 @@ def register_trading_routes(app, deps):
         data, err = parse_json_body()
         if err:
             return err
-        project_dir = data.get("project_dir")
+        settings = trading_service.get_root_settings().get("settings", {})
+        project_dir = data.get("project_dir") or settings.get("btc_trade_project_dir") or str(default_btc_trade_project_dir(Path(__file__).resolve().parents[1]))
         try:
             status = btc_trade_status(project_dir)
             root = expand_server_path(project_dir)
@@ -958,6 +1051,42 @@ def register_trading_routes(app, deps):
             return json_resp({"ok": True, "status": status})
         except Exception as exc:
             return json_resp({"ok": False, "msg": f"BTC_trade 狀態檢查失敗：{exc.__class__.__name__}"}), 400
+
+    @app.route("/api/root/trading/btc-trade/setup", methods=["POST"])
+    @require_csrf
+    def root_trading_btc_trade_setup():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        settings = trading_service.get_root_settings().get("settings", {})
+        project_dir = data.get("project_dir") or settings.get("btc_trade_project_dir") or str(default_btc_trade_project_dir(Path(__file__).resolve().parents[1]))
+        repo_url = data.get("repo_url") or settings.get("btc_trade_repo_url") or DEFAULT_BTC_TRADE_REPO_URL
+        branch = data.get("branch") or settings.get("btc_trade_branch") or DEFAULT_BTC_TRADE_BRANCH
+        result = btc_trade_setup(
+            project_dir,
+            repo_url=repo_url,
+            branch=branch,
+            base_dir=Path(__file__).resolve().parents[1],
+        )
+        audit(
+            "BTC_TRADE_SETUP",
+            get_client_ip(),
+            user=actor["username"],
+            success=bool(result.get("ok")),
+            ua=get_ua(),
+            detail=f"project_dir={result.get('project_dir')}; branch={branch}",
+        )
+        payload = {
+            "ok": True,
+            "setup_ok": bool(result.get("ok")),
+            "project_dir": result.get("project_dir"),
+            "message": result.get("message") or "",
+            "result": result,
+        }
+        return json_resp(payload)
 
     @app.route("/api/root/trading/liquidations/scan", methods=["POST"])
     @require_csrf

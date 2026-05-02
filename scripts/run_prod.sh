@@ -337,9 +337,24 @@ prepare_runtime_dirs() {
 
 init_database() {
   python3 - <<'PY'
-from server import init_db
+import server
 
-init_db()
+server.init_db(
+    ensure_secure_audit_columns=server.ensure_secure_audit_columns,
+    ensure_user_columns=server.ensure_user_columns,
+    ensure_appeal_columns=server.ensure_appeal_columns,
+    ensure_session_columns=server.ensure_session_columns,
+    ensure_security_support_schema=server.ensure_security_support_schema,
+    ensure_points_economy_schema=server.ensure_points_economy_schema,
+    ensure_official_chat_room=server.ensure_official_chat_room,
+    hash_password=server.hash_password,
+)
+conn = server.get_db()
+try:
+    server.ensure_trading_schema(conn)
+    conn.commit()
+finally:
+    conn.close()
 print("database ready")
 PY
 }

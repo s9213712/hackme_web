@@ -166,8 +166,12 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-futures-enabled"' in index_html
     assert 'id="root-trading-pvp-enabled"' in index_html
     assert 'id="root-trading-reserve-pool"' in index_html
+    assert 'id="root-trading-btc-trade-enabled"' in index_html
+    assert 'id="root-trading-btc-trade-repo"' in index_html
+    assert 'id="root-trading-btc-trade-branch"' in index_html
     assert 'id="root-trading-btc-trade-path"' in index_html
     assert 'id="root-trading-btc-trade-check-btn"' in index_html
+    assert 'id="root-trading-btc-trade-setup-btn"' in index_html
     assert "BTC_trade 專案資料夾" in index_html
     assert 'id="root-trading-market-settings"' in index_html
     assert 'id="root-trading-settings-save-btn"' in index_html
@@ -187,15 +191,21 @@ def test_root_points_page_is_chain_operations_console():
     assert "short_collateral_percent" in admin_js
     assert "price_source" in admin_js
     assert "max_price_staleness_seconds" in admin_js
+    assert "btc_trade_enabled" in admin_js
+    assert "btc_trade_repo_url" in admin_js
+    assert "btc_trade_branch" in admin_js
     assert "btc_trade_project_dir" in admin_js
     assert "function checkRootBtcTradeStatus" in admin_js
     assert 'apiFetch(API + "/root/trading/btc-trade/check"' in admin_js
+    assert "function setupRootBtcTrade" in admin_js
+    assert 'apiFetch(API + "/root/trading/btc-trade/setup"' in admin_js
     assert "margin_liquidation_enabled" in admin_js
     assert "margin_maintenance_percent" in admin_js
     assert "collectRootTradingMarketSettings" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js
     assert "loadRootTradingSettings" in bootstrap_js
     assert "checkRootBtcTradeStatus" in bootstrap_js
+    assert "setupRootBtcTrade" in bootstrap_js
 
 
 def test_trading_exchange_is_separate_from_wallet_page():

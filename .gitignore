@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+test_backtest_full.py
 database/database.db
 database/database.db.bak
 database/*.db-shm
@@ -32,6 +33,7 @@ uploads/
 attachments/
 avatars/
 media/
+external/
 logs/
 secure_backups/
 anchors/*.json

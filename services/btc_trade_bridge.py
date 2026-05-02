@@ -1,6 +1,8 @@
+import csv
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 import uuid
@@ -10,6 +12,15 @@ from pathlib import Path
 
 ASSET_SCALE = 100_000_000
 DEFAULT_TIMEFRAME = "4h"
+DEFAULT_BTC_TRADE_REPO_URL = "https://github.com/s9213712/BTC_trade.git"
+DEFAULT_BTC_TRADE_BRANCH = "strategy/v15b-plus"
+BTC_TRADE_BUILD_STEPS = [
+    ("下載行情資料", ["update_data.py"]),
+    ("訓練模型", ["retrain_models.py", "--timeframe", "4h"]),
+    ("產生最新預測", ["hourly_check.py", "--timeframe", "4h"]),
+    ("產生回測報告", ["backtest_report.py", "--timeframe", "4h"]),
+]
+BTC_TRADE_FALLBACK_DEPENDENCIES = ["pandas", "numpy", "ccxt", "requests", "scikit-learn", "ta", "pytest"]
 BTC_TRADE_TIMEFRAME_SECONDS = {"1h": 60 * 60, "4h": 4 * 60 * 60, "1d": 24 * 60 * 60}
 BTC_TRADE_SIGNAL_KEYS = {
     "bar_ts",
@@ -41,6 +52,272 @@ def expand_server_path(raw_path):
     if not value:
         return None
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
+
+
+def default_btc_trade_project_dir(base_dir=None):
+    root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[1]
+    return root / "external" / "BTC_trade"
+
+
+def _safe_text_tail(value, limit=2000):
+    text = str(value or "")
+    return text[-limit:] if len(text) > limit else text
+
+
+def _run_step(command, *, cwd, timeout):
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        return {
+            "command": " ".join(command),
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "seconds": round(time.time() - started, 2),
+            "stdout_tail": _safe_text_tail(proc.stdout),
+            "stderr_tail": _safe_text_tail(proc.stderr),
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "command": " ".join(command),
+            "ok": False,
+            "returncode": None,
+            "seconds": round(time.time() - started, 2),
+            "stdout_tail": _safe_text_tail(exc.stdout),
+            "stderr_tail": _safe_text_tail(exc.stderr),
+            "error": "timeout",
+        }
+
+
+def _run_git(args, *, cwd=None, timeout=180):
+    return _run_step(["git", *args], cwd=cwd or Path.cwd(), timeout=timeout)
+
+
+def _seed_btc_trade_report_log(root):
+    runtime = root / "runtime"
+    report_path = runtime / "report_log_4h.jsonl"
+    if report_path.is_file() and report_path.stat().st_size > 0:
+        return {"ok": True, "skipped": True, "message": "report log already exists"}
+    data_path = root / "data" / "btc_4h.csv"
+    if not data_path.is_file():
+        return {"ok": False, "message": "btc_4h.csv not found"}
+    last_row = None
+    with open(data_path, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if row:
+                last_row = row
+    if not last_row:
+        return {"ok": False, "message": "btc_4h.csv is empty"}
+    try:
+        price = float(last_row.get("close") or 0)
+    except Exception:
+        price = 0
+    now = datetime.now(timezone.utc).isoformat()
+    runtime.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": now,
+        "bar_ts": last_row.get("timestamp") or now,
+        "strategy_version": "bootstrap",
+        "report_title": "BTC_trade bootstrap report",
+        "signal_ok": False,
+        "ml_ok": False,
+        "position": "BOOTSTRAP",
+        "current_price": price,
+        "capital": 10000,
+        "btc": 0,
+        "total_equity": 10000,
+        "total_pnl_pct": 0,
+        "timeframe": "4h",
+        "report_text": "bootstrap report for first prediction run",
+        "telegram_text": "bootstrap report for first prediction run",
+    }
+    with open(report_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    return {"ok": True, "skipped": False, "message": "bootstrap report log created", "path": str(report_path)}
+
+
+def _validate_repo_url(repo_url):
+    value = str(repo_url or DEFAULT_BTC_TRADE_REPO_URL).strip()
+    if not value.startswith("https://github.com/") or not value.endswith(".git"):
+        raise ValueError("BTC_trade repo URL must be an https GitHub .git URL")
+    return value
+
+
+def _validate_branch(branch):
+    value = str(branch or DEFAULT_BTC_TRADE_BRANCH).strip()
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-+")
+    if not value or len(value) > 160 or any(ch not in allowed for ch in value):
+        raise ValueError("BTC_trade branch name is invalid")
+    return value
+
+
+def btc_trade_setup(project_dir=None, *, repo_url=None, branch=None, base_dir=None, timeout_per_step=900):
+    """Clone/update BTC_trade and run its build steps.
+
+    This function is intentionally best-effort for the web app integration:
+    callers should surface failures to root, but a failure here must not break
+    the trading page.
+    """
+    root = expand_server_path(project_dir) or default_btc_trade_project_dir(base_dir)
+    repo_url = str(repo_url or DEFAULT_BTC_TRADE_REPO_URL).strip()
+    branch = str(branch or DEFAULT_BTC_TRADE_BRANCH).strip()
+    steps = []
+    try:
+        repo_url = _validate_repo_url(repo_url)
+        branch = _validate_branch(branch)
+        if root.exists() and not (root / ".git").is_dir():
+            return {
+                "ok": False,
+                "project_dir": str(root),
+                "repo_url": repo_url,
+                "branch": branch,
+                "steps": steps,
+                "status": btc_trade_status(root),
+                "message": "BTC_trade 目錄已存在但不是 Git repo，請改用空目錄或自行建置後再填路徑",
+            }
+        if (root / ".git").is_dir():
+            for label, args in (
+                ("抓取最新分支", ["fetch", "origin", branch]),
+                ("切換分支", ["checkout", branch]),
+                ("快轉更新", ["pull", "--ff-only", "origin", branch]),
+            ):
+                step = _run_git(args, cwd=root, timeout=240)
+                step["label"] = label
+                steps.append(step)
+                if not step["ok"]:
+                    status = btc_trade_status(root)
+                    return {
+                        "ok": False,
+                        "project_dir": str(root),
+                        "repo_url": repo_url,
+                        "branch": branch,
+                        "steps": steps,
+                        "status": status,
+                        "message": f"{label}失敗，請自行檢查 BTC_trade repo 狀態",
+                    }
+        else:
+            root.parent.mkdir(parents=True, exist_ok=True)
+            step = _run_git(["clone", "--branch", branch, "--depth", "1", repo_url, str(root)], cwd=root.parent, timeout=900)
+            step["label"] = "下載 BTC_trade"
+            steps.append(step)
+            if not step["ok"]:
+                return {
+                    "ok": False,
+                    "project_dir": str(root),
+                    "repo_url": repo_url,
+                    "branch": branch,
+                    "steps": steps,
+                    "status": btc_trade_status(root),
+                    "message": "下載 BTC_trade 失敗，請自行建置後回來檢查",
+                }
+        requirements = sorted(root.glob("requirements*.txt"))
+        if requirements:
+            for req in requirements:
+                step = _run_step([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=root, timeout=timeout_per_step)
+                step["label"] = f"安裝依賴 {req.name}"
+                steps.append(step)
+                if not step["ok"]:
+                    return {
+                        "ok": False,
+                        "project_dir": str(root),
+                        "repo_url": repo_url,
+                        "branch": branch,
+                        "steps": steps,
+                        "status": btc_trade_status(root),
+                        "message": f"安裝 BTC_trade 依賴失敗：{req.name}，請自行建置",
+                    }
+        else:
+            step = _run_step([sys.executable, "-m", "pip", "install", *BTC_TRADE_FALLBACK_DEPENDENCIES], cwd=root, timeout=timeout_per_step)
+            step["label"] = "安裝 BTC_trade 預設依賴"
+            steps.append(step)
+            if not step["ok"]:
+                return {
+                    "ok": False,
+                    "project_dir": str(root),
+                    "repo_url": repo_url,
+                    "branch": branch,
+                    "steps": steps,
+                    "status": btc_trade_status(root),
+                    "message": "安裝 BTC_trade 預設依賴失敗，請自行建置",
+                }
+        for label, script_args in BTC_TRADE_BUILD_STEPS:
+            script_path = root / script_args[0]
+            if not script_path.is_file():
+                steps.append({
+                    "label": label,
+                    "command": f"{sys.executable} {' '.join(script_args)}",
+                    "ok": False,
+                    "error": "missing_script",
+                    "message": f"缺少 {script_args[0]}",
+                })
+                return {
+                    "ok": False,
+                    "project_dir": str(root),
+                    "repo_url": repo_url,
+                    "branch": branch,
+                    "steps": steps,
+                    "status": btc_trade_status(root),
+                    "message": f"BTC_trade 缺少 {script_args[0]}，請自行建置",
+                }
+            if script_args[0] == "hourly_check.py":
+                seed_result = _seed_btc_trade_report_log(root)
+                seed_step = {
+                    "label": "初始化 BTC_trade runtime 報告",
+                    "command": "internal seed report_log_4h.jsonl",
+                    "ok": bool(seed_result.get("ok")),
+                    "message": seed_result.get("message"),
+                    "skipped": bool(seed_result.get("skipped")),
+                }
+                steps.append(seed_step)
+                if not seed_step["ok"]:
+                    return {
+                        "ok": False,
+                        "project_dir": str(root),
+                        "repo_url": repo_url,
+                        "branch": branch,
+                        "steps": steps,
+                        "status": btc_trade_status(root),
+                        "message": "初始化 BTC_trade runtime 報告失敗，請自行建置",
+                    }
+            step = _run_step([sys.executable, *script_args], cwd=root, timeout=timeout_per_step)
+            step["label"] = label
+            steps.append(step)
+            if not step["ok"]:
+                return {
+                    "ok": False,
+                    "project_dir": str(root),
+                    "repo_url": repo_url,
+                    "branch": branch,
+                    "steps": steps,
+                    "status": btc_trade_status(root),
+                    "message": f"{label}失敗，請自行建置 BTC_trade",
+                }
+        status = btc_trade_status(root)
+        return {
+            "ok": bool(status.get("available")),
+            "project_dir": str(root),
+            "repo_url": repo_url,
+            "branch": branch,
+            "steps": steps,
+            "status": status,
+            "message": "BTC_trade 建置完成" if status.get("available") else "BTC_trade 建置完成但信號仍不可用，請自行檢查 runtime 報告",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "project_dir": str(root),
+            "repo_url": repo_url,
+            "branch": branch,
+            "steps": steps,
+            "status": btc_trade_status(root),
+            "message": f"BTC_trade 建置失敗：{exc.__class__.__name__}",
+        }
 
 
 def _load_json_file(path):
@@ -114,6 +391,7 @@ def btc_trade_status(project_dir):
         "project_dir": root.is_dir(),
         "hourly_check": (root / "hourly_check.py").is_file(),
         "update_data": (root / "update_data.py").is_file(),
+        "retrain_models": (root / "retrain_models.py").is_file(),
         "backtest_report": (root / "backtest_report.py").is_file(),
         "runtime_dir": runtime.is_dir(),
         "report_log": report_path.is_file(),
@@ -127,7 +405,9 @@ def btc_trade_status(project_dir):
         "missing": missing,
         "message": "",
         "commands": [
+            "python3 -m pip install pandas numpy ccxt requests scikit-learn ta pytest",
             "python3 update_data.py",
+            "python3 retrain_models.py --timeframe 4h",
             "python3 hourly_check.py --timeframe 4h",
             "python3 backtest_report.py --timeframe 4h",
         ],

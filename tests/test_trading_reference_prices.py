@@ -43,13 +43,20 @@ def _app(actor, check_user_rate_limit=None):
     return app
 
 
-def _btc_signal_app(actor, project_dir):
+def _btc_signal_app(actor, project_dir, *, btc_trade_enabled=True):
     app = Flask(__name__)
     app.testing = True
 
     class FakeTradingService:
         def get_root_settings(self):
-            return {"settings": {"btc_trade_project_dir": str(project_dir or "")}}
+            return {
+                "settings": {
+                    "btc_trade_enabled": btc_trade_enabled,
+                    "btc_trade_project_dir": str(project_dir or ""),
+                    "btc_trade_repo_url": "https://github.com/s9213712/BTC_trade.git",
+                    "btc_trade_branch": "strategy/v15b-plus",
+                }
+            }
 
     def passthrough(fn):
         return fn
@@ -199,12 +206,30 @@ def test_btc_trade_signal_hidden_when_project_missing(tmp_path):
     assert payload["hidden"] is True
 
 
+def test_btc_trade_signal_hidden_when_disabled(tmp_path):
+    client = _btc_signal_app(
+        {"id": 1, "username": "alice", "role": "user"},
+        tmp_path / "BTC_trade",
+        btc_trade_enabled=False,
+    ).test_client()
+
+    response = client.get("/api/trading/btc-signal?market=BTC/USDT")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["available"] is False
+    assert payload["hidden"] is True
+    assert "未啟用" in payload["msg"]
+
+
 def test_btc_trade_signal_reads_latest_report(tmp_path):
     project = tmp_path / "BTC_trade"
     runtime = project / "runtime"
     runtime.mkdir(parents=True)
     (project / "hourly_check.py").write_text("# test", encoding="utf-8")
     (project / "update_data.py").write_text("# test", encoding="utf-8")
+    (project / "retrain_models.py").write_text("# test", encoding="utf-8")
     (project / "backtest_report.py").write_text("# test", encoding="utf-8")
     (runtime / "report_log_4h.jsonl").write_text(
         "\n".join([
@@ -272,6 +297,48 @@ def test_root_btc_trade_check_reports_initialization_needed(tmp_path):
     assert payload["status"]["available"] is False
     assert payload["status"]["needs_initialization"] is True
     assert "hourly_check" in payload["status"]["missing"]
+
+
+def test_root_btc_trade_setup_failure_is_nonfatal(monkeypatch, tmp_path):
+    def fake_setup(project_dir, **kwargs):
+        return {
+            "ok": False,
+            "project_dir": str(project_dir),
+            "message": "build failed",
+            "steps": [{"label": "下載 BTC_trade", "ok": False}],
+            "status": {"available": False},
+        }
+
+    monkeypatch.setattr(trading_routes, "btc_trade_setup", fake_setup)
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.post("/api/root/trading/btc-trade/setup", json={
+        "project_dir": str(tmp_path / "BTC_trade"),
+        "repo_url": "https://github.com/s9213712/BTC_trade.git",
+        "branch": "strategy/v15b-plus",
+    })
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["setup_ok"] is False
+    assert payload["message"] == "build failed"
+
+
+def test_root_btc_trade_setup_rejects_bad_repo_without_500(tmp_path):
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.post("/api/root/trading/btc-trade/setup", json={
+        "project_dir": str(tmp_path / "BTC_trade"),
+        "repo_url": "file:///tmp/BTC_trade.git",
+        "branch": "strategy/v15b-plus",
+    })
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["setup_ok"] is False
+    assert "建置失敗" in payload["message"]
 
 
 def test_btc_trade_bridge_script_lives_in_hackme_project():

@@ -31,6 +31,9 @@ summary in the root GitHub update center.
 Release `2026.05.02-039` moves the BTC_trade bridge into this project, updates
 the BTC signal panel for the newer BTC_trade runtime report fields, and keeps
 the trading documentation aligned with the current Economy workflow branch.
+BTC_trade remains optional and disabled by default; when `root` enables it, the
+server can clone/update the configured GitHub branch, download data, train, run
+prediction, and hide the signal panel safely if setup fails.
 
 Release `2026.05.01-038` adds browser-only E2EE preview, a consolidated cloud
 drive file toolbar, and improved direct link / BT remote download routing.

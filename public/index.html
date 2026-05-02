@@ -2912,13 +2912,26 @@
                     <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
                   </div>
                   <div class="field">
+                    <label><input type="checkbox" id="root-trading-btc-trade-enabled" /> 啟用 BTC_trade 比特幣信號</label>
+                    <div class="field-hint">預設關閉。啟用後系統會嘗試下載/更新 BTC_trade、下載資料、訓練並產生預測；失敗只會隱藏信號，不影響交易所。</div>
+                  </div>
+                  <div class="field">
+                    <label>BTC_trade GitHub repo</label>
+                    <input type="text" id="root-trading-btc-trade-repo" placeholder="https://github.com/s9213712/BTC_trade.git" />
+                  </div>
+                  <div class="field">
+                    <label>BTC_trade 分支</label>
+                    <input type="text" id="root-trading-btc-trade-branch" placeholder="strategy/v15b-plus" />
+                  </div>
+                  <div class="field">
                     <label>BTC_trade 專案資料夾</label>
-                    <input type="text" id="root-trading-btc-trade-path" placeholder="/home/s92137/NN/BTC_trade" />
-                    <div class="field-hint">開啟方式：填入 BTC_trade 資料夾、按「檢查 BTC_trade」確認可用、再按「儲存交易所參數」。交易頁選 BTC/USDT 時才會顯示信號；找不到專案時會自動隱藏。</div>
+                    <input type="text" id="root-trading-btc-trade-path" placeholder="external/BTC_trade（空白使用預設）" />
+                    <div class="field-hint">空白時使用本專案外部整合目錄。交易頁選 BTC/USDT 時才會顯示信號；找不到專案或建置失敗時會自動隱藏。</div>
                   </div>
                   <div class="field">
                     <label>BTC_trade 狀態</label>
                     <button class="btn" type="button" id="root-trading-btc-trade-check-btn">檢查 BTC_trade</button>
+                    <button class="btn" type="button" id="root-trading-btc-trade-setup-btn">下載/更新並建置</button>
                     <div id="root-trading-btc-trade-status" class="field-hint">尚未檢查</div>
                   </div>
                 </div>

@@ -134,41 +134,54 @@ print during extreme markets.
 ## BTC_trade Signal Panel
 
 The trading page can optionally show a BTC-only signal panel from the separate
-`BTC_trade` project. This is a soft integration:
+`BTC_trade` project. This integration is disabled by default and only starts
+after `root` explicitly enables it.
 
 - It only appears when the selected market is `BTC/USDT`.
-- It only reads files from the configured `BTC_trade` folder.
-- It does not start the other project, import its code, or make trading depend
-  on it.
-- If the folder or report file is missing, the signal panel stays hidden and
-  the trading page continues to work normally.
+- When enabled, `hackme_web` can clone/update the configured GitHub branch,
+  download data, train BTC_trade, run prediction, and generate the report.
+- If cloning, training, prediction, or report generation fails, the signal panel
+  stays hidden and the trading page continues to work normally.
+- The configured folder defaults to `external/BTC_trade`, which is ignored by
+  Git and must not be committed.
 - The bridge helper now lives in this project at
   `scripts/btc_signal_bridge.py`; the external `BTC_trade` project only needs
   to produce runtime files.
 
 To enable it:
 
-1. Prepare the `BTC_trade` project on the same server.
-2. In `BTC_trade`, generate the runtime signal files:
-
-   ```bash
-   cd /home/s92137/NN/BTC_trade
-   python3 update_data.py
-   python3 hourly_check.py --timeframe 4h
-   python3 backtest_report.py --timeframe 4h
-   ```
-
-3. Log in as `root` in `hackme_web`.
-4. Open `安全中心 -> 伺服器設定 -> 計費 -> 交易所參數`.
-5. Set `BTC_trade 專案資料夾`, for example:
+1. Log in as `root` in `hackme_web`.
+2. Open `安全中心 -> 伺服器設定 -> 計費 -> 交易所參數`.
+3. Enable `啟用 BTC_trade 比特幣信號`.
+4. Keep the default repo and branch unless you are testing another BTC_trade
+   branch:
 
    ```text
-   /home/s92137/NN/BTC_trade
+   repo:   https://github.com/s9213712/BTC_trade.git
+   branch: strategy/v15b-plus
    ```
 
-6. Press `檢查 BTC_trade`.
-7. If the check says it is available, press `儲存交易所參數`.
-8. Open the trading page and select `BTC/USDT`.
+5. Leave the project folder blank to use `external/BTC_trade`, or provide an
+   existing local BTC_trade folder.
+6. Press `儲存交易所參數`. When the setting changes from disabled to enabled,
+   the web UI automatically calls the setup endpoint.
+7. You can also press `下載/更新並建置` manually.
+8. Press `檢查 BTC_trade` to inspect whether the runtime report is available.
+9. Open the trading page and select `BTC/USDT`.
+
+The setup endpoint performs these steps:
+
+```text
+git clone/fetch/checkout/pull
+python3 -m pip install <BTC_trade requirements or fallback packages>
+python3 update_data.py
+python3 retrain_models.py --timeframe 4h
+python3 hourly_check.py --timeframe 4h
+python3 backtest_report.py --timeframe 4h
+```
+
+Failures are reported to `root` as build status. They do not block login,
+wallet, trading, or other server functions.
 
 The panel reads the latest line from:
 
