@@ -258,6 +258,11 @@ def register_comfyui_routes(app, deps):
             "currency_type": "points",
         }, None
 
+    def _comfyui_total_quantity(data, params):
+        batch_size = max(1, int((params or {}).get("batch_size") or 1))
+        run_count = _int_range((data or {}).get("run_count"), 1, 1, 10)
+        return batch_size * run_count, run_count
+
     def _ensure_comfyui_balance(actor, quote):
         if not quote or not points_service:
             return None
@@ -723,6 +728,32 @@ def register_comfyui_routes(app, deps):
             "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
         })
+
+    @app.route("/api/comfyui/billing-quote", methods=["POST"])
+    @require_csrf
+    def comfyui_billing_quote():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        params, msg = _normalize_generation_payload(data)
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        if not _comfyui_charge_required(actor):
+            return json_resp({"ok": True, "billing": {"charged": False, "exempt": "root"}})
+        total_quantity, run_count = _comfyui_total_quantity(data, params)
+        quote, msg = _comfyui_price_quote(total_quantity)
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 503
+        quote = {**quote, "batch_size": params["batch_size"], "run_count": run_count}
+        msg = _ensure_comfyui_balance(actor, quote)
+        if msg:
+            return json_resp({"ok": False, "msg": msg, "billing": quote}), 409
+        return json_resp({"ok": True, "billing": quote})
 
     @app.route("/api/comfyui/generate", methods=["POST"])
     @require_csrf

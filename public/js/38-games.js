@@ -43,6 +43,12 @@ const TETRIS_PIECES = {
   L: [[0, 0, 1], [1, 1, 1]],
 };
 
+function setOneA2BNotice(text, ms = 3500) {
+  if (!oneA2BState) return;
+  oneA2BState.notice = text || "";
+  oneA2BState.noticeUntil = text ? Date.now() + ms : 0;
+}
+
 function formatSoloGameTime(ms) {
   const totalMs = Math.max(0, Number(ms || 0));
   const totalSeconds = Math.floor(totalMs / 1000);
@@ -251,8 +257,7 @@ function gameMatchLabel(match) {
 
 function gameDifficultyLabel(difficulty) {
   if (difficulty === "hard") return "困難";
-  if (difficulty === "normal") return "普通";
-  return "簡單";
+  return "普通";
 }
 
 function renderGameMatches(matches) {
@@ -755,7 +760,15 @@ function updateOneA2BStatus(prefix = "") {
     status.textContent = `完成時間 ${time} · 共 ${oneA2BState.guesses.length} 次`;
     return;
   }
-  status.textContent = `${prefix ? `${prefix} ` : ""}目前時間 ${time} · 已猜 ${oneA2BState.guesses.length} 次`;
+  const activeNotice = oneA2BState.notice && Date.now() < Number(oneA2BState.noticeUntil || 0)
+    ? oneA2BState.notice
+    : "";
+  if (!activeNotice) {
+    oneA2BState.notice = "";
+    oneA2BState.noticeUntil = 0;
+  }
+  const head = activeNotice || prefix || "";
+  status.textContent = `${head ? `${head} ` : ""}目前時間 ${time} · 已猜 ${oneA2BState.guesses.length} 次`;
 }
 
 function submitOneA2BGuess() {
@@ -764,11 +777,13 @@ function submitOneA2BGuess() {
   const guess = normalizeOneA2BGuess(input?.value || "");
   if (input && input.value !== guess) input.value = guess;
   if (!isValidOneA2BGuess(guess)) {
-    updateOneA2BStatus("請輸入 4 個不重複數字，首位不可為 0。");
+    setOneA2BNotice("請輸入 4 個不重複數字，首位不可為 0。");
+    updateOneA2BStatus();
     return;
   }
   if (oneA2BState.guesses.some((item) => item.guess === guess)) {
-    updateOneA2BStatus("這組數字已猜過。");
+    setOneA2BNotice("這組數字已猜過。");
+    updateOneA2BStatus();
     return;
   }
   const result = scoreOneA2BGuess(oneA2BState.secret, guess);
@@ -1096,6 +1111,33 @@ function tickSpaceShooterGame() {
   updateSpaceShooterStatus();
 }
 
+function nudgeSpaceShooter(dx) {
+  const state = spaceShooterState;
+  if (!state || state.status !== "active") return;
+  state.playerX = Math.max(18, Math.min(342, state.playerX + dx));
+  renderSpaceShooterBoard();
+}
+
+function shootSpaceShooter() {
+  const state = spaceShooterState;
+  if (!state || state.status !== "active") return;
+  if (state.tick - state.lastShotTick < 2) return;
+  state.bullets.push({ x: state.playerX, y: 448 });
+  state.lastShotTick = state.tick;
+  renderSpaceShooterBoard();
+}
+
+function handleGameTouchAction(action) {
+  if (action === "tetris-left") return moveTetrisPiece(-1, 0);
+  if (action === "tetris-right") return moveTetrisPiece(1, 0);
+  if (action === "tetris-down") return moveTetrisPiece(0, 1);
+  if (action === "tetris-rotate") return rotateTetrisPiece();
+  if (action === "tetris-drop") return hardDropTetrisPiece();
+  if (action === "shooter-left") return nudgeSpaceShooter(-34);
+  if (action === "shooter-right") return nudgeSpaceShooter(34);
+  if (action === "shooter-fire") return shootSpaceShooter();
+}
+
 function renderSpaceShooterBoard() {
   const canvas = $("space-shooter-board");
   if (!canvas) return;
@@ -1218,7 +1260,7 @@ async function reviewGameInvite(inviteId, action) {
 async function createPracticeGame() {
   try {
     const side = $("game-practice-side")?.value || "white";
-    const difficulty = $("game-practice-difficulty")?.value || "easy";
+    const difficulty = $("game-practice-difficulty")?.value || "normal";
     const json = await gameRequest("/games/chess/practice", { method: "POST", body: { side, difficulty } });
     gameSelectedMatchId = json.match_id;
     gameSelectedSquare = null;
@@ -1361,6 +1403,11 @@ document.addEventListener("click", (event) => {
   const shooterNewBtn = event.target?.closest?.("#space-shooter-new-btn");
   if (shooterNewBtn) {
     startSpaceShooterGame();
+    return;
+  }
+  const gameTouchBtn = event.target?.closest?.("[data-game-touch]");
+  if (gameTouchBtn) {
+    handleGameTouchAction(gameTouchBtn.dataset.gameTouch || "");
     return;
   }
   const mineBtn = event.target?.closest?.("[data-mine-index]");

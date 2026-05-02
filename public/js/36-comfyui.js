@@ -494,6 +494,27 @@ function confirmComfyuiBilling(payload) {
   return { confirmed, required: true, totalPrice, unitPrice, batchSize, runCount, totalImages };
 }
 
+async function preflightComfyuiBilling(payload, runCount, billingConfirmation) {
+  if (!billingConfirmation?.required) return null;
+  const res = await apiFetch(API + "/comfyui/billing-quote", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCsrfToken() || ""
+    },
+    body: JSON.stringify({
+      ...payload,
+      run_count: runCount
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) {
+    throw new Error(json.msg || `ComfyUI 扣點預檢失敗（HTTP ${res.status}）`);
+  }
+  return json.billing || null;
+}
+
 async function generateComfyuiImage() {
   if (comfyuiServerAvailable === false) {
     setComfyuiMessage("ComfyUI 伺服器未連線，無法產圖。", false);
@@ -525,12 +546,17 @@ async function generateComfyuiImage() {
   comfyuiGenerateAbortController = controller;
   try {
     await fetchCsrfToken({ force: true });
+    await preflightComfyuiBilling(payload, runCount, billingConfirmation);
     startComfyuiProgress(COMFYUI_GENERATION_TIMEOUT_SECONDS * runCount);
     let totalCharged = 0;
     const generated = [];
-    for (let runIndex = 0; runIndex < runCount; runIndex += 1) {
+    const requestedBatchSize = Math.max(1, Math.min(comfyuiMaxBatchSize, Number(payload.batch_size || 1)));
+    const totalRequests = runCount * requestedBatchSize;
+    for (let requestIndex = 0; requestIndex < totalRequests; requestIndex += 1) {
       if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-      setComfyuiMessage(`正在執行第 ${runIndex + 1} / ${runCount} 次產圖...`, true);
+      const runIndex = Math.floor(requestIndex / requestedBatchSize);
+      const batchIndex = requestIndex % requestedBatchSize;
+      setComfyuiMessage(`正在產生第 ${requestIndex + 1} / ${totalRequests} 張圖片...`, true);
       const res = await apiFetch(API + "/comfyui/generate", {
         method: "POST",
         credentials: "same-origin",
@@ -541,16 +567,25 @@ async function generateComfyuiImage() {
         },
         body: JSON.stringify({
           ...payload,
+          batch_size: 1,
           confirm_billing: billingConfirmation.required,
           timeout_seconds: COMFYUI_GENERATION_TIMEOUT_SECONDS
         })
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.ok) throw new Error(json.msg || `第 ${runIndex + 1} 次產圖失敗（HTTP ${res.status}）`);
+      if (!res.ok || !json.ok) throw new Error(json.msg || `第 ${requestIndex + 1} 張產圖失敗（HTTP ${res.status}）`);
       const runImages = Array.isArray(json.images) && json.images.length ? json.images : [json.image].filter(Boolean);
       runImages.forEach((image) => {
-        generated.push({ ...image, run_index: runIndex, run_count: runCount });
+        generated.push({ ...image, run_index: runIndex, batch_index: batchIndex, run_count: runCount });
       });
+      comfyuiGeneratedImages = generated.slice();
+      if (comfyuiGeneratedImages.length) {
+        comfyuiSelectedImageIndex = Math.max(0, comfyuiGeneratedImages.length - 1);
+        comfyuiCurrentImage = comfyuiGeneratedImages[comfyuiSelectedImageIndex];
+        renderComfyuiGeneratedImages(comfyuiGeneratedImages);
+        setComfyuiSelectedImage(comfyuiSelectedImageIndex);
+        updateComfyuiResultButtons(true);
+      }
       if (json.billing?.charged) totalCharged += Number(json.billing.total_price || 0);
     }
     comfyuiGeneratedImages = generated;

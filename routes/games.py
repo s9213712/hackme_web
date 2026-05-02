@@ -19,7 +19,7 @@ SOLO_GAME_KEYS = {"sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"}
 SCORE_RANKED_SOLO_GAMES = {"tetris", "space_shooter"}
 SOLO_GAME_CHECK_SQL = "'sudoku', 'minesweeper', '1a2b', 'tetris', 'space_shooter'"
 WEEKLY_REWARDS = (300, 200, 100)
-COMPUTER_DIFFICULTIES = {"easy", "normal", "hard"}
+COMPUTER_DIFFICULTIES = {"normal", "hard"}
 MINESWEEPER_DIFFICULTIES = {"easy", "normal", "hard"}
 PIECE_VALUES = {
     "p": 100,
@@ -51,7 +51,9 @@ def default_board_json():
 
 
 def normalize_computer_difficulty(value):
-    difficulty = str(value or "easy").strip().lower()
+    difficulty = str(value or "normal").strip().lower()
+    if difficulty == "easy":
+        difficulty = "normal"
     return difficulty if difficulty in COMPUTER_DIFFICULTIES else None
 
 
@@ -64,13 +66,11 @@ def move_material_value(move):
     return score
 
 
-def choose_computer_move(board, side, difficulty="easy"):
+def choose_computer_move(board, side, difficulty="normal"):
     moves = legal_moves(board, side)
     if not moves:
         return None
-    difficulty = normalize_computer_difficulty(difficulty) or "easy"
-    if difficulty == "easy":
-        return random.choice(moves)
+    difficulty = normalize_computer_difficulty(difficulty) or "normal"
 
     scored = []
     for move in moves:
@@ -135,7 +135,7 @@ def game_schema_sql():
         white_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         black_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         human_side TEXT NOT NULL DEFAULT 'white',
-        computer_difficulty TEXT NOT NULL DEFAULT 'easy',
+        computer_difficulty TEXT NOT NULL DEFAULT 'normal',
         current_turn TEXT NOT NULL DEFAULT 'white',
         board_json TEXT NOT NULL,
         move_history_json TEXT NOT NULL DEFAULT '[]',
@@ -305,7 +305,8 @@ def serialize_match(row, actor_id=None):
     history = load_history(row)
     side = None
     human_side = row["human_side"] if "human_side" in row.keys() else "white"
-    computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "easy"
+    computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
+    computer_difficulty = normalize_computer_difficulty(computer_difficulty) or "normal"
     if actor_id:
         if row["mode"] == "computer" and int(row["white_user_id"]) == int(actor_id):
             side = human_side
@@ -519,7 +520,6 @@ def register_games_routes(app, deps):
                 "supports_invites": True,
                 "supports_computer": True,
                 "computer_difficulties": [
-                    {"key": "easy", "label": "簡單"},
                     {"key": "normal", "label": "普通"},
                     {"key": "hard", "label": "困難"},
                 ],
@@ -895,7 +895,7 @@ def register_games_routes(app, deps):
             next_turn = opponent(side)
             status_info = game_status(board, next_turn)
             human_side = row["human_side"] if "human_side" in row.keys() else "white"
-            computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "easy"
+            computer_difficulty = row["computer_difficulty"] if "computer_difficulty" in row.keys() else "normal"
             if row["mode"] == "computer" and status_info["status"] == "active" and next_turn != human_side:
                 computer_side = next_turn
                 computer_move = choose_computer_move(board, computer_side, computer_difficulty)

@@ -386,6 +386,36 @@ def test_comfyui_generation_rejects_when_points_are_insufficient_before_work(tmp
     assert points.spends == []
 
 
+def test_comfyui_billing_quote_rejects_total_run_cost_before_work(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    points = FakePointsService(balance=45)
+    FakeComfyUIClient.generated_count = 0
+    client = _build_app(db_path, storage_root, points_service=points).test_client()
+
+    quoted = client.post(
+        "/api/comfyui/billing-quote",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "ten images",
+            "seed": 123,
+            "batch_size": 1,
+            "run_count": 10,
+        },
+    )
+
+    body = quoted.get_json()
+    assert quoted.status_code == 409
+    assert "積分不足" in body["msg"]
+    assert body["billing"]["quantity"] == 10
+    assert body["billing"]["total_price"] == 50
+    assert body["billing"]["run_count"] == 10
+    assert points.spends == []
+    assert FakeComfyUIClient.generated_count == 0
+
+
 def test_comfyui_generation_requires_billing_confirmation_for_non_root(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -1013,8 +1043,8 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
-    assert "/js/36-comfyui.js?v=20260502-run-count" in index_html
-    assert "/styles.css?v=20260501-mobile-sidebar" in index_html
+    assert "/js/36-comfyui.js?v=20260502-progressive-batch" in index_html
+    assert "/styles.css?v=20260502-mobile-bugfixes" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
@@ -1025,6 +1055,7 @@ def test_comfyui_frontend_is_wired():
     assert 'switchModuleTab("comfyui")' in bootstrap_js
     assert 'normTab === "comfyui"' in admin_js
     assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/interrupt"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/save"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/discard"' in comfyui_js
@@ -1037,11 +1068,13 @@ def test_comfyui_frontend_is_wired():
     assert 'function applyComfyuiRuntimeLimits(payload = {})' in comfyui_js
     assert "非 root 帳號成功產圖後每張扣" in comfyui_js
     assert "function confirmComfyuiBilling(payload)" in comfyui_js
+    assert "function preflightComfyuiBilling(payload, runCount, billingConfirmation)" in comfyui_js
     assert "function comfyuiRunCount()" in comfyui_js
     assert 'if (currentUser === "root") return { confirmed: true, required: false };' in comfyui_js
     assert "window.confirm" in comfyui_js
     assert "batchSize * runCount" in comfyui_js
-    assert "for (let runIndex = 0; runIndex < runCount; runIndex += 1)" in comfyui_js
+    assert "for (let requestIndex = 0; requestIndex < totalRequests; requestIndex += 1)" in comfyui_js
+    assert "setComfyuiMessage(`正在產生第 ${requestIndex + 1} / ${totalRequests} 張圖片...`, true)" in comfyui_js
     assert "confirm_billing: billingConfirmation.required" in comfyui_js
     assert "json.billing?.charged" in comfyui_js
     assert 'batch_size: Math.max(1, Math.min(comfyuiMaxBatchSize, comfyuiNumberValue("comfyui-batch-size", 1)))' in comfyui_js

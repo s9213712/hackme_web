@@ -13,7 +13,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260502-score-games" in index_html
+    assert "/js/38-games.js?v=20260502-mobile-controls" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="sudoku-game-panel"' in index_html
@@ -44,7 +44,10 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'switchModuleTab("games")' in bootstrap_js
     assert "/games/chess/practice" in games_js
     assert "side = $(\"game-practice-side\")?.value || \"white\"" in games_js
-    assert "difficulty = $(\"game-practice-difficulty\")?.value || \"easy\"" in games_js
+    assert "difficulty = $(\"game-practice-difficulty\")?.value || \"normal\"" in games_js
+    assert "隨機走棋" not in index_html
+    assert 'data-game-touch="tetris-left"' in index_html
+    assert 'data-game-touch="shooter-fire"' in index_html
     assert "gameDifficultyLabel" in games_js
     assert "/games/chess/leaderboard" in games_js
     assert "fetchCsrfToken({ force: true })" in games_js
@@ -76,6 +79,8 @@ def test_game_zone_frontend_assets_are_wired():
     assert "data-tetris-cell" in games_js
     assert "startSpaceShooterGame" in games_js
     assert "tickSpaceShooterGame" in games_js
+    assert "handleGameTouchAction" in games_js
+    assert "setOneA2BNotice" in games_js
     assert "generateOneA2BSecret" in games_js
     assert "scoreOneA2BGuess" in games_js
     assert 'digit === "0"' in games_js

@@ -5006,4 +5006,309 @@
         grid-template-columns: 1fr 1fr;
       }
     }
+
+    /* Cloud drive mobile polish: keep file operations compact and prevent
+       long filenames or action groups from stretching the whole page. */
+    #module-drive,
+    #module-drive .drive-card,
+    #module-drive .drive-file-preview-layout,
+    #module-drive .drive-file-row > div:first-child,
+    #module-drive .drive-preview-panel {
+      min-width: 0;
+    }
+
+    #module-drive .drive-card-sub,
+    #module-drive .drive-file-row strong,
+    #module-drive .drive-preview-panel {
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 1100px) {
+      #module-drive .drive-file-preview-layout {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+
+      #module-drive .drive-preview-card {
+        position: static;
+        max-height: none;
+      }
+    }
+
+    @media (max-width: 720px) {
+      #module-drive .admin-tools {
+        margin-top: .55rem !important;
+      }
+
+      #module-drive .drive-dashboard-grid {
+        grid-template-columns: minmax(0, 1fr);
+        gap: .58rem;
+      }
+
+      #module-drive .drive-card {
+        min-height: 0;
+        padding: .68rem;
+        border-radius: 9px;
+      }
+
+      #module-drive .drive-remaining-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: .45rem;
+        align-items: center;
+      }
+
+      #module-drive .drive-remaining-row .btn {
+        width: auto;
+        min-height: 2rem;
+        padding: .38rem .55rem;
+        white-space: nowrap;
+      }
+
+      #module-drive .admin-toolbar {
+        display: grid;
+        grid-template-columns: 1fr;
+        margin-top: .58rem !important;
+      }
+
+      #module-drive .admin-toolbar .btn {
+        width: 100%;
+      }
+
+      #module-drive .drive-file-preview-layout {
+        gap: .72rem;
+        margin-top: .72rem;
+      }
+
+      #module-drive .drive-card-heading {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: .55rem;
+      }
+
+      #module-drive .drive-card-heading > div:first-child {
+        min-width: 0;
+      }
+
+      #module-drive .drive-card-heading > .drive-file-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+        gap: .35rem;
+      }
+
+      #module-drive .drive-card-heading > .drive-file-actions .btn {
+        width: 100%;
+        min-height: 2.05rem;
+        padding: .38rem .42rem;
+        font-size: .72rem;
+      }
+
+      #module-drive .drive-breadcrumb {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        white-space: nowrap;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      #module-drive .drive-file-list {
+        gap: .48rem;
+      }
+
+      #module-drive .drive-file-row {
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: stretch;
+        gap: .48rem;
+        padding: .58rem;
+        border-radius: 9px;
+      }
+
+      #module-drive .drive-file-row strong {
+        display: block;
+        font-size: .82rem;
+        line-height: 1.35;
+      }
+
+      #module-drive .drive-file-row .drive-card-sub {
+        margin-top: .16rem;
+        font-size: .7rem;
+        line-height: 1.35;
+      }
+
+      #module-drive .drive-file-row > .drive-file-actions,
+      #module-drive .storage-trash-inline .drive-file-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+        gap: .32rem;
+        justify-content: stretch;
+      }
+
+      #module-drive .drive-file-row > .drive-file-actions .btn,
+      #module-drive .storage-trash-inline .drive-file-actions .btn,
+      #module-drive .drive-preview-card .drive-file-actions .btn {
+        width: 100%;
+        min-height: 1.95rem;
+        padding: .34rem .4rem;
+        font-size: .7rem;
+      }
+
+      #module-drive .drive-preview-card {
+        order: 2;
+      }
+
+      #module-drive .drive-preview-panel {
+        min-height: 220px;
+      }
+
+      #module-drive .drive-preview-panel img,
+      #module-drive .drive-preview-panel video,
+      #module-drive .drive-preview-panel iframe {
+        max-width: 100%;
+      }
+
+      #module-drive .drive-collapsible-panel summary {
+        gap: .5rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      #module-drive .drive-card-heading > .drive-file-actions,
+      #module-drive .drive-file-row > .drive-file-actions,
+      #module-drive .storage-trash-inline .drive-file-actions {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      #module-drive .drive-card-heading > .drive-file-actions .btn,
+      #module-drive .drive-file-row > .drive-file-actions .btn,
+      #module-drive .storage-trash-inline .drive-file-actions .btn {
+        font-size: .68rem;
+        min-height: 1.9rem;
+      }
+
+      #module-drive .drive-usage-main {
+        font-size: 1.15rem;
+      }
+
+      #module-drive .drive-remaining-row {
+        grid-template-columns: 1fr;
+      }
+
+      #module-drive .drive-remaining-row .btn {
+        width: 100%;
+      }
+    }
+
+    .user-edit-overlay {
+      z-index: 9500;
+    }
+
+    .user-edit-modal {
+      z-index: 9501;
+    }
+
+    .game-touch-controls {
+      display: none;
+    }
+
+    @media (max-width: 720px), (pointer: coarse) {
+      .game-layout {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+
+      .game-panel,
+      .game-board-panel {
+        min-width: 0;
+      }
+
+      .game-catalog-item,
+      .game-match-row {
+        min-width: 0;
+      }
+
+      .game-catalog-item span,
+      .game-match-row span {
+        min-width: 0;
+      }
+
+      .game-touch-controls {
+        display: grid;
+        gap: .38rem;
+        margin-top: .55rem;
+        touch-action: manipulation;
+        user-select: none;
+      }
+
+      .tetris-touch-controls {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+
+      .shooter-touch-controls {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .game-touch-controls .btn {
+        width: 100%;
+        min-height: 2.2rem;
+        padding: .38rem .3rem;
+      }
+
+      .tetris-board {
+        width: min(100%, 290px);
+      }
+
+      .space-shooter-board {
+        width: min(100%, 320px);
+        max-height: 58dvh;
+      }
+
+      #module-games .settings-option-grid {
+        grid-template-columns: 1fr !important;
+      }
+
+      #module-games .drive-file-actions {
+        justify-content: stretch;
+      }
+
+      #module-games .drive-file-actions .btn,
+      #module-games .drive-file-actions select {
+        width: 100%;
+      }
+
+      #module-trading .trading-indicator-controls {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        gap: .28rem;
+        margin: .25rem 0 .48rem;
+        padding-bottom: .12rem;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      #module-trading .trading-indicator-controls label {
+        flex: 0 0 auto;
+        min-height: 1.65rem;
+        padding: .16rem .42rem;
+        border-radius: 999px;
+        font-size: .68rem;
+        justify-content: flex-start;
+      }
+
+      #module-trading .trading-indicator-controls input {
+        width: 12px;
+        height: 12px;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .tetris-touch-controls {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .tetris-touch-controls [data-game-touch="tetris-drop"] {
+        grid-column: span 2;
+      }
+    }
   

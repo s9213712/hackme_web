@@ -44,6 +44,8 @@ def test_logged_in_user_can_create_bug_report_file(tmp_path):
 
     res = client.post("/api/bug-reports", json={
         "severity": "high",
+        "device": "mobile",
+        "feature": "games",
         "title": "root cannot delete post",
         "description": "Delete failed from UI",
         "steps": "login root, delete post",
@@ -59,6 +61,8 @@ def test_logged_in_user_can_create_bug_report_file(tmp_path):
     assert report_path.exists()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["severity"] == "high"
+    assert payload["device"] == "mobile"
+    assert payload["feature"] == "games"
     assert payload["reward_points"] == 5
     assert payload["reward_status"] == "pending_review"
     assert payload["title"] == "root cannot delete post"
@@ -77,6 +81,8 @@ def test_root_can_list_bug_reports_but_manager_cannot(tmp_path):
     listed = client.get("/api/admin/bug-reports")
     assert listed.status_code == 200
     assert listed.get_json()["reports"][0]["title"] == "bug"
+    assert listed.get_json()["reports"][0]["device"] == "unknown"
+    assert listed.get_json()["reports"][0]["feature"] == "other"
 
     actor_box["actor"] = {"id": 2, "username": "admin", "role": "manager"}
     denied = client.get("/api/admin/bug-reports")

@@ -5,6 +5,10 @@ function showBugReportDialog() {
   if (!overlay) return;
   const page = window.location.pathname + window.location.hash;
   const title = $("bug-report-title");
+  const device = $("bug-report-device");
+  if (device && !device.dataset.touched) {
+    device.value = window.matchMedia?.("(max-width: 720px)")?.matches ? "mobile" : "desktop";
+  }
   if (title && !title.value) title.value = "";
   const msg = $("bug-report-msg");
   if (msg) msg.className = "msg";
@@ -28,6 +32,8 @@ function setBugReportMsg(text, ok) {
 async function submitBugReport() {
   const payload = {
     severity: $("bug-report-severity")?.value || "medium",
+    device: $("bug-report-device")?.value || "unknown",
+    feature: $("bug-report-feature")?.value || "other",
     title: $("bug-report-title")?.value.trim() || "",
     description: $("bug-report-description")?.value.trim() || "",
     steps: $("bug-report-steps")?.value.trim() || "",

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260501-mobile-sidebar" />
+    <link rel="stylesheet" href="/styles.css?v=20260502-mobile-bugfixes" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -863,7 +863,6 @@
             <div class="field">
               <label>電腦難度</label>
               <select id="game-practice-difficulty">
-                <option value="easy">簡單：隨機走棋</option>
                 <option value="normal">普通：優先吃子與將軍</option>
                 <option value="hard">困難：避免明顯送子</option>
               </select>
@@ -990,6 +989,13 @@
               </div>
             </div>
             <div id="tetris-board" class="tetris-board" aria-label="俄羅斯方塊遊戲區"></div>
+            <div class="game-touch-controls tetris-touch-controls" aria-label="俄羅斯方塊手機控制">
+              <button class="btn game-mini-btn" type="button" data-game-touch="tetris-left">左</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="tetris-rotate">旋轉</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="tetris-right">右</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="tetris-down">下</button>
+              <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="tetris-drop">落下</button>
+            </div>
           </div>
           <div id="space-shooter-game-panel" class="single-game-panel" style="display:none;">
             <details class="drive-collapsible-panel game-rules-panel">
@@ -1009,6 +1015,11 @@
               </div>
             </div>
             <canvas id="space-shooter-board" class="space-shooter-board" width="360" height="520" aria-label="宇宙戰機遊戲區"></canvas>
+            <div class="game-touch-controls shooter-touch-controls" aria-label="宇宙戰機手機控制">
+              <button class="btn game-mini-btn" type="button" data-game-touch="shooter-left">左</button>
+              <button class="btn game-mini-btn btn-primary" type="button" data-game-touch="shooter-fire">發射</button>
+              <button class="btn game-mini-btn" type="button" data-game-touch="shooter-right">右</button>
+            </div>
           </div>
         </section>
         <section class="game-panel">
@@ -3408,6 +3419,33 @@
         <option value="critical">critical</option>
       </select>
     </div>
+    <div class="settings-option-grid">
+      <div class="field">
+        <label>裝置類型</label>
+        <select id="bug-report-device">
+          <option value="mobile">手機版</option>
+          <option value="desktop">電腦版</option>
+          <option value="tablet">平板</option>
+          <option value="api">API / 腳本</option>
+          <option value="unknown">不確定</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>問題功能</label>
+        <select id="bug-report-feature">
+          <option value="cloud_drive">雲端硬碟</option>
+          <option value="comfyui">ComfyUI 生圖</option>
+          <option value="trading">交易所 / 積分</option>
+          <option value="games">遊戲區</option>
+          <option value="forum">討論區 / 公告</option>
+          <option value="chat">聊天室 / 通知</option>
+          <option value="security">安全中心 / 伺服器設定</option>
+          <option value="account">帳號 / 會員管理</option>
+          <option value="ui">介面 / 手機版</option>
+          <option value="other">其他</option>
+        </select>
+      </div>
+    </div>
     <div class="field">
       <label>標題</label>
       <input type="text" id="bug-report-title" maxlength="120" placeholder="例如：root 無法刪除留言" />
@@ -3467,9 +3505,9 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
-<script src="/js/36-comfyui.js?v=20260502-run-count" defer></script>
-<script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
-<script src="/js/38-games.js?v=20260502-score-games" defer></script>
+<script src="/js/36-comfyui.js?v=20260502-progressive-batch" defer></script>
+<script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
+<script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
