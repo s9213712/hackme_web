@@ -1097,15 +1097,24 @@ function renderTradingFills(rows, targetId = "trading-fill-list") {
     list.innerHTML = `<div class="drive-empty">尚無成交</div>`;
     return;
   }
-  list.innerHTML = rows.map((row) => `
-    <div class="drive-file-row">
-      <div>
-        <strong>${sanitize(row.side)} · ${sanitize(tradingDisplaySymbol(row.market_symbol))} · ${sanitize(row.quantity)}</strong>
-        <div class="drive-card-sub">價格 ${Number(row.price_points || 0)} · 成交 ${Number(row.notional_points || 0)} 點 · 手續費 ${Number(row.fee_points || 0)}</div>
-        <div class="drive-card-sub">${sanitize(row.created_at || "")}</div>
+  list.innerHTML = rows.map((row) => {
+    const isMargin = String(row.record_type || "").startsWith("margin_");
+    const pnl = row.realized_pnl_points == null ? null : Number(row.realized_pnl_points || 0);
+    const interest = Number(row.interest_points || 0);
+    const extra = isMargin
+      ? `${pnl == null ? "" : ` · 損益 ${pnl >= 0 ? "+" : ""}${pnl} 點`}${interest ? ` · 利息 ${interest} 點` : ""}`
+      : "";
+    return `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(row.side)} · ${sanitize(tradingDisplaySymbol(row.market_symbol))} · ${sanitize(row.quantity)}</strong>
+          <div class="drive-card-sub">${isMargin ? "進階交易" : "現貨成交"} · 價格 ${Number(row.price_points || 0) || "-"} · 成交 ${Number(row.notional_points || 0)} 點 · 手續費 ${Number(row.fee_points || 0)}${extra}</div>
+          <div class="drive-card-sub">${sanitize(row.created_at || "")}</div>
+          ${row.position_uuid ? `<div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>` : ""}
+        </div>
       </div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
 }
 
 function renderTradingContracts(rows = []) {

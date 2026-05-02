@@ -359,6 +359,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function matchTradingLimitOrders" in trading_js
     assert "function scanTradingLiquidations" in trading_js
     assert "function renderTradingMarginPositions" in trading_js
+    assert "function renderTradingFills" in trading_js
+    assert "record_type" in trading_js
+    assert "margin_" in trading_js
+    assert "進階交易" in trading_js
+    assert "損益" in trading_js
     assert '"/trading/margin/open"' in trading_js
     assert '"/root/trading/liquidations/scan"' in trading_js
     assert '"/root/trading/orders/match"' in trading_js

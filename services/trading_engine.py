@@ -388,6 +388,8 @@ def ensure_trading_schema(conn):
             collateral_points INTEGER NOT NULL CHECK (collateral_points > 0),
             open_fee_points INTEGER NOT NULL DEFAULT 0,
             close_fee_points INTEGER NOT NULL DEFAULT 0,
+            exit_price_points INTEGER,
+            realized_pnl_points INTEGER NOT NULL DEFAULT 0,
             interest_percent_daily REAL NOT NULL DEFAULT 0,
             interest_points INTEGER NOT NULL DEFAULT 0,
             interest_paid_points INTEGER NOT NULL DEFAULT 0,
@@ -640,6 +642,10 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_paid_points INTEGER NOT NULL DEFAULT 0")
     if "interest_accrued_hours" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_accrued_hours INTEGER NOT NULL DEFAULT 0")
+    if "exit_price_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN exit_price_points INTEGER")
+    if "realized_pnl_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN realized_pnl_points INTEGER NOT NULL DEFAULT 0")
     bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_bots)").fetchall()}
     if "bot_type" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN bot_type TEXT NOT NULL DEFAULT 'conditional'")
@@ -1796,10 +1802,56 @@ class TradingEngineService:
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
         item["position_label"] = "融資做多" if item["position_type"] == "margin_long" else "借券放空"
+        item["exit_price_points"] = int(item.get("exit_price_points") or 0) if item.get("exit_price_points") is not None else None
+        item["realized_pnl_points"] = int(item.get("realized_pnl_points") or 0)
         item["interest_capitalized_points"] = int(item.get("interest_points") or 0)
         item["interest_paid_points"] = int(item.get("interest_paid_points") or 0)
         item["interest_accrued_hours"] = int(item.get("interest_accrued_hours") or 0)
         return item
+
+    def _margin_trade_records(self, conn, user_id, *, limit=50):
+        records = []
+        rows = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (int(user_id), int(limit)),
+        ).fetchall()
+        for row in rows:
+            payload = self._margin_position_payload(row)
+            label = payload["position_label"]
+            notional = notional_points(int(row["quantity_units"] or 0), int(row["entry_price_points"] or 0))
+            records.append({
+                "record_type": "margin_open",
+                "fill_uuid": f"margin-open:{row['position_uuid']}",
+                "position_uuid": row["position_uuid"],
+                "side": f"{label}開倉",
+                "market_symbol": row["market_symbol"],
+                "quantity": payload["quantity"],
+                "price_points": int(row["entry_price_points"] or 0),
+                "notional_points": notional,
+                "fee_points": int(row["open_fee_points"] or 0),
+                "interest_points": 0,
+                "realized_pnl_points": 0,
+                "status": "open",
+                "created_at": row["opened_at"],
+            })
+            if row["closed_at"]:
+                close_type = "margin_liquidation" if row["status"] == "liquidated" else "margin_close"
+                records.append({
+                    "record_type": close_type,
+                    "fill_uuid": f"{close_type}:{row['position_uuid']}",
+                    "position_uuid": row["position_uuid"],
+                    "side": f"{label}{'強平' if row['status'] == 'liquidated' else '平倉'}",
+                    "market_symbol": row["market_symbol"],
+                    "quantity": payload["quantity"],
+                    "price_points": int(row["exit_price_points"] or 0),
+                    "notional_points": notional_points(int(row["quantity_units"] or 0), int(row["exit_price_points"] or 0)) if row["exit_price_points"] else 0,
+                    "fee_points": int(row["close_fee_points"] or 0),
+                    "interest_points": int(row["interest_points"] or 0),
+                    "realized_pnl_points": int(row["realized_pnl_points"] or 0),
+                    "status": row["status"],
+                    "created_at": row["closed_at"],
+                })
+        return sorted(records, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:int(limit)]
 
     def _borrowing_settings(self, conn):
         settings = self._settings_payload(conn)
@@ -2255,6 +2307,12 @@ class TradingEngineService:
                 ).fetchall()
             }
             fills = [self._fill_payload(row, realized=pnl_by_fill.get(row["id"])) for row in fill_rows]
+            margin_trade_records = self._margin_trade_records(conn, user_id)
+            combined_fills = sorted(
+                [*fills, *margin_trade_records],
+                key=lambda item: str(item.get("created_at") or ""),
+                reverse=True,
+            )[:50]
             bots = [
                 self._bot_payload(row)
                 for row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
@@ -2275,7 +2333,9 @@ class TradingEngineService:
                 "margin_positions": margin_positions,
                 "margin_summary": self._margin_summary_payload(margin_positions),
                 "orders": orders,
-                "fills": fills,
+                "fills": combined_fills,
+                "spot_fills": fills,
+                "margin_trade_records": margin_trade_records,
                 "bots": bots,
                 "bot_runs": bot_runs,
             }
@@ -4406,10 +4466,10 @@ class TradingEngineService:
             conn.execute(
                 """
                 UPDATE trading_margin_positions
-                SET close_fee_points=?, interest_points=?, status=?, closed_at=?, updated_at=?
+                SET close_fee_points=?, interest_points=?, exit_price_points=?, realized_pnl_points=?, status=?, closed_at=?, updated_at=?
                 WHERE id=?
                 """,
-                (close_fee, interest, next_status, now, now, position["id"]),
+                (close_fee, interest, price, delta, next_status, now, now, position["id"]),
             )
             event_type = "TRADING_MARGIN_POSITION_LIQUIDATED" if force_liquidation else "TRADING_MARGIN_POSITION_CLOSED"
             self._audit_event(

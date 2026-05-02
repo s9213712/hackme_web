@@ -20,6 +20,10 @@ def test_main_app_has_mobile_responsive_overrides():
     assert "Mobile uses the same config-driven sidebar as desktop" in css
     assert "body.sidebar-collapsed .app-sidebar" in css
     assert "width: calc(100vw - 3.55rem);" in css
+    assert "body.sidebar-collapsed .sidebar-nav .tab" in css
+    assert "width: 2.75rem;" in css
+    assert "min-height: 2.75rem;" in css
+    assert "body.sidebar-collapsed .sidebar-icon-svg" in css
     assert "collapseSidebarAfterMobileNavigation" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     assert ".settings-option-grid" in css
     assert "grid-template-columns: 1fr !important;" in css

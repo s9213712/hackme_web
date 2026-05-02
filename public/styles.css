@@ -4822,6 +4822,7 @@
         width: 100%;
         min-height: 2.55rem;
         padding: .34rem .38rem;
+        box-sizing: border-box;
         scroll-snap-align: none;
         font-size: .82rem;
       }
@@ -4870,28 +4871,44 @@
       body.sidebar-collapsed .sidebar-nav.tabs {
         height: calc(100dvh - 10.5rem);
         padding-right: 0;
+        align-items: center;
+        gap: .38rem;
       }
 
       body.sidebar-collapsed .sidebar-brand {
         display: none;
       }
 
+      body.sidebar-collapsed .sidebar-nav .tab {
+        width: 2.75rem;
+        min-width: 0;
+        min-height: 2.75rem;
+        height: 2.75rem;
+        padding: 0;
+        gap: 0;
+      }
+
       body.sidebar-collapsed .sidebar-icon,
       body.sidebar-collapsed .sidebar-brand-icon,
       body.sidebar-collapsed .sidebar-user-avatar {
-        flex-basis: 2.05rem;
-        width: 2.05rem;
-        height: 2.05rem;
+        flex-basis: 2.18rem;
+        width: 2.18rem;
+        height: 2.18rem;
+      }
+
+      body.sidebar-collapsed .sidebar-icon-svg {
+        width: 1.16rem;
+        height: 1.16rem;
       }
 
       .app-main {
-        width: calc(100vw - 3.55rem);
-        margin-left: 3.55rem;
+        width: calc(100vw - 3.65rem);
+        margin-left: 3.65rem;
         padding: .72rem .62rem 1rem;
       }
 
       .app-action-bar {
-        left: 3.95rem;
+        left: 4.05rem;
         right: .45rem;
         z-index: 24;
       }
@@ -4899,14 +4916,14 @@
 
     @media (max-width: 480px) {
       .app-main {
-        width: calc(100vw - 3.35rem);
-        margin-left: 3.35rem;
+        width: calc(100vw - 3.55rem);
+        margin-left: 3.55rem;
         padding: .62rem .48rem .9rem;
       }
 
       .app-sidebar,
       body.sidebar-collapsed .app-sidebar {
-        width: 3.35rem;
+        width: 3.55rem;
       }
 
       body:not(.sidebar-collapsed) .app-sidebar {
@@ -4914,7 +4931,7 @@
       }
 
       .app-action-bar {
-        left: 3.68rem;
+        left: 3.88rem;
       }
 
       .session-countdown {

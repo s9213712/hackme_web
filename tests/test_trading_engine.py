@@ -1170,6 +1170,44 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert trading.verify_state()["ok"] is True
 
 
+def test_margin_open_and_close_are_included_in_trade_history(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True},
+        markets=[],
+    )
+
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    dashboard_after_open = trading.user_dashboard(user_id=1)
+
+    assert dashboard_after_open["spot_fills"] == []
+    assert [row["record_type"] for row in dashboard_after_open["margin_trade_records"]] == ["margin_open"]
+    assert dashboard_after_open["fills"][0]["record_type"] == "margin_open"
+    assert dashboard_after_open["fills"][0]["side"] == "融資做多開倉"
+    assert dashboard_after_open["fills"][0]["position_uuid"] == opened["position"]["position_uuid"]
+
+    closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
+    dashboard_after_close = trading.user_dashboard(user_id=1)
+    record_types = [row["record_type"] for row in dashboard_after_close["margin_trade_records"]]
+    close_record = next(row for row in dashboard_after_close["margin_trade_records"] if row["record_type"] == "margin_close")
+
+    assert record_types == ["margin_close", "margin_open"]
+    assert dashboard_after_close["fills"][0]["record_type"] == "margin_close"
+    assert close_record["side"] == "融資做多平倉"
+    assert close_record["position_uuid"] == opened["position"]["position_uuid"]
+    assert close_record["price_points"] == closed["position"]["exit_price_points"]
+    assert close_record["realized_pnl_points"] == closed["delta_points"]
+    assert close_record["fee_points"] == closed["close_fee_points"]
+
+
 def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
     points, trading = _services(tmp_path)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
