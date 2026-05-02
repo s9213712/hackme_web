@@ -30,6 +30,11 @@ The active project emphasizes:
 
 ## Current Economy Work
 
+Release `2026.05.02-043` turns BTC_trade into a disabled-by-default optional
+signal integration, adds root-triggered automatic clone/update/build setup,
+verifies clean deployment and first BTC_trade build, and updates production DB
+initialization so fresh installs can initialize all current schemas.
+
 Release `2026.05.02-042` moves official trading Workflow templates into the
 tracked `workflows/system/` directory, keeps user-created templates as runtime
 data under `workflows/custom/`, adds structured explanations to every official

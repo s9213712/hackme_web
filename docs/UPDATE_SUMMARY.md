@@ -1,25 +1,23 @@
 # Update Summary
 
-Release ID: `2026.05.02-042`
+Release ID: `2026.05.02-043`
 
 ## Highlights
 
-- Trading Workflow templates now live under `workflows/`, with system templates
-  tracked in `workflows/system/` and user custom templates written under
-  `workflows/custom/<username>/`.
-- Official Workflow templates now include structured explanations covering
-  purpose, trigger conditions, actions, risk notes, suitable usage, and tuning
-  guidance.
-- The trading page loads Workflow templates from the backend, displays template
-  explanations, and supports saving custom templates to the runtime workflow
-  directory.
-- Added `security/trading_workflow_template_validation.py` to validate official
-  templates, confirm trigger behavior, download public K-line data, run backend
-  backtests, and compare results against an independent replay.
-- Backtest responses now expose the engine candle limit and automatic provider
-  download limit so users can see the actual tested range.
-- Trading API 404 errors now render as actionable frontend messages instead of
-  raw `NOT FOUND` text.
+- BTC_trade signal integration is now disabled by default and only appears after
+  `root` enables it in trading settings.
+- Root can trigger automatic BTC_trade clone/update/build from the configured
+  GitHub repo and branch; setup installs dependencies, downloads data, trains
+  the 4H model, initializes first-run runtime state, runs prediction, and
+  generates the report.
+- BTC_trade setup failures are non-fatal: the signal panel stays hidden and the
+  trading page continues to work.
+- Fresh deployment was verified in a clean runtime, including dependency
+  install, database initialization, login, and zero-state PointsChain/trading
+  tables.
+- Production DB initialization now calls the current bootstrap schema helpers
+  and initializes trading schema instead of using the obsolete bare `init_db()`
+  call.
 
 ## Operator Notes
 
