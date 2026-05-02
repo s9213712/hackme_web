@@ -108,7 +108,6 @@ const SIDEBAR_MENU_CONFIG = [
     group: "工具",
     submenu: [
       { label: "檔案清單", action: "module:drive" },
-      { label: "相簿", action: "module:albums" },
     ],
   },
   { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },

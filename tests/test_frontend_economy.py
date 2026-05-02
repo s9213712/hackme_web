@@ -166,6 +166,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-futures-enabled"' in index_html
     assert 'id="root-trading-pvp-enabled"' in index_html
     assert 'id="root-trading-reserve-pool"' in index_html
+    assert 'id="root-trading-btc-trade-path"' in index_html
+    assert 'id="root-trading-btc-trade-check-btn"' in index_html
+    assert "BTC_trade 專案資料夾" in index_html
     assert 'id="root-trading-market-settings"' in index_html
     assert 'id="root-trading-settings-save-btn"' in index_html
     assert "function loadRootEconomyCatalog()" in admin_js
@@ -184,11 +187,15 @@ def test_root_points_page_is_chain_operations_console():
     assert "short_collateral_percent" in admin_js
     assert "price_source" in admin_js
     assert "max_price_staleness_seconds" in admin_js
+    assert "btc_trade_project_dir" in admin_js
+    assert "function checkRootBtcTradeStatus" in admin_js
+    assert 'apiFetch(API + "/root/trading/btc-trade/check"' in admin_js
     assert "margin_liquidation_enabled" in admin_js
     assert "margin_maintenance_percent" in admin_js
     assert "collectRootTradingMarketSettings" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js
     assert "loadRootTradingSettings" in bootstrap_js
+    assert "checkRootBtcTradeStatus" in bootstrap_js
 
 
 def test_trading_exchange_is_separate_from_wallet_page():
@@ -222,6 +229,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-funding-available"' in trading_section
     assert "交易總可用" in trading_section
     assert 'id="trading-root-reset-sim-btn"' in trading_section
+    assert 'id="trading-btc-signal-card"' in trading_section
+    assert 'id="trading-btc-signal-body"' in trading_section
+    assert "比特幣信號" in trading_section
     assert 'id="trading-reference-chart"' in trading_section
     assert 'id="trading-reference-tooltip"' in trading_section
     assert 'id="trading-reference-interval"' in trading_section
@@ -278,6 +288,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'switchModuleTab("trading")' in bootstrap_js
     assert 'if (normTab === "trading"' in admin_js
     assert "function renderTradingWalletSummary" in trading_js
+    assert "function loadTradingBtcSignal" in trading_js
+    assert "/trading/btc-signal" in trading_js
     assert "function rootVirtualSpotValue" in trading_js
     assert "function renderEconomySpotPositionDetails" in trading_js
     assert "function renderEconomyMarginPositionDetails" in trading_js

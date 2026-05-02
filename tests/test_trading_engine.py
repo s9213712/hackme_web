@@ -130,7 +130,9 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     assert dashboard["futures_positions"] == []
     ledger_actions = [row["action_type"] for row in points.list_ledger(user_id=1, include_user_id=True)]
     assert "trading_spot_buy" not in ledger_actions
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 0
+    report = trading.root_report()
+    assert report["reserve_pool"]["balance_points"] == 10000
+    assert report["funding_pool"]["available_points"] == 10000
     notes = _notifications(trading, 1)
     assert notes[-1]["type"] == "trading_order_filled"
     assert notes[-1]["title"] == "交易已成交"
@@ -195,6 +197,38 @@ def test_trading_bot_workflow_records_skipped_condition(tmp_path):
     assert dashboard["bot_runs"][0]["status"] == "skipped"
 
 
+def test_trading_bot_failure_counts_run_and_notifies_user(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "oversized ETH buyer",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "price_below",
+            "trigger_price_points": 6000,
+            "side": "sell",
+            "order_type": "market",
+            "quantity": "1",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    first = trading.run_trading_bots(actor=_actor(), limit=10)
+    second = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert first["ok"] is False
+    assert len(first["failed"]) == 1
+    assert second["scanned"] == 0
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["bots"][0]["run_count"] == 1
+    assert dashboard["bot_runs"][0]["status"] == "failed"
+    notes = _notifications(trading, 1)
+    assert notes[-1]["type"] == "trading_bot_failed"
+    assert "oversized ETH buyer" in notes[-1]["body"]
+
+
 def test_dca_trading_bot_converts_budget_to_market_order(tmp_path):
     _, trading = _services(tmp_path)
     bot = trading.save_trading_bot(
@@ -219,6 +253,32 @@ def test_dca_trading_bot_converts_budget_to_market_order(tmp_path):
     assert dashboard["orders"][0]["side"] == "buy"
     assert dashboard["orders"][0]["order_type"] == "market"
     assert dashboard["bots"][0]["run_count"] == 1
+
+
+def test_workflow_rsi_uses_wilder_smoothing(tmp_path):
+    _, trading = _services(tmp_path)
+    closes = [44, 44.15, 43.9, 44.35, 44.6, 44.3, 44.8, 45.0, 44.7, 45.2, 45.4, 45.1, 45.6, 45.8, 46.0, 45.7, 46.3]
+    candles = [{"close_points": value, "high_points": value + 0.2, "low_points": value - 0.2} for value in closes]
+    context = trading._workflow_indicator_context(candles, len(candles) - 1)
+    gains = []
+    losses = []
+    for index in range(1, len(closes)):
+        delta = closes[index] - closes[index - 1]
+        gains.append(max(delta, 0))
+        losses.append(abs(min(delta, 0)))
+    period = 14
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for index in range(period, len(gains)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[index]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[index]) / period
+    expected = 100 - (100 / (1 + (avg_gain / avg_loss)))
+
+    assert context["rsi"] == pytest.approx(expected)
+    simple_gain = sum(gains[-period:]) / period
+    simple_loss = sum(losses[-period:]) / period
+    simple_rsi = 100 - (100 / (1 + (simple_gain / simple_loss)))
+    assert context["rsi"] != pytest.approx(simple_rsi)
 
 
 def test_workflow_bot_uses_branch_priority_and_percent_action(tmp_path):
@@ -787,7 +847,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
     assert dashboard["funding"]["available_points"] == 9498
     assert dashboard["funding"]["locked_points"] == 0
     assert dashboard["positions"][0]["quantity"] == "0.1"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 0
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10000
     conn = trading.get_db()
     try:
         assert conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] == 0
@@ -965,7 +1025,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
 
     high_price_sell = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert high_price_sell["order"]["status"] == "filled"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 3
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
 
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000
@@ -990,7 +1050,7 @@ def test_root_reserve_allocation_debits_source_wallet_and_audits(tmp_path):
         reason="ROOT_RESERVE_ALLOCATION",
     )
 
-    assert result["balance_points"] == 250
+    assert result["balance_points"] == 10250
     assert points.get_wallet(2)["points_balance"] == 750
     report = trading.root_report()
     assert report["reserve_events"][0]["reason"] == "ROOT_RESERVE_ALLOCATION"
@@ -1095,15 +1155,160 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert points.get_wallet(1)["points_frozen"] == 0
     assert opened["funding"]["trial_credit"]["available_points"] == 798
     assert opened["funding"]["trial_credit"]["deployed_points"] == 200
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 2
+    assert opened["position"]["interest_percent_daily"] == pytest.approx(11.2)
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9702
 
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
     assert closed["position"]["status"] == "closed"
+    assert closed["interest_points"] == 0
+    assert closed["position"]["interest_paid_points"] == 2
     assert closed["delta_points"] == -2
     assert points.get_wallet(1)["points_frozen"] == 0
     assert closed["funding"]["trial_credit"]["available_points"] == 996
     assert closed["funding"]["trial_credit"]["deployed_points"] == 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 4
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10006
+    assert trading.verify_state()["ok"] is True
+
+
+def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 24},
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_margin_positions SET opened_at='2026-05-02T10:00:00' WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:00:01") == 4
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == 4
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == 4
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:01") == 7
+        assert trading._margin_interest_points(row, now_text="2026-05-03T09:59:59") == 81
+    finally:
+        conn.close()
+
+
+def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True},
+        markets=[],
+    )
+    conn = trading.get_db()
+    try:
+        conn.execute("BEGIN")
+        trading._reserve_delta(
+            conn,
+            delta=-9950,
+            event_type="test_funding_pool_drain",
+            reason="TEST_FUNDING_POOL_DRAIN",
+            actor=_actor(3, "root", "super_admin"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert trading.user_dashboard(user_id=1)["funding_pool"]["available_points"] == 50
+    with pytest.raises(ValueError, match="funding pool is insufficient"):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="margin_long",
+            quantity="0.1",
+            collateral_points=200,
+        )
+    assert trading.verify_state()["ok"] is True
+
+
+def test_margin_open_is_idempotent_for_client_key(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+
+    first = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+        idempotency_key="open-margin-click-1",
+    )
+    second = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+        idempotency_key="open-margin-click-1",
+    )
+
+    assert second["position"]["position_uuid"] == first["position"]["position_uuid"]
+    dashboard = trading.user_dashboard(user_id=1)
+    assert len([row for row in dashboard["margin_positions"] if row["status"] == "open"]) == 1
+    assert dashboard["margin_positions"][0]["interest_paid_points"] == 1
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9703
+    assert trading.verify_state()["ok"] is True
+
+
+def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(tmp_path):
+    points, trading = _services(tmp_path)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 24},
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    assert points.get_wallet(1)["points_balance"] == 0
+
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_margin_positions SET opened_at='2026-05-02T10:00:00' WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        accrued = trading._accrue_margin_interest(conn, row, actor={"username": "system"}, now_text="2026-05-02T11:00:01")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert accrued["interest_accrued_hours"] == 2
+    assert accrued["interest_paid_points"] == 0
+    assert accrued["interest_points"] == 7
+    dashboard = trading.user_dashboard(user_id=1)
+    position = dashboard["margin_positions"][0]
+    assert position["interest_capitalized_points"] == 7
+    assert position["risk"]["interest_points"] == 7
     assert trading.verify_state()["ok"] is True
 
 
@@ -1224,9 +1429,10 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
 
     assert closed["position"]["status"] == "closed"
-    assert closed["interest_points"] == 10
-    assert closed["delta_points"] == 88
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 14
+    assert closed["interest_points"] == 0
+    assert closed["position"]["interest_paid_points"] == 13
+    assert closed["delta_points"] == 98
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9919
     assert trading.verify_state()["ok"] is True
 
 
@@ -1264,7 +1470,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert points.get_wallet(1)["points_frozen"] == 0
     notices = _notifications(trading, 1)
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 3
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
     assert trading.verify_state()["ok"] is True
 
 

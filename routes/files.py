@@ -37,7 +37,14 @@ from services.cloud_drive import (
 )
 from services.file_previews import build_preview_metadata, preview_category
 from services.notifications import create_notification_if_enabled
-from services.remote_downloads import RemoteDownloadError, download_remote_url, download_torrent_file_with_aria2, remote_download_capabilities, validate_remote_url
+from services.remote_downloads import (
+    RemoteDownloadError,
+    download_remote_url,
+    download_torrent_file_with_aria2,
+    download_torrent_url_with_aria2,
+    remote_download_capabilities,
+    validate_remote_url,
+)
 from services.storage_albums import (
     add_album_file,
     create_album,
@@ -179,20 +186,20 @@ def register_file_routes(app, deps):
 
     def _actor_transfer_policy(actor):
         if _is_root(actor):
-            return {"upload_kbps": 0, "download_kbps": 0, "priority": 100, "enabled": False, "level": "root"}
+            return {"upload_kb_per_sec": 0, "download_kb_per_sec": 0, "priority": 100, "enabled": False, "level": "root"}
         enabled, limits = _transfer_limits_settings()
         level = _actor_transfer_level(actor)
         raw = limits.get(level) or limits.get("normal") or {}
         if not enabled:
-            return {"upload_kbps": 0, "download_kbps": 0, "priority": int(raw.get("priority") or 50), "enabled": False, "level": level}
+            return {"upload_kb_per_sec": 0, "download_kb_per_sec": 0, "priority": int(raw.get("priority") or 50), "enabled": False, "level": level}
         def _nonnegative_int(name, default):
             try:
                 return max(0, int(raw.get(name, default)))
             except Exception:
                 return default
         return {
-            "upload_kbps": _nonnegative_int("upload_kbps", 0),
-            "download_kbps": _nonnegative_int("download_kbps", 0),
+            "upload_kb_per_sec": _nonnegative_int("upload_kb_per_sec", 0),
+            "download_kb_per_sec": _nonnegative_int("download_kb_per_sec", 0),
             "priority": min(100, _nonnegative_int("priority", 50)),
             "enabled": True,
             "level": level,
@@ -218,21 +225,21 @@ def register_file_routes(app, deps):
         policy = _actor_transfer_policy(actor)
         if not policy.get("enabled"):
             return None
-        upload_kbps = int(policy.get("upload_kbps") or 0)
-        if upload_kbps <= 0:
+        upload_kb_per_sec = int(policy.get("upload_kb_per_sec") or 0)
+        if upload_kb_per_sec <= 0:
             return json_resp({"ok": False, "msg": "目前會員階級已停用雲端硬碟上傳", "error": "upload_rate_limited"}), 429
         size = _uploaded_size(file_storage)
         priority = int(policy.get("priority") or 50)
-        transfer_delay = (size / max(1, upload_kbps * 1024)) if size > 0 else 0
+        transfer_delay = (size / max(1, upload_kb_per_sec * 1024)) if size > 0 else 0
         priority_delay = max(0, 60 - priority) / 120
         delay = min(8.0, transfer_delay + priority_delay)
         if delay > 0:
             time.sleep(delay)
         return None
 
-    def _throttled_bytes_response(chunks, *, as_attachment, download_name, mimetype, total_size, kbps):
-        chunk_size = max(8192, min(256 * 1024, int(kbps * 1024 / 4)))
-        sleep_seconds = chunk_size / max(1, kbps * 1024)
+    def _throttled_bytes_response(chunks, *, as_attachment, download_name, mimetype, total_size, kb_per_sec):
+        chunk_size = max(8192, min(256 * 1024, int(kb_per_sec * 1024 / 4)))
+        sleep_seconds = chunk_size / max(1, kb_per_sec * 1024)
 
         @stream_with_context
         def _generate():
@@ -246,18 +253,18 @@ def register_file_routes(app, deps):
         if total_size is not None:
             response.headers["Content-Length"] = str(total_size)
         response.headers.set("Content-Disposition", "attachment" if as_attachment else "inline", filename=download_name)
-        response.headers["X-Cloud-Drive-Rate-Limit-KBPS"] = str(kbps)
+        response.headers["X-Cloud-Drive-Rate-Limit-KB-Per-Sec"] = str(kb_per_sec)
         return response
 
     def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False, actor=None):
         path = resolve_file_storage_path(storage_root, row)
         if not path.exists():
             return None
-        policy = _actor_transfer_policy(actor) if actor else {"download_kbps": 0}
-        download_kbps = int(policy.get("download_kbps") or 0)
+        policy = _actor_transfer_policy(actor) if actor else {"download_kb_per_sec": 0}
+        download_kb_per_sec = int(policy.get("download_kb_per_sec") or 0)
         if is_server_encrypted_file(row):
             raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
-            if download_kbps > 0:
+            if download_kb_per_sec > 0:
                 def _chunks(chunk_size):
                     bio = BytesIO(raw)
                     while True:
@@ -271,7 +278,7 @@ def register_file_routes(app, deps):
                     download_name=download_name,
                     mimetype=mimetype,
                     total_size=len(raw),
-                    kbps=download_kbps,
+                    kb_per_sec=download_kb_per_sec,
                 )
             return send_file(
                 BytesIO(raw),
@@ -280,7 +287,7 @@ def register_file_routes(app, deps):
                 mimetype=mimetype,
                 conditional=False,
             )
-        if download_kbps > 0:
+        if download_kb_per_sec > 0:
             def _file_chunks(chunk_size):
                 with open(path, "rb") as handle:
                     while True:
@@ -294,7 +301,7 @@ def register_file_routes(app, deps):
                 download_name=download_name,
                 mimetype=mimetype,
                 total_size=path.stat().st_size,
-                kbps=download_kbps,
+                kb_per_sec=download_kb_per_sec,
             )
         return send_file(
             path,
@@ -530,10 +537,64 @@ def register_file_routes(app, deps):
         }
         return public
 
+    def _remote_task_age_seconds(task):
+        try:
+            updated_at = datetime.fromisoformat(str(task.get("updated_at") or task.get("created_at") or ""))
+        except Exception:
+            return 0
+        return max(0, int((datetime.now() - updated_at).total_seconds()))
+
+    def _remote_task_stale_after_seconds(task):
+        try:
+            timeout = int(task.get("timeout_seconds") or 0)
+        except Exception:
+            timeout = 0
+        if task.get("status") == "queued":
+            return 120
+        return max(300, timeout + 180)
+
+    def _cleanup_stale_remote_download_tasks_locked():
+        active_users = set()
+        for task in _REMOTE_DOWNLOAD_TASKS.values():
+            if task.get("status") not in {"queued", "running"}:
+                continue
+            owner_user_id = int(task.get("owner_user_id") or 0)
+            if _remote_task_age_seconds(task) > _remote_task_stale_after_seconds(task):
+                task.update(
+                    status="failed",
+                    phase="failed",
+                    progress_percent=100,
+                    error="遠端下載任務逾時或已中斷，請重新建立下載任務",
+                    msg="遠端下載任務逾時或已中斷，請重新建立下載任務",
+                    updated_at=datetime.now().isoformat(),
+                )
+                continue
+            if task.get("status") == "running" and owner_user_id:
+                active_users.add(owner_user_id)
+        _REMOTE_DOWNLOAD_ACTIVE_USERS.intersection_update(active_users)
+
     def _get_remote_download_task(task_id):
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            _cleanup_stale_remote_download_tasks_locked()
             task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
             return dict(task) if task else None
+
+    def _list_remote_download_tasks_for_actor(actor):
+        actor_id = int(_actor_value(actor, "id") or 0)
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            _cleanup_stale_remote_download_tasks_locked()
+            tasks = [dict(task) for task in _REMOTE_DOWNLOAD_TASKS.values()]
+        visible = []
+        for task in tasks:
+            try:
+                owner_id = int(task.get("owner_user_id") or 0)
+            except Exception:
+                owner_id = 0
+            if owner_id != actor_id and not _is_manager(actor):
+                continue
+            visible.append(_task_snapshot(task))
+        visible.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+        return visible[:20]
 
     def _user_has_active_remote_download(user_id):
         try:
@@ -541,6 +602,7 @@ def register_file_routes(app, deps):
         except Exception:
             return True
         with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            _cleanup_stale_remote_download_tasks_locked()
             if user_id in _REMOTE_DOWNLOAD_ACTIVE_USERS:
                 return True
             return any(
@@ -668,14 +730,24 @@ def register_file_routes(app, deps):
         downloaded = None
         file_storage = None
         conn = None
+        acquired_active = False
         try:
             with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                _cleanup_stale_remote_download_tasks_locked()
                 if owner_user_id in _REMOTE_DOWNLOAD_ACTIVE_USERS:
                     task_ref = _REMOTE_DOWNLOAD_TASKS.get(task_id)
                     if task_ref:
-                        task_ref.update(status="failed", phase="failed", error="已有遠端下載正在進行，請等完成後再新增", msg="已有遠端下載正在進行")
+                        task_ref.update(
+                            status="failed",
+                            phase="failed",
+                            progress_percent=100,
+                            error="已有遠端下載正在進行，請等完成後再新增",
+                            msg="已有遠端下載正在進行，請等完成後再新增",
+                            updated_at=datetime.now().isoformat(),
+                        )
                     return
                 _REMOTE_DOWNLOAD_ACTIVE_USERS.add(owner_user_id)
+                acquired_active = True
             conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
@@ -691,7 +763,7 @@ def register_file_routes(app, deps):
             conn.close()
             conn = None
 
-            remote_rate_kbps = int(_actor_transfer_policy(actor).get("download_kbps") or 0)
+            remote_rate_kb_per_sec = int(_actor_transfer_policy(actor).get("download_kb_per_sec") or 0)
             source_type = task.get("source_type") or "url"
             _task_update(task_id, status="running", phase="starting", msg="連線到遠端來源")
             if source_type == "torrent_file":
@@ -701,7 +773,23 @@ def register_file_routes(app, deps):
                     timeout_seconds=task["timeout_seconds"],
                     max_bytes=max_bytes,
                     progress_callback=_remote_progress_updater(task_id),
-                    rate_limit_kbps=remote_rate_kbps or None,
+                    rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                )
+            elif source_type == "torrent_url":
+                downloaded = download_torrent_url_with_aria2(
+                    task["url"],
+                    timeout_seconds=task["timeout_seconds"],
+                    max_bytes=max_bytes,
+                    progress_callback=_remote_progress_updater(task_id),
+                    rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                )
+            elif source_type == "magnet":
+                downloaded = download_remote_url(
+                    task["url"],
+                    timeout_seconds=task["timeout_seconds"],
+                    max_bytes=max_bytes,
+                    progress_callback=_remote_progress_updater(task_id),
+                    rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
                 )
             else:
                 downloaded = download_remote_url(
@@ -709,7 +797,8 @@ def register_file_routes(app, deps):
                     timeout_seconds=task["timeout_seconds"],
                     max_bytes=max_bytes,
                     progress_callback=_remote_progress_updater(task_id),
-                    rate_limit_kbps=remote_rate_kbps or None,
+                    rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                    treat_torrent_as_bt=False,
                 )
             _task_update(task_id, status="running", phase="saving", filename=downloaded.filename, msg="保存到雲端硬碟")
             file_storage = _DownloadedFileStorage(downloaded)
@@ -747,7 +836,7 @@ def register_file_routes(app, deps):
                     _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
                     return
             task_url = str(task.get("url") or "")
-            source_label = "BT 下載" if source_type == "torrent_file" or task_url.startswith("magnet:?") or task_url.lower().split("?", 1)[0].endswith(".torrent") else "遠端下載"
+            source_label = "BT 下載" if source_type in {"torrent_file", "torrent_url", "magnet"} else "Direct link"
             create_notification_if_enabled(
                 conn,
                 user_id=owner_user_id,
@@ -786,7 +875,8 @@ def register_file_routes(app, deps):
             if task.get("torrent_cleanup_dir"):
                 shutil.rmtree(task["torrent_cleanup_dir"], ignore_errors=True)
             with _REMOTE_DOWNLOAD_TASKS_LOCK:
-                _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(owner_user_id)
+                if acquired_active:
+                    _REMOTE_DOWNLOAD_ACTIVE_USERS.discard(owner_user_id)
             if conn:
                 conn.close()
 
@@ -2250,9 +2340,23 @@ def register_file_routes(app, deps):
         if not url:
             return json_resp({"ok": False, "msg": "請輸入下載網址"}), 400
         try:
-            validate_remote_url(url)
+            parsed_remote = validate_remote_url(url)
         except RemoteDownloadError as exc:
             return json_resp({"ok": False, "msg": str(exc)}), 400
+        download_mode = str(data.get("download_mode") or "direct").strip().lower()
+        if download_mode not in {"direct", "bt"}:
+            return json_resp({"ok": False, "msg": "下載模式不正確"}), 400
+        if download_mode == "bt":
+            if parsed_remote["kind"] == "magnet":
+                source_type = "magnet"
+            elif parsed_remote["kind"] == "torrent_url":
+                source_type = "torrent_url"
+            else:
+                return json_resp({"ok": False, "msg": "BT/torrent 按鈕只接受 magnet link 或 .torrent URL"}), 400
+        else:
+            if parsed_remote["kind"] == "magnet":
+                return json_resp({"ok": False, "msg": "Direct link 不接受 magnet link，請使用 BT/torrent 按鈕"}), 400
+            source_type = "direct"
         if _user_has_active_remote_download(_actor_value(actor, "id")):
             return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
@@ -2272,7 +2376,7 @@ def register_file_routes(app, deps):
         task = {
             "id": task_id,
             "kind": "remote_download",
-            "source_type": "url",
+            "source_type": source_type,
             "status": "queued",
             "phase": "queued",
             "filename": "",
@@ -2284,7 +2388,7 @@ def register_file_routes(app, deps):
             "actor": actor_snapshot,
             "privacy_mode": privacy_mode,
             "virtual_path": virtual_path,
-            "timeout_seconds": 1800 if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else 120,
+            "timeout_seconds": 1800 if source_type in {"magnet", "torrent_url"} else 120,
             "loaded_bytes": 0,
             "total_bytes": None,
             "progress_percent": 0,
@@ -2302,6 +2406,14 @@ def register_file_routes(app, deps):
         worker = threading.Thread(target=_run_remote_download_task, args=(task_id,), daemon=True)
         worker.start()
         return json_resp({"ok": True, "task": _task_snapshot(task)}, 202)
+
+    @app.route("/api/cloud-drive/remote-download/tasks", methods=["GET"])
+    @require_csrf_safe
+    def cloud_drive_remote_download_task_list():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        return json_resp({"ok": True, "tasks": _list_remote_download_tasks_for_actor(actor)})
 
     @app.route("/api/cloud-drive/remote-download/torrent-tasks", methods=["POST"])
     @require_csrf
@@ -2398,6 +2510,28 @@ def register_file_routes(app, deps):
             return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
         return json_resp({"ok": True, "task": _task_snapshot(task)})
 
+    @app.route("/api/cloud-drive/remote-download/tasks/<task_id>", methods=["DELETE"])
+    @require_csrf
+    def cloud_drive_remote_download_task_dismiss(task_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        task_id = str(task_id)
+        with _REMOTE_DOWNLOAD_TASKS_LOCK:
+            _cleanup_stale_remote_download_tasks_locked()
+            task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+            if not task:
+                return json_resp({"ok": True, "removed": False})
+            if int(task.get("owner_user_id") or 0) != int(_actor_value(actor, "id")) and not _is_manager(actor):
+                return json_resp({"ok": False, "msg": "沒有下載任務權限"}), 403
+            if task.get("status") in {"queued", "running"}:
+                return json_resp({"ok": False, "msg": "下載任務仍在進行，不能移除紀錄"}), 409
+            cleanup_dir = task.get("torrent_cleanup_dir")
+            _REMOTE_DOWNLOAD_TASKS.pop(task_id, None)
+        if cleanup_dir:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
+        return json_resp({"ok": True, "removed": True})
+
     @app.route("/api/cloud-drive/remote-download", methods=["POST"])
     @require_csrf
     def cloud_drive_remote_download():
@@ -2412,7 +2546,7 @@ def register_file_routes(app, deps):
         url = str(data.get("url") or "").strip()
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         virtual_path = str(data.get("virtual_path") or "").strip()
-        timeout_seconds = 1800 if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else 120
+        timeout_seconds = 120
 
         conn = None
         downloaded = None
@@ -2433,8 +2567,14 @@ def register_file_routes(app, deps):
             conn.close()
             conn = None
 
-            remote_rate_kbps = int(_actor_transfer_policy(actor).get("download_kbps") or 0)
-            downloaded = download_remote_url(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes, rate_limit_kbps=remote_rate_kbps or None)
+            remote_rate_kb_per_sec = int(_actor_transfer_policy(actor).get("download_kb_per_sec") or 0)
+            downloaded = download_remote_url(
+                url,
+                timeout_seconds=timeout_seconds,
+                max_bytes=max_bytes,
+                rate_limit_kb_per_sec=remote_rate_kb_per_sec or None,
+                treat_torrent_as_bt=False,
+            )
             file_storage = _DownloadedFileStorage(downloaded)
             conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)

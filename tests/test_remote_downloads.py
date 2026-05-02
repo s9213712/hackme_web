@@ -3,6 +3,8 @@ import pytest
 from services.remote_downloads import (
     RemoteDownloadError,
     download_magnet_with_aria2,
+    download_remote_url,
+    download_torrent_url_with_aria2,
     validate_remote_url,
     validate_torrent_file_trackers,
 )
@@ -16,9 +18,9 @@ def test_magnet_download_reports_aria2_log_tail(monkeypatch):
             self.stdout = ""
             self.stderr = ""
             log_path = cmd[cmd.index("--log") + 1]
-            assert "--bt-stop-timeout=120" in cmd
-            assert "--enable-dht=false" in cmd
-            assert "--enable-peer-exchange=false" in cmd
+            assert "--bt-stop-timeout=600" in cmd
+            assert "--enable-dht=true" in cmd
+            assert "--enable-peer-exchange=true" in cmd
             with open(log_path, "w", encoding="utf-8") as fh:
                 fh.write("notice\n")
                 fh.write("errorCode=19 URI=magnet:?xt=urn:btih:bad\n")
@@ -44,6 +46,74 @@ def test_magnet_download_reports_aria2_log_tail(monkeypatch):
     assert "BT/magnet 下載失敗" in message
     assert "Tracker returned failure reason" in message
     assert "If there are any errors" not in message
+
+
+def test_magnet_metadata_timeout_reports_human_message(monkeypatch):
+    class TimeoutPopen:
+        def __init__(self, cmd, **kwargs):
+            self.returncode = None
+            self.stdout = ""
+            self.stderr = ""
+            log_path = cmd[cmd.index("--log") + 1]
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write("[NOTICE] Downloading 1 item(s)\n")
+                fh.write("[NOTICE] Stop downloading torrent due to --bt-stop-timeout option.\n")
+                fh.write("[NOTICE] Download GID not complete: [METADATA]deadbeef\n")
+
+        def poll(self):
+            self.returncode = 1
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", TimeoutPopen)
+
+    with pytest.raises(RemoteDownloadError) as exc:
+        download_magnet_with_aria2("magnet:?xt=urn:btih:bad")
+
+    message = str(exc.value)
+    assert "抓不到 torrent metadata" in message
+    assert "[NOTICE]" not in message
+
+
+def test_magnet_bind_failure_reports_host_network_message(monkeypatch):
+    class BindFailurePopen:
+        def __init__(self, cmd, **kwargs):
+            self.returncode = None
+            self.stdout = ""
+            self.stderr = "If there are any errors, then see the log file."
+            log_path = cmd[cmd.index("--log") + 1]
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write("IPv4 DHT: failed to bind UDP port 6978\n")
+                fh.write("Exception: Failed to bind a socket, cause: Operation not permitted\n")
+                fh.write("Exception caught\n")
+                fh.write("Errors occurred while binding port.\n")
+                fh.write("Download GID not complete: [METADATA]deadbeef\n")
+
+        def poll(self):
+            self.returncode = 1
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return "", self.stderr
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr("services.remote_downloads.shutil.which", lambda name: "/usr/bin/aria2c")
+    monkeypatch.setattr("services.remote_downloads.subprocess.Popen", BindFailurePopen)
+
+    with pytest.raises(RemoteDownloadError) as exc:
+        download_magnet_with_aria2("magnet:?xt=urn:btih:bad")
+
+    message = str(exc.value)
+    assert "無法綁定 BT/DHT 連接埠" in message
+    assert "抓不到 torrent metadata" not in message
 
 
 def test_bt_download_kills_when_temp_size_exceeds_limit(monkeypatch):
@@ -95,6 +165,81 @@ def test_torrent_url_is_classified_as_bt(monkeypatch):
 
     parsed = validate_remote_url("https://downloads.example/file.torrent?token=abc")
     assert parsed["kind"] == "torrent_url"
+
+
+def test_resolver_accepts_public_candidate_when_private_candidate_exists(monkeypatch):
+    def fake_getaddrinfo(host, port=None, **kwargs):
+        return [
+            (2, 1, 6, "", ("10.0.0.5", int(port or 80))),
+            (2, 1, 6, "", ("8.8.8.8", int(port or 80))),
+        ]
+
+    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+
+    parsed = validate_remote_url("https://downloads.example/file.torrent?token=abc")
+    assert parsed["kind"] == "torrent_url"
+
+
+def test_direct_mode_saves_torrent_file_itself(monkeypatch, tmp_path):
+    def fake_getaddrinfo(host, port=None, **kwargs):
+        return [(2, 1, 6, "", ("8.8.8.8", int(port or 80)))]
+
+    source = tmp_path / "file.torrent"
+    source.write_bytes(b"d8:announce0:e")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "file.torrent"
+        mimetype = "application/x-bittorrent"
+        cleanup_dir = None
+
+    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.remote_downloads.download_direct_link", lambda url, **kwargs: FakeDownloaded())
+    monkeypatch.setattr(
+        "services.remote_downloads.download_torrent_file_with_aria2",
+        lambda *args, **kwargs: pytest.fail("direct mode must not run aria2 for .torrent URLs"),
+    )
+
+    downloaded = download_remote_url("https://downloads.example/file.torrent", treat_torrent_as_bt=False)
+    assert downloaded.filename == "file.torrent"
+
+
+def test_torrent_url_mode_downloads_payload_with_aria2(monkeypatch, tmp_path):
+    def fake_getaddrinfo(host, port=None, **kwargs):
+        return [(2, 1, 6, "", ("8.8.8.8", int(port or 80)))]
+
+    torrent = tmp_path / "payload.torrent"
+    torrent.write_bytes(b"d8:announce0:e")
+    result = tmp_path / "payload.txt"
+    result.write_text("payload", encoding="utf-8")
+    captured = {}
+
+    class FakeTorrent:
+        path = str(torrent)
+        filename = "payload.torrent"
+        mimetype = "application/x-bittorrent"
+        cleanup_dir = None
+
+    class FakeDownloaded:
+        path = str(result)
+        filename = "payload.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    monkeypatch.setattr("services.remote_downloads.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("services.remote_downloads.download_direct_link", lambda url, **kwargs: FakeTorrent())
+
+    def fake_torrent_download(path, **kwargs):
+        captured["path"] = path
+        captured["display_name"] = kwargs.get("display_name")
+        return FakeDownloaded()
+
+    monkeypatch.setattr("services.remote_downloads.download_torrent_file_with_aria2", fake_torrent_download)
+
+    downloaded = download_torrent_url_with_aria2("https://downloads.example/payload.torrent")
+    assert downloaded.filename == "payload.txt"
+    assert captured["path"] == str(torrent)
+    assert captured["display_name"] == "payload.torrent"
 
 
 def test_torrent_file_trackers_reject_private_hosts(tmp_path, monkeypatch):

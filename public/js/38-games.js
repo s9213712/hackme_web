@@ -27,6 +27,21 @@ const SUDOKU_PUZZLES = [
 let sudokuState = null;
 let minesweeperState = null;
 let oneA2BState = null;
+let tetrisState = null;
+let tetrisLoopTimer = null;
+let spaceShooterState = null;
+let spaceShooterLoopTimer = null;
+const TETRIS_COLS = 10;
+const TETRIS_ROWS = 20;
+const TETRIS_PIECES = {
+  I: [[1, 1, 1, 1]],
+  O: [[1, 1], [1, 1]],
+  T: [[0, 1, 0], [1, 1, 1]],
+  S: [[0, 1, 1], [1, 1, 0]],
+  Z: [[1, 1, 0], [0, 1, 1]],
+  J: [[1, 0, 0], [1, 1, 1]],
+  L: [[0, 0, 1], [1, 1, 1]],
+};
 
 function formatSoloGameTime(ms) {
   const totalMs = Math.max(0, Number(ms || 0));
@@ -53,6 +68,8 @@ function ensureSoloGameTimer() {
     if (gameSelectedKey === "sudoku") updateSudokuStatus();
     if (gameSelectedKey === "minesweeper") updateMinesweeperStatus();
     if (gameSelectedKey === "1a2b") updateOneA2BStatus();
+    if (gameSelectedKey === "tetris") updateTetrisStatus();
+    if (gameSelectedKey === "space_shooter") updateSpaceShooterStatus();
   }, 250);
 }
 
@@ -60,7 +77,9 @@ function stopSoloGameTimerIfIdle() {
   const sudokuActive = sudokuState && !sudokuState.completedAt;
   const minesActive = minesweeperState && minesweeperState.status === "active";
   const oneA2BActive = oneA2BState && !oneA2BState.completedAt;
-  if (!sudokuActive && !minesActive && !oneA2BActive && soloGameTimer) {
+  const tetrisActive = tetrisState && tetrisState.status === "active";
+  const shooterActive = spaceShooterState && spaceShooterState.status === "active";
+  if (!sudokuActive && !minesActive && !oneA2BActive && !tetrisActive && !shooterActive && soloGameTimer) {
     clearInterval(soloGameTimer);
     soloGameTimer = null;
   }
@@ -77,6 +96,8 @@ function gameIcon(key) {
   if (key === "sudoku") return "9";
   if (key === "minesweeper") return "!";
   if (key === "1a2b") return "A";
+  if (key === "tetris") return "▦";
+  if (key === "space_shooter") return "▲";
   return "♟";
 }
 
@@ -84,6 +105,8 @@ function gameSubtitle(game) {
   if (game.key === "sudoku") return "單人邏輯解題";
   if (game.key === "minesweeper") return "單人推理挑戰";
   if (game.key === "1a2b") return "單人猜數字";
+  if (game.key === "tetris") return "高分消除挑戰";
+  if (game.key === "space_shooter") return "高分射擊挑戰";
   return game.supports_computer ? "玩家對戰 / 電腦練習" : "玩家對戰";
 }
 
@@ -95,11 +118,15 @@ function switchGameView(key) {
   const sudokuPanel = $("sudoku-game-panel");
   const minesPanel = $("minesweeper-game-panel");
   const oneA2BPanel = $("onea2b-game-panel");
+  const tetrisPanel = $("tetris-game-panel");
+  const shooterPanel = $("space-shooter-game-panel");
   if (chessLobby) chessLobby.style.display = isChess ? "" : "none";
   if (chessPanel) chessPanel.style.display = isChess ? "" : "none";
   if (sudokuPanel) sudokuPanel.style.display = gameSelectedKey === "sudoku" ? "" : "none";
   if (minesPanel) minesPanel.style.display = gameSelectedKey === "minesweeper" ? "" : "none";
   if (oneA2BPanel) oneA2BPanel.style.display = gameSelectedKey === "1a2b" ? "" : "none";
+  if (tetrisPanel) tetrisPanel.style.display = gameSelectedKey === "tetris" ? "" : "none";
+  if (shooterPanel) shooterPanel.style.display = gameSelectedKey === "space_shooter" ? "" : "none";
   document.querySelectorAll("[data-game-key]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-game-key") === gameSelectedKey);
   });
@@ -114,6 +141,14 @@ function switchGameView(key) {
   if (gameSelectedKey === "1a2b" && !oneA2BState) {
     renderOneA2BBoard();
     updateOneA2BStatus();
+  }
+  if (gameSelectedKey === "tetris" && !tetrisState) {
+    renderTetrisBoard();
+    updateTetrisStatus();
+  }
+  if (gameSelectedKey === "space_shooter" && !spaceShooterState) {
+    renderSpaceShooterBoard();
+    updateSpaceShooterStatus();
   }
   loadSelectedGameLeaderboard().catch((err) => setGameMsg(err.message || "排行榜讀取失敗", false));
 }
@@ -311,7 +346,21 @@ function renderGameLeaderboard(data) {
   if (!wrap) return;
   const rows = Array.isArray(data?.leaderboard) ? data.leaderboard : [];
   if (!rows.length) {
-    wrap.innerHTML = `<p style="color:var(--muted);">${data?.rank_mode === "time_asc" ? "本週尚無完成時間紀錄" : "本週尚無玩家對戰成績"}</p>`;
+    const empty = data?.rank_mode === "score_desc"
+      ? "本週尚無高分紀錄"
+      : data?.rank_mode === "time_asc"
+        ? "本週尚無完成時間紀錄"
+        : "本週尚無玩家對戰成績";
+    wrap.innerHTML = `<p style="color:var(--muted);">${empty}</p>`;
+    return;
+  }
+  if (data?.rank_mode === "score_desc") {
+    wrap.innerHTML = rows.map((row) => `
+      <div class="drive-file-row game-list-row">
+        <div><strong>#${row.rank} ${sanitize(row.username || "-")}</strong><small>${sanitize(data.difficulty || "standard")} · ${row.attempts || 1} 次挑戰 · ${formatSoloGameTime(row.elapsed_ms || 0)}</small></div>
+        <strong>${Number(row.score || 0).toLocaleString()}</strong>
+      </div>
+    `).join("");
     return;
   }
   if (data?.rank_mode === "guesses_then_time") {
@@ -350,6 +399,10 @@ async function loadSelectedGameLeaderboard() {
     path = `/games/minesweeper/solo-leaderboard?difficulty=${encodeURIComponent(difficulty)}`;
   } else if (key === "1a2b") {
     path = "/games/1a2b/solo-leaderboard";
+  } else if (key === "tetris") {
+    path = "/games/tetris/solo-leaderboard";
+  } else if (key === "space_shooter") {
+    path = "/games/space_shooter/solo-leaderboard";
   }
   const data = await gameRequest(path);
   gameState.leaderboard = data.leaderboard || [];
@@ -374,6 +427,7 @@ async function submitSoloGameScore(gameKey, state) {
         difficulty: state.difficulty || "standard",
         puzzle_id: state.puzzleId || "",
         guess_count: Array.isArray(state.guesses) ? state.guesses.length : 0,
+        score: Number(state.score || 0),
       },
     });
     await loadSelectedGameLeaderboard();
@@ -741,6 +795,365 @@ function submitOneA2BGuess() {
   updateOneA2BStatus(`${result.a}A${result.b}B`);
 }
 
+function emptyTetrisGrid() {
+  return Array.from({ length: TETRIS_ROWS }, () => Array(TETRIS_COLS).fill(""));
+}
+
+function randomTetrisPiece() {
+  const names = Object.keys(TETRIS_PIECES);
+  const type = names[Math.floor(Math.random() * names.length)];
+  return { type, shape: TETRIS_PIECES[type].map((row) => row.slice()), x: 3, y: 0 };
+}
+
+function rotateTetrisShape(shape) {
+  return shape[0].map((_cell, col) => shape.map((row) => row[col]).reverse());
+}
+
+function tetrisCollides(piece, offsetX = 0, offsetY = 0, shape = null) {
+  if (!tetrisState || !piece) return true;
+  const matrix = shape || piece.shape;
+  for (let row = 0; row < matrix.length; row += 1) {
+    for (let col = 0; col < matrix[row].length; col += 1) {
+      if (!matrix[row][col]) continue;
+      const x = piece.x + col + offsetX;
+      const y = piece.y + row + offsetY;
+      if (x < 0 || x >= TETRIS_COLS || y >= TETRIS_ROWS) return true;
+      if (y >= 0 && tetrisState.grid[y][x]) return true;
+    }
+  }
+  return false;
+}
+
+function mergeTetrisPiece() {
+  const piece = tetrisState?.piece;
+  if (!tetrisState || !piece) return;
+  piece.shape.forEach((row, rowIndex) => {
+    row.forEach((cell, colIndex) => {
+      if (!cell) return;
+      const y = piece.y + rowIndex;
+      const x = piece.x + colIndex;
+      if (y >= 0 && y < TETRIS_ROWS && x >= 0 && x < TETRIS_COLS) {
+        tetrisState.grid[y][x] = piece.type;
+      }
+    });
+  });
+}
+
+function clearTetrisLines() {
+  if (!tetrisState) return 0;
+  const kept = tetrisState.grid.filter((row) => row.some((cell) => !cell));
+  const cleared = TETRIS_ROWS - kept.length;
+  while (kept.length < TETRIS_ROWS) kept.unshift(Array(TETRIS_COLS).fill(""));
+  tetrisState.grid = kept;
+  if (cleared) {
+    const scoreTable = [0, 100, 300, 500, 800];
+    tetrisState.lines += cleared;
+    tetrisState.score += scoreTable[cleared] || cleared * 200;
+  }
+  return cleared;
+}
+
+function spawnTetrisPiece() {
+  if (!tetrisState) return;
+  tetrisState.piece = randomTetrisPiece();
+  if (tetrisCollides(tetrisState.piece)) {
+    finishTetrisGame();
+  }
+}
+
+function clearTetrisLoop() {
+  if (tetrisLoopTimer) {
+    clearInterval(tetrisLoopTimer);
+    tetrisLoopTimer = null;
+  }
+}
+
+function startTetrisGame() {
+  clearTetrisLoop();
+  tetrisState = {
+    grid: emptyTetrisGrid(),
+    piece: null,
+    score: 0,
+    lines: 0,
+    status: "active",
+    paused: false,
+    startedAt: Date.now(),
+    completedAt: null,
+    penaltySeconds: 0,
+    scoreSubmitted: false,
+    difficulty: "standard",
+    puzzleId: "tetris-standard",
+  };
+  spawnTetrisPiece();
+  renderTetrisBoard();
+  ensureSoloGameTimer();
+  tetrisLoopTimer = setInterval(tickTetrisGame, 650);
+  updateTetrisStatus("遊戲開始。方向鍵控制，空白鍵直接落下。");
+}
+
+function tickTetrisGame() {
+  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
+  if (!tetrisCollides(tetrisState.piece, 0, 1)) {
+    tetrisState.piece.y += 1;
+  } else {
+    mergeTetrisPiece();
+    clearTetrisLines();
+    spawnTetrisPiece();
+  }
+  renderTetrisBoard();
+  updateTetrisStatus();
+}
+
+function finishTetrisGame() {
+  if (!tetrisState || tetrisState.status === "finished") return;
+  tetrisState.status = "finished";
+  tetrisState.completedAt = Date.now();
+  clearTetrisLoop();
+  renderTetrisBoard();
+  updateTetrisStatus();
+  stopSoloGameTimerIfIdle();
+  if (Number(tetrisState.score || 0) > 0) {
+    submitSoloGameScore("tetris", tetrisState);
+  }
+  setGameMsg(`俄羅斯方塊結束，分數 ${Number(tetrisState.score || 0).toLocaleString()}`, true);
+}
+
+function moveTetrisPiece(dx, dy) {
+  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
+  if (!tetrisCollides(tetrisState.piece, dx, dy)) {
+    tetrisState.piece.x += dx;
+    tetrisState.piece.y += dy;
+    tetrisState.score += dy > 0 ? 1 : 0;
+    renderTetrisBoard();
+    updateTetrisStatus();
+  }
+}
+
+function rotateTetrisPiece() {
+  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
+  const rotated = rotateTetrisShape(tetrisState.piece.shape);
+  if (!tetrisCollides(tetrisState.piece, 0, 0, rotated)) {
+    tetrisState.piece.shape = rotated;
+  } else if (!tetrisCollides(tetrisState.piece, -1, 0, rotated)) {
+    tetrisState.piece.x -= 1;
+    tetrisState.piece.shape = rotated;
+  } else if (!tetrisCollides(tetrisState.piece, 1, 0, rotated)) {
+    tetrisState.piece.x += 1;
+    tetrisState.piece.shape = rotated;
+  }
+  renderTetrisBoard();
+}
+
+function hardDropTetrisPiece() {
+  if (!tetrisState || tetrisState.status !== "active" || tetrisState.paused) return;
+  let moved = 0;
+  while (!tetrisCollides(tetrisState.piece, 0, 1)) {
+    tetrisState.piece.y += 1;
+    moved += 1;
+  }
+  tetrisState.score += moved * 2;
+  tickTetrisGame();
+}
+
+function toggleTetrisPause() {
+  if (!tetrisState || tetrisState.status !== "active") return;
+  tetrisState.paused = !tetrisState.paused;
+  updateTetrisStatus(tetrisState.paused ? "已暫停。" : "繼續遊戲。");
+}
+
+function renderTetrisBoard() {
+  const board = $("tetris-board");
+  if (!board) return;
+  if (!tetrisState) {
+    board.innerHTML = '<div class="single-game-placeholder">按「開始」後開始落方塊。</div>';
+    return;
+  }
+  const view = tetrisState.grid.map((row) => row.slice());
+  const piece = tetrisState.piece;
+  if (piece && tetrisState.status === "active") {
+    piece.shape.forEach((row, rowIndex) => {
+      row.forEach((cell, colIndex) => {
+        if (!cell) return;
+        const y = piece.y + rowIndex;
+        const x = piece.x + colIndex;
+        if (y >= 0 && y < TETRIS_ROWS && x >= 0 && x < TETRIS_COLS) view[y][x] = piece.type;
+      });
+    });
+  }
+  board.innerHTML = view.flatMap((row, rowIndex) => row.map((cell, colIndex) => (
+    `<div class="tetris-cell ${cell ? `filled type-${sanitize(cell)}` : ""}" data-tetris-cell="${rowIndex}-${colIndex}"></div>`
+  ))).join("");
+}
+
+function updateTetrisStatus(prefix = "") {
+  const status = $("tetris-status");
+  if (!status) return;
+  if (!tetrisState) {
+    status.textContent = "按開始後開始落方塊，最高分列入排行榜。";
+    return;
+  }
+  const score = Number(tetrisState.score || 0).toLocaleString();
+  const time = formatSoloGameTime(soloElapsedMs(tetrisState));
+  if (tetrisState.status === "finished") {
+    status.textContent = `遊戲結束 · 分數 ${score} · 消除 ${tetrisState.lines || 0} 行 · 時間 ${time}`;
+  } else {
+    status.textContent = `${prefix ? `${prefix} ` : ""}${tetrisState.paused ? "暫停中 · " : ""}分數 ${score} · 消除 ${tetrisState.lines || 0} 行 · 時間 ${time}`;
+  }
+}
+
+function clearSpaceShooterLoop() {
+  if (spaceShooterLoopTimer) {
+    clearInterval(spaceShooterLoopTimer);
+    spaceShooterLoopTimer = null;
+  }
+}
+
+function startSpaceShooterGame() {
+  clearSpaceShooterLoop();
+  spaceShooterState = {
+    status: "active",
+    startedAt: Date.now(),
+    completedAt: null,
+    penaltySeconds: 0,
+    scoreSubmitted: false,
+    difficulty: "standard",
+    puzzleId: "space-shooter-standard",
+    score: 0,
+    lives: 3,
+    tick: 0,
+    playerX: 180,
+    bullets: [],
+    enemies: [],
+    keys: {},
+    lastShotTick: -20,
+  };
+  renderSpaceShooterBoard();
+  ensureSoloGameTimer();
+  spaceShooterLoopTimer = setInterval(tickSpaceShooterGame, 50);
+  updateSpaceShooterStatus("出擊。方向鍵或 A/D 移動，空白鍵射擊。");
+}
+
+function finishSpaceShooterGame() {
+  if (!spaceShooterState || spaceShooterState.status === "finished") return;
+  spaceShooterState.status = "finished";
+  spaceShooterState.completedAt = Date.now();
+  clearSpaceShooterLoop();
+  renderSpaceShooterBoard();
+  updateSpaceShooterStatus();
+  stopSoloGameTimerIfIdle();
+  if (Number(spaceShooterState.score || 0) > 0) {
+    submitSoloGameScore("space_shooter", spaceShooterState);
+  }
+  setGameMsg(`宇宙戰機結束，分數 ${Number(spaceShooterState.score || 0).toLocaleString()}`, true);
+}
+
+function tickSpaceShooterGame() {
+  const state = spaceShooterState;
+  if (!state || state.status !== "active") return;
+  state.tick += 1;
+  const movingLeft = state.keys.ArrowLeft || state.keys.a || state.keys.A;
+  const movingRight = state.keys.ArrowRight || state.keys.d || state.keys.D;
+  if (movingLeft) state.playerX = Math.max(18, state.playerX - 7);
+  if (movingRight) state.playerX = Math.min(342, state.playerX + 7);
+  if ((state.keys[" "] || state.keys.Spacebar) && state.tick - state.lastShotTick >= 5) {
+    state.bullets.push({ x: state.playerX, y: 448 });
+    state.lastShotTick = state.tick;
+  }
+  if (state.tick % Math.max(14, 34 - Math.floor(state.score / 250)) === 0) {
+    state.enemies.push({ x: 24 + Math.random() * 312, y: -18, hp: 1 });
+  }
+  state.bullets.forEach((bullet) => { bullet.y -= 12; });
+  state.enemies.forEach((enemy) => { enemy.y += 3.2 + Math.min(3, state.score / 600); });
+  state.bullets = state.bullets.filter((bullet) => bullet.y > -12);
+  const remainingEnemies = [];
+  state.enemies.forEach((enemy) => {
+    let hit = false;
+    state.bullets.forEach((bullet) => {
+      if (hit) return;
+      if (Math.abs(bullet.x - enemy.x) < 18 && Math.abs(bullet.y - enemy.y) < 18) {
+        bullet.y = -100;
+        hit = true;
+        state.score += 25;
+      }
+    });
+    if (hit) return;
+    if (Math.abs(state.playerX - enemy.x) < 24 && enemy.y > 420) {
+      state.lives -= 1;
+      return;
+    }
+    if (enemy.y > 540) {
+      state.lives -= 1;
+      return;
+    }
+    remainingEnemies.push(enemy);
+  });
+  state.enemies = remainingEnemies;
+  if (state.lives <= 0) {
+    finishSpaceShooterGame();
+    return;
+  }
+  renderSpaceShooterBoard();
+  updateSpaceShooterStatus();
+}
+
+function renderSpaceShooterBoard() {
+  const canvas = $("space-shooter-board");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#07111f";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "rgba(255,255,255,.18)";
+  for (let i = 0; i < 54; i += 1) {
+    const x = (i * 67 + (spaceShooterState?.tick || 0) * 2) % canvas.width;
+    const y = (i * 41 + (spaceShooterState?.tick || 0) * 3) % canvas.height;
+    ctx.fillRect(x, y, 2, 2);
+  }
+  if (!spaceShooterState) {
+    ctx.fillStyle = "rgba(214,226,240,.75)";
+    ctx.font = "16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("按「開始」後出擊", canvas.width / 2, canvas.height / 2);
+    return;
+  }
+  const state = spaceShooterState;
+  ctx.fillStyle = "#4d7dff";
+  ctx.beginPath();
+  ctx.moveTo(state.playerX, 430);
+  ctx.lineTo(state.playerX - 18, 470);
+  ctx.lineTo(state.playerX + 18, 470);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#22c79a";
+  state.bullets.forEach((bullet) => ctx.fillRect(bullet.x - 2, bullet.y - 10, 4, 12));
+  ctx.fillStyle = "#ff4f6d";
+  state.enemies.forEach((enemy) => {
+    ctx.beginPath();
+    ctx.moveTo(enemy.x, enemy.y + 18);
+    ctx.lineTo(enemy.x - 16, enemy.y - 12);
+    ctx.lineTo(enemy.x + 16, enemy.y - 12);
+    ctx.closePath();
+    ctx.fill();
+  });
+}
+
+function updateSpaceShooterStatus(prefix = "") {
+  const status = $("space-shooter-status");
+  if (!status) return;
+  if (!spaceShooterState) {
+    status.textContent = "按開始後出擊，最高分列入排行榜。";
+    return;
+  }
+  const score = Number(spaceShooterState.score || 0).toLocaleString();
+  const time = formatSoloGameTime(soloElapsedMs(spaceShooterState));
+  if (spaceShooterState.status === "finished") {
+    status.textContent = `任務結束 · 分數 ${score} · 時間 ${time}`;
+  } else {
+    status.textContent = `${prefix ? `${prefix} ` : ""}分數 ${score} · 生命 ${spaceShooterState.lives} · 時間 ${time}`;
+  }
+}
+
 async function loadGameZone() {
   try {
     await fetchCsrfToken({ force: true });
@@ -935,6 +1348,21 @@ document.addEventListener("click", (event) => {
     submitOneA2BGuess();
     return;
   }
+  const tetrisNewBtn = event.target?.closest?.("#tetris-new-btn");
+  if (tetrisNewBtn) {
+    startTetrisGame();
+    return;
+  }
+  const tetrisPauseBtn = event.target?.closest?.("#tetris-pause-btn");
+  if (tetrisPauseBtn) {
+    toggleTetrisPause();
+    return;
+  }
+  const shooterNewBtn = event.target?.closest?.("#space-shooter-new-btn");
+  if (shooterNewBtn) {
+    startSpaceShooterGame();
+    return;
+  }
   const mineBtn = event.target?.closest?.("[data-mine-index]");
   if (mineBtn) {
     revealMinesweeperCell(mineBtn.dataset.mineIndex);
@@ -980,6 +1408,30 @@ document.addEventListener("keydown", (event) => {
   if (oneA2BInput && event.key === "Enter") {
     event.preventDefault();
     submitOneA2BGuess();
+  }
+  const tag = String(event.target?.tagName || "").toLowerCase();
+  const editing = ["input", "textarea", "select"].includes(tag);
+  if (!editing && gameSelectedKey === "tetris" && tetrisState?.status === "active") {
+    if (["ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", " "].includes(event.key)) {
+      event.preventDefault();
+    }
+    if (event.key === "ArrowLeft") moveTetrisPiece(-1, 0);
+    if (event.key === "ArrowRight") moveTetrisPiece(1, 0);
+    if (event.key === "ArrowDown") moveTetrisPiece(0, 1);
+    if (event.key === "ArrowUp") rotateTetrisPiece();
+    if (event.key === " ") hardDropTetrisPiece();
+  }
+  if (!editing && gameSelectedKey === "space_shooter" && spaceShooterState?.status === "active") {
+    if (["ArrowLeft", "ArrowRight", " ", "a", "A", "d", "D"].includes(event.key)) {
+      event.preventDefault();
+      spaceShooterState.keys[event.key] = true;
+    }
+  }
+});
+
+document.addEventListener("keyup", (event) => {
+  if (spaceShooterState?.keys) {
+    spaceShooterState.keys[event.key] = false;
   }
 });
 

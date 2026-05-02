@@ -704,11 +704,12 @@ def test_admin_adjust_is_idempotent_for_client_key(tmp_path):
     assert len(adjustments) == 1
 
 
-def test_admin_adjust_without_client_key_rechecks_balance_each_time(tmp_path):
+def test_admin_adjust_without_client_key_has_auto_idempotency_window(tmp_path, monkeypatch):
     service = _service(tmp_path)
     actor = {"id": 3, "username": "root", "role": "super_admin"}
+    monkeypatch.setattr("services.points_chain.time.time", lambda: 1_800_000_000)
 
-    service.admin_adjust(
+    first = service.admin_adjust(
         actor=actor,
         user_id=1,
         currency_type="points",
@@ -716,7 +717,28 @@ def test_admin_adjust_without_client_key_rechecks_balance_each_time(tmp_path):
         amount=1,
         reason="manual correction",
     )
-    service.admin_adjust(
+    second = service.admin_adjust(
+        actor=actor,
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=1,
+        reason="manual correction",
+    )
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert service.get_wallet(1)["points_balance"] == 1
+
+    debit = service.admin_adjust(
+        actor=actor,
+        user_id=1,
+        currency_type="points",
+        direction="debit",
+        amount=1,
+        reason="manual correction",
+    )
+    duplicate_debit = service.admin_adjust(
         actor=actor,
         user_id=1,
         currency_type="points",
@@ -725,16 +747,8 @@ def test_admin_adjust_without_client_key_rechecks_balance_each_time(tmp_path):
         reason="manual correction",
     )
 
-    with pytest.raises(ValueError, match="insufficient balance"):
-        service.admin_adjust(
-            actor=actor,
-            user_id=1,
-            currency_type="points",
-            direction="debit",
-            amount=1,
-            reason="manual correction",
-        )
-
+    assert debit["created"] is True
+    assert duplicate_debit["created"] is False
     assert service.get_wallet(1)["points_balance"] == 0
 
 

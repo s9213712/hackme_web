@@ -76,7 +76,7 @@ def _seed_legacy_user_db(db_path):
     conn.close()
 
 
-def test_game_catalog_includes_sudoku_minesweeper_and_1a2b(tmp_path):
+def test_game_catalog_includes_solo_games(tmp_path):
     db_path = tmp_path / "games.db"
     _seed_db(db_path)
     actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
@@ -87,10 +87,12 @@ def test_game_catalog_includes_sudoku_minesweeper_and_1a2b(tmp_path):
     assert response.status_code == 200
     games = response.get_json()["games"]
     by_key = {game["key"]: game for game in games}
-    assert {"chess", "sudoku", "minesweeper", "1a2b"} <= set(by_key)
+    assert {"chess", "sudoku", "minesweeper", "1a2b", "tetris", "space_shooter"} <= set(by_key)
     assert by_key["sudoku"]["supports_invites"] is False
     assert by_key["minesweeper"]["supports_computer"] is False
     assert by_key["1a2b"]["supports_invites"] is False
+    assert by_key["tetris"]["supports_invites"] is False
+    assert by_key["space_shooter"]["supports_computer"] is False
 
 
 def test_games_users_and_invites_work_with_legacy_users_table_without_deleted_at(tmp_path):
@@ -165,10 +167,13 @@ def test_game_schema_migrates_existing_solo_scores_without_guess_count(tmp_path)
     try:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(game_solo_scores)").fetchall()}
         assert "guess_count" in cols
-        migrated = conn.execute("SELECT game_key, guess_count FROM game_solo_scores WHERE puzzle_id='legacy'").fetchone()
+        assert "score" in cols
+        migrated = conn.execute("SELECT game_key, guess_count, score FROM game_solo_scores WHERE puzzle_id='legacy'").fetchone()
         assert migrated["game_key"] == "sudoku"
         assert migrated["guess_count"] == 0
+        assert migrated["score"] == 0
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_guesses_rank'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_game_solo_scores_score_rank'").fetchone()
     finally:
         conn.close()
 
@@ -235,6 +240,45 @@ def test_solo_games_use_elapsed_time_leaderboard(tmp_path):
     assert onea2b_payload["leaderboard"][0]["guess_count"] == 1
     assert onea2b_payload["leaderboard"][1]["guess_count"] == 2
     assert onea2b_payload["leaderboard"][1]["elapsed_ms"] == 60000
+
+
+def test_score_ranked_solo_games_use_high_score_leaderboard(tmp_path):
+    db_path = tmp_path / "games.db"
+    _seed_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "alice", "role": "user"}}
+    app = _build_app(db_path, actor_box)
+    client = app.test_client()
+
+    low = client.post(
+        "/api/games/tetris/solo-scores",
+        json={"score": 1200, "raw_elapsed_ms": 90000, "penalty_seconds": 0, "elapsed_ms": 90000, "puzzle_id": "tetris-standard"},
+    )
+    assert low.status_code == 200
+    high = client.post(
+        "/api/games/tetris/solo-scores",
+        json={"score": 2200, "raw_elapsed_ms": 110000, "penalty_seconds": 0, "elapsed_ms": 110000, "puzzle_id": "tetris-standard"},
+    )
+    assert high.status_code == 200
+    actor_box["actor"] = {"id": 3, "username": "bob", "role": "user"}
+    bob = client.post(
+        "/api/games/tetris/solo-scores",
+        json={"score": 1800, "raw_elapsed_ms": 70000, "penalty_seconds": 0, "elapsed_ms": 70000, "puzzle_id": "tetris-standard"},
+    )
+    assert bob.status_code == 200
+
+    board = client.get("/api/games/tetris/solo-leaderboard")
+    assert board.status_code == 200
+    payload = board.get_json()
+    assert payload["rank_mode"] == "score_desc"
+    assert [row["username"] for row in payload["leaderboard"][:2]] == ["alice", "bob"]
+    assert payload["leaderboard"][0]["score"] == 2200
+    assert payload["leaderboard"][0]["attempts"] == 2
+
+    bad = client.post(
+        "/api/games/space_shooter/solo-scores",
+        json={"score": 0, "raw_elapsed_ms": 1000, "penalty_seconds": 0, "elapsed_ms": 1000, "puzzle_id": "space-shooter-standard"},
+    )
+    assert bad.status_code == 400
 
 
 def test_chess_legal_move_validation_blocks_illegal_moves():

@@ -62,7 +62,10 @@ let driveStorageUpgradeCatalog = [];
 let driveStorageUpgradeCanPurchase = false;
 let driveStorageUpgradeMessage = "";
 let driveRemoteDownloadCapabilities = { direct: true, bt_magnet: false, bt_file: false };
+const driveRemotePollingTaskIds = new Set();
 const DRIVE_TRANSFER_COMPLETED_VISIBLE_MS = 6000;
+const DRIVE_TRANSFER_FAILED_VISIBLE_MS = 15000;
+const DRIVE_REMOTE_STATUS_RETRY_LIMIT = 12;
 
 function drivePrivacyModeLabel(mode) {
   return DRIVE_PRIVACY_MODE_LABELS[mode] || mode || "-";
@@ -726,6 +729,12 @@ function addDriveTransferRow(item) {
   return id;
 }
 
+function findDriveTransferRowIdForTask(taskId) {
+  if (!taskId) return "";
+  const row = driveTransferRows.find((item) => item.task_id === taskId);
+  return row?.id || "";
+}
+
 function updateDriveTransferRow(id, updates) {
   let found = false;
   driveTransferRows = driveTransferRows.map((item) => {
@@ -747,6 +756,18 @@ function removeDriveTransferRow(id) {
   renderStorageBrowser();
 }
 
+async function dismissRemoteDownloadTask(taskId, transferId) {
+  if (taskId) {
+    await fetchCsrfToken({ force: true });
+    await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" },
+    }).catch(() => {});
+  }
+  removeDriveTransferRow(transferId);
+}
+
 function renderDriveTransferRow(item) {
   const percent = driveTransferPercent(item);
   const width = percent === null ? 100 : percent;
@@ -755,17 +776,23 @@ function renderDriveTransferRow(item) {
     ? `${formatDriveBytes(item.loaded_bytes || 0)} / ${formatDriveBytes(item.total_bytes)}`
     : (item.loaded_bytes ? formatDriveBytes(item.loaded_bytes) : "等待資料");
   const statusClass = item.status === "failed" ? "failed" : item.status === "completed" ? "completed" : "running";
+  const statusText = item.status === "failed"
+    ? "下載失敗"
+    : item.status === "completed"
+      ? "下載完成"
+      : (item.kind === "remote_download" ? "下載中" : "上傳中");
   return `
     <div class="drive-file-row drive-transfer-row ${sanitize(statusClass)}">
       <div>
         <strong>${sanitize(item.name || item.filename || "處理中的檔案")}</strong>
-        <div class="drive-card-sub">${sanitize(item.kind === "remote_download" ? "下載中" : "上傳中")} · ${sanitize(item.msg || item.phase || "處理中")} · ${sanitize(bytes)}</div>
+        <div class="drive-card-sub">${sanitize(statusText)} · ${sanitize(item.msg || item.phase || "處理中")} · ${sanitize(bytes)}</div>
         <div class="drive-progress" aria-label="${sanitize(label)}">
           <div class="drive-progress-fill ${percent === null ? "indeterminate" : ""}" style="width:${width}%;"></div>
         </div>
       </div>
       <div class="drive-file-actions">
         <span class="drive-progress-label">${sanitize(label)}</span>
+        ${item.status === "failed" || item.status === "completed" ? `<button class="btn btn-small" type="button" data-drive-action="dismiss-transfer" data-transfer-id="${sanitize(item.id)}" data-task-id="${sanitize(item.task_id || "")}">移除</button>` : ""}
       </div>
     </div>
   `;
@@ -1021,7 +1048,7 @@ async function loadRemoteDownloadCapabilities() {
   }
 }
 
-function classifyRemoteDownloadInput(rawUrl) {
+function classifyRemoteDownloadInput(rawUrl, { torrentUrlsAsBt = false } = {}) {
   const url = String(rawUrl || "").trim();
   if (!url) return { ok: false, kind: "", label: "", msg: "請輸入 direct link 或 magnet link" };
   if (url.startsWith("magnet:?")) return { ok: true, kind: "magnet", label: "BT magnet" };
@@ -1034,7 +1061,7 @@ function classifyRemoteDownloadInput(rawUrl) {
   if (!["http:", "https:"].includes(parsed.protocol)) {
     return { ok: false, kind: "", label: "", msg: "只接受 http、https direct link 或 magnet link" };
   }
-  if (parsed.pathname.toLowerCase().endsWith(".torrent")) {
+  if (torrentUrlsAsBt && parsed.pathname.toLowerCase().endsWith(".torrent")) {
     return { ok: true, kind: "torrent_url", label: "BT torrent URL" };
   }
   return { ok: true, kind: "direct", label: "direct link" };
@@ -1048,7 +1075,7 @@ function promptRemoteDriveDownloadUrl() {
   if (input) input.value = value.trim();
   const torrentInput = $("drive-remote-torrent-file");
   if (torrentInput) torrentInput.value = "";
-  startRemoteDriveDownload({ source: "url", triggerButton: $("drive-remote-download-btn") });
+  startRemoteDriveDownload({ source: "url", downloadMode: "direct", triggerButton: $("drive-remote-download-btn") });
 }
 
 function openRemoteTorrentPicker() {
@@ -1059,12 +1086,12 @@ function openRemoteTorrentPicker() {
     return;
   }
   if (caps.bt_magnet) {
-    const value = window.prompt("輸入 magnet link；若要上傳 .torrent 檔，請留空後按確定");
+    const value = window.prompt("輸入 magnet link 或 .torrent URL；若要上傳 .torrent 檔，請留空後按確定");
     if (value === null) return;
     if (value.trim()) {
       if ($("drive-remote-url")) $("drive-remote-url").value = value.trim();
       if (input) input.value = "";
-      startRemoteDriveDownload({ source: "url", triggerButton: $("drive-remote-torrent-inline-btn") });
+      startRemoteDriveDownload({ source: "torrent-url", downloadMode: "bt", triggerButton: $("drive-remote-torrent-inline-btn") });
       return;
     }
   }
@@ -1073,10 +1100,10 @@ function openRemoteTorrentPicker() {
   input.click();
 }
 
-async function startRemoteDriveDownload({ source = "auto", triggerButton = null } = {}) {
+async function startRemoteDriveDownload({ source = "auto", downloadMode = "direct", triggerButton = null } = {}) {
   const url = source === "torrent" ? "" : ($("drive-remote-url")?.value || "").trim();
   const torrentInput = $("drive-remote-torrent-file");
-  const torrentFile = source === "url" ? null : (torrentInput?.files?.[0] || null);
+  const torrentFile = source === "url" || source === "torrent-url" ? null : (torrentInput?.files?.[0] || null);
   if (!url && !torrentFile) {
     if (source === "auto") return promptRemoteDriveDownloadUrl();
     alert("請輸入下載網址，或上傳 .torrent BT 種子檔");
@@ -1086,7 +1113,10 @@ async function startRemoteDriveDownload({ source = "auto", triggerButton = null 
     alert("下載網址和 BT 種子檔請擇一使用");
     return;
   }
-  const detected = url ? classifyRemoteDownloadInput(url) : { ok: true, kind: "torrent_file", label: "BT torrent file" };
+  const effectiveMode = torrentFile ? "bt" : (downloadMode === "bt" || source === "torrent-url" ? "bt" : "direct");
+  const detected = url
+    ? classifyRemoteDownloadInput(url, { torrentUrlsAsBt: effectiveMode === "bt" })
+    : { ok: true, kind: "torrent_file", label: "BT torrent file" };
   if (!detected.ok) {
     alert(detected.msg || "下載網址格式不正確");
     return;
@@ -1140,6 +1170,7 @@ async function startRemoteDriveDownload({ source = "auto", triggerButton = null 
         headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
         body: JSON.stringify({
           url,
+          download_mode: effectiveMode,
           privacy_mode: options.privacyMode,
           virtual_path: $("drive-remote-virtual-path")?.value || ""
         })
@@ -1163,6 +1194,7 @@ async function startRemoteDriveDownload({ source = "auto", triggerButton = null 
     setTimeout(() => removeDriveTransferRow(transferId), DRIVE_TRANSFER_COMPLETED_VISIBLE_MS);
   } catch (err) {
     updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: err.message || "遠端下載失敗", progress_percent: 100 });
+    setTimeout(() => dismissRemoteDownloadTask("", transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
     alert(err.message || "遠端下載失敗");
   } finally {
     if (button) {
@@ -1178,17 +1210,37 @@ function driveSleep(ms) {
 
 async function pollRemoteDownloadTask(taskId, transferId) {
   if (!taskId) throw new Error("遠端下載任務建立失敗");
+  let consecutiveStatusErrors = 0;
   while (true) {
     await driveSleep(900);
-    await fetchCsrfToken({ force: true });
-    const res = await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
-      credentials: "same-origin",
-      headers: { "X-CSRF-Token": getCsrfToken() || "" }
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) throw new Error(json.msg || `遠端下載狀態讀取失敗（HTTP ${res.status}）`);
+    let res;
+    let json = {};
+    try {
+      await fetchCsrfToken({ force: true });
+      res = await apiFetch(API + `/cloud-drive/remote-download/tasks/${encodeURIComponent(taskId)}`, {
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": getCsrfToken() || "" }
+      });
+      json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        throw new Error(json.msg || `遠端下載狀態讀取失敗（HTTP ${res.status}）`);
+      }
+      consecutiveStatusErrors = 0;
+    } catch (err) {
+      consecutiveStatusErrors += 1;
+      updateDriveTransferRow(transferId, {
+        status: "running",
+        phase: "status_retry",
+        msg: `狀態暫時讀取失敗，正在重試（${consecutiveStatusErrors}/${DRIVE_REMOTE_STATUS_RETRY_LIMIT}）`,
+      });
+      if (consecutiveStatusErrors < DRIVE_REMOTE_STATUS_RETRY_LIMIT) {
+        continue;
+      }
+      throw new Error(err.message || "遠端下載狀態連續讀取失敗");
+    }
     const task = json.task || {};
     updateDriveTransferRow(transferId, {
+      task_id: task.id || taskId,
       name: task.filename || task.url || "遠端下載",
       status: task.status || "running",
       phase: task.phase || "",
@@ -1205,6 +1257,76 @@ async function pollRemoteDownloadTask(taskId, transferId) {
     if (task.status === "completed") return task;
     if (task.status === "failed") throw new Error(task.error || task.msg || "遠端下載失敗");
   }
+}
+
+function remoteTaskTransferId(taskId) {
+  return `remote-task-${taskId}`;
+}
+
+function applyRemoteDownloadTaskToTransfer(task) {
+  if (!task?.id) return null;
+  const transferId = findDriveTransferRowIdForTask(task.id) || remoteTaskTransferId(task.id);
+  updateDriveTransferRow(transferId, {
+    id: transferId,
+    task_id: task.id,
+    kind: "remote_download",
+    name: task.filename || task.torrent_filename || task.url || "遠端下載",
+    status: task.status || "running",
+    phase: task.phase || "",
+    loaded_bytes: task.loaded_bytes,
+    total_bytes: task.total_bytes,
+    progress_percent: task.progress_percent,
+    msg: task.msg || "",
+  });
+  return transferId;
+}
+
+function resumeRemoteDownloadTaskPolling(task) {
+  if (!task?.id || !["queued", "running"].includes(task.status)) return;
+  if (driveRemotePollingTaskIds.has(task.id)) return;
+  const transferId = applyRemoteDownloadTaskToTransfer(task);
+  if (!transferId) return;
+  driveRemotePollingTaskIds.add(task.id);
+  pollRemoteDownloadTask(task.id, transferId)
+    .then(async () => {
+      await loadDriveDashboard();
+      setTimeout(() => removeDriveTransferRow(transferId), DRIVE_TRANSFER_COMPLETED_VISIBLE_MS);
+    })
+    .catch((err) => {
+      updateDriveTransferRow(transferId, {
+        status: "failed",
+        phase: "failed",
+        msg: err.message || "遠端下載失敗",
+        progress_percent: 100,
+      });
+      setTimeout(() => dismissRemoteDownloadTask(task.id, transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
+    })
+    .finally(() => {
+      driveRemotePollingTaskIds.delete(task.id);
+    });
+}
+
+async function restoreRemoteDownloadTasks() {
+  await fetchCsrfToken({ force: true });
+  const res = await apiFetch(API + "/cloud-drive/remote-download/tasks", {
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCsrfToken() || "" },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) return;
+  const tasks = Array.isArray(json.tasks) ? json.tasks : [];
+  tasks.forEach((task) => {
+    const transferId = applyRemoteDownloadTaskToTransfer(task);
+    if (!transferId) return;
+    if (task.status === "completed" || task.status === "failed") {
+      setTimeout(
+        () => dismissRemoteDownloadTask(task.status === "failed" ? task.id : "", transferId),
+        task.status === "failed" ? DRIVE_TRANSFER_FAILED_VISIBLE_MS : DRIVE_TRANSFER_COMPLETED_VISIBLE_MS
+      );
+      return;
+    }
+    resumeRemoteDownloadTaskPolling(task);
+  });
 }
 
 async function downloadDriveFile(fileId, likelyHighRisk) {
@@ -3126,6 +3248,7 @@ async function loadDriveDashboard() {
     renderDriveDashboard(json);
     await loadStorageUpgradeOptions();
     await loadRemoteDownloadCapabilities();
+    await restoreRemoteDownloadTasks();
     await loadDriveFiles(csrf);
     await loadStorageFiles(csrf);
     if (msg) msg.className = "msg";
@@ -3260,10 +3383,13 @@ document.addEventListener("click", (event) => {
   const path = button.dataset.path || "";
   const name = button.dataset.name || "";
   const shareUrl = button.dataset.shareUrl || "";
+  const transferId = button.dataset.transferId || "";
+  const taskId = button.dataset.taskId || "";
   const warn = button.dataset.warn === "1";
   const albumSequence = button.dataset.albumSequence || "";
   (async () => {
     if (action === "preview") return previewDriveFile(fileId, { fileName: name });
+    if (action === "dismiss-transfer") return dismissRemoteDownloadTask(taskId, transferId);
     if (action === "album-full-preview") return previewAlbumFileFullscreen(fileId, name, albumSequence === "viewer" ? { files: albumPreviewSequence } : {});
     if (action === "album-preview-prev") return stepAlbumPreview(-1);
     if (action === "album-preview-next") return stepAlbumPreview(1);

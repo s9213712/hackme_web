@@ -7,6 +7,7 @@ import zipfile
 from cryptography.fernet import Fernet
 from flask import Flask, jsonify, make_response
 
+import routes.files as files_routes
 from routes.files import register_file_routes
 from services.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.member_levels import ensure_member_level_rules_schema
@@ -1483,6 +1484,225 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     assert body["progress_percent"] == 100
     assert body["file"]["filename"] == "remote-task.txt"
     assert body["storage_file"]["virtual_path"] == "/Downloads/remote-task.txt"
+
+
+def test_remote_download_task_direct_mode_keeps_torrent_file(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "sample.torrent"
+    source.write_bytes(b"d8:announce0:e")
+    captured = {}
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "sample.torrent"
+        mimetype = "application/x-bittorrent"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        captured["url"] = url
+        captured["treat_torrent_as_bt"] = kwargs.get("treat_torrent_as_bt")
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/sample.torrent",
+            "download_mode": "direct",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/sample.torrent",
+        },
+    )
+    assert created.status_code == 202
+    task = created.get_json()["task"]
+    assert task["source_type"] == "direct"
+    task_id = task["id"]
+
+    body = {}
+    for _ in range(30):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+        assert status.status_code == 200
+        body = status.get_json()["task"]
+        if body["status"] == "completed":
+            break
+        time.sleep(0.02)
+
+    assert captured["url"] == "https://93.184.216.34/sample.torrent"
+    assert captured["treat_torrent_as_bt"] is False
+    assert body["status"] == "completed"
+    assert body["file"]["filename"] == "sample.torrent"
+
+
+def test_remote_download_task_bt_mode_torrent_url_downloads_payload(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "bt-payload.txt"
+    source.write_text("bt payload", encoding="utf-8")
+    captured = {}
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "bt-payload.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        captured["url"] = url
+        progress = kwargs.get("progress_callback")
+        assert progress
+        progress({"phase": "downloading", "filename": "sample.torrent", "loaded_bytes": 1, "total_bytes": None})
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_torrent_url_with_aria2", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/sample.torrent",
+            "download_mode": "bt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/bt-payload.txt",
+        },
+    )
+    assert created.status_code == 202
+    task = created.get_json()["task"]
+    assert task["source_type"] == "torrent_url"
+    task_id = task["id"]
+
+    body = {}
+    for _ in range(30):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+        assert status.status_code == 200
+        body = status.get_json()["task"]
+        if body["status"] == "completed":
+            break
+        time.sleep(0.02)
+
+    assert captured["url"] == "https://93.184.216.34/sample.torrent"
+    assert body["status"] == "completed"
+    assert body["file"]["filename"] == "bt-payload.txt"
+
+
+def test_remote_download_task_list_restores_refresh_state(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "refresh-task.txt"
+    source.write_text("refresh task content", encoding="utf-8")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "refresh-task.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        progress = kwargs.get("progress_callback")
+        assert progress
+        progress({"phase": "downloading", "filename": "refresh-task.txt", "loaded_bytes": 3, "total_bytes": 30})
+        time.sleep(0.05)
+        progress({"phase": "downloaded", "filename": "refresh-task.txt", "loaded_bytes": 30, "total_bytes": 30})
+        return FakeDownloaded()
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/refresh-task.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/refresh-task.txt",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+
+    listed = client.get("/api/cloud-drive/remote-download/tasks")
+    assert listed.status_code == 200
+    tasks = listed.get_json()["tasks"]
+    assert any(task["id"] == task_id for task in tasks)
+
+
+def test_remote_download_stale_running_task_does_not_block_new_task(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    with files_routes._REMOTE_DOWNLOAD_TASKS_LOCK:
+        files_routes._REMOTE_DOWNLOAD_TASKS.clear()
+        files_routes._REMOTE_DOWNLOAD_ACTIVE_USERS.clear()
+        files_routes._REMOTE_DOWNLOAD_TASKS["stale-task"] = {
+            "id": "stale-task",
+            "kind": "remote_download",
+            "source_type": "url",
+            "status": "running",
+            "phase": "downloading",
+            "filename": "",
+            "url": "https://93.184.216.34/stale.txt",
+            "owner_user_id": 1,
+            "actor": dict(actor_box["actor"]),
+            "privacy_mode": "standard_plain",
+            "virtual_path": "",
+            "timeout_seconds": 1,
+            "loaded_bytes": 0,
+            "total_bytes": None,
+            "progress_percent": 0,
+            "msg": "舊任務",
+            "error": "",
+            "file": None,
+            "storage_file": None,
+            "created_at": "2000-01-01T00:00:00",
+            "updated_at": "2000-01-01T00:00:00",
+        }
+        files_routes._REMOTE_DOWNLOAD_ACTIVE_USERS.add(1)
+
+    source = tmp_path / "fresh-task.txt"
+    source.write_text("fresh task content", encoding="utf-8")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "fresh-task.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    monkeypatch.setattr("routes.files.download_remote_url", lambda url, **kwargs: FakeDownloaded())
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/fresh-task.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/fresh-task.txt",
+        },
+    )
+    assert created.status_code == 202
+
+    listed = client.get("/api/cloud-drive/remote-download/tasks")
+    assert listed.status_code == 200
+    stale = next(task for task in listed.get_json()["tasks"] if task["id"] == "stale-task")
+    assert stale["status"] == "failed"
+    assert "逾時" in stale["msg"]
+
+    removed = client.delete("/api/cloud-drive/remote-download/tasks/stale-task")
+    assert removed.status_code == 200
+    assert removed.get_json()["removed"] is True
+    listed_after_remove = client.get("/api/cloud-drive/remote-download/tasks")
+    assert all(task["id"] != "stale-task" for task in listed_after_remove.get_json()["tasks"])
 
 
 def test_remote_download_task_accepts_uploaded_torrent_file(tmp_path, monkeypatch):

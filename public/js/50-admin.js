@@ -24,12 +24,12 @@ const CLOUD_DRIVE_TRANSFER_LEVELS = [
 ];
 
 const DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS = {
-  newbie: { upload_kbps: 256, download_kbps: 512, priority: 20 },
-  normal: { upload_kbps: 512, download_kbps: 1024, priority: 40 },
-  trusted: { upload_kbps: 2048, download_kbps: 4096, priority: 70 },
-  vip: { upload_kbps: 8192, download_kbps: 16384, priority: 90 },
-  restricted: { upload_kbps: 128, download_kbps: 256, priority: 10 },
-  suspended: { upload_kbps: 0, download_kbps: 0, priority: 0 }
+  newbie: { upload_kb_per_sec: 256, download_kb_per_sec: 512, priority: 20 },
+  normal: { upload_kb_per_sec: 512, download_kb_per_sec: 1024, priority: 40 },
+  trusted: { upload_kb_per_sec: 2048, download_kb_per_sec: 4096, priority: 70 },
+  vip: { upload_kb_per_sec: 8192, download_kb_per_sec: 16384, priority: 90 },
+  restricted: { upload_kb_per_sec: 128, download_kb_per_sec: 256, priority: 10 },
+  suspended: { upload_kb_per_sec: 0, download_kb_per_sec: 0, priority: 0 }
 };
 
 function parseCloudDriveTransferLimits(raw) {
@@ -40,8 +40,8 @@ function parseCloudDriveTransferLimits(raw) {
     CLOUD_DRIVE_TRANSFER_LEVELS.forEach(({ key }) => {
       const value = parsed?.[key] || {};
       out[key] = {
-        upload_kbps: Number.isFinite(Number(value.upload_kbps)) ? Math.max(0, parseInt(value.upload_kbps, 10)) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].upload_kbps,
-        download_kbps: Number.isFinite(Number(value.download_kbps)) ? Math.max(0, parseInt(value.download_kbps, 10)) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].download_kbps,
+        upload_kb_per_sec: Number.isFinite(Number(value.upload_kb_per_sec)) ? Math.max(0, parseInt(value.upload_kb_per_sec, 10)) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].upload_kb_per_sec,
+        download_kb_per_sec: Number.isFinite(Number(value.download_kb_per_sec)) ? Math.max(0, parseInt(value.download_kb_per_sec, 10)) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].download_kb_per_sec,
         priority: Number.isFinite(Number(value.priority)) ? Math.min(100, Math.max(0, parseInt(value.priority, 10))) : DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key].priority
       };
     });
@@ -61,10 +61,10 @@ function renderCloudDriveTransferLimits(raw) {
       <div class="drive-transfer-limit-row" data-drive-transfer-level="${key}">
         <div class="drive-transfer-limit-level">${label}</div>
         <label>上傳 KB/s
-          <input type="number" min="0" step="1" data-drive-transfer-field="upload_kbps" value="${value.upload_kbps}" />
+          <input type="number" min="0" step="1" data-drive-transfer-field="upload_kb_per_sec" value="${value.upload_kb_per_sec}" />
         </label>
         <label>下載 KB/s
-          <input type="number" min="0" step="1" data-drive-transfer-field="download_kbps" value="${value.download_kbps}" />
+          <input type="number" min="0" step="1" data-drive-transfer-field="download_kb_per_sec" value="${value.download_kb_per_sec}" />
         </label>
         <label>優先序
           <input type="number" min="0" max="100" step="1" data-drive-transfer-field="priority" value="${value.priority}" />
@@ -80,7 +80,7 @@ function collectCloudDriveTransferLimits() {
     const row = document.querySelector(`[data-drive-transfer-level="${key}"]`);
     const fallback = DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS[key];
     out[key] = {};
-    ["upload_kbps", "download_kbps", "priority"].forEach((field) => {
+    ["upload_kb_per_sec", "download_kb_per_sec", "priority"].forEach((field) => {
       const input = row?.querySelector(`[data-drive-transfer-field="${field}"]`);
       const max = field === "priority" ? 100 : Number.MAX_SAFE_INTEGER;
       const raw = parseInt(input?.value || `${fallback[field]}`, 10);
@@ -1322,6 +1322,7 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
   if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
   if ($("root-trading-borrow-interest-percent")) $("root-trading-borrow-interest-percent").value = adminPercentValue(settings.borrow_interest_percent_daily ?? 0.1, 0.1);
+  if ($("root-trading-borrow-pressure-multiplier")) $("root-trading-borrow-pressure-multiplier").value = Number(settings.borrow_interest_pool_pressure_multiplier ?? 4);
   if ($("root-trading-margin-long-financing-percent")) $("root-trading-margin-long-financing-percent").value = adminPercentValue(settings.margin_long_financing_percent ?? 90, 90);
   if ($("root-trading-short-collateral-percent")) $("root-trading-short-collateral-percent").value = adminPercentValue(settings.short_collateral_percent ?? 60, 60);
   if ($("root-trading-price-source")) $("root-trading-price-source").value = "binance_public_api";
@@ -1331,6 +1332,7 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
   if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
   if ($("root-trading-reserve-pool")) $("root-trading-reserve-pool").textContent = `${Number(reserve.balance_points || 0)} POINTS`;
+  if ($("root-trading-btc-trade-path")) $("root-trading-btc-trade-path").value = settings.btc_trade_project_dir || "";
   const list = $("root-trading-market-settings");
   if (!list) return;
   if (!markets.length) {
@@ -1398,6 +1400,7 @@ async function saveRootTradingSettings() {
       enabled: !!$("root-trading-enabled")?.checked,
       borrowing_enabled: !!$("root-trading-borrowing-enabled")?.checked,
       borrow_interest_percent_daily: adminInputPercent($("root-trading-borrow-interest-percent")?.value || 0),
+      borrow_interest_pool_pressure_multiplier: Number($("root-trading-borrow-pressure-multiplier")?.value || 0),
       margin_long_financing_percent: adminInputPercent($("root-trading-margin-long-financing-percent")?.value || 90, 90),
       short_collateral_percent: adminInputPercent($("root-trading-short-collateral-percent")?.value || 60, 60),
       price_source: "binance_public_api",
@@ -1406,6 +1409,7 @@ async function saveRootTradingSettings() {
       margin_maintenance_percent: adminInputPercent($("root-trading-maintenance-percent")?.value || 0),
       futures_enabled: !!$("root-trading-futures-enabled")?.checked,
       pvp_matching_enabled: !!$("root-trading-pvp-enabled")?.checked,
+      btc_trade_project_dir: ($("root-trading-btc-trade-path")?.value || "").trim(),
     },
     markets: collectRootTradingMarketSettings(),
   };
@@ -1432,6 +1436,44 @@ async function saveRootTradingSettings() {
     rootTradingSettingsMsg(err.message || "交易所參數儲存請求失敗", false);
   } finally {
     if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+async function checkRootBtcTradeStatus() {
+  if (currentUser !== "root") return;
+  const status = $("root-trading-btc-trade-status");
+  const button = $("root-trading-btc-trade-check-btn");
+  const projectDir = ($("root-trading-btc-trade-path")?.value || "").trim();
+  if (button) button.disabled = true;
+  if (status) {
+    status.textContent = "BTC_trade 狀態檢查中...";
+    status.style.color = "var(--muted)";
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/root/trading/btc-trade/check", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+      body: JSON.stringify({ project_dir: projectDir }),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    const info = json.status || {};
+    if (status) {
+      const missing = Array.isArray(info.missing) && info.missing.length ? `；缺少 ${info.missing.join(", ")}` : "";
+      const commands = Array.isArray(info.commands) && info.commands.length ? `；初始化：cd ${projectDir || "BTC_trade"} && ${info.commands.join(" && ")}` : "";
+      status.textContent = res.ok && json.ok
+        ? `${info.available ? "可用" : "不可用"}：${info.message || "-"}${missing}${info.needs_initialization ? commands : ""}`
+        : (json.msg || `HTTP ${res.status}`);
+      status.style.color = res.ok && json.ok && info.available ? "#4caf50" : "#ffb74d";
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "BTC_trade 狀態檢查失敗";
+      status.style.color = "#ff4f6d";
+    }
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 

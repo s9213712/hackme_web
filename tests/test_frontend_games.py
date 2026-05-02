@@ -13,7 +13,7 @@ def test_game_zone_frontend_assets_are_wired():
 
     assert 'id="tab-module-games"' in index_html
     assert 'id="module-games"' in index_html
-    assert "/js/38-games.js?v=20260501-1a2b-rank" in index_html
+    assert "/js/38-games.js?v=20260502-score-games" in index_html
     assert 'id="game-practice-side"' in index_html
     assert 'id="game-practice-difficulty"' in index_html
     assert 'id="sudoku-game-panel"' in index_html
@@ -26,11 +26,18 @@ def test_game_zone_frontend_assets_are_wired():
     assert 'placeholder="例如 1234"' in index_html
     assert 'placeholder="例如 0123"' not in index_html
     assert 'id="onea2b-history"' in index_html
+    assert 'id="tetris-game-panel"' in index_html
+    assert 'id="tetris-board"' in index_html
+    assert 'id="tetris-pause-btn"' in index_html
+    assert 'id="space-shooter-game-panel"' in index_html
+    assert 'id="space-shooter-board"' in index_html
     assert 'class="drive-collapsible-panel game-rules-panel"' in index_html
     assert "西洋棋玩法說明" in index_html
     assert "數獨玩法說明" in index_html
     assert "踩地雷玩法說明" in index_html
     assert "1A2B 玩法說明" in index_html
+    assert "俄羅斯方塊玩法說明" in index_html
+    assert "宇宙戰機玩法說明" in index_html
     assert "<details" in index_html
     assert "<details class=\"drive-collapsible-panel game-rules-panel\" open" not in index_html
     assert 'module: "games"' in core_js
@@ -64,6 +71,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert "data-sudoku-index" in games_js
     assert "startMinesweeperGame" in games_js
     assert "startOneA2BGame" in games_js
+    assert "startTetrisGame" in games_js
+    assert "tickTetrisGame" in games_js
+    assert "data-tetris-cell" in games_js
+    assert "startSpaceShooterGame" in games_js
+    assert "tickSpaceShooterGame" in games_js
     assert "generateOneA2BSecret" in games_js
     assert "scoreOneA2BGuess" in games_js
     assert 'digit === "0"' in games_js
@@ -71,7 +83,11 @@ def test_game_zone_frontend_assets_are_wired():
     assert "首位不可為 0，例如 1234" in games_js
     assert "例如 0123" not in games_js
     assert 'submitSoloGameScore("1a2b", oneA2BState)' in games_js
+    assert 'submitSoloGameScore("tetris", tetrisState)' in games_js
+    assert 'submitSoloGameScore("space_shooter", spaceShooterState)' in games_js
     assert "guesses_then_time" in games_js
+    assert "score_desc" in games_js
+    assert "score: Number(state.score || 0)" in games_js
     assert "guess_count" in games_js
     assert "超過 5 分鐘，不列入排行榜" in games_js
     assert "startedAt: Date.now()" in games_js
@@ -90,3 +106,5 @@ def test_game_zone_frontend_assets_are_wired():
     assert ".sudoku-board" in styles_css
     assert ".minesweeper-board" in styles_css
     assert ".onea2b-history" in styles_css
+    assert ".tetris-board" in styles_css
+    assert ".space-shooter-board" in styles_css

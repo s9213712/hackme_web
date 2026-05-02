@@ -15,6 +15,8 @@ USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
 TRIAL_CREDIT_INITIAL_POINTS = 1_000
 TRIAL_CREDIT_DAYS = 7
+TRADING_FUNDING_POOL_INITIAL_POINTS = 10_000
+TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER = 4.0
 MARGIN_LONG_FINANCING_RATE_PERCENT = 90.0
 SHORT_COLLATERAL_RATE_PERCENT = 60.0
 SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liquidity"}
@@ -388,6 +390,8 @@ def ensure_trading_schema(conn):
             close_fee_points INTEGER NOT NULL DEFAULT 0,
             interest_percent_daily REAL NOT NULL DEFAULT 0,
             interest_points INTEGER NOT NULL DEFAULT 0,
+            interest_paid_points INTEGER NOT NULL DEFAULT 0,
+            interest_accrued_hours INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'open',
             opened_at TEXT NOT NULL,
             closed_at TEXT,
@@ -536,6 +540,26 @@ def ensure_trading_schema(conn):
         "INSERT OR IGNORE INTO trading_reserve_pool (id, balance_points, updated_at) VALUES (1, 0, ?)",
         (now,),
     )
+    initial_event = conn.execute(
+        "SELECT 1 FROM trading_reserve_pool_events WHERE event_type='initial_funding' LIMIT 1"
+    ).fetchone()
+    if not initial_event:
+        reserve = conn.execute("SELECT * FROM trading_reserve_pool WHERE id=1").fetchone()
+        balance = int(reserve["balance_points"] or 0) if reserve else 0
+        next_balance = balance + TRADING_FUNDING_POOL_INITIAL_POINTS
+        conn.execute(
+            "UPDATE trading_reserve_pool SET balance_points=?, updated_at=?, updated_by=NULL WHERE id=1",
+            (next_balance, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO trading_reserve_pool_events (
+                event_uuid, delta_points, balance_after, event_type, reason,
+                actor_user_id, source_user_id, order_id, fill_id, points_ledger_uuid, created_at
+            ) VALUES (?, ?, ?, 'initial_funding', 'TRADING_FUNDING_POOL_INITIAL', NULL, NULL, NULL, NULL, NULL, ?)
+            """,
+            (str(uuid.uuid4()), TRADING_FUNDING_POOL_INITIAL_POINTS, next_balance, now),
+        )
     conn.execute(
         "INSERT OR IGNORE INTO trading_state (id, safe_mode, reason, verification_json, updated_at) VALUES (1, 0, '', '{}', ?)",
         (now,),
@@ -564,6 +588,7 @@ def ensure_trading_schema(conn):
         ("trading.pvp_matching_enabled", "false"),
         ("trading.borrowing_enabled", "true"),
         ("trading.borrow_interest_percent_daily", "0.1"),
+        ("trading.borrow_interest_pool_pressure_multiplier", str(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)),
         ("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)),
         ("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)),
         ("trading.margin_liquidation_enabled", "true"),
@@ -611,6 +636,10 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_trial_points INTEGER NOT NULL DEFAULT 0")
     if "open_fee_chain_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN open_fee_chain_points INTEGER NOT NULL DEFAULT 0")
+    if "interest_paid_points" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_paid_points INTEGER NOT NULL DEFAULT 0")
+    if "interest_accrued_hours" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_accrued_hours INTEGER NOT NULL DEFAULT 0")
     bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_bots)").fetchall()}
     if "bot_type" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN bot_type TEXT NOT NULL DEFAULT 'conditional'")
@@ -732,12 +761,60 @@ class TradingEngineService:
             row = conn.execute("SELECT * FROM trading_reserve_pool WHERE id=1").fetchone()
         return row
 
+    def _funding_pool_outstanding_principal(self, conn):
+        lent = int(conn.execute(
+            """
+            SELECT COALESCE(SUM(delta_points), 0)
+            FROM trading_reserve_pool_events
+            WHERE event_type='margin_principal_lent'
+            """
+        ).fetchone()[0] or 0)
+        repaid = int(conn.execute(
+            """
+            SELECT COALESCE(SUM(delta_points), 0)
+            FROM trading_reserve_pool_events
+            WHERE event_type='margin_principal_repaid'
+            """
+        ).fetchone()[0] or 0)
+        return max(0, abs(lent) - repaid)
+
+    def _funding_pool_payload(self, conn, *, requested_principal=0):
+        reserve = self._reserve(conn)
+        settings = self._settings_payload(conn)
+        balance = int(reserve["balance_points"] or 0)
+        outstanding = self._funding_pool_outstanding_principal(conn)
+        requested = max(0, int(requested_principal or 0))
+        capacity = max(0, balance + outstanding)
+        projected_balance = max(0, balance - requested)
+        projected_outstanding = outstanding + requested
+        projected_capacity = max(0, projected_balance + projected_outstanding)
+        utilization = (outstanding / capacity) if capacity > 0 else 0.0
+        projected_utilization = (projected_outstanding / projected_capacity) if projected_capacity > 0 else 1.0
+        base_rate = float(settings.get("borrow_interest_percent_daily") or 0)
+        pressure = float(settings.get("borrow_interest_pool_pressure_multiplier") or TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)
+        effective_rate = base_rate * (1.0 + max(0.0, utilization) * max(0.0, pressure))
+        projected_rate = base_rate * (1.0 + max(0.0, projected_utilization) * max(0.0, pressure))
+        return {
+            "name": "資金池",
+            "initial_points": TRADING_FUNDING_POOL_INITIAL_POINTS,
+            "balance_points": balance,
+            "available_points": balance,
+            "outstanding_principal_points": outstanding,
+            "capacity_points": capacity,
+            "utilization_percent": round(utilization * 100, 4),
+            "projected_utilization_percent": round(projected_utilization * 100, 4),
+            "base_interest_percent_daily": round(base_rate, 8),
+            "interest_pool_pressure_multiplier": round(pressure, 8),
+            "effective_interest_percent_daily": round(effective_rate, 8),
+            "projected_interest_percent_daily": round(projected_rate, 8),
+        }
+
     def _reserve_delta(self, conn, *, delta, event_type, reason, actor=None, source_user_id=None, order_id=None, fill_id=None, points_ledger_uuid=None):
         reserve = self._reserve(conn)
         balance = int(reserve["balance_points"] or 0)
         next_balance = balance + int(delta)
         if next_balance < 0:
-            raise ValueError("trading reserve pool is insufficient")
+            raise ValueError("trading funding pool is insufficient")
         now = _now()
         conn.execute(
             "UPDATE trading_reserve_pool SET balance_points=?, updated_at=?, updated_by=? WHERE id=1",
@@ -809,12 +886,14 @@ class TradingEngineService:
             "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
             "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "true")).lower() in {"true", "1", "yes"},
             "borrow_interest_percent_daily": _to_float(raw.get("trading.borrow_interest_percent_daily", "0.1"), name="borrow_interest_percent_daily", minimum=0, maximum=100),
+            "borrow_interest_pool_pressure_multiplier": _to_float(raw.get("trading.borrow_interest_pool_pressure_multiplier", str(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)), name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100),
             "margin_long_financing_percent": _to_float(raw.get("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)), name="margin_long_financing_percent", minimum=0, maximum=100),
             "short_collateral_percent": _to_float(raw.get("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)), name="short_collateral_percent", minimum=0, maximum=100),
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
             "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
             "price_source": raw.get("trading.price_source", "binance_public_api"),
+            "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
             "raw": raw,
         }
 
@@ -826,6 +905,7 @@ class TradingEngineService:
                 "settings": self._settings_payload(conn),
                 "markets": [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets ORDER BY symbol").fetchall()],
                 "reserve_pool": dict(self._reserve(conn)),
+                "funding_pool": self._funding_pool_payload(conn),
             }
         finally:
             conn.close()
@@ -862,6 +942,13 @@ class TradingEngineService:
                     ("trading.borrow_interest_percent_daily", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.borrow_interest_percent_daily"] = value
+            if "borrow_interest_pool_pressure_multiplier" in settings:
+                value = str(_to_float(settings.get("borrow_interest_pool_pressure_multiplier"), name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.borrow_interest_pool_pressure_multiplier", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.borrow_interest_pool_pressure_multiplier"] = value
             for input_key, storage_key in (
                 ("margin_long_financing_percent", "trading.margin_long_financing_percent"),
                 ("short_collateral_percent", "trading.short_collateral_percent"),
@@ -896,6 +983,15 @@ class TradingEngineService:
                     ("trading.price_source", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_source"] = value
+            if "btc_trade_project_dir" in settings:
+                value = str(settings.get("btc_trade_project_dir") or "").strip()
+                if len(value) > 500:
+                    raise ValueError("btc_trade_project_dir too long")
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.btc_trade_project_dir", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.btc_trade_project_dir"] = value
             changed_markets = []
             for row in market_updates:
                 if not isinstance(row, dict):
@@ -1700,6 +1796,9 @@ class TradingEngineService:
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
         item["position_label"] = "融資做多" if item["position_type"] == "margin_long" else "借券放空"
+        item["interest_capitalized_points"] = int(item.get("interest_points") or 0)
+        item["interest_paid_points"] = int(item.get("interest_paid_points") or 0)
+        item["interest_accrued_hours"] = int(item.get("interest_accrued_hours") or 0)
         return item
 
     def _borrowing_settings(self, conn):
@@ -1707,6 +1806,7 @@ class TradingEngineService:
         return {
             "enabled": bool(settings.get("borrowing_enabled")),
             "interest_percent_daily": float(settings.get("borrow_interest_percent_daily") or 0),
+            "pool_pressure_multiplier": float(settings.get("borrow_interest_pool_pressure_multiplier") or 0),
         }
 
     def _assert_borrowing_enabled(self, conn):
@@ -1724,7 +1824,7 @@ class TradingEngineService:
         short_percent = float(settings.get("short_collateral_percent") or SHORT_COLLATERAL_RATE_PERCENT)
         return int(math.ceil(notional * short_percent / 100.0))
 
-    def _margin_interest_points(self, row, now_text=None):
+    def _margin_interest_total_hours(self, row, now_text=None):
         principal = int(row["principal_points"] or 0)
         rate_percent = float(row["interest_percent_daily"] or 0)
         if principal <= 0 or rate_percent <= 0:
@@ -1735,10 +1835,112 @@ class TradingEngineService:
         except Exception:
             return 0
         seconds = max(0, (closed_at - opened_at).total_seconds())
-        days = int(seconds // 86400)
-        if days <= 0:
+        hours = max(1, int(math.ceil(seconds / 3600.0))) if seconds > 0 else 0
+        return max(0, hours)
+
+    def _margin_interest_due_points(self, row, *, hours):
+        principal = int(row["principal_points"] or 0)
+        rate_percent = float(row["interest_percent_daily"] or 0)
+        hours = max(0, int(hours or 0))
+        if principal <= 0 or rate_percent <= 0 or hours <= 0:
             return 0
-        return int(math.ceil(principal * rate_percent * days / 100.0))
+        hourly_rate = (rate_percent / 100.0) / 24.0
+        return int(math.ceil(principal * hourly_rate * hours))
+
+    def _margin_interest_points(self, row, now_text=None):
+        accrued_hours = int(row["interest_accrued_hours"] or 0) if "interest_accrued_hours" in row.keys() else 0
+        total_hours = self._margin_interest_total_hours(row, now_text=now_text)
+        due_hours = max(0, total_hours - accrued_hours)
+        capitalized = int(row["interest_points"] or 0)
+        return capitalized + self._margin_interest_due_points(row, hours=due_hours)
+
+    def _accrue_margin_interest(self, conn, position, *, actor=None, now_text=None):
+        if not position or position["status"] != "open":
+            return position
+        if self._is_root_user_id(conn, int(position["user_id"])):
+            return position
+        total_hours = self._margin_interest_total_hours(position, now_text=now_text)
+        accrued_hours = int(position["interest_accrued_hours"] or 0) if "interest_accrued_hours" in position.keys() else 0
+        due_hours = max(0, total_hours - accrued_hours)
+        if due_hours <= 0:
+            return position
+        due_points = self._margin_interest_due_points(position, hours=due_hours)
+        if due_points <= 0:
+            conn.execute(
+                "UPDATE trading_margin_positions SET interest_accrued_hours=?, updated_at=? WHERE id=?",
+                (total_hours, _now(), position["id"]),
+            )
+            return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
+
+        user_id = int(position["user_id"])
+        wallet = self.points_service.ensure_wallet(conn, user_id)
+        available = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+        paid = min(due_points, available)
+        capitalized = due_points - paid
+        ledger_uuid = None
+        if paid:
+            ledger_uuid = self._ledger(
+                conn,
+                user_id=user_id,
+                currency_type="points",
+                direction="debit",
+                amount=paid,
+                action_type="trading_margin_interest_hourly",
+                reference_type="trading_margin_position",
+                reference_id=position["position_uuid"],
+                idempotency_key=f"trading:margin:interest:{position['position_uuid']}:{total_hours}",
+                reason="TRADING_MARGIN_HOURLY_INTEREST",
+                public_metadata={
+                    "market": position["market_symbol"],
+                    "position_type": position["position_type"],
+                    "charged_hours": due_hours,
+                    "total_accrued_hours": total_hours,
+                    "capitalized_interest_points": capitalized,
+                },
+                actor=actor,
+            )["ledger_uuid"]
+            self._reserve_delta(
+                conn,
+                delta=paid,
+                event_type="margin_interest_retained",
+                reason="TRADING_MARGIN_HOURLY_INTEREST",
+                actor=actor,
+                order_id=None,
+                fill_id=None,
+                points_ledger_uuid=ledger_uuid,
+            )
+
+        now = _now()
+        conn.execute(
+            """
+            UPDATE trading_margin_positions
+            SET interest_points=interest_points+?,
+                interest_paid_points=interest_paid_points+?,
+                interest_accrued_hours=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (capitalized, paid, total_hours, now, position["id"]),
+        )
+        self._audit_event(
+            conn,
+            "TRADING_MARGIN_INTEREST_ACCRUED",
+            "margin borrow interest accrued hourly",
+            actor=actor,
+            target_user_id=user_id,
+            market_symbol=position["market_symbol"],
+            severity="info" if not capitalized else "warning",
+            metadata={
+                "position_uuid": position["position_uuid"],
+                "due_points": due_points,
+                "paid_points": paid,
+                "capitalized_points": capitalized,
+                "charged_hours": due_hours,
+                "total_accrued_hours": total_hours,
+                "ledger_uuid": ledger_uuid,
+            },
+        )
+        return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
 
     def _margin_risk_payload(self, conn, position, market=None, *, now_text=None):
         market = market or self._market(conn, position["market_symbol"])
@@ -2023,6 +2225,12 @@ class TradingEngineService:
                 self._futures_position_payload(row)
                 for row in conn.execute("SELECT * FROM trading_futures_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             ]
+            for row in conn.execute(
+                "SELECT * FROM trading_margin_positions WHERE user_id=? AND status='open' ORDER BY id ASC",
+                (int(user_id),),
+            ).fetchall():
+                self._accrue_margin_interest(conn, row, actor={"username": "system", "role": "system"})
+            conn.commit()
             margin_positions = [
                 self._margin_position_payload_with_risk(conn, row, market=market_map.get(row["market_symbol"]))
                 for row in conn.execute("SELECT * FROM trading_margin_positions WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
@@ -2058,6 +2266,7 @@ class TradingEngineService:
             return {
                 "state": state,
                 "settings": self._settings_payload(conn),
+                "funding_pool": self._funding_pool_payload(conn),
                 "funding": self._funding_payload(conn, user_id),
                 "markets": markets,
                 "positions": positions,
@@ -2540,12 +2749,17 @@ class TradingEngineService:
                 return None
             gains = []
             losses = []
-            for offset in range(len(closes) - period, len(closes)):
+            for offset in range(1, len(closes)):
                 delta = closes[offset] - closes[offset - 1]
                 gains.append(max(delta, 0))
                 losses.append(abs(min(delta, 0)))
-            avg_gain = sum(gains) / period
-            avg_loss = sum(losses) / period
+            if len(gains) < period:
+                return None
+            avg_gain = sum(gains[:period]) / period
+            avg_loss = sum(losses[:period]) / period
+            for offset in range(period, len(gains)):
+                avg_gain = ((avg_gain * (period - 1)) + gains[offset]) / period
+                avg_loss = ((avg_loss * (period - 1)) + losses[offset]) / period
             if avg_loss == 0:
                 return 100.0
             rs = avg_gain / avg_loss
@@ -3127,8 +3341,16 @@ class TradingEngineService:
                     )
             elif status == "failed":
                 conn.execute(
-                    "UPDATE trading_bots SET last_error=?, updated_at=? WHERE id=?",
-                    (str(error or "")[:240], now, int(bot["id"])),
+                    "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error=?, updated_at=? WHERE id=?",
+                    (now, str(error or "")[:240], now, int(bot["id"])),
+                )
+                create_notification_if_enabled(
+                    conn,
+                    user_id=int(bot["user_id"]),
+                    type="trading_bot_failed",
+                    title="交易機器人執行失敗",
+                    body=f"{bot['name']} 執行失敗：{str(error or '')[:120]}",
+                    link="/trading",
                 )
             self._audit_event(
                 conn,
@@ -3694,7 +3916,7 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points):
+    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points, idempotency_key=None):
         user_id = self._actor_id(actor)
         if not user_id:
             raise ValueError("login required")
@@ -3703,12 +3925,43 @@ class TradingEngineService:
             raise ValueError("position_type must be margin_long or short")
         quantity_units = quantity_to_units(quantity)
         collateral = _to_int(collateral_points, name="collateral_points", minimum=1, maximum=10**12)
+        operation_key = _client_idempotency_key(idempotency_key, prefix=f"margin_open:{user_id}")
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             self._assert_writable(conn)
+            if operation_key:
+                existing_operation = conn.execute(
+                    """
+                    SELECT response_json FROM trading_operation_idempotency
+                    WHERE idempotency_key=? AND operation='margin_open'
+                    """,
+                    (operation_key,),
+                ).fetchone()
+                if existing_operation and existing_operation["response_json"]:
+                    result = _json_loads(existing_operation["response_json"], {"ok": True})
+                    conn.rollback()
+                    return result
+                insert_cur = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO trading_operation_idempotency (
+                        idempotency_key, operation, user_id, reference_uuid, response_json, created_at, updated_at
+                    ) VALUES (?, 'margin_open', ?, '', '', ?, ?)
+                    """,
+                    (operation_key, int(user_id), _now(), _now()),
+                )
+                if insert_cur.rowcount == 0:
+                    existing_operation = conn.execute(
+                        "SELECT response_json FROM trading_operation_idempotency WHERE idempotency_key=?",
+                        (operation_key,),
+                    ).fetchone()
+                    if existing_operation and existing_operation["response_json"]:
+                        result = _json_loads(existing_operation["response_json"], {"ok": True})
+                        conn.rollback()
+                        return result
+                    raise ValueError("duplicate margin open request is still processing")
             borrow_settings = self._assert_borrowing_enabled(conn)
             market = self._market(conn, market_symbol)
             price, price_source = self._current_market_price_points(conn, market)
@@ -3718,6 +3971,10 @@ class TradingEngineService:
                 raise ValueError(f"collateral below minimum {min_collateral}")
             fee = fee_points(notional, float(market["fee_rate_percent"] or 0))
             principal = max(0, notional - collateral) if position_type == "margin_long" else notional
+            funding_pool = self._funding_pool_payload(conn, requested_principal=principal)
+            if not self._is_root_actor(actor) and principal > int(funding_pool["available_points"] or 0):
+                raise ValueError("funding pool is insufficient for requested borrow amount")
+            effective_interest_percent_daily = float(funding_pool["projected_interest_percent_daily"] if principal else funding_pool["effective_interest_percent_daily"])
             position_uuid = str(uuid.uuid4())
             ledger_uuids = []
             is_root_simulated = self._is_root_actor(actor)
@@ -3777,15 +4034,17 @@ class TradingEngineService:
                 )["ledger_uuid"])
             if fee and not is_root_simulated:
                 self._reserve_delta(conn, delta=fee, event_type="margin_fee_retained", reason="TRADING_MARGIN_OPEN_FEE", actor=actor)
+            if principal and not is_root_simulated:
+                self._reserve_delta(conn, delta=-principal, event_type="margin_principal_lent", reason="TRADING_MARGIN_PRINCIPAL_LENT", actor=actor)
             now = _now()
             cur = conn.execute(
                 """
                 INSERT INTO trading_margin_positions (
                     position_uuid, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
-                    interest_percent_daily, status, opened_at, updated_at,
+                    interest_percent_daily, interest_paid_points, interest_accrued_hours, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -3797,7 +4056,7 @@ class TradingEngineService:
                     principal,
                     collateral,
                     fee,
-                    float(borrow_settings["interest_percent_daily"]),
+                    effective_interest_percent_daily,
                     now,
                     now,
                     trial_collateral,
@@ -3821,6 +4080,10 @@ class TradingEngineService:
                     "entry_price_points": price,
                     "price_source": price_source,
                     "principal_points": principal,
+                    "funding_pool_available_before": funding_pool["available_points"],
+                    "funding_pool_projected_utilization_percent": funding_pool["projected_utilization_percent"],
+                    "base_interest_percent_daily": borrow_settings["interest_percent_daily"],
+                    "effective_interest_percent_daily": effective_interest_percent_daily,
                     "collateral_points": collateral,
                     "open_fee_points": fee,
                     "trial_collateral_points": trial_collateral,
@@ -3833,7 +4096,18 @@ class TradingEngineService:
             )
             conn.commit()
             row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (cur.lastrowid,)).fetchone()
-            return {"ok": True, "position": self._margin_position_payload(row), "funding": self._funding_payload(conn, user_id)}
+            result = {"ok": True, "position": self._margin_position_payload(row), "funding": self._funding_payload(conn, user_id)}
+            if operation_key:
+                conn.execute(
+                    """
+                    UPDATE trading_operation_idempotency
+                    SET reference_uuid=?, response_json=?, updated_at=?
+                    WHERE idempotency_key=?
+                    """,
+                    (position_uuid, _json_dumps(result), _now(), operation_key),
+                )
+                conn.commit()
+            return result
         except Exception:
             conn.rollback()
             raise
@@ -3997,6 +4271,7 @@ class TradingEngineService:
                 raise ValueError("cannot close another user's margin position")
             if position["status"] != "open":
                 raise ValueError("margin position is not open")
+            position = self._accrue_margin_interest(conn, position, actor=actor)
             market = self._market(conn, position["market_symbol"])
             risk = self._margin_risk_payload(conn, position, market)
             if force_liquidation and not risk.get("liquidation_required"):
@@ -4005,12 +4280,15 @@ class TradingEngineService:
             price_source = risk["price_source"]
             close_fee = risk["close_fee_points"]
             interest = risk["interest_points"]
+            principal = int(position["principal_points"] or 0)
             collateral = int(position["collateral_points"] or 0)
             collateral_trial = int(position["collateral_trial_points"] or 0) if "collateral_trial_points" in position.keys() else 0
             collateral_chain = int(position["collateral_chain_points"] or 0) if "collateral_chain_points" in position.keys() else collateral
             delta = risk["delta_points"]
             ledger_uuids = []
             is_root_simulated = self._is_root_user_id(conn, user_id)
+            if principal and not is_root_simulated:
+                self._reserve_delta(conn, delta=principal, event_type="margin_principal_repaid", reason="TRADING_MARGIN_PRINCIPAL_REPAID", actor=actor)
             if is_root_simulated:
                 simulated_return = max(0, collateral + delta)
                 self._sim_delta(conn, user_id, balance_delta=simulated_return, locked_delta=-collateral)
@@ -4048,6 +4326,7 @@ class TradingEngineService:
             if is_root_simulated:
                 pass
             elif delta > 0:
+                self._reserve_delta(conn, delta=-delta, event_type="margin_profit_paid", reason="TRADING_MARGIN_PROFIT_PAID", actor=actor)
                 if collateral_trial:
                     self._release_trial_margin_collateral(
                         conn,
@@ -4198,6 +4477,7 @@ class TradingEngineService:
             scanned = len(rows)
             for position in rows:
                 try:
+                    position = self._accrue_margin_interest(conn, position, actor=actor)
                     risk = self._margin_risk_payload(conn, position)
                     if risk.get("liquidation_required"):
                         candidates.append({
@@ -4213,6 +4493,7 @@ class TradingEngineService:
                         "user_id": int(position["user_id"]),
                         "error": str(exc),
                     })
+            conn.commit()
         finally:
             conn.close()
 
@@ -4719,7 +5000,13 @@ class TradingEngineService:
             """
             SELECT COALESCE(SUM(delta_points), 0)
             FROM trading_reserve_pool_events
-            WHERE event_type IN ('margin_fee_retained', 'margin_interest_retained')
+            WHERE event_type IN (
+                'margin_fee_retained',
+                'margin_interest_retained',
+                'margin_principal_lent',
+                'margin_principal_repaid',
+                'margin_profit_paid'
+            )
             """
         ).fetchone()[0] or 0)
         allocation_delta = 0
@@ -4768,7 +5055,10 @@ class TradingEngineService:
                     "actual_delta_points": int(event["delta_points"]),
                 })
             allocation_delta += int(event["delta_points"] or 0)
-        expected_balance = fill_delta + margin_delta + allocation_delta
+        event_delta = int(conn.execute(
+            "SELECT COALESCE(SUM(delta_points), 0) FROM trading_reserve_pool_events"
+        ).fetchone()[0] or 0)
+        expected_balance = event_delta
         reserve = self._reserve(conn)
         actual_balance = int(reserve["balance_points"] or 0)
         if expected_balance != actual_balance:
@@ -4779,6 +5069,7 @@ class TradingEngineService:
                 "fill_delta_points": fill_delta,
                 "margin_delta_points": margin_delta,
                 "allocation_delta_points": allocation_delta,
+                "event_delta_points": event_delta,
             })
 
     def _verify_sim_accounts(self, conn, errors):
@@ -4995,6 +5286,7 @@ class TradingEngineService:
                 "state": state,
                 "settings": self._settings_payload(conn),
                 "reserve_pool": dict(reserve),
+                "funding_pool": self._funding_pool_payload(conn),
                 "markets": markets,
                 "reserve_events": reserve_events,
                 "audit_events": audit_events,

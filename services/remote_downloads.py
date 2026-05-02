@@ -66,13 +66,9 @@ def _host_is_public(hostname):
     if not hostname:
         return False
     try:
-        infos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
+        _resolve_public_endpoint(hostname, 80)
+    except RemoteDownloadError:
         return False
-    for info in infos:
-        address = info[4][0]
-        if not _ip_is_public(address):
-            return False
     return True
 
 
@@ -84,13 +80,18 @@ def _resolve_public_endpoint(hostname, port):
     except socket.gaierror as exc:
         raise RemoteDownloadError("下載網址無法解析") from exc
     candidates = []
+    blocked = []
     for family, socktype, proto, _, sockaddr in infos:
         address = sockaddr[0]
         if not _ip_is_public(address):
-            raise RemoteDownloadError("下載網址不可指向 localhost、內網或保留位址")
+            blocked.append(address)
+            continue
         candidates.append((family, socktype, proto, sockaddr))
     if not candidates:
-        raise RemoteDownloadError("下載網址沒有可用的公開 IP")
+        suffix = ""
+        if blocked:
+            suffix = f"（{hostname} -> {', '.join(sorted(set(blocked)))}）"
+        raise RemoteDownloadError(f"下載網址不可指向 localhost、內網或保留位址{suffix}")
     return candidates[0]
 
 
@@ -182,8 +183,7 @@ def validate_remote_url(raw_url):
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise RemoteDownloadError("只支援 http、https direct link 或 magnet link")
-    if not _host_is_public(parsed.hostname):
-        raise RemoteDownloadError("下載網址不可指向 localhost、內網或保留位址")
+    _resolve_public_endpoint(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
     if parsed.path.lower().endswith(".torrent"):
         return {"kind": "torrent_url", "url": url}
     return {"kind": "direct", "url": url}
@@ -267,7 +267,7 @@ def _open_http_response(url, *, timeout_seconds=60, redirects=0):
     return response, sock
 
 
-def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_callback=None, rate_limit_kbps=None):
+def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
     tmpdir = tempfile.mkdtemp(prefix="hackme_remote_")
     response = None
     sock = None
@@ -297,8 +297,8 @@ def download_direct_link(url, *, timeout_seconds=60, max_bytes=None, progress_ca
                     raise RemoteDownloadError("遠端檔案超過容量限制")
                 out.write(chunk)
                 _emit_progress(progress_callback, phase="downloading", filename=filename, loaded_bytes=total, total_bytes=total_bytes)
-                if rate_limit_kbps:
-                    expected_elapsed = total / max(1, int(rate_limit_kbps) * 1024)
+                if rate_limit_kb_per_sec:
+                    expected_elapsed = total / max(1, int(rate_limit_kb_per_sec) * 1024)
                     elapsed = time.monotonic() - started
                     if expected_elapsed > elapsed:
                         time.sleep(min(1.0, expected_elapsed - elapsed))
@@ -344,9 +344,21 @@ def _aria2_failure_message(proc, log_path):
     log_tail = _read_tail(log_path)
     output_tail = _tail_lines((proc.stderr or "") + "\n" + (proc.stdout or ""))
     generic = "If there are any errors, then see the log file"
+    combined = "\n".join([log_tail, output_tail])
+    if "failed to bind" in combined or "Errors occurred while binding port" in combined:
+        return "BT/magnet 下載失敗：aria2c 無法綁定 BT/DHT 連接埠。請確認 server 不是在受限沙盒中執行，並允許 aria2c 開啟 TCP/UDP BT 連接埠。"
+    if "Stop downloading torrent due to --bt-stop-timeout option" in combined or "[METADATA]" in combined:
+        return "BT/magnet 下載失敗：指定時間內抓不到 torrent metadata。常見原因是做種/節點太少、tracker 無回應、DHT 被網路或防火牆阻擋，或該 magnet 已失效。請換其他 magnet、補充 tracker，或稍後再試。"
     candidates = []
     for text in (log_tail, output_tail):
-        filtered = "\n".join(line for line in str(text or "").splitlines() if generic not in line).strip()
+        filtered_lines = []
+        for line in str(text or "").splitlines():
+            if generic in line:
+                continue
+            if "NOTICE" in line and "error" not in line.lower() and "failure" not in line.lower():
+                continue
+            filtered_lines.append(line)
+        filtered = "\n".join(filtered_lines).strip()
         if filtered:
             candidates.append(filtered)
     detail = candidates[0] if candidates else ""
@@ -355,7 +367,7 @@ def _aria2_failure_message(proc, log_path):
     return f"BT/magnet 下載失敗：{detail}"
 
 
-def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kbps=None):
+def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
     aria2c = shutil.which("aria2c")
     if not aria2c:
         raise RemoteDownloadError("BT 下載需要先安裝 aria2c")
@@ -367,10 +379,10 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         "--log", log_path,
         "--log-level=notice",
         "--seed-time=0",
-        "--bt-stop-timeout=120",
+        "--bt-stop-timeout=600",
         "--bt-enable-lpd=false",
-        "--enable-dht=false",
-        "--enable-peer-exchange=false",
+        "--enable-dht=true",
+        "--enable-peer-exchange=true",
         "--max-tries=2",
         "--max-file-not-found=2",
         "--file-allocation=none",
@@ -381,8 +393,8 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         "--console-log-level=warn",
         source,
     ]
-    if rate_limit_kbps:
-        cmd[1:1] = ["--max-download-limit", f"{int(rate_limit_kbps)}K"]
+    if rate_limit_kb_per_sec:
+        cmd[1:1] = ["--max-download-limit", f"{int(rate_limit_kb_per_sec)}K"]
     try:
         _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=None, total_bytes=None)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -437,18 +449,18 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
         raise
 
 
-def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kbps=None):
+def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
     return _download_bt_with_aria2(
         url,
         source_label="BT/magnet",
         timeout_seconds=timeout_seconds,
         max_bytes=max_bytes,
         progress_callback=progress_callback,
-        rate_limit_kbps=rate_limit_kbps,
+        rate_limit_kb_per_sec=rate_limit_kb_per_sec,
     )
 
 
-def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kbps=None):
+def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
     if not os.path.isfile(torrent_path):
         raise RemoteDownloadError("找不到 BT 種子檔")
     validate_torrent_file_trackers(torrent_path)
@@ -458,35 +470,40 @@ def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", 
         timeout_seconds=timeout_seconds,
         max_bytes=max_bytes,
         progress_callback=progress_callback,
-        rate_limit_kbps=rate_limit_kbps,
+        rate_limit_kb_per_sec=rate_limit_kb_per_sec,
     )
 
 
-def download_remote_url(url, *, timeout_seconds=120, max_bytes=None, progress_callback=None, rate_limit_kbps=None):
+def download_torrent_url_with_aria2(url, *, timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
+    parsed = validate_remote_url(url)
+    if parsed["kind"] != "torrent_url":
+        raise RemoteDownloadError("BT/torrent URL 必須指向 .torrent 種子檔")
+    torrent_limit = 2 * 1024 * 1024
+    torrent_file = download_direct_link(
+        parsed["url"],
+        timeout_seconds=min(int(timeout_seconds or 120), 120),
+        max_bytes=torrent_limit,
+        progress_callback=progress_callback,
+        rate_limit_kb_per_sec=rate_limit_kb_per_sec,
+    )
+    try:
+        return download_torrent_file_with_aria2(
+            torrent_file.path,
+            display_name=torrent_file.filename,
+            timeout_seconds=timeout_seconds,
+            max_bytes=max_bytes,
+            progress_callback=progress_callback,
+            rate_limit_kb_per_sec=rate_limit_kb_per_sec,
+        )
+    finally:
+        if torrent_file.cleanup_dir:
+            shutil.rmtree(torrent_file.cleanup_dir, ignore_errors=True)
+
+
+def download_remote_url(url, *, timeout_seconds=120, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None, treat_torrent_as_bt=True):
     parsed = validate_remote_url(url)
     if parsed["kind"] == "magnet":
-        return download_magnet_with_aria2(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback, rate_limit_kbps=rate_limit_kbps)
-    if parsed["kind"] == "torrent_url":
-        torrent_limit = 2 * 1024 * 1024
-        if max_bytes is not None:
-            torrent_limit = min(torrent_limit, int(max_bytes))
-        torrent_file = download_direct_link(
-            parsed["url"],
-            timeout_seconds=min(int(timeout_seconds or 120), 120),
-            max_bytes=torrent_limit,
-            progress_callback=progress_callback,
-            rate_limit_kbps=rate_limit_kbps,
-        )
-        try:
-            return download_torrent_file_with_aria2(
-                torrent_file.path,
-                display_name=torrent_file.filename,
-                timeout_seconds=timeout_seconds,
-                max_bytes=max_bytes,
-                progress_callback=progress_callback,
-                rate_limit_kbps=rate_limit_kbps,
-            )
-        finally:
-            if torrent_file.cleanup_dir:
-                shutil.rmtree(torrent_file.cleanup_dir, ignore_errors=True)
-    return download_direct_link(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback, rate_limit_kbps=rate_limit_kbps)
+        return download_magnet_with_aria2(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback, rate_limit_kb_per_sec=rate_limit_kb_per_sec)
+    if parsed["kind"] == "torrent_url" and treat_torrent_as_bt:
+        return download_torrent_url_with_aria2(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback, rate_limit_kb_per_sec=rate_limit_kb_per_sec)
+    return download_direct_link(parsed["url"], timeout_seconds=timeout_seconds, max_bytes=max_bytes, progress_callback=progress_callback, rate_limit_kb_per_sec=rate_limit_kb_per_sec)

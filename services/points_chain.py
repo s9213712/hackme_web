@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2017,7 +2018,10 @@ class PointsLedgerService:
         elif client_reference_id:
             idem_key = f"admin_adjust:ref:{sha256_text(client_reference_id)}:{direction}"
         else:
-            idem_key = None
+            actor_id = actor_value(actor, "id")
+            minute_window = int(time.time() // 60)
+            reason_hash = sha256_text(str(reason or "").strip())[:16]
+            idem_key = f"admin_adjust:auto:{actor_id}:{user_id}:{direction}:{int(amount)}:{reason_hash}:{minute_window}"
         reference_id = client_reference_id or f"actor:{actor_value(actor, 'id')}:target:{user_id}:{utc_now()}"
         result = self.record_transaction(
             user_id=user_id,

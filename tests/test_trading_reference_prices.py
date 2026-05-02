@@ -42,6 +42,31 @@ def _app(actor, check_user_rate_limit=None):
     return app
 
 
+def _btc_signal_app(actor, project_dir):
+    app = Flask(__name__)
+    app.testing = True
+
+    class FakeTradingService:
+        def get_root_settings(self):
+            return {"settings": {"btc_trade_project_dir": str(project_dir or "")}}
+
+    def passthrough(fn):
+        return fn
+
+    def json_resp(payload, status=None):
+        response = jsonify(payload)
+        return (response, status) if status else response
+
+    register_trading_routes(app, {
+        "trading_service": FakeTradingService(),
+        "get_current_user_ctx": lambda: actor,
+        "json_resp": json_resp,
+        "require_csrf": passthrough,
+        "require_csrf_safe": passthrough,
+    })
+    return app
+
+
 def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch):
     trading_routes.REFERENCE_PRICE_CACHE.clear()
     captured = {}
@@ -76,6 +101,71 @@ def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch
     assert "symbol=BTCUSDT" in captured["url"]
     assert "interval=1h" in captured["url"]
     assert captured["timeout"] == 6
+
+
+def test_btc_trade_signal_hidden_when_project_missing(tmp_path):
+    client = _btc_signal_app({"id": 1, "username": "alice", "role": "user"}, tmp_path / "missing").test_client()
+
+    response = client.get("/api/trading/btc-signal?market=BTC/USDT")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["available"] is False
+    assert payload["hidden"] is True
+
+
+def test_btc_trade_signal_reads_latest_report(tmp_path):
+    project = tmp_path / "BTC_trade"
+    runtime = project / "runtime"
+    runtime.mkdir(parents=True)
+    (project / "hourly_check.py").write_text("# test", encoding="utf-8")
+    (project / "update_data.py").write_text("# test", encoding="utf-8")
+    (project / "backtest_report.py").write_text("# test", encoding="utf-8")
+    (runtime / "report_log_4h.jsonl").write_text(
+        "\n".join([
+            json.dumps({"bar_ts": "old", "signal_ok": False, "current_price": 1}),
+            json.dumps({
+                "bar_ts": "2026-05-02T00:00:00",
+                "signal_ok": True,
+                "ml_ok": True,
+                "position": "LONG",
+                "current_price": 77059.5,
+                "entry_checks": {"MA50": True},
+                "ml_status": {"situation": "三多", "blocked": False},
+            }),
+        ]),
+        encoding="utf-8",
+    )
+    (runtime / "portfolio_state_4h.json").write_text(json.dumps({"position": "LONG", "btc": 0.1}), encoding="utf-8")
+    (runtime / "trade_log_4h.json").write_text(json.dumps([{"action": "ENTRY", "timestamp": "2026-05-02"}]), encoding="utf-8")
+    client = _btc_signal_app({"id": 1, "username": "alice", "role": "user"}, project).test_client()
+
+    response = client.get("/api/trading/btc-signal?market=BTC/POINTS")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["available"] is True
+    assert payload["hidden"] is False
+    assert payload["signal"]["current_price"] == 77059.5
+    assert payload["signal"]["signal_ok"] is True
+    assert payload["signal"]["ml_status"]["situation"] == "三多"
+    assert payload["signal"]["portfolio"]["position"] == "LONG"
+    assert payload["signal"]["last_trade"]["action"] == "ENTRY"
+
+
+def test_root_btc_trade_check_reports_initialization_needed(tmp_path):
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.post("/api/root/trading/btc-trade/check", json={"project_dir": str(tmp_path / "BTC_trade")})
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["status"]["available"] is False
+    assert payload["status"]["needs_initialization"] is True
+    assert "hourly_check" in payload["status"]["missing"]
 
 
 def test_trading_reference_prices_defaults_to_15m_chart_interval(monkeypatch):

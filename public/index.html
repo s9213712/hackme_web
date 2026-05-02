@@ -835,7 +835,7 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">遊戲區</div>
-          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷與 1A2B。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
+          <div class="drive-card-sub">目前開放西洋棋、數獨、踩地雷、1A2B、俄羅斯方塊與宇宙戰機。西洋棋支援玩家對戰；單人遊戲可直接在本頁遊玩。</div>
         </div>
         <button class="btn" id="game-refresh-btn" type="button">刷新</button>
       </div>
@@ -970,6 +970,45 @@
               </div>
             </div>
             <div id="onea2b-history" class="onea2b-history" aria-label="1A2B 猜測紀錄"></div>
+          </div>
+          <div id="tetris-game-panel" class="single-game-panel" style="display:none;">
+            <details class="drive-collapsible-panel game-rules-panel">
+              <summary>俄羅斯方塊玩法說明</summary>
+              <div class="drive-collapsible-body">
+                <p>方向鍵左右移動、向下加速、向上旋轉，空白鍵可直接落下。填滿一整行即可消除並得分。</p>
+                <p>排行榜以本週最高分排序，分數相同時完成時間較短者在前。</p>
+              </div>
+            </details>
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">俄羅斯方塊</div>
+                <div class="drive-card-sub" id="tetris-status">按開始後開始落方塊，最高分列入排行榜。</div>
+              </div>
+              <div class="drive-file-actions">
+                <button class="btn game-mini-btn" id="tetris-new-btn" type="button">開始</button>
+                <button class="btn game-mini-btn" id="tetris-pause-btn" type="button">暫停</button>
+              </div>
+            </div>
+            <div id="tetris-board" class="tetris-board" aria-label="俄羅斯方塊遊戲區"></div>
+          </div>
+          <div id="space-shooter-game-panel" class="single-game-panel" style="display:none;">
+            <details class="drive-collapsible-panel game-rules-panel">
+              <summary>宇宙戰機玩法說明</summary>
+              <div class="drive-collapsible-body">
+                <p>方向鍵或 A/D 左右移動，空白鍵發射。擊落敵機可得分，敵機穿越底線或撞到玩家會扣生命。</p>
+                <p>生命歸零時結算，排行榜以本週最高分排序。</p>
+              </div>
+            </details>
+            <div class="drive-card-heading">
+              <div>
+                <div class="drive-card-title">宇宙戰機</div>
+                <div class="drive-card-sub" id="space-shooter-status">按開始後出擊，最高分列入排行榜。</div>
+              </div>
+              <div class="drive-file-actions">
+                <button class="btn game-mini-btn" id="space-shooter-new-btn" type="button">開始</button>
+              </div>
+            </div>
+            <canvas id="space-shooter-board" class="space-shooter-board" width="360" height="520" aria-label="宇宙戰機遊戲區"></canvas>
           </div>
         </section>
         <section class="game-panel">
@@ -1346,6 +1385,17 @@
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
         </div>
+        <div class="drive-card trading-btc-signal-card" id="trading-btc-signal-card" style="display:none;margin-top:.75rem;">
+          <div class="drive-card-heading compact-heading">
+            <div>
+              <div class="drive-card-title">比特幣信號</div>
+              <div class="drive-card-sub" id="trading-btc-signal-meta">讀取 BTC_trade 信號中</div>
+            </div>
+            <span id="trading-btc-signal-badge" class="pill">-</span>
+          </div>
+          <div id="trading-btc-signal-body" class="settings-option-grid economy-wallet-grid"></div>
+          <div id="trading-btc-signal-checks" class="drive-card-sub" style="margin-top:.55rem;"></div>
+        </div>
         <details class="drive-collapsible-panel" id="trading-bot-card" style="margin-top:.75rem;">
           <summary>
             <div>
@@ -1464,10 +1514,16 @@
           <summary>
             <div>
               <div class="drive-card-title">進階交易：融資 / 借券</div>
-              <div class="drive-card-sub" id="trading-margin-note">由 root 開啟後可用；會凍結保證金，手續費與借貸利息計入儲備池統計。</div>
+              <div class="drive-card-sub" id="trading-margin-note">由 root 開啟後可用；會凍結保證金，手續費與借貸利息計入資金池。</div>
             </div>
           </summary>
           <div class="drive-collapsible-body">
+            <div class="settings-option-grid" id="trading-funding-pool-public" style="display:none;margin-bottom:.75rem;">
+              <div><span class="drive-card-sub">資金池可借出</span><strong id="trading-funding-pool-available">-</strong><small>POINTS</small></div>
+              <div><span class="drive-card-sub">已借出本金</span><strong id="trading-funding-pool-outstanding">-</strong><small>POINTS</small></div>
+              <div><span class="drive-card-sub">池子使用率</span><strong id="trading-funding-pool-utilization">-</strong><small>%</small></div>
+              <div><span class="drive-card-sub">目前浮動日息</span><strong id="trading-funding-pool-rate">-</strong><small>%</small></div>
+            </div>
             <div class="settings-option-grid">
               <div class="field"><label>市場</label><select id="trading-margin-market-select"><option value="">讀取市場中...</option></select></div>
               <div class="field">
@@ -1527,12 +1583,12 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">交易引擎設定</div>
-            <div class="drive-card-sub">價格由 root 手動設定；超過最大跳動比例需勾選確認。儲備池初始為 0，只能由交易收入或 root 明確撥入。</div>
+            <div class="drive-card-sub">價格由 root 手動設定；超過最大跳動比例需勾選確認。資金池初始為 10000 點，借貸交易會檢查資金池餘額。</div>
           </div>
           <button class="btn" id="trading-root-refresh-btn" type="button">更新交易報告</button>
         </div>
         <div class="settings-option-grid economy-wallet-grid">
-          <div><span class="drive-card-sub">儲備池</span><strong id="trading-reserve-balance">0</strong><small>POINTS</small></div>
+          <div><span class="drive-card-sub">資金池</span><strong id="trading-reserve-balance">0</strong><small>POINTS</small></div>
           <div><span class="drive-card-sub">交易驗證</span><strong id="trading-verification-status">-</strong><small id="trading-verification-detail">-</small></div>
           <div><span class="drive-card-sub">高風險功能</span><strong id="trading-risk-flags">關閉</strong><small>futures / pvp</small></div>
           <div><span class="drive-card-sub">root 模擬資金</span><strong id="trading-root-sim-balance">10000</strong><small><button class="btn btn-small" id="trading-root-reset-sim-btn" type="button">重設回 10000</button></small></div>
@@ -1573,7 +1629,7 @@
           <div class="field"><label>撥入來源帳戶</label><select id="trading-reserve-source-user-id"><option value="">讀取會員中...</option></select></div>
           <div class="field"><label>撥入點數</label><input type="number" id="trading-reserve-amount" min="1" step="1" /></div>
           <div class="field"><label>原因</label><input type="text" id="trading-reserve-reason" value="ROOT_RESERVE_ALLOCATION" readonly /></div>
-          <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="trading-reserve-allocate-btn" type="button">撥入儲備池</button></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-danger" id="trading-reserve-allocate-btn" type="button">撥入資金池</button></div>
         </div>
         <div class="settings-option-grid" style="margin-top:.75rem;">
           <div>
@@ -1581,7 +1637,7 @@
             <div id="trading-audit-list" class="drive-file-list"></div>
           </div>
           <div>
-            <div class="drive-card-title">儲備池事件</div>
+            <div class="drive-card-title">資金池事件</div>
             <div id="trading-reserve-event-list" class="drive-file-list"></div>
           </div>
         </div>
@@ -2720,7 +2776,7 @@
               <summary>
                 <div>
                   <div class="drive-card-title">交易所參數</div>
-                  <div class="drive-card-sub">設定現貨手續費、最低交易額、借貸開關與儲備池統計；借貸交易目前仍屬實驗設定。</div>
+                  <div class="drive-card-sub">設定現貨手續費、最低交易額、借貸開關與資金池統計；借貸交易目前仍屬實驗設定。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
@@ -2734,7 +2790,12 @@
                   <div class="field">
                     <label>借貸日利息百分比</label>
                     <input type="number" id="root-trading-borrow-interest-percent" min="0" max="100" step="0.01" value="0.1" />
-                    <div class="field-hint">例如 1% 代表每日利息 1%。借貸利息會記入交易儲備池統計。</div>
+                    <div class="field-hint">例如 1% 代表每日基礎利息 1%。實際日息會依資金池使用率浮動。</div>
+                  </div>
+                  <div class="field">
+                    <label>資金池利率浮動倍率</label>
+                    <input type="number" id="root-trading-borrow-pressure-multiplier" min="0" max="100" step="0.1" value="4" />
+                    <div class="field-hint">資金池越少，借貸日息越高；0 代表不浮動，4 代表滿載時約為基礎日息 5 倍。</div>
                   </div>
                   <div class="field">
                     <label>融資可貸比例（%）</label>
@@ -2774,9 +2835,19 @@
                     <label><input type="checkbox" id="root-trading-pvp-enabled" disabled /> PVP 撮合（保留，暫不開放）</label>
                   </div>
                   <div class="field">
-                    <label>儲備池目前統計</label>
+                    <label>資金池目前統計</label>
                     <strong id="root-trading-reserve-pool">0 POINTS</strong>
-                    <div class="field-hint">暫時只統計手續費、借貸利息與 root 明確撥入，沒有其他用途。</div>
+                    <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
+                  </div>
+                  <div class="field">
+                    <label>BTC_trade 專案資料夾</label>
+                    <input type="text" id="root-trading-btc-trade-path" placeholder="/home/s92137/NN/BTC_trade" />
+                    <div class="field-hint">開啟方式：填入 BTC_trade 資料夾、按「檢查 BTC_trade」確認可用、再按「儲存交易所參數」。交易頁選 BTC/USDT 時才會顯示信號；找不到專案時會自動隱藏。</div>
+                  </div>
+                  <div class="field">
+                    <label>BTC_trade 狀態</label>
+                    <button class="btn" type="button" id="root-trading-btc-trade-check-btn">檢查 BTC_trade</button>
+                    <div id="root-trading-btc-trade-status" class="field-hint">尚未檢查</div>
                   </div>
                 </div>
                 <div class="drive-card-sub" style="margin:.75rem 0 .4rem;">各交易對參數</div>
@@ -3381,7 +3452,7 @@
 <script src="/js/35-drive.js?v=20260429-storage-purchase-feedback" defer></script>
 <script src="/js/36-comfyui.js?v=20260502-run-count" defer></script>
 <script src="/js/37-bug-report.js?v=20260428-forum-pages" defer></script>
-<script src="/js/38-games.js?v=20260501-1a2b-rank" defer></script>
+<script src="/js/38-games.js?v=20260502-score-games" defer></script>
 <script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>

@@ -8,7 +8,9 @@ let tradingState = {
   bots: [],
   botRuns: [],
   rootReport: null,
+  fundingPool: null,
   referencePrices: null,
+  btcSignal: null,
 };
 let tradingEventsBound = false;
 let tradingReferencePriceAbort = null;
@@ -24,6 +26,12 @@ let tradingDashboardAutoBusy = false;
 let tradingTrialCountdownTimer = null;
 let tradingCurrentBotTab = "dca";
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
+
+function tradingRequestId(prefix = "trading") {
+  if (typeof economyRequestId === "function") return economyRequestId(prefix);
+  if (window.crypto && typeof window.crypto.randomUUID === "function") return `${prefix}:${window.crypto.randomUUID()}`;
+  return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
 
 function tradingSetMsg(text, ok = true) {
   const msg = $("trading-msg");
@@ -390,6 +398,8 @@ function tradingMarginPositionRow(row, scope = "trading") {
   const collateral = tradingNumber(row.risk?.initial_margin_points ?? row.initial_margin_points ?? row.collateral_points, 0);
   const fee = tradingNumber(row.open_fee_points, 0);
   const interest = tradingNumber(row.risk?.interest_points ?? row.interest_points, 0);
+  const paidInterest = tradingNumber(row.interest_paid_points, 0);
+  const interestHours = tradingNumber(row.interest_accrued_hours, 0);
   const entry = tradingNumber(row.entry_price_points, 0);
   const currentPrice = tradingNumber(row.risk?.price_points ?? row.current_price_points, 0);
   const equity = tradingNumber(row.risk?.equity_after_points ?? row.equity_after_points, 0);
@@ -416,7 +426,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
           未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 強平價格 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
         </div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
-        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercent(row.interest_percent_daily || 0)}% · 已計利息 ${formatTradingPointsValue(interest)} · ${sanitize(leverageHint)}</div>
+        <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercent(row.interest_percent_daily || 0)}% · 已扣利息 ${formatTradingPointsValue(paidInterest)} · 持倉成本利息 ${formatTradingPointsValue(interest)} · 已計 ${formatTradingPointsValue(interestHours)} 小時 · ${sanitize(leverageHint)}</div>
         <div class="economy-ledger-hash">${sanitize(row.position_uuid || "")}</div>
       </div>
       <div class="trading-spot-actions">
@@ -460,23 +470,32 @@ function renderTradingSummary() {
   const availabilityNote = $("trading-availability-note");
   const contractCard = $("trading-root-contract-card");
   const marginCard = $("trading-margin-card");
+  const fundingPoolCard = $("trading-funding-pool-public");
   if (orderForm) orderForm.style.display = "";
   if (submitBtn) submitBtn.disabled = false;
   if (contractCard) contractCard.style.display = currentUser === "root" ? "" : "none";
   const borrowingEnabled = !!tradingState.settings?.borrowing_enabled;
   if (marginCard) marginCard.style.display = "";
+  if (fundingPoolCard) fundingPoolCard.style.display = borrowingEnabled ? "" : "none";
   const marginControlsDisabled = !borrowingEnabled;
   ["trading-margin-market-select", "trading-margin-type", "trading-margin-quantity", "trading-margin-collateral", "trading-margin-open-btn"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = marginControlsDisabled;
   });
   if ($("trading-margin-note")) {
+    const pool = tradingState.fundingPool || {};
+    const effectiveRate = pool.effective_interest_percent_daily ?? tradingState.settings?.borrow_interest_percent_daily ?? 0;
     $("trading-margin-note").textContent = borrowingEnabled
       ? (currentUser === "root"
-        ? `root 可用模擬資金進行融資 / 借券，日息 ${formatTradingPercent(tradingState.settings?.borrow_interest_percent_daily || 0)}%；不寫入 PointsChain。`
-        : `已開啟，日息 ${formatTradingPercent(tradingState.settings?.borrow_interest_percent_daily || 0)}%；手續費與利息計入儲備池統計。`)
+        ? `root 可用模擬資金進行融資 / 借券，目前浮動日息 ${formatTradingPercent(effectiveRate)}%；不寫入 PointsChain。`
+        : `已開啟，目前浮動日息 ${formatTradingPercent(effectiveRate)}%；本金由資金池借出，手續費與利息回到資金池。`)
       : "root 尚未開啟借貸交易，目前僅可查看此區。";
   }
+  const fundingPool = tradingState.fundingPool || {};
+  if ($("trading-funding-pool-available")) $("trading-funding-pool-available").textContent = formatTradingPointsValue(fundingPool.available_points);
+  if ($("trading-funding-pool-outstanding")) $("trading-funding-pool-outstanding").textContent = formatTradingPointsValue(fundingPool.outstanding_principal_points);
+  if ($("trading-funding-pool-utilization")) $("trading-funding-pool-utilization").textContent = formatTradingPercent(fundingPool.utilization_percent);
+  if ($("trading-funding-pool-rate")) $("trading-funding-pool-rate").textContent = formatTradingPercent(fundingPool.effective_interest_percent_daily);
   if (availabilityNote) {
     availabilityNote.textContent = currentUser === "root"
       ? "root 可使用現貨、進階交易與合約模擬；root 以外用戶目前僅開放現貨與已啟用的進階交易。"
@@ -510,7 +529,72 @@ function renderTradingSummary() {
   syncTradingOrderSideTheme();
   updateTradingOrderEstimate();
   updateTradingMarginEstimate();
+  loadTradingBtcSignal();
   loadTradingReferencePrices();
+}
+
+function tradingSignalBoolLabel(value) {
+  if (value === true) return "通過";
+  if (value === false) return "未通過";
+  return "-";
+}
+
+function renderTradingBtcSignal(payload = null) {
+  const card = $("trading-btc-signal-card");
+  if (!card) return;
+  const market = selectedTradingMarket();
+  if (!market || tradingDisplaySymbol(market.symbol) !== "BTC/USDT" || !payload?.available || !payload.signal) {
+    card.style.display = "none";
+    return;
+  }
+  const signal = payload.signal || {};
+  const entryChecks = signal.entry_checks && typeof signal.entry_checks === "object" ? signal.entry_checks : {};
+  const ml = signal.ml_status && typeof signal.ml_status === "object" ? signal.ml_status : {};
+  const signalOk = signal.signal_ok === true;
+  const mlOk = signal.ml_ok === true;
+  const badge = $("trading-btc-signal-badge");
+  const meta = $("trading-btc-signal-meta");
+  const body = $("trading-btc-signal-body");
+  const checks = $("trading-btc-signal-checks");
+  card.style.display = "";
+  if (badge) {
+    badge.textContent = signalOk && mlOk ? "偏多觀察" : "等待條件";
+    badge.style.background = signalOk && mlOk ? "rgba(76,175,80,.18)" : "rgba(255,183,77,.16)";
+    badge.style.color = signalOk && mlOk ? "#4caf50" : "#ffb74d";
+  }
+  if (meta) {
+    const age = Number(signal.age_seconds || 0);
+    const updated = signal.updated_at ? new Date(signal.updated_at).toLocaleString() : "-";
+    meta.textContent = `來源 BTC_trade · 週期 ${signal.timeframe || "4h"} · 更新 ${updated}${age ? ` · 約 ${formatTradingDuration(age * 1000)} 前` : ""}`;
+  }
+  if (body) {
+    body.innerHTML = `
+      <div><span class="drive-card-sub">目前價格</span><strong>${sanitize(tradingReferenceLabel(signal.current_price))}</strong><small>BTC/USDT</small></div>
+      <div><span class="drive-card-sub">七條件信號</span><strong>${sanitize(tradingSignalBoolLabel(signal.signal_ok))}</strong><small>${signalOk ? "可進場觀察" : "未全滿足"}</small></div>
+      <div><span class="drive-card-sub">ML 過濾</span><strong>${sanitize(tradingSignalBoolLabel(signal.ml_ok))}</strong><small>${sanitize(ml.situation || (ml.blocked ? "已阻擋" : "未提供"))}</small></div>
+      <div><span class="drive-card-sub">BTC_trade 持倉</span><strong>${sanitize(signal.position || signal.portfolio?.position || "空手")}</strong><small>${sanitize(signal.last_trade?.action || "無最新交易")}</small></div>
+    `;
+  }
+  if (checks) {
+    const rows = Object.entries(entryChecks).map(([name, ok]) => `${ok ? "✓" : "×"} ${name}`).slice(0, 12);
+    checks.textContent = rows.length ? rows.join(" · ") : "尚無條件細節";
+  }
+}
+
+async function loadTradingBtcSignal() {
+  const market = selectedTradingMarket();
+  if (!market || tradingDisplaySymbol(market.symbol) !== "BTC/USDT") {
+    renderTradingBtcSignal(null);
+    return;
+  }
+  try {
+    const json = await fetchTradingJson(`/trading/btc-signal?market=${encodeURIComponent(market.symbol)}`);
+    tradingState.btcSignal = json;
+    renderTradingBtcSignal(json);
+  } catch (_) {
+    tradingState.btcSignal = null;
+    renderTradingBtcSignal(null);
+  }
 }
 
 function tradingReferenceLabel(value) {
@@ -1042,6 +1126,13 @@ function updateTradingMarginEstimate() {
     : Math.ceil(notional * Math.max(0, 100 - marginLongFinancingRatePercent) / 100);
   const fee = Math.ceil(notional * tradingNumber(market.fee_rate_percent, 0) / 100);
   const available = tradingNumber(tradingState.funding?.available_points, 0);
+  const principal = positionType === "short" ? notional : Math.max(0, notional - collateral);
+  const fundingPool = tradingState.fundingPool || {};
+  const poolAvailable = tradingNumber(fundingPool.available_points, 0);
+  const poolRate = tradingNumber(
+    fundingPool.projected_interest_percent_daily ?? fundingPool.effective_interest_percent_daily,
+    tradingState.settings?.borrow_interest_percent_daily || 0
+  );
   const typeLabel = positionType === "short" ? "借券放空" : "融資買入";
   if (!quantity || !collateral || !notional) {
     estimate.textContent = "輸入數量與保證金後顯示預估風險。";
@@ -1062,6 +1153,11 @@ function updateTradingMarginEstimate() {
   } else if ((collateral + fee) > available) {
     message = `${message}；可用資金不足，需要 ${collateral + fee} 點，目前可用 ${available} 點`;
     blocking = true;
+  } else if (principal > poolAvailable && currentUser !== "root") {
+    message = `${message}；資金池不足，需要借出 ${principal} 點，目前可借 ${poolAvailable} 點`;
+    blocking = true;
+  } else if (tradingState.settings?.borrowing_enabled) {
+    message = `${message}；預估借出本金 ${principal} 點，目前浮動日息約 ${formatTradingPercent(poolRate)}%`;
   }
   estimate.textContent = message;
   estimate.style.color = blocking ? "#ff6b7a" : "var(--muted)";
@@ -1271,6 +1367,7 @@ function renderTradingRootReport(report) {
   const safe = report && typeof report === "object" ? report : {};
   const reserve = safe.reserve_pool || {};
   const verification = safe.verification || {};
+  tradingState.fundingPool = safe.funding_pool || tradingState.fundingPool || null;
   if ($("trading-reserve-balance")) $("trading-reserve-balance").textContent = String(Number(reserve.balance_points || 0));
   if ($("trading-verification-status")) $("trading-verification-status").textContent = verification.ok === false ? "異常" : "正常";
   if ($("trading-verification-detail")) $("trading-verification-detail").textContent = `${Array.isArray(verification.errors) ? verification.errors.length : 0} 個問題`;
@@ -1312,7 +1409,7 @@ function renderTradingRootReport(report) {
           <div class="drive-card-sub">餘額 ${Number(row.balance_after || 0)} · ${sanitize(row.reason || "-")} · ${sanitize(row.created_at || "")}</div>
         </div>
       </div>
-    `).join("") : `<div class="drive-empty">尚無儲備池事件</div>`;
+    `).join("") : `<div class="drive-empty">尚無資金池事件</div>`;
   }
 }
 
@@ -1348,6 +1445,7 @@ async function loadTradingDashboard() {
     const json = await fetchTradingJson("/trading/dashboard");
     const payload = json.trading || {};
     tradingState.funding = payload.funding || null;
+    tradingState.fundingPool = payload.funding_pool || null;
     tradingState.markets = payload.markets || [];
     tradingState.settings = payload.settings || {};
     tradingState.positions = payload.positions || [];
@@ -1759,6 +1857,7 @@ async function openTradingMarginPosition() {
         position_type: $("trading-margin-type")?.value || "margin_long",
         quantity: $("trading-margin-quantity")?.value || "",
         collateral_points: Number($("trading-margin-collateral")?.value || 0),
+        idempotency_key: tradingRequestId("margin-open"),
       }),
     });
     if (json.funding) tradingState.funding = json.funding;
@@ -1857,7 +1956,7 @@ async function allocateTradingReserve() {
     tradingSetMsg("請選擇撥入來源帳戶與點數", false);
     return;
   }
-  if (!confirm("確認要從指定帳戶扣點並撥入交易儲備池？")) return;
+  if (!confirm("確認要從指定帳戶扣點並撥入交易資金池？")) return;
   try {
     await fetchTradingJson("/root/trading/reserve/allocate", {
       method: "POST",
@@ -1868,10 +1967,10 @@ async function allocateTradingReserve() {
       }),
     });
     if ($("trading-reserve-amount")) $("trading-reserve-amount").value = "";
-    tradingSetMsg("已撥入交易儲備池");
+    tradingSetMsg("已撥入交易資金池");
     await loadEconomyDashboard();
   } catch (err) {
-    tradingSetMsg(err.message || "儲備池撥入失敗", false);
+    tradingSetMsg(err.message || "資金池撥入失敗", false);
   }
 }
 

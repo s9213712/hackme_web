@@ -92,6 +92,15 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'data-drive-action="move-storage-file"' in drive_js
     assert 'data-drive-action="move-cloud-to-storage"' in drive_js
     assert 'data-drive-action="folder-to-album"' in drive_js
+    assert 'item.status === "failed"' in drive_js
+    assert "下載失敗" in drive_js
+    assert 'data-drive-action="dismiss-transfer"' in drive_js
+    assert "dismissRemoteDownloadTask" in drive_js
+    assert "DRIVE_TRANSFER_FAILED_VISIBLE_MS" in drive_js
+    assert "DRIVE_REMOTE_STATUS_RETRY_LIMIT" in drive_js
+    assert "consecutiveStatusErrors" in drive_js
+    assert "狀態暫時讀取失敗，正在重試" in drive_js
+    assert "findDriveTransferRowIdForTask" in drive_js
     assert "async function createAlbumFromFolder(path, name = \"\")" in drive_js
     assert 'storageAction("/storage/folders/album", "POST"' in drive_js
     assert 'storageAction("/storage/folders/trash", "POST"' in drive_js
@@ -167,9 +176,15 @@ def test_album_viewer_has_dedicated_module():
     assert "driveTransferRows" in drive_js
     assert "xhrUploadWithProgress" in drive_js
     assert "/cloud-drive/remote-download/tasks" in drive_js
-    assert "function classifyRemoteDownloadInput(rawUrl)" in drive_js
+    assert "async function restoreRemoteDownloadTasks()" in drive_js
+    assert "resumeRemoteDownloadTaskPolling(task)" in drive_js
+    assert "function classifyRemoteDownloadInput(rawUrl" in drive_js
+    assert "torrentUrlsAsBt" in drive_js
     assert "function promptRemoteDriveDownloadUrl()" in drive_js
     assert "function openRemoteTorrentPicker()" in drive_js
+    assert "magnet link 或 .torrent URL" in drive_js
+    assert "download_mode: effectiveMode" in drive_js
+    assert 'source: "torrent-url"' in drive_js
     assert 'id="drive-remote-torrent-file"' in index_html
     assert 'id="drive-remote-torrent-btn"' in index_html
     assert "/cloud-drive/remote-download/torrent-tasks" in drive_js
@@ -187,6 +202,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'data-drive-action="add-cloud-to-album"' in drive_js
     assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js
     assert "SIDEBAR_MENU_CONFIG" in core_js
+    assert '{ label: "相簿", action: "module:albums" }' not in core_js
     assert "SIDEBAR_ICON_PATHS" in core_js
     assert "sidebar-footer" in index_html
     assert "sidebar-current-user" in index_html

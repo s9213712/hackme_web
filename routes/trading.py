@@ -1,6 +1,8 @@
 import json
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -58,6 +60,113 @@ GEMINI_TIMEFRAMES = {"5m": "5m", "15m": "15m", "1h": "1hr", "1d": "1day"}
 BITSTAMP_STEP_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
+BTC_TRADE_SIGNAL_KEYS = {"bar_ts", "signal_ok", "ml_ok", "position", "current_price", "entry_checks", "ml_status"}
+
+
+def _expand_server_path(raw_path):
+    value = str(raw_path or "").strip()
+    if not value:
+        return None
+    return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
+
+
+def _load_json_file(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def btc_trade_status(project_dir):
+    root = _expand_server_path(project_dir)
+    if not root:
+        return {
+            "configured": False,
+            "available": False,
+            "needs_initialization": True,
+            "message": "root 尚未設定 BTC_trade 專案資料夾",
+        }
+    runtime = root / "runtime"
+    report_path = runtime / "report_log_4h.jsonl"
+    portfolio_path = runtime / "portfolio_state_4h.json"
+    trade_log_path = runtime / "trade_log_4h.json"
+    checks = {
+        "project_dir": root.is_dir(),
+        "hourly_check": (root / "hourly_check.py").is_file(),
+        "update_data": (root / "update_data.py").is_file(),
+        "backtest_report": (root / "backtest_report.py").is_file(),
+        "runtime_dir": runtime.is_dir(),
+        "report_log": report_path.is_file(),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    payload = {
+        "configured": True,
+        "available": False,
+        "needs_initialization": bool(missing),
+        "checks": checks,
+        "missing": missing,
+        "message": "",
+        "commands": [
+            "python3 update_data.py",
+            "python3 hourly_check.py --timeframe 4h",
+            "python3 backtest_report.py --timeframe 4h",
+        ],
+    }
+    if missing:
+        payload["message"] = "BTC_trade 專案尚未可用，請先在該資料夾執行初始化或產生信號報告"
+        return payload
+    latest_line = ""
+    try:
+        with open(report_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    latest_line = line.strip()
+        if not latest_line:
+            raise ValueError("empty report log")
+        latest = json.loads(latest_line)
+        if not isinstance(latest, dict):
+            raise ValueError("latest report is not an object")
+    except Exception as exc:
+        payload["needs_initialization"] = True
+        payload["message"] = f"BTC_trade 信號報告無法讀取：{exc.__class__.__name__}"
+        return payload
+    signal = {key: latest.get(key) for key in BTC_TRADE_SIGNAL_KEYS if key in latest}
+    signal["timeframe"] = "4h"
+    signal["source"] = "BTC_trade/report_log_4h.jsonl"
+    try:
+        stat = report_path.stat()
+        signal["updated_at"] = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+        signal["age_seconds"] = max(0, int(time.time() - stat.st_mtime))
+    except Exception:
+        pass
+    if portfolio_path.is_file():
+        try:
+            portfolio = _load_json_file(portfolio_path)
+            if isinstance(portfolio, dict):
+                signal["portfolio"] = {
+                    "position": portfolio.get("position"),
+                    "cash": portfolio.get("cash"),
+                    "btc": portfolio.get("btc"),
+                    "updated_at": portfolio.get("updated_at") or portfolio.get("timestamp"),
+                }
+        except Exception:
+            pass
+    if trade_log_path.is_file():
+        try:
+            trades = _load_json_file(trade_log_path)
+            if isinstance(trades, list) and trades:
+                last_trade = trades[-1] if isinstance(trades[-1], dict) else {}
+                signal["last_trade"] = {
+                    "action": last_trade.get("action"),
+                    "timestamp": last_trade.get("timestamp"),
+                    "pnl_pct": last_trade.get("pnl_pct"),
+                    "exit_reason": last_trade.get("exit_reason"),
+                }
+        except Exception:
+            pass
+    payload["available"] = True
+    payload["needs_initialization"] = False
+    payload["message"] = "BTC_trade 信號可用"
+    payload["signal"] = signal
+    return payload
 
 
 def register_trading_routes(app, deps):
@@ -441,6 +550,28 @@ def register_trading_routes(app, deps):
             return err
         return json_resp({"ok": True, "trading": trading_service.user_dashboard(user_id=actor["id"])})
 
+    @app.route("/api/trading/btc-signal", methods=["GET"])
+    @require_csrf_safe
+    def trading_btc_signal():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        market_symbol = str(request.args.get("market") or "BTC/USDT").strip().upper()
+        if market_symbol.replace("/POINTS", "/USDT") != "BTC/USDT":
+            return json_resp({"ok": True, "available": False, "hidden": True, "msg": "僅 BTC/USDT 顯示 BTC_trade 信號"})
+        try:
+            settings = trading_service.get_root_settings().get("settings", {})
+            status = btc_trade_status(settings.get("btc_trade_project_dir"))
+        except Exception:
+            return json_resp({"ok": True, "available": False, "hidden": True, "msg": "BTC_trade 信號暫不可用"})
+        return json_resp({
+            "ok": True,
+            "available": bool(status.get("available")),
+            "hidden": not bool(status.get("available")),
+            "signal": status.get("signal") if status.get("available") else None,
+            "msg": status.get("message") or "",
+        })
+
     @app.route("/api/trading/reference-prices", methods=["GET"])
     @require_csrf_safe
     def trading_reference_prices():
@@ -662,6 +793,9 @@ def register_trading_routes(app, deps):
         data, err = parse_json_body()
         if err:
             return err
+        idempotency_key = str(data.get("idempotency_key") or request.headers.get("Idempotency-Key") or "").strip()
+        if not idempotency_key:
+            return json_resp({"ok": False, "msg": "idempotency_key required"}), 400
         try:
             result = trading_service.open_margin_position(
                 actor=actor,
@@ -669,6 +803,7 @@ def register_trading_routes(app, deps):
                 position_type=data.get("position_type"),
                 quantity=data.get("quantity"),
                 collateral_points=data.get("collateral_points"),
+                idempotency_key=idempotency_key,
             )
             audit("TRADING_MARGIN_POSITION_OPENED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"position_uuid={result['position'].get('position_uuid')}")
             return json_resp(result)
@@ -754,6 +889,25 @@ def register_trading_routes(app, deps):
             return json_resp(result)
         except Exception as exc:
             return service_error(exc)
+
+    @app.route("/api/root/trading/btc-trade/check", methods=["POST"])
+    @require_csrf
+    def root_trading_btc_trade_check():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        project_dir = data.get("project_dir")
+        try:
+            status = btc_trade_status(project_dir)
+            root = _expand_server_path(project_dir)
+            if root:
+                status["project_dir"] = str(root)
+            return json_resp({"ok": True, "status": status})
+        except Exception as exc:
+            return json_resp({"ok": False, "msg": f"BTC_trade 狀態檢查失敗：{exc.__class__.__name__}"}), 400
 
     @app.route("/api/root/trading/liquidations/scan", methods=["POST"])
     @require_csrf

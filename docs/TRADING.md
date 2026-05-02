@@ -47,13 +47,25 @@ Root uses a separate simulated trading balance:
 - Root spot/contract simulation does not write to PointsChain and does not
   affect account points.
 
-The trading reserve pool is conservative:
+The trading funding pool is conservative:
 
-- It starts at `0`.
-- It only receives explicit root allocation, trading fees, interest, or user
-  trading losses.
-- It is currently an experimental accounting/statistics field and has no
-  automatic money-creation behavior.
+- It starts at `10000 POINTS`.
+- It is the lending source for margin long and short borrow trades.
+- It only grows from explicit root allocation, trading fees, and borrow
+  interest.
+- Borrowed principal is debited from the pool when a margin position opens and
+  repaid when the position closes.
+- User margin profit is paid from the pool; user margin loss, fees, and
+  interest return to the pool.
+- Borrow interest is floating: the configured base daily rate rises as pool
+  utilization increases.
+- Borrow interest is accrued by started hour. The engine first tries to deduct
+  each accrued interest charge from the user's remaining points through
+  PointsChain. If the user does not have enough remaining points, the unpaid
+  interest is capitalized into the open margin position cost and affects
+  equity, liquidation price, and final close-out.
+- It has no automatic money-creation behavior. If the pool cannot cover a
+  requested borrow amount, the trade is rejected.
 
 ## Spot Trading
 
@@ -119,6 +131,58 @@ extreme outliers, calculate a median/weighted mean, and halt trading when too
 few providers agree. That design avoids accepting a single abnormal exchange
 print during extreme markets.
 
+## BTC_trade Signal Panel
+
+The trading page can optionally show a BTC-only signal panel from the separate
+`BTC_trade` project. This is a soft integration:
+
+- It only appears when the selected market is `BTC/USDT`.
+- It only reads files from the configured `BTC_trade` folder.
+- It does not start the other project, import its code, or make trading depend
+  on it.
+- If the folder or report file is missing, the signal panel stays hidden and
+  the trading page continues to work normally.
+
+To enable it:
+
+1. Prepare the `BTC_trade` project on the same server.
+2. In `BTC_trade`, generate the runtime signal files:
+
+   ```bash
+   cd /home/s92137/NN/BTC_trade
+   python3 update_data.py
+   python3 hourly_check.py --timeframe 4h
+   python3 backtest_report.py --timeframe 4h
+   ```
+
+3. Log in as `root` in `hackme_web`.
+4. Open `安全中心 -> 伺服器設定 -> 計費 -> 交易所參數`.
+5. Set `BTC_trade 專案資料夾`, for example:
+
+   ```text
+   /home/s92137/NN/BTC_trade
+   ```
+
+6. Press `檢查 BTC_trade`.
+7. If the check says it is available, press `儲存交易所參數`.
+8. Open the trading page and select `BTC/USDT`.
+
+The panel reads the latest line from:
+
+```text
+runtime/report_log_4h.jsonl
+```
+
+It can also show a compact portfolio/last-trade summary when these files exist:
+
+```text
+runtime/portfolio_state_4h.json
+runtime/trade_log_4h.json
+```
+
+If the root check reports initialization is needed, run the commands shown in
+the root UI from inside the `BTC_trade` directory, then check again.
+
 ## Root Trading Settings
 
 Root settings live under the root settings page, billing/trading section.
@@ -138,6 +202,9 @@ Important fields:
   used when all live providers are unavailable.
 - Market fee percent: percentage fee charged on spot/margin orders.
 - Market min/max order points: per-order notional boundaries.
+- BTC_trade project folder: optional local path for the BTC-only signal panel.
+  This should point to the `BTC_trade` project root, not to the `runtime`
+  subfolder.
 
 All user-facing and API settings use percent values directly. For example,
 `0.3` means `0.3%`; `15` means `15%`.
@@ -289,7 +356,7 @@ or write trading ledger entries.
 
 Server snapshot/restore should restore trading tables together with normal
 server state. Trading verification checks replay spot positions, open-order
-locks, reserve pool state, root simulated account, and margin collateral locks.
+locks, funding pool state, root simulated account, and margin collateral locks.
 
 If trading replay or margin collateral validation fails, trading enters safe
 mode and write operations are blocked until root handles the issue.

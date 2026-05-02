@@ -697,6 +697,8 @@ def register_user_routes(app, deps):
             ).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+            if request.method == "PUT" and target["username"] == "root" and actor["username"] != "root":
+                return json_resp({"ok":False,"msg":"只有 root 可修改 root 帳號"}), 403
 
             if request.method == "DELETE":
                 if target["username"] == "root":
