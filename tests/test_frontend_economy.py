@@ -218,6 +218,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-margin-collateral"' in trading_section
     assert 'id="trading-margin-open-btn"' in trading_section
     assert 'id="trading-margin-position-list"' in trading_section
+    assert 'id="trading-margin-account-summary"' in trading_section
+    assert "全倉維持率" in trading_section
     assert 'id="trading-order-form"' in trading_section
     assert 'id="trading-availability-note"' in trading_section
     assert 'id="trading-trial-credit-available"' in trading_section
@@ -275,7 +277,10 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "放空價格風險" in trading_js
     assert "價格上漲會虧損並降低維持率" in trading_js
     assert "未實現盈虧" in trading_js
-    assert "強平價格" in trading_js
+    assert "逐倉估算強平價" in trading_js
+    assert "實際清算依全倉維持率" in trading_js
+    assert "融資保證金不可大於或等於名目金額" in trading_js
+    assert "renderTradingMarginAccountSummary" in trading_js
     assert "liquidation_price_points" in trading_js
     assert "unrealized_pnl_points" in trading_js
     assert 'id="economy-contract-position-count"' in economy_section
@@ -294,9 +299,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "next_prediction_at" in trading_js
     assert "下次預測倒數" in trading_js
     assert "策略版本" in trading_js
-    assert "BTC_trade 權益" in trading_js
     assert "fear_greed" in trading_js
-    assert "total_equity" in trading_js
     assert "/trading/btc-signal" in trading_js
     assert "function rootVirtualSpotValue" in trading_js
     assert "function renderEconomySpotPositionDetails" in trading_js
@@ -324,6 +327,12 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "手續費按平時 2 倍計算" in trading_js
     assert "function tradingOrderDraftEstimate" in trading_js
     assert "function syncTradingOrderSideTheme" in trading_js
+    assert "function tradingOrderInputMode" in trading_js
+    assert "function syncTradingOrderInputMode" in trading_js
+    assert 'id="trading-input-mode"' in trading_section
+    assert "用點數換算" in trading_section
+    assert "買入時點數視為含手續費的總支出" in trading_js
+    assert "quantity: tradingQuantityForSubmit(estimate.quantity)" in trading_js
     assert "trading-order-buy" in trading_js
     assert "trading-order-sell" in trading_js
     assert "買入下單" in trading_js

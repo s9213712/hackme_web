@@ -259,12 +259,23 @@ Each open borrow position shows:
 - Maintenance margin.
 - Equity.
 - Unrealized PnL.
-- Liquidation price estimate.
+- Per-position liquidation price estimate.
 - Risk status and reason.
 
-Users can add collateral. Root can run the liquidation scan. The scan must
-re-check risk before liquidating, so a recovered position is not force-closed
-based on stale candidate data.
+Borrow trading now uses a cross-margin account check:
+
+- Account equity = all open borrow-position equity + free trading balance.
+- Total borrowed = sum of open borrow principal.
+- Total maintenance requirement = sum of open-position maintenance margin.
+- Cross margin ratio = account equity / total maintenance requirement.
+- Free margin comes from available wallet/trial/root simulated trading balance.
+- Adding collateral still freezes points on the selected position, but the
+  liquidation decision is account-level.
+
+Root can run the liquidation scan. The scan first checks the account-level
+cross margin ratio, then chooses the worst-risk position as the first close
+candidate. The engine re-checks account risk before force-closing, so recovered
+accounts are not liquidated based on stale candidate data.
 
 ## Trading Bots
 

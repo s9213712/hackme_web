@@ -1370,7 +1370,18 @@
               <option value="limit">限價單</option>
             </select>
           </div>
-          <div class="field"><label>數量</label><input type="number" id="trading-quantity" min="0.00000001" step="0.00000001" value="0.01" /></div>
+          <div class="field">
+            <label>輸入方式</label>
+            <select id="trading-input-mode">
+              <option value="quantity">用枚數下單</option>
+              <option value="points">用點數換算</option>
+            </select>
+          </div>
+          <div class="field">
+            <label id="trading-quantity-label">數量</label>
+            <input type="number" id="trading-quantity" min="0.00000001" step="0.00000001" value="0.01" />
+            <div class="drive-card-sub" id="trading-input-mode-note" style="margin-top:.25rem;">直接輸入 BTC/ETH 枚數。</div>
+          </div>
           <div class="field"><label>限價（USDT 等值 / 1 單位）</label><input type="number" id="trading-limit-price" min="1" step="1" placeholder="限價單才需要" /></div>
           <div class="field">
             <label>下單</label>
@@ -1523,6 +1534,12 @@
               <div><span class="drive-card-sub">已借出本金</span><strong id="trading-funding-pool-outstanding">-</strong><small>POINTS</small></div>
               <div><span class="drive-card-sub">池子使用率</span><strong id="trading-funding-pool-utilization">-</strong><small>%</small></div>
               <div><span class="drive-card-sub">目前浮動日息</span><strong id="trading-funding-pool-rate">-</strong><small>%</small></div>
+            </div>
+            <div class="settings-option-grid economy-wallet-grid" id="trading-margin-account-summary" style="display:none;margin-bottom:.75rem;">
+              <div><span class="drive-card-sub">全倉維持率</span><strong id="trading-margin-cross-ratio">-</strong><small id="trading-margin-cross-status">-</small></div>
+              <div><span class="drive-card-sub">帳戶權益</span><strong id="trading-margin-account-equity">-</strong><small>倉位權益 + 可用保證金</small></div>
+              <div><span class="drive-card-sub">可用保證金</span><strong id="trading-margin-free-margin">-</strong><small id="trading-margin-available-margin">-</small></div>
+              <div><span class="drive-card-sub">總借出本金</span><strong id="trading-margin-total-borrowed">-</strong><small id="trading-margin-maintenance-total">-</small></div>
             </div>
             <div class="settings-option-grid">
               <div class="field"><label>市場</label><select id="trading-margin-market-select"><option value="">讀取市場中...</option></select></div>

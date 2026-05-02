@@ -9,6 +9,7 @@ let tradingState = {
   botRuns: [],
   rootReport: null,
   fundingPool: null,
+  marginSummary: null,
   referencePrices: null,
   btcSignal: null,
 };
@@ -131,23 +132,73 @@ function currentTradingPosition(marketSymbol) {
   return tradingState.positions.find((row) => row.market_symbol === marketSymbol) || null;
 }
 
+function tradingOrderInputMode() {
+  return $("trading-input-mode")?.value === "points" ? "points" : "quantity";
+}
+
+function formatTradingQuantityValue(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "-";
+  return number.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
+function tradingQuantityForSubmit(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return number.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function syncTradingOrderInputMode() {
+  const inputMode = tradingOrderInputMode();
+  const input = $("trading-quantity");
+  const label = $("trading-quantity-label");
+  const note = $("trading-input-mode-note");
+  if (label) label.textContent = inputMode === "points" ? "點數金額" : "數量";
+  if (input) {
+    input.min = inputMode === "points" ? "1" : "0.00000001";
+    input.step = inputMode === "points" ? "1" : "0.00000001";
+    input.placeholder = inputMode === "points" ? "例如 1000" : "例如 0.01";
+  }
+  if (note) {
+    note.textContent = inputMode === "points"
+      ? "買入時點數視為含手續費的總支出；賣出時點數視為成交名目金額，系統自動換算枚數。"
+      : "直接輸入 BTC/ETH 枚數。";
+  }
+}
+
 function tradingOrderDraftEstimate() {
   const market = selectedTradingMarket();
   if (!market) return { ok: false, blocking: true, message: "沒有可用交易市場" };
   const side = $("trading-side")?.value || "buy";
   const orderType = $("trading-order-type")?.value || "market";
-  const quantity = tradingNumber($("trading-quantity")?.value, 0);
+  const inputMode = tradingOrderInputMode();
+  const inputValue = tradingNumber($("trading-quantity")?.value, 0);
   const limitPrice = tradingNumber($("trading-limit-price")?.value, 0);
   const price = orderType === "limit" ? limitPrice : tradingNumber(market.manual_price_points, 0);
   const feeRate = tradingNumber(market.fee_rate_percent, 0) / 100;
-  if (!quantity || quantity <= 0) {
-    return { ok: false, blocking: false, message: "輸入數量後顯示預估金額" };
+  if (!inputValue || inputValue <= 0) {
+    return {
+      ok: false,
+      blocking: false,
+      message: inputMode === "points" ? "輸入點數後自動換算枚數" : "輸入數量後顯示預估金額",
+    };
   }
   if (!price || price <= 0) {
     return { ok: false, blocking: true, message: orderType === "limit" ? "請輸入有效限價" : "目前市場價格不可用，暫停下單" };
   }
+  let quantity = inputValue;
+  if (inputMode === "points") {
+    const denominator = side === "buy" ? price * (1 + feeRate) : price;
+    quantity = denominator > 0 ? inputValue / denominator : 0;
+  }
+  if (!quantity || quantity <= 0) {
+    return { ok: false, blocking: true, message: "點數金額太小，無法換算有效枚數" };
+  }
   const notional = quantity * price;
   const fee = Math.max(0, notional * feeRate);
+  const quantityNote = inputMode === "points"
+    ? `，約 ${formatTradingQuantityValue(quantity)} ${tradingDisplaySymbol(market.symbol).split("/")[0]}`
+    : "";
   const funding = tradingState.funding || {};
   const availablePoints = tradingNumber(funding.available_points, 0);
   const position = currentTradingPosition(market.symbol);
@@ -167,8 +218,8 @@ function tradingOrderDraftEstimate() {
       total,
       availablePoints,
       message: total > availablePoints
-        ? `買入預估 ${formatTradingPointsValue(total)} 點（含手續費 ${formatTradingPointsValue(fee)}），超過可用 ${formatTradingPointsValue(availablePoints)} 點`
-        : `買入預估 ${formatTradingPointsValue(total)} 點（成交 ${formatTradingPointsValue(notional)} + 手續費 ${formatTradingPointsValue(fee)}）`,
+        ? `買入預估 ${formatTradingPointsValue(total)} 點${quantityNote}（含手續費 ${formatTradingPointsValue(fee)}），超過可用 ${formatTradingPointsValue(availablePoints)} 點`
+        : `買入預估 ${formatTradingPointsValue(total)} 點${quantityNote}（成交 ${formatTradingPointsValue(notional)} + 手續費 ${formatTradingPointsValue(fee)}）`,
     };
   }
   const net = Math.max(0, notional - fee);
@@ -183,8 +234,8 @@ function tradingOrderDraftEstimate() {
     total: net,
     sellableQuantity,
     message: quantity > sellableQuantity
-      ? `賣出 ${formatTradingPointsValue(quantity)} 超過可賣現貨 ${formatTradingPointsValue(sellableQuantity)}`
-      : `賣出預估收入 ${formatTradingPointsValue(net)} 點（成交 ${formatTradingPointsValue(notional)} - 手續費 ${formatTradingPointsValue(fee)}）`,
+      ? `賣出 ${formatTradingQuantityValue(quantity)} 超過可賣現貨 ${formatTradingQuantityValue(sellableQuantity)}`
+      : `賣出預估收入 ${formatTradingPointsValue(net)} 點${quantityNote}（成交 ${formatTradingPointsValue(notional)} - 手續費 ${formatTradingPointsValue(fee)}）`,
   };
 }
 
@@ -424,7 +475,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
           原始保證金率 ${formatTradingPointsValue(initialMarginRatePercent)}% · 維持率 ${sanitize(riskText.ratioText)} · 權益 ${formatTradingPointsValue(equity)} · 維持保證金 ${formatTradingPointsValue(maintenance)}（${formatTradingPointsValue(maintenanceRatePercent)}%） · ${sanitize(riskText.statusLabel)}
         </div>
         <div class="drive-card-sub">
-          未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 強平價格 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
+          未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 逐倉估算強平價 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"} · 實際清算依全倉維持率
         </div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
         <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 日息 ${formatTradingPercent(row.interest_percent_daily || 0)}% · 已扣利息 ${formatTradingPointsValue(paidInterest)} · 持倉成本利息 ${formatTradingPointsValue(interest)} · 已計 ${formatTradingPointsValue(interestHours)} 小時 · ${sanitize(leverageHint)}</div>
@@ -528,6 +579,7 @@ function renderTradingSummary() {
     limit.placeholder = `目前 ${Number(market.manual_price_points || 0)}`;
   }
   syncTradingOrderSideTheme();
+  syncTradingOrderInputMode();
   updateTradingOrderEstimate();
   updateTradingMarginEstimate();
   loadTradingBtcSignal();
@@ -595,7 +647,6 @@ function renderTradingBtcSignal(payload = null) {
       <div><span class="drive-card-sub">ML 過濾</span><strong>${sanitize(tradingSignalBoolLabel(signal.ml_ok))}</strong><small>${sanitize(ml.situation || (ml.blocked ? "已阻擋" : "未提供"))}</small></div>
       <div><span class="drive-card-sub">BTC_trade 持倉</span><strong>${sanitize(signal.position || signal.portfolio?.position || "空手")}</strong><small>${sanitize(signal.last_trade?.action || "無最新交易")}</small></div>
       <div><span class="drive-card-sub">策略版本</span><strong>${sanitize(signal.strategy_version || "-")}</strong><small>Fear & Greed ${sanitize(signal.fear_greed ?? "-")}</small></div>
-      <div><span class="drive-card-sub">BTC_trade 權益</span><strong>${sanitize(tradingReferenceLabel(signal.total_equity || signal.portfolio?.total_equity || signal.capital || signal.portfolio?.capital))}</strong><small>PNL ${sanitize(signal.total_pnl_pct == null ? "-" : `${Number(signal.total_pnl_pct).toFixed(2)}%`)}</small></div>
       ${signal.next_prediction_at ? `<div><span class="drive-card-sub">下次預測</span><strong>${sanitize(tradingBtcSignalCountdownText(signal).replace("下次預測", "").trim())}</strong><small>${sanitize(new Date(signal.next_prediction_at).toLocaleString())}</small></div>` : ""}
     `;
   }
@@ -1184,7 +1235,11 @@ function updateTradingMarginEstimate() {
     message = `${message}；融資可貸比例 ${formatTradingPercent(marginLongFinancingRatePercent)}%`;
   }
   let blocking = false;
-  if (collateral < minCollateral) {
+  if (positionType === "margin_long" && collateral >= notional) {
+    const maxLongCollateral = Math.max(1, notional - 1);
+    message = `${message}；融資保證金不可大於或等於名目金額，最高 ${maxLongCollateral} 點。若不需要借貸，請改用現貨買入。`;
+    blocking = true;
+  } else if (collateral < minCollateral) {
     message = `${message}；原始保證金不足，至少需要 ${minCollateral} 點`;
     blocking = true;
   } else if ((collateral + fee) > available) {
@@ -1217,6 +1272,27 @@ function renderTradingMarginPositions(rows = []) {
   list.querySelectorAll("[data-margin-add-collateral]").forEach((btn) => {
     btn.addEventListener("click", () => addTradingMarginCollateral(btn.dataset.marginAddCollateral || ""));
   });
+}
+
+function renderTradingMarginAccountSummary(summary = null) {
+  const wrap = $("trading-margin-account-summary");
+  if (!wrap) return;
+  const data = summary || {};
+  if (!data.open_count) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "";
+  const ratio = data.cross_margin_ratio_percent ?? data.maintenance_ratio_percent;
+  if ($("trading-margin-cross-ratio")) {
+    $("trading-margin-cross-ratio").textContent = ratio == null ? "無法計算" : `${formatTradingPointsValue(ratio)}%`;
+  }
+  if ($("trading-margin-cross-status")) $("trading-margin-cross-status").textContent = data.reason || "整戶維持率正常";
+  if ($("trading-margin-account-equity")) $("trading-margin-account-equity").textContent = `${formatTradingPointsValue(data.account_equity_points || 0)} 點`;
+  if ($("trading-margin-free-margin")) $("trading-margin-free-margin").textContent = `${formatTradingPointsValue(data.free_margin_points || 0)} 點`;
+  if ($("trading-margin-available-margin")) $("trading-margin-available-margin").textContent = `維持後可用 ${formatTradingPointsValue(data.available_margin_points || 0)} 點`;
+  if ($("trading-margin-total-borrowed")) $("trading-margin-total-borrowed").textContent = `${formatTradingPointsValue(data.total_borrowed_points || 0)} 點`;
+  if ($("trading-margin-maintenance-total")) $("trading-margin-maintenance-total").textContent = `總維持需求 ${formatTradingPointsValue(data.total_maintenance_requirement_points || data.total_maintenance_points || 0)} 點`;
 }
 
 function tradingBotTriggerLabel(row) {
@@ -1483,6 +1559,7 @@ async function loadTradingDashboard() {
     const payload = json.trading || {};
     tradingState.funding = payload.funding || null;
     tradingState.fundingPool = payload.funding_pool || null;
+    tradingState.marginSummary = payload.margin_summary || null;
     tradingState.markets = payload.markets || [];
     tradingState.settings = payload.settings || {};
     tradingState.positions = payload.positions || [];
@@ -1504,6 +1581,7 @@ async function loadTradingDashboard() {
     renderTradingBots(tradingState.bots, tradingState.botRuns);
     renderTradingContracts(payload.futures_positions || []);
     renderTradingMarginPositions(tradingState.marginPositions);
+    renderTradingMarginAccountSummary(tradingState.marginSummary);
     renderTradingWalletSummary(payload);
     if (currentUser === "root") {
       await loadTradingRootReport();
@@ -1544,7 +1622,7 @@ async function submitTradingOrder() {
     market_symbol: market.symbol,
     side: $("trading-side")?.value || "buy",
     order_type: orderType,
-    quantity: $("trading-quantity")?.value || "",
+    quantity: tradingQuantityForSubmit(estimate.quantity),
   };
   if (orderType === "limit") payload.limit_price_points = Number($("trading-limit-price")?.value || 0);
   try {
@@ -2134,15 +2212,17 @@ function bindTradingEvents() {
     el.addEventListener("input", updateTradingMarginEstimate);
     el.addEventListener("change", updateTradingMarginEstimate);
   });
-  ["trading-side", "trading-order-type", "trading-quantity", "trading-limit-price"].forEach((id) => {
+  ["trading-side", "trading-order-type", "trading-input-mode", "trading-quantity", "trading-limit-price"].forEach((id) => {
     const el = $(id);
     if (!el) return;
     el.addEventListener("input", () => {
       syncTradingOrderSideTheme();
+      syncTradingOrderInputMode();
       updateTradingOrderEstimate();
     });
     el.addEventListener("change", () => {
       syncTradingOrderSideTheme();
+      syncTradingOrderInputMode();
       updateTradingOrderEstimate();
     });
   });

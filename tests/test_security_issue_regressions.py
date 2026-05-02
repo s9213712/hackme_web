@@ -369,5 +369,8 @@ def test_margin_collateral_and_account_maintenance_are_supported():
     assert "借券放空在價格上漲時會虧損" in trading_engine
     assert "def add_margin_collateral" in trading_engine
     assert "TRADING_MARGIN_COLLATERAL_ADDED" in trading_engine
-    assert '"margin_summary": self._margin_summary_payload(margin_positions)' in dashboard
+    assert '"margin_summary": self._margin_summary_payload(conn, user_id, margin_positions)' in dashboard
     assert '@app.route("/api/trading/margin/<position_uuid>/collateral", methods=["POST"])' in trading_routes
+    assert "def _margin_account_payload" in trading_engine
+    assert "cross_margin_ratio_percent" in trading_engine
+    assert "auto_transfer_rule" in trading_engine

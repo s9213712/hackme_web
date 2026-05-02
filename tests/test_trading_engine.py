@@ -64,6 +64,25 @@ def _notifications(trading, user_id):
         conn.close()
 
 
+def _deplete_trial_credit(trading, user_id=1):
+    dashboard = trading.user_dashboard(user_id=user_id)
+    assert dashboard["funding"]["trial_credit"]
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            """
+            UPDATE trading_trial_credits
+            SET available_points=0, locked_points=0, deployed_points=0,
+                status='depleted', updated_at=datetime('now')
+            WHERE user_id=?
+            """,
+            (int(user_id),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class _FakePriceResponse:
     def __init__(self, payload):
         self.payload = payload
@@ -1339,6 +1358,14 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
             quantity="0.1",
             collateral_points=77,
         )
+    with pytest.raises(ValueError, match="collateral must be lower than notional 500"):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="margin_long",
+            quantity="0.1",
+            collateral_points=500,
+        )
     long_position = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
@@ -1573,7 +1600,8 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
 
 def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     points, trading = _services(tmp_path)
-    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
         settings={
@@ -1599,7 +1627,7 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert result["ok"] is True
     assert result["scanned"] == 1
     assert result["liquidated"][0]["position_uuid"] == opened["position"]["position_uuid"]
-    assert result["liquidated"][0]["risk"]["liquidation_required"] is True
+    assert result["liquidated"][0]["account_risk"]["liquidation_required"] is True
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["margin_positions"][0]["status"] == "liquidated"
     assert points.get_wallet(1)["points_frozen"] == 0
@@ -1607,6 +1635,44 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
     assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
     assert trading.verify_state()["ok"] is True
+
+
+def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_interest_percent_daily": 0,
+            "margin_liquidation_enabled": True,
+            "margin_maintenance_percent": 15,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=3300, confirm_jump=True)
+    dashboard = trading.user_dashboard(user_id=1)
+    position_risk = dashboard["margin_positions"][0]["risk"]
+    account_risk = dashboard["margin_summary"]
+    result = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert position_risk["liquidation_required"] is True
+    assert account_risk["mode"] == "cross_margin"
+    assert account_risk["liquidation_required"] is False
+    assert account_risk["free_margin_points"] > 0
+    assert result["liquidated"] == []
+    assert trading.user_dashboard(user_id=1)["margin_positions"][0]["position_uuid"] == opened["position"]["position_uuid"]
+    assert trading.user_dashboard(user_id=1)["margin_positions"][0]["status"] == "open"
 
 
 def test_margin_scan_notifies_user_when_position_is_near_liquidation(tmp_path):

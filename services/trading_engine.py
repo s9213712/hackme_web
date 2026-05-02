@@ -2102,7 +2102,106 @@ class TradingEngineService:
         item["liquidation_price_points"] = risk.get("liquidation_price_points")
         return item
 
-    def _margin_summary_payload(self, rows):
+    def _margin_free_margin_points(self, conn, user_id):
+        user_id = int(user_id)
+        if self._is_root_user_id(conn, user_id):
+            account = self._root_sim_account(conn, user_id)
+            return int(account["balance_points"] or 0)
+        wallet = self.points_service.ensure_wallet(conn, user_id)
+        wallet_available = int(wallet["soft_balance"] or 0) + int(wallet["hard_balance"] or 0)
+        trial = self._trial_credit_row(conn, user_id)
+        trial_available = int(trial["available_points"] or 0) if trial and trial["status"] == "active" else 0
+        return max(0, wallet_available + trial_available)
+
+    def _margin_account_payload(self, conn, user_id, rows=None):
+        user_id = int(user_id)
+        if rows is None:
+            rows = [
+                self._margin_position_payload_with_risk(conn, row)
+                for row in conn.execute(
+                    "SELECT * FROM trading_margin_positions WHERE user_id=? AND status='open' ORDER BY id ASC",
+                    (user_id,),
+                ).fetchall()
+            ]
+        active = [row for row in rows if row.get("status") == "open"]
+        total_position_equity = 0
+        total_maintenance = 0
+        total_borrowed = 0
+        total_unrealized = 0
+        warning_count = 0
+        unavailable_count = 0
+        for row in active:
+            risk = row.get("risk") if isinstance(row.get("risk"), dict) else {}
+            total_position_equity += int(risk.get("equity_after_points") or row.get("equity_after_points") or 0)
+            total_maintenance += int(risk.get("maintenance_points") or row.get("maintenance_points") or 0)
+            total_borrowed += int(row.get("principal_points") or 0)
+            total_unrealized += int(risk.get("unrealized_pnl_points") or row.get("unrealized_pnl_points") or 0)
+            status = str(risk.get("risk_status") or row.get("risk_status") or "")
+            if status == "unavailable":
+                unavailable_count += 1
+            elif status == "warning":
+                warning_count += 1
+        free_margin = self._margin_free_margin_points(conn, user_id) if active else 0
+        account_equity = total_position_equity + free_margin
+        available_margin = account_equity - total_maintenance
+        ratio = round((account_equity / total_maintenance) * 100, 2) if total_maintenance > 0 else None
+        liquidation_required = bool(active and total_maintenance > 0 and account_equity <= total_maintenance)
+        if liquidation_required:
+            status = "liquidation"
+            reason = "整戶權益已低於總維持保證金，會依風險順序強制平倉"
+        elif unavailable_count:
+            status = "unavailable"
+            reason = f"{unavailable_count} 筆倉位風險資料無法計算"
+        elif active and ratio is not None and ratio < 150.0:
+            status = "warning"
+            reason = "整戶維持率偏低，建議補保證金、平倉或降低倉位"
+        elif warning_count:
+            status = "warning"
+            reason = f"{warning_count} 筆倉位接近風險區"
+        elif active:
+            status = "normal"
+            reason = "整戶維持率正常"
+        else:
+            status = "none"
+            reason = "目前沒有借貸倉位"
+        return {
+            "mode": "cross_margin",
+            "user_id": user_id,
+            "open_count": len(active),
+            "account_equity_points": account_equity,
+            "total_position_equity_points": total_position_equity,
+            "free_margin_points": free_margin,
+            "available_margin_points": available_margin,
+            "total_borrowed_points": total_borrowed,
+            "total_maintenance_requirement_points": total_maintenance,
+            "total_maintenance_points": total_maintenance,
+            "total_unrealized_pnl_points": total_unrealized,
+            "cross_margin_ratio_percent": ratio,
+            "maintenance_ratio_percent": ratio,
+            "liquidation_required": liquidation_required,
+            "liquidation_count": 1 if liquidation_required else 0,
+            "warning_count": warning_count + unavailable_count,
+            "status": status,
+            "reason": reason,
+            "auto_transfer_rule": "available wallet/trial/root-simulated balance is counted as free cross margin during risk checks",
+        }
+
+    def _margin_summary_payload(self, conn, user_id, rows):
+        return self._margin_account_payload(conn, user_id, rows)
+
+    def _margin_liquidation_order_key(self, row):
+        risk = row.get("risk") if isinstance(row.get("risk"), dict) else {}
+        equity = int(risk.get("equity_after_points") or row.get("equity_after_points") or 0)
+        maintenance = int(risk.get("maintenance_points") or row.get("maintenance_points") or 0)
+        deficit = equity - maintenance
+        ratio = risk.get("maintenance_ratio_percent")
+        try:
+            ratio_value = float(ratio)
+        except Exception:
+            ratio_value = -999999.0
+        return (deficit, ratio_value, -int(row.get("principal_points") or 0), int(row.get("id") or 0))
+
+    def _margin_summary_payload_legacy(self, rows):
         active = [row for row in rows if row.get("status") == "open"]
         total_equity = 0
         total_maintenance = 0
@@ -2396,7 +2495,7 @@ class TradingEngineService:
                 "spot_summary": self._spot_summary_payload(positions),
                 "futures_positions": futures_positions,
                 "margin_positions": margin_positions,
-                "margin_summary": self._margin_summary_payload(margin_positions),
+                "margin_summary": self._margin_summary_payload(conn, user_id, margin_positions),
                 "orders": orders,
                 "fills": combined_fills,
                 "spot_fills": fills,
@@ -4100,6 +4199,8 @@ class TradingEngineService:
             if collateral < min_collateral:
                 raise ValueError(f"collateral below minimum {min_collateral}")
             fee = fee_points(notional, float(market["fee_rate_percent"] or 0))
+            if position_type == "margin_long" and collateral >= notional:
+                raise ValueError(f"collateral must be lower than notional {notional} for margin long")
             principal = max(0, notional - collateral) if position_type == "margin_long" else notional
             funding_pool = self._funding_pool_payload(conn, requested_principal=principal)
             if not self._is_root_actor(actor) and principal > int(funding_pool["available_points"] or 0):
@@ -4404,8 +4505,18 @@ class TradingEngineService:
             position = self._accrue_margin_interest(conn, position, actor=actor)
             market = self._market(conn, position["market_symbol"])
             risk = self._margin_risk_payload(conn, position, market)
-            if force_liquidation and not risk.get("liquidation_required"):
-                raise ValueError("margin position recovered above liquidation threshold")
+            account_risk = None
+            if force_liquidation:
+                open_rows = [
+                    self._margin_position_payload_with_risk(conn, row)
+                    for row in conn.execute(
+                        "SELECT * FROM trading_margin_positions WHERE user_id=? AND status='open' ORDER BY id ASC",
+                        (user_id,),
+                    ).fetchall()
+                ]
+                account_risk = self._margin_account_payload(conn, user_id, open_rows)
+                if not account_risk.get("liquidation_required"):
+                    raise ValueError("margin position recovered above liquidation threshold")
             price = risk["price_points"]
             price_source = risk["price_source"]
             close_fee = risk["close_fee_points"]
@@ -4562,6 +4673,7 @@ class TradingEngineService:
                     "close_fee_points": close_fee,
                     "funding_mode": "root_simulated" if is_root_simulated else ("trial_mixed" if collateral_trial else "points_chain"),
                     "risk": risk,
+                    "account_risk": account_risk,
                     "ledger_uuids": ledger_uuids,
                 },
             )
@@ -4605,26 +4717,41 @@ class TradingEngineService:
                 (limit,),
             ).fetchall()
             scanned = len(rows)
+            positions_by_user = {}
             for position in rows:
                 try:
                     position = self._accrue_margin_interest(conn, position, actor=actor)
-                    risk = self._margin_risk_payload(conn, position)
                     market = self._market(conn, position["market_symbol"])
+                    payload = self._margin_position_payload_with_risk(conn, position, market=market)
+                    risk = payload.get("risk") if isinstance(payload.get("risk"), dict) else {}
                     self._notify_margin_risk_alerts(conn, position=position, risk=risk, market=market)
-                    if risk.get("liquidation_required"):
-                        candidates.append({
-                            "position_uuid": position["position_uuid"],
-                            "user_id": int(position["user_id"]),
-                            "market_symbol": position["market_symbol"],
-                            "position_type": position["position_type"],
-                            "risk": risk,
-                        })
+                    positions_by_user.setdefault(int(position["user_id"]), []).append(payload)
                 except Exception as exc:
                     errors.append({
                         "position_uuid": position["position_uuid"],
                         "user_id": int(position["user_id"]),
                         "error": str(exc),
                     })
+            for user_id, user_positions in positions_by_user.items():
+                account_risk = self._margin_account_payload(conn, user_id, user_positions)
+                if not account_risk.get("liquidation_required"):
+                    continue
+                ordered = sorted(
+                    [row for row in user_positions if row.get("status") == "open"],
+                    key=self._margin_liquidation_order_key,
+                )
+                if not ordered:
+                    continue
+                first = ordered[0]
+                candidates.append({
+                    "position_uuid": first["position_uuid"],
+                    "user_id": int(first["user_id"]),
+                    "market_symbol": first["market_symbol"],
+                    "position_type": first["position_type"],
+                    "risk": first.get("risk") or {},
+                    "account_risk": account_risk,
+                    "liquidation_order": [row["position_uuid"] for row in ordered],
+                })
             conn.commit()
         finally:
             conn.close()
@@ -4645,6 +4772,8 @@ class TradingEngineService:
                     "interest_points": int(result.get("interest_points") or 0),
                     "close_fee_points": int(result.get("close_fee_points") or 0),
                     "risk": candidate["risk"],
+                    "account_risk": candidate.get("account_risk"),
+                    "liquidation_order": candidate.get("liquidation_order") or [],
                 })
             except Exception as exc:
                 errors.append({

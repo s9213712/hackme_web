@@ -241,8 +241,11 @@ Trading funds are separated by account type:
 - Contract/futures functionality is root-only at this stage. Root can open and
   close simulated long/short positions; non-root users can only use spot.
 - Borrow trading is experimental and root-controlled. When enabled, the server
-  records margin collateral freezes in PointsChain, scans for liquidation, and
-  verifies collateral locks during trading state checks.
+  records margin collateral freezes in PointsChain, shows account-level
+  cross-margin equity/maintenance/free-margin status, scans for liquidation,
+  and verifies collateral locks during trading state checks. Individual rows
+  still show a per-position estimated liquidation price, but actual forced
+  liquidation is based on whole-account maintenance.
 
 ## Account and Permission Model
 
