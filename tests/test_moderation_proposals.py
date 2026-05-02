@@ -67,7 +67,8 @@ def _seed_users(db_path):
             (2, 'admin1', 'manager', 'active', 'normal'),
             (3, 'admin2', 'manager', 'active', 'normal'),
             (4, 'alice', 'user', 'active', 'normal'),
-            (5, 'admin3', 'manager', 'active', 'normal');
+            (5, 'admin3', 'manager', 'active', 'normal'),
+            (6, 'supervisor', 'super_admin', 'active', 'normal');
         """
     )
     conn.commit()
@@ -143,6 +144,22 @@ def test_governance_cannot_target_self_or_be_voted_by_target(tmp_path):
     target_vote = client.post(f"/api/admin/moderation/proposals/{proposal_id}/vote", json={"vote": "approve"})
     assert target_vote.status_code == 403
     assert target_vote.get_json()["msg"] == "治理對象不可投票"
+
+
+def test_manager_cannot_create_governance_proposal_against_super_admin(tmp_path):
+    db_path = tmp_path / "moderation.db"
+    _seed_users(db_path)
+    revoked = []
+    actor_box = {"actor": {"id": 2, "username": "admin1", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box, revoked).test_client()
+
+    create = client.post(
+        "/api/admin/moderation/proposals",
+        json={"target_user_id": 6, "action_type": "warn", "reason": "privilege probe"},
+    )
+
+    assert create.status_code == 403
+    assert "同級或更高權限" in create.get_json()["msg"]
 
 
 def test_high_risk_governance_requires_root_and_two_managers(tmp_path):

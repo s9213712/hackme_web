@@ -98,7 +98,7 @@ def _init_db(path):
     conn.close()
 
 
-def _build_app(db_path, *, require_email_verification=False, password_reset_mode="admin_review"):
+def _build_app(db_path, *, require_email_verification=False, password_reset_mode="admin_review", rate_limiter=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -150,7 +150,7 @@ def _build_app(db_path, *, require_email_verification=False, password_reset_mode
         "hash_password": lambda value: value,
         "is_feature_enabled": lambda name: name == "feature_account_security_enabled",
         "is_ip_blocked": lambda ip: False,
-        "is_rate_limited": lambda key, max_req, window_sec: (False, {"limit": max_req}),
+        "is_rate_limited": rate_limiter or (lambda key, max_req, window_sec: (False, {"limit": max_req})),
         "json_resp": _json_resp,
         "make_csrf_token": lambda: "csrf",
         "make_token": lambda username: "session-token",
@@ -239,6 +239,25 @@ def test_password_reset_email_token_mode_uses_one_time_token(tmp_path):
     assert latest_pw == "NewPassword123!"
     assert revoked == 1
     assert used_count == 1
+
+
+def test_password_reset_confirm_is_rate_limited(tmp_path):
+    db_path = tmp_path / "recovery.db"
+    _init_db(db_path)
+
+    def limiter(key, max_req, window_sec):
+        if key.startswith("password-reset-confirm:"):
+            return True, {"limit": max_req}
+        return False, {"limit": max_req}
+
+    client = _build_app(db_path, password_reset_mode="email_token", rate_limiter=limiter).test_client()
+    limited = client.post(
+        "/api/password-reset/confirm",
+        json={"token": "guess", PASSWORD_FIELD: "NewPassword123!", PASSWORD_CONFIRM_FIELD: "NewPassword123!"},
+    )
+
+    assert limited.status_code == 429
+    assert "過於頻繁" in limited.get_json()["msg"]
 
 
 def test_root_password_reset_bypasses_password_policy(tmp_path):

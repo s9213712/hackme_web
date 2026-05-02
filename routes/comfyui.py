@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import json
 import mimetypes
 import os
 import re
@@ -28,6 +30,7 @@ DEFAULT_GENERATION_TIMEOUT_SECONDS = 600
 MAX_GENERATION_TIMEOUT_SECONDS = 1800
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 
 
 class _MemoryFile:
@@ -68,6 +71,90 @@ def register_comfyui_routes(app, deps):
             return actor[key]
         except Exception:
             return actor.get(key, default) if hasattr(actor, "get") else default
+
+    def _image_ref_payload(image_ref):
+        if not isinstance(image_ref, dict):
+            return None
+        filename = str(image_ref.get("filename") or "").strip()
+        image_type = str(image_ref.get("type") or "output").strip() or "output"
+        subfolder = str(image_ref.get("subfolder") or "").strip()
+        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+            return None
+        if image_type not in {"input", "output", "temp"}:
+            return None
+        if subfolder.startswith("/") or subfolder.startswith("\\") or ".." in subfolder.replace("\\", "/").split("/"):
+            return None
+        return {"filename": filename, "subfolder": subfolder, "type": image_type}
+
+    def _image_ref_key(image_ref):
+        payload = _image_ref_payload(image_ref)
+        if payload is None:
+            return None
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    def _ensure_comfyui_image_ref_schema(conn):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comfyui_image_refs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ref_key TEXT NOT NULL UNIQUE,
+                owner_user_id INTEGER NOT NULL,
+                prompt_id TEXT,
+                image_ref_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_comfyui_image_refs_owner ON comfyui_image_refs(owner_user_id, created_at)")
+
+    def _register_comfyui_image_refs(conn, *, actor, images):
+        _ensure_comfyui_image_ref_schema(conn)
+        now = datetime.now().isoformat()
+        for item in images:
+            image_ref = item.get("image_ref") if isinstance(item, dict) else None
+            payload = _image_ref_payload(image_ref)
+            ref_key = _image_ref_key(payload)
+            if not payload or not ref_key:
+                continue
+            conn.execute(
+                """
+                INSERT INTO comfyui_image_refs (ref_key, owner_user_id, prompt_id, image_ref_json, created_at, last_used_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ref_key) DO UPDATE SET
+                    owner_user_id=excluded.owner_user_id,
+                    prompt_id=excluded.prompt_id,
+                    image_ref_json=excluded.image_ref_json,
+                    last_used_at=excluded.last_used_at
+                """,
+                (
+                    ref_key,
+                    int(_actor_value(actor, "id")),
+                    str(item.get("prompt_id") or ""),
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+
+    def _verify_comfyui_image_ref_owner(conn, *, actor, image_ref, prompt_id=None):
+        _ensure_comfyui_image_ref_schema(conn)
+        ref_key = _image_ref_key(image_ref)
+        if not ref_key:
+            return False
+        row = conn.execute("SELECT owner_user_id, prompt_id FROM comfyui_image_refs WHERE ref_key=?", (ref_key,)).fetchone()
+        if not row or int(row["owner_user_id"]) != int(_actor_value(actor, "id")):
+            return False
+        if prompt_id and row["prompt_id"] and str(row["prompt_id"]) != str(prompt_id):
+            return False
+        conn.execute("UPDATE comfyui_image_refs SET last_used_at=? WHERE ref_key=?", (datetime.now().isoformat(), ref_key))
+        return True
+
+    def _assert_reasonable_image_size(image):
+        size = len(getattr(image, "data", b"") or b"")
+        if size > MAX_COMFYUI_FETCH_IMAGE_BYTES:
+            raise ComfyUIError(f"ComfyUI image too large: {size} bytes")
 
     def _root_or_403():
         actor, err = _actor_or_401()
@@ -715,6 +802,7 @@ def register_comfyui_routes(app, deps):
         image_ref = result["image_ref"]
         conn = get_db()
         try:
+            _register_comfyui_image_refs(conn, actor=actor, images=images)
             create_notification_if_enabled(
                 conn,
                 user_id=_actor_value(actor, "id"),
@@ -780,13 +868,17 @@ def register_comfyui_routes(app, deps):
         image_ref = data.get("image_ref")
         if not isinstance(image_ref, dict):
             return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
-        active_client = _client()
-        try:
-            image = active_client.fetch_image(image_ref)
-        except ComfyUIError as exc:
-            return _json_error_from_comfy(exc, active_client)
         conn = get_db()
         try:
+            if not _verify_comfyui_image_ref_owner(conn, actor=actor, image_ref=image_ref):
+                audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=save,file={image_ref.get('filename', '-')}")
+                return json_resp({"ok": False, "msg": "找不到可存取的產圖預覽"}), 404
+            active_client = _client()
+            try:
+                image = active_client.fetch_image(image_ref)
+                _assert_reasonable_image_size(image)
+            except ComfyUIError as exc:
+                return _json_error_from_comfy(exc, active_client)
             upload_result, storage_file, album, msg = _save_fetched_image(conn, actor=actor, data=data, image=image)
             if msg:
                 conn.rollback()
@@ -811,6 +903,14 @@ def register_comfyui_routes(app, deps):
         image_ref = data.get("image_ref")
         if not isinstance(image_ref, dict):
             return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
+        conn = get_db()
+        try:
+            if not _verify_comfyui_image_ref_owner(conn, actor=actor, image_ref=image_ref, prompt_id=data.get("prompt_id")):
+                audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=discard,file={image_ref.get('filename', '-')}")
+                return json_resp({"ok": False, "msg": "找不到可丟棄的產圖預覽"}), 404
+            conn.commit()
+        finally:
+            conn.close()
         active_client = _client()
         try:
             if not hasattr(active_client, "discard_image"):
@@ -849,9 +949,14 @@ def register_comfyui_routes(app, deps):
             else:
                 if not isinstance(image_ref, dict):
                     return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
+                if not _verify_comfyui_image_ref_owner(conn, actor=actor, image_ref=image_ref):
+                    audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=share,file={image_ref.get('filename', '-')}")
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": "找不到可分享的產圖預覽"}), 404
                 active_client = _client()
                 try:
                     image = active_client.fetch_image(image_ref)
+                    _assert_reasonable_image_size(image)
                 except ComfyUIError as exc:
                     return _json_error_from_comfy(exc, active_client)
                 upload_result, storage_file, album, msg = _save_fetched_image(conn, actor=actor, data=data, image=image)
