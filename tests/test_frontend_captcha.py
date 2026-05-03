@@ -13,9 +13,14 @@ def test_captcha_ui_and_settings_are_wired():
     assert 'id="captcha-field"' in index_html
     assert 'id="captcha-answer"' in index_html
     assert 'id="s-captcha-mode"' in index_html
+    assert 'id="captcha-turnstile-site-key-field" style="display:none;"' in index_html
     assert "async function loadCaptchaChallenge()" in auth_js
     assert 'apiFetch(API + "/captcha/challenge"' in auth_js
     assert "captcha_answer" in auth_js
     assert "captcha_mode" in admin_js
     assert "captcha_ttl_seconds" in admin_js
+    assert "function updateCaptchaModeFields()" in admin_js
+    assert "input.disabled = !showTurnstile;" in admin_js
+    assert "updateCaptchaModeFields();" in admin_js
     assert 'captchaRefresh.addEventListener("click", loadCaptchaChallenge)' in bootstrap_js
+    assert '$("s-captcha-mode").addEventListener("change", updateCaptchaModeFields);' in bootstrap_js

@@ -1,4 +1,5 @@
 import ast
+import re
 from pathlib import Path
 
 
@@ -17,7 +18,7 @@ def _release_id():
 
 def test_release_id_is_synced_to_public_docs():
     release_id = _release_id()
-    assert release_id == "2026.05.02-047"
+    assert re.fullmatch(r"\d{4}\.\d{2}\.\d{2}-\d{3}", release_id)
     for rel in ("README.md", "docs/README.zh-TW.md", "docs/For_developer.md", "docs/UPDATE_SUMMARY.md"):
         assert release_id in (ROOT / rel).read_text(encoding="utf-8")
 
@@ -39,10 +40,24 @@ def test_root_keeps_only_readme_markdown_and_docs_has_index():
 
     docs_index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     expected_links = [
-        "README.zh-TW.md",
-        "WEB.md",
+        "00_START_HERE.md",
+        "01_DEPLOY_QUICKSTART.md",
+        "02_DEPLOY_PRODUCTION.md",
+        "03_ADMIN_GUIDE.md",
+        "04_USER_GUIDE.md",
+        "05_FEATURES_OVERVIEW.md",
+        "06_SECURITY_MODEL.md",
+        "07_POINTSCHAIN.md",
+        "08_TRADING_ENGINE.md",
+        "09_SNAPSHOT_RESET_RESTORE.md",
+        "10_WEB_TERMINAL.md",
+        "11_QA_TESTING.md",
+        "12_TROUBLESHOOTING.md",
         "For_developer.md",
         "SECURITY.md",
+        "WEB.md",
+        "TRADING.md",
+        "VIDEO_PLATFORM.md",
         "PHASE_STATUS.md",
         "implementation_workflow.md",
         "BRANCHING_AND_RELEASE.md",

@@ -159,6 +159,7 @@ def _build_app(db_path, *, require_email_verification=False, password_reset_mode
         "record_login_failure": lambda *args, **kwargs: None,
         "record_security_event": lambda *args, **kwargs: None,
         "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
         "revoke_user_sessions": revoke_sessions,
         "score_password_strength": lambda value: {"score": 4},
         "store_csrf_token": lambda *args, **kwargs: None,

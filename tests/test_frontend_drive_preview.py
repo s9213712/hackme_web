@@ -144,10 +144,10 @@ def test_album_viewer_has_dedicated_module():
     assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
-    assert '/js/35-drive.js?v=20260503-remote-download-stable' in index_html
-    assert '/styles.css?v=20260503-comfyui-lora' in index_html
-    assert '/js/00-core.js?v=20260430-trading-page-split' in index_html
-    assert '/js/40-auth-users.js?v=20260503-account-delete-feedback' in index_html
+    assert '/js/35-drive.js?v=20260503-feature-bundles' in index_html
+    assert '/styles.css?v=20260503-appearance-v2' in index_html
+    assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
+    assert '/js/40-auth-users.js?v=20260503-appearance-v2' in index_html
     assert 'src="/js/50-admin.js' in index_html
     assert 'id="root-storage-user-select"' in index_html
     assert 'id="root-storage-save-btn"' in index_html
@@ -209,9 +209,10 @@ def test_album_viewer_has_dedicated_module():
     assert "buildDriveE2eePreview(file.file_id, csrf)" in drive_js
     assert "const blob = await fetchDrivePreviewContent(file.file_id, csrf);" not in drive_js
     assert 'data-drive-action="add-cloud-to-album"' in drive_js
-    assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js
+    assert 'tabModuleAlbums.style.display = (canAccessModule("privacy_uploads") && isFeatureEnabledForUi("feature_storage_albums_enabled", false)) ? "" : "none"' in core_js
     assert "SIDEBAR_MENU_CONFIG" in core_js
     assert '{ label: "相簿", action: "module:albums" }' not in core_js
+    assert 'requiresFeatures: ["feature_storage_albums_enabled"]' in core_js
     assert "SIDEBAR_ICON_PATHS" in core_js
     assert "sidebar-footer" in index_html
     assert "sidebar-current-user" in index_html
@@ -227,14 +228,21 @@ def test_album_viewer_has_dedicated_module():
     assert 'id="security-profile-load-current-btn"' in index_html
     assert 'id="security-mode-profile-preview"' in index_html
     assert 'id="server-mode-profile-preview"' in index_html
+    assert 'id="server-mode-token-hint"' in index_html
+    assert 'id="server-mode-internal-test-panel" style="display:none;"' in index_html
+    assert 'id="server-mode-tester-token-panel" style="display:none;"' in index_html
     assert "loadCurrentSecurityProfileDraft" in admin_js
     assert "renderSecurityProfilePreview" in admin_js
     assert "function applySecurityProfileToInputs" in admin_js
     assert "function applySecurityProfileDataToInputs" in admin_js
     assert "function previewSecurityProfileSelection" in admin_js
     assert "function bindSecurityProfileSelect" in admin_js
+    assert "function updateServerModeTokenPanels(modeOverride = null)" in admin_js
     assert '"feature_audit_log_enabled"' in admin_js
     assert '"feature_economy_enabled"' in admin_js
+    assert "FEATURE_SERVICE_BUNDLES" in admin_js
+    assert "feature-bundle-toolbar" in index_html
+    assert "feature-advisory-list" in index_html
     assert 'id="sc-feature-audit-log-enabled"' in index_html
     assert 'id="sc-feature-economy-enabled"' in index_html
     assert 'previewSecurityProfileSelection("security-mode-select", "security-mode-profile-preview", "sc")' in bootstrap_js
@@ -244,6 +252,7 @@ def test_album_viewer_has_dedicated_module():
     assert "按套用才會寫入伺服器" in admin_js
     assert "await loadSettings();" in admin_js
     assert "populateProfileSelect(\"server-mode-select\"" in admin_js
+    assert 'updateServerModeTokenPanels(serverModeSelect.value)' in bootstrap_js
     assert 'confirm: "RESET_RUNTIME_STATE"' in admin_js
     assert '"RUN_RESET"' not in admin_js
     assert "icon-action-btn" in index_html
@@ -255,7 +264,9 @@ def test_album_viewer_has_dedicated_module():
     assert 'switchModuleTab("albums")' in bootstrap_js
     assert "sidebarToggle.addEventListener" in bootstrap_js
     assert 'normTab === "albums"' in admin_js
+    assert "renderStorageFeatureDisabled" in drive_js
     assert ".drive-collapsible-panel" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    assert ".settings-feature-advisory" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
     assert ".album-preview-nav" in (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
 

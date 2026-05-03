@@ -12,9 +12,9 @@ def test_chat_room_delete_ui_is_wired():
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert "/js/20-chat.js?v=20260429-official-chat-protect" in index_html
-    assert "/js/00-core.js?v=20260430-trading-page-split" in index_html
-    assert "/js/90-bootstrap.js?v=20260430-trading-page-split" in index_html
-    assert "/styles.css?v=20260502-mobile-bugfixes" in index_html
+    assert "/js/00-core.js?v=20260503-appearance-v2" in index_html
+    assert "/js/90-bootstrap.js?v=20260503-appearance-v2" in index_html
+    assert "/styles.css?v=20260503-appearance-v2" in index_html
     assert 'id="chat-friend-username"' in index_html
     assert 'id="chat-pending-attachment-list"' in index_html
     assert 'data-chat-sticker="smile"' in index_html

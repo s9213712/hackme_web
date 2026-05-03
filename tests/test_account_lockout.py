@@ -62,6 +62,7 @@ def _build_app(
         "record_login_failure": lambda *args, **kwargs: None,
         "record_security_event": lambda *args, **kwargs: (event_log.append((args, kwargs)) if event_log is not None else None),
         "require_csrf": lambda fn: fn,
+        "require_csrf_safe": lambda fn: fn,
         "score_password_strength": lambda value: {"score": 4, "missing": []},
         "role_rank": lambda role: 0,
         "store_csrf_token": lambda *args, **kwargs: None,

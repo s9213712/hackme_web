@@ -800,10 +800,10 @@ class _FakeServerModeService:
         self.saved_profiles = []
 
     def get_current_mode(self):
-        return {"current_mode": "preprod", "previous_mode": None, "active_snapshot_id": None}
+        return {"current_mode": "dev_ready", "previous_mode": None, "active_snapshot_id": None}
 
     def list_profiles(self):
-        return [{"name": "preprod", "label": "preprod（準上線）", "is_builtin": True, "settings": {}, "thresholds": {}}] + self.saved_profiles
+        return [{"name": "dev_ready", "label": "dev ready（準上線 / 開發就緒）", "is_builtin": True, "settings": {}, "thresholds": {}}] + self.saved_profiles
 
     def save_profile(self, **kwargs):
         profile = {
@@ -821,7 +821,7 @@ class _FakeServerModeService:
         return {"ok": True, "mode": {"current_mode": kwargs["target_mode"]}}
 
     def exit_superweak(self, **kwargs):
-        return {"ok": True, "mode": {"current_mode": "preprod"}}
+        return {"ok": True, "mode": {"current_mode": "dev_ready"}}
 
     def create_mode_checkpoint(self, **kwargs):
         return {"ok": True, "checkpoint_id": "chk_test", "snapshot_id": "snap_20260427_153000_abcdef"}
@@ -1016,7 +1016,7 @@ def test_security_profile_api_validates_and_server_mode_lists_profiles():
 
     mode = client.get("/api/admin/server-mode")
     assert mode.status_code == 200
-    assert mode.get_json()["profiles"][0]["name"] == "preprod"
+    assert mode.get_json()["profiles"][0]["name"] == "dev_ready"
 
     invalid = client.post("/api/admin/security-center/profiles", json={
         "name": "custom_lock",

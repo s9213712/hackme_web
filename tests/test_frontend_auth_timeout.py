@@ -24,6 +24,19 @@ def test_inactivity_timeout_message_uses_configured_duration():
     assert "showLoginScreen();" in auth
     assert "if (!res.ok && !immediate)" in auth
     assert "已超過 3 分鐘未操作" not in core
+    assert "function setInactivitySuspendState(reason, active, labelText = \"系統工作進行中\")" in core
+    assert "閒置登出：${currentInactivitySuspendLabel()}，暫停" in core
+    assert '$("li-msg") || $("settings-msg")' not in core
+
+
+def test_settings_success_banner_auto_clears_and_is_not_reused_by_idle_warning():
+    admin = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+
+    assert "let settingsStatusAutoClearTimer = null;" in admin
+    assert "const autoClearMs = Number(options.autoClearMs || 0);" in admin
+    assert "settingsStatusAutoClearTimer = setTimeout(() => {" in admin
+    assert 'setSettingsStatus(\n      `${warnings.length ? "設定已儲存，但功能組合仍未完整" : "✅ 設定已儲存"}' in admin
+    assert "{ autoClearMs: warnings.length ? 0 : 4000 }" in admin
 
 
 def test_pending_idle_timeout_blocks_auto_session_restore_on_refresh():
@@ -32,6 +45,17 @@ def test_pending_idle_timeout_blocks_auto_session_restore_on_refresh():
     assert "hasIdleTimeoutLogoutPending()" in bootstrap
     assert "await forceIdleTimeoutLogout();" in bootstrap
     assert "return;" in bootstrap
+
+
+def test_comfyui_long_running_work_suspends_idle_logout():
+    comfyui = (ROOT / "public" / "js" / "36-comfyui.js").read_text(encoding="utf-8")
+
+    assert 'function setComfyuiIdleSuspend(reason, active, label)' in comfyui
+    assert 'setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");' in comfyui
+    assert 'setComfyuiIdleSuspend("comfyui_start_local", true, "ComfyUI 啟動中");' in comfyui
+    assert 'setComfyuiIdleSuspend("comfyui_start_local", false, "ComfyUI 啟動中");' in comfyui
+    assert 'setComfyuiIdleSuspend("comfyui_model_download", true, "ComfyUI 模型下載中");' in comfyui
+    assert 'setComfyuiIdleSuspend("comfyui_model_download", false, "ComfyUI 模型下載中");' in comfyui
 
 
 def test_internal_test_login_token_is_hidden_outside_internal_test_mode():

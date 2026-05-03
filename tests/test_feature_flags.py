@@ -84,6 +84,64 @@ def test_notifications_remain_enabled_after_management_only_reset():
     assert settings.MANAGEMENT_ONLY_RESET_SETTINGS["feature_reports_notifications_enabled"] is True
 
 
+def test_feature_disabled_payload_names_missing_parent_feature():
+    db_path = ":memory:"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    original_state = dict(settings._STATE)
+    original_cache = settings._SYSTEM_SETTINGS
+    try:
+        settings.configure_settings_service(get_db=get_db, load_json=lambda path: {}, base_dir=".")
+        settings._SYSTEM_SETTINGS = {
+            **settings.DEFAULT_SETTINGS,
+            "feature_trading_enabled": False,
+            "feature_economy_enabled": False,
+        }
+        payload = settings.build_feature_disabled_payload("feature_trading_enabled")
+        assert payload["feature"] == "feature_trading_enabled"
+        assert payload["feature_label"] == "積分交易所"
+        assert payload["missing_required"] == ["feature_economy_enabled"]
+        assert "PointsChain 積分系統" in payload["msg"]
+    finally:
+        settings._STATE.clear()
+        settings._STATE.update(original_state)
+        settings._SYSTEM_SETTINGS = original_cache
+
+
+def test_feature_disabled_payload_lists_enabled_dependents_of_blocked_parent():
+    db_path = ":memory:"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    original_state = dict(settings._STATE)
+    original_cache = settings._SYSTEM_SETTINGS
+    try:
+        settings.configure_settings_service(get_db=get_db, load_json=lambda path: {}, base_dir=".")
+        settings._SYSTEM_SETTINGS = {
+            **settings.DEFAULT_SETTINGS,
+            "feature_privacy_uploads_enabled": False,
+            "feature_storage_albums_enabled": True,
+            "feature_videos_enabled": True,
+            "feature_comfyui_enabled": True,
+        }
+        payload = settings.build_feature_disabled_payload("feature_privacy_uploads_enabled")
+        assert payload["feature_label"] == "隱私分級上傳 / E2EE"
+        assert payload["enabled_dependents_required"] == ["feature_storage_albums_enabled"]
+        assert "Storage / 相簿" in payload["msg"]
+        assert "影音分享" in payload["msg"] or "ComfyUI AI 產圖" in payload["msg"]
+    finally:
+        settings._STATE.clear()
+        settings._STATE.update(original_state)
+        settings._SYSTEM_SETTINGS = original_cache
+
+
 def test_file_quota_endpoint_returns_user_usage(tmp_path):
     db_path = tmp_path / "files.db"
     app = Flask(__name__)

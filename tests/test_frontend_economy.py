@@ -81,7 +81,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
-    assert "/js/50-admin.js?v=20260501-margin-policy-settings" in index_html
+    assert "/js/50-admin.js?v=20260503-appearance-v2" in index_html
     assert "/js/56-trading.js?v=" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
@@ -93,7 +93,7 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetchEconomyJson("/root/points/chain/recovery/approve"' in economy_js
     assert "async function autoHandlePointsChainRecovery()" in economy_js
     assert '["economy-recovery-auto-handle-btn", autoHandlePointsChainRecovery]' in economy_js
-    assert "/js/90-bootstrap.js?v=20260430-trading-page-split" in index_html
+    assert "/js/90-bootstrap.js?v=20260503-appearance-v2" in index_html
     assert 'const rootMode = currentUser === "root";' in economy_js
     assert 'const canManagePoints = canManageEconomyPoints();' in economy_js
     assert 'adminCard.style.display = canManagePoints ? "" : "none"' in economy_js
