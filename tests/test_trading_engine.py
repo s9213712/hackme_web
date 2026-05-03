@@ -196,6 +196,34 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     assert points.get_wallet(1)["points_balance"] == 1746
 
 
+def test_fee_points_rounds_half_up_for_integer_point_ledger():
+    assert trading_engine_module.fee_points(100, 0.3) == 0
+    assert trading_engine_module.fee_points(167, 0.3) == 1
+    assert trading_engine_module.fee_points(334, 0.3) == 1
+    assert trading_engine_module.fee_points(500, 0.3) == 2
+
+
+def test_small_spot_buy_does_not_overcharge_integer_fee(tmp_path):
+    _, trading = _services(tmp_path)
+
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.02",
+    )
+
+    assert result["order"]["status"] == "filled"
+    assert result["order"]["fee_points"] == 0
+
+    dashboard = trading.user_dashboard(user_id=1)
+    fill = dashboard["fills"][0]
+    assert fill["notional_points"] == 100
+    assert fill["fee_points"] == 0
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 900
+
+
 def test_trading_bot_workflow_triggers_existing_order_path(tmp_path):
     _, trading = _services(tmp_path)
     bot = trading.save_trading_bot(
@@ -716,7 +744,7 @@ def test_grid_backtest_matches_live_grid_order_lifecycle(tmp_path):
     assert result["ok"] is True
     assert result["strategy"] == "grid"
     assert result["trade_count"] == 7
-    assert result["final_value_points"] == 1065
+    assert result["final_value_points"] == 1072
     assert result["trades"][0]["index"] == 1
     assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
     assert all(not (row["index"] == 0 and row["price_points"] == 100) for row in result["trades"])
@@ -1016,9 +1044,9 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position_after_sell["gross_cost_points"] == 300
     assert position_after_sell["current_value_points"] == 360
     assert position_after_sell["estimated_buy_fee_points"] == 1
-    assert position_after_sell["estimated_exit_fee_points"] == 2
-    assert position_after_sell["cost_basis_points"] == 303
-    assert position_after_sell["unrealized_pnl_points"] == 57
+    assert position_after_sell["estimated_exit_fee_points"] == 1
+    assert position_after_sell["cost_basis_points"] == 302
+    assert position_after_sell["unrealized_pnl_points"] == 58
     assert position_after_sell["realized_pnl_points"] == 38
     assert position_after_sell["total_fee_points"] == 3
     assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 38
@@ -1287,7 +1315,7 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 402
+    assert order["trial_frozen_points"] == 401
 
     cancelled = trading.cancel_order(actor=_actor(), order_uuid=order["order_uuid"])
     assert cancelled["status"] == "cancelled"
@@ -1313,7 +1341,7 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 402
+    assert order["trial_frozen_points"] == 401
 
     trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=3900, confirm_jump=True)
     matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
@@ -1855,8 +1883,8 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     assert closed["position"]["status"] == "closed"
     assert closed["interest_points"] == 0
     assert closed["position"]["interest_paid_points"] == 13
-    assert closed["delta_points"] == 98
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9919
+    assert closed["delta_points"] == 99
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9917
     assert trading.verify_state()["ok"] is True
 
 

@@ -37,11 +37,18 @@ PYTHONPATH=. python3 -m pytest -q tests
 security/run_functional_smoke.sh --port 50741
 ```
 
+`tests/smoke_suite.py`、`security/run_functional_smoke.sh`、`security/run_pentest.sh`
+的 smoke 預設帳密現在已對齊為
+`RootSmoke123! / ManagerSmoke123! / TestSmoke123!`。
+
 #### 4. 權限與安全掃描
 
 ```bash
 security/run_pentest.sh --target https://127.0.0.1:5000
 ```
+
+若只跑 `whole-site-production-gate`，wrapper 會自動把 timeout floor 拉高到
+`900s`，避免舊版預設 `180s` 永遠先把 gate timeout 掉。
 
 #### 5. 角色 / 權限專測
 
@@ -60,12 +67,16 @@ PYTHONPATH=. python3 security/trading_stress_pentest.py --target https://127.0.0
 - `scripts/pre_push_checks.py`
   是本機快速 gate，不預設啟 server。
 - `security/run_functional_smoke.sh`
-  是隔離 runtime 的主要功能回歸。
+  是隔離 runtime 的主要功能回歸；它會保留自己的 `/tmp` runtime 邊界。
 - `security/run_pentest.sh`
   是外層 orchestrator，會呼叫多種檢查，包含 `functional-permissions`、
-  server-mode-v2、whole-site-production-gate 等子檢查。
+  server-mode-v2、whole-site-production-gate 等子檢查；whole-site gate 會套
+  額外 timeout floor。
 - `security/functional_permission_pentest.py`
   是權限濫用 / 角色矩陣專測，不是一般 port scanner。
+- `tests/smoke_suite.py`
+  是極薄的 Python smoke；它現在會在跑完後把暫時打開的 feature flags 還原，
+  避免污染同一個測試 runtime。
 - `QA_MISSION_FOR_AGENTS.md`
   是 agent 深度 QA runbook，包含人工逐步測試、DB 對帳、異常輸入矩陣與直接修正模式。
 
@@ -88,6 +99,9 @@ PYTHONPATH=. python3 security/trading_stress_pentest.py --target https://127.0.0
   不要執行 pentest / stress。
 - 測試污染 repo runtime：
   請改用隔離 `/tmp` runtime，參考 `run_functional_smoke.sh` 與 `QA_MISSION_FOR_AGENTS.md`。
+- `whole-site-production-gate` 還是被 wrapper 提前 timeout：
+  先確認是不是舊版腳本；新版會自動給 `900s` floor。若仍不夠，再明確調高
+  `--tool-timeout`。
 - 看起來像重複腳本：
   先看這份文件的「腳本關係」；`run_pentest.sh` 多半是 wrapper，不等於和子腳本重複。
 

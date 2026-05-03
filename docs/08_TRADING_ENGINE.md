@@ -34,6 +34,8 @@
 - 前端報價與圖表是參考值，最終執行價格由後端重抓與驗證
 - 使用者交易資金走 PointsChain
 - root 有獨立模擬餘額，不污染正式點數
+- POINTS 帳本仍是整數制；交易手續費自 `2026.05.03-063` 起改用 `Decimal`
+  計算後四捨五入到最近整點，避免舊版小額單一律 `ceil` 造成系統性超收
 - 價格來源失效、價格跳動過大或借貸池不足時，系統應 fail closed
 
 ## 失敗情境與提示
@@ -41,7 +43,8 @@
 - 交易頁顯示數字，但成交失敗：
   可能是後端重新驗價、餘額不足、circuit breaker、live provider 失效。
 - 小額交易顯示成 0 或精度怪異：
-  應視為嚴重缺陷，不是純 UI 問題。
+  應視為嚴重缺陷，不是純 UI 問題。先確認目前 release 的整數 POINT fee
+  rounding 規則，並用同一套規則手算。
 - root 開了 trading，但 economy / PointsChain 沒先驗證：
   這是不完整部署。
 - 網格 / workflow bot 看得到但不該直接上 production：

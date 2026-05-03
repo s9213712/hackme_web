@@ -1,6 +1,30 @@
 # Update Summary
 
-Release ID: `2026.05.03-062`
+Release ID: `2026.05.03-063`
+
+## 2026.05.03-063
+
+## Highlights
+
+- QA tooling defaults were aligned. `tests/smoke_suite.py` now uses the same
+  smoke credentials as `run_functional_smoke.sh` and
+  `functional_permission_pentest`, so the default runbook no longer breaks on
+  mismatched rotated passwords.
+- The Python smoke suite now snapshots and restores feature flags after it
+  temporarily enables chat/community/games-related modules. This prevents the
+  suite from leaving `feature_economy_enabled` or sibling flags in a mutated
+  state for later checks in the same runtime.
+- `security/run_pentest.sh` now gives `whole-site-production-gate` a higher
+  timeout floor automatically, so the wrapper's generic `180s` limit no longer
+  kills that gate before the underlying Python checker finishes.
+- Trading fee calculation for integer POINT ledgers now uses `Decimal` plus
+  round-half-up instead of always `ceil`-biasing small orders upward. This
+  removes the strongest systematic overcharge behavior on small spot trades.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_smoke_suite_regressions.py tests/test_pentest_script.py tests/test_trading_engine.py`
+- `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.03-062
 

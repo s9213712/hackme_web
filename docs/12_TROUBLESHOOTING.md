@@ -125,6 +125,15 @@
 - circuit breaker 是否擋下異常價格
 - 餘額 / 借貸池 / 手續費條件是否不足
 
+#### 11-1. 小額交易的手續費和你手算不同
+
+先分辨：
+
+- 你是不是還在用舊版 `ceil` 心智模型手算
+- 目前 release 是否已經是 `2026.05.03-063` 之後；新版整數 POINT fee 會用
+  `Decimal` 後端計算後四捨五入到最近整點
+- 你比較的是 `預估值` 還是實際成交 fill
+
 ### 恢復 / reset 類
 
 #### 12. reset 後資料不見
@@ -155,6 +164,9 @@
   先重新整理、重新登入、重新取 token。
 - 問題看起來是功能 bug，但其實是部署拓樸錯誤：
   先檢查 HTTPS、proxy、runtime path、XFF 信任設定。
+- 問題看起來像是 QA 腳本互打：
+  先確認 smoke 與 pentest 是否共用同一組 smoke 帳密，以及 whole-site gate
+  是否已用新版 timeout floor。
 
 ## 測試方式
 

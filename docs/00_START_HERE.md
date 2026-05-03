@@ -47,6 +47,10 @@
    feature flags。
 3. QA 與驗車流程看 [11_QA_TESTING.md](11_QA_TESTING.md)；
    agent 級深度 runbook 看 [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)。
+4. 若你要直接接手 smoke / pentest，自 `2026.05.03-063` 起，
+   `smoke_suite.py`、`run_functional_smoke.sh` 與
+   `run_pentest.sh --only functional-permissions` 的預設 smoke 帳密已對齊，
+   可先沿用 `RootSmoke123! / ManagerSmoke123! / TestSmoke123!` 這組隔離測試密碼。
 
 ## 原理
 

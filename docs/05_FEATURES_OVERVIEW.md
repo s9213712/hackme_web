@@ -121,8 +121,8 @@
 - 一句話說明：提供現貨交易、借貸交易、DCA / 網格 / workflow bot 與回測。
 - 設計目的：驗證金額、風控、撮合、PointsChain 結算與策略流程。
 - 使用方法：root 先啟用 economy / trading，再讓使用者交易或由 root 做模擬與設定。
-- 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。
-- 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用。
+- 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。交易帳本仍以整數 POINT 為最小單位，但手續費改用 `Decimal` 後端計算並採四捨五入到最近整點，避免舊版小額單長期偏向 `ceil` 超收。
+- 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用；若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則。
 - 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、restore consistency。
 - 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 

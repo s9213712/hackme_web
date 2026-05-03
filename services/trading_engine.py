@@ -3,7 +3,7 @@ import json
 import math
 import uuid
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -200,7 +200,10 @@ def notional_points(quantity_units, price_points):
 
 
 def fee_points(notional, fee_rate_percent):
-    return int(math.ceil((int(notional) * float(fee_rate_percent or 0)) / 100))
+    exact_fee = (Decimal(int(notional or 0)) * Decimal(str(fee_rate_percent or 0))) / Decimal("100")
+    if exact_fee <= 0:
+        return 0
+    return int(exact_fee.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def ensure_trading_schema(conn):

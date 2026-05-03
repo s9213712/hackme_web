@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.03-062`**
+**Current Release ID: `2026.05.03-063`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -112,3 +112,10 @@ python3 scripts/pre_push_checks.py
 security/run_functional_smoke.sh --port 50741
 security/run_pentest.sh --target https://127.0.0.1:5000
 ```
+
+`tests/smoke_suite.py`, `security/run_functional_smoke.sh`, and
+`security/run_pentest.sh --only functional-permissions` now share the same
+default smoke credentials (`RootSmoke123! / ManagerSmoke123! / TestSmoke123!`).
+The pentest wrapper also gives `whole-site-production-gate` a longer floor
+timeout automatically, so the default `180s` wrapper no longer kills that gate
+prematurely.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import ssl
 import sys
 import urllib.error
@@ -8,9 +9,9 @@ import urllib.parse
 import urllib.request
 from http.cookiejar import CookieJar
 
-SMOKE_ROOT_PASSWORD = "Root@1234!Smoke"
-SMOKE_ADMIN_PASSWORD = "Admin@1234!Smoke"
-SMOKE_USER_PASSWORD = "Test@1234!Smoke"
+SMOKE_ROOT_PASSWORD = os.environ.get("ROOT_PASSWORD") or "RootSmoke123!"
+SMOKE_ADMIN_PASSWORD = os.environ.get("MANAGER_PASSWORD") or "ManagerSmoke123!"
+SMOKE_USER_PASSWORD = os.environ.get("TEST_PASSWORD") or "TestSmoke123!"
 
 
 class SmokeFailure(RuntimeError):
@@ -145,6 +146,17 @@ def login_default_or_rotated(client, username, default_password, rotated_passwor
         return client.login(username, default_password, rotate_to=rotated_password)
 
 
+def snapshot_feature_settings(root_client):
+    csrf = root_client.fetch_csrf()
+    res = root_client.request("GET", "/api/admin/features", headers={"X-CSRF-Token": csrf})
+    assert_status("root snapshot smoke feature flags", res, 200)
+    assert_json_ok("root snapshot smoke feature flags", res)
+    features = res["json"].get("features")
+    if not isinstance(features, dict):
+        raise SmokeFailure("feature snapshot response did not include a features object")
+    return {str(key): bool(value) for key, value in features.items()}
+
+
 def enable_smoke_features(root_client):
     feature_updates = {
         "feature_chat_enabled": True,
@@ -164,6 +176,18 @@ def enable_smoke_features(root_client):
     )
     assert_status("root enable smoke feature flags", res, 200)
     assert_json_ok("root enable smoke feature flags", res)
+
+
+def restore_feature_settings(root_client, original_features):
+    csrf = root_client.fetch_csrf()
+    res = root_client.request(
+        "PUT",
+        "/api/admin/features",
+        body=original_features,
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert_status("root restore smoke feature flags", res, 200)
+    assert_json_ok("root restore smoke feature flags", res)
 
 
 def run_functional_suite(base_url):
@@ -210,195 +234,199 @@ def run_functional_suite(base_url):
     if user_me["json"].get("role") != "user":
         raise SmokeFailure(f"test role mismatch: {user_me['json']}")
 
-    enable_smoke_features(root)
+    original_features = snapshot_feature_settings(root)
+    try:
+        enable_smoke_features(root)
 
-    csrf = user.fetch_csrf()
-    res = user.request("GET", "/api/admin/users", headers={"X-CSRF-Token": csrf})
-    assert_status("test forbidden /api/admin/users", res, 403)
+        csrf = user.fetch_csrf()
+        res = user.request("GET", "/api/admin/users", headers={"X-CSRF-Token": csrf})
+        assert_status("test forbidden /api/admin/users", res, 403)
 
-    csrf = admin.fetch_csrf()
-    res = admin.request("GET", "/api/admin/users", headers={"X-CSRF-Token": csrf})
-    assert_status("admin /api/admin/users", res, 200)
-    assert_json_ok("admin /api/admin/users", res)
-    usernames = {item.get("username") for item in res["json"].get("users", [])}
-    for expected in ("root", "admin", "test"):
-        if expected not in usernames:
-            raise SmokeFailure(f"missing seeded account {expected} in admin users list")
-
-    csrf = user.fetch_csrf()
-    res = user.request("GET", "/api/chat/rooms", headers={"X-CSRF-Token": csrf})
-    assert_status("test /api/chat/rooms", res, 200)
-    assert_json_ok("test /api/chat/rooms", res)
-
-    csrf = user.fetch_csrf()
-    res = user.request(
-        "POST",
-        "/api/chat/rooms",
-        body={"name": "smoke-room", "target_user": "admin"},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test create chat room", res, 200)
-    assert_json_ok("test create chat room", res)
-    room_id = res["json"]["room"]["id"]
-
-    csrf = user.fetch_csrf()
-    res = user.request(
-        "POST",
-        f"/api/chat/rooms/{room_id}/messages",
-        body={"content": "smoke secret message"},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test send chat message", res, 200)
-    assert_json_ok("test send chat message", res)
-
-    csrf = user.fetch_csrf()
-    upload = user.multipart_request(
-        "POST",
-        "/api/cloud-drive/upload",
-        fields={"privacy_mode": "standard_plain"},
-        files=[("file", "chat-smoke.txt", b"chat attachment smoke", "text/plain")],
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test upload chat attachment candidate", upload, 200)
-    assert_json_ok("test upload chat attachment candidate", upload)
-    chat_file_id = upload["json"]["file"]["file_id"]
-
-    csrf = user.fetch_csrf()
-    res = user.request(
-        "POST",
-        f"/api/chat/rooms/{room_id}/messages",
-        body={"content": "smoke attachment message", "attachment_file_ids": [chat_file_id]},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test send chat message with attachment", res, 200)
-    assert_json_ok("test send chat message with attachment", res)
-    attachment_message_id = res["json"]["message_id"]
-
-    csrf = user.fetch_csrf()
-    res = user.request("GET", f"/api/chat/rooms/{room_id}/messages", headers={"X-CSRF-Token": csrf})
-    assert_status("test read chat messages before recall", res, 200)
-    assert_json_ok("test read chat messages before recall", res)
-    sent_messages = [m for m in res["json"].get("messages", []) if m.get("sender") == "test" and m.get("content") == "smoke secret message"]
-    if not sent_messages:
-        raise SmokeFailure("new chat message was not returned before recall")
-    message_id = sent_messages[-1]["id"]
-    attachment_messages = [m for m in res["json"].get("messages", []) if m.get("id") == attachment_message_id]
-    if not attachment_messages or not attachment_messages[0].get("attachments"):
-        raise SmokeFailure("chat attachment message did not return attachment metadata")
-
-    csrf = user.fetch_csrf()
-    res = user.request("DELETE", f"/api/chat/messages/{message_id}", headers={"X-CSRF-Token": csrf})
-    assert_status("test recall chat message", res, 200)
-    assert_json_ok("test recall chat message", res)
-
-    csrf = user.fetch_csrf()
-    res = user.request(
-        "POST",
-        f"/api/chat/rooms/{room_id}/messages",
-        body={"message_type": "sticker", "sticker_key": "smile"},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test send chat sticker", res, 200)
-    assert_json_ok("test send chat sticker", res)
-
-    csrf = user.fetch_csrf()
-    res = user.request(
-        "POST",
-        "/api/chat/friends/requests",
-        body={"username": "admin"},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test send friend request", res, 200)
-    assert_json_ok("test send friend request", res)
-
-    csrf = admin.fetch_csrf()
-    res = admin.request("GET", "/api/chat/friends", headers={"X-CSRF-Token": csrf})
-    assert_status("admin read friend requests", res, 200)
-    assert_json_ok("admin read friend requests", res)
-    incoming = res["json"].get("incoming", [])
-    if incoming:
-        request_id = incoming[0]["id"]
         csrf = admin.fetch_csrf()
-        res = admin.request("POST", f"/api/chat/friends/requests/{request_id}/accept", headers={"X-CSRF-Token": csrf})
-        assert_status("admin accept friend request", res, 200)
-        assert_json_ok("admin accept friend request", res)
+        res = admin.request("GET", "/api/admin/users", headers={"X-CSRF-Token": csrf})
+        assert_status("admin /api/admin/users", res, 200)
+        assert_json_ok("admin /api/admin/users", res)
+        usernames = {item.get("username") for item in res["json"].get("users", [])}
+        for expected in ("root", "admin", "test"):
+            if expected not in usernames:
+                raise SmokeFailure(f"missing seeded account {expected} in admin users list")
 
-    csrf = user.fetch_csrf()
-    res = user.request("GET", "/api/games/catalog", headers={"X-CSRF-Token": csrf})
-    assert_status("test /api/games/catalog", res, 200)
-    assert_json_ok("test /api/games/catalog", res)
+        csrf = user.fetch_csrf()
+        res = user.request("GET", "/api/chat/rooms", headers={"X-CSRF-Token": csrf})
+        assert_status("test /api/chat/rooms", res, 200)
+        assert_json_ok("test /api/chat/rooms", res)
 
-    csrf = user.fetch_csrf()
-    res = user.request("POST", "/api/games/chess/practice", body={}, headers={"X-CSRF-Token": csrf})
-    assert_status("test create chess practice", res, 200)
-    assert_json_ok("test create chess practice", res)
-    chess_match_id = res["json"]["match_id"]
-
-    csrf = user.fetch_csrf()
-    res = user.request(
-        "POST",
-        f"/api/games/chess/matches/{chess_match_id}/move",
-        body={"from": "e2", "to": "e4"},
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert_status("test chess legal move", res, 200)
-    assert_json_ok("test chess legal move", res)
-    if res["json"].get("match", {}).get("board", {}).get("e4") != "P":
-        raise SmokeFailure("chess practice move did not update the board")
-
-    csrf = user.fetch_csrf()
-    res = user.request("GET", "/api/games/chess/leaderboard", headers={"X-CSRF-Token": csrf})
-    assert_status("test chess leaderboard", res, 200)
-    assert_json_ok("test chess leaderboard", res)
-
-    csrf = admin.fetch_csrf()
-    res = admin.request("GET", "/api/community/boards", headers={"X-CSRF-Token": csrf})
-    assert_status("admin read community boards", res, 200)
-    assert_json_ok("admin read community boards", res)
-    boards = res["json"].get("boards", [])
-    if boards:
-        board_id = boards[0]["id"]
-        csrf = admin.fetch_csrf()
-        res = admin.request(
+        csrf = user.fetch_csrf()
+        res = user.request(
             "POST",
-            f"/api/community/boards/{board_id}/threads",
-            body={"title": "smoke pinned topic", "content": "smoke topic body"},
+            "/api/chat/rooms",
+            body={"name": "smoke-room", "target_user": "admin"},
             headers={"X-CSRF-Token": csrf},
         )
-        assert_status("admin create smoke community thread", res, 200)
-        assert_json_ok("admin create smoke community thread", res)
-        csrf = admin.fetch_csrf()
-        res = admin.request(
-            "GET",
-            f"/api/community/boards/{board_id}/threads?q=smoke%20pinned%20topic",
-            headers={"X-CSRF-Token": csrf},
-        )
-        assert_status("admin find smoke community thread", res, 200)
-        assert_json_ok("admin find smoke community thread", res)
-        threads = res["json"].get("threads", [])
-        if not threads:
-            raise SmokeFailure("created community smoke thread was not listed")
-        thread_id = threads[0]["id"]
-        csrf = admin.fetch_csrf()
-        res = admin.request(
-            "POST",
-            f"/api/community/threads/{thread_id}/sticky",
-            body={"sticky": True},
-            headers={"X-CSRF-Token": csrf},
-        )
-        assert_status("admin sticky smoke community thread", res, 200)
-        assert_json_ok("admin sticky smoke community thread", res)
-        csrf = admin.fetch_csrf()
-        res = admin.request("GET", f"/api/community/threads/{thread_id}", headers={"X-CSRF-Token": csrf})
-        assert_status("admin read sticky smoke community thread", res, 200)
-        assert_json_ok("admin read sticky smoke community thread", res)
-        if not res["json"].get("thread", {}).get("is_sticky"):
-            raise SmokeFailure("community thread sticky flag was not persisted")
+        assert_status("test create chat room", res, 200)
+        assert_json_ok("test create chat room", res)
+        room_id = res["json"]["room"]["id"]
 
-    csrf = user.fetch_csrf()
-    res = user.request("GET", "/api/appeals", headers={"X-CSRF-Token": csrf})
-    assert_status("test /api/appeals", res, 200)
-    assert_json_ok("test /api/appeals", res)
+        csrf = user.fetch_csrf()
+        res = user.request(
+            "POST",
+            f"/api/chat/rooms/{room_id}/messages",
+            body={"content": "smoke secret message"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("test send chat message", res, 200)
+        assert_json_ok("test send chat message", res)
+
+        csrf = user.fetch_csrf()
+        upload = user.multipart_request(
+            "POST",
+            "/api/cloud-drive/upload",
+            fields={"privacy_mode": "standard_plain"},
+            files=[("file", "chat-smoke.txt", b"chat attachment smoke", "text/plain")],
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("test upload chat attachment candidate", upload, 200)
+        assert_json_ok("test upload chat attachment candidate", upload)
+        chat_file_id = upload["json"]["file"]["file_id"]
+
+        csrf = user.fetch_csrf()
+        res = user.request(
+            "POST",
+            f"/api/chat/rooms/{room_id}/messages",
+            body={"content": "smoke attachment message", "attachment_file_ids": [chat_file_id]},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("test send chat message with attachment", res, 200)
+        assert_json_ok("test send chat message with attachment", res)
+        attachment_message_id = res["json"]["message_id"]
+
+        csrf = user.fetch_csrf()
+        res = user.request("GET", f"/api/chat/rooms/{room_id}/messages", headers={"X-CSRF-Token": csrf})
+        assert_status("test read chat messages before recall", res, 200)
+        assert_json_ok("test read chat messages before recall", res)
+        sent_messages = [m for m in res["json"].get("messages", []) if m.get("sender") == "test" and m.get("content") == "smoke secret message"]
+        if not sent_messages:
+            raise SmokeFailure("new chat message was not returned before recall")
+        message_id = sent_messages[-1]["id"]
+        attachment_messages = [m for m in res["json"].get("messages", []) if m.get("id") == attachment_message_id]
+        if not attachment_messages or not attachment_messages[0].get("attachments"):
+            raise SmokeFailure("chat attachment message did not return attachment metadata")
+
+        csrf = user.fetch_csrf()
+        res = user.request("DELETE", f"/api/chat/messages/{message_id}", headers={"X-CSRF-Token": csrf})
+        assert_status("test recall chat message", res, 200)
+        assert_json_ok("test recall chat message", res)
+
+        csrf = user.fetch_csrf()
+        res = user.request(
+            "POST",
+            f"/api/chat/rooms/{room_id}/messages",
+            body={"message_type": "sticker", "sticker_key": "smile"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("test send chat sticker", res, 200)
+        assert_json_ok("test send chat sticker", res)
+
+        csrf = user.fetch_csrf()
+        res = user.request(
+            "POST",
+            "/api/chat/friends/requests",
+            body={"username": "admin"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("test send friend request", res, 200)
+        assert_json_ok("test send friend request", res)
+
+        csrf = admin.fetch_csrf()
+        res = admin.request("GET", "/api/chat/friends", headers={"X-CSRF-Token": csrf})
+        assert_status("admin read friend requests", res, 200)
+        assert_json_ok("admin read friend requests", res)
+        incoming = res["json"].get("incoming", [])
+        if incoming:
+            request_id = incoming[0]["id"]
+            csrf = admin.fetch_csrf()
+            res = admin.request("POST", f"/api/chat/friends/requests/{request_id}/accept", headers={"X-CSRF-Token": csrf})
+            assert_status("admin accept friend request", res, 200)
+            assert_json_ok("admin accept friend request", res)
+
+        csrf = user.fetch_csrf()
+        res = user.request("GET", "/api/games/catalog", headers={"X-CSRF-Token": csrf})
+        assert_status("test /api/games/catalog", res, 200)
+        assert_json_ok("test /api/games/catalog", res)
+
+        csrf = user.fetch_csrf()
+        res = user.request("POST", "/api/games/chess/practice", body={}, headers={"X-CSRF-Token": csrf})
+        assert_status("test create chess practice", res, 200)
+        assert_json_ok("test create chess practice", res)
+        chess_match_id = res["json"]["match_id"]
+
+        csrf = user.fetch_csrf()
+        res = user.request(
+            "POST",
+            f"/api/games/chess/matches/{chess_match_id}/move",
+            body={"from": "e2", "to": "e4"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert_status("test chess legal move", res, 200)
+        assert_json_ok("test chess legal move", res)
+        if res["json"].get("match", {}).get("board", {}).get("e4") != "P":
+            raise SmokeFailure("chess practice move did not update the board")
+
+        csrf = user.fetch_csrf()
+        res = user.request("GET", "/api/games/chess/leaderboard", headers={"X-CSRF-Token": csrf})
+        assert_status("test chess leaderboard", res, 200)
+        assert_json_ok("test chess leaderboard", res)
+
+        csrf = admin.fetch_csrf()
+        res = admin.request("GET", "/api/community/boards", headers={"X-CSRF-Token": csrf})
+        assert_status("admin read community boards", res, 200)
+        assert_json_ok("admin read community boards", res)
+        boards = res["json"].get("boards", [])
+        if boards:
+            board_id = boards[0]["id"]
+            csrf = admin.fetch_csrf()
+            res = admin.request(
+                "POST",
+                f"/api/community/boards/{board_id}/threads",
+                body={"title": "smoke pinned topic", "content": "smoke topic body"},
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert_status("admin create smoke community thread", res, 200)
+            assert_json_ok("admin create smoke community thread", res)
+            csrf = admin.fetch_csrf()
+            res = admin.request(
+                "GET",
+                f"/api/community/boards/{board_id}/threads?q=smoke%20pinned%20topic",
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert_status("admin find smoke community thread", res, 200)
+            assert_json_ok("admin find smoke community thread", res)
+            threads = res["json"].get("threads", [])
+            if not threads:
+                raise SmokeFailure("created community smoke thread was not listed")
+            thread_id = threads[0]["id"]
+            csrf = admin.fetch_csrf()
+            res = admin.request(
+                "POST",
+                f"/api/community/threads/{thread_id}/sticky",
+                body={"sticky": True},
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert_status("admin sticky smoke community thread", res, 200)
+            assert_json_ok("admin sticky smoke community thread", res)
+            csrf = admin.fetch_csrf()
+            res = admin.request("GET", f"/api/community/threads/{thread_id}", headers={"X-CSRF-Token": csrf})
+            assert_status("admin read sticky smoke community thread", res, 200)
+            assert_json_ok("admin read sticky smoke community thread", res)
+            if not res["json"].get("thread", {}).get("is_sticky"):
+                raise SmokeFailure("community thread sticky flag was not persisted")
+
+        csrf = user.fetch_csrf()
+        res = user.request("GET", "/api/appeals", headers={"X-CSRF-Token": csrf})
+        assert_status("test /api/appeals", res, 200)
+        assert_json_ok("test /api/appeals", res)
+    finally:
+        restore_feature_settings(root, original_features)
 
     print("[functional] all checks passed")
 
