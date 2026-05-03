@@ -242,34 +242,6 @@ BUILTIN_SECURITY_PROFILES = {
             "security_unknown_encrypted_files_threshold": 0,
         },
     },
-    "preprod": {
-        "label": "preprod（準上線）",
-        "description": "舊版準上線別名；新名稱為 dev_ready。",
-        "settings": {
-            "maintenance_mode": False,
-            "server_ssl_enabled": True,
-            "audit_chain_enabled": False,
-            "ip_blocking_enabled": False,
-            "login_violation_enabled": False,
-            "rate_limit_violation_enabled": True,
-            "root_ip_whitelist_enabled": False,
-            "root_ip_whitelist": "",
-            "browser_only_mode_enabled": False,
-            "integrity_guard_enabled": False,
-            "integrity_guard_strict_mode": False,
-            "feature_audit_log_enabled": True,
-            "feature_economy_enabled": False,
-            "feature_trading_enabled": False,
-        },
-        "thresholds": {
-            "security_pending_chat_reports_threshold": 10,
-            "security_pending_appeals_threshold": 10,
-            "security_pending_moderation_proposals_threshold": 10,
-            "security_quarantined_files_threshold": 0,
-            "security_unknown_encrypted_files_threshold": 50,
-        },
-        "color": "blue",
-    },
     "dev_ready": {
         "label": "dev ready（準上線 / 開發就緒）",
         "description": "平時開發與準上線驗證模式；保留基本登入、root 權限與 CSRF，但暫停 production audit chain 與 integrity guard。",
@@ -912,6 +884,8 @@ def ensure_snapshot_schema(conn):
                 name,
             ),
         )
+    # Remove the old builtin alias row so admin UIs only list the canonical mode.
+    conn.execute("DELETE FROM security_profiles WHERE name='preprod' AND is_builtin=1")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_type_status ON snapshots(type, status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_restore_events_snapshot ON snapshot_restore_events(snapshot_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_mode_switch_logs_created ON mode_switch_logs(created_at)")

@@ -1,6 +1,25 @@
 # Update Summary
 
-Release ID: `2026.05.03-061`
+Release ID: `2026.05.03-062`
+
+## 2026.05.03-062
+
+## Highlights
+
+- Root settings and session UX were tightened after QA. The shared settings
+  success banner now auto-clears instead of lingering indefinitely, and idle
+  logout warnings no longer reuse the same banner area.
+- Feature-gated APIs no longer stop at a generic `此功能目前已由 root 關閉`.
+  The response payload now names the blocked feature, missing parent features,
+  and already-enabled dependent modules that will be affected together.
+- Local/remote ComfyUI, user appearance, storage/albums, and related frontend
+  navigation fixes were grouped into a dedicated code split, while regression
+  coverage and legacy wrapper cleanup were split into separate commits.
+
+## Validation
+
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
 
 ## 2026.05.03-061
 

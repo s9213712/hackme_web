@@ -17,7 +17,20 @@ SECRET_PATTERNS = {
     "SLACK_TOKEN": re.compile(r"\bxox[bp]-[A-Za-z0-9-]{12,}"),
 }
 ALLOW_HINTS = ("example", "dummy", "fake", "test-only", "placeholder", "changeme", "allowlist", "Admin@1234")
-SCAN_EXTRA = ("README.md", "docs/README.zh-TW.md", "docs/For_developer.md", "docs/UPDATE_SUMMARY.md")
+SCAN_EXTRA = (
+    "README.md",
+    "docs/README.zh-TW.md",
+    "docs/00_START_HERE.md",
+    "docs/01_DEPLOY_QUICKSTART.md",
+    "docs/02_DEPLOY_PRODUCTION.md",
+    "docs/03_ADMIN_GUIDE.md",
+    "docs/04_USER_GUIDE.md",
+    "docs/05_FEATURES_OVERVIEW.md",
+    "docs/11_QA_TESTING.md",
+    "docs/12_TROUBLESHOOTING.md",
+    "docs/For_developer.md",
+    "docs/UPDATE_SUMMARY.md",
+)
 
 
 def line_allowed(line: str) -> bool:
