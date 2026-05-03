@@ -16,6 +16,9 @@ short [README](../README.md) plus GitHub-required metadata such as
   research-only design for a future spot grid trading bot
 - [Developer Guide](For_developer.md): API, deployment, runtime state, and
   operator notes
+- [Rules For Agents](RULES_FOR_AGENTS.md): project-wide completion rules for
+  docs, tests, UX, mobile behavior, server-side validation, and delivery
+  reporting
 - [Version Story](VERSION_STORY.md): project history, branch decisions, and
   abandoned WebTerminal notes
 - [Update Summary](UPDATE_SUMMARY.md): latest release notes shown by the root

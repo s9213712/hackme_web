@@ -11,6 +11,27 @@ behavior is documented in [WEB.md](WEB.md).
 - Runtime version endpoint: `GET /api/version`
 - Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
 
+## Project Working Principles
+
+Feature work is not considered complete when only the code path is finished.
+All new features, bug fixes, refactors, admin tools, and UI changes must also
+follow the project-wide rules in [RULES_FOR_AGENTS.md](RULES_FOR_AGENTS.md).
+
+Required follow-up areas include:
+
+- related README / user / admin / developer documentation
+- matching automated tests plus smoke / pre-push / QA workflow updates when
+  needed
+- explicit non-sensitive error feedback in both backend and frontend
+- mobile layout and interaction checks
+- server-side validation and recalculation for any trusted business logic
+- final delivery reporting that lists feature scope, docs, tests, UX/error
+  additions, mobile check result, moved server-side calculations, and any
+  unfinished follow-up
+
+If one of these areas is intentionally left incomplete, the delivery report must
+state that gap explicitly instead of marking the feature as fully complete.
+
 ## Fast Local Setup
 
 ```bash

@@ -86,7 +86,8 @@ details have been moved out of README.
 
 All guides live under [docs/](docs/README.md). Start there for the web UI guide,
 the [trading system and bot guide](docs/TRADING.md), developer/API notes,
-security policy, testing scripts, release policy, and project status.
+security policy, testing scripts, release policy, project-wide working rules,
+and project status.
 
 ## Fast Start
 
