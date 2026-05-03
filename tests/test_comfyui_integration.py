@@ -4,7 +4,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from flask import Flask, jsonify, make_response
+from flask import Flask, jsonify, make_response, request
 
 from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
@@ -387,6 +387,75 @@ def test_comfyui_generate_async_job_reports_progress_and_result(tmp_path):
     assert final_body["job"]["status"] == "completed"
     assert final_body["job"]["progress"]["percent"] == 100
     assert final_body["job"]["result"]["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
+
+
+def test_comfyui_generate_async_job_captures_request_meta_before_thread_handoff(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    audit_rows = []
+
+    def audit(event, ip, **kwargs):
+        audit_rows.append({
+            "event": event,
+            "ip": ip,
+            "ua": kwargs.get("ua"),
+            "detail": kwargs.get("detail"),
+        })
+
+    client = _build_app(
+        db_path,
+        storage_root,
+        extra_deps={
+            "audit": audit,
+            "get_client_ip": lambda: request.headers.get("X-Forwarded-For", "-"),
+            "get_ua": lambda: request.headers.get("User-Agent", "-"),
+        },
+    ).test_client()
+
+    started = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "a quiet test image",
+            "width": 512,
+            "height": 512,
+            "steps": 12,
+            "cfg": 6.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "seed": 123,
+            "batch_size": 1,
+            "confirm_billing": True,
+            "async_progress": True,
+        },
+        headers={
+            "User-Agent": "pytest-agent/1.0",
+            "X-Forwarded-For": "203.0.113.9",
+        },
+    )
+
+    assert started.status_code == 200
+    job_id = started.get_json()["job"]["job_id"]
+
+    final_body = None
+    for _ in range(40):
+        polled = client.get(f"/api/comfyui/jobs/{job_id}")
+        assert polled.status_code == 200
+        final_body = polled.get_json()
+        if final_body["job"]["status"] == "completed":
+            break
+        time.sleep(0.05)
+
+    assert final_body is not None
+    assert final_body["job"]["status"] == "completed"
+    assert any(
+        row["event"] == "COMFYUI_GENERATE"
+        and row["ip"] == "203.0.113.9"
+        and row["ua"] == "pytest-agent/1.0"
+        for row in audit_rows
+    )
 
 
 def test_comfyui_batch_limit_is_root_configurable(tmp_path):

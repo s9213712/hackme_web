@@ -262,6 +262,20 @@ def register_comfyui_routes(app, deps):
             generation_jobs[job_id] = job
         return job_id
 
+    def _capture_request_audit_meta():
+        try:
+            client_ip = get_client_ip() or "-"
+        except Exception:
+            client_ip = "-"
+        try:
+            user_agent = get_ua() or "-"
+        except Exception:
+            user_agent = "-"
+        return {
+            "client_ip": client_ip,
+            "user_agent": user_agent,
+        }
+
     def _update_generation_job(job_id, **changes):
         with generation_jobs_lock:
             job = generation_jobs.get(job_id)
@@ -1328,9 +1342,12 @@ def register_comfyui_routes(app, deps):
             conn.close()
         return images
 
-    def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds):
+    def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds, request_meta=None):
         active_client = _client()
         generation_token = _register_active_generation(actor)
+        request_meta = request_meta if isinstance(request_meta, dict) else {}
+        audit_ip = request_meta.get("client_ip") or "-"
+        audit_ua = request_meta.get("user_agent") or "-"
         _update_generation_job(job_id, status="running")
         try:
             result = active_client.generate_image(
@@ -1361,10 +1378,10 @@ def register_comfyui_routes(app, deps):
             })
             audit(
                 "COMFYUI_GENERATE",
-                get_client_ip(),
+                audit_ip,
                 user=_actor_value(actor, "username"),
                 success=True,
-                ua=get_ua(),
+                ua=audit_ua,
                 detail=f"job_id={job_id}, prompt_id={result['prompt_id']}, file={result['image_ref'].get('filename')}, batch={len(images)}",
             )
         except ComfyUIError as exc:
@@ -1374,7 +1391,7 @@ def register_comfyui_routes(app, deps):
                 "detail": str(exc),
                 "completed": False,
             })
-            audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=_actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc)[:180])
+            audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         except Exception as exc:
             _update_generation_job(job_id, status="error", error=str(exc), result=None)
             _update_generation_job_progress(job_id, {
@@ -1382,7 +1399,7 @@ def register_comfyui_routes(app, deps):
                 "detail": str(exc),
                 "completed": False,
             })
-            audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=_actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc)[:180])
+            audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         finally:
             _unregister_active_generation(generation_token)
 
@@ -2093,9 +2110,10 @@ def register_comfyui_routes(app, deps):
                 }), 409
         if data.get("async_progress") is True:
             job_id = _create_generation_job(actor)
+            request_meta = _capture_request_audit_meta()
             worker = threading.Thread(
                 target=_run_comfyui_generation_job,
-                args=(job_id, dict(actor), params, quote, timeout_seconds),
+                args=(job_id, dict(actor), params, quote, timeout_seconds, request_meta),
                 daemon=True,
             )
             worker.start()
