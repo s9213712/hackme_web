@@ -16,19 +16,20 @@ let comfyuiBillingQuote = null;
 let comfyuiDefaultWidth = 1024;
 let comfyuiDefaultHeight = 1024;
 let comfyuiAvailableLoras = [];
+let comfyuiLoraDetails = {};
+let comfyuiAvailableEmbeddings = [];
+let comfyuiAvailableVaes = [];
 let comfyuiSelectedLoras = [];
 let comfyuiConnectionMode = "remote";
 let comfyuiLocalStartPollTimer = null;
 let comfyuiCivitaiInspection = null;
-let comfyuiWalletSummary = null;
-let comfyuiRootAccelAvailable = false;
-let comfyuiRootAccelEnabled = false;
 const COMFYUI_GENERATION_TIMEOUT_SECONDS = 900;
 const COMFYUI_MAX_LORAS = 8;
 const COMFYUI_LORA_EXTRA_PRICE = 1;
-const COMFYUI_ROOT_ACCEL_PREF_KEY = "hackme_web:comfyui:root-accel-enabled";
+const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";
 const COMFYUI_DRAFT_FIELD_IDS = [
   "comfyui-model-select",
+  "comfyui-vae-select",
   "comfyui-prompt",
   "comfyui-negative-prompt",
   "comfyui-width",
@@ -66,58 +67,43 @@ function isComfyuiAvailableForNavigation() {
   return true;
 }
 
-function readComfyuiRootAccelPreference() {
-  try {
-    return localStorage.getItem(COMFYUI_ROOT_ACCEL_PREF_KEY) === "1";
-  } catch (err) {
-    return false;
-  }
-}
-
-function writeComfyuiRootAccelPreference(enabled) {
-  try {
-    localStorage.setItem(COMFYUI_ROOT_ACCEL_PREF_KEY, enabled ? "1" : "0");
-  } catch (err) {
-    return;
-  }
-}
-
-function comfyuiUseRootAccel() {
-  return currentUser === "root" && comfyuiRootAccelAvailable && comfyuiRootAccelEnabled;
-}
-
 function comfyuiRequestQuery() {
-  return comfyuiUseRootAccel() ? "?use_root_accel=1" : "";
+  return "";
 }
 
 function comfyuiRequestPayloadExtras() {
-  return comfyuiUseRootAccel() ? { use_root_accel: true } : {};
+  return {};
 }
 
 function comfyuiBackendLabel(payload = {}) {
-  return payload?.backend_scope === "root_accel" ? "（root 加速）" : "";
+  return "";
 }
 
-function renderComfyuiWalletSummary() {
-  const el = $("comfyui-points-balance");
-  if (!el) return;
-  const balance = Number(comfyuiWalletSummary?.points_balance);
-  if (!Number.isFinite(balance)) {
-    el.textContent = currentUser === "root" ? "剩餘點數：-（root 免扣）" : "剩餘點數：-";
-    return;
+function comfyuiConnectionModeLabel(mode = comfyuiConnectionMode) {
+  return String(mode || "remote").trim().toLowerCase() === "local"
+    ? "本地 ComfyUI"
+    : "雲端 / 遠端 API";
+}
+
+function comfyuiConnectionModeDetail(mode = comfyuiConnectionMode) {
+  return String(mode || "remote").trim().toLowerCase() === "local"
+    ? "目前是本地模式：可由 root 啟動 / 停止本地 ComfyUI，且 root 可在下方折疊區管理本地模型下載。"
+    : "目前是雲端 / 遠端模式：此頁會直接呼叫遠端 ComfyUI API 生圖，不提供本地模型下載。";
+}
+
+function updateComfyuiModeNote(modeOverride = null) {
+  const normalizedMode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase() === "local"
+    ? "local"
+    : "remote";
+  const note = $("comfyui-mode-note");
+  const badge = $("comfyui-mode-badge");
+  const detail = $("comfyui-mode-detail");
+  if (note) note.textContent = `目前模式：${comfyuiConnectionModeLabel(normalizedMode)}`;
+  if (badge) {
+    badge.textContent = normalizedMode === "local" ? "本地模式" : "雲端 / 遠端模式";
+    badge.dataset.mode = normalizedMode;
   }
-  const suffix = currentUser === "root" ? "（root 免扣）" : "";
-  el.textContent = `剩餘點數：${balance}${suffix}`;
-}
-
-function updateComfyuiRootAccelToggleVisibility() {
-  const wrap = $("comfyui-root-accel-toggle-wrap");
-  const checkbox = $("comfyui-root-accel-toggle");
-  if (!wrap || !checkbox) return;
-  const visible = currentUser === "root" && comfyuiRootAccelAvailable;
-  wrap.style.display = visible ? "" : "none";
-  checkbox.checked = visible && !!comfyuiRootAccelEnabled;
-  checkbox.disabled = !visible;
+  if (detail) detail.textContent = comfyuiConnectionModeDetail(normalizedMode);
 }
 
 function setComfyuiMessage(text, ok = true) {
@@ -129,6 +115,12 @@ function setComfyuiMessage(text, ok = true) {
     return;
   }
   flash(msg, text, ok);
+}
+
+function setComfyuiIdleSuspend(reason, active, label) {
+  if (typeof setInactivitySuspendState === "function") {
+    setInactivitySuspendState(reason, !!active, label || "ComfyUI 工作中");
+  }
 }
 
 function setComfyuiBusy(busy) {
@@ -146,12 +138,14 @@ function setComfyuiBusy(busy) {
   if (refresh) refresh.disabled = !!busy;
   if (start) start.disabled = !!busy;
   if (stop) stop.disabled = !!busy;
+  setComfyuiIdleSuspend("comfyui_generate", !!busy, "ComfyUI 產圖中");
 }
 
 function updateComfyuiStartButton() {
   const start = $("comfyui-start-btn");
   const stop = $("comfyui-stop-btn");
   const isRoot = currentUser === "root";
+  updateComfyuiModeNote();
   if (start) {
     start.style.display = comfyuiConnectionMode === "local" && comfyuiServerAvailable !== true ? "" : "none";
     start.disabled = !!comfyuiGenerateAbortController;
@@ -167,11 +161,13 @@ function stopComfyuiLocalStartPolling() {
     clearTimeout(comfyuiLocalStartPollTimer);
     comfyuiLocalStartPollTimer = null;
   }
+  setComfyuiIdleSuspend("comfyui_start_local", false, "ComfyUI 啟動中");
 }
 
 function scheduleComfyuiLocalStartPolling({ attemptsLeft = 120, delayMs = 5000 } = {}) {
   stopComfyuiLocalStartPolling();
   if (comfyuiConnectionMode !== "local" || attemptsLeft <= 0) return;
+  setComfyuiIdleSuspend("comfyui_start_local", true, "ComfyUI 啟動中");
   comfyuiLocalStartPollTimer = setTimeout(async () => {
     comfyuiLocalStartPollTimer = null;
     const ok = await refreshComfyuiStatus({ switchAway: false });
@@ -210,22 +206,10 @@ function applyComfyuiRuntimeLimits(payload = {}) {
   if (payload.lora_extra_unit_price !== undefined) {
     comfyuiBillingQuote = { ...(comfyuiBillingQuote || {}), lora_extra_unit_price: Number(payload.lora_extra_unit_price || COMFYUI_LORA_EXTRA_PRICE) };
   }
-  if (payload.wallet && typeof payload.wallet === "object") {
-    comfyuiWalletSummary = payload.wallet;
-  } else if (payload.billing?.wallet && typeof payload.billing.wallet === "object") {
-    comfyuiWalletSummary = payload.billing.wallet;
-  }
-  comfyuiRootAccelAvailable = currentUser === "root" && !!payload.root_accel_available;
-  if (payload.root_accel_available === false && comfyuiRootAccelEnabled) {
-    comfyuiRootAccelEnabled = false;
-    writeComfyuiRootAccelPreference(false);
-  }
   const generate = $("comfyui-generate-btn");
   if (generate && comfyuiBillingQuote?.unit_price) {
     generate.title = `非 root 帳號成功產圖後每張扣 ${comfyuiBillingQuote.unit_price} 點；每個 LoRA 每張額外 +${comfyuiBillingQuote.lora_extra_unit_price || COMFYUI_LORA_EXTRA_PRICE} 點；產圖失敗不扣點，丟棄預覽不退款`;
   }
-  renderComfyuiWalletSummary();
-  updateComfyuiRootAccelToggleVisibility();
   updateComfyuiRootPanelVisibility();
 }
 
@@ -234,6 +218,15 @@ function fillComfyuiSelect(id, values, fallback) {
   if (!select) return;
   const options = Array.isArray(values) && values.length ? values : [fallback].filter(Boolean);
   select.innerHTML = options.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`).join("");
+}
+
+function fillComfyuiVaeSelect(values = []) {
+  comfyuiAvailableVaes = Array.isArray(values) ? values.filter(Boolean).map(String) : [];
+  const select = $("comfyui-vae-select");
+  if (!select) return;
+  const options = [`<option value="${COMFYUI_VAE_BUILTIN}">使用 checkpoint 內建 VAE</option>`]
+    .concat(comfyuiAvailableVaes.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`));
+  select.innerHTML = options.join("");
 }
 
 function updateComfyuiResultButtons(hasImage) {
@@ -405,30 +398,21 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
     renderComfyuiSelectedLoras();
   }
   COMFYUI_DRAFT_FIELD_IDS.forEach((id) => {
-    if (!includeDynamicSelects && ["comfyui-model-select", "comfyui-sampler", "comfyui-scheduler", "comfyui-album-select"].includes(id)) {
+    if (!includeDynamicSelects && ["comfyui-model-select", "comfyui-vae-select", "comfyui-sampler", "comfyui-scheduler", "comfyui-album-select"].includes(id)) {
       return;
     }
     setComfyuiFieldValue(id, draft[id]);
   });
 }
 
-function updateComfyuiRootPanelVisibility() {
+function updateComfyuiRootPanelVisibility(modeOverride = null) {
   const panel = $("comfyui-root-model-panel");
-  if (currentUser === "root") {
-    comfyuiRootAccelEnabled = readComfyuiRootAccelPreference();
-  }
-  if (panel) panel.style.display = currentUser === "root" ? "" : "none";
-  updateComfyuiRootAccelToggleVisibility();
-}
-
-async function onComfyuiRootAccelToggleChanged() {
-  const enabled = !!$("comfyui-root-accel-toggle")?.checked;
-  comfyuiRootAccelEnabled = enabled;
-  writeComfyuiRootAccelPreference(enabled);
-  const label = enabled ? "已啟用 root 加速通道，正在重新檢查 ComfyUI..." : "已切回主 ComfyUI 通道，正在重新檢查...";
-  setComfyuiMessage(label, true);
-  await refreshComfyuiStatus({ switchAway: false });
-  await loadComfyuiModels();
+  const details = $("comfyui-root-model-details");
+  const mode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase();
+  const show = currentUser === "root" && mode === "local";
+  updateComfyuiModeNote(mode);
+  if (panel) panel.style.display = show ? "" : "none";
+  if (details && !show) details.open = false;
 }
 
 function renderComfyuiSelectedLoras() {
@@ -442,10 +426,22 @@ function renderComfyuiSelectedLoras() {
     return;
   }
   box.innerHTML = comfyuiSelectedLoras.map((item, index) => `
-    <span class="comfyui-lora-chip" title="${sanitize(item.name)}">
-      <span>${sanitize(item.name)}</span>
-      <button type="button" data-comfyui-remove-lora="${index}" aria-label="移除 ${sanitize(item.name)}">×</button>
-    </span>
+    <div class="comfyui-lora-chip" title="${sanitize(item.name)}">
+      <div class="comfyui-lora-chip-head">
+        <span>${sanitize(item.name)}</span>
+        <button type="button" data-comfyui-remove-lora="${index}" aria-label="移除 ${sanitize(item.name)}">×</button>
+      </div>
+      <div class="comfyui-lora-weight-grid">
+        <label>
+          <span>Model</span>
+          <input type="number" min="-2" max="2" step="0.05" data-comfyui-lora-strength-model="${index}" value="${sanitize(String(item.strength_model ?? 1))}" />
+        </label>
+        <label>
+          <span>CLIP</span>
+          <input type="number" min="-2" max="2" step="0.05" data-comfyui-lora-strength-clip="${index}" value="${sanitize(String(item.strength_clip ?? 1))}" />
+        </label>
+      </div>
+    </div>
   `).join("");
   box.querySelectorAll("[data-comfyui-remove-lora]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -455,6 +451,25 @@ function renderComfyuiSelectedLoras() {
       writeComfyuiDraft();
     });
   });
+  box.querySelectorAll("[data-comfyui-lora-strength-model]").forEach((input) => {
+    input.addEventListener("input", () => updateComfyuiSelectedLoraStrength(input, "strength_model"));
+    input.addEventListener("change", () => updateComfyuiSelectedLoraStrength(input, "strength_model"));
+  });
+  box.querySelectorAll("[data-comfyui-lora-strength-clip]").forEach((input) => {
+    input.addEventListener("input", () => updateComfyuiSelectedLoraStrength(input, "strength_clip"));
+    input.addEventListener("change", () => updateComfyuiSelectedLoraStrength(input, "strength_clip"));
+  });
+}
+
+function updateComfyuiSelectedLoraStrength(input, field) {
+  const datasetKey = field === "strength_clip" ? "comfyuiLoraStrengthClip" : "comfyuiLoraStrengthModel";
+  const index = Number(input?.dataset?.[datasetKey]);
+  if (!Number.isInteger(index) || !comfyuiSelectedLoras[index]) return;
+  const value = Number(input.value || 1);
+  const normalized = Math.max(-2, Math.min(2, Number.isFinite(value) ? value : 1));
+  comfyuiSelectedLoras[index][field] = Math.round(normalized * 100) / 100;
+  input.value = String(comfyuiSelectedLoras[index][field]);
+  writeComfyuiDraft();
 }
 
 function fillComfyuiLoraSelect(values = []) {
@@ -464,6 +479,61 @@ function fillComfyuiLoraSelect(values = []) {
   const options = ['<option value="">不使用 LoRA（可略過）</option>']
     .concat(comfyuiAvailableLoras.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`));
   select.innerHTML = options.join("");
+}
+
+function applyComfyuiPromptTerms(terms = []) {
+  const prompt = $("comfyui-prompt");
+  if (!prompt) return [];
+  const existing = String(prompt.value || "");
+  const existingLower = existing.toLowerCase();
+  const normalizedTerms = Array.isArray(terms)
+    ? terms.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const missingTerms = normalizedTerms.filter((term) => !existingLower.includes(term.toLowerCase()));
+  if (!missingTerms.length) return [];
+  const separator = existing.trim() ? ", " : "";
+  prompt.value = `${existing}${separator}${missingTerms.join(", ")}`;
+  writeComfyuiDraft();
+  return missingTerms;
+}
+
+function insertComfyuiEmbeddingToken(name) {
+  const prompt = $("comfyui-prompt");
+  const cleanName = String(name || "").trim();
+  if (!prompt || !cleanName) return;
+  const token = `<embeddings:${cleanName}>`;
+  if ((prompt.value || "").includes(token)) {
+    setComfyuiMessage("這個 Embedding 已經在提示詞裡。", false);
+    prompt.focus();
+    return;
+  }
+  const raw = prompt.value || "";
+  const start = Number.isInteger(prompt.selectionStart) ? prompt.selectionStart : raw.length;
+  const end = Number.isInteger(prompt.selectionEnd) ? prompt.selectionEnd : raw.length;
+  const prefix = start > 0 && !/[\s,\n]$/.test(raw.slice(0, start)) ? ", " : "";
+  const suffix = end < raw.length && !/^[\s,]/.test(raw.slice(end)) ? " " : "";
+  prompt.value = `${raw.slice(0, start)}${prefix}${token}${suffix}${raw.slice(end)}`;
+  const cursor = start + prefix.length + token.length + suffix.length;
+  prompt.focus();
+  if (typeof prompt.setSelectionRange === "function") prompt.setSelectionRange(cursor, cursor);
+  writeComfyuiDraft();
+  setComfyuiMessage(`已把 ${cleanName} 插入提示詞。`, true);
+}
+
+function renderComfyuiEmbeddingShortcuts(values = []) {
+  comfyuiAvailableEmbeddings = Array.isArray(values) ? values.filter(Boolean).map(String) : [];
+  const box = $("comfyui-embedding-shortcuts");
+  if (!box) return;
+  if (!comfyuiAvailableEmbeddings.length) {
+    box.innerHTML = '<span class="drive-card-sub">目前沒有可用的 Embedding。</span>';
+    return;
+  }
+  box.innerHTML = comfyuiAvailableEmbeddings.map((value) => (
+    `<button class="comfyui-embedding-chip" type="button" data-comfyui-embedding="${sanitize(value)}" title="插入 ${sanitize(value)}">${sanitize(value)}</button>`
+  )).join("");
+  box.querySelectorAll("[data-comfyui-embedding]").forEach((button) => {
+    button.addEventListener("click", () => insertComfyuiEmbeddingToken(button.getAttribute("data-comfyui-embedding")));
+  });
 }
 
 function addSelectedComfyuiLora() {
@@ -481,8 +551,13 @@ function addSelectedComfyuiLora() {
     return;
   }
   comfyuiSelectedLoras.push({ name, strength_model: 1, strength_clip: 1 });
+  const detail = comfyuiLoraDetails?.[name] || {};
+  const insertedTerms = applyComfyuiPromptTerms(detail.trained_words || []);
   renderComfyuiSelectedLoras();
   writeComfyuiDraft();
+  if (insertedTerms.length) {
+    setComfyuiMessage(`已加入 LoRA，並自動補上 trigger words：${insertedTerms.join(", ")}`, true);
+  }
 }
 
 function bindComfyuiDraftPersistence() {
@@ -624,6 +699,9 @@ async function loadComfyuiModels() {
     comfyuiConnectionMode = json.connection_mode || comfyuiConnectionMode || "remote";
     fillComfyuiSelect("comfyui-model-select", json.models || [], "");
     fillComfyuiLoraSelect(json.loras || []);
+    comfyuiLoraDetails = json.lora_details && typeof json.lora_details === "object" ? json.lora_details : {};
+    fillComfyuiVaeSelect(json.vaes || []);
+    renderComfyuiEmbeddingShortcuts(json.embeddings || []);
     fillComfyuiSelect("comfyui-sampler", json.samplers || [], "euler");
     fillComfyuiSelect("comfyui-scheduler", json.schedulers || [], "normal");
     restoreComfyuiDraft();
@@ -631,9 +709,10 @@ async function loadComfyuiModels() {
     comfyuiModelsLoaded = true;
     loadComfyuiAlbums({ force: true }).catch(() => {});
     setComfyuiTabAvailability(true);
-    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個`;
+    if (status) status.textContent = `已連線 ${json.comfyui_url || "ComfyUI"}${comfyuiBackendLabel(json)}，模型 ${Number((json.models || []).length)} 個，LoRA ${Number((json.loras || []).length)} 個，Embedding ${Number((json.embeddings || []).length)} 個，VAE ${Number((json.vaes || []).length)} 個`;
   } catch (err) {
     comfyuiModelsLoaded = false;
+    comfyuiLoraDetails = {};
     setComfyuiTabAvailability(false, err.message || "ComfyUI 伺服器未連線");
     if (status) status.textContent = "ComfyUI 未連線";
     const startHint = comfyuiConnectionMode === "local" ? "。若使用本地模式，請先按「啟動 ComfyUI」。" : "";
@@ -667,6 +746,7 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
     setComfyuiTabAvailability(available, detail);
     if (available) stopComfyuiLocalStartPolling();
     else if (starting && comfyuiConnectionMode === "local") scheduleComfyuiLocalStartPolling();
+    else stopComfyuiLocalStartPolling();
     if (status) status.textContent = detail;
     if (!available) {
       comfyuiModelsLoaded = false;
@@ -685,10 +765,12 @@ async function refreshComfyuiStatus({ switchAway = true } = {}) {
 async function startLocalComfyui() {
   const start = $("comfyui-start-btn");
   const status = $("comfyui-status");
+  let keepIdleSuspend = false;
   if (start) {
     start.disabled = true;
     start.textContent = "啟動中...";
   }
+  setComfyuiIdleSuspend("comfyui_start_local", true, "ComfyUI 啟動中");
   setComfyuiMessage("正在送出本地 ComfyUI 啟動請求。第一次安裝依賴可能需要數分鐘。", true);
   if (status) status.textContent = "正在啟動本地 ComfyUI...";
   try {
@@ -712,6 +794,7 @@ async function startLocalComfyui() {
       comfyuiServerAvailable = false;
       setComfyuiTabAvailability(false, info.message || "ComfyUI 正在背景啟動中");
       if (status) status.textContent = info.message || "ComfyUI 正在背景啟動中，稍後請按重新整理模型";
+      keepIdleSuspend = true;
       scheduleComfyuiLocalStartPolling();
       return;
     }
@@ -721,6 +804,7 @@ async function startLocalComfyui() {
     setComfyuiMessage(err.message || "ComfyUI 啟動失敗", false);
     if (status) status.textContent = "ComfyUI 啟動失敗";
   } finally {
+    if (!keepIdleSuspend) setComfyuiIdleSuspend("comfyui_start_local", false, "ComfyUI 啟動中");
     if (start) {
       start.disabled = false;
       start.textContent = "啟動 ComfyUI";
@@ -781,6 +865,7 @@ function comfyuiNumberValue(id, fallback) {
 }
 
 function comfyuiPayload() {
+  const vae = $("comfyui-vae-select")?.value || COMFYUI_VAE_BUILTIN;
   return {
     model: $("comfyui-model-select")?.value || "",
     prompt: $("comfyui-prompt")?.value || "",
@@ -793,6 +878,7 @@ function comfyuiPayload() {
     seed: $("comfyui-seed")?.value ? comfyuiNumberValue("comfyui-seed", 0) : undefined,
     sampler_name: $("comfyui-sampler")?.value || "euler",
     scheduler: $("comfyui-scheduler")?.value || "normal",
+    vae: vae === COMFYUI_VAE_BUILTIN ? "" : vae,
     loras: comfyuiSelectedLoras.slice(0, COMFYUI_MAX_LORAS),
     filename_prefix: "hackme_web"
   };
@@ -850,10 +936,6 @@ async function preflightComfyuiBilling(payload, runCount, billingConfirmation) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) {
     throw new Error(json.msg || `ComfyUI 扣點預檢失敗（HTTP ${res.status}）`);
-  }
-  if (json.wallet && typeof json.wallet === "object") {
-    comfyuiWalletSummary = json.wallet;
-    renderComfyuiWalletSummary();
   }
   return json.billing || null;
 }
@@ -939,10 +1021,6 @@ async function generateComfyuiImage() {
         updateComfyuiResultButtons(true);
       }
       if (json.billing?.charged) totalCharged += Number(json.billing.total_price || 0);
-      if (json.wallet && typeof json.wallet === "object") {
-        comfyuiWalletSummary = json.wallet;
-        renderComfyuiWalletSummary();
-      }
     }
     comfyuiGeneratedImages = generated;
     comfyuiCurrentImage = comfyuiGeneratedImages[0] || null;
@@ -1174,6 +1252,30 @@ function renderComfyuiCivitaiFiles(versionId) {
     : `<option value="">這個版本沒有可下載檔案</option>`;
 }
 
+function renderComfyuiCivitaiTrainedWords(versionId) {
+  const box = $("comfyui-civitai-trained-words");
+  if (!box) return;
+  const versions = comfyuiCivitaiInspection?.versions || [];
+  const selectedVersion = versions.find((item) => String(item.id) === String(versionId || "")) || null;
+  const trainedWords = Array.isArray(selectedVersion?.trained_words)
+    ? selectedVersion.trained_words.filter(Boolean).map(String)
+    : [];
+  if (!trainedWords.length) {
+    box.innerHTML = '<span class="drive-card-sub">這個版本沒有提供 trigger words，或官方沒有填寫。</span>';
+    return;
+  }
+  box.innerHTML = trainedWords.map((value) => (
+    `<button class="comfyui-embedding-chip" type="button" data-comfyui-trained-word="${sanitize(value)}" title="Trigger word：${sanitize(value)}">${sanitize(value)}</button>`
+  )).join("");
+  box.querySelectorAll("[data-comfyui-trained-word]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const token = button.getAttribute("data-comfyui-trained-word") || "";
+      if (!token) return;
+      setComfyuiMessage(`這個版本的 trigger word：${token}`, true);
+    });
+  });
+}
+
 function renderComfyuiCivitaiInspection(model) {
   const versionSelect = $("comfyui-civitai-version");
   const status = $("comfyui-model-download-status");
@@ -1190,6 +1292,7 @@ function renderComfyuiCivitaiInspection(model) {
   const selectedVersionId = comfyuiCivitaiInspection?.selected_version_id || versions[0]?.id || "";
   versionSelect.value = selectedVersionId ? String(selectedVersionId) : "";
   renderComfyuiCivitaiFiles(versionSelect.value);
+  renderComfyuiCivitaiTrainedWords(versionSelect.value);
   if ($("comfyui-model-download-type") && comfyuiCivitaiInspection?.suggested_model_type) {
     $("comfyui-model-download-type").value = comfyuiCivitaiInspection.suggested_model_type;
   }
@@ -1200,7 +1303,9 @@ function renderComfyuiCivitaiInspection(model) {
 }
 
 function onComfyuiCivitaiVersionChange() {
-  renderComfyuiCivitaiFiles($("comfyui-civitai-version")?.value || "");
+  const versionId = $("comfyui-civitai-version")?.value || "";
+  renderComfyuiCivitaiFiles(versionId);
+  renderComfyuiCivitaiTrainedWords(versionId);
 }
 
 function setComfyuiModelDownloadProgress({ visible = true, running = false, percent = 0, label = "", detail = "" } = {}) {
@@ -1220,31 +1325,36 @@ function setComfyuiModelDownloadProgress({ visible = true, running = false, perc
 }
 
 async function pollComfyuiModelDownloadJob(jobId) {
-  while (true) {
-    const res = await apiFetch(API + `/root/comfyui/download-jobs/${encodeURIComponent(jobId)}`, {
-      credentials: "same-origin",
-      headers: { "X-CSRF-Token": getCsrfToken() || "" }
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) throw new Error(json.msg || `模型下載進度讀取失敗（HTTP ${res.status}）`);
-    const job = json.job || {};
-    const progress = job.progress || {};
-    const totalBytes = Number(progress.total_bytes || 0);
-    const writtenBytes = Number(progress.bytes_written || 0);
-    const sizeText = totalBytes > 0
-      ? `${formatDriveBytes(writtenBytes)} / ${formatDriveBytes(totalBytes)}`
-      : `${formatDriveBytes(writtenBytes)}`;
-    const detail = `${progress.detail || "等待下載進度"}${writtenBytes > 0 ? `；${sizeText}` : ""}`;
-    setComfyuiModelDownloadProgress({
-      visible: true,
-      running: job.status !== "completed" && job.status !== "error",
-      percent: Number(progress.percent || 0),
-      label: job.status === "completed" ? "模型已下載" : (job.status === "error" ? "模型下載失敗" : "模型下載中"),
-      detail,
-    });
-    if (job.status === "completed") return job.result || {};
-    if (job.status === "error") throw new Error(job.error || progress.detail || "模型下載失敗");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  setComfyuiIdleSuspend("comfyui_model_download", true, "ComfyUI 模型下載中");
+  try {
+    while (true) {
+      const res = await apiFetch(API + `/root/comfyui/download-jobs/${encodeURIComponent(jobId)}`, {
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": getCsrfToken() || "" }
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.msg || `模型下載進度讀取失敗（HTTP ${res.status}）`);
+      const job = json.job || {};
+      const progress = job.progress || {};
+      const totalBytes = Number(progress.total_bytes || 0);
+      const writtenBytes = Number(progress.bytes_written || 0);
+      const sizeText = totalBytes > 0
+        ? `${formatDriveBytes(writtenBytes)} / ${formatDriveBytes(totalBytes)}`
+        : `${formatDriveBytes(writtenBytes)}`;
+      const detail = `${progress.detail || "等待下載進度"}${writtenBytes > 0 ? `；${sizeText}` : ""}`;
+      setComfyuiModelDownloadProgress({
+        visible: true,
+        running: job.status !== "completed" && job.status !== "error",
+        percent: Number(progress.percent || 0),
+        label: job.status === "completed" ? "模型已下載" : (job.status === "error" ? "模型下載失敗" : "模型下載中"),
+        detail,
+      });
+      if (job.status === "completed") return job.result || {};
+      if (job.status === "error") throw new Error(job.error || progress.detail || "模型下載失敗");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  } finally {
+    setComfyuiIdleSuspend("comfyui_model_download", false, "ComfyUI 模型下載中");
   }
 }
 
@@ -1340,14 +1450,15 @@ async function downloadComfyuiCivitaiModel() {
       body: JSON.stringify({ page_url: pageUrl, version_id: versionId, file_id: fileId, type, base_dir: baseDir, async_progress: true })
     });
     const json = await res.json().catch(() => ({}));
-    if (res.status === 410) throw new Error(json.msg || "舊下載方式已停用");
     if (!res.ok || !json.ok) throw new Error(json.msg || `模型下載失敗（HTTP ${res.status}）`);
     const jobId = json.job?.job_id;
     if (!jobId) throw new Error("ComfyUI 未回傳模型下載工作編號");
     const info = await pollComfyuiModelDownloadJob(jobId);
     if (status) {
       const versionLabel = info?.civitai?.version_name ? ` · ${info.civitai.version_name}` : "";
-      status.textContent = `${json.msg || "模型已下載"}${versionLabel}（${formatDriveBytes(info.size_bytes || 0)}）`;
+      const trainedWords = Array.isArray(info?.civitai?.trained_words) ? info.civitai.trained_words.filter(Boolean) : [];
+      const trainedText = trainedWords.length ? `；trigger words：${trainedWords.join(", ")}` : "";
+      status.textContent = `${json.msg || "模型已下載"}${versionLabel}（${formatDriveBytes(info.size_bytes || 0)}）${trainedText}`;
     }
     setComfyuiModelDownloadProgress({
       visible: true,

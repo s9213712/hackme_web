@@ -72,6 +72,7 @@ function bindUiEvents() {
   const adminReportsBulkApproveBtn = $("admin-reports-bulk-approve");
   const adminReportsBulkRejectBtn = $("admin-reports-bulk-reject");
   const settingsSave = $("settings-save-btn");
+  const settingsPanel = $("sec-server-settings");
   const comfyuiTestConnectionBtn = $("comfyui-test-connection-btn");
   const cloudDrivePolicySave = $("cloud-drive-policy-save-btn");
   const rootCatalogNew = $("root-catalog-new-btn");
@@ -190,7 +191,6 @@ function bindUiEvents() {
   const comfyuiShareBtn = $("comfyui-share-btn");
   const comfyuiDiscardBtn = $("comfyui-discard-btn");
   const comfyuiLoraAddBtn = $("comfyui-lora-add-btn");
-  const comfyuiRootAccelToggle = $("comfyui-root-accel-toggle");
   const comfyuiCivitaiInspectBtn = $("comfyui-civitai-inspect-btn");
   const comfyuiCivitaiVersion = $("comfyui-civitai-version");
   const comfyuiModelDownloadBtn = $("comfyui-model-download-btn");
@@ -363,7 +363,6 @@ function bindUiEvents() {
   if (comfyuiShareBtn) comfyuiShareBtn.addEventListener("click", shareComfyuiToCommunity);
   if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
   if (comfyuiLoraAddBtn) comfyuiLoraAddBtn.addEventListener("click", addSelectedComfyuiLora);
-  if (comfyuiRootAccelToggle) comfyuiRootAccelToggle.addEventListener("change", onComfyuiRootAccelToggleChanged);
   if (comfyuiCivitaiInspectBtn) comfyuiCivitaiInspectBtn.addEventListener("click", inspectComfyuiCivitaiModel);
   if (comfyuiCivitaiVersion) comfyuiCivitaiVersion.addEventListener("change", onComfyuiCivitaiVersionChange);
   if (comfyuiModelDownloadBtn) comfyuiModelDownloadBtn.addEventListener("click", downloadComfyuiModelFromUrl);
@@ -389,6 +388,15 @@ function bindUiEvents() {
   if (editSaveBtn)   editSaveBtn.addEventListener("click", submitEditUser);
   if (editCancelBtn) editCancelBtn.addEventListener("click", hideUserEditDialog);
   if (avatarUploadBtn) avatarUploadBtn.addEventListener("click", uploadUserAvatar);
+  if ($("edit-user-appearance-preset")) $("edit-user-appearance-preset").addEventListener("change", applyUserAppearancePresetSelection);
+  if ($("edit-user-appearance-reset")) $("edit-user-appearance-reset").addEventListener("click", resetUserAppearanceEditorToGlobal);
+  Object.values(typeof USER_APPEARANCE_FIELD_MAP === "object" ? USER_APPEARANCE_FIELD_MAP : {}).forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    const handler = () => markUserAppearanceEditorChanged();
+    el.addEventListener("input", handler);
+    el.addEventListener("change", handler);
+  });
   if (userEditOverlay) userEditOverlay.addEventListener("click", (e) => {
     if (e.target === userEditOverlay) hideUserEditDialog();
   });
@@ -452,8 +460,19 @@ function bindUiEvents() {
 
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
+  if (settingsPanel) {
+    const clearHandler = () => {
+      if (typeof clearSettingsStatus === "function") clearSettingsStatus();
+    };
+    settingsPanel.querySelectorAll("input, select, textarea").forEach((el) => {
+      el.addEventListener("input", clearHandler);
+      el.addEventListener("change", clearHandler);
+    });
+  }
   if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);
+  if ($("s-captcha-mode")) $("s-captcha-mode").addEventListener("change", updateCaptchaModeFields);
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").addEventListener("change", updateComfyuiConnectionModeFields);
+  if (typeof bindSettingsAssistants === "function") bindSettingsAssistants();
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
   if (rootCatalogRefresh) rootCatalogRefresh.addEventListener("click", loadRootEconomyCatalog);
@@ -497,7 +516,10 @@ function bindUiEvents() {
   if (securityPentestStart) securityPentestStart.addEventListener("click", startSecurityPentest);
   if (securityFunctionalStart) securityFunctionalStart.addEventListener("click", startSecurityFunctionalSmoke);
   if (securityStressStart) securityStressStart.addEventListener("click", startSecurityStressTest);
-  if (serverModeSelect) serverModeSelect.addEventListener("change", () => previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s"));
+  if (serverModeSelect) serverModeSelect.addEventListener("change", () => {
+    previewSecurityProfileSelection("server-mode-select", "server-mode-profile-preview", "s");
+    if (typeof updateServerModeTokenPanels === "function") updateServerModeTokenPanels(serverModeSelect.value);
+  });
 }
 
 $("li-pw").addEventListener("keydown", (e) => {

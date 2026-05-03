@@ -45,6 +45,13 @@ DEFAULT_SETTINGS = {
     "site_muted": "#8888aa",
     "site_layout_mode": "centered",
     "site_density": "comfortable",
+    "site_radius_px": 12,
+    "site_font_scale": 1.0,
+    "site_content_width": 1380,
+    "site_font_family": "system",
+    "site_background_style": "flat",
+    "site_panel_style": "glass",
+    "site_sidebar_width": "standard",
     "module_chat_min_role": "user",
     "module_community_min_role": "user",
     "module_appeals_min_role": "user",
@@ -54,7 +61,6 @@ DEFAULT_SETTINGS = {
     "module_videos_min_role": "user",
     "comfyui_connection_mode": os.environ.get("COMFYUI_CONNECTION_MODE", "remote"),
     "comfyui_remote_api_url": os.environ.get("COMFYUI_API_URL", ""),
-    "comfyui_root_accel_api_url": os.environ.get("COMFYUI_ROOT_ACCEL_API_URL", ""),
     "comfyui_base_dir": os.environ.get("COMFYUI_BASE_DIR", ""),
     "comfyui_local_start_script": os.environ.get("COMFYUI_START_SCRIPT", ""),
     "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
@@ -90,7 +96,7 @@ DEFAULT_SETTINGS = {
     "storage_maintenance_daily_time": "04:00",
     "storage_maintenance_last_date": "",
     "storage_trash_retention_days": 30,
-    "feature_personalization_enabled": False,
+    "feature_personalization_enabled": True,
     "feature_social_search_enabled": False,
     "feature_advanced_security_enabled": False,
     "feature_privacy_uploads_enabled": False,
@@ -112,6 +118,90 @@ DEFAULT_SETTINGS = {
 }
 
 FEATURE_FLAG_KEYS = tuple(key for key in DEFAULT_SETTINGS if key.startswith("feature_"))
+FEATURE_SETTING_LABELS = {
+    "feature_chat_enabled": "聊天室",
+    "feature_community_enabled": "討論區 / 公告 / 留言",
+    "feature_accounts_enabled": "帳號管理",
+    "feature_appeals_enabled": "用戶申覆",
+    "feature_audit_log_enabled": "Audit log 查詢",
+    "feature_violation_center_enabled": "違規中心",
+    "feature_reports_enabled": "檢舉審核",
+    "feature_system_health_enabled": "系統健康燈",
+    "feature_identity_governance_enabled": "身份治理欄位 / 會員等級",
+    "feature_account_security_enabled": "帳號安全強化",
+    "feature_member_governance_enabled": "會員治理與投票",
+    "feature_server_modes_enabled": "伺服器模式",
+    "feature_snapshot_restore_enabled": "Snapshot / Restore / Reset",
+    "feature_health_center_enabled": "健康監控中心新版",
+    "feature_forum_core_enabled": "論壇核心新版",
+    "feature_ui_rebuild_enabled": "UI 架構重構",
+    "feature_reports_notifications_enabled": "檢舉 / 申訴 / 通知新版",
+    "feature_attachments_enabled": "附件 / 頭像 / CAPTCHA",
+    "feature_storage_albums_enabled": "Storage / 相簿",
+    "feature_videos_enabled": "影音分享",
+    "feature_games_enabled": "遊戲區 / 西洋棋",
+    "feature_comfyui_enabled": "ComfyUI AI 產圖",
+    "feature_economy_enabled": "PointsChain 積分系統",
+    "feature_trading_enabled": "積分交易所",
+    "feature_personalization_enabled": "個人外觀覆寫",
+    "feature_social_search_enabled": "社交 / 搜尋",
+    "feature_advanced_security_enabled": "進階安全",
+    "feature_privacy_uploads_enabled": "隱私分級上傳 / E2EE",
+}
+FEATURE_DEPENDENCY_RULES = {
+    "feature_storage_albums_enabled": {
+        "required": ("feature_privacy_uploads_enabled",),
+        "description": "Storage / 相簿需要先有雲端硬碟父功能。",
+    },
+    "feature_trading_enabled": {
+        "required": ("feature_economy_enabled",),
+        "description": "積分交易所必須依附在 PointsChain 上。",
+    },
+    "feature_videos_enabled": {
+        "recommended": ("feature_privacy_uploads_enabled", "feature_economy_enabled"),
+        "description": "影音若搭配雲端硬碟與 PointsChain，才有上傳、保存與打賞等完整服務。",
+    },
+    "feature_comfyui_enabled": {
+        "recommended": ("feature_privacy_uploads_enabled",),
+        "description": "ComfyUI 若搭配雲端硬碟，可直接保存與分享產圖結果。",
+    },
+    "feature_chat_enabled": {
+        "recommended": ("feature_attachments_enabled", "feature_reports_enabled", "feature_reports_notifications_enabled"),
+        "description": "聊天室完整體驗通常會搭配附件、檢舉與通知。",
+    },
+    "feature_community_enabled": {
+        "recommended": ("feature_attachments_enabled", "feature_reports_enabled", "feature_reports_notifications_enabled"),
+        "description": "討論區完整體驗通常會搭配附件、檢舉與通知。",
+    },
+    "feature_appeals_enabled": {
+        "recommended": ("feature_accounts_enabled", "feature_reports_notifications_enabled"),
+        "description": "申覆流程通常會搭配帳號管理與通知。",
+    },
+    "feature_violation_center_enabled": {
+        "recommended": ("feature_accounts_enabled",),
+        "description": "違規中心通常和帳號管理一起使用。",
+    },
+    "feature_reports_enabled": {
+        "recommended": ("feature_accounts_enabled", "feature_reports_notifications_enabled"),
+        "description": "檢舉審核通常會搭配帳號管理與通知。",
+    },
+    "feature_reports_notifications_enabled": {
+        "recommended": ("feature_accounts_enabled",),
+        "description": "通知中心通常由帳號管理模組承載。",
+    },
+    "feature_identity_governance_enabled": {
+        "recommended": ("feature_accounts_enabled",),
+        "description": "身份治理欄位通常和帳號管理一起開。",
+    },
+    "feature_account_security_enabled": {
+        "recommended": ("feature_accounts_enabled",),
+        "description": "帳號安全強化通常和帳號管理一起開。",
+    },
+    "feature_member_governance_enabled": {
+        "recommended": ("feature_accounts_enabled",),
+        "description": "會員治理頁面通常掛在帳號管理底下。",
+    },
+}
 MANAGEMENT_ONLY_FEATURE_FLAGS = frozenset({
     "feature_accounts_enabled",
     "feature_audit_log_enabled",
@@ -141,6 +231,86 @@ _STATE = {
     "load_json": None,
     "settings_files": (),
 }
+
+
+def normalize_feature_key(feature_key):
+    key = str(feature_key or "").strip()
+    if not key:
+        return ""
+    if not key.startswith("feature_"):
+        key = f"feature_{key.replace('_enabled', '')}_enabled"
+    elif not key.endswith("_enabled"):
+        key = f"{key}_enabled"
+    return key
+
+
+def get_feature_setting_label(feature_key):
+    key = normalize_feature_key(feature_key)
+    return FEATURE_SETTING_LABELS.get(key, key)
+
+
+def get_feature_dependency_rule(feature_key):
+    return FEATURE_DEPENDENCY_RULES.get(normalize_feature_key(feature_key), {})
+
+
+def get_feature_dependency_details(feature_key):
+    key = normalize_feature_key(feature_key)
+    rule = get_feature_dependency_rule(key)
+    required = tuple(rule.get("required", ()) or ())
+    recommended = tuple(rule.get("recommended", ()) or ())
+    missing_required = tuple(dep for dep in required if not is_feature_enabled(dep))
+    missing_recommended = tuple(dep for dep in recommended if not is_feature_enabled(dep))
+    enabled_dependents_required = []
+    enabled_dependents_recommended = []
+    for candidate, candidate_rule in FEATURE_DEPENDENCY_RULES.items():
+        candidate_required = tuple(candidate_rule.get("required", ()) or ())
+        candidate_recommended = tuple(candidate_rule.get("recommended", ()) or ())
+        if key in candidate_required and is_feature_enabled(candidate):
+            enabled_dependents_required.append(candidate)
+        if key in candidate_recommended and is_feature_enabled(candidate):
+            enabled_dependents_recommended.append(candidate)
+    return {
+        "feature": key,
+        "feature_label": get_feature_setting_label(key),
+        "description": rule.get("description", ""),
+        "required": required,
+        "recommended": recommended,
+        "missing_required": missing_required,
+        "missing_recommended": missing_recommended,
+        "enabled_dependents_required": tuple(enabled_dependents_required),
+        "enabled_dependents_recommended": tuple(enabled_dependents_recommended),
+    }
+
+
+def build_feature_disabled_payload(feature_key):
+    details = get_feature_dependency_details(feature_key)
+    label = details["feature_label"]
+    message = f"此功能目前已由 root 關閉：{label}"
+    if details["missing_required"]:
+        required_labels = "、".join(get_feature_setting_label(item) for item in details["missing_required"])
+        message += f"。若要完整使用這個功能，還要先開啟：{required_labels}"
+    else:
+        if details["enabled_dependents_required"]:
+            affected = "、".join(get_feature_setting_label(item) for item in details["enabled_dependents_required"])
+            message += f"。目前已開啟且會被一起擋住的相依功能：{affected}"
+        if details["enabled_dependents_recommended"]:
+            affected = "、".join(get_feature_setting_label(item) for item in details["enabled_dependents_recommended"])
+            message += f"。若要提供完整服務，通常也會一起開啟：{affected}"
+    if details["missing_recommended"] and not details["missing_required"] and not details["enabled_dependents_recommended"]:
+        recommended_labels = "、".join(get_feature_setting_label(item) for item in details["missing_recommended"])
+        message += f"。若要提供完整服務，建議一併開啟：{recommended_labels}"
+    payload = {"ok": False, "msg": message, "feature": details["feature"], "feature_label": label}
+    if details["description"]:
+        payload["feature_description"] = details["description"]
+    if details["missing_required"]:
+        payload["missing_required"] = list(details["missing_required"])
+    if details["missing_recommended"]:
+        payload["missing_recommended"] = list(details["missing_recommended"])
+    if details["enabled_dependents_required"]:
+        payload["enabled_dependents_required"] = list(details["enabled_dependents_required"])
+    if details["enabled_dependents_recommended"]:
+        payload["enabled_dependents_recommended"] = list(details["enabled_dependents_recommended"])
+    return payload
 
 
 def configure_settings_service(*, get_db, load_json, base_dir):

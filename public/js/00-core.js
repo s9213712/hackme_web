@@ -39,7 +39,10 @@ let inactivityTimer = null;
 let inactivityCountdownTimer = null;
 let inactivityDeadline = null;
 let inactivityWarned = false;
+const inactivitySuspendReasons = new Map();
 let siteConfig = {};
+let globalSiteConfig = {};
+let userSiteAppearanceConfig = {};
 let serverMeta = {};
 let currentSettingsSection = "security";
 let serverConnectionFailures = 0;
@@ -47,6 +50,34 @@ let serverConnectionTimer = null;
 let notificationPollTimer = null;
 let notificationsOpen = false;
 const avatarCacheBustByUserId = new Map();
+const SITE_APPEARANCE_KEYS = [
+  "site_bg",
+  "site_surface",
+  "site_accent",
+  "site_accent2",
+  "site_text",
+  "site_muted",
+  "site_layout_mode",
+  "site_density",
+  "site_radius_px",
+  "site_font_scale",
+  "site_content_width",
+  "site_font_family",
+  "site_background_style",
+  "site_panel_style",
+  "site_sidebar_width",
+];
+const SITE_FONT_FAMILY_MAP = {
+  system: "'Segoe UI', system-ui, sans-serif",
+  rounded: "'Trebuchet MS', 'Segoe UI', system-ui, sans-serif",
+  serif: "'Iowan Old Style', 'Palatino Linotype', Georgia, ui-serif, serif",
+  mono: "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace",
+};
+const SITE_SIDEBAR_WIDTH_MAP = {
+  compact: { expanded: 216, collapsed: 64 },
+  standard: { expanded: 244, collapsed: 68 },
+  wide: { expanded: 288, collapsed: 76 },
+};
 
 function clientRoleRank(role) {
   if (role === "super_admin") return 3;
@@ -58,6 +89,15 @@ function getModuleMinRole(moduleKey, fallbackRole) {
   const key = `module_${moduleKey}_min_role`;
   const value = siteConfig && typeof siteConfig[key] === "string" ? siteConfig[key] : fallbackRole;
   return ["user", "manager", "super_admin"].includes(value) ? value : fallbackRole;
+}
+
+function isFeatureEnabledForUi(featureKey, defaultValue = true) {
+  const raw = String(featureKey || "");
+  const key = raw.startsWith("feature_")
+    ? raw
+    : `feature_${raw.replace(/^feature_/, "").replace(/_enabled$/, "")}_enabled`;
+  if (!siteConfig || typeof siteConfig !== "object" || !(key in siteConfig)) return defaultValue;
+  return siteConfig[key] !== false;
 }
 
 function canAccessModule(moduleKey, role = currentRole) {
@@ -111,7 +151,15 @@ const SIDEBAR_MENU_CONFIG = [
       { label: "檔案清單", action: "module:drive" },
     ],
   },
-  { tabId: "tab-module-albums", module: "privacy_uploads", tab: "albums", icon: "image", label: "相簿", group: "工具" },
+  {
+    tabId: "tab-module-albums",
+    module: "privacy_uploads",
+    tab: "albums",
+    icon: "image",
+    label: "相簿",
+    group: "工具",
+    requiresFeatures: ["feature_storage_albums_enabled"],
+  },
   { tabId: "tab-module-videos", module: "videos", tab: "videos", icon: "video", label: "影音", group: "工具" },
   { tabId: "tab-module-games", module: "games", tab: "games", icon: "game", label: "遊戲區", group: "工具" },
   { tabId: "tab-module-comfyui", module: "comfyui", tab: "comfyui", icon: "spark", label: "AI 產圖", group: "工具" },
@@ -127,11 +175,11 @@ const SIDEBAR_MENU_CONFIG = [
     group: "管理",
     submenu: [
       { label: "帳號", action: "admin:users" },
-      { label: "違規計次", action: "admin:violations" },
-      { label: "會員治理", action: "admin:governance" },
-      { label: "發放通知", action: "admin:notices" },
-      { label: "申覆審核", action: "admin:appeals" },
-      { label: "訊息檢舉", action: "admin:reports" },
+      { label: "違規計次", action: "admin:violations", featureKey: "feature_violation_center_enabled" },
+      { label: "會員治理", action: "admin:governance", featureKey: "feature_member_governance_enabled" },
+      { label: "發放通知", action: "admin:notices", featureKey: "feature_reports_notifications_enabled" },
+      { label: "申覆審核", action: "admin:appeals", featureKey: "feature_appeals_enabled" },
+      { label: "訊息檢舉", action: "admin:reports", featureKey: "feature_reports_enabled" },
     ],
   },
   {
@@ -143,8 +191,8 @@ const SIDEBAR_MENU_CONFIG = [
     group: "管理",
     submenu: [
       { label: "總覽", action: "server:security" },
-      { label: "審計日誌", action: "server:audit" },
-      { label: "健康度", action: "server:health" },
+      { label: "審計日誌", action: "server:audit", featureKey: "feature_audit_log_enabled" },
+      { label: "健康度", action: "server:health", featureKey: "feature_system_health_enabled" },
       { label: "Integrity Guard", action: "server:integrity" },
       { label: "伺服器設定", action: "server:settings" },
       { label: "系統環境", action: "server:env" },
@@ -166,12 +214,14 @@ function canShowSidebarItem(item) {
   if (item.hideForSuperAdmin && currentRole === "super_admin") return false;
   if (item.role === "root") return currentUser === "root";
   if (item.role === "super_admin") return currentRole === "super_admin";
+  if (Array.isArray(item.requiresFeatures) && item.requiresFeatures.some((key) => !isFeatureEnabledForUi(key))) return false;
   if (item.module === "trading") return canAccessModule("economy") && canAccessModule("trading");
   return canAccessModule(item.module);
 }
 
 function canShowSidebarSubitem(sub) {
   if (!sub) return false;
+  if (sub.featureKey && !isFeatureEnabledForUi(sub.featureKey)) return false;
   if (sub.requiresCommunityReview) {
     if (typeof canOpenCommunityReviewMode === "function") return canOpenCommunityReviewMode();
     return currentRole === "manager" || currentRole === "super_admin";
@@ -360,6 +410,7 @@ function stopInactivityTimer() {
   }
   inactivityDeadline = null;
   inactivityWarned = false;
+  if (renderInactivitySuspendedState()) return;
   const label = $("session-countdown-label");
   if (label) {
     label.textContent = currentUser ? "閒置登出：--:--" : "未登入";
@@ -367,8 +418,46 @@ function stopInactivityTimer() {
   }
 }
 
+function isInactivityCountdownSuspended() {
+  return inactivitySuspendReasons.size > 0;
+}
+
+function currentInactivitySuspendLabel() {
+  const labels = Array.from(inactivitySuspendReasons.values()).filter(Boolean);
+  return labels.length ? labels[labels.length - 1] : "系統工作進行中";
+}
+
+function renderInactivitySuspendedState() {
+  const label = $("session-countdown-label");
+  if (!label || !currentUser || !isInactivityCountdownSuspended()) return false;
+  label.textContent = `閒置登出：${currentInactivitySuspendLabel()}，暫停`;
+  label.style.color = "#4caf50";
+  return true;
+}
+
+function setInactivitySuspendState(reason, active, labelText = "系統工作進行中") {
+  const key = String(reason || "generic").trim() || "generic";
+  if (active) inactivitySuspendReasons.set(key, String(labelText || "系統工作進行中"));
+  else inactivitySuspendReasons.delete(key);
+  if (!currentUser) return;
+  if (isInactivityCountdownSuspended()) {
+    stopInactivityTimer();
+    return;
+  }
+  if (inactivityLogoutMs > 0) resetInactivityTimer();
+  else stopInactivityTimer();
+}
+
 function resetInactivityTimer() {
   if (!currentUser) return;
+  if (!inactivityLogoutMs || inactivityLogoutMs <= 0) {
+    stopInactivityTimer();
+    return;
+  }
+  if (isInactivityCountdownSuspended()) {
+    stopInactivityTimer();
+    return;
+  }
   stopInactivityTimer();
   inactivityDeadline = Date.now() + inactivityLogoutMs;
   updateInactivityCountdown();
@@ -383,6 +472,7 @@ function resetInactivityTimer() {
 function updateInactivityCountdown() {
   const label = $("session-countdown-label");
   if (!label) return;
+  if (renderInactivitySuspendedState()) return;
   if (!currentUser || !inactivityDeadline) {
     label.textContent = currentUser ? "閒置登出：--:--" : "未登入";
     label.style.color = "var(--muted)";
@@ -397,7 +487,7 @@ function updateInactivityCountdown() {
     label.style.color = "#ff4f6d";
     if (!inactivityWarned) {
       inactivityWarned = true;
-      const msg = $("li-msg") || $("settings-msg");
+      const msg = $("li-msg");
       if (msg) {
         msg.textContent = "即將因閒置自動登出，請移動滑鼠或按鍵延長登入狀態。";
         msg.style.color = "#ffb74d";
@@ -509,9 +599,18 @@ function updateLoginModeFields() {
   }
 }
 
-function applySiteConfig(config) {
-  if (!config || typeof config !== "object") return;
-  siteConfig = { ...siteConfig, ...config };
+function extractSiteAppearanceConfig(config) {
+  const out = {};
+  if (!config || typeof config !== "object") return out;
+  SITE_APPEARANCE_KEYS.forEach((key) => {
+    const value = config[key];
+    if (value !== undefined && value !== null && value !== "") out[key] = value;
+  });
+  return out;
+}
+
+function renderEffectiveSiteConfig() {
+  siteConfig = { ...globalSiteConfig, ...userSiteAppearanceConfig };
   updateLoginModeFields();
   const root = document.documentElement;
   const mappings = {
@@ -528,11 +627,44 @@ function applySiteConfig(config) {
       root.style.setProperty(cssVar, value);
     }
   });
+  const radius = Number(siteConfig.site_radius_px || 12);
+  root.style.setProperty("--radius", `${Math.max(4, Math.min(32, Number.isFinite(radius) ? radius : 12))}px`);
+  const fontScale = Number(siteConfig.site_font_scale || 1);
+  root.style.setProperty("--font-scale", String(Math.max(0.85, Math.min(1.3, Number.isFinite(fontScale) ? fontScale : 1))));
+  const contentWidth = Number(siteConfig.site_content_width || 1380);
+  root.style.setProperty("--content-max-width", `${Math.max(980, Math.min(1800, Number.isFinite(contentWidth) ? contentWidth : 1380))}px`);
+  const fontFamilyKey = typeof siteConfig.site_font_family === "string" ? siteConfig.site_font_family : "system";
+  root.style.setProperty("--ui-font-family", SITE_FONT_FAMILY_MAP[fontFamilyKey] || SITE_FONT_FAMILY_MAP.system);
+  const sidebarWidthKey = typeof siteConfig.site_sidebar_width === "string" ? siteConfig.site_sidebar_width : "standard";
+  const sidebarWidths = SITE_SIDEBAR_WIDTH_MAP[sidebarWidthKey] || SITE_SIDEBAR_WIDTH_MAP.standard;
+  root.style.setProperty("--sidebar-width", `${sidebarWidths.expanded}px`);
+  root.style.setProperty("--sidebar-width-collapsed", `${sidebarWidths.collapsed}px`);
   const layoutMode = typeof siteConfig.site_layout_mode === "string" ? siteConfig.site_layout_mode : "centered";
   const density = typeof siteConfig.site_density === "string" ? siteConfig.site_density : "comfortable";
+  const backgroundStyle = typeof siteConfig.site_background_style === "string" ? siteConfig.site_background_style : "flat";
+  const panelStyle = typeof siteConfig.site_panel_style === "string" ? siteConfig.site_panel_style : "glass";
   document.body.dataset.layoutMode = layoutMode;
   document.body.dataset.density = density;
+  document.body.dataset.backgroundStyle = backgroundStyle;
+  document.body.dataset.panelStyle = panelStyle;
+  document.body.dataset.sidebarWidth = sidebarWidthKey;
   if (typeof updateRecoveryModeUi === "function") updateRecoveryModeUi();
+}
+
+function applySiteConfig(config, options = {}) {
+  if (!config || typeof config !== "object") return;
+  const scope = options && typeof options.scope === "string" ? options.scope : "global";
+  if (scope === "user") {
+    userSiteAppearanceConfig = extractSiteAppearanceConfig(config);
+  } else {
+    globalSiteConfig = { ...globalSiteConfig, ...config };
+  }
+  renderEffectiveSiteConfig();
+}
+
+function clearUserAppearanceConfig() {
+  userSiteAppearanceConfig = {};
+  renderEffectiveSiteConfig();
 }
 
 function renderServerVersion(meta) {
@@ -882,11 +1014,15 @@ function renderChatMessages(messages) {
 
 function hideUserEditDialog() {
   if (forcedPasswordChangeMode) return;
+  if (typeof restoreUserAppearancePreviewIfNeeded === "function") {
+    restoreUserAppearancePreviewIfNeeded();
+  }
   const overlay = $("user-edit-overlay");
   if (overlay) {
     overlay.classList.remove("show");
   }
   editingUserId = null;
+  editingUserIsSelf = false;
 }
 
 function isBirthdayToday(birthdate) {
@@ -1014,6 +1150,11 @@ function setAuthState(json, showLoginHero = false) {
   const idleMinutes = Number(json.session_idle_timeout_minutes ?? 10);
   inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
   if (inactivityLogoutMs > 0) resetInactivityTimer();
+  if (json && json.appearance_settings && typeof json.appearance_settings === "object") {
+    applySiteConfig(json.appearance_settings, { scope: "user" });
+  } else {
+    clearUserAppearanceConfig();
+  }
   canManageUsers = currentRole === "super_admin";
   $("auth-card").style.display = "none";
   document.body.classList.add("app-authenticated");
@@ -1107,7 +1248,7 @@ function setAuthState(json, showLoginHero = false) {
   if (tabModuleAnnouncements) tabModuleAnnouncements.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleCommunity) tabModuleCommunity.style.display = canAccessModule("community") ? "" : "none";
   if (tabModuleDrive) tabModuleDrive.style.display = canAccessModule("privacy_uploads") ? "" : "none";
-  if (tabModuleAlbums) tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none";
+  if (tabModuleAlbums) tabModuleAlbums.style.display = (canAccessModule("privacy_uploads") && isFeatureEnabledForUi("feature_storage_albums_enabled", false)) ? "" : "none";
   if (tabModuleVideos) tabModuleVideos.style.display = canAccessModule("videos") ? "" : "none";
   if (tabModuleGames) tabModuleGames.style.display = canAccessModule("games") ? "" : "none";
   if (tabModuleComfyui) tabModuleComfyui.style.display = canAccessModule("comfyui") ? "" : "none";
@@ -1118,10 +1259,10 @@ function setAuthState(json, showLoginHero = false) {
     syncSidebarMenuVisibility();
     restoreSidebarState();
   }
-  if (appealsTab) appealsTab.style.display = currentRole === "super_admin" ? "" : "none";
-  if (reportsTab) reportsTab.style.display = currentRole === "super_admin" ? "" : "none";
-  if (governanceTab) governanceTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
-  if (noticesTab) noticesTab.style.display = (currentRole === "manager" || currentRole === "super_admin") ? "" : "none";
+  if (appealsTab) appealsTab.style.display = (currentRole === "super_admin" && isFeatureEnabledForUi("feature_appeals_enabled", false)) ? "" : "none";
+  if (reportsTab) reportsTab.style.display = (currentRole === "super_admin" && isFeatureEnabledForUi("feature_reports_enabled", false)) ? "" : "none";
+  if (governanceTab) governanceTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_member_governance_enabled", false)) ? "" : "none";
+  if (noticesTab) noticesTab.style.display = ((currentRole === "manager" || currentRole === "super_admin") && isFeatureEnabledForUi("feature_reports_notifications_enabled", false)) ? "" : "none";
   const restartBtn = $("restart-server-btn");
   if (restartBtn) restartBtn.style.display = currentUser === "root" ? "" : "none";
 
@@ -1175,12 +1316,14 @@ function setAuthState(json, showLoginHero = false) {
 
 function resetAuthState() {
   showLoginScreen();
+  clearUserAppearanceConfig();
   currentUser = null;
   currentUserId = null;
   currentRole = "user";
   currentRoleLabel = "user";
   currentMustChangePassword = false;
   inactivityLogoutMs = DEFAULT_INACTIVITY_LOGOUT_MS;
+  inactivitySuspendReasons.clear();
   forcedPasswordChangeMode = false;
   canManageUsers = false;
   users = [];

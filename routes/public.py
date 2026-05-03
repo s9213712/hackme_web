@@ -17,6 +17,7 @@ from services.account_recovery import (
     queue_mail,
 )
 from services.captcha import create_captcha_challenge, normalize_captcha_mode, verify_captcha_response
+from services.user_profiles import clear_profile_appearance, get_profile_appearance, update_profile_appearance
 
 
 def register_public_routes(app, deps):
@@ -59,6 +60,7 @@ def register_public_routes(app, deps):
     record_login_failure = deps["record_login_failure"]
     record_security_event = deps["record_security_event"]
     require_csrf = deps["require_csrf"]
+    require_csrf_safe = deps["require_csrf_safe"]
     revoke_user_sessions = deps.get("revoke_user_sessions", lambda user_id: 0)
     score_password_strength = deps["score_password_strength"]
     store_csrf_token = deps["store_csrf_token"]
@@ -291,6 +293,13 @@ def register_public_routes(app, deps):
                 "site_muted": settings.get("site_muted"),
                 "site_layout_mode": settings.get("site_layout_mode"),
                 "site_density": settings.get("site_density"),
+                "site_radius_px": settings.get("site_radius_px"),
+                "site_font_scale": settings.get("site_font_scale"),
+                "site_content_width": settings.get("site_content_width"),
+                "site_font_family": settings.get("site_font_family"),
+                "site_background_style": settings.get("site_background_style"),
+                "site_panel_style": settings.get("site_panel_style"),
+                "site_sidebar_width": settings.get("site_sidebar_width"),
                 "module_chat_min_role": settings.get("module_chat_min_role"),
                 "module_community_min_role": settings.get("module_community_min_role"),
                 "module_appeals_min_role": settings.get("module_appeals_min_role"),
@@ -895,6 +904,11 @@ def register_public_routes(app, deps):
         effective_level = None if is_special_account else (dict(ctx).get("effective_level") or dict(ctx).get("member_level") or "normal")
         # 全局覆寫（system_settings）> member_level 規則 > 預設 10
         settings = get_system_settings()
+        conn = get_db()
+        try:
+            appearance_settings = get_profile_appearance(conn, ctx["id"])
+        finally:
+            conn.close()
         override = settings.get("session_idle_timeout_minutes")
         if override is not None:
             session_idle_timeout_minutes = max(1, int(override))
@@ -930,4 +944,39 @@ def register_public_routes(app, deps):
             "nickname": decrypt_field(ctx["nickname"]),
             "birthdate": decrypt_field(ctx["birthdate"]),
             "chat_violation_warned": dict(ctx).get("chat_violation_warned") or 0,
+            "appearance_settings": appearance_settings,
         })
+
+    @app.route("/api/me/appearance", methods=["GET", "PUT", "DELETE"])
+    @require_csrf_safe
+    def me_appearance():
+        ctx = get_current_user_ctx()
+        if not ctx:
+            return json_resp({"ok": False, "msg": "未登入"}), 401
+        if request.method == "GET":
+            conn = get_db()
+            try:
+                return json_resp({"ok": True, "appearance_settings": get_profile_appearance(conn, ctx["id"])})
+            finally:
+                conn.close()
+        if request.method == "DELETE":
+            conn = get_db()
+            try:
+                appearance = clear_profile_appearance(conn, actor=ctx)
+                conn.commit()
+            finally:
+                conn.close()
+            audit("USER_APPEARANCE_RESET", get_client_ip(), user=ctx["username"], success=True, ua=get_ua())
+            return json_resp({"ok": True, "appearance_settings": appearance, "msg": "已恢復全站預設外觀"})
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            appearance = update_profile_appearance(conn, actor=ctx, data=data)
+            conn.commit()
+        finally:
+            conn.close()
+        audit("USER_APPEARANCE_SAVED", get_client_ip(), user=ctx["username"], success=True, ua=get_ua(), detail=str(sorted(appearance.keys())))
+        return json_resp({"ok": True, "appearance_settings": appearance, "msg": "個人外觀已儲存"})

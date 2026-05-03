@@ -2516,7 +2516,32 @@ function renderAlbums(albums) {
   `).join("");
 }
 
+function storageAlbumsFeatureEnabled() {
+  if (typeof isFeatureEnabledForUi === "function") return isFeatureEnabledForUi("feature_storage_albums_enabled", false);
+  if (!siteConfig || typeof siteConfig !== "object") return true;
+  return siteConfig.feature_storage_albums_enabled !== false;
+}
+
+function renderStorageFeatureDisabled() {
+  storageFilesCache = [];
+  storageFoldersCache = [];
+  storageAlbumsCache = [];
+  selectedStorageFileId = "";
+  selectedAlbumId = "";
+  const message = "Storage / 相簿目前未啟用。請由 root 到設定 > 功能開關，至少一起開啟「隱私分級上傳 / E2EE」與「Storage / 相簿」。";
+  if ($("storage-selection-label")) $("storage-selection-label").textContent = message;
+  if ($("storage-browser-list")) $("storage-browser-list").innerHTML = `<div class="drive-empty">${sanitize(message)}</div>`;
+  if ($("storage-trash-list")) $("storage-trash-list").innerHTML = `<div class="drive-empty">Storage 未啟用，因此沒有可顯示的垃圾桶內容。</div>`;
+  if ($("album-list")) $("album-list").innerHTML = `<div class="drive-empty">${sanitize(message)}</div>`;
+  if ($("album-gallery-list")) $("album-gallery-list").innerHTML = `<div class="drive-empty">${sanitize(message)}</div>`;
+  closeAlbumDetail();
+}
+
 async function loadStorageFiles(csrf) {
+  if (!storageAlbumsFeatureEnabled()) {
+    renderStorageFeatureDisabled();
+    return;
+  }
   const headers = { "X-CSRF-Token": csrf || "" };
   const [filesRes, trashRes, foldersRes, albumsRes] = await Promise.all([
     apiFetch(API + "/storage/files", { credentials: "same-origin", headers }),
@@ -2954,6 +2979,7 @@ async function downloadStorageFile(id) {
 }
 
 async function ensureAlbumChoicesLoaded() {
+  if (!storageAlbumsFeatureEnabled()) throw new Error("Storage / 相簿目前未啟用，請先由 root 開啟完整雲端硬碟組合。");
   if (storageAlbumsCache.length) return storageAlbumsCache;
   const json = await storageAction("/storage/albums", "GET");
   storageAlbumsCache = Array.isArray(json.albums) ? json.albums : [];
@@ -3208,6 +3234,10 @@ function renderAlbumGallery(albums) {
 }
 
 async function loadAlbumGallery() {
+  if (!storageAlbumsFeatureEnabled()) {
+    renderStorageFeatureDisabled();
+    return;
+  }
   if (!currentUser || !canAccessModule("privacy_uploads")) return;
   const msg = $("album-gallery-msg");
   try {

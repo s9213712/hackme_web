@@ -1,4 +1,24 @@
+import json
 from datetime import datetime
+
+
+APPEARANCE_COLOR_KEYS = (
+    "site_bg",
+    "site_surface",
+    "site_accent",
+    "site_accent2",
+    "site_text",
+    "site_muted",
+)
+APPEARANCE_LAYOUT_MODES = {"centered", "wide"}
+APPEARANCE_DENSITIES = {"comfortable", "compact"}
+APPEARANCE_RADIUS_VALUES = {8, 12, 18, 24}
+APPEARANCE_FONT_SCALES = {0.95, 1.0, 1.08, 1.15}
+APPEARANCE_CONTENT_WIDTHS = {1180, 1380, 1600}
+APPEARANCE_FONT_FAMILIES = {"system", "rounded", "serif", "mono"}
+APPEARANCE_BACKGROUND_STYLES = {"flat", "aurora", "grid"}
+APPEARANCE_PANEL_STYLES = {"glass", "matte", "solid"}
+APPEARANCE_SIDEBAR_WIDTHS = {"compact", "standard", "wide"}
 
 
 def ensure_user_profile_schema(conn):
@@ -14,11 +34,15 @@ def ensure_user_profile_schema(conn):
             custom_title TEXT,
             custom_title_status TEXT NOT NULL DEFAULT 'none',
             profile_visibility TEXT NOT NULL DEFAULT 'public',
+            appearance_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()}
+    if "appearance_json" not in columns:
+        conn.execute("ALTER TABLE user_profiles ADD COLUMN appearance_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _now():
@@ -34,6 +58,90 @@ def _visibility(value):
     return value if value in {"public", "members", "private"} else "public"
 
 
+def _clean_color(value):
+    value = str(value or "").strip()
+    return value if len(value) == 7 and value.startswith("#") and all(ch in "0123456789abcdefABCDEF" for ch in value[1:]) else ""
+
+
+def sanitize_appearance_settings(data):
+    data = data if isinstance(data, dict) else {}
+    out = {}
+    for key in APPEARANCE_COLOR_KEYS:
+        color = _clean_color(data.get(key))
+        if color:
+            out[key] = color
+    layout = str(data.get("site_layout_mode") or "").strip().lower()
+    if layout in APPEARANCE_LAYOUT_MODES:
+        out["site_layout_mode"] = layout
+    density = str(data.get("site_density") or "").strip().lower()
+    if density in APPEARANCE_DENSITIES:
+        out["site_density"] = density
+    try:
+        radius = int(data.get("site_radius_px"))
+    except Exception:
+        radius = None
+    if radius in APPEARANCE_RADIUS_VALUES:
+        out["site_radius_px"] = radius
+    try:
+        font_scale = round(float(data.get("site_font_scale")), 2)
+    except Exception:
+        font_scale = None
+    if font_scale in APPEARANCE_FONT_SCALES:
+        out["site_font_scale"] = font_scale
+    try:
+        content_width = int(data.get("site_content_width"))
+    except Exception:
+        content_width = None
+    if content_width in APPEARANCE_CONTENT_WIDTHS:
+        out["site_content_width"] = content_width
+    font_family = str(data.get("site_font_family") or "").strip().lower()
+    if font_family in APPEARANCE_FONT_FAMILIES:
+        out["site_font_family"] = font_family
+    background_style = str(data.get("site_background_style") or "").strip().lower()
+    if background_style in APPEARANCE_BACKGROUND_STYLES:
+        out["site_background_style"] = background_style
+    panel_style = str(data.get("site_panel_style") or "").strip().lower()
+    if panel_style in APPEARANCE_PANEL_STYLES:
+        out["site_panel_style"] = panel_style
+    sidebar_width = str(data.get("site_sidebar_width") or "").strip().lower()
+    if sidebar_width in APPEARANCE_SIDEBAR_WIDTHS:
+        out["site_sidebar_width"] = sidebar_width
+    return out
+
+
+def get_profile_appearance(conn, user_id):
+    profile = get_or_create_profile(conn, user_id)
+    raw = profile.get("appearance_json") or "{}"
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        parsed = {}
+    return sanitize_appearance_settings(parsed)
+
+
+def update_profile_appearance(conn, *, actor, data):
+    ensure_user_profile_schema(conn)
+    get_or_create_profile(conn, actor["id"])
+    appearance = sanitize_appearance_settings(data)
+    updated_at = _now()
+    conn.execute(
+        "UPDATE user_profiles SET appearance_json=?, updated_at=? WHERE user_id=?",
+        (json.dumps(appearance, ensure_ascii=False, sort_keys=True), updated_at, int(actor["id"])),
+    )
+    return appearance
+
+
+def clear_profile_appearance(conn, *, actor):
+    ensure_user_profile_schema(conn)
+    get_or_create_profile(conn, actor["id"])
+    updated_at = _now()
+    conn.execute(
+        "UPDATE user_profiles SET appearance_json='{}', updated_at=? WHERE user_id=?",
+        (updated_at, int(actor["id"])),
+    )
+    return {}
+
+
 def get_or_create_profile(conn, user_id):
     ensure_user_profile_schema(conn)
     row = conn.execute("SELECT * FROM user_profiles WHERE user_id=?", (int(user_id),)).fetchone()
@@ -42,8 +150,8 @@ def get_or_create_profile(conn, user_id):
     now = _now()
     conn.execute(
         """
-        INSERT INTO user_profiles (user_id, display_name, bio, signature, location, website, profile_visibility, created_at, updated_at)
-        VALUES (?, '', '', '', '', '', 'public', ?, ?)
+        INSERT INTO user_profiles (user_id, display_name, bio, signature, location, website, profile_visibility, appearance_json, created_at, updated_at)
+        VALUES (?, '', '', '', '', '', 'public', '{}', ?, ?)
         """,
         (int(user_id), now, now),
     )

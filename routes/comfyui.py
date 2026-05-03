@@ -43,13 +43,12 @@ COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_COMFYUI_LORAS_PER_PROMPT = 8
 COMFYUI_LORA_EXTRA_PRICE_POINTS = 1
+COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__"
 COMFYUI_MODEL_DOWNLOAD_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin"}
 COMFYUI_MODEL_DOWNLOAD_TYPES = {
     "checkpoint": ("checkpoints", "Checkpoint"),
     "lora": ("loras", "LoRA"),
-    "controlnet": ("controlnet", "ControlNet"),
     "embedding": ("embeddings", "Embedding / Textual Inversion"),
-    "hypernetwork": ("hypernetworks", "Hypernetwork"),
     "vae": ("vae", "VAE"),
 }
 MAX_COMFYUI_MODEL_DOWNLOAD_BYTES = int(os.environ.get("COMFYUI_MODEL_DOWNLOAD_MAX_BYTES", str(20 * 1024 * 1024 * 1024)))
@@ -65,12 +64,11 @@ CIVITAI_API_BASE = os.environ.get("CIVITAI_API_BASE", "https://civitai.com/api/v
 CIVITAI_MODEL_TYPE_TO_DOWNLOAD_TYPE = {
     "checkpoint": "checkpoint",
     "lora": "lora",
-    "controlnet": "controlnet",
     "textualinversion": "embedding",
     "embedding": "embedding",
-    "hypernetwork": "hypernetwork",
     "vae": "vae",
 }
+COMFYUI_EMBEDDING_TOKEN_RE = re.compile(r"<\s*embeddings\s*:\s*([^<>]+?)\s*>", re.IGNORECASE)
 
 
 class _MemoryFile:
@@ -344,11 +342,11 @@ def register_comfyui_routes(app, deps):
         with active_generations_lock:
             return list(active_generations.values())
 
-    def _interrupt_policy(actor, *, use_root_accel=False):
+    def _interrupt_policy(actor):
         if _actor_value(actor, "username") == "root":
             return True, "root_force", {}
         actor_id = _generation_owner_id(actor)
-        binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        binding = _comfyui_binding(actor)
         target_backend_url = _normalize_comfyui_backend_url(binding.get("url"))
         active = _active_generation_snapshot()
         own = [item for item in active if item.get("user_id") == actor_id]
@@ -450,55 +448,26 @@ def register_comfyui_routes(app, deps):
         display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
         return f"http://{display_host}:{port}"
 
-    def _configured_root_accel_comfyui_url():
-        settings = get_system_settings() or {}
-        configured_url = str(settings.get("comfyui_root_accel_api_url") or "").strip()
-        if not configured_url:
-            return ""
-        url, msg = _validate_comfyui_api_url(configured_url)
-        return "" if msg else url
-
-    def _root_accel_available(actor=None):
-        return _actor_value(actor, "username") == "root" and bool(_configured_root_accel_comfyui_url())
-
-    def _comfyui_binding(actor=None, *, backend_url=None, use_root_accel=False):
+    def _comfyui_binding(actor=None, *, backend_url=None):
         primary_mode = _configured_connection_mode()
         primary_url = _configured_comfyui_url()
-        root_accel_url = _configured_root_accel_comfyui_url() if use_root_accel and _root_accel_available(actor) else ""
         explicit_url = _normalize_comfyui_backend_url(backend_url)
         if explicit_url:
-            if root_accel_url and explicit_url == _normalize_comfyui_backend_url(root_accel_url):
-                return {
-                    "url": explicit_url,
-                    "connection_mode": "remote",
-                    "backend_scope": "root_accel",
-                    "root_accel_active": True,
-                }
             if explicit_url == _normalize_comfyui_backend_url(primary_url):
                 return {
                     "url": primary_url,
                     "connection_mode": primary_mode,
                     "backend_scope": "primary",
-                    "root_accel_active": False,
                 }
             return {
                 "url": explicit_url,
                 "connection_mode": "remote",
                 "backend_scope": "custom",
-                "root_accel_active": False,
-            }
-        if root_accel_url:
-            return {
-                "url": root_accel_url,
-                "connection_mode": "remote",
-                "backend_scope": "root_accel",
-                "root_accel_active": True,
             }
         return {
             "url": primary_url,
             "connection_mode": primary_mode,
             "backend_scope": "primary",
-            "root_accel_active": False,
         }
 
     def _configured_local_start_script(value=None, *, base_dir=None):
@@ -1010,6 +979,65 @@ def register_comfyui_routes(app, deps):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
+    def _comfyui_model_sidecar_path(*, model_type, filename, base_dir=None):
+        safe_name = str(filename or "").strip()
+        if not safe_name or "/" in safe_name or "\\" in safe_name or ".." in safe_name:
+            return None
+        project_dir = _configured_comfyui_project_dir(base_dir)
+        if not project_dir:
+            return None
+        mapping = COMFYUI_MODEL_DOWNLOAD_TYPES.get(_normalize_download_model_type(model_type))
+        if not mapping:
+            return None
+        folder_name, _label = mapping
+        model_dir = (project_dir / "models" / folder_name).resolve()
+        sidecar = (model_dir / f"{safe_name}.civitai.json").resolve()
+        try:
+            sidecar.relative_to(model_dir)
+        except ValueError:
+            return None
+        return sidecar
+
+    def _write_comfyui_model_sidecar(*, model_type, filename, base_dir=None, payload=None):
+        sidecar = _comfyui_model_sidecar_path(model_type=model_type, filename=filename, base_dir=base_dir)
+        if not sidecar:
+            return False
+        data = payload if isinstance(payload, dict) else {}
+        try:
+            sidecar.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception:
+            return False
+        return True
+
+    def _read_comfyui_model_sidecar(*, model_type, filename, base_dir=None):
+        sidecar = _comfyui_model_sidecar_path(model_type=model_type, filename=filename, base_dir=base_dir)
+        if not sidecar or not sidecar.exists():
+            return {}
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _build_lora_details(lora_names, *, base_dir=None):
+        details = {}
+        for name in list(lora_names or []):
+            clean_name = str(name or "").strip()
+            if not clean_name:
+                continue
+            meta = _read_comfyui_model_sidecar(model_type="lora", filename=clean_name, base_dir=base_dir)
+            details[clean_name] = {
+                "name": clean_name,
+                "trained_words": [
+                    str(item).strip()
+                    for item in list(meta.get("trained_words") or [])
+                    if str(item).strip()
+                ],
+                "source": str(meta.get("source") or "").strip(),
+                "version_name": str(meta.get("version_name") or "").strip(),
+            }
+        return details
+
     def _public_or_civitai_host(url, *, allow_civitai_only=False):
         parsed = urlparse(str(url or "").strip())
         host = (parsed.hostname or "").lower()
@@ -1361,14 +1389,32 @@ def register_comfyui_routes(app, deps):
             "model_name": inspection["name"],
             "version_id": chosen_version["id"],
             "version_name": chosen_version["name"],
+            "trained_words": list(chosen_version.get("trained_words") or []),
             "file_id": chosen_file.get("id"),
             "file_name": chosen_file.get("name"),
             "source_url": inspection["page_url"],
         }
+        _write_comfyui_model_sidecar(
+            model_type=result.get("type") or model_type or inspection.get("suggested_model_type"),
+            filename=result.get("filename"),
+            base_dir=base_dir,
+            payload={
+                "source": "civitai",
+                "model_id": inspection["model_id"],
+                "model_name": inspection["name"],
+                "version_id": chosen_version["id"],
+                "version_name": chosen_version["name"],
+                "file_id": chosen_file.get("id"),
+                "file_name": chosen_file.get("name"),
+                "trained_words": list(chosen_version.get("trained_words") or []),
+                "source_url": inspection["page_url"],
+                "saved_filename": result.get("filename"),
+            },
+        )
         return result, None
 
-    def _client(actor=None, *, backend_url=None, use_root_accel=False):
-        binding = _comfyui_binding(actor, backend_url=backend_url, use_root_accel=use_root_accel)
+    def _client(actor=None, *, backend_url=None):
+        binding = _comfyui_binding(actor, backend_url=backend_url)
         return _client_for_url(binding["url"])
 
     def _client_for_url(url):
@@ -1735,6 +1781,24 @@ def register_comfyui_routes(app, deps):
             })
         return normalized, None
 
+    def _normalize_comfyui_prompt_text(value):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = COMFYUI_EMBEDDING_TOKEN_RE.sub(
+            lambda match: f"embedding:{match.group(1).strip()}",
+            text,
+        )
+        return text
+
+    def _normalize_comfyui_vae_name(value):
+        text = str(value or "").strip()
+        if not text or text == COMFYUI_VAE_BUILTIN:
+            return ""
+        if "/" in text or "\\" in text or ".." in text:
+            return None
+        return text[:180]
+
     def _clean_filename(name, fallback="comfyui.png"):
         text = str(name or "").strip()
         text = text.split("/")[-1].split("\\")[-1]
@@ -1746,17 +1810,20 @@ def register_comfyui_routes(app, deps):
         return text[:120]
 
     def _normalize_generation_payload(data):
-        prompt = str(data.get("prompt") or "").strip()
+        prompt = _normalize_comfyui_prompt_text(data.get("prompt"))
         if not prompt:
             return None, "請輸入提示詞"
         if len(prompt) > 3000:
             return None, "提示詞最多 3000 字"
-        negative = str(data.get("negative_prompt") or "").strip()
+        negative = _normalize_comfyui_prompt_text(data.get("negative_prompt"))
         if len(negative) > 3000:
             return None, "負面提示詞最多 3000 字"
         model = str(data.get("model") or "").strip()
         if not model:
             return None, "請選擇模型"
+        vae = _normalize_comfyui_vae_name(data.get("vae"))
+        if vae is None:
+            return None, "VAE 名稱不合法"
         loras, lora_msg = _normalize_loras(data)
         if lora_msg:
             return None, lora_msg
@@ -1776,6 +1843,7 @@ def register_comfyui_routes(app, deps):
             "batch_size": _int_range(data.get("batch_size"), 1, 1, _configured_max_batch_size()),
             "filename_prefix": _clean_filename(data.get("filename_prefix") or "hackme_web", fallback="hackme_web").rsplit(".", 1)[0],
             "loras": loras,
+            "vae": vae,
         }
         return params, None
 
@@ -2012,6 +2080,7 @@ def register_comfyui_routes(app, deps):
         model = _safe_text(params.get("model"), 180)
         sampler = _safe_text(params.get("sampler_name"), 80)
         scheduler = _safe_text(params.get("scheduler"), 80)
+        vae = _safe_text(params.get("vae"), 180)
         size = f"{params.get('width') or '-'} x {params.get('height') or '-'}"
         loras = params.get("loras") if isinstance(params.get("loras"), list) else []
         lora_text = ", ".join(
@@ -2041,6 +2110,7 @@ def register_comfyui_routes(app, deps):
             f"Seed：{params.get('seed') if params.get('seed') is not None else '-'}",
             f"Sampler：{sampler or '-'}",
             f"Scheduler：{scheduler or '-'}",
+            f"VAE：{vae or '使用 checkpoint 內建 VAE'}",
             f"LoRA：{lora_text or '-'}",
         ])
         return "\n".join(lines)[:3900]
@@ -2051,8 +2121,7 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        use_root_accel = _coerce_bool(request.args.get("use_root_accel"))
-        binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        binding = _comfyui_binding(actor)
         active_client = _client_for_url(binding["url"])
         try:
             if hasattr(active_client, "health_check"):
@@ -2071,8 +2140,6 @@ def register_comfyui_routes(app, deps):
                     "startup_log_tail": runtime["startup_log_tail"],
                     "connection_mode": binding["connection_mode"],
                     "backend_scope": binding["backend_scope"],
-                    "root_accel_available": _root_accel_available(actor),
-                    "root_accel_enabled": binding["root_accel_active"],
                     "comfyui_url": getattr(active_client, "base_url", binding["url"]),
                     "max_batch_size": _configured_max_batch_size(),
                     "default_width": _configured_default_dimensions()["width"],
@@ -2088,8 +2155,6 @@ def register_comfyui_routes(app, deps):
             "available": True,
             "connection_mode": binding["connection_mode"],
             "backend_scope": binding["backend_scope"],
-            "root_accel_available": _root_accel_available(actor),
-            "root_accel_enabled": binding["root_accel_active"],
             "comfyui_url": getattr(active_client, "base_url", binding["url"]),
             "max_batch_size": _configured_max_batch_size(),
             "default_width": _configured_default_dimensions()["width"],
@@ -2286,22 +2351,6 @@ def register_comfyui_routes(app, deps):
             },
         })
 
-    @app.route("/api/root/comfyui/download-model", methods=["POST"])
-    @require_csrf
-    def root_comfyui_download_model_legacy():
-        actor, err = _root_or_403()
-        if err:
-            return err
-        audit(
-            "COMFYUI_MODEL_DOWNLOAD_LEGACY_REJECTED",
-            get_client_ip(),
-            user=_actor_value(actor, "username"),
-            success=False,
-            ua=get_ua(),
-            detail="legacy direct model download endpoint is disabled",
-        )
-        return json_resp({"ok": False, "msg": "直連網址下載已停用，請改用 Civitai 模型頁網址與版本選擇。"}), 410
-
     @app.route("/api/comfyui/start", methods=["POST"])
     @require_csrf
     def comfyui_start_local():
@@ -2342,8 +2391,7 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        use_root_accel = _coerce_bool(request.args.get("use_root_accel"))
-        binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        binding = _comfyui_binding(actor)
         active_client = _client_for_url(binding["url"])
         try:
             models = active_client.get_models()
@@ -2351,14 +2399,24 @@ def register_comfyui_routes(app, deps):
             loras = active_client.get_loras() if hasattr(active_client, "get_loras") else []
         except ComfyUIError as exc:
             return _json_error_from_comfy(exc, active_client)
+        try:
+            vaes = active_client.get_vaes() if hasattr(active_client, "get_vaes") else []
+        except ComfyUIError:
+            vaes = []
+        try:
+            embeddings = active_client.get_embeddings() if hasattr(active_client, "get_embeddings") else []
+        except ComfyUIError:
+            embeddings = []
+        lora_details = _build_lora_details(loras)
         return json_resp({
             "ok": True,
             "models": models,
             "loras": loras,
+            "lora_details": lora_details,
+            "vaes": vaes,
+            "embeddings": embeddings,
             "connection_mode": binding["connection_mode"],
             "backend_scope": binding["backend_scope"],
-            "root_accel_available": _root_accel_available(actor),
-            "root_accel_enabled": binding["root_accel_active"],
             "samplers": options.get("samplers") or [SAFE_SAMPLER_FALLBACK],
             "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
             "comfyui_url": getattr(active_client, "base_url", binding["url"]),
@@ -2411,8 +2469,7 @@ def register_comfyui_routes(app, deps):
         params, msg = _normalize_generation_payload(data if isinstance(data, dict) else {})
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
-        use_root_accel = _coerce_bool(data.get("use_root_accel"))
-        backend_binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        backend_binding = _comfyui_binding(actor)
         quote = None
         timeout_seconds = _int_range(
             data.get("timeout_seconds"),
@@ -2492,7 +2549,6 @@ def register_comfyui_routes(app, deps):
             "billing": billing,
             "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
             "backend_scope": backend_binding["backend_scope"],
-            "root_accel_enabled": backend_binding["root_accel_active"],
         })
 
     @app.route("/api/comfyui/jobs/<job_id>", methods=["GET"])
@@ -2526,8 +2582,7 @@ def register_comfyui_routes(app, deps):
         except TypeError:
             data = None
         data = data if isinstance(data, dict) else {}
-        use_root_accel = _coerce_bool(data.get("use_root_accel"))
-        allowed, reason, summary = _interrupt_policy(actor, use_root_accel=use_root_accel)
+        allowed, reason, summary = _interrupt_policy(actor)
         if not allowed:
             audit(
                 "COMFYUI_INTERRUPT_SKIPPED",
@@ -2550,7 +2605,7 @@ def register_comfyui_routes(app, deps):
                     **summary,
                 },
             })
-        active_client = _client(actor, use_root_accel=use_root_accel)
+        active_client = _client(actor)
         if _is_root(actor):
             own_active = [
                 item for item in _active_generation_snapshot()

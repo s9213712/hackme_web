@@ -14,6 +14,7 @@ from services.account_recovery import (
     list_password_reset_review_requests,
     mark_password_reset_review_request,
 )
+from services.user_profiles import ensure_user_profile_schema, get_profile_appearance
 
 
 def register_user_routes(app, deps):
@@ -844,6 +845,7 @@ def register_user_routes(app, deps):
         try:
             ensure_member_level_user_columns(conn)
             ensure_avatar_user_columns(conn)
+            ensure_user_profile_schema(conn)
             target = conn.execute(
                 "SELECT id, username, nickname, real_name, birthdate, id_number, phone, role, status, "
                 "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
@@ -853,10 +855,13 @@ def register_user_routes(app, deps):
             ).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
-            return json_resp({
+            payload = {
                 "ok": True,
                 "user": user_public_payload(target, include_sensitive=include_sensitive)
-            })
+            }
+            if is_self:
+                payload["appearance_settings"] = get_profile_appearance(conn, user_id)
+            return json_resp(payload)
         finally:
             conn.close()
 

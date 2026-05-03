@@ -1790,15 +1790,6 @@ def register_system_admin_routes(app, deps):
             if api_url is None:
                 return json_resp({"ok":False,"msg":"comfyui_remote_api_url 必須是 http(s)://host:port，不可包含帳密、路徑或參數"}), 400
             data["comfyui_remote_api_url"] = api_url
-        if "comfyui_root_accel_api_url" in data:
-            raw_accel_url = str(data.get("comfyui_root_accel_api_url") or "").strip()
-            if raw_accel_url:
-                api_url = validate_comfyui_api_url(raw_accel_url)
-                if api_url is None:
-                    return json_resp({"ok":False,"msg":"comfyui_root_accel_api_url 必須是 http(s)://host:port，不可包含帳密、路徑或參數"}), 400
-                data["comfyui_root_accel_api_url"] = api_url
-            else:
-                data["comfyui_root_accel_api_url"] = ""
         if "comfyui_base_dir" in data:
             raw_base = str(data.get("comfyui_base_dir") or "").strip()
             if raw_base:

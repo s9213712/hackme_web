@@ -32,6 +32,10 @@ const DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS = {
   suspended: { upload_kb_per_sec: 0, download_kb_per_sec: 0, priority: 0 }
 };
 
+let suppressNextSettingsStatusClear = false;
+let currentServerMode = "dev_ready";
+let settingsStatusAutoClearTimer = null;
+
 function parseCloudDriveTransferLimits(raw) {
   if (!raw) return { ...DEFAULT_CLOUD_DRIVE_TRANSFER_LIMITS };
   try {
@@ -138,6 +142,36 @@ function switchSettingsSection(tab) {
     loadRootTradingSettings();
   }
   if (tab === "member-levels") loadEditableMemberLevelRules();
+  if (typeof clearSettingsStatus === "function") {
+    if (suppressNextSettingsStatusClear) suppressNextSettingsStatusClear = false;
+    else clearSettingsStatus();
+  }
+}
+
+function canOpenAdminTab(tab) {
+  if (!currentUser) return false;
+  const managerOrAbove = currentRole === "manager" || currentRole === "super_admin";
+  switch (tab) {
+    case "users":
+    case "password-resets":
+      return canAccessModule("accounts");
+    case "violations":
+      return canAccessModule("accounts") && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_violation_center_enabled", false));
+    case "governance":
+      return managerOrAbove && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_member_governance_enabled", false));
+    case "notices":
+      return managerOrAbove && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_reports_notifications_enabled", false));
+    case "appeals":
+      return currentRole === "super_admin" && canAccessModule("appeals");
+    case "reports":
+      return currentRole === "super_admin" && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_reports_enabled", false));
+    default:
+      return false;
+  }
+}
+
+function firstAvailableAdminTab() {
+  return ["users", "password-resets", "violations", "governance", "notices", "appeals", "reports"].find((tab) => canOpenAdminTab(tab)) || "users";
 }
 
 function switchModuleTab(tab) {
@@ -148,7 +182,7 @@ function switchModuleTab(tab) {
   const canAccessAnnouncements = canAccessCommunity;
   const canAccessChat = !!currentUser && canAccessModule("chat");
   const canAccessDrive = !!currentUser && canAccessModule("privacy_uploads");
-  const canAccessAlbums = canAccessDrive;
+  const canAccessAlbums = canAccessDrive && (!isFeatureEnabledForUi || isFeatureEnabledForUi("feature_storage_albums_enabled", false));
   const canAccessVideos = !!currentUser && canAccessModule("videos");
   const canAccessGames = !!currentUser && canAccessModule("games");
   const canUseComfyuiTab = typeof isComfyuiAvailableForNavigation !== "function" || isComfyuiAvailableForNavigation();
@@ -262,29 +296,34 @@ function switchModuleTab(tab) {
   if (normTab === "appeals" && canAccessAppeals) {
     loadUserAppeals();
   }
-  if (normTab === "accounts" && canAccessAccounts && currentAdminTab) {
-    if (!$("sec-" + currentAdminTab)) switchAdminTab("users");
+  if (normTab === "accounts" && canAccessAccounts) {
+    const nextAdminTab = currentAdminTab && canOpenAdminTab(currentAdminTab) ? currentAdminTab : firstAvailableAdminTab();
+    if (!$("sec-" + nextAdminTab)) switchAdminTab("users");
+    else switchAdminTab(nextAdminTab);
   }
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
   if (typeof collapseSidebarAfterMobileNavigation === "function") collapseSidebarAfterMobileNavigation();
 }
 
 function switchAdminTab(tab) {
-  currentAdminTab = tab;
+  currentAdminTab = canOpenAdminTab(tab) ? tab : firstAvailableAdminTab();
   ["users","password-resets","violations","governance","notices","appeals","reports"].forEach(t => {
     const sec = $("sec-" + t);
-    if (sec) sec.classList.toggle("active", t === tab);
+    if (sec) sec.classList.toggle("active", t === currentAdminTab);
   });
   ["tab-users","tab-password-resets","tab-violations","tab-governance","tab-notices","tab-appeals","tab-reports"].forEach(id => {
     const btn = $(id);
-    if (btn) btn.classList.toggle("active", id === "tab-" + tab);
+    const tabKey = id.replace(/^tab-/, "");
+    if (!btn) return;
+    btn.style.display = canOpenAdminTab(tabKey) ? "" : "none";
+    btn.classList.toggle("active", id === "tab-" + currentAdminTab);
   });
-  if (tab === "password-resets") loadPasswordResetReviews();
-  if (tab === "violations") loadViolations(0);
-  if (tab === "governance") loadGovernanceDashboard();
-  if (tab === "notices") renderAdminNoticeTargetOptions();
-  if (tab === "appeals") loadAdminAppeals(1, adminAppealStatus);
-  if (tab === "reports") loadAdminReports(0, adminReportStatus);
+  if (currentAdminTab === "password-resets") loadPasswordResetReviews();
+  if (currentAdminTab === "violations") loadViolations(0);
+  if (currentAdminTab === "governance") loadGovernanceDashboard();
+  if (currentAdminTab === "notices") renderAdminNoticeTargetOptions();
+  if (currentAdminTab === "appeals") loadAdminAppeals(1, adminAppealStatus);
+  if (currentAdminTab === "reports") loadAdminReports(0, adminReportStatus);
   if (typeof updateSidebarActiveState === "function") updateSidebarActiveState();
 }
 
@@ -1678,6 +1717,7 @@ async function loadServerMode() {
     return;
   }
   const mode = json.mode || {};
+  currentServerMode = String(mode.current_mode || "dev_ready").trim().toLowerCase();
   populateSecurityProfiles(json.profiles || securityProfiles, mode.current_mode || "dev_ready");
   if (status) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
@@ -1687,6 +1727,7 @@ async function loadServerMode() {
     status.textContent = `目前模式：${mode.current_mode || "dev_ready"}${previous}${snapshot}${checkpoint}。切換此模式需輸入：${phrase}`;
     status.style.color = mode.current_mode === "superweak" || mode.current_mode === "incident_lockdown" ? "#ff4f6d" : "var(--muted)";
   }
+  updateServerModeTokenPanels(currentServerMode);
   renderServerModeRequirements(json.production_requirements || {});
   await loadServerModeLogs();
   await loadInternalTestTokenStatus();
@@ -1705,6 +1746,35 @@ function serverModeConfirmPhrase(mode) {
     incident_lockdown: "ENTER_INCIDENT_LOCKDOWN",
     superweak: "ENABLE_SUPERWEAK"
   }[key] || "SWITCH_CUSTOM_MODE";
+}
+
+function serverModeSupportsInternalTestToken(mode) {
+  return String(mode || "").trim().toLowerCase() === "internal_test";
+}
+
+function serverModeSupportsTesterToken(mode) {
+  const value = String(mode || "").trim().toLowerCase();
+  return value === "test" || value === "internal_test";
+}
+
+function updateServerModeTokenPanels(modeOverride = null) {
+  const mode = String(modeOverride || $("server-mode-select")?.value || currentServerMode || "dev_ready").trim().toLowerCase();
+  const internalPanel = $("server-mode-internal-test-panel");
+  const testerPanel = $("server-mode-tester-token-panel");
+  const hint = $("server-mode-token-hint");
+  const showInternal = serverModeSupportsInternalTestToken(mode);
+  const showTester = serverModeSupportsTesterToken(mode);
+  if (internalPanel) internalPanel.style.display = showInternal ? "" : "none";
+  if (testerPanel) testerPanel.style.display = showTester ? "" : "none";
+  if (!hint) return;
+  if (showInternal) {
+    hint.textContent = "目前模式可管理內測登入 token 與 tester token。";
+  } else if (showTester) {
+    hint.textContent = "目前模式可管理 tester token。若要開放內測登入 token，請切到 internal_test。";
+  } else {
+    hint.textContent = "切到 test 或 internal_test 才會顯示 tester token；切到 internal_test 才會顯示內測登入 token。";
+  }
+  hint.style.color = "var(--muted)";
 }
 
 function renderServerModeRequirements(requirements) {
@@ -1940,15 +2010,29 @@ function updateComfyuiConnectionModeFields() {
   const mode = $("s-comfyui-connection-mode")?.value || "remote";
   const localBox = $("comfyui-local-settings");
   const remoteBox = $("comfyui-remote-settings");
+  const civitaiBox = $("comfyui-civitai-settings");
+  const civitaiInput = $("s-comfyui-civitai-api-key");
   if (localBox) localBox.style.display = mode === "local" ? "" : "none";
   if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
+  if (civitaiBox) civitaiBox.style.display = mode === "local" ? "" : "none";
+  if (civitaiInput) civitaiInput.disabled = mode !== "local";
   const status = $("comfyui-test-connection-status");
   if (status && !status.dataset.userTouched) {
     status.textContent = mode === "local"
       ? "本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。"
-      : "遠端模式會測試指定 API 位址。";
+      : "遠端模式只負責呼叫指定 API 生圖，無法透過 API 把模型下載回本站的本地 ComfyUI，所以會隱藏本地模型下載與 Civitai API Key。";
     status.style.color = "var(--muted)";
   }
+  if (typeof updateComfyuiRootPanelVisibility === "function") updateComfyuiRootPanelVisibility(mode);
+}
+
+function updateCaptchaModeFields() {
+  const mode = $("s-captcha-mode")?.value || "none";
+  const wrap = $("captcha-turnstile-site-key-field");
+  const input = $("s-captcha-turnstile-site-key");
+  const showTurnstile = mode === "turnstile";
+  if (wrap) wrap.style.display = showTurnstile ? "" : "none";
+  if (input) input.disabled = !showTurnstile;
 }
 
 async function loadSettings() {
@@ -1979,6 +2063,7 @@ async function loadSettings() {
   if ($("s-captcha-mode")) $("s-captcha-mode").value = s.captcha_mode || "none";
   if ($("s-captcha-ttl-seconds")) $("s-captcha-ttl-seconds").value = s.captcha_ttl_seconds || 300;
   if ($("s-captcha-turnstile-site-key")) $("s-captcha-turnstile-site-key").value = s.captcha_turnstile_site_key || "";
+  updateCaptchaModeFields();
   if ($("s-max-fail")) $("s-max-fail").value = s.max_login_failures || 5;
   if ($("s-block-dur")) $("s-block-dur").value = s.block_duration_minutes || 30;
   if ($("s-session-ttl")) $("s-session-ttl").value = s.session_ttl_hours || 24;
@@ -1988,7 +2073,6 @@ async function loadSettings() {
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").value = s.comfyui_connection_mode || "remote";
   if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || "";
-  if ($("s-comfyui-root-accel-api-url")) $("s-comfyui-root-accel-api-url").value = s.comfyui_root_accel_api_url || "";
   if ($("s-comfyui-base-dir")) $("s-comfyui-base-dir").value = s.comfyui_base_dir || "";
   if ($("s-comfyui-local-start-script")) $("s-comfyui-local-start-script").value = s.comfyui_local_start_script || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
@@ -2046,11 +2130,20 @@ async function loadSettings() {
   if ($("s-site-muted")) $("s-site-muted").value = s.site_muted || "#8888aa";
   if ($("s-site-layout-mode")) $("s-site-layout-mode").value = s.site_layout_mode || "centered";
   if ($("s-site-density")) $("s-site-density").value = s.site_density || "comfortable";
+  if ($("s-site-radius-px")) $("s-site-radius-px").value = String(s.site_radius_px || 12);
+  if ($("s-site-font-scale")) $("s-site-font-scale").value = String(s.site_font_scale || 1);
+  if ($("s-site-content-width")) $("s-site-content-width").value = String(s.site_content_width || 1380);
+  if ($("s-site-font-family")) $("s-site-font-family").value = s.site_font_family || "system";
+  if ($("s-site-background-style")) $("s-site-background-style").value = s.site_background_style || "flat";
+  if ($("s-site-panel-style")) $("s-site-panel-style").value = s.site_panel_style || "glass";
+  if ($("s-site-sidebar-width")) $("s-site-sidebar-width").value = s.site_sidebar_width || "standard";
   FEATURE_SETTING_KEYS.forEach((key) => {
     const el = $(featureSettingInputId(key));
     if (el) el.checked = !!s[key];
   });
   applySiteConfig(s);
+  renderFeatureBundleToolbar();
+  renderFeatureAdvisories();
   switchSettingsSection(currentSettingsSection || "security");
 }
 
@@ -2085,8 +2178,296 @@ const FEATURE_SETTING_KEYS = [
   "feature_videos_enabled"
 ];
 
+const FEATURE_SETTING_LABELS = {
+  feature_chat_enabled: "聊天室",
+  feature_community_enabled: "討論區 / 公告 / 留言",
+  feature_accounts_enabled: "帳號管理",
+  feature_appeals_enabled: "用戶申覆",
+  feature_audit_log_enabled: "Audit log 查詢",
+  feature_violation_center_enabled: "違規中心",
+  feature_reports_enabled: "檢舉審核",
+  feature_system_health_enabled: "系統健康燈",
+  feature_identity_governance_enabled: "身份治理欄位 / 會員等級",
+  feature_account_security_enabled: "帳號安全強化",
+  feature_member_governance_enabled: "會員治理與投票",
+  feature_server_modes_enabled: "伺服器模式",
+  feature_snapshot_restore_enabled: "Snapshot / Restore / Reset",
+  feature_health_center_enabled: "健康監控中心新版",
+  feature_forum_core_enabled: "論壇核心新版",
+  feature_ui_rebuild_enabled: "UI 架構重構",
+  feature_reports_notifications_enabled: "檢舉 / 申訴 / 通知新版",
+  feature_attachments_enabled: "附件 / 頭像 / CAPTCHA",
+  feature_storage_albums_enabled: "Storage / 相簿",
+  feature_videos_enabled: "影音分享",
+  feature_games_enabled: "遊戲區 / 西洋棋",
+  feature_comfyui_enabled: "ComfyUI AI 產圖",
+  feature_economy_enabled: "PointsChain 積分系統",
+  feature_trading_enabled: "積分交易所",
+  feature_personalization_enabled: "個人外觀覆寫",
+  feature_social_search_enabled: "社交 / 搜尋",
+  feature_advanced_security_enabled: "進階安全",
+  feature_privacy_uploads_enabled: "隱私分級上傳 / E2EE",
+};
+
+const FEATURE_DEPENDENCY_RULES = {
+  feature_storage_albums_enabled: {
+    required: ["feature_privacy_uploads_enabled"],
+    description: "Storage / 相簿需要先有雲端硬碟父功能。",
+  },
+  feature_trading_enabled: {
+    required: ["feature_economy_enabled"],
+    description: "積分交易所必須依附在 PointsChain 上。",
+  },
+  feature_videos_enabled: {
+    recommended: ["feature_privacy_uploads_enabled", "feature_economy_enabled"],
+    description: "影音若搭配雲端硬碟與 PointsChain，才有上傳、保存與打賞等完整服務。",
+  },
+  feature_comfyui_enabled: {
+    recommended: ["feature_privacy_uploads_enabled"],
+    description: "ComfyUI 若搭配雲端硬碟，可直接保存與分享產圖結果。",
+  },
+  feature_chat_enabled: {
+    recommended: ["feature_attachments_enabled", "feature_reports_enabled", "feature_reports_notifications_enabled"],
+    description: "聊天室完整體驗通常會搭配附件、檢舉與通知。",
+  },
+  feature_community_enabled: {
+    recommended: ["feature_attachments_enabled", "feature_reports_enabled", "feature_reports_notifications_enabled"],
+    description: "討論區完整體驗通常會搭配附件、檢舉與通知。",
+  },
+  feature_appeals_enabled: {
+    recommended: ["feature_accounts_enabled", "feature_reports_notifications_enabled"],
+    description: "申覆流程通常會搭配帳號管理與通知。",
+  },
+  feature_violation_center_enabled: {
+    recommended: ["feature_accounts_enabled"],
+    description: "違規中心通常和帳號管理一起使用。",
+  },
+  feature_reports_enabled: {
+    recommended: ["feature_accounts_enabled", "feature_reports_notifications_enabled"],
+    description: "檢舉審核通常會搭配帳號管理與通知。",
+  },
+  feature_reports_notifications_enabled: {
+    recommended: ["feature_accounts_enabled"],
+    description: "通知中心通常由帳號管理模組承載。",
+  },
+  feature_identity_governance_enabled: {
+    recommended: ["feature_accounts_enabled"],
+    description: "身份治理欄位通常和帳號管理一起開。",
+  },
+  feature_account_security_enabled: {
+    recommended: ["feature_accounts_enabled"],
+    description: "帳號安全強化通常和帳號管理一起開。",
+  },
+  feature_member_governance_enabled: {
+    recommended: ["feature_accounts_enabled"],
+    description: "會員治理頁面通常掛在帳號管理底下。",
+  },
+};
+
+const FEATURE_SERVICE_BUNDLES = [
+  {
+    key: "accounts-suite",
+    label: "帳號治理整套",
+    description: "帳號、違規、治理、通知、申覆一起開。",
+    features: [
+      "feature_accounts_enabled",
+      "feature_identity_governance_enabled",
+      "feature_account_security_enabled",
+      "feature_member_governance_enabled",
+      "feature_violation_center_enabled",
+      "feature_reports_notifications_enabled",
+      "feature_appeals_enabled",
+      "feature_reports_enabled",
+    ],
+  },
+  {
+    key: "community-suite",
+    label: "社群互動整套",
+    description: "聊天、討論區、附件、檢舉與通知一起開。",
+    features: [
+      "feature_chat_enabled",
+      "feature_community_enabled",
+      "feature_attachments_enabled",
+      "feature_reports_enabled",
+      "feature_reports_notifications_enabled",
+    ],
+  },
+  {
+    key: "drive-suite",
+    label: "雲端硬碟整套",
+    description: "隱私分級上傳加 Storage / 相簿一起開。",
+    features: [
+      "feature_privacy_uploads_enabled",
+      "feature_storage_albums_enabled",
+    ],
+  },
+  {
+    key: "video-suite",
+    label: "影音分享整套",
+    description: "影音、雲端硬碟與 PointsChain 一起開。",
+    features: [
+      "feature_videos_enabled",
+      "feature_privacy_uploads_enabled",
+      "feature_economy_enabled",
+    ],
+  },
+  {
+    key: "ai-suite",
+    label: "AI 產圖整套",
+    description: "ComfyUI 加雲端硬碟保存流程一起開。",
+    features: [
+      "feature_comfyui_enabled",
+      "feature_privacy_uploads_enabled",
+    ],
+  },
+  {
+    key: "economy-suite",
+    label: "積分交易整套",
+    description: "PointsChain 與積分交易所一起開。",
+    features: [
+      "feature_economy_enabled",
+      "feature_trading_enabled",
+    ],
+  },
+];
+
 function featureSettingInputId(key) {
   return "s-" + key.replaceAll("_", "-");
+}
+
+function featureSettingLabel(key) {
+  return FEATURE_SETTING_LABELS[key] || key;
+}
+
+function setSettingsStatus(text = "", ok = null, options = {}) {
+  const el = $("settings-msg");
+  if (!el) return;
+  if (settingsStatusAutoClearTimer) {
+    clearTimeout(settingsStatusAutoClearTimer);
+    settingsStatusAutoClearTimer = null;
+  }
+  if (!text) {
+    el.textContent = "";
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  el.textContent = text;
+  el.style.color = ok === true ? "#4caf50" : ok === false ? "#ff4f6d" : "#ffb74d";
+  const autoClearMs = Number(options.autoClearMs || 0);
+  if (autoClearMs > 0) {
+    const expectedText = text;
+    settingsStatusAutoClearTimer = setTimeout(() => {
+      if ($("settings-msg")?.textContent === expectedText) clearSettingsStatus();
+    }, autoClearMs);
+  }
+}
+
+function clearSettingsStatus() {
+  if (settingsStatusAutoClearTimer) {
+    clearTimeout(settingsStatusAutoClearTimer);
+    settingsStatusAutoClearTimer = null;
+  }
+  setSettingsStatus("");
+}
+
+function formatFeatureAdvisoryLine(item) {
+  if (!item) return "";
+  const parts = [];
+  if (Array.isArray(item.missingRequired) && item.missingRequired.length) {
+    parts.push(`缺少父功能：${item.missingRequired.map(featureSettingLabel).join("、")}`);
+  }
+  if (Array.isArray(item.missingRecommended) && item.missingRecommended.length) {
+    parts.push(`建議一起開：${item.missingRecommended.map(featureSettingLabel).join("、")}`);
+  }
+  return parts.length ? `${item.feature}（${parts.join("；")}）` : item.feature;
+}
+
+function featureToggleValue(key) {
+  return !!$(featureSettingInputId(key))?.checked;
+}
+
+function buildFeatureAdvisories() {
+  return FEATURE_SETTING_KEYS.flatMap((key) => {
+    if (!featureToggleValue(key)) return [];
+    const rule = FEATURE_DEPENDENCY_RULES[key];
+    if (!rule) return [];
+    const missingRequired = (rule.required || []).filter((dep) => !featureToggleValue(dep));
+    const missingRecommended = (rule.recommended || []).filter((dep) => !featureToggleValue(dep));
+    if (!missingRequired.length && !missingRecommended.length) return [];
+    return [{
+      feature: featureSettingLabel(key),
+      description: rule.description || "",
+      missingRequired,
+      missingRecommended,
+    }];
+  });
+}
+
+function renderFeatureAdvisories() {
+  const wrap = $("feature-advisory-list");
+  if (!wrap) return;
+  const advisories = buildFeatureAdvisories();
+  if (!advisories.length) {
+    wrap.innerHTML = `<div class="settings-feature-advisory ok">目前已勾選的功能沒有缺少父功能；若要一次打開整套服務，可用上方快捷開關。</div>`;
+    return;
+  }
+  wrap.innerHTML = advisories.map((item) => {
+    const required = item.missingRequired.length
+      ? `<div><strong>還缺父功能：</strong>${item.missingRequired.map(featureSettingLabel).join("、")}</div>`
+      : "";
+    const recommended = item.missingRecommended.length
+      ? `<div><strong>完整服務建議一併開啟：</strong>${item.missingRecommended.map(featureSettingLabel).join("、")}</div>`
+      : "";
+    const tone = item.missingRequired.length ? "warn" : "info";
+    return `
+      <div class="settings-feature-advisory ${tone}">
+        <div><strong>${sanitize(item.feature)}</strong></div>
+        ${item.description ? `<div>${sanitize(item.description)}</div>` : ""}
+        ${required}
+        ${recommended}
+      </div>
+    `;
+  }).join("");
+}
+
+function renderFeatureBundleToolbar() {
+  const toolbar = $("feature-bundle-toolbar");
+  if (!toolbar) return;
+  toolbar.innerHTML = FEATURE_SERVICE_BUNDLES.map((bundle) => `
+    <button class="btn btn-sm" type="button" data-feature-bundle="${sanitize(bundle.key)}" title="${sanitize(bundle.description)}">
+      ${sanitize(bundle.label)}
+    </button>
+  `).join("");
+  toolbar.querySelectorAll("[data-feature-bundle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const bundle = FEATURE_SERVICE_BUNDLES.find((item) => item.key === btn.dataset.featureBundle);
+      if (!bundle) return;
+      bundle.features.forEach((key) => {
+        const el = $(featureSettingInputId(key));
+        if (el) el.checked = true;
+      });
+      renderFeatureAdvisories();
+      setSettingsStatus(`已套用「${bundle.label}」組合，記得再按「儲存設定」才會真正寫入。`, null);
+    });
+  });
+}
+
+function bindSettingsAssistants() {
+  const serverModule = $("module-server");
+  if (!serverModule || serverModule.dataset.settingsAssistantsBound === "1") return;
+  serverModule.dataset.settingsAssistantsBound = "1";
+  renderFeatureBundleToolbar();
+  renderFeatureAdvisories();
+  document.querySelectorAll("[id^='s-']").forEach((el) => {
+    el.addEventListener("change", () => {
+      clearSettingsStatus();
+      if (FEATURE_SETTING_KEYS.includes(el.id.replace(/^s-/, "").replaceAll("-", "_"))) renderFeatureAdvisories();
+    });
+    if (el.matches("input[type='text'], input[type='number'], input[type='password'], input[type='url'], textarea")) {
+      el.addEventListener("input", clearSettingsStatus);
+    }
+  });
 }
 
 function formatBytes(bytes) {
@@ -2285,7 +2666,7 @@ function renderSecuritySummary(sc) {
     ["Anomaly", anomaly.status || "ok", anomaly.status === "ok" ? "#4caf50" : anomaly.status === "critical" ? "#ff4f6d" : "#ffb74d"],
     ["Signals", String(signalCount), signalCount ? "#ffb74d" : "#4caf50"],
     ["Audit Chain", audit.enabled === false ? "停用" : audit.ok ? "完整" : "異常", audit.enabled === false ? "#9e9e9e" : audit.ok ? "#4caf50" : "#ff4f6d"],
-    ["Server Mode", mode.current_mode || "preprod", mode.current_mode === "superweak" ? "#ff4f6d" : "#82b1ff"],
+    ["Server Mode", mode.current_mode || "dev_ready", mode.current_mode === "superweak" ? "#ff4f6d" : "#82b1ff"],
     ["Maintenance", settings.maintenance_mode ? "啟用" : "關閉", settings.maintenance_mode ? "#ff4f6d" : "#4caf50"],
   ];
   summary.innerHTML = cards.map(([label, value, color]) => `
@@ -2541,12 +2922,12 @@ async function loadSecurityCenter() {
     if (el) el.value = thresholds[key] ?? 0;
   });
   const mode = sc.mode || {};
-  populateSecurityProfiles(sc.profiles || [], mode.current_mode || "preprod");
+  populateSecurityProfiles(sc.profiles || [], mode.current_mode || "dev_ready");
   const modeStatus = $("security-mode-status");
   if (modeStatus) {
     const previous = mode.previous_mode ? `，上一個模式：${mode.previous_mode}` : "";
     const snapshot = mode.active_snapshot_id ? `，active snapshot：${mode.active_snapshot_id}` : "";
-    modeStatus.textContent = `目前模式：${mode.current_mode || "preprod"}${previous}${snapshot}`;
+    modeStatus.textContent = `目前模式：${mode.current_mode || "dev_ready"}${previous}${snapshot}`;
     modeStatus.style.color = mode.current_mode === "superweak" ? "#ff4f6d" : "var(--muted)";
   }
   const auditBox = $("security-audit-entries");
@@ -2642,7 +3023,7 @@ async function saveSecurityThresholds() {
 }
 
 async function applySecurityMode() {
-  const target = $("security-mode-select")?.value || "preprod";
+  const target = $("security-mode-select")?.value || "dev_ready";
   const confirmText = $("security-mode-confirm")?.value || "";
   const notes = $("security-mode-notes")?.value || "";
   if (target === "production" && confirmText !== "GO_LIVE") {
@@ -3098,6 +3479,8 @@ async function exportIntegrityReport() {
 async function saveSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
+  const captchaMode = $("s-captcha-mode")?.value || "none";
+  const comfyuiMode = $("s-comfyui-connection-mode")?.value || "remote";
   const payload = {
     maintenance_mode: !!$("s-maintenance-mode")?.checked,
     audit_chain_enabled: !!$("s-audit-chain-enabled")?.checked,
@@ -3112,7 +3495,7 @@ async function saveSettings() {
     allow_register: !!$("s-allow-register")?.checked,
     require_email_verification: !!$("s-require-email")?.checked,
     password_reset_mode: $("s-password-reset-mode")?.value || "admin_review",
-    captcha_mode: $("s-captcha-mode")?.value || "none",
+    captcha_mode: captchaMode,
     captcha_ttl_seconds: parseInt($("s-captcha-ttl-seconds")?.value || "300"),
     captcha_turnstile_site_key: ($("s-captcha-turnstile-site-key")?.value || "").trim(),
     max_login_failures: parseInt($("s-max-fail")?.value || "5"),
@@ -3122,9 +3505,8 @@ async function saveSettings() {
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
-    comfyui_connection_mode: $("s-comfyui-connection-mode")?.value || "remote",
+    comfyui_connection_mode: comfyuiMode,
     comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || "").trim(),
-    comfyui_root_accel_api_url: ($("s-comfyui-root-accel-api-url")?.value || "").trim(),
     comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
     comfyui_local_start_script: ($("s-comfyui-local-start-script")?.value || "").trim(),
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
@@ -3157,7 +3539,14 @@ async function saveSettings() {
     site_text: $("s-site-text")?.value || "#e0e0f0",
     site_muted: $("s-site-muted")?.value || "#8888aa",
     site_layout_mode: $("s-site-layout-mode")?.value || "centered",
-    site_density: $("s-site-density")?.value || "comfortable"
+    site_density: $("s-site-density")?.value || "comfortable",
+    site_radius_px: parseInt($("s-site-radius-px")?.value || "12", 10) || 12,
+    site_font_scale: Number($("s-site-font-scale")?.value || 1) || 1,
+    site_content_width: parseInt($("s-site-content-width")?.value || "1380", 10) || 1380,
+    site_font_family: $("s-site-font-family")?.value || "system",
+    site_background_style: $("s-site-background-style")?.value || "flat",
+    site_panel_style: $("s-site-panel-style")?.value || "glass",
+    site_sidebar_width: $("s-site-sidebar-width")?.value || "standard"
   };
   FEATURE_SETTING_KEYS.forEach((key) => {
     const el = $(featureSettingInputId(key));
@@ -3170,29 +3559,36 @@ async function saveSettings() {
     body: JSON.stringify(payload)
   });
   const json = await res.json().catch(() => ({}));
-  const el = $("settings-msg");
-  if (el) {
-    const bind = json.server_bind || {};
-    const ssl = json.server_ssl || {};
-    const driveStorage = json.cloud_drive_storage || {};
-    const restartParts = [];
-    if (bind.restart_required) restartParts.push("listen IP/port");
-    if (ssl.restart_required) restartParts.push("HTTPS 開關");
-    if (driveStorage.restart_required) restartParts.push("雲端硬碟儲存位置");
-    const restartHint = restartParts.length ? `，${restartParts.join("、")} 需重啟服務器後生效` : "";
-    el.textContent = json.ok ? `✅ 設定已儲存${restartHint}` : (json.msg || "儲存失敗");
-    el.style.color = json.ok ? "#4caf50" : "#ff4f6d";
+  const bind = json.server_bind || {};
+  const ssl = json.server_ssl || {};
+  const driveStorage = json.cloud_drive_storage || {};
+  const restartParts = [];
+  if (bind.restart_required) restartParts.push("listen IP/port");
+  if (ssl.restart_required) restartParts.push("HTTPS 開關");
+  if (driveStorage.restart_required) restartParts.push("雲端硬碟儲存位置");
+  const restartHint = restartParts.length ? `，${restartParts.join("、")} 需重啟服務器後生效` : "";
+  if (!json.ok) {
+    setSettingsStatus(json.msg || "儲存失敗", false);
   }
   if (json.ok) {
     const activeModule = currentModuleTab;
     const activeServerTab = currentServerTab;
     const activeSettingsSection = currentSettingsSection;
     applySiteConfig(payload);
+    const warnings = buildFeatureAdvisories().filter((item) => item.missingRequired.length);
+    const warningHint = warnings.length ? `；仍有父功能未齊：${warnings.map(formatFeatureAdvisoryLine).join("、")}` : "";
+    setSettingsStatus(
+      `${warnings.length ? "設定已儲存，但功能組合仍未完整" : "✅ 設定已儲存"}${restartHint}${warningHint}`,
+      warnings.length ? null : true,
+      { autoClearMs: warnings.length ? 0 : 4000 }
+    );
+    renderFeatureAdvisories();
     const idleMinutes = Number(payload.session_idle_timeout_minutes ?? 10);
     inactivityLogoutMs = idleMinutes > 0 ? Math.max(1, idleMinutes) * 60 * 1000 : 0;
     if (inactivityLogoutMs > 0) resetInactivityTimer();
     if (typeof syncSidebarMenuVisibility === "function") syncSidebarMenuVisibility();
     if (activeModule && typeof switchModuleTab === "function") {
+      suppressNextSettingsStatusClear = true;
       currentServerTab = activeServerTab;
       currentSettingsSection = activeSettingsSection;
       switchModuleTab(activeModule);

@@ -65,6 +65,7 @@ from services.auth import (
 )
 from services.settings import (
     DEFAULT_SETTINGS,
+    build_feature_disabled_payload,
     configure_settings_service,
     get_feature_settings,
     get_system_settings,
@@ -1359,11 +1360,7 @@ def enforce_feature_flags():
         target_user=actor["username"],
         detail=f"path={request.path},feature={feature_key}",
     )
-    return json_resp({
-        "ok": False,
-        "msg": "此功能目前已由 root 關閉",
-        "feature": feature_key,
-    }, 503)
+    return json_resp(build_feature_disabled_payload(feature_key), 503)
 
 
 @app.before_request
@@ -1428,6 +1425,7 @@ register_public_routes(app, {
     "record_login_failure": record_login_failure,
     "record_security_event": record_security_event,
     "require_csrf": require_csrf,
+    "require_csrf_safe": require_csrf_safe,
     "revoke_user_sessions": revoke_user_sessions,
     "score_password_strength": score_password_strength,
     "store_csrf_token": store_csrf_token,

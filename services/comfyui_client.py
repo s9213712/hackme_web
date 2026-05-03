@@ -74,22 +74,33 @@ class ComfyUIClient:
         except Exception as exc:
             raise ComfyUIError(f"ComfyUI websocket 連線失敗：{exc}") from exc
 
-    def get_models(self):
-        info = self._json_request("/object_info/CheckpointLoaderSimple")
-        node = info.get("CheckpointLoaderSimple") if isinstance(info, dict) else None
+    def _list_node_input_options(self, node_class, input_name):
+        info = self._json_request(f"/object_info/{node_class}")
+        node = info.get(node_class) if isinstance(info, dict) else None
         required = ((node or {}).get("input") or {}).get("required") or {}
-        ckpt = required.get("ckpt_name") or []
-        values = ckpt[0] if isinstance(ckpt, list) and ckpt else []
+        raw_values = required.get(input_name) or []
+        values = raw_values[0] if isinstance(raw_values, list) and raw_values else []
         if not isinstance(values, list):
             values = []
         return [str(item) for item in values if str(item).strip()]
 
+    def get_models(self):
+        return self._list_node_input_options("CheckpointLoaderSimple", "ckpt_name")
+
     def get_loras(self):
-        info = self._json_request("/object_info/LoraLoader")
-        node = info.get("LoraLoader") if isinstance(info, dict) else None
-        required = ((node or {}).get("input") or {}).get("required") or {}
-        lora = required.get("lora_name") or []
-        values = lora[0] if isinstance(lora, list) and lora else []
+        return self._list_node_input_options("LoraLoader", "lora_name")
+
+    def get_vaes(self):
+        return self._list_node_input_options("VAELoader", "vae_name")
+
+    def get_embeddings(self):
+        data = self._json_request("/embeddings")
+        if isinstance(data, list):
+            values = data
+        elif isinstance(data, dict):
+            values = data.get("embeddings") or data.get("items") or []
+        else:
+            values = []
         if not isinstance(values, list):
             values = []
         return [str(item) for item in values if str(item).strip()]
@@ -168,13 +179,15 @@ class ComfyUIClient:
         }
         final_model = ["4", 0]
         final_clip = ["4", 1]
-        for index, item in enumerate(params.get("loras") or []):
+        next_node_id = 10
+        for item in params.get("loras") or []:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip()
             if not name:
                 continue
-            node_id = str(10 + index)
+            node_id = str(next_node_id)
+            next_node_id += 1
             workflow[node_id] = {
                 "class_type": "LoraLoader",
                 "inputs": {
@@ -187,6 +200,14 @@ class ComfyUIClient:
             }
             final_model = [node_id, 0]
             final_clip = [node_id, 1]
+        vae_name = str(params.get("vae") or "").strip()
+        if vae_name:
+            vae_node_id = str(next_node_id)
+            workflow[vae_node_id] = {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": vae_name},
+            }
+            workflow["8"]["inputs"]["vae"] = [vae_node_id, 0]
         workflow["3"]["inputs"]["model"] = final_model
         workflow["6"]["inputs"]["clip"] = final_clip
         workflow["7"]["inputs"]["clip"] = final_clip

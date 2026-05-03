@@ -44,6 +44,275 @@ async function doLogin() {
   }
 }
 
+const USER_APPEARANCE_FIELD_MAP = {
+  site_font_family: "edit-user-site-font-family",
+  site_background_style: "edit-user-site-background-style",
+  site_panel_style: "edit-user-site-panel-style",
+  site_sidebar_width: "edit-user-site-sidebar-width",
+  site_bg: "edit-user-site-bg",
+  site_surface: "edit-user-site-surface",
+  site_accent: "edit-user-site-accent",
+  site_accent2: "edit-user-site-accent2",
+  site_text: "edit-user-site-text",
+  site_muted: "edit-user-site-muted",
+  site_layout_mode: "edit-user-site-layout-mode",
+  site_density: "edit-user-site-density",
+  site_radius_px: "edit-user-site-radius-px",
+  site_font_scale: "edit-user-site-font-scale",
+  site_content_width: "edit-user-site-content-width",
+};
+const USER_APPEARANCE_PRESETS = {
+  midnight: {
+    site_font_family: "system",
+    site_background_style: "aurora",
+    site_panel_style: "glass",
+    site_sidebar_width: "standard",
+    site_bg: "#0f0f1a",
+    site_surface: "#1a1a2e",
+    site_accent: "#6c63ff",
+    site_accent2: "#00d4aa",
+    site_text: "#e0e0f0",
+    site_muted: "#8888aa",
+    site_layout_mode: "centered",
+    site_density: "comfortable",
+    site_radius_px: 12,
+    site_font_scale: 1,
+    site_content_width: 1380,
+  },
+  sunset: {
+    site_font_family: "rounded",
+    site_background_style: "aurora",
+    site_panel_style: "glass",
+    site_sidebar_width: "wide",
+    site_bg: "#1b1021",
+    site_surface: "#2c1838",
+    site_accent: "#ff875f",
+    site_accent2: "#ffd166",
+    site_text: "#fff2ea",
+    site_muted: "#d8b7b0",
+    site_layout_mode: "wide",
+    site_density: "comfortable",
+    site_radius_px: 18,
+    site_font_scale: 1.08,
+    site_content_width: 1600,
+  },
+  forest: {
+    site_font_family: "system",
+    site_background_style: "grid",
+    site_panel_style: "matte",
+    site_sidebar_width: "wide",
+    site_bg: "#0e1b15",
+    site_surface: "#163327",
+    site_accent: "#6ddf8e",
+    site_accent2: "#b9f18d",
+    site_text: "#eef7ef",
+    site_muted: "#9bb9a4",
+    site_layout_mode: "wide",
+    site_density: "comfortable",
+    site_radius_px: 12,
+    site_font_scale: 1,
+    site_content_width: 1380,
+  },
+  paper: {
+    site_font_family: "serif",
+    site_background_style: "flat",
+    site_panel_style: "solid",
+    site_sidebar_width: "compact",
+    site_bg: "#f3efe5",
+    site_surface: "#fffaf1",
+    site_accent: "#3a5cff",
+    site_accent2: "#e07a2d",
+    site_text: "#2f2b24",
+    site_muted: "#7b7266",
+    site_layout_mode: "centered",
+    site_density: "comfortable",
+    site_radius_px: 8,
+    site_font_scale: 1,
+    site_content_width: 1180,
+  },
+};
+let editingUserOriginalAppearance = {};
+let userAppearanceResetPending = false;
+
+function userAppearanceEditorVisible() {
+  return !!currentUser && editingUserIsSelf;
+}
+
+function userAppearanceFeatureEnabled() {
+  return !isFeatureEnabledForUi || isFeatureEnabledForUi("feature_personalization_enabled", true);
+}
+
+function baseAppearanceSettings() {
+  if (typeof extractSiteAppearanceConfig === "function") {
+    return extractSiteAppearanceConfig(globalSiteConfig || siteConfig || {});
+  }
+  return {};
+}
+
+function normalizedUserAppearanceSettings(settings = {}) {
+  const base = baseAppearanceSettings();
+  const overrides = typeof extractSiteAppearanceConfig === "function"
+    ? extractSiteAppearanceConfig(settings)
+    : (settings || {});
+  return { ...base, ...overrides };
+}
+
+function setUserAppearanceFieldValue(key, value) {
+  const el = $(USER_APPEARANCE_FIELD_MAP[key]);
+  if (!el || value === undefined || value === null || value === "") return;
+  el.value = String(value);
+}
+
+function populateUserAppearanceEditor(settings = {}) {
+  const merged = normalizedUserAppearanceSettings(settings);
+  Object.keys(USER_APPEARANCE_FIELD_MAP).forEach((key) => setUserAppearanceFieldValue(key, merged[key]));
+  const preset = $("edit-user-appearance-preset");
+  if (preset) preset.value = "custom";
+}
+
+function collectUserAppearanceSettingsFromEditor() {
+  return {
+    site_font_family: $("edit-user-site-font-family")?.value || "system",
+    site_background_style: $("edit-user-site-background-style")?.value || "flat",
+    site_panel_style: $("edit-user-site-panel-style")?.value || "glass",
+    site_sidebar_width: $("edit-user-site-sidebar-width")?.value || "standard",
+    site_bg: $("edit-user-site-bg")?.value || "#0f0f1a",
+    site_surface: $("edit-user-site-surface")?.value || "#1a1a2e",
+    site_accent: $("edit-user-site-accent")?.value || "#6c63ff",
+    site_accent2: $("edit-user-site-accent2")?.value || "#00d4aa",
+    site_text: $("edit-user-site-text")?.value || "#e0e0f0",
+    site_muted: $("edit-user-site-muted")?.value || "#8888aa",
+    site_layout_mode: $("edit-user-site-layout-mode")?.value || "centered",
+    site_density: $("edit-user-site-density")?.value || "comfortable",
+    site_radius_px: parseInt($("edit-user-site-radius-px")?.value || "12", 10) || 12,
+    site_font_scale: Number($("edit-user-site-font-scale")?.value || 1) || 1,
+    site_content_width: parseInt($("edit-user-site-content-width")?.value || "1380", 10) || 1380,
+  };
+}
+
+function setUserAppearanceEditorDisabled(disabled) {
+  const section = $("edit-user-appearance-section");
+  if (!section) return;
+  section.querySelectorAll("input, select, button").forEach((el) => {
+    if (el.id === "edit-user-appearance-section") return;
+    el.disabled = !!disabled;
+  });
+}
+
+function userAppearanceSignature(settings = {}) {
+  const normalized = typeof extractSiteAppearanceConfig === "function"
+    ? extractSiteAppearanceConfig(settings)
+    : (settings || {});
+  return JSON.stringify(Object.keys(USER_APPEARANCE_FIELD_MAP).reduce((acc, key) => {
+    if (normalized[key] !== undefined) acc[key] = normalized[key];
+    return acc;
+  }, {}));
+}
+
+function updateUserAppearanceEditorVisibility() {
+  const section = $("edit-user-appearance-section");
+  if (!section) return;
+  const status = $("edit-user-appearance-status");
+  if (!userAppearanceEditorVisible()) {
+    section.style.display = "none";
+    if (status) status.textContent = "";
+    return;
+  }
+  section.style.display = "";
+  section.open = true;
+  const enabled = userAppearanceFeatureEnabled();
+  setUserAppearanceEditorDisabled(!enabled);
+  if (status) {
+    status.textContent = enabled
+      ? "這些設定只會覆寫你自己的畫面；root 仍控制全站預設外觀。"
+      : "目前 root 已暫停個人外觀覆寫；你現在仍會看到既有個人外觀，但暫時不能修改或重設。";
+    status.style.color = enabled ? "var(--muted)" : "#ffb74d";
+  }
+}
+
+function previewUserAppearanceEditor() {
+  if (!userAppearanceEditorVisible() || !userAppearanceFeatureEnabled()) return;
+  if (userAppearanceResetPending) {
+    if (typeof clearUserAppearanceConfig === "function") clearUserAppearanceConfig();
+    return;
+  }
+  if (typeof applySiteConfig === "function") {
+    applySiteConfig(collectUserAppearanceSettingsFromEditor(), { scope: "user" });
+  }
+}
+
+function restoreUserAppearancePreviewIfNeeded() {
+  if (!editingUserIsSelf || !currentUser) return;
+  if (userAppearanceSignature(editingUserOriginalAppearance)) {
+    if (typeof applySiteConfig === "function") {
+      applySiteConfig(editingUserOriginalAppearance, { scope: "user" });
+    }
+  } else if (typeof clearUserAppearanceConfig === "function") {
+    clearUserAppearanceConfig();
+  }
+}
+
+function markUserAppearanceEditorChanged() {
+  if (!userAppearanceEditorVisible() || !userAppearanceFeatureEnabled()) return;
+  userAppearanceResetPending = false;
+  const preset = $("edit-user-appearance-preset");
+  if (preset) preset.value = "custom";
+  previewUserAppearanceEditor();
+}
+
+function applyUserAppearancePresetSelection() {
+  if (!userAppearanceFeatureEnabled()) return;
+  const presetKey = $("edit-user-appearance-preset")?.value || "custom";
+  if (presetKey === "custom") return;
+  const preset = USER_APPEARANCE_PRESETS[presetKey];
+  if (!preset) return;
+  userAppearanceResetPending = false;
+  populateUserAppearanceEditor(preset);
+  previewUserAppearanceEditor();
+}
+
+function resetUserAppearanceEditorToGlobal() {
+  if (!userAppearanceEditorVisible() || !userAppearanceFeatureEnabled()) return;
+  userAppearanceResetPending = true;
+  populateUserAppearanceEditor({});
+  if (typeof clearUserAppearanceConfig === "function") clearUserAppearanceConfig();
+  setUserEditMsg("已切回全站預設外觀；按「儲存」後才會寫入帳號。", true);
+}
+
+  async function saveUserAppearanceSettings() {
+  if (!userAppearanceEditorVisible()) return { ok: true, changed: false };
+  if (!userAppearanceFeatureEnabled()) {
+    return { ok: false, msg: "此功能目前已由 root 關閉：允許使用者覆寫個人外觀" };
+  }
+  const originalSignature = userAppearanceSignature(editingUserOriginalAppearance);
+  const nextAppearance = userAppearanceResetPending ? {} : collectUserAppearanceSettingsFromEditor();
+  const nextSignature = userAppearanceSignature(nextAppearance);
+  if (originalSignature === nextSignature) return { ok: true, changed: false };
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  const res = await apiFetch(API + "/me/appearance", {
+    method: userAppearanceResetPending ? "DELETE" : "PUT",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrf || ""
+    },
+    body: userAppearanceResetPending ? undefined : JSON.stringify(nextAppearance)
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return { ok: false, msg: json.msg || "個人外觀儲存失敗" };
+  editingUserOriginalAppearance = json.appearance_settings || {};
+  userAppearanceResetPending = false;
+  if (userAppearanceSignature(editingUserOriginalAppearance)) {
+    if (typeof applySiteConfig === "function") {
+      applySiteConfig(editingUserOriginalAppearance, { scope: "user" });
+    }
+  } else if (typeof clearUserAppearanceConfig === "function") {
+    clearUserAppearanceConfig();
+  }
+  return { ok: true, changed: true, reset: !userAppearanceSignature(editingUserOriginalAppearance) };
+}
+
 function renderCaptchaChallenge(captcha) {
   const field = $("captcha-field");
   const question = $("captcha-question");
@@ -392,8 +661,9 @@ async function editUser(userId) {
   const csrf = getCsrfToken();
 
   let source = target || {};
+  let detailRes = null;
   if (csrf) {
-    const detailRes = await apiFetch(API + `/admin/users/${userId}`, {
+    detailRes = await apiFetch(API + `/admin/users/${userId}`, {
       method: "GET",
       credentials: "same-origin",
       headers: { "X-CSRF-Token": csrf || "" }
@@ -432,6 +702,8 @@ async function editUser(userId) {
   editingUserOriginal.base_level = current.base_level;
   editingUserOriginal.sanction_status = current.sanction_status;
   editingUserOriginal.sanction_until = current.sanction_until;
+  editingUserOriginalAppearance = detailRes?.appearance_settings || {};
+  userAppearanceResetPending = false;
 
   const usernameEl = $("user-edit-username");
   if (usernameEl) usernameEl.textContent = current.username || String(userId);
@@ -463,6 +735,8 @@ async function editUser(userId) {
   if (roleField) roleField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (statusField) statusField.style.display = editingUserIsSelf || !canManageUsers ? "none" : "";
   if (currentPwField) currentPwField.style.display = editingUserIsSelf ? "" : "none";
+  updateUserAppearanceEditorVisibility();
+  populateUserAppearanceEditor(editingUserOriginalAppearance);
   const memberFields = $("edit-user-member-level-fields");
   if (memberFields) memberFields.style.display = editingUserIsSelf || currentUser !== "root" ? "none" : "";
   setUserEditField("edit-user-base-level", current.base_level);
@@ -552,6 +826,10 @@ async function submitEditUser() {
   const password = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
   const avatarFile = selectedUserAvatarFile();
+  const appearanceChanged = editingUserIsSelf && (
+    userAppearanceResetPending ||
+    userAppearanceSignature(collectUserAppearanceSettingsFromEditor()) !== userAppearanceSignature(editingUserOriginalAppearance)
+  );
 
   if (nickname !== editingUserOriginal.nickname) payload.nickname = nickname;
   if (realName !== editingUserOriginal.real_name) payload.real_name = realName;
@@ -593,7 +871,7 @@ async function submitEditUser() {
     return;
   }
 
-  if (!Object.keys(payload).length && !avatarFile) {
+  if (!Object.keys(payload).length && !avatarFile && !appearanceChanged) {
     setUserEditMsg("未變更任何欄位", false);
     return;
   }
@@ -617,6 +895,14 @@ async function submitEditUser() {
       currentMustChangePassword = false;
       alert("密碼已更新，請使用新密碼重新登入。");
       resetAuthState();
+      return;
+    }
+  }
+
+  if (appearanceChanged) {
+    const appearanceJson = await saveUserAppearanceSettings();
+    if (!appearanceJson.ok) {
+      setUserEditMsg(appearanceJson.msg || "個人外觀儲存失敗", false);
       return;
     }
   }

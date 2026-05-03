@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-  <link rel="stylesheet" href="/styles.css?v=20260503-comfyui-lora" />
+  <link rel="stylesheet" href="/styles.css?v=20260503-appearance-v2" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -1136,24 +1136,31 @@
         <div class="drive-card comfyui-panel">
           <div class="drive-card-heading">
             <div>
-              <div class="drive-card-title">ComfyUI</div>
+              <div class="drive-card-title comfyui-title-row">
+                <span>ComfyUI</span>
+                <span class="comfyui-mode-badge" id="comfyui-mode-badge">模式讀取中</span>
+              </div>
+              <div class="drive-card-sub" id="comfyui-mode-note">目前模式：讀取中</div>
+              <div class="drive-card-sub" id="comfyui-mode-detail">正在確認目前是本地模式還是雲端 / 遠端模式。</div>
               <div class="drive-card-sub" id="comfyui-status">尚未連線</div>
-              <div class="drive-card-sub" id="comfyui-points-balance">剩餘點數：-</div>
             </div>
             <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
             <button class="btn" id="comfyui-load-draft-btn" type="button">載入上次設定</button>
             <button class="btn btn-primary" id="comfyui-start-btn" type="button" style="display:none;">啟動 ComfyUI</button>
             <button class="btn" id="comfyui-stop-btn" type="button" style="display:none;">停止 ComfyUI</button>
           </div>
-          <div class="field" id="comfyui-root-accel-toggle-wrap" style="display:none;">
-            <label><input type="checkbox" id="comfyui-root-accel-toggle" /> root 啟用加速通道</label>
-            <div class="drive-card-sub">啟用後，root 的狀態查詢、模型讀取與產圖會優先走額外 ComfyUI API；其他帳號仍使用主 backend。</div>
-          </div>
           <div class="field">
             <label>模型</label>
             <select id="comfyui-model-select">
               <option value="">讀取模型中...</option>
             </select>
+          </div>
+          <div class="field">
+            <label>VAE</label>
+            <select id="comfyui-vae-select">
+              <option value="__checkpoint_builtin__">使用 checkpoint 內建 VAE</option>
+            </select>
+            <div class="drive-card-sub">可保留模型內建 VAE，或改用已安裝的獨立 VAE 檔。</div>
           </div>
           <div class="drive-card-sub" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
           <div class="comfyui-lora-panel">
@@ -1176,6 +1183,13 @@
             <textarea id="comfyui-prompt" rows="5" maxlength="3000" placeholder="描述你要產生的圖片"></textarea>
           </div>
           <div class="field">
+            <label>Embedding 快速插入</label>
+            <div id="comfyui-embedding-shortcuts" class="comfyui-embedding-shortcuts">
+              <span class="drive-card-sub">讀取 Embedding 中...</span>
+            </div>
+            <div class="drive-card-sub">點一下會把 <code>&lt;embeddings:名稱&gt;</code> 插入正向提示詞；送出前會自動轉成 ComfyUI 可用格式。</div>
+          </div>
+          <div class="field">
             <label>負面提示詞</label>
             <textarea id="comfyui-negative-prompt" rows="3" maxlength="3000" placeholder="不希望出現的內容"></textarea>
           </div>
@@ -1195,52 +1209,6 @@
           <div class="comfyui-share-panel">
             <div class="field"><label>分享標題</label><input type="text" id="comfyui-share-title" maxlength="120" placeholder="ComfyUI 產圖分享" /></div>
             <div class="field"><label>心得留言</label><textarea id="comfyui-share-note" rows="3" maxlength="900" placeholder="這次想分享的心得、用途或調參想法"></textarea></div>
-          </div>
-          <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:.75rem;">
-            <div class="drive-card-heading compact-heading">
-              <div>
-                <div class="drive-card-title">root 模型下載</div>
-                <div class="drive-card-sub">輸入 Civitai 模型頁網址，讀取官方 API 後選擇版本與檔案下載到本地 ComfyUI models 目錄；留空則使用 root 設定中的本地資料夾。</div>
-              </div>
-            </div>
-            <div class="settings-option-grid">
-              <div class="field">
-                <label>ComfyUI 專案資料夾</label>
-                <input type="text" id="comfyui-model-base-dir" placeholder="/opt/comfyui-portable" />
-                <div class="drive-card-sub">填 ComfyUI 專案根目錄，或 portable 外層資料夾。若此資料夾底下有 <code>ComfyUI/main.py</code>，系統會自動往內找到真正專案目錄。</div>
-              </div>
-              <div class="field">
-                <label>模型類型</label>
-                <select id="comfyui-model-download-type">
-                  <option value="checkpoint">Checkpoint</option>
-                  <option value="lora">LoRA</option>
-                  <option value="controlnet">ControlNet</option>
-                  <option value="embedding">Embedding / TI</option>
-                  <option value="hypernetwork">Hypernetwork</option>
-                  <option value="vae">VAE</option>
-                </select>
-              </div>
-            </div>
-            <div class="field"><label>Civitai 模型頁網址</label><input type="url" id="comfyui-civitai-url" placeholder="https://civitai.com/models/123456/..." /></div>
-            <div class="settings-option-grid">
-              <div class="field"><label>版本</label><select id="comfyui-civitai-version"><option value="">請先讀取模型</option></select></div>
-              <div class="field"><label>檔案</label><select id="comfyui-civitai-file"><option value="">請先選擇版本</option></select></div>
-            </div>
-            <div class="drive-file-actions" style="justify-content:flex-start;">
-              <button class="btn" id="comfyui-civitai-inspect-btn" type="button">讀取模型資訊</button>
-              <button class="btn" id="comfyui-model-download-btn" type="button">下載選定版本</button>
-            </div>
-            <div id="comfyui-model-download-status" class="drive-card-sub">尚未下載模型</div>
-            <div id="comfyui-model-download-progress" class="comfyui-progress-panel" style="display:none;margin-top:.6rem;">
-              <div class="comfyui-progress-head">
-                <span id="comfyui-model-download-progress-label">準備下載</span>
-                <strong id="comfyui-model-download-progress-percent">0%</strong>
-              </div>
-              <div class="comfyui-progress-track">
-                <div id="comfyui-model-download-progress-bar" class="comfyui-progress-bar"></div>
-              </div>
-              <div id="comfyui-model-download-progress-detail" class="drive-card-sub" style="margin-top:.45rem;">等待下載工作開始...</div>
-            </div>
           </div>
           <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
             <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
@@ -1268,6 +1236,58 @@
           </div>
           <div id="comfyui-result-meta" class="drive-card-sub"></div>
         </div>
+      </div>
+      <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:1rem;">
+        <details class="comfyui-root-details" id="comfyui-root-model-details">
+          <summary class="comfyui-root-summary">
+            <span class="comfyui-root-summary-title">root 模型下載（Civitai）</span>
+            <span class="comfyui-root-summary-sub">展開後可讀取 Civitai 模型版本與檔案，下載到本地 ComfyUI models 目錄；和上方生圖表單分開。</span>
+          </summary>
+          <div class="comfyui-root-body">
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>ComfyUI 專案資料夾</label>
+                <input type="text" id="comfyui-model-base-dir" placeholder="/opt/comfyui-portable" />
+                <div class="drive-card-sub">填 ComfyUI 專案根目錄，或 portable 外層資料夾。若此資料夾底下有 <code>ComfyUI/main.py</code>，系統會自動往內找到真正專案目錄。</div>
+              </div>
+              <div class="field">
+                <label>模型類型</label>
+                <select id="comfyui-model-download-type">
+                  <option value="checkpoint">Checkpoint</option>
+                  <option value="lora">LoRA</option>
+                  <option value="embedding">Embedding / TI</option>
+                  <option value="vae">VAE</option>
+                </select>
+              </div>
+            </div>
+            <div class="field"><label>Civitai 模型頁網址</label><input type="url" id="comfyui-civitai-url" placeholder="https://civitai.com/models/123456/..." /></div>
+            <div class="settings-option-grid">
+              <div class="field"><label>版本</label><select id="comfyui-civitai-version"><option value="">請先讀取模型</option></select></div>
+              <div class="field"><label>檔案</label><select id="comfyui-civitai-file"><option value="">請先選擇版本</option></select></div>
+            </div>
+            <div class="field">
+              <label>這個版本的 Trigger Words</label>
+              <div id="comfyui-civitai-trained-words" class="comfyui-embedding-shortcuts">
+                <span class="drive-card-sub">若這是 LoRA / Embedding 版本，讀取後會顯示官方提供的 trigger words。</span>
+              </div>
+            </div>
+            <div class="drive-file-actions" style="justify-content:flex-start;">
+              <button class="btn" id="comfyui-civitai-inspect-btn" type="button">讀取模型資訊</button>
+              <button class="btn" id="comfyui-model-download-btn" type="button">下載選定版本</button>
+            </div>
+            <div id="comfyui-model-download-status" class="drive-card-sub">尚未下載模型</div>
+            <div id="comfyui-model-download-progress" class="comfyui-progress-panel" style="display:none;margin-top:.6rem;">
+              <div class="comfyui-progress-head">
+                <span id="comfyui-model-download-progress-label">準備下載</span>
+                <strong id="comfyui-model-download-progress-percent">0%</strong>
+              </div>
+              <div class="comfyui-progress-track">
+                <div id="comfyui-model-download-progress-bar" class="comfyui-progress-bar"></div>
+              </div>
+              <div id="comfyui-model-download-progress-detail" class="drive-card-sub" style="margin-top:.45rem;">等待下載工作開始...</div>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   </div>
@@ -2540,7 +2560,8 @@
           <div id="server-mode-requirements" class="security-profile-preview"></div>
           <div id="server-mode-logs" class="security-profile-preview"></div>
           <div id="server-mode-profile-preview" class="security-profile-preview"></div>
-          <details class="drive-collapsible-panel settings-collapse">
+          <div id="server-mode-token-hint" class="drive-card-sub" style="margin-top:.65rem;"></div>
+          <details class="drive-collapsible-panel settings-collapse" id="server-mode-internal-test-panel" style="display:none;">
             <summary>
               <div>
                 <div class="drive-card-title">內測登入 token</div>
@@ -2573,7 +2594,7 @@
             <div id="internal-test-token-msg" class="msg"></div>
             </div>
           </details>
-          <details class="drive-collapsible-panel settings-collapse">
+          <details class="drive-collapsible-panel settings-collapse" id="server-mode-tester-token-panel" style="display:none;">
             <summary>
               <div>
                 <div class="drive-card-title">Server Mode v2 測試員 token</div>
@@ -2757,9 +2778,10 @@
                 <label>CAPTCHA 到期秒數</label>
                 <input type="number" id="s-captcha-ttl-seconds" min="60" max="3600" />
               </div>
-              <div class="field">
+              <div class="field" id="captcha-turnstile-site-key-field" style="display:none;">
                 <label>Turnstile site key</label>
                 <input type="text" id="s-captcha-turnstile-site-key" placeholder="未使用可留空" />
+                <div class="field-hint">只在 `turnstile` 模式需要；切到其他 CAPTCHA 模式時會自動隱藏。</div>
               </div>
             </div>
             <div class="field">
@@ -2782,6 +2804,11 @@
                 </div>
               </summary>
               <div class="drive-collapsible-body">
+            <div class="settings-feature-bundle-panel">
+              <div class="drive-card-sub">功能互相依賴屬正常。可先用下列整套開關快速勾選，再按下方「儲存設定」寫入。</div>
+              <div id="feature-bundle-toolbar" class="admin-toolbar settings-feature-bundle-toolbar"></div>
+              <div id="feature-advisory-list" class="settings-feature-advisory-list"></div>
+            </div>
             <div class="settings-option-grid">
             <div class="field"><label><input type="checkbox" id="s-feature-chat-enabled" /> 聊天室</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-community-enabled" /> 討論區 / 公告 / 留言</label></div>
@@ -2819,7 +2846,6 @@
             <div class="field"><label><input type="checkbox" id="s-feature-comfyui-enabled" /> ComfyUI AI 產圖</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-economy-enabled" /> PointsChain 積分系統</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-trading-enabled" /> 積分交易所</label></div>
-            <div class="field"><label><input type="checkbox" id="s-feature-personalization-enabled" /> 個人化</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-social-search-enabled" /> 社交 / 搜尋</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-advanced-security-enabled" /> 進階安全</label></div>
             <div class="field"><label><input type="checkbox" id="s-feature-privacy-uploads-enabled" /> 隱私分級上傳 / E2EE</label></div>
@@ -2836,6 +2862,10 @@
                 </div>
               </summary>
               <div class="drive-collapsible-body">
+            <div class="field">
+              <label><input type="checkbox" id="s-feature-personalization-enabled" /> 允許使用者覆寫個人外觀</label>
+              <div class="drive-card-sub">開啟後，所有已登入用戶都能在「修改資料 -> 個人外觀」只改自己的畫面；全站預設外觀仍只有 root 能修改。</div>
+            </div>
             <div class="settings-option-grid settings-appearance-grid">
               <div class="field">
                 <label>背景色</label>
@@ -2873,6 +2903,65 @@
                 <select id="s-site-density">
                   <option value="comfortable">舒適</option>
                   <option value="compact">緊湊</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>卡片圓角</label>
+                <select id="s-site-radius-px">
+                  <option value="8">俐落</option>
+                  <option value="12">標準</option>
+                  <option value="18">柔和</option>
+                  <option value="24">圓潤</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>介面字級</label>
+                <select id="s-site-font-scale">
+                  <option value="0.95">小一點</option>
+                  <option value="1">標準</option>
+                  <option value="1.08">大一點</option>
+                  <option value="1.15">放大</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>寬版內容上限</label>
+                <select id="s-site-content-width">
+                  <option value="1180">1180 px</option>
+                  <option value="1380">1380 px</option>
+                  <option value="1600">1600 px</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>字體風格</label>
+                <select id="s-site-font-family">
+                  <option value="system">系統預設</option>
+                  <option value="rounded">圓潤人文</option>
+                  <option value="serif">閱讀襯線</option>
+                  <option value="mono">終端風格</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>背景風格</label>
+                <select id="s-site-background-style">
+                  <option value="flat">純色簡潔</option>
+                  <option value="aurora">柔光漸層</option>
+                  <option value="grid">科技網格</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>面板風格</label>
+                <select id="s-site-panel-style">
+                  <option value="glass">玻璃感</option>
+                  <option value="matte">霧面</option>
+                  <option value="solid">實心</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>側邊欄寬度</label>
+                <select id="s-site-sidebar-width">
+                  <option value="compact">精簡</option>
+                  <option value="standard">標準</option>
+                  <option value="wide">加寬</option>
                 </select>
               </div>
             </div>
@@ -2941,18 +3030,14 @@
                 <option value="remote">遠端 ComfyUI API</option>
                 <option value="local">本地 ComfyUI 資料夾與啟動腳本</option>
               </select>
+              <div class="drive-card-sub">主 ComfyUI backend 依這裡切換。Civitai API Key 只用在 root 的模型下載區，不參與上方產圖連線。</div>
             </div>
             <div id="comfyui-remote-settings">
               <div class="field">
                 <label>遠端 API 位址</label>
                 <input type="url" id="s-comfyui-remote-api-url" placeholder="http://127.0.0.1:8192" />
               </div>
-              <div class="field">
-                <label>root 專用加速 API 位址（可空白）</label>
-                <input type="url" id="s-comfyui-root-accel-api-url" placeholder="https://comfyui-root.example:8188" />
-                <div class="drive-card-sub">設定後，只有 root 可在 ComfyUI 頁面自行切換是否走這條加速通道；其他帳號仍使用主 ComfyUI backend。</div>
-              </div>
-              <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">遠端模式只透過 ComfyUI API 產圖；丟棄預覽只會清掉網頁預覽，不會刪除遠端 output 原始檔。</div>
+              <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">遠端模式只透過 ComfyUI API 產圖；丟棄預覽只會清掉網頁預覽，不會刪除遠端 output 原始檔，也不提供本地模型下載。</div>
             </div>
             <div id="comfyui-local-settings" style="display:none;">
               <div class="field">
@@ -2974,9 +3059,10 @@
               </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">以 Linux/WSL 腳本為例：資料夾填你的 ComfyUI portable 或專案資料夾，腳本填 <code>run_in_linux.sh</code>。本地模式會下載模型到 <code>ComfyUI/models/checkpoints</code> 或 <code>ComfyUI/models/loras</code>，丟棄預覽時可刪除 output 原始檔。</div>
             </div>
-            <div class="field">
+            <div class="field" id="comfyui-civitai-settings" style="display:none;">
               <label>Civitai API Key</label>
               <input type="password" id="s-comfyui-civitai-api-key" placeholder="用於 root 模型下載面板讀取版本與下載" autocomplete="off" />
+              <div class="drive-card-sub">只在本地模式顯示，供 root 使用頁面最下方的 Civitai 模型下載折疊區；不會改變上方 ComfyUI 產圖 backend。</div>
             </div>
             <div class="field">
               <label>單次產圖張數上限</label>
@@ -3539,6 +3625,130 @@
       <label>電話</label>
       <input type="tel" id="edit-user-phone" placeholder="09xx-xxx-xxx" />
     </div>
+    <details class="drive-collapsible-panel settings-collapse" id="edit-user-appearance-section" style="display:none;">
+      <summary>
+        <div>
+          <div class="drive-card-title">個人外觀</div>
+          <div class="drive-card-sub">所有已登入用戶都能在這裡只改自己的畫面，不會改全站預設。關閉視窗不會自動儲存。</div>
+        </div>
+      </summary>
+      <div class="drive-collapsible-body">
+        <div id="edit-user-appearance-status" class="drive-card-sub" style="margin-bottom:.65rem;"></div>
+        <div class="field">
+          <label>快速套用風格</label>
+          <select id="edit-user-appearance-preset">
+            <option value="custom">維持目前設定</option>
+            <option value="midnight">Midnight</option>
+            <option value="sunset">Sunset</option>
+            <option value="forest">Forest</option>
+            <option value="paper">Paper</option>
+          </select>
+          <div class="drive-card-sub">選完會立即預覽；最後仍要按下方「儲存」才會寫入帳號。</div>
+        </div>
+        <div class="settings-option-grid settings-appearance-grid">
+          <div class="field">
+            <label>字體風格</label>
+            <select id="edit-user-site-font-family">
+              <option value="system">系統預設</option>
+              <option value="rounded">圓潤人文</option>
+              <option value="serif">閱讀襯線</option>
+              <option value="mono">終端風格</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>背景風格</label>
+            <select id="edit-user-site-background-style">
+              <option value="flat">純色簡潔</option>
+              <option value="aurora">柔光漸層</option>
+              <option value="grid">科技網格</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>面板風格</label>
+            <select id="edit-user-site-panel-style">
+              <option value="glass">玻璃感</option>
+              <option value="matte">霧面</option>
+              <option value="solid">實心</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>側邊欄寬度</label>
+            <select id="edit-user-site-sidebar-width">
+              <option value="compact">精簡</option>
+              <option value="standard">標準</option>
+              <option value="wide">加寬</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>背景色</label>
+            <input type="color" id="edit-user-site-bg" />
+          </div>
+          <div class="field">
+            <label>面板色</label>
+            <input type="color" id="edit-user-site-surface" />
+          </div>
+          <div class="field">
+            <label>主色</label>
+            <input type="color" id="edit-user-site-accent" />
+          </div>
+          <div class="field">
+            <label>輔助色</label>
+            <input type="color" id="edit-user-site-accent2" />
+          </div>
+          <div class="field">
+            <label>文字色</label>
+            <input type="color" id="edit-user-site-text" />
+          </div>
+          <div class="field">
+            <label>次要文字色</label>
+            <input type="color" id="edit-user-site-muted" />
+          </div>
+          <div class="field">
+            <label>介面配置</label>
+            <select id="edit-user-site-layout-mode">
+              <option value="centered">置中版面</option>
+              <option value="wide">寬版管理台</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>介面密度</label>
+            <select id="edit-user-site-density">
+              <option value="comfortable">舒適</option>
+              <option value="compact">緊湊</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>卡片圓角</label>
+            <select id="edit-user-site-radius-px">
+              <option value="8">俐落</option>
+              <option value="12">標準</option>
+              <option value="18">柔和</option>
+              <option value="24">圓潤</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>介面字級</label>
+            <select id="edit-user-site-font-scale">
+              <option value="0.95">小一點</option>
+              <option value="1">標準</option>
+              <option value="1.08">大一點</option>
+              <option value="1.15">放大</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>寬版內容上限</label>
+            <select id="edit-user-site-content-width">
+              <option value="1180">1180 px</option>
+              <option value="1380">1380 px</option>
+              <option value="1600">1600 px</option>
+            </select>
+          </div>
+        </div>
+        <div class="edit-user-actions" style="margin-top:.7rem;">
+          <button type="button" id="edit-user-appearance-reset" class="btn">恢復全站預設</button>
+        </div>
+      </div>
+    </details>
     <div class="field">
       <label>頭像上傳（JPEG / PNG / GIF，會走雲端硬碟掃描與圖片去 EXIF）</label>
       <input type="file" id="edit-user-avatar-file" accept="image/png,image/jpeg,image/gif" />
@@ -3902,22 +4112,22 @@
   <span id="server-version-badge" data-server-version-badge style="display:block;margin-top:.35rem;color:var(--muted);font-size:.74rem;">發佈號: loading...</span>
 </div>
 
-<script src="/js/00-core.js?v=20260430-trading-page-split" defer></script>
+<script src="/js/00-core.js?v=20260503-appearance-v2" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
 <script src="/js/25-community.js?v=20260429-moderator-user-select" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260503-remote-download-stable" defer></script>
-<script src="/js/36-comfyui.js?v=20260503-comfyui-lora" defer></script>
+<script src="/js/35-drive.js?v=20260503-feature-bundles" defer></script>
+<script src="/js/36-comfyui.js?v=20260503-comfyui-mode-badge" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260502-video-platform" defer></script>
-<script src="/js/40-auth-users.js?v=20260503-account-delete-feedback" defer></script>
-<script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
+<script src="/js/40-auth-users.js?v=20260503-appearance-v2" defer></script>
+<script src="/js/50-admin.js?v=20260503-appearance-v2" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
-<script src="/js/90-bootstrap.js?v=20260503-comfyui-lora" defer></script>
+<script src="/js/90-bootstrap.js?v=20260503-appearance-v2" defer></script>
 </body>
 </html>
