@@ -40,7 +40,7 @@
 
 - 一句話說明：root 控制全站預設外觀，而每位已登入用戶都可選擇是否覆寫成自己的字體、背景、面板、側邊欄與配色風格。
 - 設計目的：讓部署者維持全站品牌與預設可讀性，同時不必把每位使用者都綁死在同一套視覺配置。
-- 使用方法：root 到 `Security Center -> Settings -> Appearance` 設定全站預設，並決定是否開啟 `允許使用者覆寫個人外觀`；一般使用者到 `修改資料 -> 個人外觀` 儲存自己的主題。
+- 使用方法：root 到 `Security Center -> Settings -> Appearance` 設定全站預設，並決定是否開啟 `允許使用者覆寫個人外觀`；一般使用者到 `修改資料 -> 個人外觀` 儲存自己的主題。若要放棄個人覆寫，可直接按編輯視窗底部的 `恢復全站預設` 再儲存。
 - 原理：前端會先套 root 的全域 site config，再覆蓋登入使用者的個人 appearance settings；後端只接受白名單欄位與有限選項，不信任任意 CSS 或自由字串。
 - 失敗情境與提示：root 關閉個人外觀覆寫時，使用者編輯器會顯示停用提示並阻止儲存；若沒按儲存，只是暫時預覽；全站預設永遠不會被一般使用者改到。
 - 測試方式：驗證 root 可改全站預設、一般使用者只能改自己的畫面；驗證預覽、儲存、恢復預設、關閉個人覆寫後的停用提示；驗證字體/背景/面板/側邊欄寬度在重新登入後仍正確套用。
@@ -118,12 +118,12 @@
 
 ### Trading / Bots / Backtest
 
-- 一句話說明：提供現貨交易、借貸交易、DCA / 網格 / workflow bot 與回測。
+- 一句話說明：提供現貨交易、借貸交易、多交易所融合價格、DCA / 網格 / workflow bot 與回測。
 - 設計目的：驗證金額、風控、撮合、PointsChain 結算與策略流程。
-- 使用方法：root 先啟用 economy / trading，再讓使用者交易或由 root 做模擬與設定。
-- 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。交易帳本仍以整數 POINT 為最小單位，但手續費改用 `Decimal` 後端計算並採四捨五入到最近整點，避免舊版小額單長期偏向 `ceil` 超收。
-- 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用；若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則。
-- 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、restore consistency。
+- 使用方法：root 先啟用 economy / trading，再決定價格來源是 `融合價格（多交易所加權平均）` 還是單一 Binance；若選融合價格，可維持 `依深度自動權重`，或切成 `root 手動權重` 自行調整各交易所占比。定投機器人的 `最多執行次數` 也可輸入 `-1` 代表不限制。
+- 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。融合價格模式會優先抓 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 的掛單簿中價與深度，依深度或 root 手動權重融合；若部分 API 失效，系統會自動用剩餘健康來源重新分配權重。交易帳本仍以整數 POINT 為最小單位，但手續費改用 `Decimal` 後端計算並採四捨五入到最近整點，避免舊版小額單長期偏向 `ceil` 超收。
+- 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用；若融合價格手動權重全部設成 0，系統會退回自動深度權重；若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則。
+- 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、單一交易所 API 失效後的融合價格重算、DCA `max_runs=-1` 連續執行、restore consistency。
 - 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### Snapshot / Restore / Reset
@@ -132,7 +132,7 @@
 - 設計目的：把「還原整站」與「修復帳本」分開，避免災難恢復時互相覆蓋。
 - 使用方法：root 先建 snapshot，再進行 restore / reset / ledger recovery。
 - 原理：server snapshot、PointsChain backup、audit chain、runtime reset 各自有明確所有權邊界。
-- 失敗情境與提示：restore 後 secrets 不會回來、reset 需要重啟、PointsChain recovery 不能拿來代替全站 restore。
+- 失敗情境與提示：snapshot restore 會回放 runtime secret files，若 restore event 出現 `runtime secret validation failed` 要先修這批檔案；reset 仍會清掉 runtime secrets 並要求重啟；PointsChain recovery 不能拿來代替全站 restore。
 - 測試方式：create/list/download/restore/upload-restore/reset、post-restore consistency、offline/reconnect reset smoke。
 - 相關文件連結：[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md), [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 

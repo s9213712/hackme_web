@@ -163,6 +163,9 @@ def test_root_points_page_is_chain_operations_console():
     assert "借券原始保證金比例（%）" in index_html
     assert "維持保證金比例（%）" in index_html
     assert 'id="root-trading-price-source"' in index_html
+    assert 'value="fused_weighted"' in index_html
+    assert 'id="root-trading-price-fusion-mode"' in index_html
+    assert 'id="root-trading-price-fusion-weights"' in index_html
     assert 'id="root-trading-max-price-staleness"' in index_html
     assert 'id="root-trading-liquidation-enabled"' in index_html
     assert 'id="root-trading-maintenance-percent"' in index_html
@@ -183,6 +186,9 @@ def test_root_points_page_is_chain_operations_console():
     assert "saveRootEconomyCatalogItem" in admin_js
     assert "function loadRootTradingSettings()" in admin_js
     assert "function saveRootTradingSettings()" in admin_js
+    assert "function renderRootTradingFusionWeightInputs" in admin_js
+    assert "function toggleRootTradingPriceFusionControls" in admin_js
+    assert "collectRootTradingFusionWeights" in admin_js
     assert "adminInputPercent" in admin_js
     assert "adminFormatPercent" in admin_js
     assert 'apiFetch(API + "/root/trading/settings"' in admin_js
@@ -409,6 +415,7 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "data-trading-bot-next-run" in trading_js
     assert "data-trading-bot-increase-runs" in trading_js
     assert "增加次數" in trading_js
+    assert "不限制" in trading_js
     assert "交易明細（" in trading_js
     assert "設定摘要" in trading_js
     assert "已立即執行第一筆" in trading_js
@@ -419,6 +426,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "定投機器人新增失敗" in trading_js
     assert "未提供錯誤原因" in trading_js
     assert "正在新增自動化機器人" in trading_js
+    assert 'id="trading-dca-bot-max-runs"' in trading_section
+    assert "輸入 -1 代表不限制執行次數" in trading_section
     assert "parseTradingWorkflowInput" in trading_js
     assert "function tradingWorkflowTemplates" in trading_js
     assert "function loadTradingWorkflowTemplates" in trading_js

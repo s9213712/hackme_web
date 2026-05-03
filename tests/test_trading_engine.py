@@ -834,6 +834,69 @@ def test_increase_trading_bot_max_runs_updates_limit(tmp_path):
     assert updated["bot"]["max_runs"] == 4
 
 
+def test_dca_bot_accepts_unlimited_max_runs_and_can_continue_running(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "unlimited dca",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "max_runs": -1,
+            "enabled": True,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+
+    assert created["bot"]["max_runs"] == -1
+
+    first = trading.run_trading_bots(actor=_actor(), limit=10)
+    assert first["ok"] is True
+    assert len(first["triggered"]) == 1
+
+    conn = trading.get_db()
+    try:
+        conn.execute("UPDATE trading_bots SET last_run_at='2000-01-01T00:00:00' WHERE bot_uuid=?", (bot_uuid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    second = trading.run_trading_bots(actor=_actor(), limit=10)
+    assert second["ok"] is True
+    assert len(second["triggered"]) == 1
+
+    dashboard = trading.user_dashboard(user_id=1)
+    bot = next(row for row in dashboard["bots"] if row["bot_uuid"] == bot_uuid)
+    assert bot["max_runs"] == -1
+    assert bot["run_count"] == 2
+    assert bot["can_run"] is True
+
+
+def test_increase_trading_bot_max_runs_is_noop_for_unlimited_dca(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "unlimited dca",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "max_runs": -1,
+            "enabled": True,
+        },
+    )
+
+    updated = trading.increase_trading_bot_max_runs(actor=_actor(), bot_uuid=created["bot"]["bot_uuid"], delta=3)
+
+    assert updated["ok"] is True
+    assert updated["delta"] == 0
+    assert updated["unlimited"] is True
+    assert updated["bot"]["max_runs"] == -1
+
+
 def test_workflow_backtest_supports_take_profit_and_stop_loss_percent(tmp_path):
     _, trading = _services(tmp_path)
     workflow = {
@@ -1173,6 +1236,85 @@ def test_live_price_provider_walks_public_fallback_chain_to_bitstamp(tmp_path, m
     )
     seen_hosts = [host for host in expected_hosts if any(host in url for url in urls)]
     assert seen_hosts == list(expected_hosts)
+
+
+def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+
+    def boom(_market_symbol):
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: {"source": "binance_public_api", "price_points": 100, "depth_score": 1.0})
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: {"source": "okx_public_api", "price_points": 200, "depth_score": 3.0})
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", boom)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "ETH/POINTS")
+        price, source = trading._current_market_price_points(conn, market)
+        updated = trading._market(conn, "ETH/POINTS")
+    finally:
+        conn.close()
+
+    assert price == 175
+    assert source == "fused_weighted"
+    assert updated["manual_price_points"] == 175
+    assert updated["price_source"] == "fused_weighted"
+
+
+def test_live_price_fusion_manual_weights_renormalize_after_provider_failure(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "manual_weights",
+            "price_fusion_manual_weights": {
+                "binance_public_api": 1,
+                "okx_public_api": 3,
+                "coinbase_exchange": 0,
+                "kraken_public_api": 0,
+                "gemini_public_api": 0,
+                "bitstamp_public_api": 0,
+            },
+        },
+        markets=[],
+    )
+
+    def boom(_market_symbol):
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: {"source": "binance_public_api", "price_points": 123, "depth_score": 10.0})
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", boom)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "ETH/POINTS")
+        price, source = trading._current_market_price_points(conn, market)
+    finally:
+        conn.close()
+
+    assert price == 123
+    assert source == "fused_weighted"
+    settings = trading.get_root_settings()["settings"]
+    assert settings["price_fusion_mode"] == "manual_weights"
+    assert settings["price_fusion_manual_weights"]["okx_public_api"] == 3
 
 
 def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_path):

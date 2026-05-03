@@ -256,7 +256,7 @@ def register_trading_routes(app, deps):
             msg = "定投機器人每次投入點數必須大於 0"
             status = 400
         elif lowered.startswith("max_runs must be"):
-            msg = "交易機器人最多執行次數必須是 1 到 1000 之間的整數"
+            msg = "交易機器人最多執行次數必須是 -1（不限制）或 1 到 1000 之間的整數"
             status = 400
         elif lowered.startswith("cooldown_seconds must be"):
             msg = "交易機器人冷卻秒數必須是 0 到 86400 之間的整數"
@@ -1309,7 +1309,7 @@ def register_trading_routes(app, deps):
             return err
         settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
         if settings.get("price_source") == "manual_root":
-            return json_resp({"ok": False, "msg": "交易價格來源不可切換為 root 手動價格，請使用 Binance 與最後健康快取"}), 400
+            return json_resp({"ok": False, "msg": "交易價格來源不可切換為 root 手動價格，請使用融合價格或單一公開 API"}), 400
         try:
             result = trading_service.update_root_settings(
                 actor=actor,

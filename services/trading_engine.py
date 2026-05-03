@@ -49,7 +49,44 @@ KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker"
 GEMINI_TICKER_URL_TEMPLATE = "https://api.gemini.com/v2/ticker/{symbol}"
 BITSTAMP_TICKER_URL_TEMPLATE = "https://www.bitstamp.net/api/v2/ticker/{pair}/"
 COINGECKO_SIMPLE_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+BINANCE_DEPTH_URL = "https://api.binance.com/api/v3/depth"
+OKX_BOOKS_URL = "https://www.okx.com/api/v5/market/books"
+COINBASE_BOOK_URL_TEMPLATE = "https://api.exchange.coinbase.com/products/{product_id}/book"
+KRAKEN_DEPTH_URL = "https://api.kraken.com/0/public/Depth"
+GEMINI_BOOK_URL_TEMPLATE = "https://api.gemini.com/v1/book/{symbol}"
+BITSTAMP_ORDER_BOOK_URL_TEMPLATE = "https://www.bitstamp.net/api/v2/order_book/{pair}/"
+FUSED_PRICE_SOURCE = "fused_weighted"
+PRICE_FUSION_MODES = {"auto_depth", "manual_weights"}
+WEIGHTED_PRICE_PROVIDERS = (
+    "binance_public_api",
+    "okx_public_api",
+    "coinbase_exchange",
+    "kraken_public_api",
+    "gemini_public_api",
+    "bitstamp_public_api",
+)
+PRICE_PROVIDER_LABELS = {
+    "binance_public_api": "Binance",
+    "okx_public_api": "OKX",
+    "coinbase_exchange": "Coinbase",
+    "kraken_public_api": "Kraken",
+    "gemini_public_api": "Gemini",
+    "bitstamp_public_api": "Bitstamp",
+    "coingecko_simple_price": "CoinGecko",
+}
+DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS = {
+    "binance_public_api": 1.0,
+    "okx_public_api": 1.0,
+    "coinbase_exchange": 1.0,
+    "kraken_public_api": 1.0,
+    "gemini_public_api": 1.0,
+    "bitstamp_public_api": 1.0,
+}
+DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT = 1.0
+DEFAULT_PRICE_FUSION_DEPTH_LEVELS = 10
+UNLIMITED_BOT_MAX_RUNS = 2_147_483_647
 LIVE_PRICE_SOURCE_NAMES = {
+    FUSED_PRICE_SOURCE,
     "binance_public_api",
     "okx_public_api",
     "coinbase_exchange",
@@ -148,6 +185,40 @@ def _to_float(value, *, name, minimum=0.0, maximum=10**12):
     return number
 
 
+def _normalize_price_fusion_manual_weights(raw):
+    out = {}
+    source = raw if isinstance(raw, dict) else {}
+    for provider in WEIGHTED_PRICE_PROVIDERS:
+        value = source.get(provider, DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS.get(provider, 1.0))
+        try:
+            number = float(value)
+        except Exception:
+            number = DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS.get(provider, 1.0)
+        if not math.isfinite(number):
+            number = DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS.get(provider, 1.0)
+        out[provider] = max(0.0, min(number, 1000.0))
+    return out
+
+
+def _bot_max_runs_from_storage(value):
+    number = int(value or 0)
+    return -1 if number >= UNLIMITED_BOT_MAX_RUNS else number
+
+
+def _bot_max_runs_to_storage(value, *, allow_unlimited=False, maximum=1000):
+    raw = str(value).strip() if value is not None else ""
+    if allow_unlimited and raw == "-1":
+        return UNLIMITED_BOT_MAX_RUNS
+    return _to_int(value, name="max_runs", minimum=1, maximum=maximum)
+
+
+def _bot_max_runs_has_remaining(run_count, max_runs):
+    max_runs = int(max_runs or 0)
+    if max_runs >= UNLIMITED_BOT_MAX_RUNS:
+        return True
+    return int(run_count or 0) < max_runs
+
+
 def quantity_to_units(value):
     try:
         dec = Decimal(str(value or "")).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
@@ -235,7 +306,7 @@ def ensure_trading_schema(conn):
             fee_rate_percent REAL NOT NULL DEFAULT 0.3,
             updated_at TEXT NOT NULL,
             updated_by INTEGER,
-            price_source TEXT NOT NULL DEFAULT 'manual_root',
+            price_source TEXT NOT NULL DEFAULT 'fused_weighted',
             CHECK (execution_mode IN ('house_counterparty', 'pvp_matching', 'hybrid_liquidity'))
         )
         """
@@ -668,7 +739,9 @@ def ensure_trading_schema(conn):
         ("trading.margin_liquidation_enabled", "true"),
         ("trading.margin_maintenance_percent", "15"),
         ("trading.max_price_staleness_seconds", "900"),
-        ("trading.price_source", "binance_public_api"),
+        ("trading.price_source", FUSED_PRICE_SOURCE),
+        ("trading.price_fusion_mode", "auto_depth"),
+        ("trading.price_fusion_manual_weights_json", _json_dumps(DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
         ("trading.btc_trade_enabled", "false"),
         ("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
         ("trading.btc_trade_branch", "strategy/v15b-plus"),
@@ -689,9 +762,9 @@ def ensure_trading_schema(conn):
             """
             INSERT OR IGNORE INTO trading_markets (
                 symbol, base_asset, quote_currency, manual_price_points, updated_at, price_source
-            ) VALUES (?, ?, 'POINTS', ?, ?, 'binance_public_api')
+            ) VALUES (?, ?, 'POINTS', ?, ?, ?)
             """,
-            (symbol, asset, price, now),
+            (symbol, asset, price, now, FUSED_PRICE_SOURCE),
         )
     for table in ("trading_orders", "trading_fills"):
         cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -945,7 +1018,8 @@ class TradingEngineService:
     def _bot_payload(self, row):
         item = dict(row)
         item["enabled"] = bool(item["enabled"])
-        item["can_run"] = bool(item["enabled"]) and int(item["run_count"] or 0) < int(item["max_runs"] or 1)
+        item["max_runs"] = _bot_max_runs_from_storage(item.get("max_runs"))
+        item["can_run"] = bool(item["enabled"]) and _bot_max_runs_has_remaining(item.get("run_count"), row["max_runs"])
         item["next_run_at"] = None
         if item["can_run"]:
             try:
@@ -992,7 +1066,13 @@ class TradingEngineService:
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
             "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
-            "price_source": raw.get("trading.price_source", "binance_public_api"),
+            "price_source": raw.get("trading.price_source", FUSED_PRICE_SOURCE),
+            "price_fusion_mode": raw.get("trading.price_fusion_mode", "auto_depth") if raw.get("trading.price_fusion_mode", "auto_depth") in PRICE_FUSION_MODES else "auto_depth",
+            "price_fusion_manual_weights": _normalize_price_fusion_manual_weights(_json_loads(raw.get("trading.price_fusion_manual_weights_json"), DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
+            "price_fusion_provider_labels": dict(PRICE_PROVIDER_LABELS),
+            "price_fusion_providers": list(WEIGHTED_PRICE_PROVIDERS),
+            "price_fusion_depth_band_percent": DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT,
+            "price_fusion_depth_levels": DEFAULT_PRICE_FUSION_DEPTH_LEVELS,
             "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
             "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
             "btc_trade_repo_url": raw.get("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
@@ -1098,13 +1178,29 @@ class TradingEngineService:
                 setting_changes["trading.bot_auto_scan_limit"] = value
             if "price_source" in settings:
                 value = str(settings.get("price_source") or "").strip()
-                if value not in {"binance_public_api", "manual_root"}:
-                    raise ValueError("price_source must be binance_public_api or manual_root")
+                if value not in {FUSED_PRICE_SOURCE, "binance_public_api", "manual_root"}:
+                    raise ValueError("price_source must be fused_weighted, binance_public_api, or manual_root")
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
                     ("trading.price_source", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_source"] = value
+            if "price_fusion_mode" in settings:
+                value = str(settings.get("price_fusion_mode") or "").strip()
+                if value not in PRICE_FUSION_MODES:
+                    raise ValueError("price_fusion_mode must be auto_depth or manual_weights")
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_mode", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_mode"] = value
+            if "price_fusion_manual_weights" in settings:
+                value = _normalize_price_fusion_manual_weights(settings.get("price_fusion_manual_weights"))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_manual_weights_json", _json_dumps(value), now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_manual_weights_json"] = value
             if "btc_trade_project_dir" in settings:
                 value = str(settings.get("btc_trade_project_dir") or "").strip()
                 if len(value) > 500:
@@ -1289,6 +1385,196 @@ class TradingEngineService:
         price = coin.get("usd") if isinstance(coin, dict) else None
         return self._price_points_from_float(price, source="coingecko_simple_price")
 
+    def _depth_notional_score(self, bids, asks, *, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
+        bid_levels = []
+        ask_levels = []
+        for price, quantity in bids[:max_levels]:
+            try:
+                bid_levels.append((float(price), float(quantity)))
+            except Exception:
+                continue
+        for price, quantity in asks[:max_levels]:
+            try:
+                ask_levels.append((float(price), float(quantity)))
+            except Exception:
+                continue
+        if not bid_levels or not ask_levels:
+            raise ValueError("order book is empty")
+        best_bid = bid_levels[0][0]
+        best_ask = ask_levels[0][0]
+        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+            raise ValueError("order book spread is invalid")
+        midpoint = (best_bid + best_ask) / 2.0
+        lower_bound = midpoint * (1.0 - band_percent / 100.0)
+        upper_bound = midpoint * (1.0 + band_percent / 100.0)
+        bid_notional = sum(price * quantity for price, quantity in bid_levels if price >= lower_bound)
+        ask_notional = sum(price * quantity for price, quantity in ask_levels if price <= upper_bound)
+        score = min(bid_notional, ask_notional)
+        if score <= 0:
+            score = (bid_notional + ask_notional) / 2.0
+        if score <= 0:
+            raise ValueError("order book depth score is invalid")
+        return midpoint, score
+
+    def _fetch_binance_orderbook_snapshot(self, market_symbol):
+        symbol = LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
+        if not symbol:
+            raise ValueError("binance order book is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{BINANCE_DEPTH_URL}?{urlencode({'symbol': symbol, 'limit': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+            timeout=5,
+        )
+        midpoint, depth_score = self._depth_notional_score(payload.get("bids") or [], payload.get("asks") or [])
+        return {"source": "binance_public_api", "price_points": self._price_points_from_float(midpoint, source="binance_public_api"), "depth_score": depth_score}
+
+    def _fetch_okx_orderbook_snapshot(self, market_symbol):
+        instrument = OKX_PRICE_INSTRUMENTS.get(str(market_symbol or "").strip().upper())
+        if not instrument:
+            raise ValueError("okx order book is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{OKX_BOOKS_URL}?{urlencode({'instId': instrument, 'sz': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-depth okx",
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        book = data[0] if isinstance(data, list) and data else None
+        midpoint, depth_score = self._depth_notional_score(book.get("bids") or [], book.get("asks") or [])
+        return {"source": "okx_public_api", "price_points": self._price_points_from_float(midpoint, source="okx_public_api"), "depth_score": depth_score}
+
+    def _fetch_coinbase_orderbook_snapshot(self, market_symbol):
+        product_id = COINBASE_PRICE_PRODUCTS.get(str(market_symbol or "").strip().upper())
+        if not product_id:
+            raise ValueError("coinbase order book is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{COINBASE_BOOK_URL_TEMPLATE.format(product_id=product_id)}?{urlencode({'level': 2})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-depth coinbase",
+        )
+        midpoint, depth_score = self._depth_notional_score(payload.get("bids") or [], payload.get("asks") or [])
+        return {"source": "coinbase_exchange", "price_points": self._price_points_from_float(midpoint, source="coinbase_exchange"), "depth_score": depth_score}
+
+    def _fetch_kraken_orderbook_snapshot(self, market_symbol):
+        pair = KRAKEN_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        if not pair:
+            raise ValueError("kraken order book is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{KRAKEN_DEPTH_URL}?{urlencode({'pair': pair, 'count': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-depth kraken",
+        )
+        if not isinstance(payload, dict) or payload.get("error"):
+            raise ValueError(f"kraken depth error: {payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        book = next(iter(result.values()), None)
+        midpoint, depth_score = self._depth_notional_score(book.get("bids") or [], book.get("asks") or [])
+        return {"source": "kraken_public_api", "price_points": self._price_points_from_float(midpoint, source="kraken_public_api"), "depth_score": depth_score}
+
+    def _fetch_gemini_orderbook_snapshot(self, market_symbol):
+        symbol = GEMINI_PRICE_SYMBOLS.get(str(market_symbol or "").strip().upper())
+        if not symbol:
+            raise ValueError("gemini order book is not supported for this market")
+        payload = self._fetch_json_url(
+            f"{GEMINI_BOOK_URL_TEMPLATE.format(symbol=symbol)}?{urlencode({'limit_bids': DEFAULT_PRICE_FUSION_DEPTH_LEVELS, 'limit_asks': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-depth gemini",
+        )
+        bids = [[row.get("price"), row.get("amount")] for row in (payload.get("bids") or []) if isinstance(row, dict)]
+        asks = [[row.get("price"), row.get("amount")] for row in (payload.get("asks") or []) if isinstance(row, dict)]
+        midpoint, depth_score = self._depth_notional_score(bids, asks)
+        return {"source": "gemini_public_api", "price_points": self._price_points_from_float(midpoint, source="gemini_public_api"), "depth_score": depth_score}
+
+    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol):
+        pair = BITSTAMP_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        if not pair:
+            raise ValueError("bitstamp order book is not supported for this market")
+        payload = self._fetch_json_url(
+            BITSTAMP_ORDER_BOOK_URL_TEMPLATE.format(pair=pair),
+            timeout=5,
+            user_agent="hackme_web/1.0 trading-depth bitstamp",
+        )
+        midpoint, depth_score = self._depth_notional_score(payload.get("bids") or [], payload.get("asks") or [])
+        return {"source": "bitstamp_public_api", "price_points": self._price_points_from_float(midpoint, source="bitstamp_public_api"), "depth_score": depth_score}
+
+    def _price_fusion_manual_weights(self, settings):
+        return _normalize_price_fusion_manual_weights((settings or {}).get("price_fusion_manual_weights"))
+
+    def _fetch_weighted_fused_price_points(self, market_symbol, *, settings):
+        market_symbol = str(market_symbol or "").strip().upper()
+        snapshots = []
+        errors = []
+        fetchers = (
+            ("binance_public_api", self._fetch_binance_orderbook_snapshot),
+            ("okx_public_api", self._fetch_okx_orderbook_snapshot),
+            ("coinbase_exchange", self._fetch_coinbase_orderbook_snapshot),
+            ("kraken_public_api", self._fetch_kraken_orderbook_snapshot),
+            ("gemini_public_api", self._fetch_gemini_orderbook_snapshot),
+            ("bitstamp_public_api", self._fetch_bitstamp_orderbook_snapshot),
+        )
+        for source, fetcher in fetchers:
+            try:
+                snapshots.append(fetcher(market_symbol))
+            except Exception as exc:
+                errors.append(f"{source}: {str(exc)[:120]}")
+        if not snapshots:
+            try:
+                fallback_price, fallback_source = self._fetch_live_price_points(market_symbol)
+                return fallback_price, {
+                    "mode": "emergency_single_source",
+                    "providers_used": [{
+                        "source": fallback_source,
+                        "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
+                        "price_points": int(fallback_price),
+                        "depth_score": 0.0,
+                        "weight": 1.0,
+                        "normalized_weight": 1.0,
+                    }],
+                    "provider_errors": errors,
+                    "resolved_source": fallback_source,
+                }
+            except Exception as fallback_exc:
+                errors.append(f"single_source_fallback: {str(fallback_exc)[:120]}")
+                raise ValueError("; ".join(errors) or "all fused price providers failed") from fallback_exc
+        mode = str((settings or {}).get("price_fusion_mode") or "auto_depth").strip()
+        weight_map = self._price_fusion_manual_weights(settings)
+        weighted_rows = []
+        resolved_mode = mode
+        if mode == "manual_weights":
+            for snap in snapshots:
+                weight = float(weight_map.get(snap["source"], 0.0))
+                if weight > 0:
+                    weighted_rows.append((snap, weight))
+        if not weighted_rows:
+            if mode == "manual_weights":
+                resolved_mode = "auto_depth_fallback"
+            auto_rows = [(snap, max(float(snap.get("depth_score") or 0.0), 0.0)) for snap in snapshots]
+            total_auto = sum(weight for _, weight in auto_rows)
+            if total_auto <= 0:
+                resolved_mode = "equal_weight_fallback"
+                equal_weight = 1.0 / len(snapshots)
+                weighted_rows = [(snap, equal_weight) for snap in snapshots]
+            else:
+                weighted_rows = auto_rows
+        total_weight = sum(weight for _, weight in weighted_rows)
+        if total_weight <= 0:
+            raise ValueError("weighted fused price has no positive provider weight")
+        weighted_price = sum(int(snap["price_points"]) * float(weight) for snap, weight in weighted_rows) / total_weight
+        return int(Decimal(str(weighted_price)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)), {
+            "mode": resolved_mode,
+            "providers_used": [
+                {
+                    "source": snap["source"],
+                    "label": PRICE_PROVIDER_LABELS.get(snap["source"], snap["source"]),
+                    "price_points": int(snap["price_points"]),
+                    "depth_score": round(float(snap.get("depth_score") or 0.0), 8),
+                    "weight": round(float(weight), 8),
+                    "normalized_weight": round(float(weight) / total_weight, 8),
+                }
+                for snap, weight in weighted_rows
+            ],
+            "provider_errors": errors,
+            "resolved_source": FUSED_PRICE_SOURCE,
+        }
+
     def _fetch_live_price_points(self, market_symbol):
         market_symbol = str(market_symbol or "").strip().upper()
         if not self._live_price_symbol(market_symbol):
@@ -1379,13 +1665,19 @@ class TradingEngineService:
     def _current_market_price_points(self, conn, market):
         symbol = market["symbol"]
         settings = self._settings_payload(conn)
-        configured_source = settings.get("price_source") or "binance_public_api"
+        configured_source = settings.get("price_source") or FUSED_PRICE_SOURCE
         if configured_source == "manual_root" or not self._live_price_symbol(symbol):
             return int(market["manual_price_points"]), str(market["price_source"] or "manual_root")
         old_price = int(market["manual_price_points"] or 0)
         old_source = str(market["price_source"] or "")
         try:
-            price, live_source = self._fetch_live_price_points(symbol)
+            if self.live_price_provider:
+                price, live_source = self._fetch_live_price_points(symbol)
+            elif configured_source == FUSED_PRICE_SOURCE:
+                price, fusion_details = self._fetch_weighted_fused_price_points(symbol, settings=settings)
+                live_source = str((fusion_details or {}).get("resolved_source") or FUSED_PRICE_SOURCE)
+            else:
+                price, live_source = self._fetch_live_price_points(symbol)
         except Exception as exc:
             max_stale = int(settings.get("max_price_staleness_seconds") or 0)
             try:
@@ -2979,7 +3271,11 @@ class TradingEngineService:
         trigger_price = None
         if trigger_type != "always":
             trigger_price = _to_int(payload.get("trigger_price_points"), name="trigger_price_points", minimum=1, maximum=10**12)
-        max_runs = _to_int(payload.get("max_runs", 1), name="max_runs", minimum=1, maximum=1000)
+        max_runs = _bot_max_runs_to_storage(
+            payload.get("max_runs", 1),
+            allow_unlimited=(bot_type == "dca"),
+            maximum=1000,
+        )
         cooldown_seconds = _to_int(payload.get("cooldown_seconds", 300), name="cooldown_seconds", minimum=0, maximum=86400)
         interval_hours = _to_int(payload.get("interval_hours", 24), name="interval_hours", minimum=1, maximum=8760)
         if bot_type == "dca":
@@ -3151,6 +3447,9 @@ class TradingEngineService:
                 raise ValueError("trading bot not found")
             if int(row["user_id"]) != int(user_id):
                 raise ValueError("cannot update another user's trading bot")
+            if int(row["max_runs"] or 0) >= UNLIMITED_BOT_MAX_RUNS:
+                conn.commit()
+                return {"ok": True, "bot": self._bot_payload(row), "delta": 0, "unlimited": True}
             next_max_runs = _to_int(int(row["max_runs"] or 0) + increment, name="max_runs", minimum=1, maximum=10000)
             now = _now()
             conn.execute(
@@ -3797,7 +4096,10 @@ class TradingEngineService:
         if bot.get("run_count") is not None and bot.get("max_runs") is not None:
             run_count = int(bot["run_count"])
             max_runs = int(bot["max_runs"])
-            checks.append({"label": f"執行次數 {run_count}/{max_runs}", "met": run_count < max_runs})
+            if max_runs == -1:
+                checks.append({"label": f"執行次數 {run_count}/不限制", "met": True})
+            else:
+                checks.append({"label": f"執行次數 {run_count}/{max_runs}", "met": _bot_max_runs_has_remaining(run_count, max_runs)})
         cooldown = int(bot.get("cooldown_seconds") or 0)
         if cooldown > 0 and bot.get("last_run_at"):
             try:
@@ -3993,7 +4295,7 @@ class TradingEngineService:
             raise ValueError("trading bot not found")
         if not bool(row["enabled"]):
             return {"ok": True, "scanned": 1, "triggered": [], "skipped": [{"bot_uuid": row["bot_uuid"], "reason": "disabled"}], "failed": []}
-        if int(row["run_count"] or 0) >= int(row["max_runs"] or 1):
+        if not _bot_max_runs_has_remaining(row["run_count"], row["max_runs"]):
             return {"ok": True, "scanned": 1, "triggered": [], "skipped": [{"bot_uuid": row["bot_uuid"], "reason": "max_runs_reached"}], "failed": []}
         return self._run_trading_bot_rows([row])
 

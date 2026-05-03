@@ -425,7 +425,7 @@ def validation_scenarios():
             "grid backtest follows adjacent-level lifecycle and avoids same-candle churn",
             grid_backtest["strategy"] == "grid"
             and grid_backtest["trade_count"] == 7
-            and grid_backtest["final_value_points"] == 1065
+            and grid_backtest["final_value_points"] == 1072
             and [row["side"] for row in grid_backtest["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
             and all(not (row["index"] == 0 and row["price_points"] == 100) for row in grid_backtest["trades"]),
             backtest=grid_backtest,

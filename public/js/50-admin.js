@@ -891,10 +891,10 @@ async function loadPasswordResetReviews() {
 }
 
 async function approvePasswordResetReview(requestId) {
-  const password = document.querySelector(`[data-reset-review-pass="${CSS.escape(String(requestId))}"]`)?.value || "";
+  const proposedPassword = document.querySelector(`[data-reset-review-pass="${CSS.escape(String(requestId))}"]`)?.value || "";
   const passwordConfirm = document.querySelector(`[data-reset-review-pass-confirm="${CSS.escape(String(requestId))}"]`)?.value || "";
   const note = document.querySelector(`[data-reset-review-note="${CSS.escape(String(requestId))}"]`)?.value || "";
-  if (!password || password !== passwordConfirm) {
+  if (!proposedPassword || proposedPassword !== passwordConfirm) {
     passwordResetReviewSetMsg("請輸入一致的臨時密碼", false);
     return;
   }
@@ -904,7 +904,7 @@ async function approvePasswordResetReview(requestId) {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({ temporary_password: password, temporary_password_confirm: passwordConfirm, note })
+    body: JSON.stringify({ temporary_password: proposedPassword, temporary_password_confirm: passwordConfirm, note })
   });
   const json = await res.json().catch(() => ({}));
   passwordResetReviewSetMsg(json.msg || (json.ok ? "已通過" : "處理失敗"), !!json.ok);
@@ -1363,6 +1363,44 @@ function rootTradingSettingsHttpMessage(res, json, fallback) {
   return json?.msg || fallback || `HTTP ${res.status}`;
 }
 
+function renderRootTradingFusionWeightInputs(settings = {}) {
+  const container = $("root-trading-price-fusion-weights");
+  if (!container) return;
+  const providers = Array.isArray(settings.price_fusion_providers) && settings.price_fusion_providers.length
+    ? settings.price_fusion_providers
+    : ["binance_public_api", "okx_public_api", "coinbase_exchange", "kraken_public_api", "gemini_public_api", "bitstamp_public_api"];
+  const labels = settings.price_fusion_provider_labels && typeof settings.price_fusion_provider_labels === "object"
+    ? settings.price_fusion_provider_labels
+    : {};
+  const weights = settings.price_fusion_manual_weights && typeof settings.price_fusion_manual_weights === "object"
+    ? settings.price_fusion_manual_weights
+    : {};
+  container.innerHTML = providers.map((provider) => `
+    <label>
+      ${sanitize(labels[provider] || provider)}
+      <input type="number" min="0" max="1000" step="0.1" data-trading-price-weight="${sanitize(provider)}" value="${Number(weights[provider] ?? 1)}" />
+    </label>
+  `).join("");
+}
+
+function toggleRootTradingPriceFusionControls() {
+  const source = $("root-trading-price-source")?.value || "fused_weighted";
+  const mode = $("root-trading-price-fusion-mode")?.value || "auto_depth";
+  const modeField = $("root-trading-price-fusion-mode-field");
+  const weightsField = $("root-trading-price-fusion-weights-field");
+  const fusionEnabled = source === "fused_weighted";
+  if (modeField) modeField.hidden = !fusionEnabled;
+  if (weightsField) weightsField.hidden = !(fusionEnabled && mode === "manual_weights");
+}
+
+function collectRootTradingFusionWeights() {
+  const out = {};
+  document.querySelectorAll("[data-trading-price-weight]").forEach((input) => {
+    out[input.dataset.tradingPriceWeight || ""] = Number(input.value || 0);
+  });
+  return out;
+}
+
 function renderRootTradingSettings(payload) {
   const settings = payload?.settings || {};
   const markets = Array.isArray(payload?.markets) ? payload.markets : [];
@@ -1373,7 +1411,20 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-borrow-pressure-multiplier")) $("root-trading-borrow-pressure-multiplier").value = Number(settings.borrow_interest_pool_pressure_multiplier ?? 4);
   if ($("root-trading-margin-long-financing-percent")) $("root-trading-margin-long-financing-percent").value = adminPercentValue(settings.margin_long_financing_percent ?? 90, 90);
   if ($("root-trading-short-collateral-percent")) $("root-trading-short-collateral-percent").value = adminPercentValue(settings.short_collateral_percent ?? 60, 60);
-  if ($("root-trading-price-source")) $("root-trading-price-source").value = "binance_public_api";
+  if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "fused_weighted";
+  if ($("root-trading-price-fusion-mode")) $("root-trading-price-fusion-mode").value = settings.price_fusion_mode || "auto_depth";
+  renderRootTradingFusionWeightInputs(settings);
+  const priceSourceSelect = $("root-trading-price-source");
+  if (priceSourceSelect && !priceSourceSelect.dataset.fusionBound) {
+    priceSourceSelect.addEventListener("change", toggleRootTradingPriceFusionControls);
+    priceSourceSelect.dataset.fusionBound = "1";
+  }
+  const fusionModeSelect = $("root-trading-price-fusion-mode");
+  if (fusionModeSelect && !fusionModeSelect.dataset.fusionBound) {
+    fusionModeSelect.addEventListener("change", toggleRootTradingPriceFusionControls);
+    fusionModeSelect.dataset.fusionBound = "1";
+  }
+  toggleRootTradingPriceFusionControls();
   if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
   if ($("root-trading-liquidation-enabled")) $("root-trading-liquidation-enabled").checked = settings.margin_liquidation_enabled !== false;
   if ($("root-trading-bot-auto-enabled")) $("root-trading-bot-auto-enabled").checked = settings.bot_auto_scan_enabled !== false;
@@ -1459,7 +1510,9 @@ async function saveRootTradingSettings() {
       borrow_interest_pool_pressure_multiplier: Number($("root-trading-borrow-pressure-multiplier")?.value || 0),
       margin_long_financing_percent: adminInputPercent($("root-trading-margin-long-financing-percent")?.value || 90, 90),
       short_collateral_percent: adminInputPercent($("root-trading-short-collateral-percent")?.value || 60, 60),
-      price_source: "binance_public_api",
+      price_source: ($("root-trading-price-source")?.value || "fused_weighted"),
+      price_fusion_mode: ($("root-trading-price-fusion-mode")?.value || "auto_depth"),
+      price_fusion_manual_weights: collectRootTradingFusionWeights(),
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
@@ -1843,16 +1896,16 @@ function testerTokenMsg(text, ok = true) {
 
 function testerTokenListMarkup(tokens) {
   if (!Array.isArray(tokens) || !tokens.length) return `<div class="drive-empty">尚無 Server Mode v2 tester token</div>`;
-  return tokens.map((token) => {
-    const revoked = !!token.revoked_at;
-    const routes = Array.isArray(token.allowed_routes) ? token.allowed_routes.join(", ") : "-";
+  return tokens.map((testerEntry) => {
+    const revoked = !!testerEntry.revoked_at;
+    const routes = Array.isArray(testerEntry.allowed_routes) ? testerEntry.allowed_routes.join(", ") : "-";
     return `<div class="drive-file-row">
       <div>
-        <strong>${sanitize(token.id || "-")}</strong>
-        <div class="drive-card-sub">user #${sanitize(String(token.tester_user_id || "-"))} · 到期 ${sanitize(token.expires_at || "-")} · ${revoked ? "已撤銷" : "有效"}</div>
-        <div class="drive-card-sub">routes: ${sanitize(routes || "-")} · rpm ${sanitize(String(token.max_requests_per_minute || "-"))}</div>
+        <strong>${sanitize(testerEntry.id || "-")}</strong>
+        <div class="drive-card-sub">user #${sanitize(String(testerEntry.tester_user_id || "-"))} · 到期 ${sanitize(testerEntry.expires_at || "-")} · ${revoked ? "已撤銷" : "有效"}</div>
+        <div class="drive-card-sub">routes: ${sanitize(routes || "-")} · rpm ${sanitize(String(testerEntry.max_requests_per_minute || "-"))}</div>
       </div>
-      ${revoked ? "" : `<button class="btn" type="button" data-revoke-tester-token="${sanitize(token.id || "")}">撤銷</button>`}
+      ${revoked ? "" : `<button class="btn" type="button" data-revoke-tester-entry="${sanitize(testerEntry.id || "")}">撤銷</button>`}
     </div>`;
   }).join("");
 }
@@ -1872,8 +1925,8 @@ async function loadTesterTokens() {
   }
   const list = $("tester-token-list");
   list.innerHTML = testerTokenListMarkup(json.tokens || []);
-  list.querySelectorAll("[data-revoke-tester-token]").forEach((btn) => {
-    btn.addEventListener("click", () => revokeTesterToken(btn.dataset.revokeTesterToken || ""));
+  list.querySelectorAll("[data-revoke-tester-entry]").forEach((btn) => {
+    btn.addEventListener("click", () => revokeTesterToken(btn.dataset.revokeTesterEntry || ""));
   });
 }
 

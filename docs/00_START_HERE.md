@@ -32,12 +32,18 @@
    模式顯示；`none / math / image` 模式下不會再看到這個 token 欄位。
 6. 如果你要調整全站預設外觀或決定是否開放使用者個人外觀覆寫，先看
    [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md) 再回 [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md)。
+7. 如果你要啟用交易，先看 [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md) 和
+   [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md) 裡的融合價格設定；
+   新版預設是多交易所加權平均，root 可切成手動權重，而定投機器人的
+   `最多執行次數` 也支援 `-1` 代表不限制。
 
 ### 如果你是一般使用者或要寫教學給一般使用者
 
 1. 先看 [04_USER_GUIDE.md](04_USER_GUIDE.md)。
 2. 再看 [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md)。
 3. 若你想只改自己的畫面風格，不改全站預設，`04_USER_GUIDE.md` 內有個人外觀入口與限制。
+4. 想放棄自己的外觀覆寫時，不必自己把每個欄位改回來；新版可直接用編輯視窗底部的
+   `恢復全站預設`。
 4. 某個模組需要更多細節時，再進深層參考文件。
 
 ### 如果你是開發者 / API 維護者 / QA

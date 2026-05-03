@@ -1,6 +1,47 @@
 # Update Summary
 
-Release ID: `2026.05.03-063`
+Release ID: `2026.05.03-065`
+
+## 2026.05.03-065
+
+## Highlights
+
+- Trading now defaults to a fused live price instead of a single fixed public
+  ticker source. Root can keep automatic depth-based weights or switch to
+  manual per-exchange weights across Binance, OKX, Coinbase, Kraken, Gemini,
+  and Bitstamp; if one API fails, the remaining healthy exchanges are
+  re-normalized automatically.
+- DCA bots now accept `max_runs = -1` as an unlimited schedule. The backend
+  stores this as a sentinel, the frontend renders it as `不限制`, and the
+  `增加次數` flow now no-ops cleanly for unlimited bots.
+- The deterministic trading validation script was resynced with the current
+  grid engine result (`1072` instead of the stale `1065`), and the trading QA
+  report set gained a follow-up note that records the code changes and retest
+  results.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_trading_reference_prices.py tests/test_frontend_economy.py`
+- `python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.03-064
+
+## Highlights
+
+- The personal appearance override reset action was moved to the main user-edit
+  footer so ordinary users can find it without hunting inside the collapsed
+  appearance controls.
+- The reset copy now explains that it returns the account to root's global
+  default appearance and still requires the final `儲存` action before writing
+  to the profile.
+- Appearance docs and QA guidance were updated so deployers know where the
+  reset action lives and how to verify that the override is actually cleared.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_personalization.py tests/test_frontend_drive_preview.py tests/test_user_profile_appearance.py`
+- `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.03-063
 

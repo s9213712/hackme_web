@@ -1244,6 +1244,7 @@
             <span class="comfyui-root-summary-sub">展開後可讀取 Civitai 模型版本與檔案，下載到本地 ComfyUI models 目錄；和上方生圖表單分開。</span>
           </summary>
           <div class="comfyui-root-body">
+            <div id="comfyui-root-model-mode-hint" class="drive-card-sub" style="margin-bottom:.8rem;">目前是本地模式，可在這裡管理 Civitai 模型下載。</div>
             <div class="settings-option-grid">
               <div class="field">
                 <label>ComfyUI 專案資料夾</label>
@@ -1660,7 +1661,11 @@
                   <div class="field"><label>自訂間隔小時</label><input type="number" id="trading-dca-bot-interval-hours" min="1" max="8760" step="1" value="24" /></div>
                   <div class="field"><label>價格上限（可選）</label><input type="number" id="trading-dca-price-upper" min="1" step="1" placeholder="高於此價暫停" /></div>
                   <div class="field"><label>價格下限（可選）</label><input type="number" id="trading-dca-price-lower" min="1" step="1" placeholder="低於此價暫停" /></div>
-                  <div class="field"><label>最多執行次數</label><input type="number" id="trading-dca-bot-max-runs" min="1" max="1000" step="1" value="7" /></div>
+                  <div class="field">
+                    <label>最多執行次數</label>
+                    <input type="number" id="trading-dca-bot-max-runs" min="-1" max="1000" step="1" value="7" />
+                    <div class="field-hint">輸入 -1 代表不限制執行次數；其餘請填 1 到 1000。</div>
+                  </div>
                   <div class="field"><label><input type="checkbox" id="trading-dca-bot-enabled" checked /> 啟用</label></div>
                   <div class="field"><label>操作</label><button class="btn btn-primary" id="trading-dca-bot-save-btn" type="button">新增定投</button></div>
                 </div>
@@ -3306,9 +3311,23 @@
                   <div class="field">
                     <label>價格來源</label>
                     <select id="root-trading-price-source">
+                      <option value="fused_weighted">融合價格（多交易所加權平均）</option>
                       <option value="binance_public_api">Binance 公開 API</option>
                     </select>
-                    <div class="field-hint">交易執行使用 Binance 公開 API；故障時只可使用最後健康快取，不提供 root 任意改價。</div>
+                    <div class="field-hint">預設會用多交易所融合價格；若部分 API 失效，會自動用仍健康的交易所重新分配權重，必要時再退回最後健康快取。</div>
+                  </div>
+                  <div class="field" id="root-trading-price-fusion-mode-field">
+                    <label>融合權重模式</label>
+                    <select id="root-trading-price-fusion-mode">
+                      <option value="auto_depth">自動依深度權重</option>
+                      <option value="manual_weights">root 手動權重</option>
+                    </select>
+                    <div class="field-hint">自動模式會依各交易所掛單簿深度決定占比；手動模式可由 root 個別調整各交易所權重。</div>
+                  </div>
+                  <div class="field" id="root-trading-price-fusion-weights-field">
+                    <label>手動權重</label>
+                    <div id="root-trading-price-fusion-weights" class="settings-option-grid"></div>
+                    <div class="field-hint">只有在「root 手動權重」模式下會生效。填 0 代表該交易所不參與融合價格。</div>
                   </div>
                   <div class="field">
                     <label>即時價格備援秒數</label>
@@ -3744,8 +3763,8 @@
             </select>
           </div>
         </div>
-        <div class="edit-user-actions" style="margin-top:.7rem;">
-          <button type="button" id="edit-user-appearance-reset" class="btn">恢復全站預設</button>
+        <div class="drive-card-sub" style="margin-top:.7rem;">
+          若你不想再覆寫自己的畫面，可用視窗底部的「恢復全站預設」回到 root 設定的全站外觀。
         </div>
       </div>
     </details>
@@ -3830,6 +3849,7 @@
     </div>
     <div id="user-edit-msg" class="msg"></div>
     <div class="edit-user-actions">
+      <button type="button" id="edit-user-appearance-reset" class="btn" style="display:none;">恢復全站預設</button>
       <button type="button" id="user-edit-save" class="btn btn-primary">儲存</button>
       <button type="button" id="user-edit-cancel" class="btn">取消</button>
     </div>
@@ -4124,7 +4144,7 @@
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260502-video-platform" defer></script>
-<script src="/js/40-auth-users.js?v=20260503-appearance-v2" defer></script>
+<script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
 <script src="/js/50-admin.js?v=20260503-appearance-v2" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>

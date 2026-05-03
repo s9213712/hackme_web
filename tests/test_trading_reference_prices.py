@@ -347,7 +347,7 @@ def test_btc_trade_bridge_script_lives_in_hackme_project():
 
     assert "BtcTradeBridge" in text
     assert "--btc-trade-dir" in text
-    assert "/home/s92137/NN/BTC_trade/btc_signal_bridge.py" not in text
+    assert "/NN/BTC_trade/btc_signal_bridge.py" not in text
 
 
 def test_btc_trade_bridge_dry_run_does_not_advance_state(tmp_path):
@@ -653,3 +653,62 @@ def test_root_trading_routes_reject_manual_price_cheat_controls():
     assert source_response.get_json()["ok"] is False
     assert price_response.status_code == 400
     assert price_response.get_json()["ok"] is False
+
+
+def test_root_trading_routes_accept_fused_price_settings_payload():
+    captured = {}
+
+    class FakeTradingService:
+        def get_root_settings(self):
+            return {"settings": {}}
+
+        def update_root_settings(self, *, actor, settings, markets):
+            captured["actor"] = actor
+            captured["settings"] = settings
+            captured["markets"] = markets
+            return {"ok": True, "settings": settings, "markets": markets}
+
+    app = Flask(__name__)
+    app.testing = True
+
+    def passthrough(fn):
+        return fn
+
+    def json_resp(payload, status=None):
+        response = jsonify(payload)
+        return (response, status) if status else response
+
+    register_trading_routes(app, {
+        "trading_service": FakeTradingService(),
+        "get_current_user_ctx": lambda: {"id": 1, "username": "root", "role": "super_admin"},
+        "json_resp": json_resp,
+        "require_csrf": passthrough,
+        "require_csrf_safe": passthrough,
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_ua": lambda: "pytest",
+    })
+    client = app.test_client()
+
+    response = client.post("/api/root/trading/settings", json={
+        "settings": {
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "manual_weights",
+            "price_fusion_manual_weights": {
+                "binance_public_api": 2,
+                "okx_public_api": 1,
+                "coinbase_exchange": 0,
+                "kraken_public_api": 0,
+                "gemini_public_api": 0,
+                "bitstamp_public_api": 0,
+            },
+        },
+        "markets": [],
+    })
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert captured["actor"]["username"] == "root"
+    assert captured["settings"]["price_source"] == "fused_weighted"
+    assert captured["settings"]["price_fusion_mode"] == "manual_weights"
+    assert captured["settings"]["price_fusion_manual_weights"]["binance_public_api"] == 2

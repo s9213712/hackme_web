@@ -13,7 +13,7 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.03-063`
+- Release ID: `2026.05.03-065`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -381,8 +381,19 @@ Trading API notes:
   balances for trading.
 - Percent API fields use human percent values directly: `0.3` means `0.3%`,
   `15` means `15%`.
+- Root trading settings now default `price_source` to `fused_weighted`.
+  `price_fusion_mode` accepts `auto_depth` or `manual_weights`, and
+  `price_fusion_manual_weights` is a per-provider map for
+  `binance_public_api / okx_public_api / coinbase_exchange / kraken_public_api / gemini_public_api / bitstamp_public_api`.
+- In fused mode the backend uses exchange order-book midpoint plus depth score,
+  not a single ticker. If some providers fail, the surviving providers are
+  re-normalized automatically; if all order-book sources fail, the backend
+  falls back to the single-source public ticker chain and then cached last-good
+  price according to `max_price_staleness_seconds`.
 - Workflow bots use `workflow_json` with `nodes` and `edges`; legacy branch
   workflow JSON is normalized on save/import.
+- DCA bots accept `max_runs = -1` to mean unlimited. This is stored as a
+  sentinel in SQLite and returned to the UI again as `-1`.
 - Grid bots are spot-first range bots; creation may prompt for a底倉 buy before
   initial sell levels are placed.
 - Backtests can accept frontend-supplied candles or fetch Binance historical

@@ -62,6 +62,13 @@ security/run_pentest.sh --target https://127.0.0.1:5000 --only functional-permis
 PYTHONPATH=. python3 security/trading_stress_pentest.py --target https://127.0.0.1:5000
 ```
 
+若這次改到交易價格融合或定投上限，另外補跑：
+
+```bash
+PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_trading_reference_prices.py
+python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup
+```
+
 ### 腳本關係
 
 - `scripts/pre_push_checks.py`
@@ -125,9 +132,20 @@ PYTHONPATH=. python3 security/trading_stress_pentest.py --target https://127.0.0
   - `設定已儲存` 成功訊息是否會自動消失，而不是長時間誤導 root 以為目前狀態已再次寫入
   - 功能被擋下時，503 / UI 訊息是否有指出真正被關閉的是哪個父功能，而不是只回一句 generic 的 `root 關閉`
   - 若某個父功能關閉，但其子功能仍已開啟，訊息是否有提醒哪些已開功能會一起受影響
+- 若本次改到交易價格來源 / 交易所備援，至少補：
+  - `融合價格（多交易所加權平均）` 是否真會抓多家交易所，而不是只回單一來源
+  - `自動依深度權重` 是否會在單一 API 掛掉時自動用剩餘來源重算，不會整個交易頁直接停擺
+  - `root 手動權重` 是否能個別調整 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 占比
+  - 所有手動權重設成 0 時，是否會安全退回自動深度權重
+  - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
+- 若本次改到 DCA 機器人，至少補：
+  - `max_runs=-1` 是否會被正確保存為不限制，而不是被前端或後端偷偷改回 1
+  - 跑過一次後再 backdate/重啟，是否仍可繼續執行，不會被誤判為已達上限
+  - 不限制模式下 UI 是否不再顯示「增加次數」這種多餘操作
 - 若本次改到站點外觀 / 個人外觀，至少補：
   - root 改全站預設後，未登入與一般使用者是否都先看到新預設
   - 一般使用者儲存個人外觀後，重新整理與重新登入是否仍會套用
+  - 一般使用者按 `恢復全站預設` 後，是否立即預覽 root 的全站外觀，且按 `儲存` 後會真的清掉個人 appearance override
   - root 關閉 `允許使用者覆寫個人外觀` 後，使用者是否看到明確停用提示，而不是靜默失敗
   - 新增的字體風格、背景風格、面板風格、側邊欄寬度在桌面與手機版是否都沒有把按鈕、訊息或側邊欄擠壞
 - 檢查腳本重疊是否已有清楚定位，而不是兩份文件各寫一套不同說法

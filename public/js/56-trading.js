@@ -1597,9 +1597,23 @@ function parseTradingDateMs(value) {
   return parsed;
 }
 
+function tradingBotMaxRunsValue(row) {
+  return Number(row?.max_runs ?? 1);
+}
+
+function tradingBotMaxRunsLabel(row) {
+  return tradingBotMaxRunsValue(row) === -1 ? "不限制" : String(tradingBotMaxRunsValue(row));
+}
+
+function tradingBotRunLimitReached(row) {
+  const maxRuns = tradingBotMaxRunsValue(row);
+  if (maxRuns === -1) return false;
+  return Number(row?.run_count || 0) >= maxRuns;
+}
+
 function tradingBotNextRunInfo(row) {
   if (!row || !row.enabled) return { text: "下次執行：已停用", ready: false };
-  if (Number(row.run_count || 0) >= Number(row.max_runs || 1)) return { text: "下次執行：已達最大次數", ready: false };
+  if (tradingBotRunLimitReached(row)) return { text: "下次執行：已達最大次數", ready: false };
   let nextMs = parseTradingDateMs(row.next_run_at);
   if (Number.isNaN(nextMs)) {
     const lastMs = parseTradingDateMs(row.last_run_at);
@@ -1632,7 +1646,7 @@ function restartTradingBotCountdown() {
   if (tradingBotCountdownTimer) window.clearInterval(tradingBotCountdownTimer);
   tradingBotCountdownTimer = null;
   updateTradingBotCountdowns();
-  if ((tradingState.bots || []).some((row) => row.enabled && Number(row.run_count || 0) < Number(row.max_runs || 1))) {
+  if ((tradingState.bots || []).some((row) => row.enabled && !tradingBotRunLimitReached(row))) {
     tradingBotCountdownTimer = window.setInterval(updateTradingBotCountdowns, 1000);
   }
 }
@@ -1667,7 +1681,7 @@ function renderTradingBots(rows = [], runs = []) {
               ${row.order_type === "limit" ? `限價 ${formatTradingPointsValue(row.limit_price_points)}` : "市價單"}
             </div>
             <div class="drive-card-sub">
-              狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${Number(row.max_runs || 1)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
+              狀態 ${row.enabled ? "啟用" : "停用"} · 已觸發 ${Number(row.run_count || 0)} / ${tradingBotMaxRunsLabel(row)} · 冷卻 ${Number(row.cooldown_seconds || 0)} 秒
             </div>
             ${condHtml}
             ${tradeHistoryHtml}
@@ -1675,7 +1689,7 @@ function renderTradingBots(rows = [], runs = []) {
             ${row.last_error ? `<div class="drive-card-sub negative">上次錯誤：${sanitize(row.last_error)}</div>` : ""}
           </div>
           <div class="drive-file-actions">
-            ${Number(row.run_count || 0) >= Number(row.max_runs || 1) ? `<button class="btn" type="button" data-trading-bot-increase-runs="${sanitize(row.bot_uuid || "")}">增加次數</button>` : ""}
+            ${tradingBotRunLimitReached(row) ? `<button class="btn" type="button" data-trading-bot-increase-runs="${sanitize(row.bot_uuid || "")}">增加次數</button>` : ""}
             <button class="btn" type="button" data-trading-bot-toggle="${sanitize(row.bot_uuid || "")}" data-trading-bot-enabled="${row.enabled ? "0" : "1"}">${row.enabled ? "暫停" : "啟用"}</button>
             <button class="btn" type="button" data-trading-bot-backtest="${sanitize(row.bot_uuid || "")}">回測</button>
             <button class="btn btn-danger" type="button" data-trading-bot-delete="${sanitize(row.bot_uuid || "")}">刪除</button>
@@ -1822,7 +1836,7 @@ function renderMyBotsList() {
           <strong>${sanitize(bot.name || "定投機器人")} · ${symbol}</strong>
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
-        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${Number(bot.max_runs || 1)} · 冷卻 ${Number(bot.cooldown_seconds || 0)} 秒${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
+        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · 冷卻 ${Number(bot.cooldown_seconds || 0)} 秒${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -1835,7 +1849,7 @@ function renderMyBotsList() {
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-chart-type="dca" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
-        ${Number(bot.run_count || 0) >= Number(bot.max_runs || 1) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
+        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
@@ -1855,7 +1869,7 @@ function renderMyBotsList() {
           <strong>${sanitize(bot.name || "Workflow 機器人")} · ${symbol}</strong>
           <span class="grid-status-badge ${bot.enabled ? "grid-status-running" : "grid-status-stopped"}">${bot.enabled ? "運行中" : "已暫停"}</span>
         </div>
-        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${Number(bot.max_runs || 1)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
+        <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>設定摘要</summary>
@@ -1868,7 +1882,7 @@ function renderMyBotsList() {
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-chart-type="workflow" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
-        ${Number(bot.run_count || 0) >= Number(bot.max_runs || 1) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
+        ${tradingBotRunLimitReached(bot) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
@@ -3154,7 +3168,7 @@ async function toggleTradingBot(botUuid, enabled) {
     trigger_price_points: bot.trigger_price_points || null,
     budget_points: Number(bot.budget_points || 0),
     interval_hours: Number(bot.interval_hours || 24),
-    max_runs: Number(bot.max_runs || 1),
+    max_runs: Number(bot.max_runs ?? 1),
     cooldown_seconds: Number(bot.cooldown_seconds || 0),
     workflow_json: bot.workflow || null,
     enabled,
@@ -3196,7 +3210,11 @@ async function increaseTradingBotMaxRuns(botUuid) {
     tradingSetMsg("找不到要增加次數的交易機器人", false);
     return;
   }
-  const raw = window.prompt(`目前 ${Number(bot.run_count || 0)} / ${Number(bot.max_runs || 1)} 次。\n要再增加幾次？`, "1");
+  if (tradingBotMaxRunsValue(bot) === -1) {
+    tradingSetMsg("這個定投機器人目前是不限制執行次數，不需要再增加上限");
+    return;
+  }
+  const raw = window.prompt(`目前 ${Number(bot.run_count || 0)} / ${tradingBotMaxRunsLabel(bot)} 次。\n要再增加幾次？`, "1");
   if (raw == null) {
     tradingSetMsg("已取消增加機器人次數");
     return;
@@ -3210,7 +3228,8 @@ async function increaseTradingBotMaxRuns(botUuid) {
     method: "POST",
     body: JSON.stringify({ delta }),
   });
-  tradingSetMsg(`已增加 ${delta} 次，新的最大交易次數為 ${Number(json?.bot?.max_runs || 0)} 次`);
+  const nextLimitLabel = tradingBotMaxRunsLabel(json?.bot || {});
+  tradingSetMsg(`已增加 ${delta} 次，新的最大交易次數為 ${nextLimitLabel === "不限制" ? "不限制" : `${nextLimitLabel} 次`}`);
   await loadTradingDashboard();
 }
 

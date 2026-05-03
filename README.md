@@ -7,12 +7,13 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.03-063`**
+**Current Release ID: `2026.05.03-065`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
-ComfyUI integration, PointsChain, trading experiments, server-mode controls,
-and auditable recovery tools in a single-node deployment.
+ComfyUI integration, PointsChain, multi-exchange fused-price trading
+experiments, server-mode controls, and auditable recovery tools in a
+single-node deployment.
 
 This README keeps only the shortest entry route. Detailed deployment,
 operations, feature, security, and QA references live under `docs/`.
