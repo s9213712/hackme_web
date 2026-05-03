@@ -2,6 +2,10 @@
 
 This document defines the ownership boundary between the three recovery tools.
 
+For the operator-first summary, start with
+[09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md). This file keeps
+the detailed boundary and conflict rules.
+
 ## Runtime Reset
 
 Runtime reset is a destructive cleanup tool for returning the live server to a

@@ -1,5 +1,8 @@
 # Functional Smoke Script Usage
 
+For the higher-level validation map, read [../11_QA_TESTING.md](../11_QA_TESTING.md)
+first. This file documents the exact `run_functional_smoke.sh` behavior and options.
+
 `security/run_functional_smoke.sh` 是本專案的功能回歸測試腳本。它和
 `security/run_pentest.sh` 不同：pentest 腳本偏向外部安全掃描，functional
 smoke 腳本會啟動一個隔離 runtime server，登入 root，實際操作主要功能，最後產生

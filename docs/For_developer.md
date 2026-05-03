@@ -3,9 +3,17 @@
 This document is for developers, operators, and API consumers. User-facing WEB
 behavior is documented in [WEB.md](WEB.md).
 
+Read this after the deployer-first entry docs:
+[00_START_HERE.md](00_START_HERE.md),
+[01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md),
+[02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md),
+and [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md).
+This file is the deep technical reference, not the first stop for a new
+deployer.
+
 ## Release and Schema
 
-- Release ID: `2026.05.03-052`
+- Release ID: `2026.05.03-061`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -44,13 +52,12 @@ python3 server.py
 Default local URL:
 
 ```text
-http://127.0.0.1:5000/
+https://127.0.0.1:5000/
 ```
 
 If `cert.pem` and `key.pem` are missing, startup generates a local self-signed
-certificate/key pair. They are deployment-local runtime files and must not be
-committed. Startup switches to HTTPS when root settings enable SSL and both
-files exist.
+certificate/key pair for local development. They are deployment-local runtime
+files and must not be committed.
 
 ## Runtime State
 
@@ -282,16 +289,27 @@ transaction, and retry protection uses `Idempotency-Key` when supplied.
 - `POST /api/root/comfyui/civitai/inspect`
 - `POST /api/root/comfyui/civitai/download`
 - `POST /api/root/comfyui/stop`
+- `GET /api/me/appearance`
+- `PUT /api/me/appearance`
+- `DELETE /api/me/appearance`
 - root can configure the API port from server settings
 
 ComfyUI notes:
 
 - `POST /api/comfyui/generate` can return an async job payload; the frontend
   polls `/api/comfyui/jobs/{job_id}` for progress and final result.
+- Each selected LoRA keeps its own `strength_model` and `strength_clip` values
+  in the frontend draft and sends them back in the generation payload.
 - Root-only Civitai endpoints inspect a page URL, list versions/files, and
   download the selected checkpoint or LoRA into the configured local project.
+  The model-download UI is intentionally separated from the main generation form
+  and rendered as a collapsed panel at the bottom of the AI page.
 - Local mode supports explicit start and root-only stop operations for the
   shared ComfyUI process.
+- Remote mode is generation-only. Root settings hide Civitai key / download UI
+  in that mode because the server cannot push models into a remote ComfyUI host
+  through the standard API.
+- Frontend idle auto-logout is suspended while a ComfyUI generation is active.
 
 ### PointsChain
 
@@ -381,6 +399,13 @@ Detailed usage is documented in [TRADING.md](TRADING.md).
 - `GET /api/admin/access-controls`
 - `PUT /api/admin/access-controls`
 - `POST /api/admin/access-controls/maintenance-bypass-token`
+- `GET /api/root/server-mode`
+- `POST /api/root/server-mode/checkpoint`
+- `POST /api/root/server-mode/restore-check`
+- `POST /api/root/server-mode/switch`
+- `GET /api/root/server-mode/requirements`
+- `GET /api/root/server-mode/logs`
+- `GET /api/root/server-mode/logs/verify`
 - `GET /api/admin/server-mode`
 - `POST /api/admin/server-mode`
 - `POST /api/admin/server-mode/exit-superweak`
@@ -405,18 +430,26 @@ Detailed usage is documented in [TRADING.md](TRADING.md).
 
 Pending Integrity Guard findings are automatically approved after 24 hours.
 Rejected findings remain explicit operator decisions and are not auto-approved.
+The `/api/admin/server-mode*` routes remain only as compatibility wrappers for
+older scripts; the root UI and current Server Mode v2 control plane use
+`/api/root/server-mode*`.
 
 ## Server Modes and Snapshot Rules
 
-Server modes:
+Canonical Server Mode v2 states:
 
 - `test`: default mode for fresh deployment and server reset
-- `preprod`: normal hardened mode
-- `superweak`: intentionally weakened mode for controlled testing
+- `internal_test`: root-approved tester mode with tighter access control
+- `dev_ready`: hardened pre-release mode; legacy `preprod` is only an alias
+- `production`: public online mode
+- `maintenance`: controlled maintenance / repair mode
+- `incident_lockdown`: forced containment mode after critical integrity failures
+- `superweak`: intentionally weakened mode for controlled security experiments
 
 Entering `superweak` requires root confirmation and creates a
 `before_superweak` snapshot. Reset creates a `pre_reset` snapshot before
-clearing resettable runtime state.
+clearing resettable runtime state. The authoritative mode matrix and
+confirmation rules live in [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md).
 
 Snapshot archives are downloadable and can be uploaded for restore on another
 host.
@@ -428,29 +461,34 @@ Root can change them from Security Center / server settings.
 
 | Setting | Default |
 |---|---:|
-| `feature_chat_enabled` | `true` |
-| `feature_community_enabled` | `true` |
+| `feature_chat_enabled` | `false` |
+| `feature_community_enabled` | `false` |
 | `feature_accounts_enabled` | `true` |
-| `feature_appeals_enabled` | `true` |
+| `feature_appeals_enabled` | `false` |
 | `feature_audit_log_enabled` | `true` |
 | `feature_violation_center_enabled` | `true` |
-| `feature_reports_enabled` | `true` |
+| `feature_reports_enabled` | `false` |
 | `feature_system_health_enabled` | `true` |
 | `feature_identity_governance_enabled` | `true` |
 | `feature_account_security_enabled` | `false` |
-| `feature_member_governance_enabled` | `false` |
-| `feature_server_modes_enabled` | `false` |
-| `feature_snapshot_restore_enabled` | `false` |
+| `feature_member_governance_enabled` | `true` |
+| `feature_server_modes_enabled` | `true` |
+| `feature_snapshot_restore_enabled` | `true` |
 | `feature_health_center_enabled` | `true` |
-| `feature_forum_core_enabled` | `true` |
+| `feature_forum_core_enabled` | `false` |
 | `feature_ui_rebuild_enabled` | `false` |
 | `feature_reports_notifications_enabled` | `true` |
-| `feature_attachments_enabled` | `true` |
-| `feature_storage_albums_enabled` | `true` |
-| `feature_personalization_enabled` | `false` |
+| `feature_attachments_enabled` | `false` |
+| `feature_storage_albums_enabled` | `false` |
+| `feature_personalization_enabled` | `true` |
 | `feature_social_search_enabled` | `false` |
 | `feature_advanced_security_enabled` | `false` |
-| `feature_privacy_uploads_enabled` | `true` |
+| `feature_privacy_uploads_enabled` | `false` |
+| `feature_comfyui_enabled` | `false` |
+| `feature_economy_enabled` | `false` |
+| `feature_trading_enabled` | `false` |
+| `feature_games_enabled` | `false` |
+| `feature_videos_enabled` | `false` |
 
 Other defaults:
 

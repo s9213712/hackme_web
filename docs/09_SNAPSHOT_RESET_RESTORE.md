@@ -1,0 +1,66 @@
+# 09 Snapshot Reset Restore
+
+一句話說明：這份文件專門說明 snapshot、portable restore、runtime reset、PointsChain recovery 的邊界與實際操作觀念。
+
+## 設計目的
+
+部署者最容易混淆的就是：
+
+- server snapshot restore
+- PointsChain restore
+- runtime reset
+- server mode checkpoint / rollback
+
+這幾個都像「恢復」，但責任完全不同。這份文件就是把這些責任邊界拉清楚。
+
+## 使用方法
+
+### 你要整站回滾時
+
+用 server snapshot restore。
+
+### 你只要修復經濟鏈時
+
+先看 PointsChain recovery，不要先動全站 restore。
+
+### 你要把站點清回最小可跑狀態時
+
+用 runtime reset，但先理解它是 destructive cleanup。
+
+### 你在做模式切換或高風險測試時
+
+看 server mode checkpoint / superweak rollback。
+
+## 原理
+
+- server snapshot：保護整站 DB + runtime file roots + config archive
+- PointsChain backup：只保護經濟 ledger / chain
+- runtime reset：清掉可重建 runtime 與 live data，並要求重啟
+- server mode checkpoint：保護 mode switch / rollback 場景
+
+## 失敗情境與提示
+
+- restore 完還期待 `.fkey`、`.csrfkey`、TLS cert 跟著回來：
+  不會，這些是 deployment-local secrets。
+- reset 後發現東西都沒了：
+  這是設計目的；先去找 `pre_reset` snapshot。
+- 只壞了 PointsChain 卻直接做整站 restore：
+  可能把不需要回滾的其他模組也一起覆蓋。
+- 做了 restore 卻沒驗 post-restore consistency：
+  視同沒完成恢復演練。
+
+## 測試方式
+
+- create/list/download/upload-restore
+- pre-reset snapshot 是否存在
+- reset 後離線 / 重連 / `started_at` 更新
+- restore 後 baseline data 保留、殘留 dirty data 被清掉
+- PointsChain verify / recovery / wallet rebuild
+
+## 相關文件連結
+
+- [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md)
+- [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md)
+- [SERVER_MODE_V2_TEST_PLAN.md](SERVER_MODE_V2_TEST_PLAN.md)
+- [11_QA_TESTING.md](11_QA_TESTING.md)
+- [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md)

@@ -169,8 +169,8 @@ Exit criteria:
 
 - `preprod` remains accepted as an input alias during migration but is displayed
   as `dev_ready`.
-- Existing `/api/admin/server-mode` remains as a compatibility wrapper until the
-  UI fully migrates to `/api/root/server-mode`.
+- Existing `/api/admin/server-mode` remains as a compatibility wrapper for
+  older scripts and tests; the root UI already uses `/api/root/server-mode`.
 - Existing `maintenance_mode` setting remains an implementation detail of the
   formal `maintenance` and `incident_lockdown` modes.
 

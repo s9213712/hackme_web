@@ -1,28 +1,188 @@
 # Update Summary
 
-Release ID: `2026.05.03-052`
+Release ID: `2026.05.03-061`
 
-## 2026.05.03-052
+## 2026.05.03-061
 
 ## Highlights
 
-- ComfyUI now supports a root-only optional acceleration backend. Root can
-  configure a dedicated extra ComfyUI API URL in server settings, toggle it on
-  or off from the AI page, and keep normal users on the primary backend.
-- The AI page now shows the current ComfyUI points balance and keeps root's
-  no-charge state explicit while still surfacing the remaining wallet value.
-- ComfyUI image ownership now records which backend produced each preview, so
-  follow-up save/share/discard actions keep talking to the correct backend even
-  when root switches between the primary and acceleration channels.
-- Root Civitai model downloads now run as tracked jobs with progress polling,
-  byte counts, and a visible progress bar instead of a static "do not close"
-  message.
-- Regression coverage was extended for root acceleration routing, persisted
-  backend ownership, async Civitai download jobs, and the new frontend wiring.
+- The root settings success banner no longer lingers indefinitely. A normal
+  green `設定已儲存` message now auto-clears after a short delay, while
+  incomplete feature-dependency warnings stay visible as a separate warning
+  state.
+- The idle logout countdown warning no longer reuses the root settings status
+  area, so operators do not see unrelated countdown notices overwriting or
+  mixing with settings-save feedback.
+- Feature-gated `503` responses are no longer generic-only. The payload now
+  includes the blocked feature label plus missing parent features or currently
+  enabled dependent modules that will also be affected, so root can tell what
+  to open together instead of only seeing `此功能目前已由 root 關閉`.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_auth_timeout.py tests/test_feature_flags.py tests/test_functional_permission_pentest.py`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.03-060
+
+## Highlights
+
+- Root settings now hide token fields when the matching mode is not active.
+  `Turnstile site key` only appears when registration CAPTCHA is set to
+  `turnstile`, instead of staying visible in `none / math / image` mode.
+- The ComfyUI settings copy now states more explicitly that remote API mode is
+  generation-only. In remote mode, the root-only local model-download path and
+  `Civitai API Key` stay hidden because the app cannot download models into a
+  remote ComfyUI host through the normal API.
+- Admin, feature-overview, troubleshooting, and QA docs were updated so a new
+  deployer can tell whether a missing token field is expected mode behavior or
+  an actual UI bug.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_captcha.py tests/test_comfyui_integration.py`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.03-059
+
+## Highlights
+
+- ComfyUI long-running tasks now suspend the frontend idle auto-logout
+  countdown more consistently. This no longer applies only to generation:
+  local startup polling and root's local Civitai model downloads now also keep
+  the session alive while the task is still running.
+- Static regression tests were expanded so future frontend changes must keep
+  the `ComfyUI 產圖中` / `ComfyUI 啟動中` / `ComfyUI 模型下載中` idle-suspend hooks.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_auth_timeout.py tests/test_comfyui_integration.py`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.03-058
+
+## Highlights
+
+- Site appearance control is now split cleanly between global defaults and
+  personal overrides. Root still owns the global theme, while logged-in users
+  can save a personal theme from `修改資料 -> 個人外觀`.
+- The appearance editor now exposes more than just colors: users and root can
+  adjust font family, background style, panel style, sidebar width, layout,
+  density, radius, font scale, and content width.
+- The old `feature_personalization_enabled` switch is now effectively the
+  "allow personal appearance overrides" control. It defaults to on, lives next
+  to root's appearance settings, and shows a clear disabled message to users if
+  root turns it off.
+- Root's settings page now clears the stale `設定已儲存` banner as soon as
+  another field is edited, so operators no longer keep seeing an outdated
+  success state while making new unsaved changes.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_personalization.py tests/test_user_profile_appearance.py tests/test_frontend_chat.py tests/test_frontend_economy.py tests/test_frontend_governance.py tests/test_frontend_drive_preview.py tests/test_mobile_responsive_layout.py tests/test_comfyui_integration.py`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.03-057
+
+## Highlights
+
+- The ComfyUI page now shows the active connection mode more explicitly. The
+  panel header includes a visible mode badge plus a short explanatory line, so
+  users can tell at a glance whether they are in local mode or cloud/remote API
+  mode.
+- The mode explanation now clarifies what each mode means operationally:
+  local mode allows root-controlled local start/stop and local model download,
+  while cloud/remote mode is generation-only and does not expose local model
+  management.
+- Troubleshooting and feature-overview docs were updated so operators know to
+  use the visible mode badge as the first check when ComfyUI behavior looks
+  different from expectations.
 
 ## Validation
 
 - `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py`
+
+## 2026.05.03-056
+
+## Highlights
+
+- LoRA trigger words are now persisted after root downloads a LoRA through the
+  local-mode Civitai panel. The server writes a small sidecar metadata file next
+  to the downloaded LoRA so the trigger-word mapping survives page refreshes and
+  later sessions.
+- `/api/comfyui/models` now returns `lora_details` alongside the plain LoRA
+  name list. The frontend uses that metadata to auto-append any missing trigger
+  words into the positive prompt when a user adds a known LoRA.
+- The auto-insert behavior is intentionally conservative: it only applies to
+  LoRAs with known saved metadata and only appends missing terms, so repeated
+  add/remove actions do not keep duplicating the same trigger words.
+- Admin/operator, feature-overview, troubleshooting, and QA docs were updated
+  so this behavior and its limits are documented from both deployer and root
+  perspectives.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py`
+
+## 2026.05.03-055
+
+## Highlights
+
+- The ComfyUI generation form now supports both `Embedding` and `VAE`
+  parameters instead of only listing them conceptually. Users can click an
+  embedding shortcut button to insert it into the positive prompt, and can
+  switch between the checkpoint builtin VAE or an installed standalone VAE.
+- The backend translates the UI's `<embeddings:name>` helper token into actual
+  ComfyUI embedding prompt syntax before queueing the workflow, and custom VAE
+  selection now inserts a real `VAELoader` node into the generated workflow.
+- Root's local-mode Civitai download panel no longer offers outdated
+  `Hypernetwork` or currently unsupported `ControlNet` downloads. The panel now
+  focuses on the types this UI can actually use: checkpoint, LoRA, embedding,
+  and VAE.
+- Civitai inspect/download responses now surface official `trainedWords`, so
+  root can see a model version's trigger words before downloading a LoRA and in
+  the post-download result message.
+- Documentation and QA guidance were updated so deployers and root operators
+  can see the new ComfyUI limits and validation points without digging through
+  source first.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py`
+
+## 2026.05.03-054
+
+## Highlights
+
+- Removed the unfinished ComfyUI acceleration / credits UI that was added under
+  the wrong assumption that Comfy Cloud paid credits could be surfaced and used
+  through the existing page flow.
+- The AI generation panel is back to the usable core: main ComfyUI connection
+  mode, local start/stop controls, async progress, billing confirmation, and
+  result save/share/discard behavior.
+- Root's Civitai model download tools remain available, but they now live in a
+  separate collapsed panel at the bottom of the AI page so generation and model
+  management are clearly separated.
+- The AI page now states the active mode explicitly (`local` vs `remote`) and
+  hides Civitai/model-download controls when the root setting is in remote
+  mode.
+- Each selected LoRA now exposes separate `model` and `clip` strength controls,
+  and the frontend pauses idle auto-logout while generation is running.
+- Personal appearance settings are no longer root-only: authenticated users can
+  keep their own appearance override while root still owns the global default
+  theme.
+- Server settings now keep only the active ComfyUI connection settings plus the
+  Civitai API key; the temporary root acceleration URL field is removed.
+- Documentation was reorganized from a deployer-first perspective: README is
+  now brief, new numbered entry guides were added under `docs/`, and the older
+  large guides were downgraded to deep-reference status instead of being
+  deleted.
+- Regression coverage was updated for the new frontend layout/scripts and the
+  simplified ComfyUI settings surface.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py tests/test_frontend_chat.py tests/test_frontend_economy.py tests/test_frontend_governance.py`
 - `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.03-051

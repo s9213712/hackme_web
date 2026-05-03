@@ -3,6 +3,11 @@
 Video Platform v1 is a display and interaction layer on top of the existing
 Cloud Drive. It does not create a second storage system.
 
+For the shorter deployer-facing summary, start with
+[05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md) and
+[04_USER_GUIDE.md](04_USER_GUIDE.md). This file keeps the detailed module
+reference.
+
 ## Architecture
 
 - Cloud Drive is the storage layer.

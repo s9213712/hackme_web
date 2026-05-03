@@ -1,5 +1,9 @@
 # Security Measures — hackme_web
 
+若你是第一次接手部署或要先看整體安全模型，先讀
+[06_SECURITY_MODEL.md](06_SECURITY_MODEL.md)。本文件保留目前已啟用保護的細節與
+已知限制。
+
 ## 目的與邊界
 本文件記錄目前已啟用的保護，並保留仍需持續改善的項目。
 

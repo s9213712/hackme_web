@@ -3,6 +3,10 @@
 This guide explains the Economy branch trading system, root settings, trading
 bots, workflow editor, backtesting, and validation scripts.
 
+For a faster operator view, read [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md)
+first. This file keeps the full detailed reference for markets, bots,
+workflow JSON, and validation scripts.
+
 The trading system is a simulation and education feature. It is designed to
 exercise accounting, auditability, permission checks, and strategy workflows.
 It is not a real-money exchange.
@@ -357,7 +361,7 @@ Runtime behavior:
 - Existing grid bots can be loaded into the backtest panel for what-if replay.
 
 The earlier design report is still useful background material:
-[Grid Trading Bot Design Report](research_reports/GRID_TRADING_BOT_DESIGN_REPORT.md).
+[Grid Trading Bot Design Report](research/GRID_TRADING_BOT_DESIGN_REPORT.md).
 
 ### Workflow Strategy Bot
 

@@ -1,5 +1,10 @@
 # Deployment And Operations Scripts
 
+This file is the script-level reference. New deployers should start with
+[01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md) and
+[02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md), then come back here when
+they need exact command modes and script flags.
+
 ## One-Command Deployment
 
 Use the root helper:

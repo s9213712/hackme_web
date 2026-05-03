@@ -3,6 +3,11 @@
 `WEB.md` describes the user-facing web application. API details and deployment
 defaults live in [For_developer.md](For_developer.md).
 
+If you are onboarding a deployer or an end user, start with
+[04_USER_GUIDE.md](04_USER_GUIDE.md) and
+[05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md) first. This file is the
+page-by-page deep reference.
+
 Before any production release, use
 [security/PRE_RELEASE_CHECKLIST.md](security/PRE_RELEASE_CHECKLIST.md). The
 checklist treats completed pentesting and completed full functional smoke
@@ -148,21 +153,49 @@ an explanatory placeholder and stream/content endpoints return a structured
 ### ComfyUI
 
 The AI image page checks whether the configured ComfyUI API is reachable. Users
-can select a model, LoRA entries, prompts, and generation parameters, then save
-the generated image into Cloud Drive, share it to the ComfyUI forum board, or
-discard the preview. Generation now runs through an async job path so the page
-can keep showing queue/node progress until the image is complete.
+can select a model, VAE, LoRA entries, prompts, and generation parameters, then
+save the generated image into Cloud Drive, share it to the ComfyUI forum board,
+or discard the preview. Generation now runs through an async job path so the
+page can keep showing queue/node progress until the image is complete. The page
+also shows the current mode explicitly (`local` vs `remote / cloud API`) so
+users do not need to infer it from start/stop buttons. The mode is shown both
+as a badge and as a short explanation line near the panel title.
 
 Root can configure ComfyUI in two modes from server settings:
 
 - Remote mode: set a full API URL such as `http://127.0.0.1:8192`. Discarding a
   preview only clears the web preview because a remote ComfyUI API does not offer
-  a safe file-delete endpoint.
+  a safe file-delete endpoint. In this mode the root-only Civitai API key field
+  and model-download tools are hidden because the server cannot download models
+  into a remote ComfyUI host through the normal API.
 - Local mode: set a local ComfyUI folder and startup script. The image page shows
   a `Start ComfyUI` button; the server only runs the startup script when a user
   presses that button. If another user already started the shared ComfyUI backend,
   later users can use it directly. Root also sees a `Stop ComfyUI` button when
   the shared local process is already available.
+- In the root settings page, token-like fields are now mode-aware: the
+  `Turnstile site key` only appears when CAPTCHA mode is `turnstile`, and the
+  `Civitai API Key` only appears when ComfyUI is in local mode.
+- The AI page keeps the main ComfyUI generation form focused on generation
+  only. Root's Civitai model-download tools now live in a separate collapsed
+  panel at the bottom of the page so downloading models does not crowd the
+  generation controls.
+- Each selected LoRA now exposes separate `Model` and `CLIP` strength fields in
+  the page. The frontend stores those values in the local draft, and the
+  backend still re-validates them into the allowed range before they reach the
+  ComfyUI workflow. If that LoRA was downloaded through the root Civitai panel
+  and its official `trainedWords` were recorded, adding the LoRA will also
+  auto-append any missing trigger words into the positive prompt.
+- The page also exposes a VAE selector. Keeping `use checkpoint builtin VAE`
+  uses the model's bundled VAE; selecting another VAE inserts a `VAELoader`
+  node into the generated workflow.
+- Available Embeddings are loaded from the ComfyUI API and rendered as clickable
+  shortcut buttons. Clicking one inserts `<embeddings:name>` into the positive
+  prompt; the backend translates that shortcut into ComfyUI's actual embedding
+  prompt syntax before queueing the workflow.
+- While a long ComfyUI task is running, the frontend idle auto-logout countdown
+  is paused so the session does not expire mid-task. That currently includes
+  local startup polling, async generation, and root's local-model download job.
 
 The reference Linux/WSL startup script template is
 `scripts/comfyui_run_in_linux.template.sh`. Copy it into a ComfyUI portable
@@ -175,12 +208,20 @@ environment checks.
 
 ComfyUI model downloads are root-only. Checkpoints are saved under
 `ComfyUI/models/checkpoints`, and LoRA files are saved under
-`ComfyUI/models/loras` inside the configured local ComfyUI project. Local mode
-can delete generated output files when a user discards a preview; ownership is
-checked so users can only save or delete their own generated image references.
-Root can paste a Civitai page URL, inspect model versions/files, and download a
-selected checkpoint or LoRA into the configured local project; an optional
-Civitai API key can be stored in server settings for authenticated downloads.
+`ComfyUI/models/loras` inside the configured local ComfyUI project. The same
+panel can also download Embedding and VAE files into the matching local ComfyUI
+model folders. ControlNet and Hypernetwork downloads are intentionally not
+offered in this UI because the current generation form does not expose matching
+runtime controls. Local mode can delete generated output files when a user
+discards a preview; ownership is checked so users can only save or delete their
+own generated image references. Root can paste a Civitai page URL, inspect
+model versions/files, see the version's official `trainedWords` / trigger
+words, and download a selected checkpoint, LoRA, Embedding, or VAE into the
+configured local project from that bottom collapsed panel; when a LoRA is
+downloaded this way, the server stores a small sidecar metadata file next to
+that LoRA so future page loads can auto-insert the same trigger words when the
+LoRA is selected again. An optional Civitai API key can be stored in server
+settings for authenticated downloads.
 Interrupt requests are guarded because ComfyUI interrupt is global: normal users
 only interrupt the backend when no other user's generation is active, while root
 can force a global interrupt.
@@ -198,6 +239,12 @@ violations, review appeals/reports, and handle governance workflows according to
 their authority. Rejecting a pending registration removes that application
 account entirely. Deleting an existing account is a soft-delete: the account is
 hidden from default admin lists, access is revoked, attached storage is trashed,
+and authenticated users can open `我的資料` to keep a personal appearance
+override without changing the root-managed global default theme. That personal
+override now covers font family, background style, panel style, sidebar width,
+colors, layout, density, radius, font scale, and content width. Root still owns
+the global default theme, and can separately decide whether personal appearance
+overrides are allowed at all.
 but audit/trading/comment history remains preserved for review. Member-rights
 changes send a governance notice to the affected user and link to Appeals when
 the action is appealable.
