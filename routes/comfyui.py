@@ -98,6 +98,8 @@ def register_comfyui_routes(app, deps):
     active_generations_lock = deps.get("comfyui_active_generations_lock") or threading.Lock()
     generation_jobs = deps.get("comfyui_generation_jobs") or {}
     generation_jobs_lock = deps.get("comfyui_generation_jobs_lock") or threading.Lock()
+    model_download_jobs = deps.get("comfyui_model_download_jobs") or {}
+    model_download_jobs_lock = deps.get("comfyui_model_download_jobs_lock") or threading.Lock()
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -145,17 +147,22 @@ def register_comfyui_routes(app, deps):
                 ref_key TEXT NOT NULL UNIQUE,
                 owner_user_id INTEGER NOT NULL,
                 prompt_id TEXT,
+                backend_url TEXT NOT NULL DEFAULT '',
                 image_ref_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 last_used_at TEXT
             )
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_image_refs)").fetchall()}
+        if "backend_url" not in columns:
+            conn.execute("ALTER TABLE comfyui_image_refs ADD COLUMN backend_url TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_comfyui_image_refs_owner ON comfyui_image_refs(owner_user_id, created_at)")
 
-    def _register_comfyui_image_refs(conn, *, actor, images):
+    def _register_comfyui_image_refs(conn, *, actor, images, backend_url=""):
         _ensure_comfyui_image_ref_schema(conn)
         now = datetime.now().isoformat()
+        normalized_backend_url = _normalize_comfyui_backend_url(backend_url)
         for item in images:
             image_ref = item.get("image_ref") if isinstance(item, dict) else None
             payload = _image_ref_payload(image_ref)
@@ -164,11 +171,12 @@ def register_comfyui_routes(app, deps):
                 continue
             conn.execute(
                 """
-                INSERT INTO comfyui_image_refs (ref_key, owner_user_id, prompt_id, image_ref_json, created_at, last_used_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO comfyui_image_refs (ref_key, owner_user_id, prompt_id, backend_url, image_ref_json, created_at, last_used_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ref_key) DO UPDATE SET
                     owner_user_id=excluded.owner_user_id,
                     prompt_id=excluded.prompt_id,
+                    backend_url=excluded.backend_url,
                     image_ref_json=excluded.image_ref_json,
                     last_used_at=excluded.last_used_at
                 """,
@@ -176,24 +184,31 @@ def register_comfyui_routes(app, deps):
                     ref_key,
                     int(_actor_value(actor, "id")),
                     str(item.get("prompt_id") or ""),
+                    normalized_backend_url,
                     json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     now,
                     now,
                 ),
             )
 
-    def _verify_comfyui_image_ref_owner(conn, *, actor, image_ref, prompt_id=None):
+    def _load_comfyui_image_ref_record(conn, *, actor, image_ref, prompt_id=None):
         _ensure_comfyui_image_ref_schema(conn)
         ref_key = _image_ref_key(image_ref)
         if not ref_key:
-            return False
-        row = conn.execute("SELECT owner_user_id, prompt_id FROM comfyui_image_refs WHERE ref_key=?", (ref_key,)).fetchone()
+            return None
+        row = conn.execute(
+            "SELECT owner_user_id, prompt_id, backend_url FROM comfyui_image_refs WHERE ref_key=?",
+            (ref_key,),
+        ).fetchone()
         if not row or int(row["owner_user_id"]) != int(_actor_value(actor, "id")):
-            return False
+            return None
         if prompt_id and row["prompt_id"] and str(row["prompt_id"]) != str(prompt_id):
-            return False
+            return None
         conn.execute("UPDATE comfyui_image_refs SET last_used_at=? WHERE ref_key=?", (datetime.now().isoformat(), ref_key))
-        return True
+        return dict(row)
+
+    def _verify_comfyui_image_ref_owner(conn, *, actor, image_ref, prompt_id=None):
+        return bool(_load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref, prompt_id=prompt_id))
 
     def _assert_reasonable_image_size(image):
         size = len(getattr(image, "data", b"") or b"")
@@ -220,13 +235,24 @@ def register_comfyui_routes(app, deps):
         except Exception:
             return None
 
-    def _register_active_generation(actor):
+    def _coerce_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+        return False
+
+    def _register_active_generation(actor, *, backend_url="", backend_scope="primary"):
         token = secrets.token_hex(12)
         with active_generations_lock:
             active_generations[token] = {
                 "user_id": _generation_owner_id(actor),
                 "username": _actor_value(actor, "username", ""),
                 "role": _actor_value(actor, "role", ""),
+                "backend_url": _normalize_comfyui_backend_url(backend_url),
+                "backend_scope": str(backend_scope or "primary"),
                 "started_at": time.time(),
             }
         return token
@@ -318,14 +344,24 @@ def register_comfyui_routes(app, deps):
         with active_generations_lock:
             return list(active_generations.values())
 
-    def _interrupt_policy(actor):
+    def _interrupt_policy(actor, *, use_root_accel=False):
         if _actor_value(actor, "username") == "root":
             return True, "root_force", {}
         actor_id = _generation_owner_id(actor)
+        binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        target_backend_url = _normalize_comfyui_backend_url(binding.get("url"))
         active = _active_generation_snapshot()
         own = [item for item in active if item.get("user_id") == actor_id]
-        others = [item for item in active if item.get("user_id") != actor_id]
-        summary = {"own_active": len(own), "other_active": len(others), "total_active": len(active)}
+        others = [
+            item for item in active
+            if item.get("user_id") != actor_id
+            and _normalize_comfyui_backend_url(item.get("backend_url")) == target_backend_url
+        ]
+        summary = {
+            "own_active": len(own),
+            "other_active_same_backend": len(others),
+            "total_active": len(active),
+        }
         if not own:
             return False, "no_owned_generation", summary
         if others:
@@ -381,6 +417,13 @@ def register_comfyui_routes(app, deps):
             return None, "ComfyUI API 位址只需填主機與 port，不要包含路徑或參數"
         return raw, None
 
+    def _normalize_comfyui_backend_url(value):
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        url, msg = _validate_comfyui_api_url(raw)
+        return "" if msg else url
+
     def _configured_connection_mode():
         settings = get_system_settings() or {}
         mode = str(settings.get("comfyui_connection_mode") or "remote").strip().lower()
@@ -406,6 +449,57 @@ def register_comfyui_routes(app, deps):
         port = min(65535, max(1, port))
         display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
         return f"http://{display_host}:{port}"
+
+    def _configured_root_accel_comfyui_url():
+        settings = get_system_settings() or {}
+        configured_url = str(settings.get("comfyui_root_accel_api_url") or "").strip()
+        if not configured_url:
+            return ""
+        url, msg = _validate_comfyui_api_url(configured_url)
+        return "" if msg else url
+
+    def _root_accel_available(actor=None):
+        return _actor_value(actor, "username") == "root" and bool(_configured_root_accel_comfyui_url())
+
+    def _comfyui_binding(actor=None, *, backend_url=None, use_root_accel=False):
+        primary_mode = _configured_connection_mode()
+        primary_url = _configured_comfyui_url()
+        root_accel_url = _configured_root_accel_comfyui_url() if use_root_accel and _root_accel_available(actor) else ""
+        explicit_url = _normalize_comfyui_backend_url(backend_url)
+        if explicit_url:
+            if root_accel_url and explicit_url == _normalize_comfyui_backend_url(root_accel_url):
+                return {
+                    "url": explicit_url,
+                    "connection_mode": "remote",
+                    "backend_scope": "root_accel",
+                    "root_accel_active": True,
+                }
+            if explicit_url == _normalize_comfyui_backend_url(primary_url):
+                return {
+                    "url": primary_url,
+                    "connection_mode": primary_mode,
+                    "backend_scope": "primary",
+                    "root_accel_active": False,
+                }
+            return {
+                "url": explicit_url,
+                "connection_mode": "remote",
+                "backend_scope": "custom",
+                "root_accel_active": False,
+            }
+        if root_accel_url:
+            return {
+                "url": root_accel_url,
+                "connection_mode": "remote",
+                "backend_scope": "root_accel",
+                "root_accel_active": True,
+            }
+        return {
+            "url": primary_url,
+            "connection_mode": primary_mode,
+            "backend_scope": "primary",
+            "root_accel_active": False,
+        }
 
     def _configured_local_start_script(value=None, *, base_dir=None):
         raw = str(value or (get_system_settings() or {}).get("comfyui_local_start_script") or "").strip()
@@ -1043,7 +1137,91 @@ def register_comfyui_routes(app, deps):
             "versions": versions,
         }, None
 
-    def _download_comfyui_model_file(*, url, model_type, base_dir, filename_hint=None, api_key=None):
+    def _create_model_download_job(actor):
+        job_id = secrets.token_hex(12)
+        job = {
+            "job_id": job_id,
+            "owner_user_id": _generation_owner_id(actor),
+            "owner_username": _actor_value(actor, "username", ""),
+            "status": "queued",
+            "error": "",
+            "result": None,
+            "progress": {
+                "phase": "queued",
+                "percent": 0,
+                "bytes_written": 0,
+                "total_bytes": 0,
+                "detail": "已建立模型下載工作",
+                "completed": False,
+                "updated_at": time.time(),
+            },
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+        with model_download_jobs_lock:
+            model_download_jobs[job_id] = job
+        return job_id
+
+    def _update_model_download_job(job_id, **changes):
+        with model_download_jobs_lock:
+            job = model_download_jobs.get(job_id)
+            if not job:
+                return None
+            for key, value in changes.items():
+                job[key] = value
+            job["updated_at"] = time.time()
+            return dict(job)
+
+    def _update_model_download_progress(job_id, progress):
+        with model_download_jobs_lock:
+            job = model_download_jobs.get(job_id)
+            if not job:
+                return None
+            job["progress"] = {
+                **(job.get("progress") or {}),
+                **(progress or {}),
+                "updated_at": time.time(),
+            }
+            if job["status"] in {"queued", "running"}:
+                job["status"] = "running"
+            job["updated_at"] = time.time()
+            return dict(job["progress"])
+
+    def _get_model_download_job(job_id):
+        with model_download_jobs_lock:
+            job = model_download_jobs.get(str(job_id))
+            return dict(job) if job else None
+
+    def _assert_model_download_job_owner(job_id, actor):
+        job = _get_model_download_job(job_id)
+        if not job:
+            return None, json_resp({"ok": False, "msg": "找不到 ComfyUI 模型下載工作"}, 404)
+        if int(job.get("owner_user_id") or 0) != int(_generation_owner_id(actor) or 0):
+            return None, json_resp({"ok": False, "msg": "無權查看此 ComfyUI 模型下載工作"}, 403)
+        return job, None
+
+    def _parse_civitai_download_request(data):
+        page_url = str(data.get("page_url") or data.get("url") or "").strip()
+        try:
+            version_id = int(data.get("version_id") or data.get("model_version_id") or 0)
+        except Exception:
+            version_id = 0
+        try:
+            file_id = int(data.get("file_id") or 0) or None
+        except Exception:
+            file_id = None
+        model_type = str(data.get("type") or data.get("model_type") or "").strip().lower()
+        if not page_url or version_id <= 0:
+            return None, "請先輸入 Civitai 模型頁網址並選擇版本"
+        return {
+            "page_url": page_url,
+            "version_id": version_id,
+            "file_id": file_id,
+            "model_type": model_type,
+            "base_dir": data.get("base_dir"),
+        }, None
+
+    def _download_comfyui_model_file(*, url, model_type, base_dir, filename_hint=None, api_key=None, progress_callback=None):
         parsed, msg = _public_or_civitai_host(url)
         if msg:
             return None, msg
@@ -1080,6 +1258,10 @@ def register_comfyui_routes(app, deps):
         temp_path = None
         try:
             with urllib.request.urlopen(request_obj, timeout=30) as resp:
+                try:
+                    total_bytes = int(resp.headers.get("Content-Length") or 0)
+                except Exception:
+                    total_bytes = 0
                 final_url = resp.geturl()
                 _final_parsed, final_msg = _public_or_civitai_host(final_url)
                 if final_msg:
@@ -1090,6 +1272,15 @@ def register_comfyui_routes(app, deps):
                     destination = (destination_dir / filename).resolve()
                     if destination.exists():
                         return None, f"{label} 檔案已存在：{filename}"
+                if progress_callback:
+                    progress_callback({
+                        "phase": "downloading",
+                        "percent": 0,
+                        "bytes_written": 0,
+                        "total_bytes": total_bytes,
+                        "detail": f"開始下載 {label}：{filename}",
+                        "completed": False,
+                    })
                 with tempfile.NamedTemporaryFile(prefix=f".{filename}.", suffix=".part", dir=str(destination_dir), delete=False) as tmp:
                     temp_path = Path(tmp.name)
                     while True:
@@ -1100,6 +1291,18 @@ def register_comfyui_routes(app, deps):
                         if written > MAX_COMFYUI_MODEL_DOWNLOAD_BYTES:
                             raise ValueError("模型檔案超過下載大小上限")
                         tmp.write(chunk)
+                        if progress_callback:
+                            percent = 0
+                            if total_bytes > 0:
+                                percent = max(0, min(99, round((written / total_bytes) * 100)))
+                            progress_callback({
+                                "phase": "downloading",
+                                "percent": percent,
+                                "bytes_written": written,
+                                "total_bytes": total_bytes,
+                                "detail": f"正在下載 {label}：{filename}",
+                                "completed": False,
+                            })
             if written <= 0:
                 raise ValueError("下載內容為空")
             temp_path.replace(destination)
@@ -1119,7 +1322,7 @@ def register_comfyui_routes(app, deps):
             "saved_path": str(destination),
         }, None
 
-    def _download_civitai_model_selection(*, page_url, version_id, file_id, model_type, base_dir):
+    def _download_civitai_model_selection(*, page_url, version_id, file_id, model_type, base_dir, progress_callback=None):
         inspection, msg = _inspect_civitai_model(page_url)
         if msg:
             return None, msg
@@ -1149,6 +1352,7 @@ def register_comfyui_routes(app, deps):
             base_dir=base_dir,
             filename_hint=chosen_file.get("name"),
             api_key=_configured_civitai_api_key(),
+            progress_callback=progress_callback,
         )
         if err:
             return None, err
@@ -1163,8 +1367,9 @@ def register_comfyui_routes(app, deps):
         }
         return result, None
 
-    def _client():
-        return injected_client or ComfyUIClient(_configured_comfyui_url())
+    def _client(actor=None, *, backend_url=None, use_root_accel=False):
+        binding = _comfyui_binding(actor, backend_url=backend_url, use_root_accel=use_root_accel)
+        return _client_for_url(binding["url"])
 
     def _client_for_url(url):
         if injected_client is not None:
@@ -1179,6 +1384,20 @@ def register_comfyui_routes(app, deps):
 
     def _comfyui_charge_required(actor):
         return not _is_root(actor)
+
+    def _comfyui_wallet_payload(actor):
+        if not points_service:
+            return None
+        try:
+            wallet = points_service.get_wallet(_actor_value(actor, "id"))
+        except Exception:
+            return None
+        if not isinstance(wallet, dict):
+            return None
+        return {
+            "points_balance": int(wallet.get("points_balance") or 0),
+            "charged": _comfyui_charge_required(actor),
+        }
 
     def _comfyui_lora_count(params):
         loras = (params or {}).get("loras") or []
@@ -1297,7 +1516,7 @@ def register_comfyui_routes(app, deps):
             "billing": billing,
         }
 
-    def _finalize_generation_records(actor, params, result):
+    def _finalize_generation_records(actor, params, result, *, backend_url=""):
         result_images = result.get("images") if isinstance(result.get("images"), list) else []
         if not result_images:
             result_images = [{
@@ -1323,7 +1542,7 @@ def register_comfyui_routes(app, deps):
             })
         conn = get_db()
         try:
-            _register_comfyui_image_refs(conn, actor=actor, images=images)
+            _register_comfyui_image_refs(conn, actor=actor, images=images, backend_url=backend_url)
             create_notification_if_enabled(
                 conn,
                 user_id=_actor_value(actor, "id"),
@@ -1342,9 +1561,14 @@ def register_comfyui_routes(app, deps):
             conn.close()
         return images
 
-    def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds, request_meta=None):
-        active_client = _client()
-        generation_token = _register_active_generation(actor)
+    def _run_comfyui_generation_job(job_id, actor, params, quote, timeout_seconds, request_meta=None, backend_binding=None):
+        backend_binding = backend_binding if isinstance(backend_binding, dict) else _comfyui_binding(actor)
+        active_client = _client_for_url(backend_binding["url"])
+        generation_token = _register_active_generation(
+            actor,
+            backend_url=backend_binding.get("url"),
+            backend_scope=backend_binding.get("backend_scope"),
+        )
         request_meta = request_meta if isinstance(request_meta, dict) else {}
         audit_ip = request_meta.get("client_ip") or "-"
         audit_ua = request_meta.get("user_agent") or "-"
@@ -1358,11 +1582,12 @@ def register_comfyui_routes(app, deps):
             billing = {"charged": False, "exempt": "root"} if not quote else None
             if quote:
                 billing = _charge_comfyui_generation(actor, quote, prompt_id=result.get("prompt_id"))
-            images = _finalize_generation_records(actor, params, result)
+            images = _finalize_generation_records(actor, params, result, backend_url=backend_binding.get("url"))
             payload = {
                 "image": images[0],
                 "images": images,
                 "billing": billing,
+                "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
             }
             _update_generation_job(
                 job_id,
@@ -1402,6 +1627,58 @@ def register_comfyui_routes(app, deps):
             audit("COMFYUI_GENERATE_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
         finally:
             _unregister_active_generation(generation_token)
+
+    def _run_comfyui_model_download_job(job_id, actor, request_data, request_meta=None):
+        request_data = dict(request_data or {})
+        request_meta = request_meta if isinstance(request_meta, dict) else {}
+        audit_ip = request_meta.get("client_ip") or "-"
+        audit_ua = request_meta.get("user_agent") or "-"
+        _update_model_download_job(job_id, status="running")
+        parsed_request, msg = _parse_civitai_download_request(request_data)
+        if msg:
+            _update_model_download_job(job_id, status="error", error=msg, result=None)
+            _update_model_download_progress(job_id, {
+                "phase": "error",
+                "detail": msg,
+                "completed": False,
+            })
+            return
+        try:
+            result, msg = _download_civitai_model_selection(
+                page_url=parsed_request["page_url"],
+                version_id=parsed_request["version_id"],
+                file_id=parsed_request["file_id"],
+                model_type=parsed_request["model_type"],
+                base_dir=parsed_request["base_dir"],
+                progress_callback=lambda progress: _update_model_download_progress(job_id, progress),
+            )
+            if msg:
+                raise ValueError(msg)
+            _update_model_download_job(job_id, status="completed", error="", result=result)
+            _update_model_download_progress(job_id, {
+                "phase": "completed",
+                "percent": 100,
+                "bytes_written": int((result or {}).get("size_bytes") or 0),
+                "total_bytes": int((result or {}).get("size_bytes") or 0),
+                "detail": f"已下載 {(result or {}).get('filename') or ''}",
+                "completed": True,
+            })
+            audit(
+                "COMFYUI_CIVITAI_DOWNLOAD",
+                audit_ip,
+                user=_actor_value(actor, "username"),
+                success=True,
+                ua=audit_ua,
+                detail=f"async_job={job_id}, type={(result or {}).get('type') or ''}, filename={(result or {}).get('filename') or ''}",
+            )
+        except Exception as exc:
+            _update_model_download_job(job_id, status="error", error=str(exc), result=None)
+            _update_model_download_progress(job_id, {
+                "phase": "error",
+                "detail": str(exc),
+                "completed": False,
+            })
+            audit("COMFYUI_CIVITAI_DOWNLOAD", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=f"async_job={job_id}, error={str(exc)[:220]}")
 
     def _comfyui_unavailable_payload(exc, active_client=None):
         active_client = active_client or _client()
@@ -1774,7 +2051,9 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        active_client = _client()
+        use_root_accel = _coerce_bool(request.args.get("use_root_accel"))
+        binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        active_client = _client_for_url(binding["url"])
         try:
             if hasattr(active_client, "health_check"):
                 status = active_client.health_check(timeout=3)
@@ -1783,19 +2062,23 @@ def register_comfyui_routes(app, deps):
                 status = {"ok": True}
         except ComfyUIError as exc:
             runtime = _local_comfyui_runtime_status(_configured_comfyui_port())
-            if _configured_connection_mode() == "local" and runtime:
+            if binding["connection_mode"] == "local" and runtime:
                 return json_resp({
                     "ok": True,
                     "available": False,
                     "starting": True,
                     "msg": runtime["message"],
                     "startup_log_tail": runtime["startup_log_tail"],
-                    "connection_mode": _configured_connection_mode(),
-                    "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+                    "connection_mode": binding["connection_mode"],
+                    "backend_scope": binding["backend_scope"],
+                    "root_accel_available": _root_accel_available(actor),
+                    "root_accel_enabled": binding["root_accel_active"],
+                    "comfyui_url": getattr(active_client, "base_url", binding["url"]),
                     "max_batch_size": _configured_max_batch_size(),
                     "default_width": _configured_default_dimensions()["width"],
                     "default_height": _configured_default_dimensions()["height"],
                     "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
+                    "wallet": _comfyui_wallet_payload(actor),
                     "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
                     "local_runtime": runtime,
                 })
@@ -1803,12 +2086,16 @@ def register_comfyui_routes(app, deps):
         return json_resp({
             "ok": True,
             "available": True,
-            "connection_mode": _configured_connection_mode(),
-            "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+            "connection_mode": binding["connection_mode"],
+            "backend_scope": binding["backend_scope"],
+            "root_accel_available": _root_accel_available(actor),
+            "root_accel_enabled": binding["root_accel_active"],
+            "comfyui_url": getattr(active_client, "base_url", binding["url"]),
             "max_batch_size": _configured_max_batch_size(),
             "default_width": _configured_default_dimensions()["width"],
             "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
+            "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
             "system": status.get("system") if isinstance(status, dict) else {},
         })
@@ -1935,24 +2222,37 @@ def register_comfyui_routes(app, deps):
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok": False, "msg": "Invalid request"}), 400
-        page_url = str(data.get("page_url") or data.get("url") or "").strip()
-        try:
-            version_id = int(data.get("version_id") or data.get("model_version_id") or 0)
-        except Exception:
-            version_id = 0
-        try:
-            file_id = int(data.get("file_id") or 0) or None
-        except Exception:
-            file_id = None
-        model_type = str(data.get("type") or data.get("model_type") or "").strip().lower()
-        if not page_url or version_id <= 0:
-            return json_resp({"ok": False, "msg": "請先輸入 Civitai 模型頁網址並選擇版本"}), 400
+        request_data, msg = _parse_civitai_download_request(data)
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        if _coerce_bool(data.get("async_progress")):
+            job_id = _create_model_download_job(actor)
+            request_meta = _capture_request_audit_meta()
+            worker = threading.Thread(
+                target=_run_comfyui_model_download_job,
+                args=(job_id, dict(actor), request_data, request_meta),
+                daemon=True,
+            )
+            worker.start()
+            return json_resp({
+                "ok": True,
+                "async": True,
+                "job": {
+                    "job_id": job_id,
+                    "status": "queued",
+                    "progress": {
+                        "phase": "queued",
+                        "percent": 0,
+                        "detail": "已建立模型下載工作",
+                    },
+                },
+            })
         result, msg = _download_civitai_model_selection(
-            page_url=page_url,
-            version_id=version_id,
-            file_id=file_id,
-            model_type=model_type,
-            base_dir=data.get("base_dir"),
+            page_url=request_data["page_url"],
+            version_id=request_data["version_id"],
+            file_id=request_data["file_id"],
+            model_type=request_data["model_type"],
+            base_dir=request_data["base_dir"],
         )
         audit(
             "COMFYUI_CIVITAI_DOWNLOAD",
@@ -1960,11 +2260,31 @@ def register_comfyui_routes(app, deps):
             user=_actor_value(actor, "username"),
             success=not bool(msg),
             ua=get_ua(),
-            detail=f"type={model_type}, version_id={version_id}, file_id={file_id or ''}, url_host={urlparse(page_url).hostname if page_url else ''}, filename={(result or {}).get('filename') or ''}, error={msg or ''}"[:300],
+            detail=f"type={request_data['model_type']}, version_id={request_data['version_id']}, file_id={request_data['file_id'] or ''}, url_host={urlparse(request_data['page_url']).hostname if request_data['page_url'] else ''}, filename={(result or {}).get('filename') or ''}, error={msg or ''}"[:300],
         )
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
         return json_resp({"ok": True, "download": result, "msg": f"已下載 {result['label']}：{result['filename']}"})
+
+    @app.route("/api/root/comfyui/download-jobs/<job_id>", methods=["GET"])
+    @require_csrf_safe
+    def root_comfyui_download_job_status(job_id):
+        actor, err = _root_or_403()
+        if err:
+            return err
+        job, err = _assert_model_download_job_owner(job_id, actor)
+        if err:
+            return err
+        return json_resp({
+            "ok": True,
+            "job": {
+                "job_id": job["job_id"],
+                "status": job["status"],
+                "progress": job.get("progress") or {},
+                "error": job.get("error") or "",
+                "result": job.get("result"),
+            },
+        })
 
     @app.route("/api/root/comfyui/download-model", methods=["POST"])
     @require_csrf
@@ -2022,7 +2342,9 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        active_client = _client()
+        use_root_accel = _coerce_bool(request.args.get("use_root_accel"))
+        binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
+        active_client = _client_for_url(binding["url"])
         try:
             models = active_client.get_models()
             options = active_client.get_sampler_options()
@@ -2033,14 +2355,18 @@ def register_comfyui_routes(app, deps):
             "ok": True,
             "models": models,
             "loras": loras,
-            "connection_mode": _configured_connection_mode(),
+            "connection_mode": binding["connection_mode"],
+            "backend_scope": binding["backend_scope"],
+            "root_accel_available": _root_accel_available(actor),
+            "root_accel_enabled": binding["root_accel_active"],
             "samplers": options.get("samplers") or [SAFE_SAMPLER_FALLBACK],
             "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
-            "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+            "comfyui_url": getattr(active_client, "base_url", binding["url"]),
             "max_batch_size": _configured_max_batch_size(),
             "default_width": _configured_default_dimensions()["width"],
             "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
+            "wallet": _comfyui_wallet_payload(actor),
             "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
         })
 
@@ -2059,7 +2385,7 @@ def register_comfyui_routes(app, deps):
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
         if not _comfyui_charge_required(actor):
-            return json_resp({"ok": True, "billing": {"charged": False, "exempt": "root"}})
+            return json_resp({"ok": True, "billing": {"charged": False, "exempt": "root"}, "wallet": _comfyui_wallet_payload(actor)})
         total_quantity, run_count = _comfyui_total_quantity(data, params)
         quote, msg = _comfyui_price_quote(total_quantity, lora_count=_comfyui_lora_count(params))
         if msg:
@@ -2067,8 +2393,8 @@ def register_comfyui_routes(app, deps):
         quote = {**quote, "batch_size": params["batch_size"], "run_count": run_count}
         msg = _ensure_comfyui_balance(actor, quote)
         if msg:
-            return json_resp({"ok": False, "msg": msg, "billing": quote}), 409
-        return json_resp({"ok": True, "billing": quote})
+            return json_resp({"ok": False, "msg": msg, "billing": quote, "wallet": _comfyui_wallet_payload(actor)}), 409
+        return json_resp({"ok": True, "billing": quote, "wallet": _comfyui_wallet_payload(actor)})
 
     @app.route("/api/comfyui/generate", methods=["POST"])
     @require_csrf
@@ -2085,6 +2411,8 @@ def register_comfyui_routes(app, deps):
         params, msg = _normalize_generation_payload(data if isinstance(data, dict) else {})
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
+        use_root_accel = _coerce_bool(data.get("use_root_accel"))
+        backend_binding = _comfyui_binding(actor, use_root_accel=use_root_accel)
         quote = None
         timeout_seconds = _int_range(
             data.get("timeout_seconds"),
@@ -2113,7 +2441,7 @@ def register_comfyui_routes(app, deps):
             request_meta = _capture_request_audit_meta()
             worker = threading.Thread(
                 target=_run_comfyui_generation_job,
-                args=(job_id, dict(actor), params, quote, timeout_seconds, request_meta),
+                args=(job_id, dict(actor), params, quote, timeout_seconds, request_meta, backend_binding),
                 daemon=True,
             )
             worker.start()
@@ -2130,8 +2458,12 @@ def register_comfyui_routes(app, deps):
                     },
                 },
             })
-        active_client = _client()
-        generation_token = _register_active_generation(actor)
+        active_client = _client_for_url(backend_binding["url"])
+        generation_token = _register_active_generation(
+            actor,
+            backend_url=backend_binding.get("url"),
+            backend_scope=backend_binding.get("backend_scope"),
+        )
         try:
             result = active_client.generate_image(
                 params,
@@ -2149,7 +2481,7 @@ def register_comfyui_routes(app, deps):
             except Exception as exc:
                 audit("COMFYUI_BILLING_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
                 return json_resp({"ok": False, "msg": f"產圖成功，但扣款失敗：{exc}"}), 409
-        images = _finalize_generation_records(actor, params, result)
+        images = _finalize_generation_records(actor, params, result, backend_url=backend_binding.get("url"))
         image = images[0]
         image_ref = result["image_ref"]
         audit("COMFYUI_GENERATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"prompt_id={result['prompt_id']}, file={image_ref.get('filename')}, batch={len(images)}")
@@ -2158,6 +2490,9 @@ def register_comfyui_routes(app, deps):
             "image": image,
             "images": images,
             "billing": billing,
+            "wallet": (billing or {}).get("wallet") or _comfyui_wallet_payload(actor),
+            "backend_scope": backend_binding["backend_scope"],
+            "root_accel_enabled": backend_binding["root_accel_active"],
         })
 
     @app.route("/api/comfyui/jobs/<job_id>", methods=["GET"])
@@ -2186,7 +2521,13 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        allowed, reason, summary = _interrupt_policy(actor)
+        try:
+            data = request.get_json(force=True, silent=True)
+        except TypeError:
+            data = None
+        data = data if isinstance(data, dict) else {}
+        use_root_accel = _coerce_bool(data.get("use_root_accel"))
+        allowed, reason, summary = _interrupt_policy(actor, use_root_accel=use_root_accel)
         if not allowed:
             audit(
                 "COMFYUI_INTERRUPT_SKIPPED",
@@ -2209,7 +2550,19 @@ def register_comfyui_routes(app, deps):
                     **summary,
                 },
             })
-        active_client = _client()
+        active_client = _client(actor, use_root_accel=use_root_accel)
+        if _is_root(actor):
+            own_active = [
+                item for item in _active_generation_snapshot()
+                if int(item.get("user_id") or 0) == int(_generation_owner_id(actor) or 0)
+            ]
+            own_backends = {
+                _normalize_comfyui_backend_url(item.get("backend_url"))
+                for item in own_active
+                if _normalize_comfyui_backend_url(item.get("backend_url"))
+            }
+            if len(own_backends) == 1:
+                active_client = _client_for_url(next(iter(own_backends)))
         try:
             if not hasattr(active_client, "interrupt"):
                 return json_resp({"ok": False, "msg": "ComfyUI 中斷產圖不支援"}), 501
@@ -2241,10 +2594,11 @@ def register_comfyui_routes(app, deps):
             return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
         conn = get_db()
         try:
-            if not _verify_comfyui_image_ref_owner(conn, actor=actor, image_ref=image_ref):
+            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
+            if not ref_row:
                 audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=save,file={image_ref.get('filename', '-')}")
                 return json_resp({"ok": False, "msg": "找不到可存取的產圖預覽"}), 404
-            active_client = _client()
+            active_client = _client_for_url(_comfyui_binding(actor, backend_url=ref_row.get("backend_url")).get("url"))
             try:
                 image = active_client.fetch_image(image_ref)
                 _assert_reasonable_image_size(image)
@@ -2276,13 +2630,15 @@ def register_comfyui_routes(app, deps):
             return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
         conn = get_db()
         try:
-            if not _verify_comfyui_image_ref_owner(conn, actor=actor, image_ref=image_ref, prompt_id=data.get("prompt_id")):
+            ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref, prompt_id=data.get("prompt_id"))
+            if not ref_row:
                 audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=discard,file={image_ref.get('filename', '-')}")
                 return json_resp({"ok": False, "msg": "找不到可丟棄的產圖預覽"}), 404
             conn.commit()
         finally:
             conn.close()
-        if _configured_connection_mode() != "local":
+        image_binding = _comfyui_binding(actor, backend_url=(ref_row or {}).get("backend_url"))
+        if image_binding["connection_mode"] != "local":
             result = {
                 "file_deleted": False,
                 "file_missing": False,
@@ -2297,7 +2653,7 @@ def register_comfyui_routes(app, deps):
                 "discard": result,
                 "warning": "source_file_not_deleted",
             })
-        active_client = _client()
+        active_client = _client_for_url(image_binding["url"])
         try:
             if not hasattr(active_client, "discard_image"):
                 return json_resp({"ok": False, "msg": "ComfyUI 原始檔刪除不支援"}), 501
@@ -2340,11 +2696,12 @@ def register_comfyui_routes(app, deps):
             else:
                 if not isinstance(image_ref, dict):
                     return json_resp({"ok": False, "msg": "缺少 image_ref"}), 400
-                if not _verify_comfyui_image_ref_owner(conn, actor=actor, image_ref=image_ref):
+                ref_row = _load_comfyui_image_ref_record(conn, actor=actor, image_ref=image_ref)
+                if not ref_row:
                     audit("COMFYUI_IMAGE_REF_DENIED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=f"action=share,file={image_ref.get('filename', '-')}")
                     conn.rollback()
                     return json_resp({"ok": False, "msg": "找不到可分享的產圖預覽"}), 404
-                active_client = _client()
+                active_client = _client_for_url(_comfyui_binding(actor, backend_url=ref_row.get("backend_url")).get("url"))
                 try:
                     image = active_client.fetch_image(image_ref)
                     _assert_reasonable_image_size(image)

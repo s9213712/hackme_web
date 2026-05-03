@@ -54,6 +54,7 @@ DEFAULT_SETTINGS = {
     "module_videos_min_role": "user",
     "comfyui_connection_mode": os.environ.get("COMFYUI_CONNECTION_MODE", "remote"),
     "comfyui_remote_api_url": os.environ.get("COMFYUI_API_URL", ""),
+    "comfyui_root_accel_api_url": os.environ.get("COMFYUI_ROOT_ACCEL_API_URL", ""),
     "comfyui_base_dir": os.environ.get("COMFYUI_BASE_DIR", ""),
     "comfyui_local_start_script": os.environ.get("COMFYUI_START_SCRIPT", ""),
     "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),

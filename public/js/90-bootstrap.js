@@ -190,6 +190,7 @@ function bindUiEvents() {
   const comfyuiShareBtn = $("comfyui-share-btn");
   const comfyuiDiscardBtn = $("comfyui-discard-btn");
   const comfyuiLoraAddBtn = $("comfyui-lora-add-btn");
+  const comfyuiRootAccelToggle = $("comfyui-root-accel-toggle");
   const comfyuiCivitaiInspectBtn = $("comfyui-civitai-inspect-btn");
   const comfyuiCivitaiVersion = $("comfyui-civitai-version");
   const comfyuiModelDownloadBtn = $("comfyui-model-download-btn");
@@ -362,6 +363,7 @@ function bindUiEvents() {
   if (comfyuiShareBtn) comfyuiShareBtn.addEventListener("click", shareComfyuiToCommunity);
   if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
   if (comfyuiLoraAddBtn) comfyuiLoraAddBtn.addEventListener("click", addSelectedComfyuiLora);
+  if (comfyuiRootAccelToggle) comfyuiRootAccelToggle.addEventListener("change", onComfyuiRootAccelToggleChanged);
   if (comfyuiCivitaiInspectBtn) comfyuiCivitaiInspectBtn.addEventListener("click", inspectComfyuiCivitaiModel);
   if (comfyuiCivitaiVersion) comfyuiCivitaiVersion.addEventListener("change", onComfyuiCivitaiVersionChange);
   if (comfyuiModelDownloadBtn) comfyuiModelDownloadBtn.addEventListener("click", downloadComfyuiModelFromUrl);

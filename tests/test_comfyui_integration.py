@@ -233,6 +233,72 @@ class RecoveringComfyUIClient:
         return {"ok": True, "system": {"os": "test"}}
 
 
+class TrackingBackendClient:
+    def __init__(self, base_url, *, model_name, filename):
+        self.base_url = base_url
+        self.model_name = model_name
+        self.filename = filename
+        self.generate_calls = []
+        self.fetch_calls = []
+        self.discard_calls = []
+        self.interrupted = 0
+
+    def health_check(self, *, timeout=3):
+        return {"ok": True, "system": {"backend": self.base_url}}
+
+    def get_models(self):
+        return [self.model_name]
+
+    def get_loras(self):
+        return []
+
+    def get_sampler_options(self):
+        return {"samplers": ["euler"], "schedulers": ["normal"]}
+
+    def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
+        self.generate_calls.append({"params": dict(params), "timeout_seconds": timeout_seconds})
+        if progress_callback:
+            progress_callback({
+                "phase": "running",
+                "percent": 50,
+                "current": 1,
+                "max": 1,
+                "detail": f"{self.base_url} generating",
+                "queue_remaining": 0,
+            })
+        image_ref = {"filename": self.filename, "subfolder": "", "type": "output"}
+        image_data = f"generated:{self.base_url}".encode("utf-8")
+        return {
+            "prompt_id": f"prompt:{self.base_url}",
+            "image_ref": image_ref,
+            "mime_type": "image/png",
+            "data": image_data,
+            "images": [{
+                "image_ref": image_ref,
+                "mime_type": "image/png",
+                "data": image_data,
+            }],
+        }
+
+    def fetch_image(self, image_ref):
+        self.fetch_calls.append(dict(image_ref))
+        return ComfyUIImage(
+            filename=image_ref.get("filename") or self.filename,
+            subfolder=image_ref.get("subfolder") or "",
+            type=image_ref.get("type") or "output",
+            mime_type="image/png",
+            data=f"fetched:{self.base_url}".encode("utf-8"),
+        )
+
+    def discard_image(self, image_ref, *, prompt_id=None, **kwargs):
+        self.discard_calls.append({"image_ref": dict(image_ref), "prompt_id": prompt_id, **kwargs})
+        return {"file_deleted": True, "file_missing": False, "file_delete_supported": True, "history_deleted": bool(prompt_id)}
+
+    def interrupt(self):
+        self.interrupted += 1
+        return {"interrupted": True}
+
+
 def _init_db(db_path):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -673,6 +739,219 @@ def test_comfyui_generation_does_not_charge_root(tmp_path):
     body = generated.get_json()
     assert body["billing"] == {"charged": False, "exempt": "root"}
     assert points.spends == []
+
+
+def test_root_can_switch_to_accel_backend_and_wallet_is_reported(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    primary_url = "https://primary.example:8188"
+    accel_url = "https://accel.example:8288"
+    primary_client = TrackingBackendClient(primary_url, model_name="primary_model.safetensors", filename="primary.png")
+    accel_client = TrackingBackendClient(accel_url, model_name="accel_model.safetensors", filename="accel.png")
+    root_actor = {
+        "id": 1,
+        "username": "root",
+        "role": "super_admin",
+        "member_level": "trusted",
+        "effective_level": "trusted",
+        "sanction_status": "none",
+    }
+    points = FakePointsService(balance=42)
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        points_service=points,
+        settings={
+            "comfyui_connection_mode": "remote",
+            "comfyui_remote_api_url": primary_url,
+            "comfyui_root_accel_api_url": accel_url,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: {
+                primary_url: primary_client,
+                accel_url: accel_client,
+            }[url],
+        },
+    ).test_client()
+
+    primary_status = client.get("/api/comfyui/status")
+    assert primary_status.status_code == 200
+    assert primary_status.get_json()["backend_scope"] == "primary"
+    assert primary_status.get_json()["root_accel_available"] is True
+    assert primary_status.get_json()["root_accel_enabled"] is False
+    assert primary_status.get_json()["wallet"] == {"points_balance": 42, "charged": False}
+
+    accel_status = client.get("/api/comfyui/status?use_root_accel=1")
+    assert accel_status.status_code == 200
+    assert accel_status.get_json()["backend_scope"] == "root_accel"
+    assert accel_status.get_json()["root_accel_enabled"] is True
+    assert accel_status.get_json()["comfyui_url"] == accel_url
+    assert accel_status.get_json()["wallet"] == {"points_balance": 42, "charged": False}
+
+    accel_models = client.get("/api/comfyui/models?use_root_accel=1")
+    assert accel_models.status_code == 200
+    assert accel_models.get_json()["models"] == ["accel_model.safetensors"]
+    assert accel_models.get_json()["backend_scope"] == "root_accel"
+
+    user_client = _build_app(
+        db_path,
+        storage_root,
+        points_service=points,
+        settings={
+            "comfyui_connection_mode": "remote",
+            "comfyui_remote_api_url": primary_url,
+            "comfyui_root_accel_api_url": accel_url,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: {
+                primary_url: primary_client,
+                accel_url: accel_client,
+            }[url],
+        },
+    ).test_client()
+    ignored = user_client.get("/api/comfyui/status?use_root_accel=1")
+    assert ignored.status_code == 200
+    assert ignored.get_json()["backend_scope"] == "primary"
+    assert ignored.get_json()["root_accel_available"] is False
+    assert ignored.get_json()["root_accel_enabled"] is False
+
+
+def test_root_accel_generation_uses_selected_backend_for_followup_save(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    primary_url = "https://primary.example:8188"
+    accel_url = "https://accel.example:8288"
+    primary_client = TrackingBackendClient(primary_url, model_name="primary_model.safetensors", filename="primary.png")
+    accel_client = TrackingBackendClient(accel_url, model_name="accel_model.safetensors", filename="accel.png")
+    root_actor = {
+        "id": 1,
+        "username": "root",
+        "role": "super_admin",
+        "member_level": "trusted",
+        "effective_level": "trusted",
+        "sanction_status": "none",
+    }
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_connection_mode": "remote",
+            "comfyui_remote_api_url": primary_url,
+            "comfyui_root_accel_api_url": accel_url,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: {
+                primary_url: primary_client,
+                accel_url: accel_client,
+            }[url],
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "accel_model.safetensors",
+            "prompt": "root accel route",
+            "seed": 123,
+            "use_root_accel": True,
+        },
+    )
+
+    assert generated.status_code == 200
+    body = generated.get_json()
+    assert body["backend_scope"] == "root_accel"
+    assert body["root_accel_enabled"] is True
+    assert len(accel_client.generate_calls) == 1
+    assert primary_client.generate_calls == []
+
+    saved = client.post(
+        "/api/comfyui/save",
+        json={
+            "image_ref": body["image"]["image_ref"],
+            "virtual_path": "/output/accel-saved.png",
+        },
+    )
+
+    assert saved.status_code == 200
+    assert len(accel_client.fetch_calls) == 1
+    assert accel_client.fetch_calls[0]["filename"] == "accel.png"
+    assert primary_client.fetch_calls == []
+
+
+def test_root_accel_generation_discard_stays_remote_even_when_primary_is_local(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI"
+    storage_root.mkdir()
+    (comfy_base / "output").mkdir(parents=True)
+    _init_db(db_path)
+    primary_url = "http://localhost:8192"
+    accel_url = "https://accel.example:8288"
+    primary_client = TrackingBackendClient(primary_url, model_name="primary_model.safetensors", filename="primary.png")
+    accel_client = TrackingBackendClient(accel_url, model_name="accel_model.safetensors", filename="accel.png")
+    root_actor = {
+        "id": 1,
+        "username": "root",
+        "role": "super_admin",
+        "member_level": "trusted",
+        "effective_level": "trusted",
+        "sanction_status": "none",
+    }
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": 8192,
+            "comfyui_root_accel_api_url": accel_url,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: {
+                primary_url: primary_client,
+                accel_url: accel_client,
+            }[url],
+        },
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "accel_model.safetensors",
+            "prompt": "remote preview",
+            "seed": 123,
+            "use_root_accel": True,
+        },
+    )
+    assert generated.status_code == 200
+    preview = generated.get_json()["image"]
+
+    discarded = client.post(
+        "/api/comfyui/discard",
+        json={
+            "image_ref": preview["image_ref"],
+            "prompt_id": preview["prompt_id"],
+        },
+    )
+
+    assert discarded.status_code == 200
+    body = discarded.get_json()
+    assert body["warning"] == "source_file_not_deleted"
+    assert body["discard"]["remote_preview_only"] is True
+    assert primary_client.discard_calls == []
+    assert accel_client.discard_calls == []
 
 
 def test_comfyui_workflow_uses_requested_batch_size():
@@ -1266,6 +1545,108 @@ def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
     assert (comfy_base / "models" / "loras" / "fancy_v2.safetensors").exists()
 
 
+def test_comfyui_civitai_async_download_job_reports_progress_and_result(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_civitai_api_key": "secret-token",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    model_bytes = b"async-model-bytes"
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        if url == "https://civitai.com/api/v1/models/123456":
+            payload = {
+                "id": 123456,
+                "name": "Fancy Model",
+                "type": "LORA",
+                "creator": {"username": "artist"},
+                "modelVersions": [
+                    {
+                        "id": 2002,
+                        "name": "v2",
+                        "baseModel": "SDXL",
+                        "downloadUrl": "https://civitai.com/api/download/models/2002",
+                        "files": [
+                            {
+                                "id": 3002,
+                                "name": "fancy_v2.safetensors",
+                                "sizeKB": 4096,
+                                "downloadUrl": "https://civitai.com/api/download/models/2002",
+                                "type": "Model",
+                            }
+                        ],
+                    },
+                ],
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        if url.startswith("https://civitai.com/api/download/models/2002"):
+            return _FakeResponse(
+                url=url,
+                body=model_bytes,
+                headers={
+                    "Content-Disposition": 'attachment; filename="fancy_v2.safetensors"',
+                    "Content-Length": str(len(model_bytes)),
+                },
+            )
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        comfyui_routes.socket,
+        "getaddrinfo",
+        lambda host, port, type=0: [(None, None, None, None, ("104.21.72.187", port or 443))],
+    )
+
+    started = client.post(
+        "/api/root/comfyui/civitai/download",
+        json={
+            "page_url": "https://civitai.com/models/123456/fancy-model?modelVersionId=2002",
+            "version_id": 2002,
+            "file_id": 3002,
+            "type": "lora",
+            "base_dir": str(comfy_base),
+            "async_progress": True,
+        },
+    )
+
+    assert started.status_code == 200
+    start_body = started.get_json()
+    assert start_body["ok"] is True
+    assert start_body["async"] is True
+    job_id = start_body["job"]["job_id"]
+
+    final_body = None
+    for _ in range(40):
+        polled = client.get(f"/api/root/comfyui/download-jobs/{job_id}")
+        assert polled.status_code == 200
+        final_body = polled.get_json()
+        assert final_body["ok"] is True
+        if final_body["job"]["status"] == "completed":
+            break
+        time.sleep(0.05)
+
+    assert final_body is not None
+    assert final_body["job"]["status"] == "completed"
+    assert final_body["job"]["progress"]["percent"] == 100
+    assert final_body["job"]["progress"]["bytes_written"] == len(model_bytes)
+    assert final_body["job"]["result"]["filename"] == "fancy_v2.safetensors"
+    assert (comfy_base / "models" / "loras" / "fancy_v2.safetensors").read_bytes() == model_bytes
+
+
 def test_comfyui_legacy_direct_download_is_disabled(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -1670,9 +2051,10 @@ def test_comfyui_interrupt_denies_shared_backend_when_other_user_is_generating(t
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
+    shared_backend_url = "http://localhost:8192"
     active_generations = {
-        "own": {"user_id": 1, "username": "test"},
-        "other": {"user_id": 2, "username": "admin"},
+        "own": {"user_id": 1, "username": "test", "backend_url": shared_backend_url},
+        "other": {"user_id": 2, "username": "admin", "backend_url": shared_backend_url},
     }
     client = _build_app(
         db_path,
@@ -1696,7 +2078,7 @@ def test_comfyui_interrupt_allows_owned_generation_when_backend_is_not_shared(tm
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    active_generations = {"own": {"user_id": 1, "username": "test"}}
+    active_generations = {"own": {"user_id": 1, "username": "test", "backend_url": "http://localhost:8192"}}
     client = _build_app(
         db_path,
         storage_root,
@@ -1866,7 +2248,15 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
+    assert 'id="comfyui-points-balance"' in index_html
+    assert 'id="comfyui-root-accel-toggle-wrap"' in index_html
+    assert 'id="comfyui-root-accel-toggle"' in index_html
     assert 'id="comfyui-model-download-btn"' in index_html
+    assert 'id="comfyui-model-download-progress"' in index_html
+    assert 'id="comfyui-model-download-progress-label"' in index_html
+    assert 'id="comfyui-model-download-progress-percent"' in index_html
+    assert 'id="comfyui-model-download-progress-bar"' in index_html
+    assert 'id="comfyui-model-download-progress-detail"' in index_html
     assert 'id="comfyui-civitai-inspect-btn"' in index_html
     assert 'id="comfyui-civitai-url"' in index_html
     assert 'id="comfyui-civitai-version"' in index_html
@@ -1875,6 +2265,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-stop-btn"' in index_html
     assert 'id="s-comfyui-connection-mode"' in index_html
     assert 'id="s-comfyui-remote-api-url"' in index_html
+    assert 'id="s-comfyui-root-accel-api-url"' in index_html
     assert 'id="s-comfyui-base-dir"' in index_html
     assert 'id="s-comfyui-local-start-script"' in index_html
     assert 'id="s-comfyui-civitai-api-key"' in index_html
@@ -1893,12 +2284,22 @@ def test_comfyui_frontend_is_wired():
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/inspect"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/civitai/download"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/models" + comfyuiRequestQuery()' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/status" + comfyuiRequestQuery()' in comfyui_js
     assert 'apiFetch(API + "/comfyui/start"' in comfyui_js
     assert 'apiFetch(API + "/root/comfyui/stop"' in comfyui_js
     assert 'apiFetch(API + `/comfyui/jobs/${encodeURIComponent(jobId)}`' in comfyui_js
+    assert 'apiFetch(API + `/root/comfyui/download-jobs/${encodeURIComponent(jobId)}`' in comfyui_js
     assert "function startLocalComfyui()" in comfyui_js
     assert "function stopLocalComfyui()" in comfyui_js
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
+    assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
+    assert "function setComfyuiModelDownloadProgress" in comfyui_js
+    assert "COMFYUI_ROOT_ACCEL_PREF_KEY" in comfyui_js
+    assert "function comfyuiRequestPayloadExtras()" in comfyui_js
+    assert "function renderComfyuiWalletSummary()" in comfyui_js
+    assert "function onComfyuiRootAccelToggleChanged()" in comfyui_js
+    assert "use_root_accel: true" in comfyui_js
     assert '"async_progress": True' not in comfyui_js
     assert "async_progress: true" in comfyui_js
     assert "comfyuiConnectionMode !== \"local\"" in comfyui_js
@@ -1912,9 +2313,12 @@ def test_comfyui_frontend_is_wired():
     assert "function updateComfyuiConnectionModeFields()" in admin_js
     assert "s-comfyui-connection-mode" in bootstrap_js
     assert "s-comfyui-civitai-api-key" in admin_js
+    assert "comfyui_root_accel_api_url" in admin_js
     assert "startLocalComfyui" in bootstrap_js
     assert "inspectComfyuiCivitaiModel" in bootstrap_js
     assert "stopLocalComfyui" in bootstrap_js
+    assert "onComfyuiRootAccelToggleChanged" in bootstrap_js
+    assert 'if (comfyuiRootAccelToggle) comfyuiRootAccelToggle.addEventListener("change", onComfyuiRootAccelToggleChanged);' in bootstrap_js
     assert "json.starting" in admin_js
     assert "scheduleComfyuiLocalStartPolling({ attemptsLeft = 120, delayMs = 5000 }" in comfyui_js
     assert 'apiFetch(API + "/comfyui/interrupt"' in comfyui_js
@@ -1978,6 +2382,7 @@ def test_comfyui_frontend_is_wired():
     assert '"feature_comfyui_enabled": False' in settings_py
     assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in settings_py
     assert '"comfyui_api_port": 8192' in settings_py
+    assert '"comfyui_root_accel_api_url": os.environ.get("COMFYUI_ROOT_ACCEL_API_URL", "")' in settings_py
     assert '"comfyui_max_batch_size": 1' in settings_py
     assert '"comfyui_default_width": 1024' in settings_py
     assert '"comfyui_default_height": 1024' in settings_py

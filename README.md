@@ -7,17 +7,16 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.03-051`**
+**Current Release ID: `2026.05.03-052`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
 hardening in a compact single-node deployment.
 
-Release `2026.05.03-051` adds asynchronous ComfyUI job progress, root-only
-Civitai model inspection/download, governance-aware account review/delete flows,
-grid trading bot operations/backtests, safer server-encrypted media fallback
-behavior after key rotation, and a modular pre-push v2 validation suite with
-cleanup helpers and broader regression coverage.
+Release `2026.05.03-052` adds a root-only optional ComfyUI acceleration
+backend toggle, visible ComfyUI points balance on the AI page, backend-aware
+save/share/discard handling after root switches backends, tracked Civitai model
+download progress, and broader ComfyUI regression coverage for the new routing.
 
 Release `2026.05.02-047` adds the whole-site production gate. The latest local
 sign-off evidence before the Video Platform module passed 12/12 modules with

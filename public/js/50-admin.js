@@ -1988,6 +1988,7 @@ async function loadSettings() {
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
   if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").value = s.comfyui_connection_mode || "remote";
   if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || "";
+  if ($("s-comfyui-root-accel-api-url")) $("s-comfyui-root-accel-api-url").value = s.comfyui_root_accel_api_url || "";
   if ($("s-comfyui-base-dir")) $("s-comfyui-base-dir").value = s.comfyui_base_dir || "";
   if ($("s-comfyui-local-start-script")) $("s-comfyui-local-start-script").value = s.comfyui_local_start_script || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
@@ -3123,6 +3124,7 @@ async function saveSettings() {
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
     comfyui_connection_mode: $("s-comfyui-connection-mode")?.value || "remote",
     comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || "").trim(),
+    comfyui_root_accel_api_url: ($("s-comfyui-root-accel-api-url")?.value || "").trim(),
     comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
     comfyui_local_start_script: ($("s-comfyui-local-start-script")?.value || "").trim(),
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),

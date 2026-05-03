@@ -1,6 +1,29 @@
 # Update Summary
 
-Release ID: `2026.05.03-051`
+Release ID: `2026.05.03-052`
+
+## 2026.05.03-052
+
+## Highlights
+
+- ComfyUI now supports a root-only optional acceleration backend. Root can
+  configure a dedicated extra ComfyUI API URL in server settings, toggle it on
+  or off from the AI page, and keep normal users on the primary backend.
+- The AI page now shows the current ComfyUI points balance and keeps root's
+  no-charge state explicit while still surfacing the remaining wallet value.
+- ComfyUI image ownership now records which backend produced each preview, so
+  follow-up save/share/discard actions keep talking to the correct backend even
+  when root switches between the primary and acceleration channels.
+- Root Civitai model downloads now run as tracked jobs with progress polling,
+  byte counts, and a visible progress bar instead of a static "do not close"
+  message.
+- Regression coverage was extended for root acceleration routing, persisted
+  backend ownership, async Civitai download jobs, and the new frontend wiring.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py`
+- `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.03-051
 

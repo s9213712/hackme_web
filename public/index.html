@@ -1138,11 +1138,16 @@
             <div>
               <div class="drive-card-title">ComfyUI</div>
               <div class="drive-card-sub" id="comfyui-status">尚未連線</div>
+              <div class="drive-card-sub" id="comfyui-points-balance">剩餘點數：-</div>
             </div>
             <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
             <button class="btn" id="comfyui-load-draft-btn" type="button">載入上次設定</button>
             <button class="btn btn-primary" id="comfyui-start-btn" type="button" style="display:none;">啟動 ComfyUI</button>
             <button class="btn" id="comfyui-stop-btn" type="button" style="display:none;">停止 ComfyUI</button>
+          </div>
+          <div class="field" id="comfyui-root-accel-toggle-wrap" style="display:none;">
+            <label><input type="checkbox" id="comfyui-root-accel-toggle" /> root 啟用加速通道</label>
+            <div class="drive-card-sub">啟用後，root 的狀態查詢、模型讀取與產圖會優先走額外 ComfyUI API；其他帳號仍使用主 backend。</div>
           </div>
           <div class="field">
             <label>模型</label>
@@ -1226,6 +1231,16 @@
               <button class="btn" id="comfyui-model-download-btn" type="button">下載選定版本</button>
             </div>
             <div id="comfyui-model-download-status" class="drive-card-sub">尚未下載模型</div>
+            <div id="comfyui-model-download-progress" class="comfyui-progress-panel" style="display:none;margin-top:.6rem;">
+              <div class="comfyui-progress-head">
+                <span id="comfyui-model-download-progress-label">準備下載</span>
+                <strong id="comfyui-model-download-progress-percent">0%</strong>
+              </div>
+              <div class="comfyui-progress-track">
+                <div id="comfyui-model-download-progress-bar" class="comfyui-progress-bar"></div>
+              </div>
+              <div id="comfyui-model-download-progress-detail" class="drive-card-sub" style="margin-top:.45rem;">等待下載工作開始...</div>
+            </div>
           </div>
           <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
             <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
@@ -2931,6 +2946,11 @@
               <div class="field">
                 <label>遠端 API 位址</label>
                 <input type="url" id="s-comfyui-remote-api-url" placeholder="http://127.0.0.1:8192" />
+              </div>
+              <div class="field">
+                <label>root 專用加速 API 位址（可空白）</label>
+                <input type="url" id="s-comfyui-root-accel-api-url" placeholder="https://comfyui-root.example:8188" />
+                <div class="drive-card-sub">設定後，只有 root 可在 ComfyUI 頁面自行切換是否走這條加速通道；其他帳號仍使用主 ComfyUI backend。</div>
               </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">遠端模式只透過 ComfyUI API 產圖；丟棄預覽只會清掉網頁預覽，不會刪除遠端 output 原始檔。</div>
             </div>

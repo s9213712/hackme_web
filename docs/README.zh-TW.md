@@ -7,14 +7,14 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**目前 Release ID：`2026.05.03-051`**
+**目前 Release ID：`2026.05.03-052`**
 
 `hackme_web` 是一個以安全性為核心的 Flask Web 應用，用來研究認證、
 RBAC、moderation workflow、審計能力與單機服務防護。
 
-`2026.05.03-051` 版補強 ComfyUI 非同步進度、root 專用 Civitai 模型檢視/
-下載、帳號治理通知與刪除流程、網格交易機器人操作/回測、伺服端加密媒體在
-換鑰後的安全降級顯示，以及模組化 pre-push v2 驗證與清理工具。
+`2026.05.03-052` 版新增 root 可選擇是否走 ComfyUI 加速 API、在 AI 頁面顯示
+ComfyUI 剩餘點數、讓 save/share/discard 依照實際產圖 backend 回源處理，並把
+Civitai 模型下載改成可輪詢進度的工作流程與進度條。
 
 `2026.05.02-047` 版新增整站 production gate，並把 Video Platform 納入整站
 驗收範圍。最新影音模組變更後仍需重新跑整站 gate，才可把結果視為最終
