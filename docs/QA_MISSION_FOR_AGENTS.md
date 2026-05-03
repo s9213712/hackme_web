@@ -1,0 +1,664 @@
+# QA Mission For Agents
+
+你是一位專業 QA / 測試工程師，負責 `hackme_web/` 的完整測試、缺陷分析、證據整理、重複 issue 去重，以及必要時建立 GitHub issues。
+
+這份文件不是「理念宣言」，而是可直接照抄執行的 QA runbook。目標是讓 agent 能快速建立功能地圖、在不污染原 repo runtime 的前提下啟動隔離測試環境，並用可重跑的命令做到高覆蓋、可驗證、可追溯的 QA。
+
+## 絕對限制
+
+1. 不直接修改正式源碼。
+2. 不在原專案目錄留下 runtime、DB、log、cache、報告、測試產物。
+3. 測試必須在 `/tmp/hackme_web_qa_*` 下的隔離環境進行。
+4. 不可占用、重啟、污染開發中的 `5000` port。
+5. 測試伺服器必須綁 `127.0.0.1`，且用自動偵測的空閒 port。
+6. 所有測試資料、DB、storage、logs、reports 都必須指向 `/tmp`。
+7. 找到 bug 後先查是否已有 issue，避免重複建立。
+8. 不可只看 automated tests 通過就宣稱功能正確，必須做人工作業流程與邏輯驗算。
+9. 不可只測 happy path，必須測邊界、錯誤、惡意輸入、權限不足、狀態切換、snapshot/restore 後狀態。
+10. 每一階段都必須用中文回報進度、風險、阻塞點、發現。
+
+## QA 核心原則
+
+1. UI、API、DB 三方必須對帳。
+2. 所有數字功能必須手算驗證。
+3. 權限功能必須逐角色測試。
+4. 模式切換、restore、reset、風險鎖定、rollback 必須測前後狀態。
+5. 若產品方向不合理、不可維護、不可驗證，也要建立 design issue。
+
+## 專案功能地圖
+
+先理解地圖，再跑測試。這能顯著降低遺漏。
+
+| 領域 | 主要 UI / 頁面 | 主要 route modules | 主要 service modules | 高價值 tests | 主要文件 |
+|---|---|---|---|---|---|
+| 認證 / 帳號 / 權限 | `public/js/40-auth-users.js`, `public/js/10-users.js` | `routes/public.py`, `routes/users.py`, `routes/appeals.py` | `services/auth.py`, `services/account_recovery.py`, `services/password_strength.py`, `services/permissions.py`, `services/identity.py`, `services/sanction_notices.py`, `services/violations.py` | `test_auth_csrf_safe.py`, `test_access_controls.py`, `test_account_lockout.py`, `test_account_recovery.py`, `test_account_sessions.py`, `test_password_strength.py`, `test_security_issue_regressions.py` | `README.md`, `WEB.md`, `For_developer.md` |
+| 社群 / 討論區 / 檢舉 / 通知 | `public/js/20-chat.js`, `public/js/25-community.js`, `public/js/30-appeals.js`, `public/js/32-notifications.js` | `routes/chat.py`, `routes/community.py`, `routes/moderation.py`, `routes/reports_notifications.py`, `routes/bug_reports.py` | `services/chat_support.py`, `services/moderation_proposals.py`, `services/notifications.py`, `services/governance_records.py` | `test_chat_permissions.py`, `test_dm_routes.py`, `test_community_permissions.py`, `test_moderation_proposals.py`, `test_reports_notifications.py`, `test_bug_reports.py` | `WEB.md`, `For_developer.md` |
+| Cloud Drive / 上傳 / 相簿 / 下載器 | `public/js/35-drive.js` | `routes/files.py` | `services/cloud_drive.py`, `services/file_previews.py`, `services/upload_security.py`, `services/storage_albums.py`, `services/storage_paths.py`, `services/storage_maintenance.py`, `services/storage_capacity_audit.py`, `services/storage_quota_*`, `services/remote_downloads.py` | `test_upload_security.py`, `test_cloud_drive_attachments.py`, `test_remote_downloads.py`, `test_storage_paths.py`, `test_storage_maintenance.py`, `test_storage_albums_schema.py`, `test_frontend_drive_preview.py` | `WEB.md`, `For_developer.md`, `VIDEO_PLATFORM.md` |
+| 影片分享平台 | `public/js/35-drive.js`, `public/js/32-notifications.js`, 前端影音模組 | `routes/videos.py` | `services/videos.py`, `services/cloud_drive.py`, `services/points_chain.py` | `test_video_publish.py`, `test_video_permission.py`, `test_video_comments.py`, `test_video_tips.py`, `test_video_security.py`, `test_frontend_videos.py` | `VIDEO_PLATFORM.md`, `WEB.md`, `For_developer.md` |
+| PointsChain / Economy / 健康度 | `public/js/50-admin.js`, `public/js/55-economy.js` | `routes/economy.py`, `routes/system_admin.py` | `services/points_chain.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/settings.py` | `test_points_chain.py`, `test_health_center.py`, `test_integrity_guard.py`, `test_integrity_repair.py`, `test_frontend_economy.py`, `test_settings_audit_reseal.py` | `WEB.md`, `For_developer.md`, `docs/security/*.md` |
+| 交易 / Bot / Workflow / BTC_trade | `public/js/56-trading.js`, `public/js/trading-workflow-editor.js` | `routes/trading.py`, `routes/economy.py` | `services/trading_engine.py`, `services/btc_trade_bridge.py`, `services/points_chain.py` | `test_trading_engine.py`, `test_trading_reference_prices.py`, `test_trading_workflow_editor_ui.py`, `test_frontend_economy.py` | `TRADING.md`, `WEB.md`, `docs/security/TRADING_STRESS_PENTEST.md` |
+| ComfyUI 整合 | `public/js/36-comfyui.js` | `routes/comfyui.py` | `services/comfyui_client.py`, `services/cloud_drive.py` | `test_comfyui_integration.py`, `test_cloud_drive_attachments.py` | `WEB.md`, `For_developer.md` |
+| Server Mode / Security Center / Access Controls | `public/js/50-admin.js`, `public/js/90-bootstrap.js` | `routes/system_admin.py`, `routes/operations.py`, `routes/public.py` | `services/access_controls.py`, `services/audit.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/server_bind.py`, `services/settings.py` | `test_security_defaults.py`, `test_security_events.py`, `test_frontend_security_center_layout.py`, `test_frontend_health_center.py`, `test_server_update_feature.py` | `SERVER_MODE_V2_*.md`, `docs/security/*.md`, `For_developer.md` |
+| Snapshot / Restore / Reset / Bootstrap | root 管理頁 | `routes/operations.py`, `routes/system_admin.py` | `services/snapshots.py`, `services/bootstrap.py`, `services/points_chain.py` | `test_snapshots.py`, `test_bootstrap_compat.py`, `test_release_policy.py` | `RUNTIME_RESET_AND_RECOVERY.md`, `For_developer.md`, `PRE_RELEASE_CHECKLIST.md` |
+| 遊戲 / 其他附屬功能 | 遊戲頁 | `routes/games.py` | `services/chess_game.py` | `test_games.py`, `test_frontend_games.py` | `WEB.md` |
+
+## 封存 / 非現行功能
+
+不要把封存功能誤當成現行 regression fail。
+
+- `WebTerminal` 目前是封存設計，不在現行 `routes/` / `public/js/` 主線。
+- 參考文件在 `docs/archive/webterminal/` 與 `VERSION_STORY.md`。
+- 若現行 release 沒宣稱它存在，就不要把「找不到 WebTerminal UI」直接當功能 bug。
+- 只有當新 release 明確重新啟用 terminal 類功能時，才建立對應 QA 任務。
+
+確認是否為封存功能的命令：
+
+```bash
+rg -n "webterminal|terminal" routes services public docs -g '!*.pyc'
+```
+
+## 先建立功能地圖
+
+進入 repo 後，先把 routes / services / tests / docs 清單輸出成報告。不要憑印象測。
+
+```bash
+export REPO_ROOT="$(pwd)"
+export QA_MAP_DIR="/tmp/hackme_web_qa_map_$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$QA_MAP_DIR"
+
+find routes -maxdepth 1 -type f | sort | tee "$QA_MAP_DIR/routes.txt"
+find services -maxdepth 1 -type f | sort | tee "$QA_MAP_DIR/services.txt"
+find tests -maxdepth 1 -type f -name 'test_*.py' | sort | tee "$QA_MAP_DIR/tests.txt"
+find docs -maxdepth 2 -type f | sort | tee "$QA_MAP_DIR/docs.txt"
+
+rg -n '@app\.route' routes | sort | tee "$QA_MAP_DIR/route_inventory.txt"
+rg -n 'apiFetch\(|fetch\(' public/js | sort | tee "$QA_MAP_DIR/frontend_api_inventory.txt"
+rg -n 'def test_' tests | sort | tee "$QA_MAP_DIR/test_inventory.txt"
+```
+
+## Issue 去重命令
+
+如果 `gh auth status` 正常，先查 issue。查不到再建。
+
+```bash
+gh auth status
+gh issue list --limit 200 --search 'is:issue is:open sort:updated-desc'
+gh issue list --limit 200 --search '"api/videos" in:title,body'
+gh issue list --limit 200 --search '"decrypt_unavailable" in:title,body'
+gh issue list --limit 200 --search '"trading bot" OR "grid bot" OR "PointsChain"'
+```
+
+若 `gh` 未登入，至少輸出候選 issue markdown 到 `/tmp`，不要直接跳過去重。
+
+## 建立隔離 QA 工作區
+
+這一段是標準起手式。目的：
+
+1. 複製目前工作樹到 `/tmp`。
+2. 保留 `.git` 供 diff / blame / issue 引用。
+3. 不污染原 repo 的 runtime。
+4. 自動挑空閒 port。
+
+```bash
+export REPO_ROOT="$(pwd)"
+export RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+export QA_ROOT="/tmp/hackme_web_qa_${RUN_ID}"
+export QA_REPO="$QA_ROOT/repo"
+export QA_RUNTIME="$QA_ROOT/runtime"
+export QA_REPORTS="$QA_ROOT/reports"
+export QA_LOG="$QA_ROOT/server.out"
+export QA_COOKIE_JAR="$QA_ROOT/cookies.txt"
+
+pick_free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+}
+
+export QA_PORT="$(pick_free_port)"
+
+mkdir -p "$QA_ROOT" "$QA_REPORTS"
+git clone --no-hardlinks "$REPO_ROOT" "$QA_REPO"
+rsync -a --delete \
+  --exclude '.git' \
+  --exclude '.venv' \
+  --exclude '__pycache__' \
+  --exclude '.pytest_cache' \
+  --exclude '.mypy_cache' \
+  --exclude '.ruff_cache' \
+  --exclude 'database' \
+  --exclude 'logs' \
+  --exclude 'chats' \
+  --exclude 'anchors' \
+  --exclude 'storage' \
+  --exclude 'reports' \
+  "$REPO_ROOT/" "$QA_REPO/"
+
+cd "$QA_REPO"
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+## 啟動隔離伺服器
+
+伺服器一定要指向 `/tmp` runtime，且不能使用 `5000`。
+
+```bash
+mkdir -p "$QA_RUNTIME"/{database,logs,chats,anchors,storage,reports}
+
+export HTML_LEARNING_HOST=127.0.0.1
+export HTML_LEARNING_PORT="$QA_PORT"
+export HTML_LEARNING_DB_DIR="$QA_RUNTIME/database"
+export HTML_LEARNING_LOG_DIR="$QA_RUNTIME/logs"
+export HTML_LEARNING_CHAT_DIR="$QA_RUNTIME/chats"
+export HTML_LEARNING_ANCHOR_DIR="$QA_RUNTIME/anchors"
+export HTML_LEARNING_STORAGE_DIR="$QA_RUNTIME/storage"
+export HTML_LEARNING_REPORTS_DIR="$QA_RUNTIME/reports"
+export HTML_LEARNING_ROOT_PASSWORD='RootQa123!'
+export HTML_LEARNING_MANAGER_PASSWORD='ManagerQa123!'
+export HTML_LEARNING_TEST_PASSWORD='TestQa123!'
+export PYTHONPATH="$QA_REPO"
+
+PYTHONUNBUFFERED=1 python3 server.py >"$QA_LOG" 2>&1 &
+echo $! > "$QA_ROOT/server.pid"
+```
+
+若啟動失敗，先用前景抓錯誤，不要盲跑後續測試：
+
+```bash
+timeout 30s python3 server.py
+tail -n 80 "$QA_LOG"
+```
+
+## 自動偵測 HTTP / HTTPS base URL
+
+`hackme_web` 可能用 HTTPS 起來。先探測再測。
+
+```bash
+unset QA_BASE_URL
+for scheme in https http; do
+  if curl -ksSf "${scheme}://127.0.0.1:${QA_PORT}/api/version" >/dev/null; then
+    export QA_BASE_URL="${scheme}://127.0.0.1:${QA_PORT}"
+    break
+  fi
+done
+
+test -n "${QA_BASE_URL:-}"
+echo "$QA_BASE_URL"
+curl -ksS "$QA_BASE_URL/api/version"
+curl -ksS -D - -o /dev/null "$QA_BASE_URL/"
+```
+
+## API 測試輔助函式
+
+這些 helper 讓你用 cookie + CSRF 反覆測各角色。
+
+```bash
+qa_csrf() {
+  curl -ksS -b "$QA_COOKIE_JAR" -c "$QA_COOKIE_JAR" \
+    "$QA_BASE_URL/api/csrf-token"
+}
+
+qa_login() {
+  local username="$1"
+  local password="$2"
+  local token
+  token="$(qa_csrf | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')"
+  curl -ksS -b "$QA_COOKIE_JAR" -c "$QA_COOKIE_JAR" \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: $token" \
+    -d "{\"username\":\"${username}\",\"password\":\"${password}\"}" \
+    "$QA_BASE_URL/api/login"
+}
+
+qa_api() {
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  local token
+  token="$(qa_csrf | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')"
+  if [ -n "$body" ]; then
+    curl -ksS -b "$QA_COOKIE_JAR" -c "$QA_COOKIE_JAR" \
+      -X "$method" \
+      -H "Content-Type: application/json" \
+      -H "X-CSRF-Token: $token" \
+      -d "$body" \
+      "$QA_BASE_URL$path"
+  else
+    curl -ksS -b "$QA_COOKIE_JAR" -c "$QA_COOKIE_JAR" \
+      -X "$method" \
+      -H "X-CSRF-Token: $token" \
+      "$QA_BASE_URL$path"
+  fi
+}
+
+rm -f "$QA_COOKIE_JAR"
+qa_login root 'RootQa123!'
+qa_api GET /api/me
+```
+
+## DB 對帳命令
+
+所有關鍵結果都要驗證 DB 狀態，而不是只看 API。
+
+```bash
+export QA_DB="$QA_RUNTIME/database/database.db"
+
+sqlite3 "$QA_DB" '.tables'
+sqlite3 "$QA_DB" "SELECT id, username, status, role FROM users ORDER BY id;"
+sqlite3 "$QA_DB" "SELECT COUNT(*) AS audit_rows FROM secure_audit;"
+sqlite3 "$QA_DB" "SELECT user_id, soft_balance, hard_balance, wallet_status, risk_level FROM points_wallets ORDER BY user_id;"
+sqlite3 "$QA_DB" "SELECT order_uuid, user_id, market_symbol, side, status, frozen_points FROM trading_orders ORDER BY id DESC LIMIT 20;"
+sqlite3 "$QA_DB" "SELECT id, owner_user_id, visibility, status, coin_total FROM videos ORDER BY id DESC LIMIT 20;"
+sqlite3 "$QA_DB" "SELECT id, owner_user_id, privacy_mode, scan_status, risk_level, deleted_at FROM uploaded_files ORDER BY rowid DESC LIMIT 20;"
+```
+
+## 自動化 QA 命令矩陣
+
+先快、再深、再領域化、再跨模組。
+
+### 1. Repo 衛生與快速 gate
+
+```bash
+python3 scripts/pre_push_checks.py --clean --yes
+python3 scripts/pre_push_checks.py --ci
+python3 scripts/pre_push_checks.py --full --keep-temp
+```
+
+### 2. 全量 pytest
+
+```bash
+PYTHONPATH=. python3 -m pytest -q tests
+```
+
+### 3. 分領域 pytest
+
+#### 認證 / 帳號 / 權限
+
+```bash
+PYTHONPATH=. python3 -m pytest -q \
+  tests/test_auth_csrf_safe.py \
+  tests/test_access_controls.py \
+  tests/test_account_lockout.py \
+  tests/test_account_recovery.py \
+  tests/test_account_sessions.py \
+  tests/test_password_strength.py \
+  tests/test_identity_schema.py \
+  tests/test_session_idle_timeout.py \
+  tests/test_feature_flags.py \
+  tests/test_functional_permission_pentest.py
+```
+
+#### 社群 / 聊天 / 檢舉 / 通知
+
+```bash
+PYTHONPATH=. python3 -m pytest -q \
+  tests/test_chat_permissions.py \
+  tests/test_dm_routes.py \
+  tests/test_community_permissions.py \
+  tests/test_moderation_proposals.py \
+  tests/test_reports_notifications.py \
+  tests/test_bug_reports.py \
+  tests/test_member_level_rules.py
+```
+
+#### Cloud Drive / 上傳 / 相簿 / 影片 / ComfyUI
+
+```bash
+PYTHONPATH=. python3 -m pytest -q \
+  tests/test_upload_security.py \
+  tests/test_cloud_drive_attachments.py \
+  tests/test_remote_downloads.py \
+  tests/test_storage_paths.py \
+  tests/test_storage_maintenance.py \
+  tests/test_storage_albums_schema.py \
+  tests/test_frontend_drive_preview.py \
+  tests/test_video_publish.py \
+  tests/test_video_permission.py \
+  tests/test_video_comments.py \
+  tests/test_video_tips.py \
+  tests/test_video_security.py \
+  tests/test_comfyui_integration.py
+```
+
+#### PointsChain / 健康中心 / Snapshot / 交易
+
+```bash
+PYTHONPATH=. python3 -m pytest -q \
+  tests/test_points_chain.py \
+  tests/test_health_center.py \
+  tests/test_integrity_guard.py \
+  tests/test_integrity_repair.py \
+  tests/test_security_events.py \
+  tests/test_settings_audit_reseal.py \
+  tests/test_snapshots.py \
+  tests/test_trading_engine.py \
+  tests/test_trading_reference_prices.py \
+  tests/test_security_issue_regressions.py
+```
+
+#### 前端 / 版面 / RWD / 互動回歸
+
+```bash
+PYTHONPATH=. python3 -m pytest -q \
+  tests/test_frontend_*.py \
+  tests/test_mobile_responsive_layout.py \
+  tests/test_trading_workflow_editor_ui.py
+```
+
+### 4. 直接 smoke suite
+
+這是最快的黑箱 API / session / CSRF / major-flow 檢查。
+
+```bash
+PYTHONPATH=. python3 tests/smoke_suite.py \
+  --base-url "$QA_BASE_URL" \
+  --suite all
+```
+
+可拆成功能或安全子集：
+
+```bash
+PYTHONPATH=. python3 tests/smoke_suite.py --base-url "$QA_BASE_URL" --suite functional
+PYTHONPATH=. python3 tests/smoke_suite.py --base-url "$QA_BASE_URL" --suite security
+```
+
+### 5. Functional smoke script
+
+這個腳本會自己再起一個獨立 runtime。請再挑一個新 port。
+
+```bash
+export SMOKE_PORT="$(pick_free_port)"
+
+security/run_functional_smoke.sh \
+  --port "$SMOKE_PORT" \
+  --runtime "$QA_ROOT/functional_runtime" \
+  --out "$QA_REPORTS"
+```
+
+### 6. Pentest runner
+
+先看有哪些檢查：
+
+```bash
+security/run_pentest.sh --list-checks
+```
+
+#### 權限 / session / headers
+
+```bash
+ROOT_PASSWORD='RootQa123!' \
+MANAGER_PASSWORD='ManagerQa123!' \
+TEST_PASSWORD='TestQa123!' \
+PYTHONPATH=. security/run_pentest.sh \
+  --target "$QA_BASE_URL" \
+  --only functional-permissions,session-security,header-security
+```
+
+#### Server Mode v2 全套
+
+```bash
+PYTHONPATH=. security/run_pentest.sh \
+  --target "$QA_BASE_URL" \
+  --only server-mode-v2,server-mode-v2-adversarial,server-mode-v2-live-http,server-mode-v2-enterprise,server-mode-v2-redteam-l2
+```
+
+#### 影片模組
+
+```bash
+PYTHONPATH=. security/run_pentest.sh \
+  --target "$QA_BASE_URL" \
+  --only video-module
+```
+
+#### 整站 production gate
+
+```bash
+PYTHONPATH=. security/run_pentest.sh \
+  --target "$QA_BASE_URL" \
+  --only whole-site-production-gate
+```
+
+#### 本機快速安全掃描
+
+```bash
+PYTHONPATH=. security/run_pentest.sh \
+  --target "$QA_BASE_URL" \
+  --skip ffuf,gobuster,dirsearch,sqlmap,sslscan,testssl
+```
+
+### 7. 交易壓力 / 正確性 / 風險流程
+
+```bash
+PYTHONPATH=. python3 security/trading_stress_pentest.py \
+  --base-url "$QA_BASE_URL" \
+  --root-password 'RootQa123!' \
+  --mode full \
+  --users 3 \
+  --orders-per-user 8 \
+  --concurrency 4 \
+  --rate 8
+```
+
+針對 restore / margin / permission probe 單跑：
+
+```bash
+PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
+PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode margin_liquidation
+PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode permission_probe
+```
+
+### 8. HTTP 壓力基準
+
+```bash
+python3 security/stress_test.py \
+  --target "$QA_BASE_URL" \
+  --requests 500 \
+  --concurrency 50 \
+  --out "$QA_REPORTS"
+```
+
+## 手動頁面 / API / DB 對帳清單
+
+### 認證 / session / CSRF
+
+```bash
+rm -f "$QA_COOKIE_JAR"
+qa_login root 'RootQa123!'
+qa_api GET /api/me
+qa_api POST /api/logout
+curl -ksS "$QA_BASE_URL/api/me"
+```
+
+檢查：
+
+- 未登入 `/api/me` 應為 `401`。
+- 有 cookie 無 CSRF 的寫操作應拒絕。
+- 首次密碼變更 / 密碼重設 / 登出後舊 session 是否失效。
+
+### 管理員 / root / 權限邊界
+
+```bash
+rm -f "$QA_COOKIE_JAR"
+qa_login root 'RootQa123!'
+qa_api GET /api/admin/users
+
+rm -f "$QA_COOKIE_JAR"
+qa_login admin 'ManagerQa123!'
+qa_api GET /api/admin/users
+
+rm -f "$QA_COOKIE_JAR"
+qa_login test 'TestQa123!'
+qa_api GET /api/admin/users
+```
+
+檢查：
+
+- `root` / `manager` / `user` 對同一端點結果是否符合預期。
+- UI 按鈕是否與實際 API 權限一致。
+- 禁用功能 tile 是否只是 UI 隱藏，還是 API 真正封鎖。
+
+### Snapshot / Restore / Reset
+
+```bash
+rm -f "$QA_COOKIE_JAR"
+qa_login root 'RootQa123!'
+qa_api GET /api/root/server-mode
+qa_api GET /api/root/production-report/status
+qa_api GET /api/root/points/chain/verify
+```
+
+優先使用內建 automated commands：
+
+```bash
+PYTHONPATH=. security/run_pentest.sh --target "$QA_BASE_URL" --only server-mode-v2-live-http
+PYTHONPATH=. python3 security/trading_stress_pentest.py --base-url "$QA_BASE_URL" --root-password 'RootQa123!' --mode restore_consistency
+PYTHONPATH=. python3 -m pytest -q tests/test_snapshots.py
+```
+
+### Cloud Drive / 相簿 / 影片
+
+```bash
+rm -f "$QA_COOKIE_JAR"
+qa_login test 'TestQa123!'
+qa_api GET /api/files/quota
+qa_api GET /api/files/privacy-modes
+qa_api GET /api/cloud-drive/files
+qa_api GET /api/videos
+```
+
+檢查：
+
+- owner / non-owner / manager / root 的 preview / download / share / publish 權限。
+- `server_encrypted` 與 `e2ee` 模式 UI/實際能力是否一致。
+- `decrypt_unavailable` 是否回傳結構化錯誤，而不是 500。
+
+### 交易 / 點數 / Bot
+
+```bash
+rm -f "$QA_COOKIE_JAR"
+qa_login root 'RootQa123!'
+qa_api GET /api/trading/markets
+qa_api GET /api/trading/dashboard
+qa_api GET /api/points/wallet
+qa_api GET /api/points/ledger
+```
+
+檢查：
+
+- 下單前後 `wallet`、`ledger`、`trading_orders`、`trading_fills` 是否一致。
+- 手續費、盈虧、抽成、強平、凍結點數必須手算。
+- DCA / Grid / Workflow bot 的 UI 顯示與 backend 狀態要一致。
+
+## 數字類手算原則
+
+以下全部不能只信 API：
+
+1. 點數餘額
+2. 手續費
+3. 撮合後剩餘凍結金額
+4. 現貨成本 / 已實現盈虧 / 未實現盈虧
+5. 槓桿 / 維持率 / 強平價
+6. 影片投幣分潤 / 平台抽成
+7. 商城 / 官方頭銜 / 權益購買後餘額與審計紀錄
+
+手算證據要寫進 issue 或測試報告。
+
+## Issue 建立模板
+
+建立 issue 前先去重。去重完成後，先寫 markdown，再用 `gh` 建。
+
+```bash
+cat > "$QA_REPORTS/issue_template.md" <<'EOF'
+## 摘要
+
+- 類型：
+- 嚴重程度：
+- 影響範圍：
+
+## 重現步驟
+
+1.
+2.
+3.
+
+## 預期結果
+
+-
+
+## 實際結果
+
+-
+
+## 證據
+
+- API response 摘要：
+- screenshot：
+- sanitized log：
+- DB 對帳：
+- 手算過程：
+
+## 建議修復方向
+
+-
+
+## 去重確認
+
+- 已搜尋：
+- 非重複原因：
+EOF
+```
+
+建立 issue：
+
+```bash
+gh issue create \
+  --title "[QA] <簡短標題>" \
+  --body-file "$QA_REPORTS/issue_template.md" \
+  --label bug
+```
+
+## 最終輸出要求
+
+每次 QA 結束必須輸出：
+
+1. 測試總報告
+2. 已建立 issues 清單
+3. 未建 issue 但值得追蹤的風險
+4. 無法測試的項目與原因
+5. 下一輪測試重點
+6. 失敗命令、log 路徑、報告路徑
+
+## 清理命令
+
+測完後清理，不要殘留背景伺服器。
+
+```bash
+if [ -f "$QA_ROOT/server.pid" ]; then
+  kill "$(cat "$QA_ROOT/server.pid")" || true
+fi
+
+rm -rf "$QA_ROOT"
+```
+
+若需要保留證據，刪除前先打包：
+
+```bash
+tar -C /tmp -czf "/tmp/hackme_web_qa_${RUN_ID}.tar.gz" "$(basename "$QA_ROOT")"
+```
+
+## QA 成功標準
+
+以下全部成立，才可宣稱這輪 QA 完成：
+
+1. 功能地圖已建立並覆蓋主要模組。
+2. 至少跑過 quick gate、全量 pytest、smoke suite、functional smoke。
+3. 權限、安全、Server Mode、snapshot/restore、PointsChain、交易、Cloud Drive、影片、ComfyUI 至少各有一輪 automated 或 manual 驗證。
+4. 至少完成一次 UI / API / DB 三方對帳。
+5. 所有 bug 都已去重、整理證據、建立 issue 或明確記錄未建原因。
+6. 所有回報皆為中文，且附命令、路徑、結果摘要。
