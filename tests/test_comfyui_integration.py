@@ -1,9 +1,12 @@
 import io
+import json
 import sqlite3
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response
 
+from routes import comfyui as comfyui_routes
 from routes.comfyui import register_comfyui_routes
 from services.cloud_drive import ensure_cloud_drive_attachment_schema
 from services.comfyui_client import ComfyUIClient, ComfyUIImage
@@ -43,10 +46,20 @@ class FakeComfyUIClient:
     def get_sampler_options(self):
         return {"samplers": ["euler", "dpmpp_2m"], "schedulers": ["normal", "karras"]}
 
-    def generate_image(self, params, *, timeout_seconds=180):
+    def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
         FakeComfyUIClient.generated_count += 1
         FakeComfyUIClient.last_timeout_seconds = timeout_seconds
         FakeComfyUIClient.last_params = dict(params)
+        if progress_callback:
+            progress_callback({
+                "phase": "running",
+                "percent": 50,
+                "current": 10,
+                "max": 20,
+                "current_node": "3",
+                "detail": "節點 3：10/20",
+                "queue_remaining": 0,
+            })
         batch_size = int(params.get("batch_size") or 1)
         images = []
         for index in range(batch_size):
@@ -82,7 +95,7 @@ class FakeComfyUIClient:
 
 
 class FailingComfyUIClient(FakeComfyUIClient):
-    def generate_image(self, params, *, timeout_seconds=180):
+    def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
         from services.comfyui_client import ComfyUIError
 
         raise ComfyUIError("ComfyUI 產圖失敗")
@@ -134,6 +147,30 @@ class FakePointsService:
         }
 
 
+class _FakeHeaders(dict):
+    def get_content_charset(self):
+        return "utf-8"
+
+
+class _FakeResponse:
+    def __init__(self, *, url, body, headers=None, final_url=None):
+        self._url = final_url or url
+        self._buffer = io.BytesIO(body if isinstance(body, bytes) else body.encode("utf-8"))
+        self.headers = _FakeHeaders(headers or {})
+
+    def read(self, amt=-1):
+        return self._buffer.read(amt)
+
+    def geturl(self):
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 def _json_resp(payload, status=200):
     return make_response(jsonify(payload), status)
 
@@ -181,6 +218,19 @@ class OfflineComfyUIClient:
         from services.comfyui_client import ComfyUIError
 
         raise ComfyUIError("ComfyUI 連線失敗：refused")
+
+
+class RecoveringComfyUIClient:
+    def __init__(self, state):
+        self.state = state
+        self.base_url = "http://localhost:8192"
+
+    def health_check(self, *, timeout=3):
+        from services.comfyui_client import ComfyUIError
+
+        if not self.state.get("ready"):
+            raise ComfyUIError("ComfyUI 連線失敗：refused")
+        return {"ok": True, "system": {"os": "test"}}
 
 
 def _init_db(db_path):
@@ -289,6 +339,54 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
     assert FakeComfyUIClient.last_timeout_seconds == 600
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
+
+
+def test_comfyui_generate_async_job_reports_progress_and_result(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    started = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "a quiet test image",
+            "width": 512,
+            "height": 512,
+            "steps": 12,
+            "cfg": 6.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "seed": 123,
+            "batch_size": 1,
+            "confirm_billing": True,
+            "async_progress": True,
+        },
+    )
+
+    assert started.status_code == 200
+    start_body = started.get_json()
+    assert start_body["ok"] is True
+    assert start_body["async"] is True
+    job_id = start_body["job"]["job_id"]
+
+    final_body = None
+    for _ in range(40):
+        polled = client.get(f"/api/comfyui/jobs/{job_id}")
+        assert polled.status_code == 200
+        final_body = polled.get_json()
+        assert final_body["ok"] is True
+        assert "percent" in (final_body["job"]["progress"] or {})
+        if final_body["job"]["status"] == "completed":
+            break
+        time.sleep(0.05)
+
+    assert final_body is not None
+    assert final_body["job"]["status"] == "completed"
+    assert final_body["job"]["progress"]["percent"] == 100
+    assert final_body["job"]["result"]["image"]["image_ref"]["filename"] == "hackme_web_00001_.png"
 
 
 def test_comfyui_batch_limit_is_root_configurable(tmp_path):
@@ -638,6 +736,61 @@ def test_local_comfyui_start_reuses_existing_backend(tmp_path):
     assert body["start"]["already_running"] is True
 
 
+def test_local_comfyui_status_reports_starting_when_process_alive(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    storage_root.mkdir()
+    comfy_base.mkdir()
+    _init_db(db_path)
+    temp_root = tmp_path / "tmp-runtime"
+    temp_root.mkdir()
+    port = 8192
+    log_path = temp_root / "comfy-start.log"
+    log_path.write_text(
+        "Starting server\nTo see the GUI go to: http://0.0.0.0:8192\nFETCH ComfyRegistry Data: 40/143\n",
+        encoding="utf-8",
+    )
+    state_file = temp_root / f"hackme_web_comfyui_local_{port}.json"
+    state_file.write_text(
+        '{"pid": 4321, "pgid": 4321, "port": 8192, "base_dir": "%s", "script": "run_in_linux.sh", "log_path": "%s"}'
+        % (str(comfy_base), str(log_path)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("routes.comfyui.tempfile.gettempdir", lambda: str(temp_root))
+
+    def fake_kill(pid, sig):
+        if int(pid) == 4321 and sig == 0:
+            return None
+        raise ProcessLookupError()
+
+    monkeypatch.setattr("routes.comfyui.os.kill", fake_kill)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": port,
+        },
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: OfflineComfyUIClient(),
+        },
+    ).test_client()
+
+    status = client.get("/api/comfyui/status")
+
+    assert status.status_code == 200
+    body = status.get_json()
+    assert body["ok"] is True
+    assert body["available"] is False
+    assert body["starting"] is True
+    assert "正在載入自訂節點 / Registry" in body["msg"]
+    assert body["startup_log_tail"][-1] == "FETCH ComfyRegistry Data: 40/143"
+
+
 def test_comfyui_connection_test_requires_root_and_valid_endpoint(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -655,24 +808,410 @@ def test_comfyui_connection_test_requires_root_and_valid_endpoint(tmp_path):
     assert "Host" in invalid.get_json()["msg"]
 
 
-def test_comfyui_model_download_requires_root_and_safe_url(tmp_path):
+def test_local_comfyui_connection_test_attempts_autostart(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    storage_root.mkdir()
+    comfy_base.mkdir()
+    (comfy_base / "run_in_linux.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    _init_db(db_path)
+    state = {"ready": False}
+
+    class DummyPopen:
+        def __init__(self, *args, **kwargs):
+            self.pid = 4321
+            state["ready"] = True
+
+        def poll(self):
+            return None
+
+    class DummyRunResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("routes.comfyui.subprocess.run", lambda *args, **kwargs: DummyRunResult())
+    monkeypatch.setattr("routes.comfyui.subprocess.Popen", DummyPopen)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_local_start_script": "run_in_linux.sh",
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": 8192,
+        },
+        actor=lambda: root_actor,
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: RecoveringComfyUIClient(state),
+        },
+    ).test_client()
+
+    tested = client.post(
+        "/api/root/comfyui/test-connection",
+        json={
+            "mode": "local",
+            "host": "localhost",
+            "port": 8192,
+            "base_dir": str(comfy_base),
+            "local_start_script": "run_in_linux.sh",
+        },
+    )
+
+    assert tested.status_code == 200
+    body = tested.get_json()
+    assert body["ok"] is True
+    assert body["available"] is True
+    assert body["autostart"]["attempted"] is True
+    assert body["autostart"]["start"]["started"] is True
+
+
+def test_local_comfyui_connection_test_reports_startup_failure_detail(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    storage_root.mkdir()
+    comfy_base.mkdir()
+    (comfy_base / "run_in_linux.sh").write_text("#!/usr/bin/env bash\necho boot failed >&2\nexit 3\n", encoding="utf-8")
+    _init_db(db_path)
+
+    class DummyPopen:
+        def __init__(self, *args, **kwargs):
+            self.pid = 4321
+            self._returncode = 3
+
+        def poll(self):
+            return self._returncode
+
+    class DummyRunResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("routes.comfyui.subprocess.run", lambda *args, **kwargs: DummyRunResult())
+    monkeypatch.setattr("routes.comfyui.subprocess.Popen", DummyPopen)
+    monkeypatch.setattr("routes.comfyui.time.sleep", lambda *_args, **_kwargs: None)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_local_start_script": "run_in_linux.sh",
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": 8192,
+        },
+        actor=lambda: root_actor,
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: OfflineComfyUIClient(),
+        },
+    ).test_client()
+
+    tested = client.post(
+        "/api/root/comfyui/test-connection",
+        json={
+            "mode": "local",
+            "host": "localhost",
+            "port": 8192,
+            "base_dir": str(comfy_base),
+            "local_start_script": "run_in_linux.sh",
+        },
+    )
+
+    assert tested.status_code == 200
+    body = tested.get_json()
+    assert body["ok"] is True
+    assert body["available"] is False
+    assert body["autostart"]["attempted"] is True
+    assert "exit 3" in body["autostart"]["message"]
+
+
+def test_root_can_stop_local_comfyui_with_tracked_pid(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    storage_root.mkdir()
+    comfy_base.mkdir()
+    _init_db(db_path)
+    state = {"ready": True}
+    temp_root = tmp_path / "tmp-runtime"
+    temp_root.mkdir()
+    port = 8192
+    state_file = temp_root / f"hackme_web_comfyui_local_{port}.json"
+    state_file.write_text(
+        '{"pid": 4321, "pgid": 4321, "port": 8192, "base_dir": "%s", "script": "run_in_linux.sh"}' % str(comfy_base),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("routes.comfyui.tempfile.gettempdir", lambda: str(temp_root))
+    monkeypatch.setattr("routes.comfyui.time.sleep", lambda *_args, **_kwargs: None)
+
+    def fake_killpg(pgid, sig):
+        assert pgid == 4321
+        state["ready"] = False
+
+    def fake_kill(pid, sig):
+        if int(pid) != 4321:
+            raise ProcessLookupError()
+        if sig == 0:
+            if state["ready"]:
+                return None
+            raise ProcessLookupError()
+        return None
+
+    monkeypatch.setattr("routes.comfyui.os.killpg", fake_killpg)
+    monkeypatch.setattr("routes.comfyui.os.kill", fake_kill)
+
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_local_start_script": "run_in_linux.sh",
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": port,
+        },
+        actor=lambda: root_actor,
+        extra_deps={
+            "comfyui_client": None,
+            "comfyui_client_factory": lambda url: RecoveringComfyUIClient(state),
+        },
+    ).test_client()
+
+    stopped = client.post("/api/root/comfyui/stop", json={})
+
+    assert stopped.status_code == 200
+    body = stopped.get_json()
+    assert body["ok"] is True
+    assert body["stop"]["stopped"] is True
+    assert body["stop"]["killed_pids"] == [4321]
+    assert not state_file.exists()
+
+
+def test_root_comfyui_stop_requires_root(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    storage_root.mkdir()
+    comfy_base.mkdir()
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": 8192,
+        },
+    ).test_client()
+
+    response = client.post("/api/root/comfyui/stop", json={})
+
+    assert response.status_code == 403
+
+
+def test_comfyui_civitai_inspect_requires_root_and_civitai_url(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
     user_client = _build_app(db_path, storage_root).test_client()
 
-    forbidden = user_client.post("/api/root/comfyui/download-model", json={"type": "lora", "url": "https://example.com/a.safetensors"})
+    forbidden = user_client.post("/api/root/comfyui/civitai/inspect", json={"page_url": "https://civitai.com/models/123/a"})
     assert forbidden.status_code == 403
 
     root_actor = {"id": 1, "username": "root", "role": "super_admin"}
     root_client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
     invalid = root_client.post(
-        "/api/root/comfyui/download-model",
-        json={"type": "lora", "url": "http://127.0.0.1/a.safetensors", "base_dir": str(tmp_path)},
+        "/api/root/comfyui/civitai/inspect",
+        json={"page_url": "http://127.0.0.1/models/123456/local"},
     )
     assert invalid.status_code == 400
-    assert "localhost" in invalid.get_json()["msg"]
+    assert "Civitai" in invalid.get_json()["msg"]
+
+
+def test_comfyui_civitai_red_url_is_accepted(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={"comfyui_civitai_api_key": "secret-token"},
+    ).test_client()
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        if url == "https://civitai.com/api/v1/models/376130":
+            payload = {
+                "id": 376130,
+                "name": "novaAnimeIL_V18",
+                "type": "Checkpoint",
+                "creator": {"username": "demo"},
+                "modelVersions": [
+                    {
+                        "id": 2837020,
+                        "name": "v18",
+                        "downloadUrl": "https://civitai.com/api/download/models/2837020",
+                        "files": [
+                            {
+                                "id": 5001,
+                                "name": "novaAnimeIL_V18.safetensors",
+                                "sizeKB": 1024,
+                                "downloadUrl": "https://civitai.com/api/download/models/2837020",
+                            }
+                        ],
+                    }
+                ],
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+    inspected = client.post(
+        "/api/root/comfyui/civitai/inspect",
+        json={"page_url": "https://civitai.red/models/376130?modelVersionId=2837020"},
+    )
+
+    assert inspected.status_code == 200
+    body = inspected.get_json()
+    assert body["model"]["model_id"] == 376130
+    assert body["model"]["selected_version_id"] == 2837020
+
+
+def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    comfy_base.mkdir()
+    (comfy_base / "main.py").write_text("# comfy", encoding="utf-8")
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(
+        db_path,
+        storage_root,
+        actor=lambda: root_actor,
+        settings={
+            "comfyui_civitai_api_key": "secret-token",
+            "comfyui_base_dir": str(comfy_base),
+        },
+    ).test_client()
+
+    def fake_urlopen(request_obj, timeout=0):
+        url = request_obj.full_url
+        headers = dict(request_obj.header_items())
+        if url == "https://civitai.com/api/v1/models/123456":
+            assert headers.get("Authorization") == "Bearer secret-token"
+            payload = {
+                "id": 123456,
+                "name": "Fancy Model",
+                "type": "LORA",
+                "creator": {"username": "artist"},
+                "modelVersions": [
+                    {
+                        "id": 2001,
+                        "name": "v1",
+                        "baseModel": "SDXL",
+                        "downloadUrl": "https://civitai.com/api/download/models/2001",
+                        "files": [
+                            {
+                                "id": 3001,
+                                "name": "fancy_v1.safetensors",
+                                "sizeKB": 2048,
+                                "downloadUrl": "https://civitai.com/api/download/models/2001",
+                                "type": "Model",
+                            }
+                        ],
+                    },
+                    {
+                        "id": 2002,
+                        "name": "v2",
+                        "baseModel": "SDXL",
+                        "downloadUrl": "https://civitai.com/api/download/models/2002",
+                        "files": [
+                            {
+                                "id": 3002,
+                                "name": "fancy_v2.safetensors",
+                                "sizeKB": 4096,
+                                "downloadUrl": "https://civitai.com/api/download/models/2002",
+                                "type": "Model",
+                            }
+                        ],
+                    },
+                ],
+            }
+            return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
+        if url.startswith("https://civitai.com/api/download/models/2002"):
+            assert "token=secret-token" in url
+            return _FakeResponse(
+                url=url,
+                body=b"fake-model-bytes",
+                headers={"Content-Disposition": 'attachment; filename="fancy_v2.safetensors"'},
+            )
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(comfyui_routes.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        comfyui_routes.socket,
+        "getaddrinfo",
+        lambda host, port, type=0: [(None, None, None, None, ("104.21.72.187", port or 443))],
+    )
+
+    inspected = client.post(
+        "/api/root/comfyui/civitai/inspect",
+        json={"page_url": "https://civitai.com/models/123456/fancy-model?modelVersionId=2002"},
+    )
+    assert inspected.status_code == 200
+    inspected_json = inspected.get_json()
+    assert inspected_json["model"]["name"] == "Fancy Model"
+    assert inspected_json["model"]["selected_version_id"] == 2002
+    assert inspected_json["model"]["suggested_model_type"] == "lora"
+    assert inspected_json["model"]["versions"][1]["files"][0]["id"] == 3002
+
+    downloaded = client.post(
+        "/api/root/comfyui/civitai/download",
+        json={
+            "page_url": "https://civitai.com/models/123456/fancy-model?modelVersionId=2002",
+            "version_id": 2002,
+            "file_id": 3002,
+            "type": "lora",
+            "base_dir": str(comfy_base),
+        },
+    )
+    assert downloaded.status_code == 200
+    downloaded_json = downloaded.get_json()
+    assert downloaded_json["download"]["filename"] == "fancy_v2.safetensors"
+    assert downloaded_json["download"]["civitai"]["version_id"] == 2002
+    assert (comfy_base / "models" / "loras" / "fancy_v2.safetensors").exists()
+
+
+def test_comfyui_legacy_direct_download_is_disabled(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
+
+    response = client.post(
+        "/api/root/comfyui/download-model",
+        json={"url": "https://example.com/a.safetensors", "type": "lora"},
+    )
+
+    assert response.status_code == 410
+    assert "Civitai" in response.get_json()["msg"]
 
 
 def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
@@ -1247,6 +1786,7 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-model-select"' in index_html
     assert 'id="comfyui-lora-select"' in index_html
     assert 'id="comfyui-lora-add-btn"' in index_html
+    assert 'id="comfyui-lora-count"' in index_html
     assert 'id="comfyui-selected-loras"' in index_html
     assert 'id="comfyui-generate-btn"' in index_html
     assert 'id="comfyui-interrupt-btn"' in index_html
@@ -1258,11 +1798,17 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
     assert 'id="comfyui-model-download-btn"' in index_html
+    assert 'id="comfyui-civitai-inspect-btn"' in index_html
+    assert 'id="comfyui-civitai-url"' in index_html
+    assert 'id="comfyui-civitai-version"' in index_html
+    assert 'id="comfyui-civitai-file"' in index_html
     assert 'id="comfyui-start-btn"' in index_html
+    assert 'id="comfyui-stop-btn"' in index_html
     assert 'id="s-comfyui-connection-mode"' in index_html
     assert 'id="s-comfyui-remote-api-url"' in index_html
     assert 'id="s-comfyui-base-dir"' in index_html
     assert 'id="s-comfyui-local-start-script"' in index_html
+    assert 'id="s-comfyui-civitai-api-key"' in index_html
     assert "/js/36-comfyui.js?v=20260503-comfyui-lora" in index_html
     assert "/styles.css?v=20260503-comfyui-lora" in index_html
     assert "width: min(420px, 100%);" in css
@@ -1276,13 +1822,32 @@ def test_comfyui_frontend_is_wired():
     assert 'normTab === "comfyui"' in admin_js
     assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
-    assert 'apiFetch(API + "/root/comfyui/download-model"' in comfyui_js
+    assert 'apiFetch(API + "/root/comfyui/civitai/inspect"' in comfyui_js
+    assert 'apiFetch(API + "/root/comfyui/civitai/download"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/start"' in comfyui_js
+    assert 'apiFetch(API + "/root/comfyui/stop"' in comfyui_js
+    assert 'apiFetch(API + `/comfyui/jobs/${encodeURIComponent(jobId)}`' in comfyui_js
     assert "function startLocalComfyui()" in comfyui_js
+    assert "function stopLocalComfyui()" in comfyui_js
+    assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
+    assert '"async_progress": True' not in comfyui_js
+    assert "async_progress: true" in comfyui_js
     assert "comfyuiConnectionMode !== \"local\"" in comfyui_js
+    assert 'currentUser === "root"' in comfyui_js
+    assert 'return true;' in comfyui_js
+    assert 'tab.disabled = false;' in comfyui_js
+    assert "不使用 LoRA（可略過）" in comfyui_js
+    assert "scheduleComfyuiLocalStartPolling" in comfyui_js
+    assert "function inspectComfyuiCivitaiModel()" in comfyui_js
+    assert "function onComfyuiCivitaiVersionChange()" in comfyui_js
     assert "function updateComfyuiConnectionModeFields()" in admin_js
     assert "s-comfyui-connection-mode" in bootstrap_js
+    assert "s-comfyui-civitai-api-key" in admin_js
     assert "startLocalComfyui" in bootstrap_js
+    assert "inspectComfyuiCivitaiModel" in bootstrap_js
+    assert "stopLocalComfyui" in bootstrap_js
+    assert "json.starting" in admin_js
+    assert "scheduleComfyuiLocalStartPolling({ attemptsLeft = 120, delayMs = 5000 }" in comfyui_js
     assert 'apiFetch(API + "/comfyui/interrupt"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/save"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/discard"' in comfyui_js
@@ -1300,6 +1865,7 @@ def test_comfyui_frontend_is_wired():
     assert 'if (currentUser === "root") return { confirmed: true, required: false };' in comfyui_js
     assert "window.confirm" in comfyui_js
     assert "LoRA 加價" in comfyui_js
+    assert 'comfyuiSelectedLoras.length >= COMFYUI_MAX_LORAS' in comfyui_js
     assert "batchSize * runCount" in comfyui_js
     assert "for (let requestIndex = 0; requestIndex < totalRequests; requestIndex += 1)" in comfyui_js
     assert "setComfyuiMessage(`正在產生第 ${requestIndex + 1} / ${totalRequests} 張圖片...`, true)" in comfyui_js

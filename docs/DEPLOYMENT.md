@@ -83,4 +83,37 @@ python3 scripts/pre_push_checks.py
 
 The helper compiles Python under `server.py`, `routes/`, `services/`,
 `security/`, `scripts/`, and `tests/`, checks that the Release ID appears in the
-required docs, starts an isolated server, and runs the smoke suite.
+required docs, rejects tracked runtime artifacts and local workstation paths,
+runs config/CI safety checks, runs `git diff --check`, runs the plaintext secret
+scanner, runs `gitleaks` and `node --check` when those tools are installed, and
+runs a focused pytest set. The default mode is fast and does not start the
+server. Use `--full` when you need the isolated `/tmp` server smoke, API
+contract, snapshot/restore, Server Mode, PointsChain, and log-chain checks.
+
+`--ci` is a non-interactive/sanitized execution mode; it does not automatically
+enable heavyweight checks. Optional cleanup flags list their deletion plan first
+and require confirmation unless `--yes` is used:
+
+```bash
+python3 scripts/pre_push_checks.py --clean --clean-temp --yes
+```
+
+- `--clean`: remove safe repository caches such as `__pycache__`,
+  `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.coverage`, `htmlcov`,
+  `dist`, `build`, `*.pyc`, and `*.pyo`. It never removes user/runtime data,
+  reports, key files, `.gitkeep`, or tracked files unless they are explicit
+  cache artifacts.
+- `--clean-temp`: remove old `/tmp/html_learning_prepush_*` and
+  `/tmp/html_learning_secrets_*` directories, keeping the newest two by
+  default.
+- `--keep-temp`: keep this run's isolated runtime even in `--ci` success.
+- `--yes`: skip cleanup confirmation.
+
+Install the hook with:
+
+```bash
+bash hooks/install-hooks.sh
+```
+
+The hook bumps `APP_RELEASE_ID`, amends the current commit, runs
+`scripts/pre_push_checks.py --ci`, and blocks the push on failure.

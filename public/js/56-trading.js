@@ -1675,6 +1675,7 @@ function renderTradingBots(rows = [], runs = []) {
             ${row.last_error ? `<div class="drive-card-sub negative">上次錯誤：${sanitize(row.last_error)}</div>` : ""}
           </div>
           <div class="drive-file-actions">
+            ${Number(row.run_count || 0) >= Number(row.max_runs || 1) ? `<button class="btn" type="button" data-trading-bot-increase-runs="${sanitize(row.bot_uuid || "")}">增加次數</button>` : ""}
             <button class="btn" type="button" data-trading-bot-toggle="${sanitize(row.bot_uuid || "")}" data-trading-bot-enabled="${row.enabled ? "0" : "1"}">${row.enabled ? "暫停" : "啟用"}</button>
             <button class="btn" type="button" data-trading-bot-backtest="${sanitize(row.bot_uuid || "")}">回測</button>
             <button class="btn btn-danger" type="button" data-trading-bot-delete="${sanitize(row.bot_uuid || "")}">刪除</button>
@@ -1699,6 +1700,9 @@ function renderTradingBots(rows = [], runs = []) {
     });
     list.querySelectorAll("[data-trading-bot-backtest]").forEach((btn) => {
       bindTradingActionButton(btn, () => prepareTradingBacktestFromBot(btn.dataset.tradingBotBacktest || ""), "正在帶入回測設定...", "回測設定帶入失敗");
+    });
+    list.querySelectorAll("[data-trading-bot-increase-runs]").forEach((btn) => {
+      bindTradingActionButton(btn, () => increaseTradingBotMaxRuns(btn.dataset.tradingBotIncreaseRuns || ""), "正在增加可執行次數...", "增加機器人次數失敗");
     });
   });
   refreshBacktestBotSelect();
@@ -1745,6 +1749,49 @@ function tradingWorkflowBotDetail(bot) {
   return parts.join(" · ");
 }
 
+function tradingBotRecentFills(bot) {
+  if (!bot) return [];
+  const orderUuids = new Set();
+  const botRuns = Array.isArray(tradingState.botRuns) ? tradingState.botRuns : [];
+  botRuns.forEach((run) => {
+    const sameBot = (bot.id && Number(run.bot_id || 0) === Number(bot.id)) || (bot.bot_uuid && run.bot_uuid === bot.bot_uuid);
+    if (sameBot && run.order_uuid) orderUuids.add(run.order_uuid);
+  });
+  const gridOrders = Array.isArray(bot.orders) ? bot.orders : [];
+  gridOrders.forEach((order) => {
+    if (order?.trading_order_uuid) orderUuids.add(order.trading_order_uuid);
+    if (order?.order_uuid) orderUuids.add(order.order_uuid);
+  });
+  return (Array.isArray(tradingState.fills) ? tradingState.fills : [])
+    .filter((fill) => {
+      if (fill?.order_uuid && orderUuids.has(fill.order_uuid)) return true;
+      return Boolean(fill?.bot_name && bot?.name && fill.bot_name === bot.name);
+    })
+    .slice(0, 30);
+}
+
+function renderTradingBotFillDetails(fills = []) {
+  if (!fills.length) return `<div class="drive-card-sub">尚無交易明細</div>`;
+  return fills.map((fill) => {
+    const side = fill.side === "sell" ? "賣出" : "買入";
+    const sideClass = fill.side === "sell" ? "negative" : "positive";
+    const qty = sanitize(fill.quantity || "0");
+    const market = sanitize(tradingDisplaySymbol(fill.market_symbol || ""));
+    const time = fill.created_at ? sanitize(String(fill.created_at).slice(0, 16).replace("T", " ")) : "-";
+    const feeText = Number(fill.fee_points || 0) > 0 ? ` · 手續費 ${formatTradingPointsValue(fill.fee_points)}` : "";
+    const pnl = Number(fill.realized_pnl_points || 0);
+    const pnlText = Number.isFinite(pnl) && pnl !== 0
+      ? ` · 已實現 <span class="${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${formatTradingPointsValue(pnl)}</span>`
+      : "";
+    return `<div class="drive-card-sub" style="white-space:normal;">
+      <span class="${sideClass}" style="font-weight:600;">${side}</span>
+      ${market} ${qty} @ ${formatTradingPointsValue(fill.execution_price_points || fill.price_points || 0)}
+      ${feeText}${pnlText}
+      <span style="color:var(--muted);"> · ${time}</span>
+    </div>`;
+  }).join("");
+}
+
 function renderMyBotsList() {
   const container = $("trading-my-bots-list");
   if (!container) return;
@@ -1767,6 +1814,7 @@ function renderMyBotsList() {
     const condHtml = (Array.isArray(bot.condition_checks) ? bot.condition_checks : []).map(
       (c) => `<span class="${c.met ? "trading-condition-met" : "trading-condition-unmet"}">${sanitize(c.label)}</span>`
     ).join("") || "";
+    const fills = tradingBotRecentFills(bot);
     rows.push(`<div class="drive-file-row" data-mybot-uuid="${sanitize(bot.bot_uuid || "")}" data-mybot-type="dca">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
@@ -1777,12 +1825,17 @@ function renderMyBotsList() {
         <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${Number(bot.max_runs || 1)} · 冷卻 ${Number(bot.cooldown_seconds || 0)} 秒${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
-          <summary>詳細設定</summary>
+          <summary>設定摘要</summary>
           <div class="drive-card-sub">${sanitize(bot.bot_type_label || "定投機器人")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")} · 每次 ${sanitize(bot.quantity_text || "?")}</div>
+        </details>
+        <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>交易明細（${fills.length} 筆）</summary>
+          ${renderTradingBotFillDetails(fills)}
         </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-chart-type="dca" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
+        ${Number(bot.run_count || 0) >= Number(bot.max_runs || 1) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
@@ -1794,6 +1847,7 @@ function renderMyBotsList() {
     const condHtml = (Array.isArray(bot.condition_checks) ? bot.condition_checks : []).map(
       (c) => `<span class="${c.met ? "trading-condition-met" : "trading-condition-unmet"}">${sanitize(c.label)}</span>`
     ).join("") || "";
+    const fills = tradingBotRecentFills(bot);
     rows.push(`<div class="drive-file-row" data-mybot-uuid="${sanitize(bot.bot_uuid || "")}" data-mybot-type="workflow">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
@@ -1804,12 +1858,17 @@ function renderMyBotsList() {
         <div class="drive-card-sub">已觸發 ${Number(bot.run_count || 0)} / ${Number(bot.max_runs || 1)} · ${sanitize(bot.side === "sell" ? "賣出" : "買入")} · ${sanitize(bot.order_type === "limit" ? `限價 ${bot.limit_price_points}` : "市價單")}${bot.last_error ? ` · <span class="negative">上次錯誤：${sanitize(bot.last_error)}</span>` : ""}</div>
         ${condHtml ? `<div class="drive-card-sub trading-bot-conditions">${condHtml}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
-          <summary>詳細設定</summary>
+          <summary>設定摘要</summary>
           <div class="drive-card-sub">${sanitize(tradingWorkflowBotDetail(bot))}</div>
+        </details>
+        <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>交易明細（${fills.length} 筆）</summary>
+          ${renderTradingBotFillDetails(fills)}
         </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-chart-type="workflow" data-chart-bot-uuid="${sanitize(bot.bot_uuid || "")}" data-chart-symbol="${sanitize(bot.market_symbol || "")}">圖表</button>
+        ${Number(bot.run_count || 0) >= Number(bot.max_runs || 1) ? `<button class="btn btn-sm" type="button" data-trading-bot-increase-runs="${sanitize(bot.bot_uuid || "")}">增加次數</button>` : ""}
         <button class="btn btn-sm" type="button" data-trading-bot-toggle="${sanitize(bot.bot_uuid || "")}" data-trading-bot-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
         <button class="btn btn-sm btn-danger" type="button" data-trading-bot-delete="${sanitize(bot.bot_uuid || "")}">刪除</button>
       </div>
@@ -1821,6 +1880,7 @@ function renderMyBotsList() {
     const symbol = sanitize(tradingDisplaySymbol(bot.market_symbol || ""));
     const profit = Number(bot.total_profit_points || 0);
     const profitClass = profit >= 0 ? "positive" : "negative";
+    const fills = tradingBotRecentFills(bot);
     rows.push(`<div class="drive-file-row" data-mybot-uuid="${sanitize(bot.bot_uuid || "")}" data-mybot-type="grid">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
@@ -1836,8 +1896,16 @@ function renderMyBotsList() {
         </div>
         ${bot.last_error ? `<div class="drive-card-sub negative">錯誤：${sanitize(bot.last_error)}</div>` : ""}
         <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>設定摘要</summary>
+          <div class="drive-card-sub">${sanitize(symbol)} · 區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 每格 ${formatTradingPointsValue(bot.order_amount_points)} 點</div>
+        </details>
+        <details class="economy-collapse" style="margin-top:.35rem;">
           <summary>掛單明細（${(Array.isArray(bot.orders) ? bot.orders : []).filter((o) => o.status === "open").length} 筆掛單）</summary>
           ${renderGridBotVisual(bot, cp)}
+        </details>
+        <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>交易明細（${fills.length} 筆）</summary>
+          ${renderTradingBotFillDetails(fills)}
         </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
@@ -1865,6 +1933,9 @@ function renderMyBotsList() {
       btn.dataset.tradingBotEnabled === "1" ? "準備啟用..." : "準備暫停...",
       "機器人狀態更新失敗"
     );
+  });
+  container.querySelectorAll("[data-trading-bot-increase-runs]").forEach((btn) => {
+    bindTradingActionButton(btn, () => increaseTradingBotMaxRuns(btn.dataset.tradingBotIncreaseRuns || ""), "正在增加可執行次數...", "增加機器人次數失敗");
   });
   container.querySelectorAll("[data-grid-toggle]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -2148,6 +2219,7 @@ function renderGridBotList(bots, currentPriceMap) {
     const orders = Array.isArray(bot.orders) ? bot.orders : [];
     const openOrders = orders.filter((o) => o.status === "open");
     const filledOrders = orders.filter((o) => o.status === "filled");
+    const fills = tradingBotRecentFills(bot);
     const buyOrders = openOrders.filter((o) => o.side === "buy");
     const sellOrders = openOrders.filter((o) => o.side === "sell");
     const levels = Array.isArray(bot.grid_levels) ? bot.grid_levels : [];
@@ -2181,19 +2253,26 @@ function renderGridBotList(bots, currentPriceMap) {
           已成交 ${totalTrades} 次 · 估計手續費支出 ${formatTradingPointsValue(Math.round(estimatedFee))} 點 · 累計盈虧 <span class="${profitClass}">${profit >= 0 ? "+" : ""}${formatTradingPointsValue(profit)}</span> 點
         </div>
         ${bot.last_error ? `<div class="drive-card-sub negative">錯誤：${sanitize(bot.last_error)}</div>` : ""}
-        <button class="btn btn-sm" type="button" style="margin-top:.35rem;" data-grid-visual-toggle="${sanitize(bot.bot_uuid || "")}">${tradingGridExpandedBots.has(bot.bot_uuid || "") ? "收起掛單圖" : `展開掛單圖（${levels.length} 層）`}</button>
-        <div class="grid-visual-details" data-grid-visual-panel="${sanitize(bot.bot_uuid || "")}" style="display:${tradingGridExpandedBots.has(bot.bot_uuid || "") ? "" : "none"};margin-top:.5rem;">
+        <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>設定摘要</summary>
+          <div class="drive-card-sub">${sanitize(symbol)} · 區間 ${formatTradingPointsValue(bot.lower_price_points)} ～ ${formatTradingPointsValue(bot.upper_price_points)} · ${Number(bot.grid_count)} 格 · 每格 ${formatTradingPointsValue(bot.order_amount_points)} 點</div>
+        </details>
+        <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>掛單明細（${openOrders.length} 筆掛單）</summary>
           <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
             <div style="flex:0 0 auto;">
-              <div class="drive-card-sub" style="margin-bottom:.25rem;font-weight:600;">掛單層級</div>
               ${renderGridBotVisual(bot, cp)}
             </div>
             <div style="flex:1;min-width:160px;">
-              <div class="drive-card-sub" style="margin-bottom:.25rem;font-weight:600;">成交紀錄（${orders.filter((o) => o.status === "filled").length} 筆）</div>
+              <div class="drive-card-sub" style="margin-bottom:.25rem;font-weight:600;">掛單成交層級（${orders.filter((o) => o.status === "filled").length} 筆）</div>
               ${renderGridBotFills(orders.filter((o) => o.status === "filled"))}
             </div>
           </div>
-        </div>
+        </details>
+        <details class="economy-collapse" style="margin-top:.35rem;">
+          <summary>交易明細（${fills.length} 筆）</summary>
+          ${renderTradingBotFillDetails(fills)}
+        </details>
       </div>
       <div class="drive-file-actions" style="flex-shrink:0;">
         <button class="btn btn-sm" type="button" data-grid-toggle="${sanitize(bot.bot_uuid || "")}" data-grid-enabled="${bot.enabled ? "0" : "1"}">${bot.enabled ? "暫停" : "啟用"}</button>
@@ -2222,24 +2301,6 @@ function renderGridBotList(bots, currentPriceMap) {
   });
   container.querySelectorAll("[data-grid-delete]").forEach((btn) => {
     bindTradingActionButton(btn, () => deleteGridBot(btn.dataset.gridDelete || ""), "正在刪除網格機器人...", "網格機器人刪除失敗");
-  });
-  // Visual toggle buttons
-  container.querySelectorAll("[data-grid-visual-toggle]").forEach((btn) => {
-    const uuid = btn.dataset.gridVisualToggle;
-    const panel = container.querySelector(`[data-grid-visual-panel="${CSS.escape(uuid)}"]`);
-    if (!panel) return;
-    btn.addEventListener("click", () => {
-      const expanded = panel.style.display !== "none";
-      if (expanded) {
-        panel.style.display = "none";
-        tradingGridExpandedBots.delete(uuid);
-        btn.textContent = `展開掛單圖`;
-      } else {
-        panel.style.display = "";
-        tradingGridExpandedBots.add(uuid);
-        btn.textContent = "收起掛單圖";
-      }
-    });
   });
 }
 
@@ -3127,6 +3188,30 @@ async function toggleTradingBot(botUuid, enabled) {
   } catch (err) {
     tradingSetMsg(err.message || "機器人狀態更新失敗", false);
   }
+}
+
+async function increaseTradingBotMaxRuns(botUuid) {
+  const bot = (tradingState.bots || []).find((row) => row.bot_uuid === botUuid);
+  if (!bot) {
+    tradingSetMsg("找不到要增加次數的交易機器人", false);
+    return;
+  }
+  const raw = window.prompt(`目前 ${Number(bot.run_count || 0)} / ${Number(bot.max_runs || 1)} 次。\n要再增加幾次？`, "1");
+  if (raw == null) {
+    tradingSetMsg("已取消增加機器人次數");
+    return;
+  }
+  const delta = Number(raw);
+  if (!Number.isInteger(delta) || delta <= 0) {
+    tradingSetMsg("請輸入大於 0 的整數次數", false);
+    return;
+  }
+  const json = await fetchTradingJson(`/trading/bots/${encodeURIComponent(botUuid)}/increase-runs`, {
+    method: "POST",
+    body: JSON.stringify({ delta }),
+  });
+  tradingSetMsg(`已增加 ${delta} 次，新的最大交易次數為 ${Number(json?.bot?.max_runs || 0)} 次`);
+  await loadTradingDashboard();
 }
 
 async function scanTradingBots() {

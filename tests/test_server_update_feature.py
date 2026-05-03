@@ -6,12 +6,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_server_update_routes_are_root_only_and_use_safe_git_flow():
     system_admin = (ROOT / "routes" / "system_admin.py").read_text(encoding="utf-8")
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
 
     assert '@app.route("/api/root/server-update/status", methods=["GET"])' in system_admin
     assert '@app.route("/api/root/server-update/preview", methods=["POST"])' in system_admin
     assert '@app.route("/api/root/server-update/apply", methods=["POST"])' in system_admin
+    assert 'HTML_LEARNING_GIT_REPO_DIR' in server_py
+    assert '"GIT_REPO_DIR": GIT_REPO_DIR' in server_py
+    assert 'GIT_REPO_DIR = deps.get("GIT_REPO_DIR") or BASE_DIR' in system_admin
     assert "require_root_actor()" in system_admin
     assert "validate_git_branch_name" in system_admin
+    assert '["rev-parse", "--show-toplevel"]' in system_admin
     assert '["fetch", "--prune", "origin"]' in system_admin
     assert '["diff", "--name-status", "HEAD", remote_ref, "--"]' in system_admin
     assert '["show", f"{ref}:docs/UPDATE_SUMMARY.md"]' in system_admin

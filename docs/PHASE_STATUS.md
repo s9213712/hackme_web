@@ -1,6 +1,6 @@
 # Phase 狀態
 
-最後更新：2026-05-02
+最後更新：2026-05-03
 
 ## Phase 12 前完成狀態
 
@@ -24,7 +24,8 @@
   `security/run_pentest.sh --target http://127.0.0.1:5000 --only whole-site-production-gate`
   執行。仍需在實際部署端另外驗證 off-host append-only audit backup /
   immutable log replication。
-- Economy Phase 2 交易引擎基礎已完成第一版現貨 MVP：BTC/POINTS、ETH/POINTS 內部市場、BTC/USDT、ETH/USDT 前台顯示、市價/限價、取消訂單、限價單掃描撮合、Binance/OKX/Coinbase/Kraken/Gemini/Bitstamp/CoinGecko 公開行情 fallback、last-good-price fallback、保守資金池、PointsChain 結算、交易審計、現貨成本/已實現/未實現損益報表、snapshot/restore 一致性檢查與 `security/trading_stress_pentest.py`。交易 UI 以 `1 POINT = 1 USDT` 顯示，參考圖預設 15 分線，可切換其他週期。交易機器人已分為 DCA、節點式 Workflow 策略與回測，Workflow Editor 輸出 `nodes`/`edges` graph 並支援 TRUE/FALSE、nested AND/OR/NOT、cooldown 與 step 控制。BTC_trade 屬預設關閉的軟性整合，root 啟用後可自動 clone/update V15b+ 分支、下載資料、訓練與產生預測；建置失敗只隱藏 BTC-only 信號，不影響交易所；橋接交易事件的腳本已移入本專案。期貨與 PVP 撮合仍屬高風險功能，除 root 模擬與實驗性借貸測試外，不對一般用戶開放。
+- Economy Phase 2 交易引擎基礎已完成第一版現貨 MVP：BTC/POINTS、ETH/POINTS 內部市場、BTC/USDT、ETH/USDT 前台顯示、市價/限價、取消訂單、限價單掃描撮合、Binance/OKX/Coinbase/Kraken/Gemini/Bitstamp/CoinGecko 公開行情 fallback、last-good-price fallback、保守資金池、PointsChain 結算、交易審計、現貨成本/已實現/未實現損益報表、snapshot/restore 一致性檢查與 `security/trading_stress_pentest.py`。交易 UI 以 `1 POINT = 1 USDT` 顯示，參考圖預設 15 分線，可切換其他週期。交易機器人已分為 DCA、網格、節點式 Workflow 策略與回測；DCA / Workflow 機器人可直接追加 `max_runs`，網格機器人支援底倉檢查、手動掃描與回測。Workflow Editor 輸出 `nodes`/`edges` graph 並支援 TRUE/FALSE、nested AND/OR/NOT、cooldown 與 step 控制。BTC_trade 屬預設關閉的軟性整合，root 啟用後可自動 clone/update V15b+ 分支、下載資料、訓練與產生預測；建置失敗只隱藏 BTC-only 信號，不影響交易所；橋接交易事件的腳本已移入本專案。期貨與 PVP 撮合仍屬高風險功能，除 root 模擬與實驗性借貸測試外，不對一般用戶開放。
+- 帳號治理線已補上會員權益通知/申覆上下文：待審註冊可直接刪除申請帳號，既有帳號刪除改為 soft-delete 保留歷史，角色/狀態/點數權益變更會送出治理通知並在可申覆時保留恢復上下文。
 - 完整 `AuthLayout` 重構待後續處理；目前登入頁先保留可操作的最小復原 UI。
 - 真實 SMTP 或外部寄信服務待後續部署整合；目前 mail adapter 會把 token 信件寫入資料庫 `mail_outbox`，足以支援本機測試與部署端接線。
 - WebSocket 即時通知與 Email 通知摘要待後續處理。

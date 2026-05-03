@@ -14,6 +14,8 @@ def _build_app(
     db_path,
     actor_box,
     revoke_user_sessions=None,
+    delete_csrf_tokens_for_username=None,
+    enable_foreign_keys=False,
     validate_password=None,
     enforce_password_strength=None,
 ):
@@ -22,11 +24,18 @@ def _build_app(
 
     def get_db():
         conn = sqlite3.connect(db_path)
+        if enable_foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         return conn
 
     def json_resp(payload, status=200):
         return make_response(jsonify(payload), status)
+
+    def default_add_violation(*args, **kwargs):
+        if kwargs.get("return_violation_id"):
+            return ("none", "ok", 0, 1)
+        return ("none", "ok", 0)
 
     register_user_routes(app, {
         "ACCOUNT_STATUSES": {"active", "inactive", "pending", "rejected"},
@@ -36,12 +45,13 @@ def _build_app(
         "PASSWORD_HISTORY_LIMIT": 5,
         "ROLE_LABEL": {"user": "一般用戶", "manager": "管理者", "super_admin": "最高管理者"},
         "ROLE_RANK": {"user": 0, "manager": 1, "super_admin": 2},
-        "add_violation": lambda *args, **kwargs: ("none", "ok", 0),
+        "add_violation": default_add_violation,
         "audit": lambda *args, **kwargs: None,
         "check_user_rate_limit": lambda *args, **kwargs: (False, {"limit": 10}),
         "count_role": lambda role: 0,
         "db_get_user_from_token": lambda *args, **kwargs: None,
         "db_get_user_role": lambda *args, **kwargs: "user",
+        "delete_csrf_tokens_for_username": delete_csrf_tokens_for_username or (lambda username: None),
         "decrypt_field": lambda value: value or "",
         "encrypt_field": lambda value: value,
         "ensure_user_official_room_membership": lambda *args, **kwargs: None,
@@ -201,6 +211,646 @@ def test_admin_users_include_online_status_from_active_sessions(tmp_path):
     assert users["test"]["online_status"] == "online"
     assert users["test"]["active_session_count"] == 1
     assert users["admin"]["is_online"] is False
+
+
+def test_reject_registration_deletes_pending_account(tmp_path):
+    db_path = tmp_path / "registration-review.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (1, 'admin', 'active', 'manager')")
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (2, 'pending_user', 'pending', 'user')")
+    conn.execute(
+        "INSERT INTO sessions (user_id, token_hash, expires_at, is_revoked, last_seen, created_at) VALUES (2, 'pendingtok', '2999-01-01T00:00:00', 0, ?, ?)",
+        ("2999-01-01T00:00:00", "2999-01-01T00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+    revoked = []
+    deleted_csrf = []
+    actor_box = {"actor": {"id": 1, "username": "admin", "role": "manager", "status": "active"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        revoke_user_sessions=lambda user_id: revoked.append(user_id),
+        delete_csrf_tokens_for_username=lambda username: deleted_csrf.append(username),
+    ).test_client()
+
+    res = client.post("/api/admin/users/2/review-registration", json={"action": "reject"})
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["status"] == "deleted"
+    assert "刪除" in body["msg"]
+    assert revoked == [2]
+    assert deleted_csrf == ["pending_user"]
+    conn = sqlite3.connect(db_path)
+    remaining = conn.execute("SELECT COUNT(*) FROM users WHERE id=2").fetchone()[0]
+    conn.close()
+    assert remaining == 0
+
+
+def test_delete_user_repairs_missing_optional_announcement_table(tmp_path):
+    db_path = tmp_path / "delete-user-legacy-fk.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY
+        );
+        CREATE TABLE announcement_attachment_requests (
+            id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            requested_by INTEGER NOT NULL REFERENCES users(id),
+            announcement_id INTEGER REFERENCES announcements(id),
+            status TEXT NOT NULL DEFAULT 'pending',
+            reviewed_by INTEGER REFERENCES users(id),
+            reviewed_at TEXT,
+            reason TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (1, 'root', 'active', 'super_admin')")
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (4, 'pending_user', 'pending', 'user')")
+    conn.commit()
+    conn.close()
+    revoked = []
+    deleted_csrf = []
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        revoke_user_sessions=lambda user_id: revoked.append(user_id),
+        delete_csrf_tokens_for_username=lambda username: deleted_csrf.append(username),
+        enable_foreign_keys=True,
+    ).test_client()
+
+    res = client.delete("/api/admin/users/4")
+
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    assert revoked == [4]
+    assert deleted_csrf == ["pending_user"]
+    conn = sqlite3.connect(db_path)
+    status = conn.execute("SELECT status FROM users WHERE id=4").fetchone()[0]
+    assert status == "deleted"
+    assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='announcements'").fetchone()
+    conn.close()
+
+
+def test_delete_user_cleans_legacy_user_foreign_keys_without_cascade(tmp_path):
+    db_path = tmp_path / "delete-user-legacy-user-refs.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY
+        );
+        CREATE TABLE announcement_attachment_requests (
+            id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            requested_by INTEGER NOT NULL REFERENCES users(id),
+            reviewed_by INTEGER REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE legacy_nullable_refs (
+            id INTEGER PRIMARY KEY,
+            reviewed_by INTEGER REFERENCES users(id)
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (1, 'root', 'active', 'super_admin')")
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (5, 'pending_user', 'pending', 'user')")
+    conn.execute("INSERT INTO uploaded_files (id) VALUES ('f1')")
+    conn.execute(
+        "INSERT INTO announcement_attachment_requests (id, file_id, requested_by, reviewed_by, status, created_at) "
+        "VALUES ('r1', 'f1', 5, 5, 'pending', '2026-01-01T00:00:00')"
+    )
+    conn.execute("INSERT INTO legacy_nullable_refs (id, reviewed_by) VALUES (1, 5)")
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True).test_client()
+
+    res = client.delete("/api/admin/users/5")
+
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    conn = sqlite3.connect(db_path)
+    user_row = conn.execute("SELECT status FROM users WHERE id=5").fetchone()
+    assert user_row[0] == "deleted"
+    assert conn.execute("SELECT COUNT(*) FROM announcement_attachment_requests WHERE requested_by=5 OR reviewed_by=5").fetchone()[0] == 1
+    assert conn.execute("SELECT reviewed_by FROM legacy_nullable_refs WHERE id=1").fetchone()[0] == 5
+    conn.close()
+
+
+def test_delete_user_closes_wallet_and_soft_deletes_cloud_drive_without_breaking_history(tmp_path):
+    db_path = tmp_path / "delete-user-soft-delete.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE points_wallets (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            soft_balance INTEGER NOT NULL DEFAULT 0,
+            hard_balance INTEGER NOT NULL DEFAULT 0,
+            soft_frozen INTEGER NOT NULL DEFAULT 0,
+            hard_frozen INTEGER NOT NULL DEFAULT 0,
+            total_soft_earned INTEGER NOT NULL DEFAULT 0,
+            total_hard_earned INTEGER NOT NULL DEFAULT 0,
+            total_soft_spent INTEGER NOT NULL DEFAULT 0,
+            total_hard_spent INTEGER NOT NULL DEFAULT 0,
+            wallet_status TEXT NOT NULL DEFAULT 'active',
+            risk_level TEXT NOT NULL DEFAULT 'normal',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE uploaded_files (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            deleted_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE storage_files (
+            id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            is_trashed INTEGER NOT NULL DEFAULT 0,
+            trashed_at TEXT,
+            deleted_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE storage_folders (
+            id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            deleted_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE video_comments (
+            id INTEGER PRIMARY KEY,
+            video_id INTEGER,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            content TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (1, 'root', 'active', 'super_admin')")
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (7, 'wallet_user', 'active', 'user')")
+    conn.execute(
+        "INSERT INTO points_wallets (user_id, created_at, updated_at) VALUES (7, '2026-01-01T00:00:00', '2026-01-01T00:00:00')"
+    )
+    conn.execute("INSERT INTO uploaded_files (id, owner_user_id) VALUES ('f1', 7)")
+    conn.execute("INSERT INTO storage_files (id, file_id, owner_user_id) VALUES ('sf1', 'f1', 7)")
+    conn.execute("INSERT INTO storage_folders (id, owner_user_id) VALUES ('dir1', 7)")
+    conn.execute("INSERT INTO video_comments (id, video_id, user_id, content) VALUES (1, 100, 7, 'hello')")
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True).test_client()
+
+    res = client.delete("/api/admin/users/7")
+
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    conn = sqlite3.connect(db_path)
+    status = conn.execute("SELECT status FROM users WHERE id=7").fetchone()[0]
+    wallet = conn.execute("SELECT wallet_status, risk_level FROM points_wallets WHERE user_id=7").fetchone()
+    file_deleted_at = conn.execute("SELECT deleted_at FROM uploaded_files WHERE id='f1'").fetchone()[0]
+    storage_row = conn.execute("SELECT is_trashed, deleted_at FROM storage_files WHERE id='sf1'").fetchone()
+    folder_deleted_at = conn.execute("SELECT deleted_at FROM storage_folders WHERE id='dir1'").fetchone()[0]
+    comment_count = conn.execute("SELECT COUNT(*) FROM video_comments WHERE user_id=7").fetchone()[0]
+    assert status == "deleted"
+    assert wallet == ("closed", "blocked")
+    assert file_deleted_at is not None
+    assert storage_row[0] == 1
+    assert storage_row[1] is not None
+    assert folder_deleted_at is not None
+    assert comment_count == 1
+    conn.close()
+
+
+def test_admin_users_list_hides_deleted_accounts_by_default(tmp_path):
+    db_path = tmp_path / "admin-users-hide-deleted.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level) VALUES (1, 'root', 'active', 'super_admin', 'normal', 'normal', 'normal')")
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level) VALUES (2, 'active_user', 'active', 'user', 'trusted', 'trusted', 'trusted')")
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level) VALUES (3, 'deleted_user', 'deleted', 'user', 'vip', 'vip', 'vip')")
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True).test_client()
+
+    res = client.get("/api/admin/users")
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["ok"] is True
+    usernames = [item["username"] for item in body["users"]]
+    assert "active_user" in usernames
+    assert "deleted_user" not in usernames
+
+
+def test_soft_delete_releases_original_username_for_reuse(tmp_path):
+    db_path = tmp_path / "soft-delete-release-username.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0,
+            deleted_at TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            must_change_password INTEGER DEFAULT 0,
+            is_default_password INTEGER DEFAULT 0
+        );
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role, created_at, updated_at) VALUES (1, 'root', 'active', 'super_admin', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.execute("INSERT INTO users (id, username, status, role, created_at, updated_at) VALUES (2, 'reuse_me', 'active', 'user', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.commit()
+    conn.close()
+
+
+def test_admin_create_user_accepts_minimal_required_fields(tmp_path):
+    db_path = tmp_path / "admin-create-user-minimal.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE user_passwords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (1, 'root', 'active', 'super_admin', 'normal', 'normal', 'normal', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.commit()
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True).test_client()
+
+    res = client.post(
+        "/api/admin/users",
+        json={
+            "username": "minimal_user",
+            "password": "AdminCreate#123",
+            "password_confirm": "AdminCreate#123",
+            "nickname": "Minimal",
+            "role": "user",
+            "status": "active",
+        },
+    )
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["ok"] is True
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT username, status, role FROM users WHERE username='minimal_user'").fetchone()
+    assert row == ("minimal_user", "active", "user")
+    conn.close()
+
+
+def test_admin_promote_user_succeeds_when_csrf_cleanup_writes_same_db(tmp_path):
+    db_path = tmp_path / "admin-promote-lock-regression.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT,
+            nickname TEXT,
+            real_name TEXT,
+            birthdate TEXT,
+            id_number TEXT,
+            phone TEXT,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            member_level TEXT,
+            base_level TEXT,
+            effective_level TEXT,
+            trust_score INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            reputation INTEGER DEFAULT 0,
+            violation_score INTEGER DEFAULT 0,
+            sanction_status TEXT,
+            sanction_until TEXT,
+            level_updated_at TEXT,
+            level_updated_by TEXT,
+            level_update_reason TEXT,
+            password_strength_score INTEGER DEFAULT 0,
+            avatar_file_id INTEGER,
+            avatar_crop_json TEXT,
+            blocked_until TEXT,
+            violation_count INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE csrf_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            revoked_at TEXT
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (1, 'root', 'active', 'super_admin', 'normal', 'normal', 'normal', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.execute("INSERT INTO users (id, username, status, role, member_level, base_level, effective_level, created_at, updated_at) VALUES (2, 'promote_me', 'active', 'user', 'normal', 'normal', 'normal', '2026-01-01T00:00:00', '2026-01-01T00:00:00')")
+    conn.execute("INSERT INTO csrf_tokens (username, revoked_at) VALUES ('promote_me', NULL)")
+    conn.commit()
+    conn.close()
+
+    def cleanup_csrf(username):
+        db = sqlite3.connect(db_path)
+        db.execute("UPDATE csrf_tokens SET revoked_at='2026-01-02T00:00:00' WHERE username=?", (username,))
+        db.commit()
+        db.close()
+
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(
+        str(db_path),
+        actor_box,
+        delete_csrf_tokens_for_username=cleanup_csrf,
+        enable_foreign_keys=True,
+    ).test_client()
+
+    res = client.post("/api/admin/users/2/promote", json={})
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["ok"] is True
+    conn = sqlite3.connect(db_path)
+    user_row = conn.execute("SELECT role FROM users WHERE id=2").fetchone()
+    csrf_row = conn.execute("SELECT revoked_at FROM csrf_tokens WHERE username='promote_me'").fetchone()
+    assert user_row == ("manager",)
+    assert csrf_row == ("2026-01-02T00:00:00",)
+    conn.close()
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    client = _build_app(str(db_path), actor_box, enable_foreign_keys=True).test_client()
+
+    res = client.delete("/api/admin/users/2")
+    body = res.get_json()
+
+    assert res.status_code == 200
+    assert body["ok"] is True
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT username, status FROM users WHERE id=2").fetchone()
+    assert row[1] == "deleted"
+    assert row[0] != "reuse_me"
+    conn.execute(
+        "INSERT INTO users (username, status, role, created_at, updated_at) VALUES (?, 'pending', 'user', '2026-01-02T00:00:00', '2026-01-02T00:00:00')",
+        ("reuse_me",),
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_account_sessions_logout_all_can_keep_current(tmp_path):

@@ -723,6 +723,89 @@ def test_grid_backtest_matches_live_grid_order_lifecycle(tmp_path):
     assert len(result["equity_curve"]) == 4
 
 
+def test_grid_bot_scans_and_fills_when_price_crosses_level_in_cfd_mode(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(
+        user_id=1,
+        currency_type="points",
+        direction="credit",
+        amount=5000,
+        action_type="test_funding",
+    )
+    trading.test_prices["ETH/POINTS"] = 100
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=100, confirm_jump=True)
+    trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="2.0",
+    )
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "CFD grid",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 80,
+            "upper_price_points": 120,
+            "grid_count": 5,
+            "order_amount_points": 100,
+        },
+    )
+
+    assert created["ok"] is True
+    trading.test_prices["ETH/POINTS"] = 85
+    trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=85, confirm_jump=True)
+    scanned = trading.scan_grid_bots(actor=_actor())
+
+    assert scanned["ok"] is True
+    assert scanned["results"][0]["fills_processed"] == [
+        {"level_index": 1, "side": "buy", "price_points": 90}
+    ]
+    assert scanned["results"][0]["counter_orders_placed"] == [
+        {"level_index": 2, "side": "sell", "price_points": 100}
+    ]
+
+    bots = trading.list_grid_bots(actor=_actor())["bots"]
+    bot = next(row for row in bots if row["bot_uuid"] == created["bot"]["bot_uuid"])
+    level_90 = next(row for row in bot["orders"] if row["level_index"] == 1)
+    level_100 = next(row for row in bot["orders"] if row["level_index"] == 2 and row["side"] == "sell")
+    assert level_90["status"] == "filled"
+    assert level_100["status"] == "open"
+
+    dashboard = trading.user_dashboard(user_id=1)
+    grid_fill = next(fill for fill in dashboard["fills"] if fill.get("bot_name") == "CFD grid")
+    assert grid_fill["order_uuid"] == level_90["trading_order_uuid"]
+    assert grid_fill["price_points"] == 90
+    assert trading.verify_state()["ok"] is True
+
+
+def test_increase_trading_bot_max_runs_updates_limit(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "runs bot",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "always",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+
+    updated = trading.increase_trading_bot_max_runs(actor=_actor(), bot_uuid=bot_uuid, delta=3)
+
+    assert updated["ok"] is True
+    assert updated["delta"] == 3
+    assert updated["bot"]["max_runs"] == 4
+
+
 def test_workflow_backtest_supports_take_profit_and_stop_loss_percent(tmp_path):
     _, trading = _services(tmp_path)
     workflow = {

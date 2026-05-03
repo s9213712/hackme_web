@@ -138,11 +138,15 @@ def test_user_promote_button_is_rendered_and_frontend_sends_json():
     users_js = (ROOT / "public" / "js" / "10-users.js").read_text(encoding="utf-8")
     auth_users_js = (ROOT / "public" / "js" / "40-auth-users.js").read_text(encoding="utf-8")
     promote_frontend = auth_users_js.split('async function promoteUser', 1)[1].split('async function updateUserMemberLevel', 1)[0]
+    promote_route = (ROOT / "routes" / "users.py").read_text(encoding="utf-8").split('def admin_user_promote(user_id):', 1)[1].split('def admin_user_demote', 1)[0]
 
     assert 'currentRole === "super_admin" && u.role === "user" && !isSelf' in users_js
     assert 'promoteUser(u.id, u.username)' in users_js
     assert '"Content-Type": "application/json"' in promote_frontend
     assert 'body: JSON.stringify({})' in promote_frontend
+    assert 'flash(msgEl, json.msg || "升級完成", true);' in promote_frontend
+    assert 'flash(msgEl, json.msg || `升級失敗（HTTP ${res.status}）`, false);' in promote_frontend
+    assert promote_route.index("conn.commit()") < promote_route.index("delete_csrf_tokens_for_username")
 
 
 def test_manual_points_adjustment_reports_insufficient_balance():
@@ -162,6 +166,8 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     appeals = (ROOT / "routes" / "appeals.py").read_text(encoding="utf-8")
     notices = (ROOT / "services" / "sanction_notices.py").read_text(encoding="utf-8")
     violations = (ROOT / "services" / "violations.py").read_text(encoding="utf-8")
+    users_notice = users.split("def _send_member_governance_notice", 1)[1].split("def _send_admin_sanction_notice", 1)[0]
+    economy_notice = economy.split("def notify_member_points_action", 1)[1].split("@app.route(\"/api/points/wallet\"", 1)[0]
 
     assert "def _send_member_governance_notice" in users
     assert "governance_notice_needed = True" in users
@@ -175,11 +181,18 @@ def test_member_rights_changes_send_notice_and_appeal_path():
     assert "points_service.rollback_ledger" in appeals
     assert 'link="/appeals"' in notices
     assert "你可以到「申覆」分頁提出申覆" in notices
+    assert "if not appealable:" in notices
     assert "violation_id = cur.lastrowid" in violations
-    assert "return_violation_id=True" in users
-    assert "return_violation_id=True" in economy
+    assert "return_violation_id=True" not in users_notice
+    assert "return_violation_id=True" not in economy_notice
+    assert "violation_id=None" in notices or "violation_id is not None" in notices
     assert "def _latest_violation_id" not in users
     assert "SELECT id FROM secure_violations WHERE user_id=? ORDER BY id DESC LIMIT 1" not in economy
+    assert "violation_id < 0" in appeals
+    assert "LEFT JOIN admin_sanction_appeal_contexts asc2" not in appeals
+    assert "LEFT JOIN admin_sanction_appeal_contexts asc2" not in violations
+    assert "appealable=(direction != \"credit\")" in economy
+    assert "appealable=False" in users
 
 
 def test_pending_reward_review_enforces_maker_checker():

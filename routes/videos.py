@@ -59,9 +59,22 @@ def register_video_routes(app, deps):
         message = str(exc) or exc.__class__.__name__
         if isinstance(exc, PermissionError):
             return json_resp({"ok": False, "msg": message, "error": "forbidden"}), 403
+        if "無法以目前伺服器金鑰解密" in message:
+            return json_resp({"ok": False, "msg": message, "error": "decrypt_unavailable"}), 409
         if "insufficient balance" in message:
             return json_resp({"ok": False, "msg": "積分不足，無法投幣", "error": "insufficient_balance"}), 409
         return json_resp({"ok": False, "msg": message, "error": exc.__class__.__name__}), 400
+
+    def _svg_placeholder_response(message, *, label="封面不可顯示"):
+        safe_label = (label or "封面不可顯示").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_message = (message or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+<rect width="960" height="540" fill="#151823"/>
+<rect x="32" y="32" width="896" height="476" rx="20" fill="#202533" stroke="#39405a"/>
+<text x="480" y="220" text-anchor="middle" fill="#f4f6ff" font-size="34" font-family="Arial, sans-serif">{safe_label}</text>
+<text x="480" y="280" text-anchor="middle" fill="#b8bfd8" font-size="20" font-family="Arial, sans-serif">{safe_message}</text>
+</svg>"""
+        return Response(svg, status=200, mimetype="image/svg+xml")
 
     def _settings_float(key, default):
         try:
@@ -369,7 +382,10 @@ def register_video_routes(app, deps):
             filename = row["original_filename_plain_for_public"] or "cover"
             mimetype = row["mime_type_plain_for_public"] or mimetypes.guess_type(filename)[0] or "image/jpeg"
             if is_server_encrypted_file(row):
-                raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+                try:
+                    raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+                except ValueError as exc:
+                    return _svg_placeholder_response(str(exc))
                 return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
             return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
         except PermissionError as exc:

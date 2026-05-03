@@ -38,7 +38,7 @@ def _passthrough(fn):
     return fn
 
 
-def _build_app(db_path, storage_root, actor_box, points_service=None):
+def _build_app(db_path, storage_root, actor_box, points_service=None, server_file_fernet=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -66,7 +66,7 @@ def _build_app(db_path, storage_root, actor_box, points_service=None):
         "require_csrf_safe": _passthrough,
         "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
         "points_service": points_service,
-        "server_file_fernet": Fernet(Fernet.generate_key()),
+        "server_file_fernet": server_file_fernet or Fernet(Fernet.generate_key()),
     })
     return app
 
@@ -1111,6 +1111,43 @@ def test_cloud_drive_image_preview_content(tmp_path):
     assert content.status_code == 200
     assert content.data == image_bytes
     assert content.mimetype.startswith("image/")
+
+
+def test_server_encrypted_preview_handles_rotated_key_without_500(tmp_path):
+    from cryptography.fernet import Fernet
+
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    writer_fernet = Fernet(Fernet.generate_key())
+    writer_client = _build_app(db_path, storage_root, actor_box, server_file_fernet=writer_fernet).test_client()
+
+    uploaded = writer_client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(b"\x89PNG\r\n\x1a\nold-encrypted-image"), "old.png", "image/png"),
+            "privacy_mode": "server_encrypted",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    reader_fernet = Fernet(Fernet.generate_key())
+    reader_client = _build_app(db_path, storage_root, actor_box, server_file_fernet=reader_fernet).test_client()
+
+    preview = reader_client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert preview.status_code == 200
+    preview_body = preview.get_json()["preview"]
+    assert preview_body["decryption_unavailable"] is True
+    assert preview_body["render_mode"] == "metadata"
+    assert "重新上傳" in preview_body["message"]
+
+    content = reader_client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.mimetype == "image/svg+xml"
 
 
 def test_storage_admin_summary_sync_and_root_purge(tmp_path):

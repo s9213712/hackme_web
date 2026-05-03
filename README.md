@@ -7,21 +7,17 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.02-050`**
+**Current Release ID: `2026.05.03-051`**
 
 `hackme_web` is a security-focused Flask web application for studying
 authentication, RBAC, moderation workflows, auditability, and operational
 hardening in a compact single-node deployment.
 
-Release `2026.05.02-050` improves ComfyUI operations, Cloud Drive media
-handling, and Video Platform upload/playback behavior. ComfyUI now supports
-root-configurable local or remote connection modes, an explicit local-start
-button, safer per-user generation ownership, LoRA/checkpoint download settings,
-and a reusable Linux startup script template that avoids leaking local machine
-paths. Cloud Drive and albums now better handle E2EE preview sessions, document
-creation, media previews, and queued remote downloads. Video sharing can publish
-direct uploads and server-encrypted media through the existing Cloud Drive
-storage layer.
+Release `2026.05.03-051` adds asynchronous ComfyUI job progress, root-only
+Civitai model inspection/download, governance-aware account review/delete flows,
+grid trading bot operations/backtests, safer server-encrypted media fallback
+behavior after key rotation, and a modular pre-push v2 validation suite with
+cleanup helpers and broader regression coverage.
 
 Release `2026.05.02-047` adds the whole-site production gate. The latest local
 sign-off evidence before the Video Platform module passed 12/12 modules with
@@ -144,6 +140,16 @@ Before pushing:
 ```bash
 python3 scripts/pre_push_checks.py
 ```
+
+This blocking pre-push gate compiles Python, verifies release metadata,
+rejects tracked runtime artifacts and local workstation paths, runs
+`git diff --check`, scans plaintext secrets, optionally runs `gitleaks` and
+`node --check` when installed, and runs a focused pytest set. It is intentionally
+fast; isolated server smoke, API contract, snapshot, Server Mode, and
+PointsChain checks run only with `--full`. `--ci` means non-interactive CI mode,
+not heavyweight mode. Use `--clean --yes` to remove safe repo caches and
+`--clean-temp --yes` to remove old `/tmp/html_learning_prepush_*` and
+`/tmp/html_learning_secrets_*` directories while keeping the newest two.
 
 For focused test runs:
 

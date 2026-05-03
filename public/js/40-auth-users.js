@@ -631,23 +631,37 @@ async function submitEditUser() {
 }
 
 async function removeUser(userId) {
-  if (!window.confirm("確定要刪除帳號？")) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await apiFetch(API + `/admin/users/${userId}`, {
-    method: "DELETE",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrf || "" }
-  });
-  const json = await res.json().catch(() => ({}));
-  if (json && json.ok) {
-    loadUsers();
-  } else {
-    flash($("li-msg"), json.msg || "刪除失敗", false);
+  const target = Array.isArray(users) ? users.find((u) => String(u.id) === String(userId)) : null;
+  const label = target?.username ? `「${target.username}」` : "這個帳號";
+  const pending = target?.status === "pending";
+  const confirmText = pending
+    ? `確定要刪除待審核帳號 ${label}？此操作會移除該註冊申請。`
+    : `確定要刪除帳號 ${label}？`;
+  if (!window.confirm(confirmText)) return;
+  const msgEl = typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg");
+  try {
+    flash(msgEl, "正在刪除帳號...", true);
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + `/admin/users/${userId}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await res.json().catch(() => ({}));
+    if (json && json.ok) {
+      await loadUsers();
+      flash(msgEl, json.msg || "帳號已刪除", true);
+    } else {
+      flash(msgEl, json.msg || `刪除失敗（HTTP ${res.status}）`, false);
+    }
+  } catch (err) {
+    flash(msgEl, err.message || "刪除失敗，請稍後再試", false);
   }
 }
 
 async function createUserByAdmin() {
+  const msgEl = typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg");
   const payload = {
     username: sanitize($("admin-add-user").value.trim()),
     password: $("admin-add-pw").value,
@@ -660,12 +674,12 @@ async function createUserByAdmin() {
     role: "user",
     status: "active"
   };
-  if (!payload.username || !payload.password || !payload.password_confirm || !payload.nickname || !payload.real_name || !payload.id_number || !payload.birthdate || !payload.phone) {
-    flash($("li-msg"), "請完整填寫新增欄位", false);
+  if (!payload.username || !payload.password || !payload.password_confirm || !payload.nickname) {
+    flash(msgEl, "請至少填寫帳號、密碼、確認密碼與暱稱", false);
     return;
   }
   if (payload.password !== payload.password_confirm) {
-    flash($("li-msg"), "兩次輸入的密碼不一致", false);
+    flash(msgEl, "兩次輸入的密碼不一致", false);
     return;
   }
   await fetchCsrfToken({ force: true });
@@ -683,9 +697,10 @@ async function createUserByAdmin() {
     const adminAddHint = $("admin-add-pw-confirm-hint");
     if (adminAddHint) adminAddHint.textContent = "";
     hideAdminAddDialog();
-    loadUsers();
+    await loadUsers();
+    flash(msgEl, json.msg || "帳號已建立", true);
   } else {
-    flash($("li-msg"), json.msg || "建立帳號失敗", false);
+    flash(msgEl, json.msg || "建立帳號失敗", false);
   }
 }
 
@@ -716,9 +731,10 @@ async function reviewRegistration(userId, action) {
   });
   const json = await res.json().catch(() => ({}));
   if (json && json.ok) {
-    loadUsers();
+    await loadUsers();
+    flash(typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg"), json.msg || `${label}完成`, true);
   } else {
-    alert(json.msg || "審核失敗");
+    flash(typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg"), json.msg || "審核失敗", false);
   }
 }
 
@@ -749,27 +765,33 @@ async function bulkReviewRegistrations(action) {
   selectedPendingUserIds.clear();
   await loadUsers();
   if (failed === 0) {
-    flash($("li-msg"), `${label}完成，共 ${success} 筆`, true);
+    flash(typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg"), `${label}完成，共 ${success} 筆`, true);
   } else {
-    flash($("li-msg"), `${label}完成 ${success} 筆，失敗 ${failed} 筆`, false);
+    flash(typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg"), `${label}完成 ${success} 筆，失敗 ${failed} 筆`, false);
   }
 }
 
 async function promoteUser(userId, username) {
+  const msgEl = typeof adminUsersMsgEl === "function" ? adminUsersMsgEl() : $("li-msg");
   if (!confirm(`確定要將「${username}」升級為管理者？`)) return;
-  await fetchCsrfToken({ force: true });
-  const csrf = getCsrfToken();
-  const res = await apiFetch(API + "/admin/users/" + userId + "/promote", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
-    body: JSON.stringify({})
-  });
-  const json = await res.json().catch(() => ({}));
-  if (json.ok) {
-    loadUsers();
-  } else {
-    alert(json.msg || "升級失敗");
+  try {
+    await fetchCsrfToken({ force: true });
+    const csrf = getCsrfToken();
+    const res = await apiFetch(API + "/admin/users/" + userId + "/promote", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({})
+    });
+    const json = await res.json().catch(() => ({}));
+    if (json.ok) {
+      await loadUsers();
+      flash(msgEl, json.msg || "升級完成", true);
+    } else {
+      flash(msgEl, json.msg || `升級失敗（HTTP ${res.status}）`, false);
+    }
+  } catch (err) {
+    flash(msgEl, err.message || "升級失敗，請稍後再試", false);
   }
 }
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from flask import request
 
-from services.sanction_notices import restore_admin_sanction_context
+from services.sanction_notices import ensure_admin_sanction_appeal_schema, restore_admin_sanction_context
 
 
 def register_appeal_routes(app, deps):
@@ -57,6 +57,26 @@ def register_appeal_routes(app, deps):
             "is_governance_notice": bool(r["is_governance_notice"]) if "is_governance_notice" in keys else False,
         }
 
+    def _serialize_governance_notice_row(r):
+        if not r:
+            return None
+        action_label = r["action_label"] if "action_label" in r.keys() else ""
+        reason = r["reason"] if "reason" in r.keys() else ""
+        combined_reason = action_label or "會員權益變更通知"
+        if reason:
+            combined_reason = f"{combined_reason}；原因：{reason}"
+        return {
+            "id": r["violation_id"],
+            "user_id": r["user_id"],
+            "username": r["username"] if "username" in r.keys() else "",
+            "points": 0,
+            "reason": combined_reason,
+            "triggered_by": "member_governance",
+            "actor_username": r["actor_username"] if "actor_username" in r.keys() else "",
+            "created_at": r["created_at"],
+            "is_governance_notice": True,
+        }
+
     @app.route("/api/appeals", methods=["GET"])
     @require_csrf_safe
     def violation_appeals_list():
@@ -66,6 +86,7 @@ def register_appeal_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_admin_sanction_appeal_schema(conn)
             user_id = actor["id"]
             actor_username = actor["username"]
             user_row = conn.execute(
@@ -73,11 +94,42 @@ def register_appeal_routes(app, deps):
             ).fetchone()
             latest_violation = get_latest_violation(conn, user_id)
             violation_rows = conn.execute(
-                "SELECT sv.id, sv.user_id, sv.username, sv.points, sv.reason, sv.triggered_by, sv.actor_username, sv.created_at, "
-                "  CASE WHEN asc2.id IS NOT NULL THEN 1 ELSE 0 END AS is_governance_notice "
-                "FROM secure_violations sv "
-                "LEFT JOIN admin_sanction_appeal_contexts asc2 ON asc2.violation_id = sv.id "
-                "WHERE sv.user_id=? ORDER BY sv.id DESC LIMIT 50",
+                """
+                SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at
+                FROM secure_violations
+                WHERE user_id=?
+                  AND NOT (
+                      points=0
+                      AND (
+                          reason LIKE '會員權益變更：%'
+                          OR reason LIKE '會員點數權益變更：%'
+                      )
+                  )
+                ORDER BY id DESC LIMIT 50
+                """,
+                (user_id,)
+            ).fetchall()
+            governance_rows = conn.execute(
+                """
+                SELECT c.violation_id, c.user_id, u.username, c.action_label, c.reason, c.actor_username, c.created_at
+                FROM admin_sanction_appeal_contexts c
+                LEFT JOIN users u ON u.id = c.user_id
+                LEFT JOIN secure_violations sv ON sv.id = c.violation_id
+                WHERE c.user_id=?
+                  AND (
+                      c.violation_id < 0
+                      OR (
+                          sv.id IS NOT NULL
+                          AND COALESCE(sv.points, 0)=0
+                          AND (
+                              sv.reason LIKE '會員權益變更：%'
+                              OR sv.reason LIKE '會員點數權益變更：%'
+                          )
+                      )
+                  )
+                ORDER BY c.created_at DESC, c.violation_id ASC
+                LIMIT 50
+                """,
                 (user_id,)
             ).fetchall()
             rows = conn.execute(
@@ -86,7 +138,7 @@ def register_appeal_routes(app, deps):
                 (user_id,)
             ).fetchall()
             appeal_by_violation = {}
-            violation_ids = [row["id"] for row in violation_rows]
+            violation_ids = [row["id"] for row in violation_rows] + [row["violation_id"] for row in governance_rows]
             if violation_ids:
                 placeholders = ",".join("?" for _ in violation_ids)
                 appeal_rows = conn.execute(
@@ -131,6 +183,23 @@ def register_appeal_routes(app, deps):
                 item["can_appeal"] = bool(within_window and not appeal and actor_username != "root")
                 item["appeal"] = _serialize_appeal_row(appeal) if appeal else None
                 violations.append(item)
+            for row in governance_rows:
+                created_dt = parse_iso_to_datetime(row["created_at"])
+                row_remaining = 0
+                within_window = False
+                if created_dt:
+                    elapsed = now - created_dt
+                    if elapsed <= timedelta(hours=VIOLATION_APPEAL_WINDOW_HOURS):
+                        row_remaining = int((timedelta(hours=VIOLATION_APPEAL_WINDOW_HOURS) - elapsed).total_seconds())
+                        within_window = True
+                appeal = appeal_by_violation.get(row["violation_id"])
+                item = _serialize_governance_notice_row(row)
+                item["remaining_seconds"] = row_remaining
+                appeal_status = appeal["status"] if appeal else None
+                item["is_resolved"] = appeal_status == "approved"
+                item["can_appeal"] = bool(within_window and not appeal and actor_username != "root")
+                item["appeal"] = _serialize_appeal_row(appeal) if appeal else None
+                violations.append(item)
 
             return json_resp({
                 "ok": True,
@@ -167,9 +236,29 @@ def register_appeal_routes(app, deps):
             if not isinstance(data, dict):
                 return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
-            violation_id = parse_positive_int(data.get("violation_id"), default=None)
+            raw_violation_id = data.get("violation_id")
+            violation_id = None
+            if raw_violation_id not in (None, ""):
+                try:
+                    violation_id = int(raw_violation_id)
+                except Exception:
+                    return json_resp({"ok":False,"msg":"violation_id 格式錯誤"}), 400
+                if violation_id == 0:
+                    return json_resp({"ok":False,"msg":"violation_id 格式錯誤"}), 400
+            ensure_admin_sanction_appeal_schema(conn)
             if violation_id is None:
                 latest_violation = get_latest_violation(conn, user_id)
+            elif violation_id < 0:
+                latest_violation = conn.execute(
+                    """
+                    SELECT c.violation_id AS id, c.user_id, u.username, 0 AS points,
+                           c.action_label, c.reason, c.actor_username, c.created_at
+                    FROM admin_sanction_appeal_contexts c
+                    LEFT JOIN users u ON u.id = c.user_id
+                    WHERE c.violation_id=? AND c.user_id=?
+                    """,
+                    (violation_id, user_id)
+                ).fetchone()
             else:
                 latest_violation = conn.execute(
                     "SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at "
@@ -202,6 +291,7 @@ def register_appeal_routes(app, deps):
             if not user_row:
                 return json_resp({"ok":False,"msg":"帳號不存在"}), 404
 
+            penalty_points = latest_violation["points"] if "points" in latest_violation.keys() else 0
             conn.execute(
                 "INSERT INTO violation_appeals "
                 "(user_id, username, latest_violation_id, violation_count_snapshot, penalty_points, pre_status, pre_role, reason, created_at) "
@@ -211,7 +301,7 @@ def register_appeal_routes(app, deps):
                     user_row["username"],
                     latest_violation["id"],
                     user_row["violation_count"],
-                    latest_violation["points"],
+                    penalty_points,
                     user_row["status"],
                     user_row["role"],
                     reason,
@@ -246,6 +336,7 @@ def register_appeal_routes(app, deps):
 
         conn = get_db()
         try:
+            ensure_admin_sanction_appeal_schema(conn)
             where = "WHERE 1=1"
             params = []
             if status in ("pending","approved","rejected"):
@@ -360,6 +451,8 @@ def register_appeal_routes(app, deps):
                     user_id=appeal["user_id"],
                     violation_id=appeal["latest_violation_id"],
                 )
+                if appeal["latest_violation_id"] < 0 and not restored_sanction:
+                    return json_resp({"ok":False,"msg":"找不到對應的會員權益通知上下文，無法完成申覆恢復"}), 409
                 if restored_sanction:
                     conn.execute(
                         "UPDATE users SET violation_count=?, updated_at=? WHERE id=?",

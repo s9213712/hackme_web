@@ -208,6 +208,9 @@ function renderUsers() {
     if (u.status === "pending") {
       statusSpan.textContent = "待審核";
       statusSpan.style.color = "#ffb74d";
+    } else if (u.status === "deleted") {
+      statusSpan.textContent = "已刪除";
+      statusSpan.style.color = "#9e9e9e";
     } else if (u.status === "rejected") {
       statusSpan.textContent = "已駁回";
       statusSpan.style.color = "#ff4f6d";
@@ -251,6 +254,10 @@ function renderUsers() {
   }
 }
 
+function adminUsersMsgEl() {
+  return $("admin-users-msg") || $("li-msg");
+}
+
 function updatePendingSelectionUi() {
   const count = selectedPendingUserIds.size;
   const info = $("pending-selection-info");
@@ -272,10 +279,15 @@ async function loadUsers() {
       headers: { "X-CSRF-Token": csrf || "" }
     });
     const json = await res.json();
-    if (!json.ok) return;
+    if (!json.ok) {
+      flash(adminUsersMsgEl(), json.msg || "會員清單讀取失敗", false);
+      return;
+    }
     users = Array.isArray(json.users) ? json.users : [];
     canManageUsers = !!json.can_manage;
     renderUsers();
     if (typeof renderAdminNoticeTargetOptions === "function") renderAdminNoticeTargetOptions();
-  } catch (_) {}
+  } catch (err) {
+    flash(adminUsersMsgEl(), err.message || "會員清單讀取失敗", false);
+  }
 }

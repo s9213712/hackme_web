@@ -166,6 +166,37 @@ def register_file_routes(app, deps):
 
         return temp_path, temp_path
 
+    def _decryption_unavailable_preview(preview_row, message):
+        category, mime_type = preview_category(preview_row)
+        filename = preview_row.get("original_filename_plain_for_public") or "preview"
+        return {
+            "filename": filename,
+            "size_bytes": int(preview_row.get("size_bytes") or 0),
+            "privacy_mode": preview_row.get("privacy_mode") or "",
+            "risk_level": preview_row.get("risk_level") or "",
+            "scan_status": preview_row.get("scan_status") or "",
+            "category": category,
+            "mime_type": mime_type,
+            "render_mode": "metadata",
+            "previewable": False,
+            "text": "",
+            "entries": [],
+            "truncated": False,
+            "decryption_unavailable": True,
+            "message": message,
+        }
+
+    def _svg_placeholder_response(message, *, label="預覽不可用"):
+        safe_label = (label or "預覽不可用").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_message = (message or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+<rect width="960" height="540" fill="#161821"/>
+<rect x="40" y="40" width="880" height="460" rx="24" fill="#202333" stroke="#3a3f58"/>
+<text x="480" y="220" text-anchor="middle" fill="#f2f4ff" font-size="34" font-family="Arial, sans-serif">{safe_label}</text>
+<text x="480" y="280" text-anchor="middle" fill="#b7bdd8" font-size="20" font-family="Arial, sans-serif">{safe_message}</text>
+</svg>"""
+        return Response(svg, status=200, mimetype="image/svg+xml")
+
     def _transfer_limits_settings():
         settings = get_system_settings() or {}
         if not settings.get("cloud_drive_transfer_limits_enabled", False):
@@ -3066,9 +3097,12 @@ def register_file_routes(app, deps):
             path = resolve_file_storage_path(storage_root, row)
             if not path.exists():
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
-            readable_path, _ = _readable_file_path(row)
             preview_row = _preview_row_with_storage_fallback(conn, actor, row)
-            preview = build_preview_metadata(preview_row, readable_path)
+            try:
+                readable_path, _ = _readable_file_path(row)
+                preview = build_preview_metadata(preview_row, readable_path)
+            except ValueError as exc:
+                preview = _decryption_unavailable_preview(preview_row, str(exc))
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview", result="allowed", reason=preview["category"], ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
             return json_resp({"ok": True, "preview": preview})
@@ -3110,21 +3144,25 @@ def register_file_routes(app, deps):
             ok, msg = _preview_allowed_by_policy(policy, row)
             if not ok:
                 return json_resp({"ok": False, "msg": msg}), 403
-            readable_path, _ = _readable_file_path(row)
             preview_row = _preview_row_with_storage_fallback(conn, actor, row)
             category, mime_type = preview_category(preview_row)
             if category not in {"audio", "video", "image", "pdf"}:
                 return json_resp({"ok": False, "msg": "此檔案類型不支援 inline content preview"}), 415
             log_file_access(conn, file_id=file_id, actor_user_id=actor["id"], action="preview_content", result="allowed", reason=category, ip=get_client_ip(), user_agent=get_ua())
             conn.commit()
-            response = _send_readable_file(
-                row,
-                as_attachment=False,
-                download_name=preview_row["original_filename_plain_for_public"] or "preview",
-                mimetype=mime_type,
-                conditional=True,
-                actor=actor,
-            )
+            try:
+                response = _send_readable_file(
+                    row,
+                    as_attachment=False,
+                    download_name=preview_row["original_filename_plain_for_public"] or "preview",
+                    mimetype=mime_type,
+                    conditional=True,
+                    actor=actor,
+                )
+            except ValueError as exc:
+                if category == "image":
+                    return _svg_placeholder_response(str(exc), label="圖片不可預覽")
+                return json_resp({"ok": False, "msg": str(exc), "error": "decrypt_unavailable"}), 409
             if response is None:
                 return json_resp({"ok": False, "msg": "實體檔案不存在"}), 404
             return response

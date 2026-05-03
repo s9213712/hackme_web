@@ -40,24 +40,47 @@ def ensure_admin_sanction_appeal_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_sanction_context_user ON admin_sanction_appeal_contexts(user_id, created_at)")
 
 
-def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id, action_label, reason, notice_title="會員權益變更通知", notification_type="member_governance", points_ledger_uuid=None):
-    ensure_admin_sanction_appeal_schema(conn)
-    ensure_notifications_schema(conn)
-    actor_username = _value(actor, "username", "admin")
+def _next_governance_notice_violation_id(conn):
+    row = conn.execute(
+        "SELECT MIN(violation_id) AS min_id FROM admin_sanction_appeal_contexts WHERE violation_id < 0"
+    ).fetchone()
+    current = row["min_id"] if row and row["min_id"] is not None else 0
+    current = int(current or 0)
+    return current - 1 if current < 0 else -1
+
+
+def _member_notice_body(*, action_label, reason, appealable):
     body = (
         f"你收到一筆會員權益變更通知。\n\n"
         f"變更內容：{action_label}\n"
-        f"原因：{reason or '未填寫'}\n\n"
-        "你可以到「申覆」分頁提出申覆。申覆時請補充理由、證據或相關脈絡；root 會依申覆紀錄審核是否撤銷或調整。"
+        f"原因：{reason or '未填寫'}\n"
     )
+    if appealable:
+        body += (
+            "\n你可以到「申覆」分頁提出申覆。申覆時請補充理由、證據或相關脈絡；"
+            "root 會依申覆紀錄審核是否撤銷或調整。"
+        )
+    return body
+
+
+def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id=None, action_label, reason, notice_title="會員權益變更通知", notification_type="member_governance", points_ledger_uuid=None, appealable=True):
+    ensure_admin_sanction_appeal_schema(conn)
+    ensure_notifications_schema(conn)
+    actor_username = _value(actor, "username", "admin")
+    resolved_violation_id = None
+    if appealable:
+        resolved_violation_id = int(violation_id) if violation_id is not None else _next_governance_notice_violation_id(conn)
+    body = _member_notice_body(action_label=action_label, reason=reason, appealable=appealable)
     create_notification(
         conn,
         user_id=int(_value(target, "id")),
         type=notification_type,
         title=notice_title,
         body=body,
-        link="/appeals",
+        link="/appeals" if appealable else None,
     )
+    if not appealable:
+        return {"notification": True, "violation_id": None}
     conn.execute(
         """
         INSERT OR REPLACE INTO admin_sanction_appeal_contexts (
@@ -67,7 +90,7 @@ def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id,
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            int(violation_id),
+            resolved_violation_id,
             int(_value(target, "id")),
             _value(previous, "status"),
             _value(previous, "role"),
@@ -83,7 +106,7 @@ def record_admin_sanction_notice(conn, *, actor, target, previous, violation_id,
             datetime.now().isoformat(),
         ),
     )
-    return {"notification": True}
+    return {"notification": True, "violation_id": resolved_violation_id}
 
 
 def restore_admin_sanction_context(conn, *, user_id, violation_id):

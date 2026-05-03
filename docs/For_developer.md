@@ -5,7 +5,7 @@ behavior is documented in [WEB.md](WEB.md).
 
 ## Release and Schema
 
-- Release ID: `2026.05.02-050`
+- Release ID: `2026.05.03-051`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -129,11 +129,27 @@ send `X-CSRF-Token`.
 ### Users and Governance
 
 - `GET /api/admin/users`
-- user create/update/status/role endpoints under `/api/admin/users`
+- `POST /api/admin/users`
+- `GET /api/admin/users/{user_id}`
+- `PUT /api/admin/users/{user_id}`
+- `DELETE /api/admin/users/{user_id}`
+- `POST /api/admin/users/{user_id}/review-registration`
+- `POST /api/admin/users/{user_id}/promote`
+- `POST /api/admin/users/{user_id}/demote`
 - `GET /api/admin/member-level-rules`
 - `PUT /api/admin/member-level-rules/{level}`
 - governance proposal endpoints under moderation routes
 - reputation summary/history endpoints under account moderation routes
+
+Governance notes:
+
+- Rejecting a pending registration deletes the application account and revokes
+  any pending sessions/tokens.
+- Deleting an existing user is a soft-delete that preserves audit/trading/video
+  history while revoking access and trashing owned storage rows.
+- Role/status/points-rights changes can generate member-governance notices with
+  appeal restore context; governance-only notices may use negative synthetic
+  `violation_id` values internally.
 
 ### Forum and Announcements
 
@@ -169,6 +185,12 @@ Remote download APIs:
 - `GET /api/cloud-drive/remote-download/tasks/{task_id}`
 
 BT/magnet/`.torrent` support depends on `aria2c`.
+
+Server-encrypted preview/download note:
+
+- If a file was encrypted with an older unavailable server file key,
+  preview/content routes return `error=decrypt_unavailable` with HTTP `409`
+  instead of a generic `500`. Image/video style UIs may render a placeholder.
 
 ### Storage and Albums
 
@@ -226,10 +248,29 @@ transaction, and retry protection uses `Idempotency-Key` when supplied.
 ### ComfyUI
 
 - `GET /api/comfyui/status`
+- `POST /api/comfyui/start`
 - `GET /api/comfyui/models`
+- `POST /api/comfyui/billing-quote`
 - `POST /api/comfyui/generate`
-- `POST /api/comfyui/save-to-drive`
+- `GET /api/comfyui/jobs/{job_id}`
+- `POST /api/comfyui/interrupt`
+- `POST /api/comfyui/save`
+- `POST /api/comfyui/discard`
+- `POST /api/comfyui/share`
+- `POST /api/root/comfyui/test-connection`
+- `POST /api/root/comfyui/civitai/inspect`
+- `POST /api/root/comfyui/civitai/download`
+- `POST /api/root/comfyui/stop`
 - root can configure the API port from server settings
+
+ComfyUI notes:
+
+- `POST /api/comfyui/generate` can return an async job payload; the frontend
+  polls `/api/comfyui/jobs/{job_id}` for progress and final result.
+- Root-only Civitai endpoints inspect a page URL, list versions/files, and
+  download the selected checkpoint or LoRA into the configured local project.
+- Local mode supports explicit start and root-only stop operations for the
+  shared ComfyUI process.
 
 ### PointsChain
 
@@ -268,8 +309,14 @@ User trading APIs:
 - `POST /api/trading/bots`
 - `PUT /api/trading/bots/{bot_uuid}`
 - `DELETE /api/trading/bots/{bot_uuid}`
+- `POST /api/trading/bots/{bot_uuid}/increase-runs`
 - `POST /api/trading/bots/scan`
 - `POST /api/trading/bots/backtest`
+- `GET /api/trading/grid-bots`
+- `POST /api/trading/grid-bots`
+- `POST /api/trading/grid-bots/{bot_uuid}/toggle`
+- `DELETE /api/trading/grid-bots/{bot_uuid}`
+- `POST /api/trading/grid-bots/scan`
 - `POST /api/trading/margin/open`
 - `POST /api/trading/margin/{position_uuid}/collateral`
 - `POST /api/trading/margin/{position_uuid}/close`
@@ -297,6 +344,8 @@ Trading API notes:
   `15` means `15%`.
 - Workflow bots use `workflow_json` with `nodes` and `edges`; legacy branch
   workflow JSON is normalized on save/import.
+- Grid bots are spot-first range bots; creation may prompt for a底倉 buy before
+  initial sell levels are placed.
 - Backtests can accept frontend-supplied candles or fetch Binance historical
   K-lines from `start_time`, `end_time`, and `timeframe`.
 
@@ -498,6 +547,41 @@ Full local gate:
 ```bash
 python3 scripts/pre_push_checks.py
 ```
+
+The default gate is intentionally lightweight: Python compilation,
+release-document synchronization, generated/runtime file checks, local
+workstation path leak checks, config safety, CI portability checks,
+`git diff --check`, plaintext secret scanning, optional `gitleaks`, optional
+`node --check`, and focused pytest. It does not start the server by default.
+Use `--full` for isolated `/tmp` server startup, smoke tests, API contract,
+snapshot/restore, Server Mode, PointsChain, and log-chain checks. `--ci` makes
+the run non-interactive and sanitized; it does not imply `--full`.
+
+Cleanup helpers:
+
+```bash
+python3 scripts/pre_push_checks.py --clean --clean-temp --yes
+```
+
+- `--clean` removes safe repository caches only: `__pycache__`,
+  `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.coverage`, `htmlcov`,
+  `dist`, `build`, `*.pyc`, and `*.pyo`.
+- `--clean` never removes DB/log/storage/report data, security reports, bug
+  reports, key material, `.gitkeep`, or tracked files unless they are explicit
+  cache artifacts.
+- `--clean-temp` removes old pre-push and secret-scan temp roots under `/tmp`,
+  keeping the newest two by default.
+- `--yes` skips cleanup confirmation.
+- `--keep-temp` keeps the current run's isolated runtime even in `--ci` success.
+
+Install the blocking hook:
+
+```bash
+bash hooks/install-hooks.sh
+```
+
+The hook bumps `APP_RELEASE_ID`, amends the tip commit, runs the local gate in
+`--ci` mode, and blocks the push if it fails.
 
 Focused test run:
 

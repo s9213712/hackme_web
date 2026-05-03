@@ -5,6 +5,7 @@ import uuid
 import hashlib
 from datetime import datetime
 from pathlib import Path
+from cryptography.fernet import InvalidToken
 
 from services.storage_paths import resolve_storage_path
 from services.storage_albums import ensure_storage_album_schema
@@ -97,7 +98,10 @@ def is_server_encrypted_file(row_or_mode):
 def decrypt_server_encrypted_bytes(path, server_file_fernet):
     if not server_file_fernet:
         raise ValueError("server-side file encryption key is unavailable")
-    return server_file_fernet.decrypt(Path(path).read_bytes())
+    try:
+        return server_file_fernet.decrypt(Path(path).read_bytes())
+    except InvalidToken as exc:
+        raise ValueError("此檔案無法以目前伺服器金鑰解密，可能是重設或換鑰後留下的舊檔案，請重新上傳") from exc
 
 
 def _actor_value(actor, key, default=None):

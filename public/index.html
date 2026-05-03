@@ -1142,6 +1142,7 @@
             <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
             <button class="btn" id="comfyui-load-draft-btn" type="button">載入上次設定</button>
             <button class="btn btn-primary" id="comfyui-start-btn" type="button" style="display:none;">啟動 ComfyUI</button>
+            <button class="btn" id="comfyui-stop-btn" type="button" style="display:none;">停止 ComfyUI</button>
           </div>
           <div class="field">
             <label>模型</label>
@@ -1153,15 +1154,12 @@
           <div class="comfyui-lora-panel">
             <div class="settings-option-grid">
               <div class="field">
-                <label>LoRA 數量</label>
-                <input type="number" id="comfyui-lora-limit" min="0" max="8" value="0" />
-              </div>
-              <div class="field">
                 <label>新增 LoRA</label>
                 <div class="inline-control-row">
                   <select id="comfyui-lora-select"><option value="">讀取 LoRA 中...</option></select>
                   <button class="btn btn-sm" id="comfyui-lora-add-btn" type="button">加入</button>
                 </div>
+                <div class="drive-card-sub" id="comfyui-lora-count" style="margin-top:.35rem;">0 / 8</div>
               </div>
             </div>
             <div id="comfyui-selected-loras" class="comfyui-selected-loras">
@@ -1197,16 +1195,35 @@
             <div class="drive-card-heading compact-heading">
               <div>
                 <div class="drive-card-title">root 模型下載</div>
-                <div class="drive-card-sub">輸入公開網址下載 checkpoint 或 LoRA 到本地 ComfyUI models 目錄；留空則使用 root 設定中的本地資料夾。</div>
+                <div class="drive-card-sub">輸入 Civitai 模型頁網址，讀取官方 API 後選擇版本與檔案下載到本地 ComfyUI models 目錄；留空則使用 root 設定中的本地資料夾。</div>
               </div>
             </div>
             <div class="settings-option-grid">
-              <div class="field"><label>ComfyUI 專案資料夾</label><input type="text" id="comfyui-model-base-dir" placeholder="/opt/comfyui-portable" /></div>
-              <div class="field"><label>模型類型</label><select id="comfyui-model-download-type"><option value="checkpoint">Checkpoint</option><option value="lora">LoRA</option></select></div>
+              <div class="field">
+                <label>ComfyUI 專案資料夾</label>
+                <input type="text" id="comfyui-model-base-dir" placeholder="/opt/comfyui-portable" />
+                <div class="drive-card-sub">填 ComfyUI 專案根目錄，或 portable 外層資料夾。若此資料夾底下有 <code>ComfyUI/main.py</code>，系統會自動往內找到真正專案目錄。</div>
+              </div>
+              <div class="field">
+                <label>模型類型</label>
+                <select id="comfyui-model-download-type">
+                  <option value="checkpoint">Checkpoint</option>
+                  <option value="lora">LoRA</option>
+                  <option value="controlnet">ControlNet</option>
+                  <option value="embedding">Embedding / TI</option>
+                  <option value="hypernetwork">Hypernetwork</option>
+                  <option value="vae">VAE</option>
+                </select>
+              </div>
             </div>
-            <div class="field"><label>下載網址</label><input type="url" id="comfyui-model-download-url" placeholder="https://example.com/model.safetensors" /></div>
+            <div class="field"><label>Civitai 模型頁網址</label><input type="url" id="comfyui-civitai-url" placeholder="https://civitai.com/models/123456/..." /></div>
+            <div class="settings-option-grid">
+              <div class="field"><label>版本</label><select id="comfyui-civitai-version"><option value="">請先讀取模型</option></select></div>
+              <div class="field"><label>檔案</label><select id="comfyui-civitai-file"><option value="">請先選擇版本</option></select></div>
+            </div>
             <div class="drive-file-actions" style="justify-content:flex-start;">
-              <button class="btn" id="comfyui-model-download-btn" type="button">下載到 ComfyUI</button>
+              <button class="btn" id="comfyui-civitai-inspect-btn" type="button">讀取模型資訊</button>
+              <button class="btn" id="comfyui-model-download-btn" type="button">下載選定版本</button>
             </div>
             <div id="comfyui-model-download-status" class="drive-card-sub">尚未下載模型</div>
           </div>
@@ -2921,6 +2938,7 @@
               <div class="field">
                 <label>本地 ComfyUI 資料夾</label>
                 <input type="text" id="s-comfyui-base-dir" placeholder="/opt/comfyui-portable" />
+                <div class="drive-card-sub">可填真正的 ComfyUI 專案目錄，或 portable 外層資料夾。例如外層是 <code>.../ComfyUI_windows_portable</code>、內層有 <code>ComfyUI/main.py</code> 時，填外層即可。</div>
               </div>
               <div class="field">
                 <label>啟動腳本</label>
@@ -2932,9 +2950,13 @@
               </div>
               <div class="field">
                 <label>本地 API Port</label>
-                <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8188" />
+                <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8192" />
               </div>
               <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">以 Linux/WSL 腳本為例：資料夾填你的 ComfyUI portable 或專案資料夾，腳本填 <code>run_in_linux.sh</code>。本地模式會下載模型到 <code>ComfyUI/models/checkpoints</code> 或 <code>ComfyUI/models/loras</code>，丟棄預覽時可刪除 output 原始檔。</div>
+            </div>
+            <div class="field">
+              <label>Civitai API Key</label>
+              <input type="password" id="s-comfyui-civitai-api-key" placeholder="用於 root 模型下載面板讀取版本與下載" autocomplete="off" />
             </div>
             <div class="field">
               <label>單次產圖張數上限</label>
@@ -3758,10 +3780,10 @@
         <p style="margin-top:.4rem; color:#ff4f6d" id="admin-add-pw-confirm-hint"></p>
       </div>
       <div class="field"><label>暱稱</label><input type="text" id="admin-add-nickname" placeholder="暱稱" /></div>
-      <div class="field"><label>真實姓名</label><input type="text" id="admin-add-realname" placeholder="真實姓名" /></div>
-      <div class="field"><label>身分證</label><input type="text" id="admin-add-idno" placeholder="身分證" /></div>
-      <div class="field"><label>生日</label><input type="date" id="admin-add-birthdate" /></div>
-      <div class="field"><label>電話</label><input type="tel" id="admin-add-phone" placeholder="09xx-xxx-xxx" /></div>
+      <div class="field"><label>真實姓名（選填）</label><input type="text" id="admin-add-realname" placeholder="可留空" /></div>
+      <div class="field"><label>身分證（選填）</label><input type="text" id="admin-add-idno" placeholder="可留空" /></div>
+      <div class="field"><label>生日（選填）</label><input type="date" id="admin-add-birthdate" /></div>
+      <div class="field"><label>電話（選填）</label><input type="tel" id="admin-add-phone" placeholder="可留空" /></div>
       <div class="edit-user-actions">
         <button class="btn btn-primary" type="button" id="admin-add-btn">建立帳號</button>
         <button class="btn" type="button" id="admin-add-cancel">取消</button>
@@ -3861,7 +3883,7 @@
 </div>
 
 <script src="/js/00-core.js?v=20260430-trading-page-split" defer></script>
-<script src="/js/10-users.js?v=20260501-online-dot" defer></script>
+<script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
 <script src="/js/25-community.js?v=20260429-moderator-user-select" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
@@ -3872,7 +3894,7 @@
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260502-video-platform" defer></script>
-<script src="/js/40-auth-users.js?v=20260429-timeout-login" defer></script>
+<script src="/js/40-auth-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>

@@ -1087,6 +1087,30 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/trading/bots/<bot_uuid>/increase-runs", methods=["POST"])
+    @require_csrf
+    def trading_bots_increase_runs(bot_uuid):
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            delta = data.get("delta", 1)
+            result = trading_service.increase_trading_bot_max_runs(actor=actor, bot_uuid=bot_uuid, delta=delta)
+            audit(
+                "TRADING_BOT_MAX_RUNS_INCREASED",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"bot_uuid={bot_uuid}, delta={result.get('delta')}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/bots/scan", methods=["POST"])
     @require_csrf
     def trading_bots_scan():

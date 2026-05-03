@@ -174,6 +174,7 @@ subprocess.Popen([python_exe, script_path], cwd=base_dir, close_fds=True, start_
 def register_system_admin_routes(app, deps):
     ANCHOR_DIR = deps["ANCHOR_DIR"]
     BASE_DIR = deps["BASE_DIR"]
+    GIT_REPO_DIR = deps.get("GIT_REPO_DIR") or BASE_DIR
     CHAT_DIR = deps["CHAT_DIR"]
     DB_PATH = deps["DB_PATH"]
     LOG_DIR = deps["LOG_DIR"]
@@ -377,10 +378,10 @@ def register_system_admin_routes(app, deps):
         return result
 
     def run_git_command(args, *, timeout=30):
-        command = ["git", "-C", BASE_DIR, *args]
+        command = ["git", "-C", GIT_REPO_DIR, *args]
         completed = subprocess.run(
             command,
-            cwd=BASE_DIR,
+            cwd=GIT_REPO_DIR,
             text=True,
             capture_output=True,
             timeout=timeout,
@@ -394,12 +395,29 @@ def register_system_admin_routes(app, deps):
             "command": ["git", "-C", ".", *args],
         }
 
+    def git_repo_ready():
+        result = run_git_command(["rev-parse", "--show-toplevel"], timeout=10)
+        if result["ok"]:
+            return {"ok": True, "repo_dir": GIT_REPO_DIR}
+        msg = "目前執行中的副本不含 Git 更新資訊"
+        detail = git_short_text(result) or "not a git repository"
+        if GIT_REPO_DIR != BASE_DIR:
+            msg = "GitHub 更新中心指定的 repo 無法讀取"
+        return {
+            "ok": False,
+            "msg": msg,
+            "error": detail,
+            "repo_dir": GIT_REPO_DIR,
+        }
+
     def git_short_text(result, limit=12000):
         text = "\n".join(part for part in (result.get("stdout"), result.get("stderr")) if part)
         return text[:limit]
 
     def read_update_summary(limit=12000):
-        path = os.path.join(BASE_DIR, "docs", "UPDATE_SUMMARY.md")
+        path = os.path.join(GIT_REPO_DIR, "docs", "UPDATE_SUMMARY.md")
+        if not os.path.exists(path):
+            path = os.path.join(BASE_DIR, "docs", "UPDATE_SUMMARY.md")
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 return fh.read()[:limit]
@@ -416,6 +434,9 @@ def register_system_admin_routes(app, deps):
         return ""
 
     def current_git_state(fetch=False):
+        ready = git_repo_ready()
+        if not ready.get("ok"):
+            return ready
         if fetch:
             fetch_result = run_git_command(["fetch", "--prune", "origin"], timeout=90)
             if not fetch_result["ok"]:
@@ -441,6 +462,7 @@ def register_system_admin_routes(app, deps):
             "current_branch": branch_result["stdout"],
             "current_commit": commit_result["stdout"],
             "origin_url": remote_result["stdout"] if remote_result["ok"] else "",
+            "repo_dir": public_relative_path(GIT_REPO_DIR, BASE_DIR),
             "dirty": bool(status_result["stdout"]),
             "dirty_files": status_result["stdout"].splitlines()[:80],
             "branches": sorted(set(branches)),
@@ -1801,6 +1823,8 @@ def register_system_admin_routes(app, deps):
             if port < 1 or port > 65535:
                 return json_resp({"ok":False,"msg":"comfyui_api_port 必須是 1-65535"}), 400
             data["comfyui_api_port"] = port
+        if "comfyui_civitai_api_key" in data:
+            data["comfyui_civitai_api_key"] = str(data.get("comfyui_civitai_api_key") or "").strip()
         if "comfyui_max_batch_size" in data:
             try:
                 batch_size = int(data.get("comfyui_max_batch_size"))

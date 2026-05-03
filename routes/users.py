@@ -1,5 +1,6 @@
 import json
 import re
+import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, send_file
@@ -56,6 +57,326 @@ def register_user_routes(app, deps):
     validate_password = deps["validate_password"]
     validate_phone = deps["validate_phone"]
     verify_password = deps["verify_password"]
+
+    def quote_identifier(name):
+        if not isinstance(name, str) or "\x00" in name:
+            raise ValueError("invalid SQL identifier")
+        return '"' + name.replace('"', '""') + '"'
+
+    def ensure_user_delete_dependency_tables(conn):
+        """Repair legacy DBs with optional FK parents missing before user delete."""
+        tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "announcement_attachment_requests" in tables and "announcements" not in tables:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS announcements (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title            TEXT NOT NULL DEFAULT '',
+                    content          TEXT NOT NULL DEFAULT '',
+                    author_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    author_username  TEXT NOT NULL DEFAULT '',
+                    is_pinned        INTEGER NOT NULL DEFAULT 0,
+                    is_active        INTEGER NOT NULL DEFAULT 1,
+                    created_at       TEXT NOT NULL DEFAULT '',
+                    updated_at       TEXT NOT NULL DEFAULT ''
+                )
+            """)
+
+    def _table_column_meta(conn, table):
+        return {row["name"]: row for row in conn.execute(f"PRAGMA table_info({quote_identifier(table)})").fetchall()}
+
+    def _table_exists(conn, table):
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (str(table or ""),),
+        ).fetchone()
+        return bool(row)
+
+    def cleanup_user_foreign_key_refs(conn, *, user_id):
+        """Clear existing user references before deleting, including legacy FKs.
+
+        SQLite only applies ON DELETE rules while foreign_keys is enabled, and
+        several older optional tables were created without explicit ON DELETE
+        behavior.  A root delete should not fail just because a user has
+        messages, uploads, invites, or pending attachment review rows.
+        """
+        tables = [
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            if row["name"] != "users" and not str(row["name"]).startswith("sqlite_")
+        ]
+        operations = []
+        for table in tables:
+            try:
+                fks = conn.execute(f"PRAGMA foreign_key_list({quote_identifier(table)})").fetchall()
+            except sqlite3.Error:
+                continue
+            user_fks = [fk for fk in fks if fk["table"] == "users"]
+            if not user_fks:
+                continue
+            cols = _table_column_meta(conn, table)
+            for fk in user_fks:
+                column = fk["from"]
+                if column not in cols:
+                    continue
+                quoted_table = quote_identifier(table)
+                quoted_column = quote_identifier(column)
+                on_delete = str(fk["on_delete"] or "").upper()
+                nullable = not bool(cols[column]["notnull"]) and not bool(cols[column]["pk"])
+                if on_delete == "SET NULL" or nullable:
+                    cur = conn.execute(
+                        f"UPDATE {quoted_table} SET {quoted_column}=NULL WHERE {quoted_column}=?",
+                        (user_id,),
+                    )
+                    action = "set_null"
+                else:
+                    cur = conn.execute(
+                        f"DELETE FROM {quoted_table} WHERE {quoted_column}=?",
+                        (user_id,),
+                    )
+                    action = "delete_rows"
+                if cur.rowcount:
+                    operations.append({"table": table, "column": column, "action": action, "count": cur.rowcount})
+        return operations
+
+    def hard_delete_user_row(conn, *, user_id, username):
+        ensure_user_delete_dependency_tables(conn)
+        cleanup_user_foreign_key_refs(conn, user_id=user_id)
+        conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+        return {"user_id": int(user_id), "username": username}
+
+    def soft_delete_user_row(conn, *, user_id, username):
+        ensure_user_delete_dependency_tables(conn)
+        now = datetime.now().isoformat()
+        tombstone_username = f"deleted_u{int(user_id)}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        summary = {
+            "cloud_files_deleted": 0,
+            "storage_entries_deleted": 0,
+            "folders_deleted": 0,
+            "albums_deleted": 0,
+            "videos_blocked": 0,
+            "wallet_closed": False,
+            "warnings": [],
+            "original_username": username,
+            "tombstone_username": tombstone_username,
+        }
+
+        def _warn(scope, exc):
+            summary["warnings"].append({"scope": scope, "error": str(exc)})
+
+        if _table_exists(conn, "uploaded_files"):
+            try:
+                upload_cols = _table_column_meta(conn, "uploaded_files")
+                upload_updates = []
+                upload_params = []
+                if "deleted_at" in upload_cols:
+                    upload_updates.append("deleted_at=?")
+                    upload_params.append(now)
+                if "updated_at" in upload_cols:
+                    upload_updates.append("updated_at=?")
+                    upload_params.append(now)
+                if upload_updates and "owner_user_id" in upload_cols:
+                    upload_where = "owner_user_id=?"
+                    if "deleted_at" in upload_cols:
+                        upload_where += " AND deleted_at IS NULL"
+                    file_cur = conn.execute(
+                        f"UPDATE uploaded_files SET {', '.join(upload_updates)} WHERE {upload_where}",
+                        (*upload_params, int(user_id)),
+                    )
+                    summary["cloud_files_deleted"] = max(int(file_cur.rowcount or 0), 0)
+            except sqlite3.Error as exc:
+                _warn("uploaded_files", exc)
+
+        if _table_exists(conn, "storage_files"):
+            try:
+                storage_cols = _table_column_meta(conn, "storage_files")
+                storage_updates = []
+                storage_params = []
+                if "deleted_at" in storage_cols:
+                    storage_updates.append("deleted_at=?")
+                    storage_params.append(now)
+                if "updated_at" in storage_cols:
+                    storage_updates.append("updated_at=?")
+                    storage_params.append(now)
+                if "is_trashed" in storage_cols:
+                    storage_updates.append("is_trashed=1")
+                if "trashed_at" in storage_cols:
+                    storage_updates.append("trashed_at=COALESCE(trashed_at, ?)")
+                    storage_params.append(now)
+                if storage_updates:
+                    storage_where = "owner_user_id=?"
+                    if "deleted_at" in storage_cols:
+                        storage_where += " AND deleted_at IS NULL"
+                    storage_cur = conn.execute(
+                        f"UPDATE storage_files SET {', '.join(storage_updates)} WHERE {storage_where}",
+                        (*storage_params, int(user_id)),
+                    )
+                    summary["storage_entries_deleted"] = max(int(storage_cur.rowcount or 0), 0)
+            except sqlite3.Error as exc:
+                _warn("storage_files", exc)
+
+        if _table_exists(conn, "storage_folders"):
+            try:
+                folder_cols = _table_column_meta(conn, "storage_folders")
+                folder_updates = []
+                folder_params = []
+                if "deleted_at" in folder_cols:
+                    folder_updates.append("deleted_at=?")
+                    folder_params.append(now)
+                if "updated_at" in folder_cols:
+                    folder_updates.append("updated_at=?")
+                    folder_params.append(now)
+                if folder_updates:
+                    folder_where = "owner_user_id=?"
+                    if "deleted_at" in folder_cols:
+                        folder_where += " AND deleted_at IS NULL"
+                    folder_cur = conn.execute(
+                        f"UPDATE storage_folders SET {', '.join(folder_updates)} WHERE {folder_where}",
+                        (*folder_params, int(user_id)),
+                    )
+                    summary["folders_deleted"] = max(int(folder_cur.rowcount or 0), 0)
+            except sqlite3.Error as exc:
+                _warn("storage_folders", exc)
+
+        if _table_exists(conn, "albums"):
+            try:
+                album_cols = _table_column_meta(conn, "albums")
+                album_updates = []
+                album_params = []
+                if "deleted_at" in album_cols:
+                    album_updates.append("deleted_at=?")
+                    album_params.append(now)
+                if "updated_at" in album_cols:
+                    album_updates.append("updated_at=?")
+                    album_params.append(now)
+                if "visibility" in album_cols:
+                    album_updates.append("visibility='private'")
+                if album_updates:
+                    album_where = "owner_user_id=?"
+                    if "deleted_at" in album_cols:
+                        album_where += " AND deleted_at IS NULL"
+                    album_cur = conn.execute(
+                        f"UPDATE albums SET {', '.join(album_updates)} WHERE {album_where}",
+                        (*album_params, int(user_id)),
+                    )
+                    summary["albums_deleted"] = max(int(album_cur.rowcount or 0), 0)
+            except sqlite3.Error as exc:
+                _warn("albums", exc)
+
+        if _table_exists(conn, "storage_share_links"):
+            try:
+                share_cols = _table_column_meta(conn, "storage_share_links")
+                if "revoked_at" in share_cols:
+                    conn.execute(
+                        "UPDATE storage_share_links SET revoked_at=? WHERE owner_user_id=? AND revoked_at IS NULL",
+                        (now, int(user_id)),
+                    )
+            except sqlite3.Error as exc:
+                _warn("storage_share_links", exc)
+
+        if _table_exists(conn, "album_share_links") and _table_exists(conn, "albums"):
+            try:
+                album_share_cols = _table_column_meta(conn, "album_share_links")
+                if "revoked_at" in album_share_cols:
+                    conn.execute(
+                        """
+                        UPDATE album_share_links
+                        SET revoked_at=?
+                        WHERE revoked_at IS NULL
+                          AND album_id IN (
+                              SELECT id FROM albums WHERE owner_user_id=?
+                          )
+                        """,
+                        (now, int(user_id)),
+                    )
+            except sqlite3.Error as exc:
+                _warn("album_share_links", exc)
+
+        if _table_exists(conn, "videos"):
+            try:
+                video_cols = _table_column_meta(conn, "videos")
+                video_updates = []
+                video_params = []
+                if "visibility" in video_cols:
+                    video_updates.append("visibility='private'")
+                if "status" in video_cols:
+                    video_updates.append("status='blocked'")
+                if "updated_at" in video_cols:
+                    video_updates.append("updated_at=?")
+                    video_params.append(now)
+                if video_updates:
+                    video_cur = conn.execute(
+                        f"UPDATE videos SET {', '.join(video_updates)} WHERE owner_user_id=?",
+                        (*video_params, int(user_id)),
+                    )
+                    summary["videos_blocked"] = max(int(video_cur.rowcount or 0), 0)
+            except sqlite3.Error as exc:
+                _warn("videos", exc)
+
+        if _table_exists(conn, "user_storage"):
+            try:
+                user_storage_cols = _table_column_meta(conn, "user_storage")
+                updates = []
+                params = []
+                for column in ("used_bytes", "reserved_bytes", "file_count"):
+                    if column in user_storage_cols:
+                        updates.append(f"{column}=0")
+                if "updated_at" in user_storage_cols:
+                    updates.append("updated_at=?")
+                    params.append(now)
+                if updates:
+                    conn.execute(
+                        f"UPDATE user_storage SET {', '.join(updates)} WHERE user_id=?",
+                        (*params, int(user_id)),
+                    )
+            except sqlite3.Error as exc:
+                _warn("user_storage", exc)
+
+        if _table_exists(conn, "points_wallets"):
+            wallet_cols = _table_column_meta(conn, "points_wallets")
+            wallet_updates = []
+            wallet_params = []
+            if "wallet_status" in wallet_cols:
+                wallet_updates.append("wallet_status='closed'")
+            if "risk_level" in wallet_cols:
+                wallet_updates.append("risk_level='blocked'")
+            if "updated_at" in wallet_cols:
+                wallet_updates.append("updated_at=?")
+                wallet_params.append(now)
+            if wallet_updates:
+                wallet_cur = conn.execute(
+                    f"UPDATE points_wallets SET {', '.join(wallet_updates)} WHERE user_id=?",
+                    (*wallet_params, int(user_id)),
+                )
+                summary["wallet_closed"] = bool(wallet_cur.rowcount)
+
+        user_cols = _table_column_meta(conn, "users")
+        user_updates = []
+        user_params = []
+        if "status" in user_cols:
+            user_updates.append("status='deleted'")
+        if "username" in user_cols:
+            user_updates.append("username=?")
+            user_params.append(tombstone_username)
+        if "deleted_at" in user_cols:
+            user_updates.append("deleted_at=?")
+            user_params.append(now)
+        if "updated_at" in user_cols:
+            user_updates.append("updated_at=?")
+            user_params.append(now)
+        for column in ("email", "nickname", "real_name", "birthdate", "id_number", "phone", "avatar_file_id", "avatar_crop_json", "blocked_until"):
+            if column in user_cols:
+                user_updates.append(f"{column}=NULL")
+        if "must_change_password" in user_cols:
+            user_updates.append("must_change_password=0")
+        if "is_default_password" in user_cols:
+            user_updates.append("is_default_password=0")
+        conn.execute(
+            f"UPDATE users SET {', '.join(user_updates)} WHERE id=?",
+            (*user_params, int(user_id)),
+        )
+        summary["user_id"] = int(user_id)
+        summary["username"] = tombstone_username
+        return summary
     get_member_level_rule = deps.get("get_member_level_rule")
     storage_root = deps.get("STORAGE_DIR", ".")
 
@@ -159,31 +480,18 @@ def register_user_routes(app, deps):
             return True
         return False
 
-    def _send_member_governance_notice(conn, *, actor, actor_role, target, previous, action_label, reason, points=0, existing_violation_id=None):
+    def _send_member_governance_notice(conn, *, actor, actor_role, target, previous, action_label, reason, points=0, existing_violation_id=None, appealable=True):
         if not target or target["username"] == "root":
-            return
-        violation_id = existing_violation_id
-        if not violation_id:
-            _action, _msg, _new_count, violation_id = add_violation(
-                target["id"],
-                target["username"],
-                target["role"],
-                points=points,
-                reason=f"會員權益變更：{action_label}；原因：{reason or '未填寫'}",
-                triggered_by=actor_role,
-                actor_username=actor["username"],
-                return_violation_id=True,
-            )
-        if not violation_id:
             return
         record_admin_sanction_notice(
             conn,
             actor=actor,
             target=target,
             previous=previous,
-            violation_id=violation_id,
+            violation_id=existing_violation_id,
             action_label=action_label,
             reason=reason,
+            appealable=appealable,
         )
 
     def _send_admin_sanction_notice(conn, *, actor, actor_role, target, previous, data):
@@ -197,6 +505,7 @@ def register_user_routes(app, deps):
             action_label=_sanction_label(data, target),
             reason=reason,
             points=0,
+            appealable=_is_punitive_member_update(data, target),
         )
 
     def _can_review_password_reset(actor_role, target):
@@ -302,7 +611,8 @@ def register_user_routes(app, deps):
                 })
             return json_resp({"ok":True,"sessions":sessions})
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     @app.route("/api/account/sessions/<int:session_id>", methods=["DELETE"])
     @require_csrf
@@ -335,7 +645,8 @@ def register_user_routes(app, deps):
                 resp.delete_cookie("csrf_token", path="/", samesite=SESSION_COOKIE_SAMESITE, secure=SESSION_COOKIE_SECURE)
             return resp
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     @app.route("/api/account/sessions/logout-all", methods=["POST"])
     @require_csrf
@@ -383,16 +694,22 @@ def register_user_routes(app, deps):
         if request.method == "GET":
             if role_rank(actor_role) < role_rank("manager"):
                 return json_resp({"ok":False,"msg":"權限不足"}), 403
+            include_deleted = str(request.args.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
             conn = get_db()
             try:
                 ensure_member_level_user_columns(conn)
                 ensure_avatar_user_columns(conn)
+                where = ""
+                params = ()
+                if not include_deleted:
+                    where = " WHERE COALESCE(status, 'active') <> 'deleted'"
                 rows = conn.execute(
                     "SELECT id, username, email, nickname, real_name, birthdate, id_number, phone, status, role, "
                     "member_level, base_level, effective_level, trust_score, points, reputation, violation_score, "
                     "sanction_status, sanction_until, level_updated_at, level_updated_by, level_update_reason, "
                     "password_strength_score, avatar_file_id, avatar_crop_json, blocked_until, violation_count "
-                    "FROM users ORDER BY id ASC"
+                    f"FROM users{where} ORDER BY id ASC",
+                    params,
                 ).fetchall()
                 sessions_by_user = active_session_map(conn)
                 data = []
@@ -453,13 +770,11 @@ def register_user_routes(app, deps):
             return json_resp({"ok":False,"msg":"帳號只能包含英文、數字、底線、減號"}), 400
         if not nickname:
             return json_resp({"ok":False,"msg":"暱稱不可為空"}), 400
-        if not real_name:
-            return json_resp({"ok":False,"msg":"真實姓名不可為空"}), 400
-        if not validate_id_number(id_number):
+        if id_number and not validate_id_number(id_number):
             return json_resp({"ok":False,"msg":"身分證格式錯誤"}), 400
-        if not birthdate:
+        if data.get("birthdate") and not birthdate:
             return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
-        if not validate_phone(phone):
+        if phone and not validate_phone(phone):
             return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
         if password != password_confirm:
             return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400
@@ -705,11 +1020,39 @@ def register_user_routes(app, deps):
                     return json_resp({"ok":False,"msg":"不可刪除最高管理者帳號"}), 403
                 if target["username"] == actor["username"]:
                     return json_resp({"ok":False,"msg":"不可刪除目前登入中的帳號"}), 403
-                conn.execute("DELETE FROM users WHERE id=?", (user_id,))
-                conn.commit()
+                target_username = target["username"]
+                try:
+                    cleanup = soft_delete_user_row(conn, user_id=user_id, username=target_username)
+                    conn.commit()
+                except sqlite3.IntegrityError as exc:
+                    conn.rollback()
+                    audit("ADMIN_DELETE_USER_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target_id={user_id}, integrity_error={exc}")
+                    return json_resp({"ok":False,"msg":"刪除帳號失敗：仍有未清理的帳號關聯資料，請重新整理後再試"}), 409
+                except sqlite3.Error as exc:
+                    conn.rollback()
+                    audit("ADMIN_DELETE_USER_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target_id={user_id}, error={exc}")
+                    return json_resp({"ok":False,"msg":f"刪除帳號失敗：{exc}"}), 500
+                msg = "帳號已停用並清理雲端硬碟"
+                if cleanup.get("warnings"):
+                    msg = "帳號已停用，但部分附屬資料清理失敗，請查看 cleanup.warnings"
+                delete_result = {"cleanup": cleanup, "msg": msg, "target_username": target_username}
+                conn.close()
+                conn = None
+                try:
+                    revoke_user_sessions(user_id)
+                except Exception as exc:
+                    cleanup.setdefault("warnings", []).append({"scope": "revoke_user_sessions", "error": str(exc)})
+                try:
+                    delete_csrf_tokens_for_username(target_username)
+                except Exception as exc:
+                    cleanup.setdefault("warnings", []).append({"scope": "delete_csrf_tokens", "error": str(exc)})
                 audit("ADMIN_DELETE_USER", get_client_ip(), user=actor["username"], success=True, ua=get_ua(),
-                      detail=f"target_id={user_id}")
-                return json_resp({"ok":True,"msg":"帳號已刪除"})
+                      detail=f"target_id={user_id},cleanup={json.dumps(cleanup, ensure_ascii=False, sort_keys=True)}")
+                if cleanup.get("warnings"):
+                    delete_result["msg"] = "帳號已停用，但部分附屬資料清理失敗，請查看 cleanup.warnings"
+                return json_resp({"ok":True,"msg":delete_result["msg"],"cleanup":cleanup})
 
             try:
                 data = request.get_json(force=True)
@@ -877,6 +1220,7 @@ def register_user_routes(app, deps):
             elif level_changed:
                 conn.commit()
             if governance_notice_needed and target["username"] != "root" and not is_self:
+                appealable_notice = _is_punitive_member_update(data, target)
                 _send_member_governance_notice(
                     conn,
                     actor=actor,
@@ -886,6 +1230,7 @@ def register_user_routes(app, deps):
                     action_label=_sanction_label(data, target),
                     reason=normalize_text(data.get("level_update_reason") or data.get("reason") or "會員權益變更"),
                     points=0,
+                    appealable=appealable_notice,
                 )
                 conn.commit()
             if revoke_sessions_needed:
@@ -895,7 +1240,8 @@ def register_user_routes(app, deps):
                   detail=f"target_id={user_id},self={is_self}")
             return json_resp({"ok":True,"msg":"帳號已更新"})
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     @app.route("/api/admin/users/<int:user_id>/review-registration", methods=["POST"])
     @require_csrf
@@ -929,14 +1275,33 @@ def register_user_routes(app, deps):
             if target["status"] != "pending":
                 return json_resp({"ok":False,"msg":"此帳號目前不是待審核狀態"}), 409
 
-            new_status = "active" if action == "approve" else "rejected"
-            conn.execute(
-                "UPDATE users SET status=?, updated_at=? WHERE id=?",
-                (new_status, datetime.now().isoformat(), user_id)
-            )
             if action == "approve":
+                new_status = "active"
+                conn.execute(
+                    "UPDATE users SET status=?, updated_at=? WHERE id=?",
+                    (new_status, datetime.now().isoformat(), user_id)
+                )
                 ensure_user_official_room_membership(conn, user_id)
-            conn.commit()
+                msg = "註冊申請已核准"
+            else:
+                new_status = "deleted"
+                target_username = target["username"]
+                try:
+                    hard_delete_user_row(conn, user_id=user_id, username=target_username)
+                    conn.commit()
+                except sqlite3.IntegrityError as exc:
+                    conn.rollback()
+                    audit("REGISTRATION_REVIEW_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target={target['username']},action={action},integrity_error={exc}")
+                    return json_resp({"ok":False,"msg":"駁回註冊申請失敗：仍有未清理的帳號關聯資料，請重新整理後再試"}), 409
+                except sqlite3.Error as exc:
+                    conn.rollback()
+                    audit("REGISTRATION_REVIEW_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                          detail=f"target={target['username']},action={action},error={exc}")
+                    return json_resp({"ok":False,"msg":f"駁回註冊申請失敗：{exc}"}), 500
+                msg = "註冊申請已駁回並刪除帳號"
+            if action == "approve":
+                conn.commit()
             audit(
                 "REGISTRATION_REVIEWED",
                 get_client_ip(),
@@ -945,9 +1310,15 @@ def register_user_routes(app, deps):
                 ua=get_ua(),
                 detail=f"target={target['username']},action={action}"
             )
-            return json_resp({"ok":True,"msg":"審核已完成","status":new_status})
+            if action == "reject":
+                conn.close()
+                conn = None
+                revoke_user_sessions(user_id)
+                delete_csrf_tokens_for_username(target_username)
+            return json_resp({"ok":True,"msg":msg,"status":new_status})
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     @app.route("/api/admin/password-reset-requests", methods=["GET"])
     @require_csrf_safe
@@ -1170,10 +1541,17 @@ def register_user_routes(app, deps):
             if to_role == "super_admin" and count_role("super_admin") >= MAX_EXTRA_SUPER_ADMINS:
                 return json_resp({"ok":False,"msg":f"非 root 最高管理者已達上限（{MAX_EXTRA_SUPER_ADMINS} 人）"}), 409
 
+            previous_target = _row_snapshot(target)
             conn.execute("UPDATE users SET role=?, violation_count=0, updated_at=? WHERE id=?",
                          (to_role, datetime.now().isoformat(), user_id))
-            delete_csrf_tokens_for_username(target["username"])
             conn.commit()
+            conn.close()
+            conn = None
+            warnings = []
+            try:
+                delete_csrf_tokens_for_username(target["username"])
+            except Exception as exc:
+                warnings.append({"scope": "delete_csrf_tokens", "error": str(exc)})
             if points_service and to_role in {"manager", "super_admin"} and target["username"] != "root":
                 try:
                     points_service.award_admin_initial_grant(
@@ -1181,24 +1559,39 @@ def register_user_routes(app, deps):
                         actor={"id": actor["id"], "username": actor["username"], "role": actor_role},
                     )
                 except Exception as exc:
+                    warnings.append({"scope": "award_admin_initial_grant", "error": str(exc)})
                     audit("POINTS_ADMIN_INITIAL_GRANT_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
                           detail=f"target_id={user_id}, error={exc}")
+            try:
+                notice_conn = get_db()
+                try:
+                    _send_member_governance_notice(
+                        notice_conn,
+                        actor=actor,
+                        actor_role=actor_role,
+                        target=target,
+                        previous=previous_target,
+                        action_label=f"角色 {from_role} -> {to_role}",
+                        reason="root 晉升帳號",
+                        points=0,
+                        appealable=False,
+                    )
+                    notice_conn.commit()
+                finally:
+                    notice_conn.close()
+            except Exception as exc:
+                warnings.append({"scope": "member_governance_notice", "error": str(exc)})
+                audit("USER_PROMOTE_NOTICE_FAILED", get_client_ip(), user=actor["username"], success=False, ua=get_ua(),
+                      detail=f"user_id={user_id}, error={exc}")
             audit("USER_PROMOTED", get_client_ip(), user=actor["username"],
                   success=True, detail=f"user_id={user_id} {from_role}→{to_role}")
-            _send_member_governance_notice(
-                conn,
-                actor=actor,
-                actor_role=actor_role,
-                target=target,
-                previous=_row_snapshot(target),
-                action_label=f"角色 {from_role} -> {to_role}",
-                reason="root 晉升帳號",
-                points=0,
-            )
-            conn.commit()
-            return json_resp({"ok":True,"msg":f"已升為 {ROLE_LABEL[to_role]}"})
+            payload = {"ok":True,"msg":f"已升為 {ROLE_LABEL[to_role]}"}
+            if warnings:
+                payload["warnings"] = warnings
+            return json_resp(payload)
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     @app.route("/api/admin/users/<int:user_id>/demote", methods=["POST"])
     @require_csrf
@@ -1231,46 +1624,80 @@ def register_user_routes(app, deps):
             from_role = target["role"]
             if from_role == "user":
                 # Demote user to selected restricted/suspended/inactive state (Bug: demote)
+                previous_target = _row_snapshot(target)
                 conn.execute(
                     f"UPDATE users SET status=?, blocked_until=NULL, updated_at=? WHERE id=?",
                     (target_status, datetime.now().isoformat(), user_id)
                 )
                 conn.commit()
-                revoke_user_sessions(user_id)
+                conn.close()
+                conn = None
+                warnings = []
+                try:
+                    revoke_user_sessions(user_id)
+                except Exception as exc:
+                    warnings.append({"scope": "revoke_user_sessions", "error": str(exc)})
                 audit("USER_DEACTIVATED_BY_ADMIN", get_client_ip(), user=actor["username"],
                       detail=f"user_id={user_id} demoted to {target_status}")
-                _send_member_governance_notice(
-                    conn,
-                    actor=actor,
-                    actor_role=actor_role,
-                    target=target,
-                    previous=_row_snapshot(target),
-                    action_label=f"帳號狀態 {target['status'] or '-'} -> {target_status}",
-                    reason="root 降級帳號",
-                    points=0,
-                )
-                conn.commit()
-                return json_resp({"ok":True,"msg":f"帳號已降級為 {target_status}"})
+                try:
+                    notice_conn = get_db()
+                    try:
+                        _send_member_governance_notice(
+                            notice_conn,
+                            actor=actor,
+                            actor_role=actor_role,
+                            target=target,
+                            previous=previous_target,
+                            action_label=f"帳號狀態 {target['status'] or '-'} -> {target_status}",
+                            reason="root 降級帳號",
+                            points=0,
+                            appealable=True,
+                        )
+                        notice_conn.commit()
+                    finally:
+                        notice_conn.close()
+                except Exception as exc:
+                    warnings.append({"scope": "member_governance_notice", "error": str(exc)})
+                payload = {"ok":True,"msg":f"帳號已降級為 {target_status}"}
+                if warnings:
+                    payload["warnings"] = warnings
+                return json_resp(payload)
             # 管理者 → 一般用戶
+            previous_target = _row_snapshot(target)
             conn.execute("UPDATE users SET role='user', violation_count=0, updated_at=? WHERE id=?",
                          (datetime.now().isoformat(), user_id))
             conn.commit()
+            conn.close()
+            conn = None
             audit("MANAGER_DEMOTED_BY_ADMIN", get_client_ip(), user=actor["username"],
                   detail=f"user_id={user_id} manager→user")
-            _send_member_governance_notice(
-                conn,
-                actor=actor,
-                actor_role=actor_role,
-                target=target,
-                previous=_row_snapshot(target),
-                action_label="角色 manager -> user",
-                reason="root 降級管理員",
-                points=0,
-            )
-            conn.commit()
-            return json_resp({"ok":True,"msg":"已降級為一般用戶"})
+            warnings = []
+            try:
+                notice_conn = get_db()
+                try:
+                    _send_member_governance_notice(
+                        notice_conn,
+                        actor=actor,
+                        actor_role=actor_role,
+                        target=target,
+                        previous=previous_target,
+                        action_label="角色 manager -> user",
+                        reason="root 降級管理員",
+                        points=0,
+                        appealable=True,
+                    )
+                    notice_conn.commit()
+                finally:
+                    notice_conn.close()
+            except Exception as exc:
+                warnings.append({"scope": "member_governance_notice", "error": str(exc)})
+            payload = {"ok":True,"msg":"已降級為一般用戶"}
+            if warnings:
+                payload["warnings"] = warnings
+            return json_resp(payload)
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     # ── 違規計點（系統自動 or 超級管理者手動）─────────────────────────────────────
     @app.route("/api/admin/users/<int:user_id>/violation", methods=["POST"])
@@ -1327,6 +1754,7 @@ def register_user_routes(app, deps):
                 reason=reason,
                 points=points,
                 existing_violation_id=violation_id,
+                appealable=True,
             )
             conn.commit()
             return json_resp({"ok":True,"msg":msg,"new_count":new_count})

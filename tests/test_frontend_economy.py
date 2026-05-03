@@ -400,9 +400,17 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function saveTradingDcaBot" in trading_js
     assert "function scanTradingBots" in trading_js
     assert "function backtestTradingBot" in trading_js
+    assert "function tradingBotRecentFills" in trading_js
+    assert "function renderTradingBotFillDetails" in trading_js
+    assert "function increaseTradingBotMaxRuns" in trading_js
+    assert "/trading/bots/${encodeURIComponent(botUuid)}/increase-runs" in trading_js
     assert "function tradingBotNextRunText" in trading_js
     assert "function updateTradingBotCountdowns" in trading_js
     assert "data-trading-bot-next-run" in trading_js
+    assert "data-trading-bot-increase-runs" in trading_js
+    assert "增加次數" in trading_js
+    assert "交易明細（" in trading_js
+    assert "設定摘要" in trading_js
     assert "已立即執行第一筆" in trading_js
     assert "function tradingErrorText" in trading_js
     assert "交易所 API 不存在" in trading_js

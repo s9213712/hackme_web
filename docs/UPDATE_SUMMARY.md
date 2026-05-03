@@ -1,5 +1,38 @@
 # Update Summary
 
+Release ID: `2026.05.03-051`
+
+## 2026.05.03-051
+
+## Highlights
+
+- ComfyUI generation now supports asynchronous job progress. The web page polls
+  `/api/comfyui/jobs/<job_id>`, shows queue/node progress, and keeps the user on
+  the AI page while local-mode startup is still in progress.
+- Root can inspect a Civitai model page URL, choose a version/file, and
+  download checkpoints or LoRA files into the configured local ComfyUI project.
+  Root can also stop the shared local ComfyUI process from the page.
+- Account governance is stricter and more auditable: rejecting a pending
+  registration deletes the application account, normal user deletion becomes
+  soft-delete with history preservation, deleted users are hidden from default
+  admin lists, and member-rights changes create governance notices plus appeal
+  restore context when appropriate.
+- Trading now exposes first-class grid bot routes/UI plus bot max-run
+  extension. Grid bots support底倉 checks before creation, manual scans that
+  place counter-orders after fills, and backtest selection alongside DCA and
+  workflow bots.
+- Server-encrypted Cloud Drive / Video media no longer fails with a generic 500
+  after a server file-key rotation. Previews return an explanatory placeholder
+  where possible, and raw content/stream APIs return `decrypt_unavailable`.
+- The blocking pre-push gate is modularized under `scripts/prepush/`, adds
+  cleanup helpers, and now has dedicated regression coverage for release-sync,
+  governance/account, and trading updates.
+
+## Validation
+
+- `python3 scripts/pre_push_checks.py --ci`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_prepush_v2.py tests/test_frontend_account_admin.py tests/test_comfyui_integration.py tests/test_account_sessions.py tests/test_sanction_notices.py tests/test_trading_engine.py tests/test_video_publish.py tests/test_security_issue_regressions.py`
+
 ## 2026.05.02-050
 
 ## Highlights

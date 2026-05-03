@@ -7,17 +7,14 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**目前 Release ID：`2026.05.02-050`**
+**目前 Release ID：`2026.05.03-051`**
 
 `hackme_web` 是一個以安全性為核心的 Flask Web 應用，用來研究認證、
 RBAC、moderation workflow、審計能力與單機服務防護。
 
-`2026.05.02-050` 版改善 ComfyUI、雲端硬碟與影音平台整合。ComfyUI 現在可由
-root 選擇本地或遠端模式，只有使用者在生圖頁按下啟動時才會啟動本地服務，
-並加入可重用的 Linux 啟動腳本模板、每位使用者的產圖所有權隔離、LoRA /
-checkpoint 下載設定，以及避免文件洩漏本機路徑。雲端硬碟補強 E2EE session
-預覽、文檔建立、媒體預覽與遠端下載佇列；影音平台可直接上傳影音並透過既有
-Cloud Drive 儲存層發布伺服端加密媒體。
+`2026.05.03-051` 版補強 ComfyUI 非同步進度、root 專用 Civitai 模型檢視/
+下載、帳號治理通知與刪除流程、網格交易機器人操作/回測、伺服端加密媒體在
+換鑰後的安全降級顯示，以及模組化 pre-push v2 驗證與清理工具。
 
 `2026.05.02-047` 版新增整站 production gate，並把 Video Platform 納入整站
 驗收範圍。最新影音模組變更後仍需重新跑整站 gate，才可把結果視為最終
@@ -123,6 +120,15 @@ push 前：
 ```bash
 python3 scripts/pre_push_checks.py
 ```
+
+這個阻擋式 pre-push gate 會編譯 Python、確認版本文件同步、拒絕追蹤 runtime
+檔案與本機工作站路徑、執行 `git diff --check`、掃描明文 secrets、在本機有
+安裝時額外執行 `gitleaks` 與 `node --check`、跑核心 pytest。預設模式刻意保持
+快速，不會啟動伺服器；只有明確加 `--full` 才會跑 isolated `/tmp` server smoke、
+API contract、snapshot/restore、Server Mode、PointsChain 與 log-chain 檢查。
+`--ci` 代表非互動與輸出淨化，不等於重型測試。可加 `--clean --yes` 清 repo 內安全快取，或加
+`--clean-temp --yes` 清舊的 `/tmp/html_learning_prepush_*`、
+`/tmp/html_learning_secrets_*`，預設保留最新兩個。
 
 快速測試：
 

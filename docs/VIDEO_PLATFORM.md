@@ -82,6 +82,7 @@ video_tip_min_points
 POST   /api/videos/publish
 GET    /api/videos?sort=new|hot|trending&page=1
 GET    /api/videos/<id>
+GET    /api/videos/<id>/cover
 GET    /api/videos/<id>/stream
 POST   /api/videos/<id>/view
 POST   /api/videos/<id>/like
@@ -93,6 +94,14 @@ POST   /api/videos/<id>/tip
 ```
 
 State-changing requests require CSRF through the shared `apiFetch()` wrapper.
+
+Server-encrypted media note:
+
+- If the current server file key cannot decrypt an older `server_encrypted`
+  asset, `/api/videos/<id>/cover` returns an explanatory SVG placeholder and
+  `/api/videos/<id>/stream` returns HTTP `409` with
+  `error=decrypt_unavailable`. Re-upload the media after the key rotation/reset
+  if playback is still required.
 
 ## Tables
 

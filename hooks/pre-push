@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Pre-push hook: auto-bumps APP_RELEASE_ID and syncs UPDATE_SUMMARY.md Release ID.
+# Pre-push hook: auto-bumps APP_RELEASE_ID, amends the tip commit, and then
+# runs the blocking local pre-push validation suite.
 # Install: ln -sf ../../hooks/pre-push .git/hooks/pre-push
 # Or run once: bash hooks/install-hooks.sh
 #
-# IMPORTANT: this hook NEVER exits non-zero — version bump failures are logged
-# but the push always proceeds.
+# IMPORTANT: validation failures exit non-zero and block the push.
 
 RELEASE_FILE="services/release_info.py"
 SUMMARY_FILE="docs/UPDATE_SUMMARY.md"
@@ -82,4 +82,6 @@ PYEOF
 }
 
 bump_version
-exit 0
+
+echo "pre-push: running blocking validation suite"
+PYTHONPATH=. python3 scripts/pre_push_checks.py --ci

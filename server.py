@@ -137,6 +137,11 @@ from services.trading_engine import TradingEngineService, ensure_trading_schema
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+_git_repo_dir_env = os.environ.get("HTML_LEARNING_GIT_REPO_DIR", "").strip()
+if _git_repo_dir_env:
+    GIT_REPO_DIR = _git_repo_dir_env if os.path.isabs(_git_repo_dir_env) else os.path.abspath(_git_repo_dir_env)
+else:
+    GIT_REPO_DIR = BASE_DIR
 STARTUP_BIND = effective_server_bind()
 STARTUP_HOST = STARTUP_BIND["host"]
 STARTUP_PORT = STARTUP_BIND["port"]
@@ -372,7 +377,11 @@ def decrypt_field(value):
     try:
         return fernet.decrypt(value.encode("utf-8")).decode("utf-8")
     except Exception:
-        # Backward compatibility with pre-encryption rows
+        # Backward compatibility with pre-encryption rows. If the value looks
+        # like Fernet ciphertext but can no longer be decrypted (for example,
+        # a runtime key was reset), do not leak the raw ciphertext into UI.
+        if value.startswith("gAAAAA"):
+            return ""
         return value
 
 def verify_token(token):
@@ -814,6 +823,7 @@ def user_public_payload(row, *, include_sensitive=False):
         return None
     data = dict(row)
     is_special_account = data.get("username") == "root" or data.get("role") in {"super_admin", "manager"}
+    is_deleted = str(data.get("status") or "").strip().lower() == "deleted"
     try:
         avatar_crop = json.loads(data.get("avatar_crop_json") or "{}") if data.get("avatar_crop_json") else {}
     except Exception:
@@ -825,11 +835,12 @@ def user_public_payload(row, *, include_sensitive=False):
         "email": data.get("email"),
         "status": data.get("status"),
         "role": data.get("role"),
-        "member_level": None if is_special_account else (data.get("member_level") or "normal"),
-        "base_level": None if is_special_account else (data.get("base_level") or data.get("member_level") or "normal"),
-        "effective_level": None if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal"),
-        "member_level_label": "特殊階級" if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal"),
+        "member_level": None if (is_special_account or is_deleted) else (data.get("member_level") or "normal"),
+        "base_level": None if (is_special_account or is_deleted) else (data.get("base_level") or data.get("member_level") or "normal"),
+        "effective_level": None if (is_special_account or is_deleted) else (data.get("effective_level") or data.get("member_level") or "normal"),
+        "member_level_label": "已刪除" if is_deleted else ("特殊階級" if is_special_account else (data.get("effective_level") or data.get("member_level") or "normal")),
         "special_account": is_special_account,
+        "is_deleted": is_deleted,
         "trust_score": data.get("trust_score") or 0,
         "points": data.get("points") or 0,
         "reputation": data.get("reputation") or 0,
@@ -1510,6 +1521,7 @@ register_operation_routes(app, {
     "ANCHOR_DIR": ANCHOR_DIR,
     "AUDIT_LOG_PATH": AUDIT_LOG_PATH,
     "BASE_DIR": BASE_DIR,
+    "GIT_REPO_DIR": GIT_REPO_DIR,
     "CHAT_DIR": CHAT_DIR,
     "CURRENT_SERVER_BIND_STATE": SERVER_BIND_STATE,
     "DB_PATH": DB_PATH,

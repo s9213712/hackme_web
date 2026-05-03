@@ -292,6 +292,8 @@ def is_safe_dynamic_assignment(rule: Rule, match: re.Match[str]) -> bool:
         return True
     if rhs in SAFE_DYNAMIC_RHS:
         return True
+    if rhs in {"str", "int", "float", "bool", "dict", "list", "tuple", "set", "None"}:
+        return True
     if SAFE_IDENTIFIER_RE.match(rhs) and ("_" in rhs or any(ch.isupper() for ch in rhs)):
         return True
     if rhs in {"[]", "{}"} or rhs.startswith(("[", "{")):

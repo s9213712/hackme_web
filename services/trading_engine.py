@@ -2616,6 +2616,16 @@ class TradingEngineService:
                     (int(user_id),),
                 ).fetchall()
             }
+            for row in conn.execute(
+                """
+                SELECT go.trading_order_uuid AS order_uuid, gb.name AS bot_name
+                FROM trading_grid_orders go
+                JOIN trading_grid_bots gb ON gb.id = go.grid_bot_id
+                WHERE go.user_id=? AND go.trading_order_uuid IS NOT NULL
+                """,
+                (int(user_id),),
+            ).fetchall():
+                bot_order_map[row["order_uuid"]] = row["bot_name"]
             raw_orders = conn.execute("SELECT * FROM trading_orders WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall()
             orders = []
             for row in raw_orders:
@@ -2648,6 +2658,8 @@ class TradingEngineService:
             for row in fill_rows:
                 item = self._fill_payload(row, realized=pnl_by_fill.get(row["id"]))
                 order_uuid = fill_order_uuid_map.get(row["id"])
+                if order_uuid:
+                    item["order_uuid"] = order_uuid
                 if order_uuid and order_uuid in bot_order_map:
                     item["bot_name"] = bot_order_map[order_uuid]
                 fills.append(item)
@@ -3120,6 +3132,51 @@ class TradingEngineService:
         finally:
             conn.close()
 
+    def increase_trading_bot_max_runs(self, *, actor, bot_uuid, delta):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        increment = _to_int(delta, name="delta", minimum=1, maximum=1000)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            row = conn.execute("SELECT * FROM trading_bots WHERE bot_uuid=?", (str(bot_uuid or ""),)).fetchone()
+            if not row:
+                raise ValueError("trading bot not found")
+            if int(row["user_id"]) != int(user_id):
+                raise ValueError("cannot update another user's trading bot")
+            next_max_runs = _to_int(int(row["max_runs"] or 0) + increment, name="max_runs", minimum=1, maximum=10000)
+            now = _now()
+            conn.execute(
+                "UPDATE trading_bots SET max_runs=?, updated_at=? WHERE id=?",
+                (next_max_runs, now, row["id"]),
+            )
+            updated = conn.execute("SELECT * FROM trading_bots WHERE id=?", (row["id"],)).fetchone()
+            self._audit_event(
+                conn,
+                "TRADING_BOT_MAX_RUNS_INCREASED",
+                "trading bot max runs increased",
+                actor=actor,
+                target_user_id=user_id,
+                market_symbol=row["market_symbol"],
+                metadata={
+                    "bot_uuid": row["bot_uuid"],
+                    "delta": increment,
+                    "previous_max_runs": int(row["max_runs"] or 0),
+                    "max_runs": next_max_runs,
+                },
+            )
+            conn.commit()
+            return {"ok": True, "bot": self._bot_payload(updated), "delta": increment}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     # ── Grid Trading Bot ────────────────────────────────────────────────────
 
     def _grid_levels(self, lower, upper, count, spacing_mode="arithmetic"):
@@ -3423,9 +3480,47 @@ class TradingEngineService:
                 ).fetchone()
                 if not t_order:
                     continue
-                if t_order["status"] not in ("filled", "partially_filled"):
-                    continue
-                filled_units = int(t_order["filled_quantity_units"] or 0)
+                if t_order["status"] in ("filled", "partially_filled"):
+                    filled_units = int(t_order["filled_quantity_units"] or 0)
+                else:
+                    executable, _ = self._is_executable(
+                        market,
+                        side=t_order["side"],
+                        order_type=t_order["order_type"],
+                        limit_price=t_order["limit_price_points"],
+                        current_price=current_price,
+                    )
+                    if not executable:
+                        continue
+                    execution_price = int(t_order["limit_price_points"] or go["price_points"] or current_price)
+                    conn.execute(
+                        "UPDATE trading_orders SET execution_price_points=?, updated_at=? WHERE id=?",
+                        (execution_price, now, t_order["id"]),
+                    )
+                    t_order = conn.execute("SELECT * FROM trading_orders WHERE id=?", (t_order["id"],)).fetchone()
+                    fill = self._execute_order(conn, t_order, market, actor=actor)
+                    filled_units = int(fill["quantity_units"] or 0)
+                    self._audit_event(
+                        conn,
+                        "GRID_ORDER_FILLED",
+                        "grid order filled by CFD price crossing",
+                        actor=actor,
+                        target_user_id=user_id,
+                        order_id=t_order["id"],
+                        market_symbol=market["symbol"],
+                        metadata={
+                            "bot_uuid": bot["bot_uuid"],
+                            "grid_order_uuid": go["order_uuid"],
+                            "fill_id": fill["id"],
+                            "level_index": int(go["level_index"]),
+                            "side": go["side"],
+                            "trigger_price_points": current_price,
+                            "execution_price_points": execution_price,
+                        },
+                    )
+                    self._notify_trade_filled(conn, fill)
+                    conn.commit()
+                filled_units = int(filled_units or 0)
                 if filled_units <= 0:
                     continue
                 conn.commit()

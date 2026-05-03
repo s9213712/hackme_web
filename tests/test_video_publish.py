@@ -218,6 +218,40 @@ def test_video_upload_endpoint_accepts_audio_and_streams_it(tmp_path):
     assert stream.data == b"not-a-real-mp3-but-route-test"
 
 
+def test_video_server_encrypted_cover_and_stream_handle_rotated_key_without_500(tmp_path):
+    db_path = tmp_path / "video.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_video_upload_db(db_path)
+    writer_fernet = Fernet(Fernet.generate_key())
+    writer_client = _build_video_upload_app(db_path, storage_root, writer_fernet).test_client()
+
+    response = writer_client.post(
+        "/api/videos/upload",
+        data={
+            "video": (io.BytesIO(b"rotated-key-video"), "clip.mp4", "video/mp4"),
+            "cover": (io.BytesIO(b"\xff\xd8\xff\xe0rotated-cover\xff\xd9"), "cover.jpg", "image/jpeg"),
+            "title": "Rotated key",
+            "visibility": "public",
+            "privacy_mode": "server_encrypted",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    video_id = response.get_json()["video"]["id"]
+
+    reader_fernet = Fernet(Fernet.generate_key())
+    reader_client = _build_video_upload_app(db_path, storage_root, reader_fernet).test_client()
+
+    cover = reader_client.get(f"/api/videos/{video_id}/cover")
+    assert cover.status_code == 200
+    assert cover.mimetype == "image/svg+xml"
+
+    stream = reader_client.get(f"/api/videos/{video_id}/stream")
+    assert stream.status_code == 409
+    assert stream.get_json()["error"] == "decrypt_unavailable"
+
+
 def test_video_upload_rejects_e2ee_and_non_video(tmp_path):
     db_path = tmp_path / "video.db"
     storage_root = tmp_path / "storage"

@@ -8,6 +8,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    import websocket
+except Exception:  # pragma: no cover - optional import fallback
+    websocket = None
+
 
 class ComfyUIError(RuntimeError):
     pass
@@ -30,6 +35,13 @@ class ComfyUIClient:
     def _url(self, path):
         return f"{self.base_url}{path}"
 
+    def _ws_url(self):
+        parsed = urllib.parse.urlparse(self.base_url)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        netloc = parsed.netloc or parsed.path
+        path = parsed.path.rstrip("/")
+        return urllib.parse.urlunparse((scheme, netloc, path, "", "", ""))
+
     def _json_request(self, path, *, method="GET", payload=None, timeout=None, allow_non_json=False):
         headers = {"Accept": "application/json"}
         body = None
@@ -50,6 +62,17 @@ class ComfyUIClient:
                     raise ComfyUIError("ComfyUI 回應不是 JSON") from exc
         except urllib.error.URLError as exc:
             raise ComfyUIError(f"ComfyUI 連線失敗：{getattr(exc, 'reason', exc)}") from exc
+
+    def _open_progress_socket(self, client_id, *, timeout=5):
+        if websocket is None:
+            raise ComfyUIError("缺少 websocket-client 套件，無法讀取 ComfyUI 即時進度")
+        query = urllib.parse.urlencode({"clientId": str(client_id)})
+        try:
+            ws = websocket.create_connection(f"{self._ws_url()}/ws?{query}", timeout=timeout)
+            ws.settimeout(0.25)
+            return ws
+        except Exception as exc:
+            raise ComfyUIError(f"ComfyUI websocket 連線失敗：{exc}") from exc
 
     def get_models(self):
         info = self._json_request("/object_info/CheckpointLoaderSimple")
@@ -169,40 +192,162 @@ class ComfyUIClient:
         workflow["7"]["inputs"]["clip"] = final_clip
         return workflow
 
-    def queue_prompt(self, workflow):
-        client_id = uuid.uuid4().hex
+    def queue_prompt_with_client_id(self, workflow, *, client_id=None):
+        client_id = str(client_id or uuid.uuid4().hex)
         data = self._json_request("/prompt", method="POST", payload={"prompt": workflow, "client_id": client_id})
         prompt_id = data.get("prompt_id") if isinstance(data, dict) else None
         if not prompt_id:
             raise ComfyUIError("ComfyUI 未回傳 prompt_id")
-        return str(prompt_id)
+        return {"prompt_id": str(prompt_id), "client_id": client_id}
+
+    def queue_prompt(self, workflow):
+        return self.queue_prompt_with_client_id(workflow)["prompt_id"]
 
     def interrupt(self):
         return self._json_request("/interrupt", method="POST", payload={}, allow_non_json=True)
 
-    def wait_for_images(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0, expected_count=1):
+    def _emit_progress(self, progress_callback, snapshot):
+        if not progress_callback:
+            return
+        progress_callback(dict(snapshot))
+
+    def _apply_ws_message_to_progress(self, snapshot, message, prompt_id):
+        if not isinstance(message, dict):
+            return False
+        msg_type = str(message.get("type") or "")
+        data = message.get("data") if isinstance(message.get("data"), dict) else {}
+        if data.get("prompt_id") and str(data.get("prompt_id")) != str(prompt_id):
+            return False
+        updated = False
+        snapshot["last_event"] = msg_type
+        snapshot["updated_at"] = time.time()
+        if msg_type == "status":
+            exec_info = data.get("status") if isinstance(data.get("status"), dict) else data.get("exec_info")
+            if isinstance(exec_info, dict):
+                queue_remaining = exec_info.get("queue_remaining")
+                if queue_remaining is not None:
+                    snapshot["queue_remaining"] = int(queue_remaining)
+                    updated = True
+        elif msg_type == "executing":
+            snapshot["phase"] = "running"
+            snapshot["current_node"] = data.get("node")
+            updated = True
+        elif msg_type == "execution_cached":
+            snapshot["phase"] = "running"
+            nodes = data.get("nodes") if isinstance(data.get("nodes"), list) else []
+            snapshot["detail"] = f"使用快取節點 {len(nodes)} 個"
+            updated = True
+        elif msg_type == "progress":
+            value = data.get("value")
+            maximum = data.get("max")
+            if isinstance(value, (int, float)) and isinstance(maximum, (int, float)) and maximum:
+                snapshot["phase"] = "running"
+                snapshot["current"] = float(value)
+                snapshot["max"] = float(maximum)
+                snapshot["percent"] = max(0, min(99, round((float(value) / float(maximum)) * 100)))
+                node_id = data.get("node") or data.get("display_node_id")
+                snapshot["current_node"] = node_id
+                snapshot["detail"] = f"節點 {node_id or '-'}：{int(value)}/{int(maximum)}"
+                updated = True
+        elif msg_type == "progress_state":
+            nodes = data.get("nodes") if isinstance(data.get("nodes"), dict) else {}
+            total_value = 0.0
+            total_max = 0.0
+            active_node = None
+            for node_id, node in nodes.items():
+                if not isinstance(node, dict):
+                    continue
+                if node.get("prompt_id") and str(node.get("prompt_id")) != str(prompt_id):
+                    continue
+                node_max = node.get("max")
+                node_value = node.get("value")
+                if isinstance(node_max, (int, float)) and float(node_max) > 0:
+                    total_max += float(node_max)
+                    total_value += min(float(node_value or 0), float(node_max))
+                    if active_node is None and float(node_value or 0) < float(node_max):
+                        active_node = node
+                        active_node["node_id"] = node.get("display_node_id") or node.get("node_id") or node_id
+            if total_max > 0:
+                snapshot["phase"] = "running"
+                snapshot["current"] = total_value
+                snapshot["max"] = total_max
+                snapshot["percent"] = max(0, min(99, round((total_value / total_max) * 100)))
+                if active_node:
+                    node_label = active_node.get("node_id") or "-"
+                    snapshot["current_node"] = node_label
+                    snapshot["detail"] = f"節點 {node_label}：{int(active_node.get('value') or 0)}/{int(active_node.get('max') or 0)}"
+                updated = True
+        return updated
+
+    def wait_for_images(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0, expected_count=1, websocket_conn=None, progress_callback=None):
         deadline = time.time() + int(timeout_seconds)
         last_status = None
         expected = max(1, int(expected_count or 1))
+        snapshot = {
+            "prompt_id": str(prompt_id),
+            "phase": "queued",
+            "percent": 0,
+            "current": 0,
+            "max": 0,
+            "current_node": None,
+            "queue_remaining": None,
+            "detail": "已送出至 ComfyUI 佇列",
+            "completed": False,
+            "updated_at": time.time(),
+        }
+        next_history_poll = 0.0
         while time.time() < deadline:
-            history = self._json_request(f"/history/{urllib.parse.quote(prompt_id)}", timeout=self.timeout)
-            record = history.get(prompt_id) if isinstance(history, dict) else None
-            if record:
-                status = record.get("status") or {}
-                last_status = status
-                if status.get("status_str") == "error" or status.get("completed") is False and status.get("status_str") == "error":
-                    raise ComfyUIError("ComfyUI 產圖失敗")
-                found = []
-                outputs = record.get("outputs") or {}
-                for output in outputs.values():
-                    images = output.get("images") if isinstance(output, dict) else None
-                    if images:
-                        found.extend(images)
-                if len(found) >= expected:
-                    return found[:expected]
-                if found and status.get("completed") is True:
-                    return found
-            time.sleep(float(poll_interval))
+            if websocket_conn is not None and websocket is not None:
+                for _ in range(20):
+                    try:
+                        raw = websocket_conn.recv()
+                    except websocket.WebSocketTimeoutException:
+                        break
+                    except websocket.WebSocketConnectionClosedException:
+                        websocket_conn = None
+                        break
+                    except Exception:
+                        websocket_conn = None
+                        break
+                    if not isinstance(raw, str):
+                        continue
+                    try:
+                        message = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if self._apply_ws_message_to_progress(snapshot, message, prompt_id):
+                        self._emit_progress(progress_callback, snapshot)
+            now = time.time()
+            if now >= next_history_poll:
+                history = self._json_request(f"/history/{urllib.parse.quote(prompt_id)}", timeout=self.timeout)
+                record = history.get(prompt_id) if isinstance(history, dict) else None
+                if record:
+                    status = record.get("status") or {}
+                    last_status = status
+                    if status.get("status_str") == "error" or status.get("completed") is False and status.get("status_str") == "error":
+                        raise ComfyUIError("ComfyUI 產圖失敗")
+                    found = []
+                    outputs = record.get("outputs") or {}
+                    for output in outputs.values():
+                        images = output.get("images") if isinstance(output, dict) else None
+                        if images:
+                            found.extend(images)
+                    if len(found) >= expected:
+                        snapshot["phase"] = "completed"
+                        snapshot["percent"] = 100
+                        snapshot["completed"] = True
+                        snapshot["detail"] = f"已完成，共 {len(found[:expected])} 張"
+                        self._emit_progress(progress_callback, snapshot)
+                        return found[:expected]
+                    if found and status.get("completed") is True:
+                        snapshot["phase"] = "completed"
+                        snapshot["percent"] = 100
+                        snapshot["completed"] = True
+                        snapshot["detail"] = f"已完成，共 {len(found)} 張"
+                        self._emit_progress(progress_callback, snapshot)
+                        return found
+                next_history_poll = now + float(poll_interval)
+            time.sleep(0.15)
         detail = f"；最後狀態：{last_status}" if last_status else ""
         raise ComfyUIError(f"ComfyUI 產圖逾時{detail}")
 
@@ -301,14 +446,43 @@ class ComfyUIClient:
             result["history_deleted"] = True
         return result
 
-    def generate_image(self, params, *, timeout_seconds=600):
+    def generate_image(self, params, *, timeout_seconds=600, progress_callback=None):
         workflow = self.build_text_to_image_workflow(params)
-        prompt_id = self.queue_prompt(workflow)
-        image_refs = self.wait_for_images(
-            prompt_id,
-            timeout_seconds=timeout_seconds,
-            expected_count=int(params.get("batch_size") or 1),
-        )
+        websocket_conn = None
+        client_id = uuid.uuid4().hex
+        try:
+            if progress_callback:
+                try:
+                    websocket_conn = self._open_progress_socket(client_id, timeout=min(5, self.timeout))
+                except ComfyUIError:
+                    websocket_conn = None
+            queued = self.queue_prompt_with_client_id(workflow, client_id=client_id)
+            prompt_id = queued["prompt_id"]
+            self._emit_progress(progress_callback, {
+                "prompt_id": prompt_id,
+                "phase": "queued",
+                "percent": 0,
+                "current": 0,
+                "max": 0,
+                "current_node": None,
+                "queue_remaining": None,
+                "detail": "已送出至 ComfyUI 佇列",
+                "completed": False,
+                "updated_at": time.time(),
+            })
+            image_refs = self.wait_for_images(
+                prompt_id,
+                timeout_seconds=timeout_seconds,
+                expected_count=int(params.get("batch_size") or 1),
+                websocket_conn=websocket_conn,
+                progress_callback=progress_callback,
+            )
+        finally:
+            try:
+                if websocket_conn is not None:
+                    websocket_conn.close()
+            except Exception:
+                pass
         images = [self.fetch_image(image_ref) for image_ref in image_refs]
         image = images[0]
         serialized_images = [{

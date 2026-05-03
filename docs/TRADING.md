@@ -295,6 +295,7 @@ accounts are not liquidated based on stale candidate data.
 The trading page separates bots into:
 
 - DCA bot.
+- Grid trading bot.
 - Workflow strategy bot.
 - Backtest analysis.
 - Bot execution records.
@@ -302,12 +303,8 @@ The trading page separates bots into:
 New enabled DCA bots execute their first run immediately after creation. Later
 runs depend on the bot interval/cooldown and the bot scanner.
 
-Grid Trading Bot is not enabled yet. Its proposed spot-only design is tracked
-as a research report at
-[Grid Trading Bot Design Report](research_reports/GRID_TRADING_BOT_DESIGN_REPORT.md).
-The intended first version should reuse the existing spot order path,
-PointsChain accounting, audit events, and backtest candle downloader instead of
-creating a second trading engine.
+DCA and workflow bots can extend their `max_runs` limit directly from the bot
+card without editing the rest of the configuration.
 
 ### DCA Bot
 
@@ -325,6 +322,42 @@ Configuration:
 At scan time, the bot converts budget points to quantity using the current
 backend execution price. The bot card shows whether the bot is ready, cooling
 down, disabled, exhausted, or waiting for the next run.
+
+### Grid Trading Bot
+
+Grid bots are spot-first range bots. They place multiple buy/sell levels inside
+a configured price band and try to capture repeated price oscillation between
+those levels.
+
+Configuration:
+
+- Market.
+- Lower price.
+- Upper price.
+- Grid count.
+- Order amount in POINTS per level.
+- Spacing mode (`arithmetic` or `geometric`).
+
+Creation flow:
+
+- The page estimates the sell-side inventory required for the upper grid
+  levels.
+- If the user already holds enough spot inventory, the grid can be created
+  immediately.
+- If inventory is missing, the page offers a底倉 confirmation card so the user
+  can buy the missing spot first or continue creating the grid without the
+  helper buy.
+
+Runtime behavior:
+
+- Grid bots are scanned manually from the exchange page in this version.
+- After a level is filled, the scan places the counter-order on the next level.
+- In simulated/CFD-style paths, a price crossing can also fill a resting grid
+  level even when no external matching engine event is received.
+- Existing grid bots can be loaded into the backtest panel for what-if replay.
+
+The earlier design report is still useful background material:
+[Grid Trading Bot Design Report](research_reports/GRID_TRADING_BOT_DESIGN_REPORT.md).
 
 ### Workflow Strategy Bot
 
@@ -414,6 +447,7 @@ Backtesting uses the same bot configuration used for live bot scans.
 Supported inputs:
 
 - DCA bot config.
+- Grid bot config.
 - Workflow graph strategy config.
 - Market symbol.
 - Start/end time.

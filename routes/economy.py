@@ -16,7 +16,6 @@ def register_economy_routes(app, deps):
     get_ua = deps.get("get_ua", lambda: "")
     json_resp = deps["json_resp"]
     audit = deps.get("audit", lambda *args, **kwargs: None)
-    add_violation = deps.get("add_violation")
     get_db = deps.get("get_db")
     require_csrf = deps["require_csrf"]
     require_csrf_safe = deps["require_csrf_safe"]
@@ -128,8 +127,8 @@ def register_economy_routes(app, deps):
             offset += len(batch)
         return rows[:max_rows]
 
-    def notify_member_points_action(*, actor, user_id, action_label, reason, points_ledger_uuid=None):
-        if not add_violation or not get_db:
+    def notify_member_points_action(*, actor, user_id, action_label, reason, points_ledger_uuid=None, appealable=False):
+        if not get_db:
             return
         conn = get_db()
         try:
@@ -139,29 +138,16 @@ def register_economy_routes(app, deps):
             ).fetchone()
             if not target or target["username"] == "root":
                 return
-            actor_role = "super_admin" if actor_value(actor, "username") == "root" else actor_value(actor, "role", "user")
-            _action, _msg, _new_count, violation_id = add_violation(
-                target["id"],
-                target["username"],
-                target["role"],
-                points=0,
-                reason=f"會員點數權益變更：{action_label}；原因：{reason or '未填寫'}",
-                triggered_by=actor_role,
-                actor_username=actor_value(actor, "username", "admin"),
-                return_violation_id=True,
-            )
-            if not violation_id:
-                return
             previous = {key: target[key] for key in target.keys()}
             record_admin_sanction_notice(
                 conn,
                 actor=actor,
                 target=target,
                 previous=previous,
-                violation_id=violation_id,
                 action_label=action_label,
                 reason=reason or "會員點數權益變更",
                 points_ledger_uuid=points_ledger_uuid,
+                appealable=appealable,
             )
             conn.commit()
         except Exception as exc:
@@ -443,6 +429,11 @@ def register_economy_routes(app, deps):
                 action_label="；".join(changes) or "錢包處分",
                 reason=str(data.get("reason") or "錢包處分"),
                 points_ledger_uuid=(result.get("ledgers") or [{}])[0].get("ledger_uuid") if result.get("ledgers") else None,
+                appealable=bool(
+                    int(data.get("freeze_amount") or 0) > 0
+                    or str(data.get("wallet_status") or "").strip().lower() in {"closed", "blocked", "disabled", "frozen", "suspended"}
+                    or str(data.get("risk_level") or "").strip().lower() in {"blocked", "restricted", "high", "critical"}
+                ),
             )
             return json_resp(result)
         except Exception as exc:
@@ -495,6 +486,7 @@ def register_economy_routes(app, deps):
                 action_label=f"{'加點' if direction == 'credit' else '扣點'} {amount} 點",
                 reason=reason,
                 points_ledger_uuid=(result.get("ledger") or {}).get("ledger_uuid"),
+                appealable=(direction != "credit"),
             )
             return json_resp(result)
         except Exception as exc:
@@ -563,6 +555,7 @@ def register_economy_routes(app, deps):
                     action_label=f"審核通過加點 {reward.get('amount')} 點",
                     reason=str(data.get("review_note") or "待審核獎勵通過"),
                     points_ledger_uuid=(result.get("ledger") or {}).get("ledger_uuid"),
+                    appealable=False,
                 )
             return json_resp({"ok": True, **result})
         except Exception as exc:

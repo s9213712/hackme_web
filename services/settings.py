@@ -58,6 +58,7 @@ DEFAULT_SETTINGS = {
     "comfyui_local_start_script": os.environ.get("COMFYUI_START_SCRIPT", ""),
     "comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost"),
     "comfyui_api_port": 8192,
+    "comfyui_civitai_api_key": os.environ.get("CIVITAI_API_KEY", ""),
     "comfyui_max_batch_size": 1,
     "comfyui_default_width": 1024,
     "comfyui_default_height": 1024,

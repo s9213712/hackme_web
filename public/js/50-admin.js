@@ -1991,7 +1991,8 @@ async function loadSettings() {
   if ($("s-comfyui-base-dir")) $("s-comfyui-base-dir").value = s.comfyui_base_dir || "";
   if ($("s-comfyui-local-start-script")) $("s-comfyui-local-start-script").value = s.comfyui_local_start_script || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
-  if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8188;
+  if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
+  if ($("s-comfyui-civitai-api-key")) $("s-comfyui-civitai-api-key").value = s.comfyui_civitai_api_key || "";
   updateComfyuiConnectionModeFields();
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
@@ -3125,7 +3126,8 @@ async function saveSettings() {
     comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
     comfyui_local_start_script: ($("s-comfyui-local-start-script")?.value || "").trim(),
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
-    comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8188"),
+    comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
+    comfyui_civitai_api_key: ($("s-comfyui-civitai-api-key")?.value || "").trim(),
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
@@ -3201,7 +3203,7 @@ async function testComfyuiConnection() {
   const button = $("comfyui-test-connection-btn");
   const mode = $("s-comfyui-connection-mode")?.value || "remote";
   const host = ($("s-comfyui-api-host")?.value || "localhost").trim();
-  const port = parseInt($("s-comfyui-api-port")?.value || "8188", 10);
+  const port = parseInt($("s-comfyui-api-port")?.value || "8192", 10);
   const apiUrl = ($("s-comfyui-remote-api-url")?.value || "").trim();
   const baseDir = ($("s-comfyui-base-dir")?.value || "").trim();
   const startScript = ($("s-comfyui-local-start-script")?.value || "").trim();
@@ -3239,10 +3241,24 @@ async function testComfyuiConnection() {
       const scriptText = mode === "local" && script.configured
         ? `；啟動腳本${script.exists ? "存在" : "缺失"}${script.syntax_ok === false ? "，語法檢查失敗" : (script.syntax_ok === true ? "，語法正常" : "")}`
         : "";
-      status.textContent = json.available
-        ? `連線成功：${json.comfyui_url || targetLabel}${scriptText}`
-        : `連線失敗：${json.msg || "ComfyUI 沒有回應"}（${json.comfyui_url || targetLabel}）${scriptText}`;
-      status.style.color = json.available ? "#4caf50" : "#ff4f6d";
+      const autostart = json.autostart || {};
+      const startupLogTail = Array.isArray((json.local_runtime || {}).startup_log_tail)
+        ? json.local_runtime.startup_log_tail.filter(Boolean)
+        : (Array.isArray(autostart.start?.startup_log_tail) ? autostart.start.startup_log_tail.filter(Boolean) : []);
+      const startupLogText = startupLogTail.length ? `；最近輸出：${startupLogTail.join(" / ")}` : "";
+      const autostartText = mode === "local" && autostart.attempted
+        ? `；${autostart.available ? "已成功自動啟動 ComfyUI" : (autostart.message || "已嘗試自動啟動 ComfyUI，仍未就緒")}${startupLogText}`
+        : "";
+      if (json.available) {
+        status.textContent = `連線成功：${json.comfyui_url || targetLabel}${scriptText}${autostartText}`;
+        status.style.color = "#4caf50";
+      } else if (json.starting) {
+        status.textContent = `啟動中：${json.msg || "ComfyUI 正在初始化"}（${json.comfyui_url || targetLabel}）${scriptText}${autostartText}`;
+        status.style.color = "#f5b544";
+      } else {
+        status.textContent = `連線失敗：${json.msg || "ComfyUI 沒有回應"}（${json.comfyui_url || targetLabel}）${scriptText}${autostartText}`;
+        status.style.color = "#ff4f6d";
+      }
     }
   } catch (err) {
     if (status) {

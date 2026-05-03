@@ -193,11 +193,17 @@ def repair_violation_chains():
 def get_latest_violation(conn, user_id):
     return conn.execute(
         """
-        SELECT sv.id, sv.user_id, sv.username, sv.points, sv.reason, sv.triggered_by, sv.actor_username, sv.created_at
-        FROM secure_violations sv
-        LEFT JOIN admin_sanction_appeal_contexts asc2 ON asc2.violation_id = sv.id
-        WHERE sv.user_id=? AND asc2.id IS NULL
-        ORDER BY sv.id DESC LIMIT 1
+        SELECT id, user_id, username, points, reason, triggered_by, actor_username, created_at
+        FROM secure_violations
+        WHERE user_id=?
+          AND NOT (
+              points=0
+              AND (
+                  reason LIKE '會員權益變更：%'
+                  OR reason LIKE '會員點數權益變更：%'
+              )
+          )
+        ORDER BY id DESC LIMIT 1
         """,
         (user_id,)
     ).fetchone()

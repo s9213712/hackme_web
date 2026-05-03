@@ -58,6 +58,10 @@ def _json_hash(payload):
     ).hexdigest()
 
 
+def _sha256_text(value):
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
 def _mode_switch_log_payload(row, prev_hash):
     get = row.get if isinstance(row, dict) else lambda key, default=None: row[key] if key in row.keys() else default
     return {
@@ -1133,7 +1137,19 @@ class SnapshotService:
                 manifest["files"].append({"path": rel_text, "size": path.stat().st_size, "sha256": _sha256_file(path)})
         return manifest
 
+    def _iter_runtime_secret_files(self):
+        for cfg in self.runtime_secret_files:
+            path = cfg if cfg.is_absolute() else self.base_dir / cfg
+            if not path.exists() or not path.is_file() or path.is_symlink():
+                continue
+            try:
+                arcname = str(path.relative_to(self.base_dir))
+            except Exception:
+                arcname = path.name
+            yield path, arcname
+
     def _write_config_archive(self, archive_path):
+        manifest = {"config_files": [], "runtime_secret_files": []}
         with tarfile.open(archive_path, "w:gz") as tar:
             for cfg in self.config_files:
                 if not cfg.exists() or not cfg.is_file():
@@ -1146,6 +1162,7 @@ class SnapshotService:
                             if key and not key.startswith("#"):
                                 out.write(f"{key}=<redacted>\n")
                     tar.add(redacted, arcname=".env.snapshot.redacted")
+                    manifest["config_files"].append({"path": ".env.snapshot.redacted", "size": redacted.stat().st_size, "sha256": _sha256_file(redacted), "redacted": True})
                     try:
                         redacted.unlink()
                     except Exception:
@@ -1153,7 +1170,42 @@ class SnapshotService:
                     continue
                 arcname = str(cfg.relative_to(self.base_dir)) if self.base_dir in cfg.resolve().parents else cfg.name
                 tar.add(cfg, arcname=arcname)
+                manifest["config_files"].append({"path": arcname, "size": cfg.stat().st_size, "sha256": _sha256_file(cfg), "redacted": False})
+            for secret_path, arcname in self._iter_runtime_secret_files():
+                tar.add(secret_path, arcname=arcname)
+                manifest["runtime_secret_files"].append({"path": arcname, "size": secret_path.stat().st_size, "sha256": _sha256_file(secret_path)})
+        return manifest
 
+    def _validate_runtime_secret_files(self, snapshot_dir):
+        metadata_path = snapshot_dir / "metadata.json"
+        if not metadata_path.exists():
+            return {"ok": True, "checked": 0, "errors": []}
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {"ok": False, "checked": 0, "errors": [{"path": "metadata.json", "reason": f"invalid metadata: {exc}"}]}
+        expected = metadata.get("runtime_secret_files") or []
+        if not isinstance(expected, list) or not expected:
+            return {"ok": True, "checked": 0, "errors": []}
+        checked = 0
+        errors = []
+        for item in expected:
+            rel_path = str((item or {}).get("path") or "").strip()
+            digest = str((item or {}).get("sha256") or "").strip()
+            if not rel_path or not digest:
+                continue
+            target = (self.base_dir / rel_path).resolve(strict=False)
+            if self.base_dir.resolve(strict=False) not in target.parents and target != self.base_dir.resolve(strict=False):
+                errors.append({"path": rel_path, "reason": "outside_base_dir"})
+                continue
+            checked += 1
+            if not target.exists() or not target.is_file():
+                errors.append({"path": rel_path, "reason": "missing"})
+                continue
+            actual = _sha256_file(target)
+            if actual != digest:
+                errors.append({"path": rel_path, "reason": "hash_mismatch", "expected_sha256": digest, "actual_sha256": actual})
+        return {"ok": not errors, "checked": checked, "errors": errors}
     def create_snapshot(self, *, snapshot_type, actor, notes=None):
         if snapshot_type not in SNAPSHOT_TYPES:
             return SnapshotResult(False, error="snapshot type 錯誤")
@@ -1196,8 +1248,9 @@ class SnapshotService:
             metadata_path = snapshot_dir / "metadata.json"
 
             self._write_db_backup(db_dump)
-            manifest = self._write_files_archive(files_archive)
-            self._write_config_archive(config_archive)
+            file_manifest = self._write_files_archive(files_archive)
+            config_manifest = self._write_config_archive(config_archive)
+            manifest = {"files": file_manifest.get("files", []), "config": config_manifest}
             manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
             checksums = {}
@@ -1215,7 +1268,9 @@ class SnapshotService:
                 "schema_version": str(CURRENT_SCHEMA_VERSION),
                 "source_mode": source_mode,
                 "includes": includes,
-                "secrets_excluded": True,
+                "secrets_excluded": False,
+                "env_redacted": True,
+                "runtime_secret_files": config_manifest.get("runtime_secret_files", []),
                 "checksum_algorithm": "sha256",
                 "checksum": overall_checksum,
                 "notes": notes or "",
@@ -1804,6 +1859,7 @@ class SnapshotService:
             self._restore_db(snapshot_dir)
             self._clear_file_roots()
             _safe_extract_tar(snapshot_dir / "uploads.tar.gz", self.base_dir)
+            _safe_extract_tar(snapshot_dir / "config.tar.gz", self.base_dir)
             completed_at = datetime.now().isoformat()
             mode_log_merge = self._merge_mode_switch_logs(preserved_mode_switch_logs)
             conn = self.get_db()
@@ -1827,6 +1883,43 @@ class SnapshotService:
                     "event_id": event_id,
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "mode_switch_log_merge": mode_log_merge,
+                }
+            runtime_secret_validation = self._validate_runtime_secret_files(snapshot_dir)
+            if not runtime_secret_validation["ok"]:
+                conn = self.get_db()
+                try:
+                    self.ensure_schema(conn)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO snapshot_restore_events "
+                        "(id, snapshot_id, restored_by, started_at, completed_at, status, restore_mode, pre_restore_snapshot_id, checksum_verified, dry_run, error_message) "
+                        "VALUES (?, ?, ?, ?, ?, 'failed', 'full', ?, 1, 0, ?)",
+                        (
+                            event_id,
+                            snapshot_id,
+                            actor_id,
+                            started_at,
+                            datetime.now().isoformat(),
+                            pre.snapshot_id,
+                            json.dumps(runtime_secret_validation, ensure_ascii=False, sort_keys=True),
+                        ),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                self.audit(
+                    "SNAPSHOT_RESTORE_RUNTIME_SECRETS_FAILED",
+                    "-",
+                    user=actor_name,
+                    success=False,
+                    detail=f"snapshot_id={snapshot_id},runtime_secrets={json.dumps(runtime_secret_validation, ensure_ascii=False, sort_keys=True)}",
+                )
+                return {
+                    "ok": False,
+                    "msg": "runtime secret validation failed",
+                    "event_id": event_id,
+                    "pre_restore_snapshot_id": pre.snapshot_id,
+                    "runtime_secret_validation": runtime_secret_validation,
+                    "requires_restart": True,
                 }
             post_restore_validation = self._run_post_restore_validators()
             if not post_restore_validation["ok"]:
@@ -1857,9 +1950,19 @@ class SnapshotService:
                     "event_id": event_id,
                     "pre_restore_snapshot_id": pre.snapshot_id,
                     "post_restore_validation": post_restore_validation,
+                    "runtime_secret_validation": runtime_secret_validation,
+                    "requires_restart": True,
                 }
             self.audit("SNAPSHOT_RESTORE_COMPLETED", "-", user=actor_name, success=True, detail=f"snapshot_id={snapshot_id},pre_restore={pre.snapshot_id},reason={reason}")
-            return {"ok": True, "msg": "snapshot restored", "event_id": event_id, "pre_restore_snapshot_id": pre.snapshot_id, "post_restore_validation": post_restore_validation}
+            return {
+                "ok": True,
+                "msg": "snapshot restored",
+                "event_id": event_id,
+                "pre_restore_snapshot_id": pre.snapshot_id,
+                "post_restore_validation": post_restore_validation,
+                "runtime_secret_validation": runtime_secret_validation,
+                "requires_restart": True,
+            }
         except Exception as exc:
             conn = self.get_db()
             try:

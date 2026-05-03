@@ -82,7 +82,9 @@ def _service(tmp_path, audit_log, *, runtime_secret_files=None):
 
 def test_root_service_creates_manual_snapshot_with_metadata(tmp_path):
     audit_log = []
-    service, db_path, uploads = _service(tmp_path, audit_log)
+    runtime_key = tmp_path / "app" / ".filekey"
+    service, db_path, uploads = _service(tmp_path, audit_log, runtime_secret_files=[runtime_key])
+    runtime_key.write_text("secret-key-v1", encoding="utf-8")
     (uploads / "avatar.txt").write_text("v1", encoding="utf-8")
 
     result = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="before risky test")
@@ -91,7 +93,9 @@ def test_root_service_creates_manual_snapshot_with_metadata(tmp_path):
     snapshot = service.get_snapshot(snapshot_id=result.snapshot_id, actor={"id": 1, "username": "root"})
     snapshot_dir = Path(snapshot["storage_path"])
     assert snapshot["status"] == "ready"
-    assert snapshot["metadata"]["secrets_excluded"] is True
+    assert snapshot["metadata"]["secrets_excluded"] is False
+    assert snapshot["metadata"]["env_redacted"] is True
+    assert snapshot["metadata"]["runtime_secret_files"][0]["path"] == ".filekey"
     assert (snapshot_dir / "metadata.json").exists()
     assert (snapshot_dir / "db.sqlite3.backup").exists()
     assert (snapshot_dir / "uploads.tar.gz").exists()
@@ -102,7 +106,9 @@ def test_root_service_creates_manual_snapshot_with_metadata(tmp_path):
 
 def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path):
     audit_log = []
-    service, db_path, uploads = _service(tmp_path, audit_log)
+    runtime_key = tmp_path / "app" / ".filekey"
+    service, db_path, uploads = _service(tmp_path, audit_log, runtime_secret_files=[runtime_key])
+    runtime_key.write_text("secret-key-v1", encoding="utf-8")
     (uploads / "f1.txt").write_text("one", encoding="utf-8")
     snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="baseline")
 
@@ -112,10 +118,13 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
     conn.commit()
     conn.close()
     (uploads / "f2.txt").write_text("two", encoding="utf-8")
+    runtime_key.write_text("secret-key-v2", encoding="utf-8")
 
     restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
 
     assert restored["ok"] is True
+    assert restored["requires_restart"] is True
+    assert restored["runtime_secret_validation"]["ok"] is True
     conn = _db(db_path)
     posts = [row["title"] for row in conn.execute("SELECT title FROM posts ORDER BY id").fetchall()]
     user = conn.execute("SELECT base_level, effective_level FROM users WHERE id=1").fetchone()
@@ -125,6 +134,7 @@ def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path)
     assert user["effective_level"] == "normal"
     assert (uploads / "f1.txt").exists()
     assert not (uploads / "f2.txt").exists()
+    assert runtime_key.read_text(encoding="utf-8") == "secret-key-v1"
     assert event["status"] == "completed"
     assert event["pre_restore_snapshot_id"]
     assert (service.snapshots_root / event["pre_restore_snapshot_id"]).exists()
@@ -155,6 +165,26 @@ def test_restore_reports_failure_when_post_restore_validation_fails(tmp_path):
     assert event["status"] == "failed"
     assert "test_failure" in event["error_message"]
     assert any(call[0][0] == "SNAPSHOT_RESTORE_VALIDATION_FAILED" for call in audit_log)
+
+
+def test_restore_fails_when_runtime_secret_validation_fails(tmp_path):
+    audit_log = []
+    runtime_key = tmp_path / "app" / ".filekey"
+    service, db_path, uploads = _service(tmp_path, audit_log, runtime_secret_files=[runtime_key])
+    runtime_key.write_text("secret-key-v1", encoding="utf-8")
+    snap = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="baseline")
+    snapshot_dir = service._snapshot_dir(snap.snapshot_id)
+    metadata = json.loads((snapshot_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["runtime_secret_files"][0]["sha256"] = "0" * 64
+    (snapshot_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+    restored = service.restore_snapshot(snapshot_id=snap.snapshot_id, actor={"id": 1, "username": "root"}, reason="rollback")
+
+    assert restored["ok"] is False
+    assert restored["msg"] == "runtime secret validation failed"
+    assert restored["requires_restart"] is True
+    assert restored["runtime_secret_validation"]["ok"] is False
+    assert any(call[0][0] == "SNAPSHOT_RESTORE_RUNTIME_SECRETS_FAILED" for call in audit_log)
 
 
 def test_portable_snapshot_archive_restores_on_different_instance(tmp_path):
