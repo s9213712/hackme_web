@@ -52,7 +52,7 @@ def actor(user_id, username, role="user"):
     return {"id": user_id, "username": username, "role": role, "status": "active"}
 
 
-def seed_cloud_file(conn, *, file_id="file-video", owner_user_id=1, mime="video/mp4", privacy_mode="standard_plain"):
+def seed_cloud_file(conn, *, file_id="file-video", owner_user_id=1, mime="video/mp4", privacy_mode="standard_plain", filename="clip.mp4"):
     conn.execute(
         """
         INSERT INTO uploaded_files (
@@ -60,6 +60,6 @@ def seed_cloud_file(conn, *, file_id="file-video", owner_user_id=1, mime="video/
             original_filename_plain_for_public, mime_type_plain_for_public, size_bytes
         ) VALUES (?, ?, ?, ?, 'low', 'clean', ?, ?, 128)
         """,
-        (file_id, owner_user_id, f"users/{owner_user_id}/{file_id}/clip.mp4", privacy_mode, "clip.mp4", mime),
+        (file_id, owner_user_id, f"users/{owner_user_id}/{file_id}/{filename}", privacy_mode, filename, mime),
     )
     return file_id

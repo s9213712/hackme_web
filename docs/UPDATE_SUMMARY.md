@@ -1,6 +1,28 @@
 # Update Summary
 
-P26.05.02-048`
+## 2026.05.02-050
+
+## Highlights
+
+- ComfyUI root settings now support local and remote connection modes. Local
+  mode keeps startup explicit: users press the AI-page start button before
+  generation, and already-running local ComfyUI instances can be reused by
+  other users.
+- Added `scripts/comfyui_run_in_linux.template.sh` as a reusable Linux
+  startup template. It checks for an existing virtual environment, creates one
+  only when needed, installs dependencies idempotently, and avoids embedding
+  workstation-specific paths.
+- ComfyUI generation ownership is tracked per user. Save, discard, share, and
+  interrupt actions only operate on that user's generated image references;
+  user interrupts avoid stopping other users' active backend jobs.
+- Cloud Drive and album behavior is improved for E2EE session preview,
+  document creation, media previews, queued remote downloads, and generated
+  ComfyUI output albums.
+- Video Platform publishing now works through the existing Cloud Drive storage
+  layer for direct uploads and server-encrypted media without exposing storage
+  paths.
+- Documentation was cleaned to describe ComfyUI local/remote operation and to
+  remove local machine path examples.
 
 ## Highlights
 

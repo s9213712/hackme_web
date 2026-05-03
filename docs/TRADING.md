@@ -206,9 +206,9 @@ hackme_web-owned bridge script after BTC_trade generates `trade_log_4h.json`:
 
 ```bash
 cd /path/to/hackme_web
-python3 scripts/btc_signal_bridge.py --btc-trade-dir /home/s92137/NN/BTC_trade --status
-python3 scripts/btc_signal_bridge.py --btc-trade-dir /home/s92137/NN/BTC_trade --dry-run
-python3 scripts/btc_signal_bridge.py --btc-trade-dir /home/s92137/NN/BTC_trade
+python3 scripts/btc_signal_bridge.py --btc-trade-dir /path/to/BTC_trade --status
+python3 scripts/btc_signal_bridge.py --btc-trade-dir /path/to/BTC_trade --dry-run
+python3 scripts/btc_signal_bridge.py --btc-trade-dir /path/to/BTC_trade
 ```
 
 The bridge expects a normal hackme_web user named `btc_bridge` by default. You

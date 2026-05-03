@@ -312,21 +312,55 @@ function driveE2eeSessionKey(fileId) {
   return `${currentUserId || "anon"}:${String(fileId || "")}`;
 }
 
+function driveE2eeKnownFileIds(fileId) {
+  const ids = new Set();
+  const addId = (value) => {
+    const normalized = String(value || "").trim();
+    if (normalized) ids.add(normalized);
+  };
+  addId(fileId);
+  const known = findKnownDriveFile(fileId);
+  if (known) {
+    addId(known.id);
+    addId(known.file_id);
+    addId(known.storage_file_id);
+  }
+  return Array.from(ids);
+}
+
 function clearDriveE2eeSessionPassphrases() {
   driveE2eeSessionPassphrases.clear();
 }
 
 function forgetDriveE2eeSessionPassphrase(fileId) {
-  driveE2eeSessionPassphrases.delete(driveE2eeSessionKey(fileId));
+  driveE2eeKnownFileIds(fileId).forEach((id) => {
+    driveE2eeSessionPassphrases.delete(driveE2eeSessionKey(id));
+  });
+}
+
+function getRememberedDriveE2eeSessionPassphrase(fileId) {
+  for (const id of driveE2eeKnownFileIds(fileId)) {
+    const key = driveE2eeSessionKey(id);
+    if (driveE2eeSessionPassphrases.has(key)) {
+      return driveE2eeSessionPassphrases.get(key);
+    }
+  }
+  return "";
+}
+
+function rememberDriveE2eeSessionPassphrase(fileId, passphrase) {
+  if (!passphrase) return;
+  driveE2eeKnownFileIds(fileId).forEach((id) => {
+    driveE2eeSessionPassphrases.set(driveE2eeSessionKey(id), passphrase);
+  });
 }
 
 async function getDriveE2eeSessionPassphrase(fileId, promptText, { force = false } = {}) {
-  const key = driveE2eeSessionKey(fileId);
-  if (!force && driveE2eeSessionPassphrases.has(key)) {
-    return driveE2eeSessionPassphrases.get(key);
+  if (!force) {
+    const remembered = getRememberedDriveE2eeSessionPassphrase(fileId);
+    if (remembered) return remembered;
   }
   const passphrase = await askDriveE2eePassphrase(promptText);
-  if (passphrase) driveE2eeSessionPassphrases.set(key, passphrase);
   return passphrase || "";
 }
 
@@ -1216,7 +1250,6 @@ async function startRemoteDriveDownload({ source = "auto", downloadMode = "direc
     resumeRemoteDownloadTaskPolling(task);
   } catch (err) {
     updateDriveTransferRow(transferId, { status: "failed", phase: "failed", msg: err.message || "遠端下載失敗", progress_percent: 100 });
-    setTimeout(() => dismissRemoteDownloadTask("", transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
     alert(err.message || "遠端下載失敗");
   } finally {
     if (button) {
@@ -1318,7 +1351,6 @@ function resumeRemoteDownloadTaskPolling(task) {
   pollRemoteDownloadTask(task.id, transferId)
     .then(async () => {
       await loadDriveDashboard();
-      setTimeout(() => removeDriveTransferRow(transferId), DRIVE_TRANSFER_COMPLETED_VISIBLE_MS);
     })
     .catch((err) => {
       if (err?.remoteStatusTransient) {
@@ -1340,9 +1372,6 @@ function resumeRemoteDownloadTaskPolling(task) {
         msg: err.message || "遠端下載失敗",
         progress_percent: 100,
       });
-      if (err?.remoteTaskFailed) {
-        setTimeout(() => dismissRemoteDownloadTask(task.id, transferId), DRIVE_TRANSFER_FAILED_VISIBLE_MS);
-      }
     })
     .finally(() => {
       driveRemotePollingTaskIds.delete(task.id);
@@ -1362,10 +1391,6 @@ async function restoreRemoteDownloadTasks() {
     const transferId = applyRemoteDownloadTaskToTransfer(task);
     if (!transferId) return;
     if (task.status === "completed" || task.status === "failed") {
-      setTimeout(
-        () => dismissRemoteDownloadTask(task.status === "failed" ? task.id : "", transferId),
-        task.status === "failed" ? DRIVE_TRANSFER_FAILED_VISIBLE_MS : DRIVE_TRANSFER_COMPLETED_VISIBLE_MS
-      );
       return;
     }
     resumeRemoteDownloadTaskPolling(task);
@@ -1410,6 +1435,7 @@ async function downloadDriveFile(fileId, likelyHighRisk) {
         const passphrase = await getDriveE2eeSessionPassphrase(fileId, "請輸入此 E2EE 檔案的加密密碼。密碼不會送到伺服器；本次登入期間會暫存在瀏覽器記憶體。");
         if (!passphrase) return;
         const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);
+        rememberDriveE2eeSessionPassphrase(fileId, passphrase);
         outputBlob = decrypted.blob;
         name = decrypted.filename || name;
       } catch (err) {
@@ -1555,7 +1581,9 @@ async function decryptDriveE2eeFileForSession(fileId, csrf, promptText) {
     const passphrase = await getDriveE2eeSessionPassphrase(fileId, promptText, { force: attempt > 0 });
     if (!passphrase) return null;
     try {
-      return await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
+      const decrypted = await decryptDriveE2eeBlob(ciphertext, e2ee, passphrase);
+      rememberDriveE2eeSessionPassphrase(fileId, passphrase);
+      return decrypted;
     } catch (err) {
       forgetDriveE2eeSessionPassphrase(fileId);
       if (attempt > 0) throw err;
@@ -2008,6 +2036,7 @@ async function createDriveTextDocument() {
       filename,
       content,
       privacy_mode: privacyMode,
+      virtual_path: joinStoragePath(currentStoragePath, filename),
     });
     if ($("drive-new-doc-name")) $("drive-new-doc-name").value = "";
     if ($("drive-new-doc-content")) $("drive-new-doc-content").value = "";
@@ -2983,6 +3012,31 @@ async function createAlbum() {
   } catch (err) { alert(err.message); }
 }
 
+async function smartOrganizeAlbums() {
+  const strategy = $("album-smart-strategy")?.value || "folder";
+  const msg = $("album-smart-organize-msg") || $("album-gallery-msg");
+  const button = document.querySelector("[data-drive-action='smart-organize-albums']");
+  if (button) button.disabled = true;
+  if (msg) flash(msg, "正在整理相簿...", true);
+  try {
+    const json = await storageAction("/storage/albums/smart-organize", "POST", {
+      strategy,
+      visibility: "private"
+    });
+    const result = json.result || {};
+    const text = Number(result.media_count || 0)
+      ? `智慧整理完成：掃描 ${Number(result.media_count || 0)} 個媒體檔，建立 ${Number(result.created_count || 0)} 本、更新 ${Number(result.updated_count || 0)} 本，新增 ${Number(result.added_count || 0)} 個相簿項目。`
+      : "沒有找到可整理的圖片或影片。";
+    if (msg) flash(msg, text, true);
+    await loadDriveDashboard();
+    await loadAlbumGallery();
+  } catch (err) {
+    if (msg) flash(msg, err.message || "智慧整理失敗", false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function deleteAlbum(id) {
   if (!window.confirm("刪除此相簿？不會刪除原始檔案。")) return;
   try {
@@ -3228,7 +3282,7 @@ async function hydrateAlbumViewerThumbnails(files) {
     const holder = Array.from(document.querySelectorAll("[data-album-thumb-key]")).find((node) => node.dataset.albumThumbKey === String(thumbKey));
     if (!holder) continue;
     try {
-      const blob = await fetchDrivePreviewBlob(file.file_id, csrf);
+      let blob = await fetchDrivePreviewBlob(file.file_id, csrf);
       if (!String(blob.type || "").toLowerCase().startsWith("image/")) throw new Error("不是圖片預覽");
       const url = URL.createObjectURL(blob);
       albumThumbObjectUrls.push(url);
@@ -3236,7 +3290,19 @@ async function hydrateAlbumViewerThumbnails(files) {
       const categoryLabel = Array.from(document.querySelectorAll("[data-album-category-key]")).find((node) => node.dataset.albumCategoryKey === String(thumbKey));
       if (categoryLabel) categoryLabel.textContent = "image";
     } catch (err) {
-      holder.innerHTML = `<span>無法預覽</span>`;
+      try {
+        const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);
+        if (!remembered) throw err;
+        const decrypted = await buildDriveE2eePreview(file.file_id, csrf);
+        if (!decrypted || decrypted.preview.category !== "image") throw err;
+        const url = URL.createObjectURL(decrypted.blob);
+        albumThumbObjectUrls.push(url);
+        holder.innerHTML = `<img src="${url}" alt="${sanitize(decrypted.preview.filename || albumFileDisplayName(file))}" loading="lazy" />`;
+        const categoryLabel = Array.from(document.querySelectorAll("[data-album-category-key]")).find((node) => node.dataset.albumCategoryKey === String(thumbKey));
+        if (categoryLabel) categoryLabel.textContent = "image · E2EE";
+      } catch (_) {
+        holder.innerHTML = `<span>無法預覽</span>`;
+      }
     }
   }
 }
@@ -3468,6 +3534,7 @@ document.addEventListener("click", (event) => {
     if (action === "open-album-viewer") return openAlbumViewer(albumId);
     if (action === "close-album-viewer") return closeAlbumViewer();
     if (action === "refresh-albums") return loadAlbumGallery();
+    if (action === "smart-organize-albums") return smartOrganizeAlbums();
   })().catch((err) => alert(err.message || "操作失敗"));
 });
 

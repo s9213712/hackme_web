@@ -1302,6 +1302,172 @@ def ensure_output_album(conn, *, actor):
     return album, None
 
 
+def smart_organize_albums(conn, *, actor, strategy="folder", visibility="private"):
+    """Create or update albums from existing media files without moving storage files."""
+    ensure_storage_album_schema(conn)
+    owner_user_id = int(actor["id"])
+    strategy = str(strategy or "folder").strip().lower()
+    if strategy not in {"folder", "month", "type", "all"}:
+        return None, "智慧整理方式不支援"
+    visibility = _normalize_album_visibility(visibility)
+    rows = conn.execute(
+        """
+        SELECT sf.id AS storage_file_id, sf.file_id, sf.display_name, sf.virtual_path,
+               sf.created_at AS storage_created_at,
+               f.mime_type_plain_for_public, f.original_filename_plain_for_public,
+               f.created_at AS file_created_at
+        FROM storage_files sf
+        JOIN uploaded_files f ON f.id=sf.file_id
+        WHERE sf.owner_user_id=? AND sf.deleted_at IS NULL AND COALESCE(sf.is_trashed, 0)=0
+              AND f.deleted_at IS NULL
+        ORDER BY sf.virtual_path ASC, sf.created_at ASC
+        """,
+        (owner_user_id,),
+    ).fetchall()
+    media_rows = [row for row in rows if _is_album_media_storage_row(row)]
+    if not media_rows:
+        return {
+            "strategy": strategy,
+            "visibility": visibility,
+            "media_count": 0,
+            "album_count": 0,
+            "created_count": 0,
+            "updated_count": 0,
+            "added_count": 0,
+            "albums": [],
+        }, None
+
+    def media_kind(row):
+        mime = str(row["mime_type_plain_for_public"] or "").lower()
+        name = str(row["display_name"] or row["original_filename_plain_for_public"] or "").lower()
+        if mime.startswith("video/") or name.endswith((".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm", ".wmv")):
+            return "影片"
+        return "圖片"
+
+    def month_key(row):
+        created = str(row["file_created_at"] or row["storage_created_at"] or "")[:7]
+        if len(created) == 7 and created[4] == "-":
+            return created
+        return "未分類日期"
+
+    def folder_key(row):
+        path = str(row["virtual_path"] or "")
+        parts = [part for part in path.split("/") if part]
+        if len(parts) <= 1:
+            return "根目錄"
+        return "/" + "/".join(parts[:-1])
+
+    def group_for(row):
+        if strategy == "all":
+            return "全部媒體"
+        if strategy == "type":
+            return media_kind(row)
+        if strategy == "month":
+            return month_key(row)
+        return folder_key(row)
+
+    groups = {}
+    for row in media_rows:
+        groups.setdefault(group_for(row), []).append(row)
+
+    now = _now()
+    albums = []
+    created_count = 0
+    updated_count = 0
+    added_total = 0
+    for group_name in sorted(groups.keys()):
+        group_rows = groups[group_name]
+        title = f"智慧整理 - {group_name}"[:120]
+        description = f"智慧整理自雲端硬碟；規則={strategy}；來源={group_name}"[:1000]
+        album_row = conn.execute(
+            """
+            SELECT * FROM albums
+            WHERE owner_user_id=? AND deleted_at IS NULL AND title=?
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (owner_user_id, title),
+        ).fetchone()
+        if album_row:
+            album_id = album_row["id"]
+            updated_count += 1
+            conn.execute(
+                "UPDATE albums SET description=?, visibility=?, updated_at=? WHERE id=?",
+                (description, visibility, now, album_id),
+            )
+        else:
+            album, msg = create_album(
+                conn,
+                actor=actor,
+                title=title,
+                description=description,
+                visibility=visibility,
+            )
+            if msg:
+                return None, msg
+            album_id = album["id"]
+            created_count += 1
+
+        existing_rows = conn.execute(
+            "SELECT file_id FROM album_files WHERE album_id=? AND deleted_at IS NULL",
+            (album_id,),
+        ).fetchall()
+        existing_file_ids = {row["file_id"] for row in existing_rows}
+        added_count = 0
+        sort_offset = len(existing_file_ids)
+        for index, row in enumerate(group_rows, start=1):
+            if row["file_id"] in existing_file_ids:
+                conn.execute(
+                    """
+                    UPDATE album_files
+                    SET storage_file_id=?, sort_order=?
+                    WHERE album_id=? AND file_id=? AND deleted_at IS NULL
+                    """,
+                    (row["storage_file_id"], index, album_id, row["file_id"]),
+                )
+                continue
+            conn.execute(
+                """
+                INSERT INTO album_files (
+                    id, album_id, storage_file_id, file_id, sort_order, caption, added_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    album_id,
+                    row["storage_file_id"],
+                    row["file_id"],
+                    sort_offset + index,
+                    f"smart-organize:{strategy}:{group_name}"[:500],
+                    owner_user_id,
+                    now,
+                ),
+            )
+            added_count += 1
+            existing_file_ids.add(row["file_id"])
+        added_total += added_count
+        conn.execute(
+            "UPDATE albums SET cover_file_id=?, updated_at=? WHERE id=?",
+            (group_rows[0]["file_id"], now, album_id),
+        )
+        album = get_album(conn, actor=actor, album_id=album_id, include_files=False)
+        album["group"] = group_name
+        album["matched_count"] = len(group_rows)
+        album["added_count"] = added_count
+        albums.append(album)
+
+    return {
+        "strategy": strategy,
+        "visibility": visibility,
+        "media_count": len(media_rows),
+        "album_count": len(albums),
+        "created_count": created_count,
+        "updated_count": updated_count,
+        "added_count": added_total,
+        "albums": albums,
+    }, None
+
+
 def list_albums(conn, *, actor, include_deleted=False, limit=100, offset=0):
     ensure_storage_album_schema(conn)
     where = "owner_user_id=?"

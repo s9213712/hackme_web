@@ -22,7 +22,7 @@ from services.btc_trade_bridge import BtcTradeBridge, btc_trade_status
 
 
 def _default_btc_trade_dir():
-    return os.environ.get("BTC_TRADE_DIR") or os.environ.get("HACKME_BTC_TRADE_DIR") or "/home/s92137/NN/BTC_trade"
+    return os.environ.get("BTC_TRADE_DIR") or os.environ.get("HACKME_BTC_TRADE_DIR") or ""
 
 
 def main():

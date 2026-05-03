@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import re
 import time
@@ -6,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from flask import request
+from flask import Response, request
 
 from services.btc_trade_bridge import (
     DEFAULT_BTC_TRADE_BRANCH,
@@ -16,7 +18,7 @@ from services.btc_trade_bridge import (
     default_btc_trade_project_dir,
     expand_server_path,
 )
-from services.trading_engine import MAX_BACKTEST_CANDLES
+from services.trading_engine import MAX_BACKTEST_CANDLES, units_to_quantity
 
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
@@ -131,6 +133,24 @@ def register_trading_routes(app, deps):
         if not isinstance(data, dict):
             return None, json_resp({"ok": False, "msg": "Invalid request"}, 400)
         return data, None
+
+    def csv_download_response(filename, fieldnames, rows):
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+        return Response(
+            "\ufeff" + buffer.getvalue(),
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    def table_columns(conn, table_name):
+        try:
+            return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        except Exception:
+            return set()
 
     def workflow_user_slug(actor):
         raw = str(actor_value(actor, "username", "") or actor_value(actor, "id", "user")).strip()
@@ -589,6 +609,169 @@ def register_trading_routes(app, deps):
         if err:
             return err
         return json_resp({"ok": True, "trading": trading_service.user_dashboard(user_id=actor["id"])})
+
+    @app.route("/api/trading/history/export.csv", methods=["GET"])
+    @require_csrf_safe
+    def trading_history_export_csv():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        user_id = int(actor["id"])
+        conn = trading_service.get_db()
+        rows = []
+        try:
+            trading_service.ensure_schema(conn)
+            for row in conn.execute(
+                """
+                SELECT * FROM trading_orders
+                WHERE user_id=?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 10000
+                """,
+                (user_id,),
+            ).fetchall():
+                rows.append({
+                    "record_type": "order",
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "market_symbol": row["market_symbol"],
+                    "side": row["side"],
+                    "order_type": row["order_type"],
+                    "status": row["status"],
+                    "quantity": units_to_quantity(row["quantity_units"]),
+                    "filled_quantity": units_to_quantity(row["filled_quantity_units"]),
+                    "limit_price_points": row["limit_price_points"],
+                    "execution_price_points": row["execution_price_points"],
+                    "notional_points": "",
+                    "fee_points": row["fee_points"],
+                    "frozen_points": row["frozen_points"],
+                    "trial_frozen_points": row["trial_frozen_points"] if "trial_frozen_points" in row.keys() else "",
+                    "chain_frozen_points": row["chain_frozen_points"] if "chain_frozen_points" in row.keys() else "",
+                    "funding_mode": row["funding_mode"],
+                    "execution_mode": row["execution_mode"],
+                    "order_uuid": row["order_uuid"],
+                    "reason": row["reason"],
+                })
+            pnl_by_fill = {
+                row["fill_id"]: row
+                for row in conn.execute(
+                    "SELECT * FROM trading_spot_realized_pnl WHERE user_id=?",
+                    (user_id,),
+                ).fetchall()
+            } if table_columns(conn, "trading_spot_realized_pnl") else {}
+            fill_rows = conn.execute(
+                """
+                SELECT f.*, o.order_uuid
+                FROM trading_fills f
+                JOIN trading_orders o ON o.id=f.order_id
+                WHERE f.user_id=?
+                ORDER BY f.created_at DESC, f.id DESC
+                LIMIT 10000
+                """,
+                (user_id,),
+            ).fetchall()
+            for row in fill_rows:
+                pnl = pnl_by_fill.get(row["id"])
+                rows.append({
+                    "record_type": "fill",
+                    "created_at": row["created_at"],
+                    "market_symbol": row["market_symbol"],
+                    "side": row["side"],
+                    "quantity": units_to_quantity(row["quantity_units"]),
+                    "price_points": row["price_points"],
+                    "notional_points": row["notional_points"],
+                    "fee_points": row["fee_points"],
+                    "reserve_delta_points": row["reserve_delta_points"],
+                    "trial_repaid_points": row["trial_repaid_points"] if "trial_repaid_points" in row.keys() else "",
+                    "trial_profit_points": row["trial_profit_points"] if "trial_profit_points" in row.keys() else "",
+                    "realized_pnl_points": pnl["net_pnl_points"] if pnl else "",
+                    "gross_cost_points": pnl["gross_cost_points"] if pnl else "",
+                    "gross_proceeds_points": pnl["gross_proceeds_points"] if pnl else "",
+                    "buy_fee_estimate_points": pnl["buy_fee_estimate_points"] if pnl else "",
+                    "sell_fee_points": pnl["sell_fee_points"] if pnl else "",
+                    "funding_mode": row["funding_mode"],
+                    "order_uuid": row["order_uuid"],
+                    "fill_uuid": row["fill_uuid"],
+                    "points_ledger_uuids": row["points_ledger_uuids_json"],
+                })
+            if table_columns(conn, "trading_margin_positions"):
+                for row in conn.execute(
+                    """
+                    SELECT * FROM trading_margin_positions
+                    WHERE user_id=?
+                    ORDER BY opened_at DESC, id DESC
+                    LIMIT 10000
+                    """,
+                    (user_id,),
+                ).fetchall():
+                    rows.append({
+                        "record_type": "margin_position",
+                        "created_at": row["opened_at"],
+                        "updated_at": row["updated_at"],
+                        "closed_at": row["closed_at"],
+                        "market_symbol": row["market_symbol"],
+                        "side": "margin_long" if row["position_type"] == "margin_long" else "short",
+                        "status": row["status"],
+                        "quantity": units_to_quantity(row["quantity_units"]),
+                        "price_points": row["entry_price_points"],
+                        "exit_price_points": row["exit_price_points"],
+                        "principal_points": row["principal_points"],
+                        "collateral_points": row["collateral_points"],
+                        "fee_points": row["open_fee_points"],
+                        "close_fee_points": row["close_fee_points"],
+                        "interest_percent_daily": row["interest_percent_daily"],
+                        "interest_points": row["interest_points"],
+                        "interest_paid_points": row["interest_paid_points"],
+                        "realized_pnl_points": row["realized_pnl_points"],
+                        "position_uuid": row["position_uuid"],
+                    })
+            rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        finally:
+            conn.close()
+        fieldnames = [
+            "record_type",
+            "created_at",
+            "updated_at",
+            "closed_at",
+            "market_symbol",
+            "side",
+            "order_type",
+            "status",
+            "quantity",
+            "filled_quantity",
+            "limit_price_points",
+            "execution_price_points",
+            "price_points",
+            "exit_price_points",
+            "notional_points",
+            "fee_points",
+            "close_fee_points",
+            "frozen_points",
+            "trial_frozen_points",
+            "chain_frozen_points",
+            "trial_repaid_points",
+            "trial_profit_points",
+            "reserve_delta_points",
+            "principal_points",
+            "collateral_points",
+            "interest_percent_daily",
+            "interest_points",
+            "interest_paid_points",
+            "realized_pnl_points",
+            "gross_cost_points",
+            "gross_proceeds_points",
+            "buy_fee_estimate_points",
+            "sell_fee_points",
+            "funding_mode",
+            "execution_mode",
+            "order_uuid",
+            "fill_uuid",
+            "position_uuid",
+            "points_ledger_uuids",
+            "reason",
+        ]
+        audit("TRADING_HISTORY_CSV_EXPORTED", get_client_ip(), user=actor_value(actor, "username", ""), success=True, ua=get_ua(), detail=f"user_id={user_id},rows={len(rows)}")
+        return csv_download_response(f"trading_history_{actor_value(actor, 'username', 'user')}.csv", fieldnames, rows)
 
     @app.route("/api/trading/btc-signal", methods=["GET"])
     @require_csrf_safe

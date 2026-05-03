@@ -121,6 +121,9 @@ def test_root_points_page_is_chain_operations_console():
     assert 'fetchEconomyJson("/admin/users")' in economy_js
     assert "function renderEconomyAdjustUserOptions" in economy_js
     assert "async function loadEconomyAccountLookup()" in economy_js
+    assert "async function downloadCsvEndpoint" in economy_js
+    assert "apiFetch(API + path" in economy_js
+    assert "window.location.href = API + path" not in economy_js
     assert "async function sanctionEconomyWallet()" in economy_js
     assert "renderEconomyAccountLookup" in economy_js
     assert "formatEconomyVerificationSummary" in economy_js
@@ -272,6 +275,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-submit-order-btn"' not in economy_section
     assert 'id="trading-root-card"' not in economy_section
     assert 'id="economy-trading-summary-card"' in economy_section
+    assert 'id="economy-wallet-download-btn"' in economy_section
+    assert 'id="economy-trading-export-btn"' in economy_section
     assert 'id="economy-spot-position-quantity"' in economy_section
     assert 'id="economy-spot-position-detail-list"' in economy_section
     assert "現貨明細" in economy_section
@@ -328,6 +333,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "margin_summary" in trading_js
     assert ">確認</button>" in trading_js
     assert ">市價平倉</button>" in trading_js
+    economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
+    assert "/points/wallet/export.csv" in economy_js
+    assert "/trading/history/export.csv" in economy_js
+    assert '"economy-wallet-download-btn", downloadEconomyWalletCsv' in economy_js
+    assert '"economy-trading-export-btn", downloadEconomyTradingCsv' in economy_js
     assert "grid-template-columns: minmax(120px, .85fr) repeat(5" in styles
     assert "成本價（總額）" in trading_js
     assert "目前部位價值" in trading_js

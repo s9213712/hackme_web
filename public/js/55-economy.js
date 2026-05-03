@@ -240,6 +240,39 @@ function exportEconomyLedgerCsv() {
   URL.revokeObjectURL(url);
 }
 
+async function downloadCsvEndpoint(path, label) {
+  try {
+    const res = await apiFetch(API + path, { credentials: "same-origin" });
+    if (!res.ok) {
+      const json = await res.clone().json().catch(() => ({}));
+      throw new Error(json.msg || json.message || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^";]+)"?/i);
+    const filename = match ? match[1] : `${label.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    economySetMsg(`${label} 下載已開始`, true);
+  } catch (err) {
+    economySetMsg(err.message || `${label} 下載失敗`, false);
+  }
+}
+
+function downloadEconomyWalletCsv() {
+  downloadCsvEndpoint("/points/wallet/export.csv", "積分錢包 CSV");
+}
+
+function downloadEconomyTradingCsv() {
+  downloadCsvEndpoint("/trading/history/export.csv", "交易紀錄 CSV");
+}
+
 function renderEconomyLedger(rows, targetId = "economy-ledger-list") {
   if (targetId === "economy-ledger-list") economyLedgerCache = Array.isArray(rows) ? rows : [];
   const list = $(targetId);
@@ -896,6 +929,8 @@ function bindEconomyInlineEvents() {
   economyInlineEventsBound = true;
   const bindings = [
     ["economy-refresh-btn", loadEconomyDashboard],
+    ["economy-wallet-download-btn", downloadEconomyWalletCsv],
+    ["economy-trading-export-btn", downloadEconomyTradingCsv],
     ["economy-ledger-export-btn", exportEconomyLedgerCsv],
     ["economy-admin-refresh-btn", loadEconomyAdmin],
     ["economy-adjust-btn", submitEconomyAdjustment],

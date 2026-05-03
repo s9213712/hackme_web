@@ -43,6 +43,10 @@ def _admin_app(settings_state=None, actor=None, cert_file=None, key_file=None, c
         "server_listen_host": "",
         "server_listen_port": 0,
         "server_ssl_enabled": True,
+        "comfyui_connection_mode": "remote",
+        "comfyui_remote_api_url": "",
+        "comfyui_base_dir": "",
+        "comfyui_local_start_script": "",
         "comfyui_api_host": "localhost",
         "comfyui_api_port": 8192,
         "comfyui_max_batch_size": 1,
@@ -271,6 +275,32 @@ def test_root_can_configure_comfyui_api_endpoint_without_restart_hint():
     assert state["comfyui_api_port"] == 8193
     assert res.get_json()["settings"]["comfyui_api_host"] == "192.168.1.20"
     assert res.get_json()["settings"]["comfyui_api_port"] == 8193
+
+
+def test_root_can_configure_local_comfyui_script_with_absolute_path(tmp_path):
+    app, state = _admin_app()
+    client = app.test_client()
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    comfy_base.mkdir()
+    script = comfy_base / "run_in_linux.sh"
+    script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+
+    res = client.put(
+        "/api/admin/settings",
+        json={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_local_start_script": str(script),
+            "comfyui_api_host": "localhost",
+            "comfyui_api_port": 8188,
+        },
+    )
+
+    assert res.status_code == 200
+    assert state["comfyui_connection_mode"] == "local"
+    assert state["comfyui_base_dir"] == str(comfy_base)
+    assert state["comfyui_local_start_script"] == "run_in_linux.sh"
+    assert state["comfyui_api_port"] == 8188
 
 
 def test_invalid_comfyui_api_endpoint_is_rejected():

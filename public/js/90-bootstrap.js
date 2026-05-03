@@ -182,11 +182,14 @@ function bindUiEvents() {
   const gameAwardBtn = $("game-award-btn");
   const comfyuiRefreshBtn = $("comfyui-refresh-btn");
   const comfyuiLoadDraftBtn = $("comfyui-load-draft-btn");
+  const comfyuiStartBtn = $("comfyui-start-btn");
   const comfyuiGenerateBtn = $("comfyui-generate-btn");
   const comfyuiInterruptBtn = $("comfyui-interrupt-btn");
   const comfyuiSaveBtn = $("comfyui-save-btn");
   const comfyuiShareBtn = $("comfyui-share-btn");
   const comfyuiDiscardBtn = $("comfyui-discard-btn");
+  const comfyuiLoraAddBtn = $("comfyui-lora-add-btn");
+  const comfyuiModelDownloadBtn = $("comfyui-model-download-btn");
   const economyRefreshBtn = $("economy-refresh-btn");
   const economyAdminRefreshBtn = $("economy-admin-refresh-btn");
   const economyAdjustBtn = $("economy-adjust-btn");
@@ -348,11 +351,14 @@ function bindUiEvents() {
   if (gameAwardBtn) gameAwardBtn.addEventListener("click", awardGameRewards);
   if (comfyuiRefreshBtn) comfyuiRefreshBtn.addEventListener("click", loadComfyuiModels);
   if (comfyuiLoadDraftBtn) comfyuiLoadDraftBtn.addEventListener("click", loadComfyuiLastSettings);
+  if (comfyuiStartBtn) comfyuiStartBtn.addEventListener("click", startLocalComfyui);
   if (comfyuiGenerateBtn) comfyuiGenerateBtn.addEventListener("click", generateComfyuiImage);
   if (comfyuiInterruptBtn) comfyuiInterruptBtn.addEventListener("click", interruptComfyuiGeneration);
   if (comfyuiSaveBtn) comfyuiSaveBtn.addEventListener("click", saveComfyuiImageToDrive);
   if (comfyuiShareBtn) comfyuiShareBtn.addEventListener("click", shareComfyuiToCommunity);
   if (comfyuiDiscardBtn) comfyuiDiscardBtn.addEventListener("click", discardComfyuiImage);
+  if (comfyuiLoraAddBtn) comfyuiLoraAddBtn.addEventListener("click", addSelectedComfyuiLora);
+  if (comfyuiModelDownloadBtn) comfyuiModelDownloadBtn.addEventListener("click", downloadComfyuiModelFromUrl);
   if (rootTradingSettingsRefresh) rootTradingSettingsRefresh.addEventListener("click", loadRootTradingSettings);
   if (rootTradingSettingsSave) rootTradingSettingsSave.addEventListener("click", saveRootTradingSettings);
   if (rootTradingBtcTradeCheck) rootTradingBtcTradeCheck.addEventListener("click", checkRootBtcTradeStatus);
@@ -439,6 +445,7 @@ function bindUiEvents() {
   // Settings
   if (settingsSave) settingsSave.addEventListener("click", saveSettings);
   if (comfyuiTestConnectionBtn) comfyuiTestConnectionBtn.addEventListener("click", testComfyuiConnection);
+  if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").addEventListener("change", updateComfyuiConnectionModeFields);
   if (cloudDrivePolicySave) cloudDrivePolicySave.addEventListener("click", saveCloudDriveAdminPolicy);
   if (rootCatalogNew) rootCatalogNew.addEventListener("click", clearRootCatalogForm);
   if (rootCatalogRefresh) rootCatalogRefresh.addEventListener("click", loadRootEconomyCatalog);

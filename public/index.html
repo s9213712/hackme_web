@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hackme_web — 登入系統</title>
   <!-- Security headers via HTTP (set by server/Talisman) -->
-    <link rel="stylesheet" href="/styles.css?v=20260502-mobile-bugfixes" />
+  <link rel="stylesheet" href="/styles.css?v=20260503-comfyui-lora" />
 </head>
 <body>
 <!-- ════════════════════ AUTH CARD ════════════════════ -->
@@ -728,7 +728,15 @@
         <div class="drive-collapsible-body">
           <div class="drive-file-actions" style="justify-content:flex-start;margin-bottom:.7rem;">
             <button class="btn" type="button" data-drive-action="refresh-albums">刷新</button>
+            <select id="album-smart-strategy" class="compact-select" aria-label="智慧整理方式">
+              <option value="folder">依資料夾</option>
+              <option value="month">依上傳月份</option>
+              <option value="type">依圖片 / 影片</option>
+              <option value="all">全部媒體一本</option>
+            </select>
+            <button class="btn btn-primary" type="button" data-drive-action="smart-organize-albums">智慧整理</button>
           </div>
+          <div id="album-smart-organize-msg" class="msg"></div>
           <div class="settings-option-grid">
             <div class="field">
               <label>相簿名稱</label>
@@ -836,58 +844,80 @@
       <div class="drive-card-heading">
         <div>
           <div class="mini-title">影音</div>
-          <div class="drive-card-sub">從自己的雲端硬碟發布影片，其他人可觀看、按讚、留言與投幣。</div>
+          <div class="drive-card-sub">從自己的雲端硬碟發布影片或音樂，其他人可觀看 / 收聽、按讚、留言與投幣。</div>
         </div>
         <div class="drive-file-actions">
           <button class="btn" id="video-refresh-btn" type="button">刷新</button>
-          <button class="btn btn-primary" id="video-publish-open-btn" type="button">發布影片</button>
+          <button class="btn btn-primary" id="video-publish-open-btn" type="button">發布影音</button>
         </div>
       </div>
-      <details class="drive-collapsible-panel" id="video-publish-panel">
-        <summary>
-          <span>
-            <span class="drive-card-title">發布雲端硬碟影片</span>
-            <span class="drive-card-sub">只會使用 cloud_file_id 串接，不公開 storage path。</span>
-          </span>
-        </summary>
-        <div class="drive-collapsible-body">
-          <div class="settings-option-grid">
-            <div class="field">
-              <label>雲端硬碟影片</label>
-              <select id="video-publish-file"></select>
-            </div>
-            <div class="field">
-              <label>標題</label>
-              <input type="text" id="video-publish-title" maxlength="120" placeholder="影片標題" />
-            </div>
-            <div class="field">
-              <label>可見性</label>
-              <select id="video-publish-visibility">
-                <option value="public">公開</option>
-                <option value="unlisted">不列出，持連結可看</option>
-                <option value="private">私人</option>
-              </select>
-            </div>
-            <div class="field" style="grid-column:1/-1;">
-              <label>描述</label>
-              <textarea id="video-publish-description" rows="3" maxlength="2000" placeholder="影片說明、章節或注意事項"></textarea>
-            </div>
-            <div class="field">
-              <label>&nbsp;</label>
-              <button class="btn btn-primary" id="video-publish-btn" type="button">發布</button>
+      <div id="video-browse-view">
+        <details class="drive-collapsible-panel" id="video-publish-panel">
+          <summary>
+            <span>
+              <span class="drive-card-title">發布雲端硬碟影音</span>
+              <span class="drive-card-sub">只會使用 cloud_file_id 串接，不公開 storage path。</span>
+            </span>
+          </summary>
+          <div class="drive-collapsible-body">
+            <div class="settings-option-grid video-publish-grid">
+              <div class="field" style="grid-column:1/-1;">
+                <label>直接上傳影音</label>
+                <input type="file" id="video-upload-file" accept="video/*,audio/*" />
+                <div class="field-help">可直接發布影片或音樂；系統仍會存入你的 Cloud Drive，不建立第二套檔案系統。</div>
+              </div>
+              <div class="field" style="grid-column:1/-1;">
+                <label>封面圖（選填）</label>
+                <input type="file" id="video-cover-file" accept="image/*" />
+                <div class="field-help">建議使用 16:9 圖片；不提供時影片首頁會使用影片首幀或音樂預設封面。</div>
+              </div>
+              <div class="field">
+                <label>上傳隱私</label>
+                <select id="video-upload-privacy-mode">
+                  <option value="standard_plain">一般檔案</option>
+                  <option value="server_encrypted">伺服器端加密</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>雲端硬碟影音</label>
+                <select id="video-publish-file"></select>
+                <div class="field-help">不選直接上傳影音時，才使用既有雲端影音發布。</div>
+              </div>
+              <div class="field">
+                <label>標題</label>
+                <input type="text" id="video-publish-title" maxlength="120" placeholder="影音標題" />
+              </div>
+              <div class="field">
+                <label>可見性</label>
+                <select id="video-publish-visibility">
+                  <option value="public">公開</option>
+                  <option value="unlisted">不列出，持連結可看</option>
+                  <option value="private">私人</option>
+                </select>
+              </div>
+              <div class="field" style="grid-column:1/-1;">
+                <label>描述</label>
+                <textarea id="video-publish-description" rows="3" maxlength="2000" placeholder="影音說明、章節或注意事項"></textarea>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary" id="video-publish-btn" type="button">發布</button>
+              </div>
             </div>
           </div>
+        </details>
+        <div class="drive-card-heading video-sort-bar" style="margin-top:1rem;">
+          <div class="drive-file-actions">
+            <button class="btn btn-sm" type="button" data-video-sort="new">最新</button>
+            <button class="btn btn-sm" type="button" data-video-sort="hot">熱門</button>
+            <button class="btn btn-sm" type="button" data-video-sort="trending">趨勢</button>
+          </div>
         </div>
-      </details>
-      <div class="drive-card-heading" style="margin-top:1rem;">
-        <div class="drive-file-actions">
-          <button class="btn btn-sm" type="button" data-video-sort="new">最新</button>
-          <button class="btn btn-sm" type="button" data-video-sort="hot">熱門</button>
-          <button class="btn btn-sm" type="button" data-video-sort="trending">趨勢</button>
-        </div>
+        <div id="video-list" class="video-grid"></div>
       </div>
-      <div id="video-list" class="video-grid"></div>
-      <div id="video-detail" class="video-detail" style="display:none;"></div>
+      <div id="video-watch-view" class="video-watch-view" style="display:none;">
+        <div id="video-detail" class="video-detail"></div>
+      </div>
       <div id="video-msg" class="msg"></div>
     </div>
   </div>
@@ -1111,12 +1141,32 @@
             </div>
             <button class="btn" id="comfyui-refresh-btn" type="button">重新整理模型</button>
             <button class="btn" id="comfyui-load-draft-btn" type="button">載入上次設定</button>
+            <button class="btn btn-primary" id="comfyui-start-btn" type="button" style="display:none;">啟動 ComfyUI</button>
           </div>
           <div class="field">
             <label>模型</label>
             <select id="comfyui-model-select">
               <option value="">讀取模型中...</option>
             </select>
+          </div>
+          <div class="drive-card-sub" style="margin-top:-.25rem;margin-bottom:.5rem;">LoRA 每增加 1 個，成功產圖每張額外 +1 點。</div>
+          <div class="comfyui-lora-panel">
+            <div class="settings-option-grid">
+              <div class="field">
+                <label>LoRA 數量</label>
+                <input type="number" id="comfyui-lora-limit" min="0" max="8" value="0" />
+              </div>
+              <div class="field">
+                <label>新增 LoRA</label>
+                <div class="inline-control-row">
+                  <select id="comfyui-lora-select"><option value="">讀取 LoRA 中...</option></select>
+                  <button class="btn btn-sm" id="comfyui-lora-add-btn" type="button">加入</button>
+                </div>
+              </div>
+            </div>
+            <div id="comfyui-selected-loras" class="comfyui-selected-loras">
+              <span class="drive-card-sub">尚未選擇 LoRA</span>
+            </div>
           </div>
           <div class="field">
             <label>提示詞</label>
@@ -1142,6 +1192,23 @@
           <div class="comfyui-share-panel">
             <div class="field"><label>分享標題</label><input type="text" id="comfyui-share-title" maxlength="120" placeholder="ComfyUI 產圖分享" /></div>
             <div class="field"><label>心得留言</label><textarea id="comfyui-share-note" rows="3" maxlength="900" placeholder="這次想分享的心得、用途或調參想法"></textarea></div>
+          </div>
+          <div class="drive-card comfyui-root-panel" id="comfyui-root-model-panel" style="display:none;margin-top:.75rem;">
+            <div class="drive-card-heading compact-heading">
+              <div>
+                <div class="drive-card-title">root 模型下載</div>
+                <div class="drive-card-sub">輸入公開網址下載 checkpoint 或 LoRA 到本地 ComfyUI models 目錄；留空則使用 root 設定中的本地資料夾。</div>
+              </div>
+            </div>
+            <div class="settings-option-grid">
+              <div class="field"><label>ComfyUI 專案資料夾</label><input type="text" id="comfyui-model-base-dir" placeholder="/opt/comfyui-portable" /></div>
+              <div class="field"><label>模型類型</label><select id="comfyui-model-download-type"><option value="checkpoint">Checkpoint</option><option value="lora">LoRA</option></select></div>
+            </div>
+            <div class="field"><label>下載網址</label><input type="url" id="comfyui-model-download-url" placeholder="https://example.com/model.safetensors" /></div>
+            <div class="drive-file-actions" style="justify-content:flex-start;">
+              <button class="btn" id="comfyui-model-download-btn" type="button">下載到 ComfyUI</button>
+            </div>
+            <div id="comfyui-model-download-status" class="drive-card-sub">尚未下載模型</div>
           </div>
           <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.75rem;">
             <button class="btn btn-primary" id="comfyui-generate-btn" type="button">產生圖片</button>
@@ -1185,7 +1252,10 @@
         <div class="drive-card">
           <div class="drive-card-heading">
             <div class="drive-card-title">我的餘額</div>
-            <button class="btn" id="economy-refresh-btn" type="button">重新整理</button>
+            <div class="drive-file-actions">
+              <button class="btn" id="economy-refresh-btn" type="button">重新整理</button>
+              <button class="btn" id="economy-wallet-download-btn" type="button">下載錢包 CSV</button>
+            </div>
           </div>
           <div class="settings-option-grid economy-wallet-grid">
             <div><span class="drive-card-sub">全站積分</span><strong id="economy-points-balance">0</strong><small id="economy-points-frozen">凍結 0</small></div>
@@ -1222,6 +1292,7 @@
           <div class="drive-file-actions">
             <button class="btn btn-sm" type="button" onclick="toggleWalletCard('economy-trading-body',this)" style="font-size:.8rem;padding:.2rem .5rem;">▾</button>
             <button class="btn" id="economy-trading-open-btn" type="button">開啟交易所</button>
+            <button class="btn" id="economy-trading-export-btn" type="button">下載交易 CSV</button>
           </div>
         </div>
         <div id="economy-trading-safe-mode" class="drive-card-sub">交易狀態讀取中</div>
@@ -2827,18 +2898,43 @@
             <details class="drive-collapsible-panel settings-collapse">
               <summary>
                 <div>
-                  <div class="drive-card-title">ComfyUI API</div>
-                  <div class="drive-card-sub">ComfyUI 連線位置、預設尺寸與 batch 上限。</div>
+                  <div class="drive-card-title">ComfyUI 連線與模型</div>
+                  <div class="drive-card-sub">可選本地啟動腳本或遠端 API，並設定預設尺寸與 batch 上限。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
             <div class="field">
-              <label>ComfyUI API Host / IP</label>
-              <input type="text" id="s-comfyui-api-host" placeholder="localhost / 192.168.1.20" />
+              <label>連線模式</label>
+              <select id="s-comfyui-connection-mode">
+                <option value="remote">遠端 ComfyUI API</option>
+                <option value="local">本地 ComfyUI 資料夾與啟動腳本</option>
+              </select>
             </div>
-            <div class="field">
-              <label>ComfyUI API Port</label>
-              <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8192" />
+            <div id="comfyui-remote-settings">
+              <div class="field">
+                <label>遠端 API 位址</label>
+                <input type="url" id="s-comfyui-remote-api-url" placeholder="http://127.0.0.1:8192" />
+              </div>
+              <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">遠端模式只透過 ComfyUI API 產圖；丟棄預覽只會清掉網頁預覽，不會刪除遠端 output 原始檔。</div>
+            </div>
+            <div id="comfyui-local-settings" style="display:none;">
+              <div class="field">
+                <label>本地 ComfyUI 資料夾</label>
+                <input type="text" id="s-comfyui-base-dir" placeholder="/opt/comfyui-portable" />
+              </div>
+              <div class="field">
+                <label>啟動腳本</label>
+                <input type="text" id="s-comfyui-local-start-script" placeholder="run_in_linux.sh" />
+              </div>
+              <div class="field">
+                <label>本地 API Host / IP</label>
+                <input type="text" id="s-comfyui-api-host" placeholder="localhost / 127.0.0.1" />
+              </div>
+              <div class="field">
+                <label>本地 API Port</label>
+                <input type="number" id="s-comfyui-api-port" min="1" max="65535" placeholder="8188" />
+              </div>
+              <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">以 Linux/WSL 腳本為例：資料夾填你的 ComfyUI portable 或專案資料夾，腳本填 <code>run_in_linux.sh</code>。本地模式會下載模型到 <code>ComfyUI/models/checkpoints</code> 或 <code>ComfyUI/models/loras</code>，丟棄預覽時可刪除 output 原始檔。</div>
             </div>
             <div class="field">
               <label>單次產圖張數上限</label>
@@ -2857,7 +2953,7 @@
               <button class="btn" type="button" id="comfyui-test-connection-btn">測試連線</button>
             </div>
             <div id="comfyui-test-connection-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">尚未測試 ComfyUI 連線</div>
-            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">ComfyUI 會連線到 <code>http://&lt;host&gt;:&lt;port&gt;</code>。Host 僅填主機名稱或 IP，不要包含 <code>http://</code> 或路徑；儲存後立即生效，不需重啟。</div>
+            <div style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .75rem;">儲存後立即生效，不需重啟。若使用本地模式，第一次產圖時會在後台嘗試執行啟動腳本。</div>
               </div>
             </details>
             <details class="drive-collapsible-panel settings-collapse">
@@ -3169,7 +3265,7 @@
               <div class="drive-collapsible-body">
             <div class="field">
               <label>儲存根目錄（空白代表沿用 HTML_LEARNING_STORAGE_DIR / 目前啟動設定）</label>
-              <input type="text" id="s-cloud-drive-storage-root" placeholder="/home/s92137/html_learning_storage" />
+              <input type="text" id="s-cloud-drive-storage-root" placeholder="/srv/hackme_web/storage" />
             </div>
             <div id="cloud-drive-storage-status" style="font-size:.78rem;color:var(--muted);margin:.25rem 0 .9rem;"></div>
               </div>
@@ -3772,7 +3868,7 @@
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
 <script src="/js/35-drive.js?v=20260503-remote-download-stable" defer></script>
-<script src="/js/36-comfyui.js?v=20260502-progressive-batch" defer></script>
+<script src="/js/36-comfyui.js?v=20260503-comfyui-lora" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260502-video-platform" defer></script>
@@ -3780,6 +3876,6 @@
 <script src="/js/50-admin.js?v=20260501-margin-policy-settings" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
-<script src="/js/90-bootstrap.js?v=20260430-trading-page-split" defer></script>
+<script src="/js/90-bootstrap.js?v=20260503-comfyui-lora" defer></script>
 </body>
 </html>

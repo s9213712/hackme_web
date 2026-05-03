@@ -1936,6 +1936,21 @@ async function applyServerMode() {
   }
 }
 
+function updateComfyuiConnectionModeFields() {
+  const mode = $("s-comfyui-connection-mode")?.value || "remote";
+  const localBox = $("comfyui-local-settings");
+  const remoteBox = $("comfyui-remote-settings");
+  if (localBox) localBox.style.display = mode === "local" ? "" : "none";
+  if (remoteBox) remoteBox.style.display = mode === "remote" ? "" : "none";
+  const status = $("comfyui-test-connection-status");
+  if (status && !status.dataset.userTouched) {
+    status.textContent = mode === "local"
+      ? "本地模式會測試本地 API；若產圖時 API 未啟動，後端會嘗試執行啟動腳本。"
+      : "遠端模式會測試指定 API 位址。";
+    status.style.color = "var(--muted)";
+  }
+}
+
 async function loadSettings() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
@@ -1971,8 +1986,13 @@ async function loadSettings() {
   if ($("s-server-ssl-enabled")) $("s-server-ssl-enabled").checked = !!s.server_ssl_enabled;
   if ($("s-server-listen-host")) $("s-server-listen-host").value = s.server_listen_host || "";
   if ($("s-server-listen-port")) $("s-server-listen-port").value = s.server_listen_port || "";
+  if ($("s-comfyui-connection-mode")) $("s-comfyui-connection-mode").value = s.comfyui_connection_mode || "remote";
+  if ($("s-comfyui-remote-api-url")) $("s-comfyui-remote-api-url").value = s.comfyui_remote_api_url || "";
+  if ($("s-comfyui-base-dir")) $("s-comfyui-base-dir").value = s.comfyui_base_dir || "";
+  if ($("s-comfyui-local-start-script")) $("s-comfyui-local-start-script").value = s.comfyui_local_start_script || "";
   if ($("s-comfyui-api-host")) $("s-comfyui-api-host").value = s.comfyui_api_host || "localhost";
-  if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8192;
+  if ($("s-comfyui-api-port")) $("s-comfyui-api-port").value = s.comfyui_api_port || 8188;
+  updateComfyuiConnectionModeFields();
   if ($("s-comfyui-max-batch-size")) $("s-comfyui-max-batch-size").value = s.comfyui_max_batch_size || 1;
   if ($("s-comfyui-default-width")) $("s-comfyui-default-width").value = s.comfyui_default_width || 1024;
   if ($("s-comfyui-default-height")) $("s-comfyui-default-height").value = s.comfyui_default_height || 1024;
@@ -3100,8 +3120,12 @@ async function saveSettings() {
     server_ssl_enabled: $("s-server-ssl-enabled") ? !!$("s-server-ssl-enabled").checked : true,
     server_listen_host: ($("s-server-listen-host")?.value || "").trim(),
     server_listen_port: parseInt($("s-server-listen-port")?.value || "0"),
+    comfyui_connection_mode: $("s-comfyui-connection-mode")?.value || "remote",
+    comfyui_remote_api_url: ($("s-comfyui-remote-api-url")?.value || "").trim(),
+    comfyui_base_dir: ($("s-comfyui-base-dir")?.value || "").trim(),
+    comfyui_local_start_script: ($("s-comfyui-local-start-script")?.value || "").trim(),
     comfyui_api_host: ($("s-comfyui-api-host")?.value || "localhost").trim(),
-    comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8192"),
+    comfyui_api_port: parseInt($("s-comfyui-api-port")?.value || "8188"),
     comfyui_max_batch_size: parseInt($("s-comfyui-max-batch-size")?.value || "1"),
     comfyui_default_width: parseInt($("s-comfyui-default-width")?.value || "1024"),
     comfyui_default_height: parseInt($("s-comfyui-default-height")?.value || "1024"),
@@ -3175,10 +3199,18 @@ async function saveSettings() {
 async function testComfyuiConnection() {
   const status = $("comfyui-test-connection-status");
   const button = $("comfyui-test-connection-btn");
+  const mode = $("s-comfyui-connection-mode")?.value || "remote";
   const host = ($("s-comfyui-api-host")?.value || "localhost").trim();
-  const port = parseInt($("s-comfyui-api-port")?.value || "8192", 10);
+  const port = parseInt($("s-comfyui-api-port")?.value || "8188", 10);
+  const apiUrl = ($("s-comfyui-remote-api-url")?.value || "").trim();
+  const baseDir = ($("s-comfyui-base-dir")?.value || "").trim();
+  const startScript = ($("s-comfyui-local-start-script")?.value || "").trim();
+  const targetLabel = mode === "local"
+    ? `本地 http://${host || "localhost"}:${Number.isFinite(port) ? port : "-"}`
+    : (apiUrl || "遠端 API");
   if (status) {
-    status.textContent = `正在測試 http://${host || "localhost"}:${Number.isFinite(port) ? port : "-"} ...`;
+    status.dataset.userTouched = "1";
+    status.textContent = `正在測試 ${targetLabel} ...`;
     status.style.color = "var(--muted)";
   }
   if (button) button.disabled = true;
@@ -3191,14 +3223,25 @@ async function testComfyuiConnection() {
         "Content-Type": "application/json",
         "X-CSRF-Token": getCsrfToken() || ""
       },
-      body: JSON.stringify({ host, port })
+      body: JSON.stringify({
+        mode,
+        api_url: apiUrl,
+        host,
+        port,
+        base_dir: baseDir,
+        local_start_script: startScript
+      })
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 連線測試失敗（HTTP ${res.status}）`);
     if (status) {
+      const script = json.local_script || {};
+      const scriptText = mode === "local" && script.configured
+        ? `；啟動腳本${script.exists ? "存在" : "缺失"}${script.syntax_ok === false ? "，語法檢查失敗" : (script.syntax_ok === true ? "，語法正常" : "")}`
+        : "";
       status.textContent = json.available
-        ? `連線成功：${json.comfyui_url || `http://${host}:${port}`}`
-        : `連線失敗：${json.msg || "ComfyUI 沒有回應"}（${json.comfyui_url || `http://${host}:${port}`}）`;
+        ? `連線成功：${json.comfyui_url || targetLabel}${scriptText}`
+        : `連線失敗：${json.msg || "ComfyUI 沒有回應"}（${json.comfyui_url || targetLabel}）${scriptText}`;
       status.style.color = json.available ? "#4caf50" : "#ff4f6d";
     }
   } catch (err) {

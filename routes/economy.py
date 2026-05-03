@@ -1,8 +1,10 @@
+import csv
 import hashlib
+import io
 import json
 import time
 
-from flask import request
+from flask import Response, request
 
 from services.points_chain import DISPLAY_CURRENCY
 from services.sanction_notices import record_admin_sanction_notice
@@ -101,6 +103,31 @@ def register_economy_routes(app, deps):
             return json_resp({"ok": False, "msg": "點數不足，無法扣除；本次調整未寫入帳本", "code": "insufficient_balance"}), status
         return json_resp({"ok": False, "msg": msg}), status
 
+    def csv_download_response(filename, fieldnames, rows):
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+        return Response(
+            "\ufeff" + buffer.getvalue(),
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    def load_user_ledger_for_export(user_id, *, max_rows=10000):
+        rows = []
+        offset = 0
+        while len(rows) < max_rows:
+            batch = points_service.list_ledger(user_id=user_id, limit=200, offset=offset)
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < 200:
+                break
+            offset += len(batch)
+        return rows[:max_rows]
+
     def notify_member_points_action(*, actor, user_id, action_label, reason, points_ledger_uuid=None):
         if not add_violation or not get_db:
             return
@@ -173,6 +200,81 @@ def register_economy_routes(app, deps):
             "ok": True,
             "ledger": points_service.list_ledger(user_id=actor["id"], limit=limit, offset=offset),
         })
+
+    @app.route("/api/points/wallet/export.csv", methods=["GET"])
+    @require_csrf_safe
+    def points_wallet_export_csv():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        user_id = int(actor["id"])
+        wallet = points_service.get_wallet(user_id) or {}
+        ledger_rows = load_user_ledger_for_export(user_id)
+        rows = [{
+            "record_type": "wallet_summary",
+            "user_id": wallet.get("user_id", user_id),
+            "public_account_id": wallet.get("public_account_id", ""),
+            "currency_type": wallet.get("currency_type", DISPLAY_CURRENCY),
+            "points_balance": wallet.get("points_balance", 0),
+            "points_frozen": wallet.get("points_frozen", 0),
+            "total_points_earned": wallet.get("total_points_earned", 0),
+            "total_points_spent": wallet.get("total_points_spent", 0),
+            "wallet_status": wallet.get("wallet_status", ""),
+            "risk_level": wallet.get("risk_level", ""),
+            "wallet_created_at": wallet.get("created_at", ""),
+            "wallet_updated_at": wallet.get("updated_at", ""),
+        }]
+        for row in ledger_rows:
+            rows.append({
+                "record_type": "ledger",
+                "user_id": user_id,
+                "public_account_id": row.get("public_account_id", ""),
+                "currency_type": row.get("currency_type", DISPLAY_CURRENCY),
+                "ledger_uuid": row.get("ledger_uuid", ""),
+                "direction": row.get("direction", ""),
+                "amount": row.get("amount", ""),
+                "balance_before": row.get("balance_before", ""),
+                "balance_after": row.get("balance_after", ""),
+                "action_type": row.get("action_type", ""),
+                "reference_type": row.get("reference_type", ""),
+                "reference_id": row.get("reference_id", ""),
+                "reason": row.get("reason", ""),
+                "ledger_hash": row.get("ledger_hash", ""),
+                "previous_ledger_hash": row.get("previous_ledger_hash", ""),
+                "chain_block_id": row.get("chain_block_id", ""),
+                "status": row.get("status", ""),
+                "created_at": row.get("created_at", ""),
+            })
+        fieldnames = [
+            "record_type",
+            "user_id",
+            "public_account_id",
+            "currency_type",
+            "points_balance",
+            "points_frozen",
+            "total_points_earned",
+            "total_points_spent",
+            "wallet_status",
+            "risk_level",
+            "wallet_created_at",
+            "wallet_updated_at",
+            "ledger_uuid",
+            "direction",
+            "amount",
+            "balance_before",
+            "balance_after",
+            "action_type",
+            "reference_type",
+            "reference_id",
+            "reason",
+            "ledger_hash",
+            "previous_ledger_hash",
+            "chain_block_id",
+            "status",
+            "created_at",
+        ]
+        audit("POINTS_WALLET_CSV_EXPORTED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"user_id={user_id},rows={len(rows)}")
+        return csv_download_response(f"points_wallet_{actor['username']}.csv", fieldnames, rows)
 
     @app.route("/api/points/catalog", methods=["GET"])
     @require_csrf_safe

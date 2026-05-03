@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from flask import request, send_file
 
 from services.access_controls import (
@@ -80,6 +81,47 @@ def validate_comfyui_api_host(value):
     if not COMFYUI_HOST_RE.match(host):
         return None
     return host
+
+
+def validate_comfyui_api_url(value):
+    from urllib.parse import urlparse
+
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        return None
+    return raw
+
+
+def validate_comfyui_relative_script(value, *, base_dir=None):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) > 240:
+        return None
+    try:
+        if raw.startswith("/") or raw.startswith("\\"):
+            if not base_dir:
+                return None
+            base = Path(str(base_dir)).expanduser().resolve()
+            target = Path(raw).expanduser().resolve()
+            rel = target.relative_to(base)
+            parts = rel.as_posix().split("/")
+            if not parts or any(part in {"", ".", ".."} for part in parts):
+                return None
+            return rel.as_posix()
+        parts = raw.replace("\\", "/").split("/")
+        if not parts or any(part in {"", ".", ".."} for part in parts):
+            return None
+        return "/".join(parts)
+    except Exception:
+        return None
 
 
 def validate_git_branch_name(value):
@@ -1716,6 +1758,36 @@ def register_system_admin_routes(app, deps):
             data["server_listen_port"] = port
         if "server_ssl_enabled" in data:
             data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
+        if "comfyui_connection_mode" in data:
+            mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
+            if mode not in {"local", "remote"}:
+                return json_resp({"ok":False,"msg":"comfyui_connection_mode 必須是 local 或 remote"}), 400
+            data["comfyui_connection_mode"] = mode
+        if "comfyui_remote_api_url" in data:
+            api_url = validate_comfyui_api_url(data.get("comfyui_remote_api_url"))
+            if api_url is None:
+                return json_resp({"ok":False,"msg":"comfyui_remote_api_url 必須是 http(s)://host:port，不可包含帳密、路徑或參數"}), 400
+            data["comfyui_remote_api_url"] = api_url
+        if "comfyui_base_dir" in data:
+            raw_base = str(data.get("comfyui_base_dir") or "").strip()
+            if raw_base:
+                try:
+                    data["comfyui_base_dir"] = str(validate_storage_root(raw_base, base_dir=BASE_DIR, create=False))
+                except ValueError as exc:
+                    return json_resp({"ok":False,"msg":f"comfyui_base_dir 不安全或格式錯誤：{exc}"}), 400
+            else:
+                data["comfyui_base_dir"] = ""
+        if "comfyui_local_start_script" in data:
+            base_dir_for_script = data.get("comfyui_base_dir")
+            if base_dir_for_script is None:
+                base_dir_for_script = (get_system_settings() or {}).get("comfyui_base_dir")
+            script = validate_comfyui_relative_script(
+                data.get("comfyui_local_start_script"),
+                base_dir=base_dir_for_script,
+            )
+            if script is None:
+                return json_resp({"ok":False,"msg":"comfyui_local_start_script 必須在 ComfyUI 本地資料夾內，可填相對路徑或同資料夾下的絕對路徑"}), 400
+            data["comfyui_local_start_script"] = script
         if "comfyui_api_host" in data:
             host = validate_comfyui_api_host(data.get("comfyui_api_host"))
             if host is None:

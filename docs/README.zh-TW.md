@@ -7,10 +7,17 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**目前 Release ID：`2026.05.02-047`**
+**目前 Release ID：`2026.05.02-050`**
 
 `hackme_web` 是一個以安全性為核心的 Flask Web 應用，用來研究認證、
 RBAC、moderation workflow、審計能力與單機服務防護。
+
+`2026.05.02-050` 版改善 ComfyUI、雲端硬碟與影音平台整合。ComfyUI 現在可由
+root 選擇本地或遠端模式，只有使用者在生圖頁按下啟動時才會啟動本地服務，
+並加入可重用的 Linux 啟動腳本模板、每位使用者的產圖所有權隔離、LoRA /
+checkpoint 下載設定，以及避免文件洩漏本機路徑。雲端硬碟補強 E2EE session
+預覽、文檔建立、媒體預覽與遠端下載佇列；影音平台可直接上傳影音並透過既有
+Cloud Drive 儲存層發布伺服端加密媒體。
 
 `2026.05.02-047` 版新增整站 production gate，並把 Video Platform 納入整站
 驗收範圍。最新影音模組變更後仍需重新跑整站 gate，才可把結果視為最終

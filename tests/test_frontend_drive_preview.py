@@ -58,12 +58,17 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="album-edit-share-password"' in index_html
     assert 'id="album-edit-clear-share-password"' in index_html
     assert 'id="album-picker-select"' in index_html
+    assert 'id="album-smart-strategy"' in index_html
+    assert 'data-drive-action="smart-organize-albums"' in index_html
     assert 'id="album-list"' in index_html
     assert 'id="album-detail-card"' in index_html
     assert 'id="album-file-list"' not in index_html
     assert "不列出，持連結可看" in index_html
     assert "async function uploadStorageFile()" in drive_js
     assert "async function uploadStorageFolder()" in drive_js
+    assert "async function smartOrganizeAlbums()" in drive_js
+    assert 'storageAction("/storage/albums/smart-organize", "POST"' in drive_js
+    assert 'action === "smart-organize-albums"' in drive_js
     assert "function openStorageFolderUploadPicker()" in drive_js
     assert "function storageUploadRelativePath(file)" in drive_js
     assert "file?.webkitRelativePath" in drive_js
@@ -100,6 +105,7 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert "DRIVE_REMOTE_STATUS_RETRY_LIMIT" in drive_js
     assert "consecutiveStatusErrors" in drive_js
     assert "狀態暫時讀取失敗，正在重試" in drive_js
+    assert 'setTimeout(() => dismissRemoteDownloadTask(task.id, transferId)' not in drive_js
     assert "findDriveTransferRowIdForTask" in drive_js
     assert "async function createAlbumFromFolder(path, name = \"\")" in drive_js
     assert 'storageAction("/storage/folders/album", "POST"' in drive_js
@@ -198,7 +204,9 @@ def test_album_viewer_has_dedicated_module():
     assert 'data-album-sequence="viewer"' in drive_js
     assert "closeAlbumFullPreview" in drive_js
     assert "hydrateAlbumViewerThumbnails" in drive_js
-    assert "const blob = await fetchDrivePreviewBlob(file.file_id, csrf);" in drive_js
+    assert "let blob = await fetchDrivePreviewBlob(file.file_id, csrf);" in drive_js
+    assert "const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);" in drive_js
+    assert "buildDriveE2eePreview(file.file_id, csrf)" in drive_js
     assert "const blob = await fetchDrivePreviewContent(file.file_id, csrf);" not in drive_js
     assert 'data-drive-action="add-cloud-to-album"' in drive_js
     assert 'tabModuleAlbums.style.display = canAccessModule("privacy_uploads") ? "" : "none"' in core_js
@@ -284,6 +292,7 @@ def test_cloud_drive_privacy_modes_use_human_labels():
     assert "E2EE 上傳時附本機掃描回報" in index_html
     assert "新增文檔" in index_html
     assert 'data-drive-action="create-text-document"' in index_html
+    assert "virtual_path: joinStoragePath(currentStoragePath, filename)" in drive_js
     assert "drivePrivacyModeLabel(file.privacy_mode)" in drive_js
     assert "DRIVE_PRIVACY_MODE_COMPARISON" in drive_js
     assert "伺服器端加密" in drive_js
@@ -370,7 +379,13 @@ def test_cloud_drive_e2ee_download_decrypts_in_browser():
     assert "/preview/content" in drive_js
     assert "askDriveE2eePassphrase" in drive_js
     assert "getDriveE2eeSessionPassphrase" in drive_js
+    assert "function rememberDriveE2eeSessionPassphrase(fileId, passphrase)" in drive_js
+    assert "function getRememberedDriveE2eeSessionPassphrase(fileId)" in drive_js
     assert "const decrypted = await decryptDriveE2eeBlob(blob, keyJson.e2ee, passphrase);" in drive_js
+    assert "rememberDriveE2eeSessionPassphrase(fileId, passphrase);" in drive_js
+    assert "const remembered = getRememberedDriveE2eeSessionPassphrase(file.file_id);" in drive_js
+    assert "buildDriveE2eePreview(file.file_id, csrf)" in drive_js
+    assert "image · E2EE" in drive_js
     assert "outputBlob = decrypted.blob" in drive_js
     assert "name = decrypted.filename || name" in drive_js
     assert "伺服器無法重設或找回此密碼" in drive_js

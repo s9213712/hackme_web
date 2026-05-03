@@ -142,14 +142,38 @@ videos meant to be watched in the web player.
 
 ### ComfyUI
 
-The AI image page checks whether the configured ComfyUI API is reachable. If the
-service is unavailable, the page is disabled. Users can select a model, enter a
-prompt and generation parameters, generate an image, then either save it into
-Cloud Drive or discard it.
+The AI image page checks whether the configured ComfyUI API is reachable. Users
+can select a model, LoRA entries, prompts, and generation parameters, then save
+the generated image into Cloud Drive, share it to the ComfyUI forum board, or
+discard the preview.
 
-Root can change the ComfyUI API host/IP and port from server settings. Enter
-only the host name or IP in the host field, for example `localhost` or
-`192.168.1.20`; do not include `http://`, paths, query strings, or credentials.
+Root can configure ComfyUI in two modes from server settings:
+
+- Remote mode: set a full API URL such as `http://127.0.0.1:8192`. Discarding a
+  preview only clears the web preview because a remote ComfyUI API does not offer
+  a safe file-delete endpoint.
+- Local mode: set a local ComfyUI folder and startup script. The image page shows
+  a `Start ComfyUI` button; the server only runs the startup script when a user
+  presses that button. If another user already started the shared ComfyUI backend,
+  later users can use it directly.
+
+The reference Linux/WSL startup script template is
+`scripts/comfyui_run_in_linux.template.sh`. Copy it into a ComfyUI portable
+folder as `run_in_linux.sh`, then set that folder and script name in root
+settings. Do not document or commit workstation-specific absolute paths; use
+deployment-local paths such as `/opt/comfyui-portable` in examples. The script
+reuses an existing virtual environment when available, creates one only if
+needed, installs dependencies with `--install-only`, and supports `--doctor` for
+environment checks.
+
+ComfyUI model downloads are root-only. Checkpoints are saved under
+`ComfyUI/models/checkpoints`, and LoRA files are saved under
+`ComfyUI/models/loras` inside the configured local ComfyUI project. Local mode
+can delete generated output files when a user discards a preview; ownership is
+checked so users can only save or delete their own generated image references.
+Interrupt requests are guarded because ComfyUI interrupt is global: normal users
+only interrupt the backend when no other user's generation is active, while root
+can force a global interrupt.
 
 ### Appeals
 

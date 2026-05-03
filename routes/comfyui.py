@@ -3,11 +3,20 @@ import hashlib
 import json
 import mimetypes
 import os
+import ipaddress
 import re
 import secrets
+import socket
+import subprocess
+import tempfile
+import threading
+import time
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import urlparse
+import urllib.error
+import urllib.request
 
 from flask import request
 
@@ -31,6 +40,14 @@ MAX_GENERATION_TIMEOUT_SECONDS = 1800
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 MAX_COMFYUI_FETCH_IMAGE_BYTES = 50 * 1024 * 1024
+MAX_COMFYUI_LORAS_PER_PROMPT = 8
+COMFYUI_LORA_EXTRA_PRICE_POINTS = 1
+COMFYUI_MODEL_DOWNLOAD_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin"}
+COMFYUI_MODEL_DOWNLOAD_TYPES = {
+    "checkpoint": ("checkpoints", "Checkpoint"),
+    "lora": ("loras", "LoRA"),
+}
+MAX_COMFYUI_MODEL_DOWNLOAD_BYTES = int(os.environ.get("COMFYUI_MODEL_DOWNLOAD_MAX_BYTES", str(20 * 1024 * 1024 * 1024)))
 
 
 class _MemoryFile:
@@ -54,6 +71,8 @@ def register_comfyui_routes(app, deps):
     get_system_settings = deps.get("get_system_settings", lambda: {})
     injected_client = deps.get("comfyui_client")
     points_service = deps.get("points_service")
+    active_generations = deps.get("comfyui_active_generations") or {}
+    active_generations_lock = deps.get("comfyui_active_generations_lock") or threading.Lock()
 
     def _actor_or_401():
         actor = get_current_user_ctx()
@@ -170,6 +189,45 @@ def register_comfyui_routes(app, deps):
             or _actor_value(actor, "role") in {"manager", "super_admin"}
         )
 
+    def _generation_owner_id(actor):
+        try:
+            return int(_actor_value(actor, "id"))
+        except Exception:
+            return None
+
+    def _register_active_generation(actor):
+        token = secrets.token_hex(12)
+        with active_generations_lock:
+            active_generations[token] = {
+                "user_id": _generation_owner_id(actor),
+                "username": _actor_value(actor, "username", ""),
+                "role": _actor_value(actor, "role", ""),
+                "started_at": time.time(),
+            }
+        return token
+
+    def _unregister_active_generation(token):
+        with active_generations_lock:
+            active_generations.pop(token, None)
+
+    def _active_generation_snapshot():
+        with active_generations_lock:
+            return list(active_generations.values())
+
+    def _interrupt_policy(actor):
+        if _actor_value(actor, "username") == "root":
+            return True, "root_force", {}
+        actor_id = _generation_owner_id(actor)
+        active = _active_generation_snapshot()
+        own = [item for item in active if item.get("user_id") == actor_id]
+        others = [item for item in active if item.get("user_id") != actor_id]
+        summary = {"own_active": len(own), "other_active": len(others), "total_active": len(active)}
+        if not own:
+            return False, "no_owned_generation", summary
+        if others:
+            return False, "shared_backend_busy", summary
+        return True, "owned_generation_only", summary
+
     def _validate_comfyui_host(value):
         host = str(value or "").strip().strip("[]")
         if not host:
@@ -184,6 +242,15 @@ def register_comfyui_routes(app, deps):
         return host
 
     def _parse_comfyui_endpoint(data):
+        mode = str((data or {}).get("mode") or (data or {}).get("comfyui_connection_mode") or _configured_connection_mode()).strip().lower()
+        if mode == "remote":
+            raw_url = str((data or {}).get("api_url") or (data or {}).get("comfyui_remote_api_url") or "").strip()
+            if raw_url:
+                url, msg = _validate_comfyui_api_url(raw_url)
+                if msg:
+                    return None, None, msg
+                parsed = urlparse(url)
+                return url, {"mode": "remote", "api_url": url, "host": parsed.hostname, "port": parsed.port or (443 if parsed.scheme == "https" else 80)}, None
         default_url = urlparse(DEFAULT_COMFYUI_URL)
         host = _validate_comfyui_host(data.get("host") or data.get("comfyui_api_host") or default_url.hostname or "localhost")
         if host is None:
@@ -195,10 +262,34 @@ def register_comfyui_routes(app, deps):
         if port < 1 or port > 65535:
             return None, None, "ComfyUI Port 必須是 1-65535"
         display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-        return f"http://{display_host}:{port}", {"host": host, "port": port}, None
+        return f"http://{display_host}:{port}", {"mode": mode if mode in {"local", "remote"} else "remote", "host": host, "port": port}, None
+
+    def _validate_comfyui_api_url(value):
+        raw = str(value or "").strip().rstrip("/")
+        if not raw:
+            return None, "ComfyUI API 位址不可空白"
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None, "ComfyUI API 位址必須是 http://host:port 或 https://host:port"
+        if parsed.username or parsed.password:
+            return None, "ComfyUI API 位址不可包含帳密"
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            return None, "ComfyUI API 位址只需填主機與 port，不要包含路徑或參數"
+        return raw, None
+
+    def _configured_connection_mode():
+        settings = get_system_settings() or {}
+        mode = str(settings.get("comfyui_connection_mode") or "remote").strip().lower()
+        return mode if mode in {"local", "remote"} else "remote"
 
     def _configured_comfyui_url():
         settings = get_system_settings() or {}
+        if _configured_connection_mode() == "remote":
+            configured_url = str(settings.get("comfyui_remote_api_url") or "").strip()
+            if configured_url:
+                url, msg = _validate_comfyui_api_url(configured_url)
+                if not msg:
+                    return url
         default_url = urlparse(DEFAULT_COMFYUI_URL)
         host = str(settings.get("comfyui_api_host") or default_url.hostname or os.environ.get("COMFYUI_API_HOST") or "localhost").strip()
         host = host.strip("[]")
@@ -212,6 +303,110 @@ def register_comfyui_routes(app, deps):
         display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
         return f"http://{display_host}:{port}"
 
+    def _configured_local_start_script(value=None, *, base_dir=None):
+        raw = str(value or (get_system_settings() or {}).get("comfyui_local_start_script") or "").strip()
+        if not raw:
+            return None, None
+        base = _configured_comfyui_base_dir(base_dir)
+        if not base:
+            return None, "請先設定 ComfyUI 本地資料夾"
+        try:
+            if raw.startswith("/") or raw.startswith("\\"):
+                script = Path(raw).expanduser().resolve()
+            else:
+                if ".." in raw.replace("\\", "/").split("/"):
+                    return None, "ComfyUI 啟動腳本必須在本地資料夾內"
+                script = (base / raw).resolve()
+            script.relative_to(base)
+        except Exception:
+            return None, "ComfyUI 啟動腳本超出允許資料夾"
+        if not script.exists() or not script.is_file():
+            return None, f"找不到 ComfyUI 啟動腳本：{raw}"
+        return script, None
+
+    def _local_start_script_status(data):
+        raw_script = str((data or {}).get("local_start_script") or (data or {}).get("comfyui_local_start_script") or "").strip()
+        raw_base = str((data or {}).get("base_dir") or (data or {}).get("comfyui_base_dir") or "").strip()
+        if not raw_script:
+            raw_script = str((get_system_settings() or {}).get("comfyui_local_start_script") or "").strip()
+        script, msg = _configured_local_start_script(raw_script, base_dir=raw_base or None)
+        status = {
+            "configured": bool(raw_script),
+            "exists": bool(script),
+            "syntax_ok": None,
+            "message": msg or "",
+        }
+        if script:
+            status["filename"] = script.name
+            status["relative_path"] = script.relative_to(_configured_comfyui_base_dir(raw_base or None)).as_posix()
+            if script.suffix.lower() == ".sh":
+                try:
+                    check = subprocess.run(["bash", "-n", str(script)], cwd=str(script.parent), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+                    status["syntax_ok"] = check.returncode == 0
+                    if check.returncode != 0:
+                        status["message"] = (check.stderr or check.stdout or "啟動腳本語法檢查失敗")[:400]
+                except Exception as exc:
+                    status["syntax_ok"] = False
+                    status["message"] = str(exc)[:400]
+        return status
+
+    def _start_local_comfyui(actor, *, wait_seconds=2):
+        if _configured_connection_mode() != "local":
+            return None, "只有本地模式可以從網頁啟動 ComfyUI"
+        if injected_client is not None:
+            return {"started": False, "already_running": True, "testing": True}, None
+        active_client = _client()
+        try:
+            active_client.health_check(timeout=2)
+            return {"started": False, "already_running": True, "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url())}, None
+        except Exception:
+            pass
+        script, msg = _configured_local_start_script()
+        if msg or not script:
+            audit("COMFYUI_LOCAL_AUTOSTART_SKIPPED", get_client_ip(), user=_actor_value(actor, "username"), success=False, ua=get_ua(), detail=msg or "no script configured")
+            return None, msg or "尚未設定 ComfyUI 本地啟動腳本"
+        base = _configured_comfyui_base_dir()
+        project_dir = _configured_comfyui_project_dir()
+        command = [str(script)]
+        if script.suffix.lower() == ".sh":
+            command = ["bash", str(script)]
+        env = os.environ.copy()
+        try:
+            configured_port = urlparse(_configured_comfyui_url()).port or DEFAULT_COMFYUI_PORT
+        except Exception:
+            configured_port = DEFAULT_COMFYUI_PORT
+        env.update({
+            "PORT": str(configured_port),
+            "AUTO_PORT_SCAN": "0",
+            "COMFYUI_DIR": str(project_dir or base),
+        })
+        try:
+            subprocess.Popen(
+                command,
+                cwd=str(base),
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            audit("COMFYUI_LOCAL_AUTOSTART", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"script={script.name}")
+            deadline = time.time() + max(0, int(wait_seconds or 0))
+            while time.time() < deadline:
+                try:
+                    active_client.health_check(timeout=2)
+                    return {"started": True, "available": True, "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url())}, None
+                except Exception:
+                    time.sleep(1)
+            return {
+                "started": True,
+                "available": False,
+                "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+                "message": "已啟動背景流程；若是第一次安裝依賴，可能需要數分鐘，稍後請按重新整理模型。",
+            }, None
+        except Exception as exc:
+            audit("COMFYUI_LOCAL_AUTOSTART_ERROR", get_client_ip(), user=_actor_value(actor, "username"), success=False, ua=get_ua(), detail=str(exc)[:180])
+            return None, str(exc)
+
     def _configured_max_batch_size():
         settings = get_system_settings() or {}
         return _int_range(settings.get("comfyui_max_batch_size"), 1, 1, 8)
@@ -222,6 +417,126 @@ def register_comfyui_routes(app, deps):
             "width": _int_range(settings.get("comfyui_default_width"), 1024, 64, 2048, multiple_of=8),
             "height": _int_range(settings.get("comfyui_default_height"), 1024, 64, 2048, multiple_of=8),
         }
+
+    def _configured_comfyui_base_dir(value=None):
+        raw = str(value or (get_system_settings() or {}).get("comfyui_base_dir") or os.environ.get("COMFYUI_BASE_DIR") or "").strip()
+        if not raw:
+            return None
+        path = Path(raw).expanduser()
+        try:
+            return path.resolve()
+        except Exception:
+            return None
+
+    def _configured_comfyui_project_dir(value=None):
+        base = _configured_comfyui_base_dir(value)
+        if not base:
+            return None
+        direct = (base / "main.py").resolve()
+        nested = (base / "ComfyUI" / "main.py").resolve()
+        if direct.exists():
+            return base
+        if nested.exists():
+            return nested.parent
+        return base
+
+    def _public_download_host(url):
+        parsed = urlparse(str(url or "").strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None, "下載網址只支援 http/https"
+        if parsed.username or parsed.password:
+            return None, "下載網址不可包含帳密"
+        try:
+            resolved = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            return None, "下載網址無法解析主機"
+        for item in resolved:
+            ip_text = item[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                return None, "下載網址解析到不合法 IP"
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                return None, "下載網址不可指向 localhost、內網或保留位址"
+        return parsed, None
+
+    def _safe_model_filename(url, fallback):
+        parsed = urlparse(str(url or ""))
+        name = Path(parsed.path or "").name or fallback
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
+        if not name:
+            name = fallback
+        suffix = Path(name).suffix.lower()
+        if suffix not in COMFYUI_MODEL_DOWNLOAD_EXTENSIONS:
+            raise ValueError(f"模型副檔名必須是 {', '.join(sorted(COMFYUI_MODEL_DOWNLOAD_EXTENSIONS))}")
+        return name[:180]
+
+    def _download_comfyui_model_file(*, url, model_type, base_dir):
+        parsed, msg = _public_download_host(url)
+        if msg:
+            return None, msg
+        model_type = str(model_type or "").strip().lower()
+        if model_type not in COMFYUI_MODEL_DOWNLOAD_TYPES:
+            return None, "模型類型必須是 checkpoint 或 lora"
+        base = _configured_comfyui_base_dir(base_dir)
+        if not base:
+            return None, "請先設定 COMFYUI_BASE_DIR 或在本面板輸入 ComfyUI 專案資料夾"
+        project_dir = _configured_comfyui_project_dir(base_dir) or base
+        folder_name, label = COMFYUI_MODEL_DOWNLOAD_TYPES[model_type]
+        try:
+            filename = _safe_model_filename(url, f"downloaded_{model_type}.safetensors")
+        except ValueError as exc:
+            return None, str(exc)
+        destination_dir = (project_dir / "models" / folder_name).resolve()
+        try:
+            destination_dir.relative_to(base.resolve())
+        except ValueError:
+            return None, "模型儲存路徑不合法"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = (destination_dir / filename).resolve()
+        try:
+            destination.relative_to(destination_dir)
+        except ValueError:
+            return None, "模型檔名不合法"
+        if destination.exists():
+            return None, f"{label} 檔案已存在：{filename}"
+        request_obj = urllib.request.Request(str(url), headers={"User-Agent": "hackme_web-comfyui-model-downloader/1.0"})
+        written = 0
+        temp_path = None
+        try:
+            with urllib.request.urlopen(request_obj, timeout=30) as resp:
+                final_url = resp.geturl()
+                _final_parsed, final_msg = _public_download_host(final_url)
+                if final_msg:
+                    return None, final_msg
+                with tempfile.NamedTemporaryFile(prefix=f".{filename}.", suffix=".part", dir=str(destination_dir), delete=False) as tmp:
+                    temp_path = Path(tmp.name)
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > MAX_COMFYUI_MODEL_DOWNLOAD_BYTES:
+                            raise ValueError("模型檔案超過下載大小上限")
+                        tmp.write(chunk)
+            if written <= 0:
+                raise ValueError("下載內容為空")
+            temp_path.replace(destination)
+        except urllib.error.URLError as exc:
+            if temp_path and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            return None, f"模型下載失敗：{getattr(exc, 'reason', exc)}"
+        except Exception as exc:
+            if temp_path and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            return None, str(exc)
+        return {
+            "type": model_type,
+            "label": label,
+            "filename": filename,
+            "size_bytes": written,
+            "saved_path": str(destination),
+        }, None
 
     def _client():
         return injected_client or ComfyUIClient(_configured_comfyui_url())
@@ -240,7 +555,11 @@ def register_comfyui_routes(app, deps):
     def _comfyui_charge_required(actor):
         return not _is_root(actor)
 
-    def _comfyui_price_quote(quantity):
+    def _comfyui_lora_count(params):
+        loras = (params or {}).get("loras") or []
+        return len(loras) if isinstance(loras, list) else 0
+
+    def _comfyui_price_quote(quantity, *, lora_count=0):
         if not points_service:
             return None, "積分服務未啟用，無法使用 ComfyUI 產圖"
         catalog = points_service.list_catalog()
@@ -248,13 +567,19 @@ def register_comfyui_routes(app, deps):
         if not item:
             return None, "ComfyUI 產圖收費項目未啟用"
         quantity = max(1, int(quantity or 1))
+        lora_count = max(0, int(lora_count or 0))
         unit_price = int(item.get("base_price") or 0)
+        lora_extra_price = COMFYUI_LORA_EXTRA_PRICE_POINTS * lora_count * quantity
         return {
             "item_key": COMFYUI_BASIC_PRICE_ITEM_KEY,
             "item_name": item.get("item_name") or "ComfyUI 基礎生圖一次",
             "unit_price": unit_price,
+            "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
+            "lora_count": lora_count,
+            "lora_extra_price": lora_extra_price,
             "quantity": quantity,
-            "total_price": unit_price * quantity,
+            "base_price_total": unit_price * quantity,
+            "total_price": unit_price * quantity + lora_extra_price,
             "currency_type": "points",
         }, None
 
@@ -279,6 +604,7 @@ def register_comfyui_routes(app, deps):
             user_id=_actor_value(actor, "id"),
             item_key=quote["item_key"],
             quantity=quote["quantity"],
+            override_amount=quote["total_price"],
             reference_type="comfyui_generation",
             reference_id=str(prompt_id or ""),
             idempotency_key=f"comfyui_generation:{_actor_value(actor, 'id')}:{prompt_id or secrets.token_hex(8)}",
@@ -286,6 +612,9 @@ def register_comfyui_routes(app, deps):
                 "charged_after_success": True,
                 "unit_price": quote["unit_price"],
                 "quantity": quote["quantity"],
+                "lora_count": quote.get("lora_count", 0),
+                "lora_extra_unit_price": quote.get("lora_extra_unit_price", 0),
+                "lora_extra_price": quote.get("lora_extra_price", 0),
                 "total_price": quote["total_price"],
             },
             actor=actor,
@@ -295,6 +624,9 @@ def register_comfyui_routes(app, deps):
             "item_key": quote["item_key"],
             "unit_price": quote["unit_price"],
             "quantity": quote["quantity"],
+            "lora_count": quote.get("lora_count", 0),
+            "lora_extra_unit_price": quote.get("lora_extra_unit_price", 0),
+            "lora_extra_price": quote.get("lora_extra_price", 0),
             "total_price": quote["total_price"],
             "ledger_uuid": (result.get("ledger") or {}).get("ledger_uuid"),
             "wallet": result.get("wallet"),
@@ -302,7 +634,12 @@ def register_comfyui_routes(app, deps):
 
     def _json_error_from_comfy(exc, active_client=None):
         active_client = active_client or _client()
-        return json_resp({"ok": False, "msg": str(exc), "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url())}), 503
+        return json_resp({
+            "ok": False,
+            "msg": str(exc),
+            "connection_mode": _configured_connection_mode(),
+            "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
+        }), 503
 
     def _comfyui_unavailable_payload(exc, active_client=None):
         active_client = active_client or _client()
@@ -310,6 +647,7 @@ def register_comfyui_routes(app, deps):
             "ok": True,
             "available": False,
             "msg": str(exc),
+            "connection_mode": _configured_connection_mode(),
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
         }
 
@@ -329,6 +667,34 @@ def register_comfyui_routes(app, deps):
         except Exception:
             number = default
         return max(minimum, min(maximum, number))
+
+    def _normalize_loras(data):
+        raw_loras = data.get("loras") if isinstance(data, dict) else []
+        if raw_loras in (None, ""):
+            return [], None
+        if not isinstance(raw_loras, list):
+            return None, "LoRA 參數格式不正確"
+        normalized = []
+        seen = set()
+        for item in raw_loras[:MAX_COMFYUI_LORAS_PER_PROMPT]:
+            if isinstance(item, str):
+                item = {"name": item}
+            if not isinstance(item, dict):
+                return None, "LoRA 參數格式不正確"
+            name = str(item.get("name") or item.get("lora_name") or "").strip()
+            if not name:
+                continue
+            if "/" in name or "\\" in name or ".." in name:
+                return None, "LoRA 名稱不合法"
+            if name in seen:
+                continue
+            seen.add(name)
+            normalized.append({
+                "name": name[:180],
+                "strength_model": _float_range(item.get("strength_model"), 1.0, -2.0, 2.0),
+                "strength_clip": _float_range(item.get("strength_clip"), 1.0, -2.0, 2.0),
+            })
+        return normalized, None
 
     def _clean_filename(name, fallback="comfyui.png"):
         text = str(name or "").strip()
@@ -352,6 +718,9 @@ def register_comfyui_routes(app, deps):
         model = str(data.get("model") or "").strip()
         if not model:
             return None, "請選擇模型"
+        loras, lora_msg = _normalize_loras(data)
+        if lora_msg:
+            return None, lora_msg
         seed = _int_range(data.get("seed"), secrets.randbits(32), 0, 2**63 - 1)
         default_dimensions = _configured_default_dimensions()
         params = {
@@ -367,6 +736,7 @@ def register_comfyui_routes(app, deps):
             "seed": seed,
             "batch_size": _int_range(data.get("batch_size"), 1, 1, _configured_max_batch_size()),
             "filename_prefix": _clean_filename(data.get("filename_prefix") or "hackme_web", fallback="hackme_web").rsplit(".", 1)[0],
+            "loras": loras,
         }
         return params, None
 
@@ -604,6 +974,12 @@ def register_comfyui_routes(app, deps):
         sampler = _safe_text(params.get("sampler_name"), 80)
         scheduler = _safe_text(params.get("scheduler"), 80)
         size = f"{params.get('width') or '-'} x {params.get('height') or '-'}"
+        loras = params.get("loras") if isinstance(params.get("loras"), list) else []
+        lora_text = ", ".join(
+            _safe_text((item or {}).get("name"), 120)
+            for item in loras
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        )
         lines = []
         if note:
             lines.extend(["心得", note, ""])
@@ -626,6 +1002,7 @@ def register_comfyui_routes(app, deps):
             f"Seed：{params.get('seed') if params.get('seed') is not None else '-'}",
             f"Sampler：{sampler or '-'}",
             f"Scheduler：{scheduler or '-'}",
+            f"LoRA：{lora_text or '-'}",
         ])
         return "\n".join(lines)[:3900]
 
@@ -647,11 +1024,13 @@ def register_comfyui_routes(app, deps):
         return json_resp({
             "ok": True,
             "available": True,
+            "connection_mode": _configured_connection_mode(),
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
             "max_batch_size": _configured_max_batch_size(),
             "default_width": _configured_default_dimensions()["width"],
             "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
+            "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
             "system": status.get("system") if isinstance(status, dict) else {},
         })
 
@@ -670,6 +1049,7 @@ def register_comfyui_routes(app, deps):
         url, endpoint, msg = _parse_comfyui_endpoint(data)
         if msg:
             return json_resp({"ok": False, "msg": msg}), 400
+        local_script_status = _local_start_script_status(data) if isinstance(endpoint, dict) and endpoint.get("mode") == "local" else None
         active_client = _client_for_url(url)
         try:
             status = active_client.health_check(timeout=3) if hasattr(active_client, "health_check") else {"ok": True}
@@ -686,6 +1066,8 @@ def register_comfyui_routes(app, deps):
                 "available": True,
                 "comfyui_url": getattr(active_client, "base_url", url),
                 "endpoint": endpoint,
+                "connection_mode": endpoint.get("mode") if isinstance(endpoint, dict) else _configured_connection_mode(),
+                "local_script": local_script_status,
                 "system": status.get("system") if isinstance(status, dict) else {},
             })
         except ComfyUIError as exc:
@@ -703,7 +1085,57 @@ def register_comfyui_routes(app, deps):
                 "msg": str(exc),
                 "comfyui_url": getattr(active_client, "base_url", url),
                 "endpoint": endpoint,
+                "connection_mode": endpoint.get("mode") if isinstance(endpoint, dict) else _configured_connection_mode(),
+                "local_script": local_script_status,
             })
+
+    @app.route("/api/root/comfyui/download-model", methods=["POST"])
+    @require_csrf
+    def root_comfyui_download_model():
+        actor, err = _root_or_403()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        if not isinstance(data, dict):
+            return json_resp({"ok": False, "msg": "Invalid request"}), 400
+        url = str(data.get("url") or "").strip()
+        model_type = str(data.get("type") or data.get("model_type") or "").strip().lower()
+        result, msg = _download_comfyui_model_file(
+            url=url,
+            model_type=model_type,
+            base_dir=data.get("base_dir"),
+        )
+        audit(
+            "COMFYUI_MODEL_DOWNLOAD",
+            get_client_ip(),
+            user=_actor_value(actor, "username"),
+            success=not bool(msg),
+            ua=get_ua(),
+            detail=f"type={model_type}, url_host={urlparse(url).hostname if url else ''}, filename={(result or {}).get('filename') or ''}, error={msg or ''}"[:300],
+        )
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        return json_resp({"ok": True, "download": result, "msg": f"已下載 {result['label']}：{result['filename']}"})
+
+    @app.route("/api/comfyui/start", methods=["POST"])
+    @require_csrf
+    def comfyui_start_local():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        result, msg = _start_local_comfyui(actor, wait_seconds=2)
+        if msg:
+            return json_resp({"ok": False, "msg": msg, "connection_mode": _configured_connection_mode()}), 400
+        return json_resp({
+            "ok": True,
+            "connection_mode": _configured_connection_mode(),
+            "comfyui_url": _configured_comfyui_url(),
+            "start": result,
+            "msg": (result or {}).get("message") or ("ComfyUI 已在執行中" if (result or {}).get("already_running") else "已送出 ComfyUI 啟動請求"),
+        })
 
     @app.route("/api/comfyui/models", methods=["GET"])
     @require_csrf_safe
@@ -715,11 +1147,14 @@ def register_comfyui_routes(app, deps):
         try:
             models = active_client.get_models()
             options = active_client.get_sampler_options()
+            loras = active_client.get_loras() if hasattr(active_client, "get_loras") else []
         except ComfyUIError as exc:
             return _json_error_from_comfy(exc, active_client)
         return json_resp({
             "ok": True,
             "models": models,
+            "loras": loras,
+            "connection_mode": _configured_connection_mode(),
             "samplers": options.get("samplers") or [SAFE_SAMPLER_FALLBACK],
             "schedulers": options.get("schedulers") or [SAFE_SCHEDULER_FALLBACK],
             "comfyui_url": getattr(active_client, "base_url", _configured_comfyui_url()),
@@ -727,6 +1162,7 @@ def register_comfyui_routes(app, deps):
             "default_width": _configured_default_dimensions()["width"],
             "default_height": _configured_default_dimensions()["height"],
             "billing": None if not _comfyui_charge_required(actor) else (_comfyui_price_quote(1)[0] or {}),
+            "lora_extra_unit_price": COMFYUI_LORA_EXTRA_PRICE_POINTS,
         })
 
     @app.route("/api/comfyui/billing-quote", methods=["POST"])
@@ -746,7 +1182,7 @@ def register_comfyui_routes(app, deps):
         if not _comfyui_charge_required(actor):
             return json_resp({"ok": True, "billing": {"charged": False, "exempt": "root"}})
         total_quantity, run_count = _comfyui_total_quantity(data, params)
-        quote, msg = _comfyui_price_quote(total_quantity)
+        quote, msg = _comfyui_price_quote(total_quantity, lora_count=_comfyui_lora_count(params))
         if msg:
             return json_resp({"ok": False, "msg": msg}), 503
         quote = {**quote, "batch_size": params["batch_size"], "run_count": run_count}
@@ -770,7 +1206,7 @@ def register_comfyui_routes(app, deps):
             return json_resp({"ok": False, "msg": msg}), 400
         quote = None
         if _comfyui_charge_required(actor):
-            quote, msg = _comfyui_price_quote(params["batch_size"])
+            quote, msg = _comfyui_price_quote(params["batch_size"], lora_count=_comfyui_lora_count(params))
             if msg:
                 return json_resp({"ok": False, "msg": msg}), 503
             msg = _ensure_comfyui_balance(actor, quote)
@@ -786,6 +1222,7 @@ def register_comfyui_routes(app, deps):
                     "billing": {**quote, "confirmation_required": True},
                 }), 409
         active_client = _client()
+        generation_token = _register_active_generation(actor)
         try:
             result = active_client.generate_image(
                 params,
@@ -799,6 +1236,8 @@ def register_comfyui_routes(app, deps):
         except ComfyUIError as exc:
             audit("COMFYUI_GENERATE_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)
+        finally:
+            _unregister_active_generation(generation_token)
         billing = {"charged": False, "exempt": "root"} if not quote else None
         if quote:
             try:
@@ -864,16 +1303,29 @@ def register_comfyui_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        if not _can_interrupt(actor):
+        allowed, reason, summary = _interrupt_policy(actor)
+        if not allowed:
             audit(
-                "COMFYUI_INTERRUPT_DENIED",
+                "COMFYUI_INTERRUPT_SKIPPED",
                 get_client_ip(),
                 user=actor["username"],
-                success=False,
+                success=True,
                 ua=get_ua(),
-                detail="non privileged interrupt denied",
+                detail=f"reason={reason}, summary={summary}",
             )
-            return json_resp({"ok": False, "msg": "只有 root 或管理員可以中斷全域 ComfyUI 產圖任務"}), 403
+            msg = "已中斷本頁等待；未送出 ComfyUI 全域中斷，避免影響其他使用者的產圖。"
+            if reason == "no_owned_generation":
+                msg = "目前沒有偵測到你的後端產圖任務；已中斷本頁等待。"
+            return json_resp({
+                "ok": True,
+                "msg": msg,
+                "interrupt": {
+                    "interrupted": False,
+                    "backend_interrupted": False,
+                    "reason": reason,
+                    **summary,
+                },
+            })
         active_client = _client()
         try:
             if not hasattr(active_client, "interrupt"):
@@ -882,8 +1334,13 @@ def register_comfyui_routes(app, deps):
         except ComfyUIError as exc:
             audit("COMFYUI_INTERRUPT_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)
-        audit("COMFYUI_INTERRUPT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail="interrupt requested")
-        return json_resp({"ok": True, "msg": "已送出中斷產圖請求", "interrupt": result if isinstance(result, dict) else {}})
+        payload = result if isinstance(result, dict) else {}
+        payload.setdefault("interrupted", True)
+        payload["backend_interrupted"] = True
+        payload["reason"] = reason
+        payload.update(summary)
+        audit("COMFYUI_INTERRUPT", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"interrupt requested, reason={reason}, summary={summary}")
+        return json_resp({"ok": True, "msg": "已送出中斷產圖請求", "interrupt": payload})
 
     @app.route("/api/comfyui/save", methods=["POST"])
     @require_csrf
@@ -942,11 +1399,31 @@ def register_comfyui_routes(app, deps):
             conn.commit()
         finally:
             conn.close()
+        if _configured_connection_mode() != "local":
+            result = {
+                "file_deleted": False,
+                "file_missing": False,
+                "file_delete_supported": False,
+                "history_deleted": False,
+                "remote_preview_only": True,
+            }
+            audit("COMFYUI_DISCARD_REMOTE_PREVIEW_ONLY", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file={image_ref.get('filename')}")
+            return json_resp({
+                "ok": True,
+                "msg": "已移除網頁上的預覽；遠端 ComfyUI API 不支援刪除 output 原始檔。",
+                "discard": result,
+                "warning": "source_file_not_deleted",
+            })
         active_client = _client()
         try:
             if not hasattr(active_client, "discard_image"):
                 return json_resp({"ok": False, "msg": "ComfyUI 原始檔刪除不支援"}), 501
-            result = active_client.discard_image(image_ref, prompt_id=data.get("prompt_id"))
+            result = active_client.discard_image(
+                image_ref,
+                prompt_id=data.get("prompt_id"),
+                local_base_dir=str(_configured_comfyui_project_dir() or _configured_comfyui_base_dir() or ""),
+                allow_api_delete=False,
+            )
         except ComfyUIError as exc:
             audit("COMFYUI_DISCARD_ERROR", get_client_ip(), user=actor["username"], success=False, ua=get_ua(), detail=str(exc)[:180])
             return _json_error_from_comfy(exc, active_client)

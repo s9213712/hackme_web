@@ -37,6 +37,9 @@ class FakeComfyUIClient:
     def get_models(self):
         return ["dream.safetensors", "photo.ckpt"]
 
+    def get_loras(self):
+        return ["detail.safetensors", "anime-style.safetensors"]
+
     def get_sampler_options(self):
         return {"samplers": ["euler", "dpmpp_2m"], "schedulers": ["normal", "karras"]}
 
@@ -69,8 +72,8 @@ class FakeComfyUIClient:
             data=b"fake-png-bytes",
         )
 
-    def discard_image(self, image_ref, *, prompt_id=None):
-        FakeComfyUIClient.discarded.append({"image_ref": dict(image_ref), "prompt_id": prompt_id})
+    def discard_image(self, image_ref, *, prompt_id=None, **kwargs):
+        FakeComfyUIClient.discarded.append({"image_ref": dict(image_ref), "prompt_id": prompt_id, **kwargs})
         return {"file_deleted": True, "file_missing": False, "file_delete_supported": True, "history_deleted": bool(prompt_id)}
 
     def interrupt(self):
@@ -106,10 +109,10 @@ class FakePointsService:
         return {"user_id": user_id, "points_balance": self.balance}
 
     def spend_points(self, *, user_id, item_key, quantity=1, reference_type=None,
-                     reference_id=None, idempotency_key=None, metadata=None, actor=None):
+                     reference_id=None, idempotency_key=None, metadata=None, actor=None, override_amount=None):
         if self.fail_spend:
             raise ValueError("billing failed")
-        amount = 5 * int(quantity or 1)
+        amount = int(override_amount) if override_amount is not None else 5 * int(quantity or 1)
         if self.balance < amount:
             raise ValueError("insufficient balance")
         self.balance -= amount
@@ -202,7 +205,7 @@ def _init_db(db_path):
     conn.close()
 
 
-def _build_app(db_path, storage_root, settings=None, comfyui_client=None, actor=None, points_service=None):
+def _build_app(db_path, storage_root, settings=None, comfyui_client=None, actor=None, points_service=None, extra_deps=None):
     app = Flask(__name__)
     app.testing = True
 
@@ -211,7 +214,7 @@ def _build_app(db_path, storage_root, settings=None, comfyui_client=None, actor=
         conn.row_factory = sqlite3.Row
         return conn
 
-    register_comfyui_routes(app, {
+    deps = {
         "STORAGE_DIR": str(storage_root),
         "audit": lambda *args, **kwargs: None,
         "get_client_ip": lambda: "127.0.0.1",
@@ -230,7 +233,10 @@ def _build_app(db_path, storage_root, settings=None, comfyui_client=None, actor=
         "require_csrf_safe": _passthrough,
         "comfyui_client": comfyui_client or FakeComfyUIClient(),
         "points_service": points_service or FakePointsService(),
-    })
+    }
+    if extra_deps:
+        deps.update(extra_deps)
+    register_comfyui_routes(app, deps)
     return app
 
 
@@ -244,6 +250,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     models = client.get("/api/comfyui/models")
     assert models.status_code == 200
     assert models.get_json()["models"] == ["dream.safetensors", "photo.ckpt"]
+    assert models.get_json()["loras"] == ["detail.safetensors", "anime-style.safetensors"]
     assert models.get_json()["max_batch_size"] == 1
     assert models.get_json()["default_width"] == 1024
     assert models.get_json()["default_height"] == 1024
@@ -268,6 +275,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
             "scheduler": "normal",
             "seed": 123,
             "batch_size": 3,
+            "loras": [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}],
             "confirm_billing": True,
         },
     )
@@ -280,6 +288,7 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert len(body["images"]) == 1
     assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
     assert FakeComfyUIClient.last_timeout_seconds == 600
+    assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
 
 
 def test_comfyui_batch_limit_is_root_configurable(tmp_path):
@@ -317,6 +326,9 @@ def test_comfyui_batch_limit_is_root_configurable(tmp_path):
             "charged_after_success": True,
             "unit_price": 5,
             "quantity": 3,
+            "lora_count": 0,
+            "lora_extra_unit_price": 1,
+            "lora_extra_price": 0,
             "total_price": 15,
         },
         "amount": 15,
@@ -416,6 +428,35 @@ def test_comfyui_billing_quote_rejects_total_run_cost_before_work(tmp_path):
     assert FakeComfyUIClient.generated_count == 0
 
 
+def test_comfyui_lora_billing_quote_adds_one_point_per_lora_per_image(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    points = FakePointsService(balance=100)
+    client = _build_app(db_path, storage_root, points_service=points).test_client()
+
+    quoted = client.post(
+        "/api/comfyui/billing-quote",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "lora quote",
+            "seed": 123,
+            "batch_size": 1,
+            "run_count": 2,
+            "loras": [{"name": "detail.safetensors"}, {"name": "anime-style.safetensors"}],
+        },
+    )
+
+    assert quoted.status_code == 200
+    billing = quoted.get_json()["billing"]
+    assert billing["quantity"] == 2
+    assert billing["lora_count"] == 2
+    assert billing["base_price_total"] == 10
+    assert billing["lora_extra_price"] == 4
+    assert billing["total_price"] == 14
+
+
 def test_comfyui_generation_requires_billing_confirmation_for_non_root(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -486,6 +527,37 @@ def test_comfyui_workflow_uses_requested_batch_size():
     assert workflow["5"]["inputs"]["batch_size"] == 4
 
 
+def test_comfyui_workflow_chains_loras_between_checkpoint_and_sampler():
+    workflow = ComfyUIClient("http://fake-comfyui").build_text_to_image_workflow({
+        "model": "dream.safetensors",
+        "prompt": "lora test",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 12,
+        "cfg": 6.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "seed": 123,
+        "batch_size": 1,
+        "filename_prefix": "hackme_web",
+        "loras": [
+            {"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7},
+            {"name": "anime-style.safetensors", "strength_model": 1.0, "strength_clip": 1.0},
+        ],
+    })
+
+    assert workflow["10"]["class_type"] == "LoraLoader"
+    assert workflow["10"]["inputs"]["model"] == ["4", 0]
+    assert workflow["10"]["inputs"]["clip"] == ["4", 1]
+    assert workflow["10"]["inputs"]["lora_name"] == "detail.safetensors"
+    assert workflow["11"]["inputs"]["model"] == ["10", 0]
+    assert workflow["11"]["inputs"]["clip"] == ["10", 1]
+    assert workflow["3"]["inputs"]["model"] == ["11", 0]
+    assert workflow["6"]["inputs"]["clip"] == ["11", 1]
+    assert workflow["7"]["inputs"]["clip"] == ["11", 1]
+
+
 def test_comfyui_status_reports_offline_backend(tmp_path):
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -536,7 +608,34 @@ def test_root_can_test_unsaved_comfyui_endpoint(tmp_path):
     body = tested.get_json()
     assert body["ok"] is True
     assert body["available"] is True
-    assert body["endpoint"] == {"host": "192.168.1.20", "port": 8192}
+    assert body["endpoint"] == {"mode": "remote", "host": "192.168.1.20", "port": 8192}
+
+
+def test_local_comfyui_start_reuses_existing_backend(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI_windows_portable"
+    storage_root.mkdir()
+    comfy_base.mkdir()
+    (comfy_base / "run_in_linux.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    _init_db(db_path)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={
+            "comfyui_connection_mode": "local",
+            "comfyui_base_dir": str(comfy_base),
+            "comfyui_local_start_script": "run_in_linux.sh",
+        },
+    ).test_client()
+
+    started = client.post("/api/comfyui/start", json={})
+
+    assert started.status_code == 200
+    body = started.get_json()
+    assert body["ok"] is True
+    assert body["connection_mode"] == "local"
+    assert body["start"]["already_running"] is True
 
 
 def test_comfyui_connection_test_requires_root_and_valid_endpoint(tmp_path):
@@ -554,6 +653,26 @@ def test_comfyui_connection_test_requires_root_and_valid_endpoint(tmp_path):
     invalid = root_client.post("/api/root/comfyui/test-connection", json={"host": "http://127.0.0.1/path", "port": 8192})
     assert invalid.status_code == 400
     assert "Host" in invalid.get_json()["msg"]
+
+
+def test_comfyui_model_download_requires_root_and_safe_url(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    user_client = _build_app(db_path, storage_root).test_client()
+
+    forbidden = user_client.post("/api/root/comfyui/download-model", json={"type": "lora", "url": "https://example.com/a.safetensors"})
+    assert forbidden.status_code == 403
+
+    root_actor = {"id": 1, "username": "root", "role": "super_admin"}
+    root_client = _build_app(db_path, storage_root, actor=lambda: root_actor).test_client()
+    invalid = root_client.post(
+        "/api/root/comfyui/download-model",
+        json={"type": "lora", "url": "http://127.0.0.1/a.safetensors", "base_dir": str(tmp_path)},
+    )
+    assert invalid.status_code == 400
+    assert "localhost" in invalid.get_json()["msg"]
 
 
 def test_comfyui_save_stores_generated_image_in_user_storage(tmp_path):
@@ -766,13 +885,19 @@ def test_output_album_prunes_files_moved_out_of_output_folder(tmp_path):
         conn.close()
 
 
-def test_comfyui_discard_deletes_original_comfyui_file(tmp_path):
+def test_comfyui_discard_deletes_original_comfyui_file_in_local_mode(tmp_path):
     FakeComfyUIClient.discarded = []
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
+    comfy_base = tmp_path / "ComfyUI"
     storage_root.mkdir()
+    (comfy_base / "output").mkdir(parents=True)
     _init_db(db_path)
-    client = _build_app(db_path, storage_root).test_client()
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_connection_mode": "local", "comfyui_base_dir": str(comfy_base)},
+    ).test_client()
     preview = _generate_preview(client)
 
     discarded = client.post(
@@ -790,7 +915,34 @@ def test_comfyui_discard_deletes_original_comfyui_file(tmp_path):
     assert FakeComfyUIClient.discarded == [{
         "image_ref": {"filename": "hackme_web_00001_.png", "subfolder": "", "type": "output"},
         "prompt_id": "prompt-1",
+        "local_base_dir": str(comfy_base),
+        "allow_api_delete": False,
     }]
+
+
+def test_comfyui_discard_remote_mode_clears_preview_without_deleting_source(tmp_path):
+    FakeComfyUIClient.discarded = []
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root, settings={"comfyui_connection_mode": "remote"}).test_client()
+    preview = _generate_preview(client)
+
+    discarded = client.post(
+        "/api/comfyui/discard",
+        json={
+            "image_ref": preview["image_ref"],
+            "prompt_id": preview["prompt_id"],
+        },
+    )
+
+    assert discarded.status_code == 200
+    body = discarded.get_json()
+    assert body["ok"] is True
+    assert body["warning"] == "source_file_not_deleted"
+    assert body["discard"]["file_delete_supported"] is False
+    assert FakeComfyUIClient.discarded == []
 
 
 def test_comfyui_discard_tolerates_plain_text_history_response(tmp_path, monkeypatch):
@@ -830,7 +982,7 @@ def test_comfyui_discard_tolerates_plain_text_history_response(tmp_path, monkeyp
 
 def test_comfyui_discard_without_file_delete_endpoint_clears_preview_with_warning(tmp_path):
     class UnsupportedDeleteClient(FakeComfyUIClient):
-        def discard_image(self, image_ref, *, prompt_id=None):
+        def discard_image(self, image_ref, *, prompt_id=None, **kwargs):
             return {
                 "file_deleted": False,
                 "file_missing": False,
@@ -842,7 +994,14 @@ def test_comfyui_discard_without_file_delete_endpoint_clears_preview_with_warnin
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    client = _build_app(db_path, storage_root, comfyui_client=UnsupportedDeleteClient()).test_client()
+    comfy_base = tmp_path / "ComfyUI"
+    (comfy_base / "output").mkdir(parents=True)
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_connection_mode": "local", "comfyui_base_dir": str(comfy_base)},
+        comfyui_client=UnsupportedDeleteClient(),
+    ).test_client()
     preview = _generate_preview(client)
 
     discarded = client.post(
@@ -879,7 +1038,7 @@ def test_comfyui_interrupt_requests_backend_interrupt(tmp_path):
     assert FakeComfyUIClient.interrupted == 1
 
 
-def test_comfyui_interrupt_denies_normal_user(tmp_path):
+def test_comfyui_interrupt_without_owned_generation_does_not_interrupt_backend(tmp_path):
     FakeComfyUIClient.interrupted = 0
     db_path = tmp_path / "comfyui.db"
     storage_root = tmp_path / "storage"
@@ -889,9 +1048,61 @@ def test_comfyui_interrupt_denies_normal_user(tmp_path):
 
     interrupted = client.post("/api/comfyui/interrupt", json={})
 
-    assert interrupted.status_code == 403
-    assert interrupted.get_json()["ok"] is False
+    assert interrupted.status_code == 200
+    body = interrupted.get_json()
+    assert body["ok"] is True
+    assert body["interrupt"]["backend_interrupted"] is False
+    assert body["interrupt"]["reason"] == "no_owned_generation"
     assert FakeComfyUIClient.interrupted == 0
+
+
+def test_comfyui_interrupt_denies_shared_backend_when_other_user_is_generating(tmp_path):
+    FakeComfyUIClient.interrupted = 0
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    active_generations = {
+        "own": {"user_id": 1, "username": "test"},
+        "other": {"user_id": 2, "username": "admin"},
+    }
+    client = _build_app(
+        db_path,
+        storage_root,
+        extra_deps={"comfyui_active_generations": active_generations},
+    ).test_client()
+
+    interrupted = client.post("/api/comfyui/interrupt", json={})
+
+    assert interrupted.status_code == 200
+    body = interrupted.get_json()
+    assert body["ok"] is True
+    assert body["interrupt"]["backend_interrupted"] is False
+    assert body["interrupt"]["reason"] == "shared_backend_busy"
+    assert FakeComfyUIClient.interrupted == 0
+
+
+def test_comfyui_interrupt_allows_owned_generation_when_backend_is_not_shared(tmp_path):
+    FakeComfyUIClient.interrupted = 0
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    active_generations = {"own": {"user_id": 1, "username": "test"}}
+    client = _build_app(
+        db_path,
+        storage_root,
+        extra_deps={"comfyui_active_generations": active_generations},
+    ).test_client()
+
+    interrupted = client.post("/api/comfyui/interrupt", json={})
+
+    assert interrupted.status_code == 200
+    body = interrupted.get_json()
+    assert body["ok"] is True
+    assert body["interrupt"]["backend_interrupted"] is True
+    assert body["interrupt"]["reason"] == "owned_generation_only"
+    assert FakeComfyUIClient.interrupted == 1
 
 
 def test_comfyui_interrupt_tolerates_plain_text_response(monkeypatch):
@@ -1034,6 +1245,9 @@ def test_comfyui_frontend_is_wired():
     assert 'id="tab-module-comfyui"' in index_html
     assert 'id="module-comfyui"' in index_html
     assert 'id="comfyui-model-select"' in index_html
+    assert 'id="comfyui-lora-select"' in index_html
+    assert 'id="comfyui-lora-add-btn"' in index_html
+    assert 'id="comfyui-selected-loras"' in index_html
     assert 'id="comfyui-generate-btn"' in index_html
     assert 'id="comfyui-interrupt-btn"' in index_html
     assert 'id="comfyui-load-draft-btn"' in index_html
@@ -1043,8 +1257,14 @@ def test_comfyui_frontend_is_wired():
     assert 'id="comfyui-album-select"' in index_html
     assert 'id="comfyui-share-btn"' in index_html
     assert 'id="comfyui-progress-panel"' in index_html
-    assert "/js/36-comfyui.js?v=20260502-progressive-batch" in index_html
-    assert "/styles.css?v=20260502-mobile-bugfixes" in index_html
+    assert 'id="comfyui-model-download-btn"' in index_html
+    assert 'id="comfyui-start-btn"' in index_html
+    assert 'id="s-comfyui-connection-mode"' in index_html
+    assert 'id="s-comfyui-remote-api-url"' in index_html
+    assert 'id="s-comfyui-base-dir"' in index_html
+    assert 'id="s-comfyui-local-start-script"' in index_html
+    assert "/js/36-comfyui.js?v=20260503-comfyui-lora" in index_html
+    assert "/styles.css?v=20260503-comfyui-lora" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert 'id="s-comfyui-api-port"' in index_html
@@ -1056,6 +1276,13 @@ def test_comfyui_frontend_is_wired():
     assert 'normTab === "comfyui"' in admin_js
     assert 'apiFetch(API + "/comfyui/generate"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/billing-quote"' in comfyui_js
+    assert 'apiFetch(API + "/root/comfyui/download-model"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/start"' in comfyui_js
+    assert "function startLocalComfyui()" in comfyui_js
+    assert "comfyuiConnectionMode !== \"local\"" in comfyui_js
+    assert "function updateComfyuiConnectionModeFields()" in admin_js
+    assert "s-comfyui-connection-mode" in bootstrap_js
+    assert "startLocalComfyui" in bootstrap_js
     assert 'apiFetch(API + "/comfyui/interrupt"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/save"' in comfyui_js
     assert 'apiFetch(API + "/comfyui/discard"' in comfyui_js
@@ -1072,6 +1299,7 @@ def test_comfyui_frontend_is_wired():
     assert "function comfyuiRunCount()" in comfyui_js
     assert 'if (currentUser === "root") return { confirmed: true, required: false };' in comfyui_js
     assert "window.confirm" in comfyui_js
+    assert "LoRA 加價" in comfyui_js
     assert "batchSize * runCount" in comfyui_js
     assert "for (let requestIndex = 0; requestIndex < totalRequests; requestIndex += 1)" in comfyui_js
     assert "setComfyuiMessage(`正在產生第 ${requestIndex + 1} / ${totalRequests} 張圖片...`, true)" in comfyui_js

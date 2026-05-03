@@ -162,7 +162,7 @@ def _decode_tracker_value(value):
     return str(value or "")
 
 
-def validate_torrent_file_trackers(torrent_path):
+def _torrent_file_trackers(torrent_path):
     try:
         with open(torrent_path, "rb") as fh:
             data = fh.read(2 * 1024 * 1024 + 1)
@@ -182,8 +182,26 @@ def validate_torrent_file_trackers(torrent_path):
                 trackers.extend(_decode_tracker_value(item) for item in tier)
             else:
                 trackers.append(_decode_tracker_value(tier))
+    return [tracker for tracker in trackers if str(tracker or "").strip()]
+
+
+def inspect_torrent_file_trackers(torrent_path):
+    trackers = _torrent_file_trackers(torrent_path)
+    blocked = []
     for tracker in trackers:
-        _validate_tracker_url(tracker)
+        try:
+            _validate_tracker_url(tracker)
+        except RemoteDownloadError as exc:
+            blocked.append({"url": tracker, "reason": str(exc)})
+    return {"trackers": trackers, "blocked": blocked}
+
+
+def validate_torrent_file_trackers(torrent_path):
+    report = inspect_torrent_file_trackers(torrent_path)
+    if report["blocked"]:
+        first = report["blocked"][0]
+        raise RemoteDownloadError(f"BT 種子檔包含不安全 tracker，已阻擋（{first['url']}：{first['reason']}）")
+    return report
 
 
 def validate_remote_url(raw_url):
@@ -380,7 +398,7 @@ def _aria2_failure_message(proc, log_path):
     return f"BT/magnet 下載失敗：{detail}"
 
 
-def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
+def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None, exclude_trackers=None):
     aria2c = shutil.which("aria2c")
     if not aria2c:
         raise RemoteDownloadError("BT 下載需要先安裝 aria2c")
@@ -417,6 +435,9 @@ def _download_bt_with_aria2(source, *, source_label="BT/magnet", timeout_seconds
     ]
     if rate_limit_kb_per_sec:
         cmd[1:1] = ["--max-download-limit", f"{int(rate_limit_kb_per_sec)}K"]
+    safe_excludes = [str(item or "").strip() for item in (exclude_trackers or []) if str(item or "").strip()]
+    if safe_excludes:
+        cmd[1:1] = ["--bt-exclude-tracker", ",".join(safe_excludes)]
     try:
         _emit_progress(progress_callback, phase="downloading", filename=source_label, loaded_bytes=None, total_bytes=None)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -485,7 +506,8 @@ def download_magnet_with_aria2(url, *, timeout_seconds=300, max_bytes=None, prog
 def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", timeout_seconds=300, max_bytes=None, progress_callback=None, rate_limit_kb_per_sec=None):
     if not os.path.isfile(torrent_path):
         raise RemoteDownloadError("找不到 BT 種子檔")
-    validate_torrent_file_trackers(torrent_path)
+    tracker_report = inspect_torrent_file_trackers(torrent_path)
+    excluded_trackers = [item["url"] for item in tracker_report.get("blocked", [])]
     return _download_bt_with_aria2(
         torrent_path,
         source_label=display_name or "BT 檔案",
@@ -493,6 +515,7 @@ def download_torrent_file_with_aria2(torrent_path, *, display_name="BT 檔案", 
         max_bytes=max_bytes,
         progress_callback=progress_callback,
         rate_limit_kb_per_sec=rate_limit_kb_per_sec,
+        exclude_trackers=excluded_trackers,
     )
 
 

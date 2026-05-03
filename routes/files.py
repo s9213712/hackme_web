@@ -74,6 +74,7 @@ from services.storage_albums import (
     restore_storage_file,
     revoke_share_link,
     mark_share_link_accessed,
+    smart_organize_albums,
     sync_user_storage_summary,
     trash_cloud_file_to_storage,
     trash_storage_folder,
@@ -256,6 +257,52 @@ def register_file_routes(app, deps):
         response.headers["X-Cloud-Drive-Rate-Limit-KB-Per-Sec"] = str(kb_per_sec)
         return response
 
+    def _parse_http_byte_range(range_header, total_size):
+        if not range_header:
+            return None, None
+        value = str(range_header or "").strip()
+        if not value.startswith("bytes="):
+            return None, "invalid"
+        spec = value[6:].split(",", 1)[0].strip()
+        if "-" not in spec:
+            return None, "invalid"
+        start_raw, end_raw = spec.split("-", 1)
+        try:
+            if start_raw == "":
+                suffix_len = int(end_raw)
+                if suffix_len <= 0:
+                    return None, "invalid"
+                start = max(0, total_size - suffix_len)
+                end = total_size - 1
+            else:
+                start = int(start_raw)
+                end = int(end_raw) if end_raw else total_size - 1
+        except Exception:
+            return None, "invalid"
+        if total_size <= 0 or start < 0 or end < start or start >= total_size:
+            return None, "invalid"
+        return (start, min(end, total_size - 1)), None
+
+    def _send_bytes_with_range(raw, *, as_attachment, download_name, mimetype, range_header=None):
+        total_size = len(raw)
+        byte_range, error = _parse_http_byte_range(range_header, total_size)
+        if error:
+            response = Response(status=416)
+            response.headers["Content-Range"] = f"bytes */{total_size}"
+            response.headers["Accept-Ranges"] = "bytes"
+            return response
+        if byte_range:
+            start, end = byte_range
+            response = Response(raw[start:end + 1], status=206, mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream")
+            response.headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+            response.headers["Content-Length"] = str(end - start + 1)
+        else:
+            response = Response(raw, status=200, mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream")
+            response.headers["Content-Length"] = str(total_size)
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers.set("Content-Disposition", "attachment" if as_attachment else "inline", filename=download_name)
+        return response
+
     def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False, actor=None):
         path = resolve_file_storage_path(storage_root, row)
         if not path.exists():
@@ -264,6 +311,14 @@ def register_file_routes(app, deps):
         download_kb_per_sec = int(policy.get("download_kb_per_sec") or 0)
         if is_server_encrypted_file(row):
             raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
+            if request.headers.get("Range") or download_kb_per_sec <= 0:
+                return _send_bytes_with_range(
+                    raw,
+                    as_attachment=as_attachment,
+                    download_name=download_name,
+                    mimetype=mimetype,
+                    range_header=request.headers.get("Range"),
+                )
             if download_kb_per_sec > 0:
                 def _chunks(chunk_size):
                     bio = BytesIO(raw)
@@ -557,7 +612,11 @@ def register_file_routes(app, deps):
         except Exception:
             timeout = 0
         if task.get("status") == "queued":
-            return 120
+            # Queued downloads may legitimately wait behind a large BT/direct
+            # transfer.  The worker refreshes updated_at while waiting, so this
+            # long stale window mainly catches orphaned queued tasks after a
+            # server crash/reload.
+            return max(3600, timeout + 3600)
         return max(300, timeout + 180)
 
     def _cleanup_stale_remote_download_tasks_locked():
@@ -617,6 +676,52 @@ def register_file_routes(app, deps):
                 and task.get("status") in {"queued", "running"}
                 for task in _REMOTE_DOWNLOAD_TASKS.values()
             )
+
+    def _remote_download_task_sort_key(task):
+        return (str(task.get("created_at") or ""), str(task.get("id") or ""))
+
+    def _try_acquire_remote_download_slot_locked(owner_user_id, task_id):
+        _cleanup_stale_remote_download_tasks_locked()
+        if owner_user_id in _REMOTE_DOWNLOAD_ACTIVE_USERS:
+            return False
+        same_owner = [
+            task
+            for task in _REMOTE_DOWNLOAD_TASKS.values()
+            if int(task.get("owner_user_id") or 0) == int(owner_user_id)
+            and task.get("status") in {"queued", "running"}
+        ]
+        same_owner.sort(key=_remote_download_task_sort_key)
+        if same_owner and str(same_owner[0].get("id")) != str(task_id):
+            return False
+        _REMOTE_DOWNLOAD_ACTIVE_USERS.add(owner_user_id)
+        return True
+
+    def _wait_for_remote_download_slot(task_id, owner_user_id):
+        last_notice_at = 0.0
+        while True:
+            with _REMOTE_DOWNLOAD_TASKS_LOCK:
+                task = _REMOTE_DOWNLOAD_TASKS.get(task_id)
+                if not task or task.get("status") not in {"queued", "running"}:
+                    return False
+                if _try_acquire_remote_download_slot_locked(owner_user_id, task_id):
+                    task.update(
+                        status="running",
+                        phase="starting",
+                        msg="準備開始下載",
+                        updated_at=datetime.now().isoformat(),
+                    )
+                    return True
+            now_ts = time.time()
+            if now_ts - last_notice_at >= 2:
+                _task_update(
+                    task_id,
+                    status="queued",
+                    phase="queued",
+                    msg="等待前方下載任務完成",
+                    progress_percent=0,
+                )
+                last_notice_at = now_ts
+            time.sleep(0.5)
 
     def _table_exists(conn, table_name):
         row = conn.execute(
@@ -728,6 +833,13 @@ def register_file_routes(app, deps):
             )
         return _callback
 
+    def _remote_download_storage_path(filename, explicit_path=""):
+        explicit_path = str(explicit_path or "").strip()
+        if explicit_path:
+            return explicit_path
+        safe_name = safe_public_filename(filename or "download.bin") or "download.bin"
+        return f"/Downloads/{safe_name}"
+
     def _run_remote_download_task(task_id):
         task = _get_remote_download_task(task_id)
         if not task:
@@ -739,22 +851,9 @@ def register_file_routes(app, deps):
         conn = None
         acquired_active = False
         try:
-            with _REMOTE_DOWNLOAD_TASKS_LOCK:
-                _cleanup_stale_remote_download_tasks_locked()
-                if owner_user_id in _REMOTE_DOWNLOAD_ACTIVE_USERS:
-                    task_ref = _REMOTE_DOWNLOAD_TASKS.get(task_id)
-                    if task_ref:
-                        task_ref.update(
-                            status="failed",
-                            phase="failed",
-                            progress_percent=100,
-                            error="已有遠端下載正在進行，請等完成後再新增",
-                            msg="已有遠端下載正在進行，請等完成後再新增",
-                            updated_at=datetime.now().isoformat(),
-                        )
-                    return
-                _REMOTE_DOWNLOAD_ACTIVE_USERS.add(owner_user_id)
-                acquired_active = True
+            if not _wait_for_remote_download_slot(task_id, owner_user_id):
+                return
+            acquired_active = True
             conn = get_db()
             ensure_cloud_drive_attachment_schema(conn)
             ensure_storage_album_schema(conn)
@@ -827,21 +926,20 @@ def register_file_routes(app, deps):
                 _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
                 return
 
-            storage_file = None
-            if task.get("virtual_path"):
-                file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
-                storage_file, msg = create_storage_file_entry(
-                    conn,
-                    actor=actor,
-                    file_row=file_row,
-                    virtual_path=task["virtual_path"],
-                    display_name=downloaded.filename,
-                    source="remote_download",
-                )
-                if msg:
-                    conn.rollback()
-                    _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
-                    return
+            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
+            storage_path = _remote_download_storage_path(downloaded.filename, task.get("virtual_path"))
+            storage_file, msg = create_storage_file_entry(
+                conn,
+                actor=actor,
+                file_row=file_row,
+                virtual_path=storage_path,
+                display_name=downloaded.filename,
+                source="remote_download",
+            )
+            if msg:
+                conn.rollback()
+                _task_update(task_id, status="failed", phase="failed", error=msg, msg=msg)
+                return
             task_url = str(task.get("url") or "")
             source_label = "BT 下載" if source_type in {"torrent_file", "torrent_url", "magnet"} else "Direct link"
             create_notification_if_enabled(
@@ -1453,6 +1551,52 @@ def register_file_routes(app, deps):
         except Exception:
             return None
 
+    def _unique_storage_path(conn, owner_user_id, filename):
+        safe_name = safe_public_filename(filename or "download.bin")
+        stem, ext = os.path.splitext(safe_name)
+        stem = stem or "file"
+        for index in range(1, 101):
+            candidate_name = safe_name if index == 1 else f"{stem}-{index}{ext}"
+            candidate = f"/{candidate_name}"
+            exists = conn.execute(
+                "SELECT 1 FROM storage_files WHERE owner_user_id=? AND virtual_path=? AND deleted_at IS NULL",
+                (int(owner_user_id), candidate),
+            ).fetchone()
+            if not exists:
+                return candidate
+        return f"/{stem}-{uuid.uuid4().hex[:8]}{ext}"
+
+    def _sync_orphan_cloud_files_to_storage_browser(conn, actor):
+        ensure_storage_album_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT f.*
+            FROM uploaded_files f
+            WHERE f.owner_user_id=? AND f.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM storage_files sf
+                  WHERE sf.file_id=f.id AND sf.deleted_at IS NULL
+              )
+            ORDER BY f.created_at ASC, f.id ASC
+            LIMIT 100
+            """,
+            (int(actor["id"]),),
+        ).fetchall()
+        synced = []
+        for row in rows:
+            filename = row["original_filename_plain_for_public"] or "download.bin"
+            storage_file, msg = create_storage_file_entry(
+                conn,
+                actor=actor,
+                file_row=row,
+                virtual_path=_unique_storage_path(conn, actor["id"], filename),
+                display_name=filename,
+                source="orphan_cloud_file_sync",
+            )
+            if storage_file and not msg:
+                synced.append(storage_file)
+        return synced
+
     @app.route("/api/storage/files", methods=["GET", "POST"])
     @require_csrf_safe
     def storage_files():
@@ -1465,6 +1609,7 @@ def register_file_routes(app, deps):
             ensure_storage_album_schema(conn)
             if request.method == "GET":
                 ensure_output_album(conn, actor=actor)
+                _sync_orphan_cloud_files_to_storage_browser(conn, actor)
                 include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
                 files = list_storage_files(conn, actor=actor, include_trashed=include_trashed, limit=100, offset=0)
                 summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="list", reason="storage_files_list")
@@ -1837,6 +1982,43 @@ def register_file_routes(app, deps):
             conn.commit()
             audit("STORAGE_ALBUM_CREATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"album_id={album['id']}")
             return json_resp({"ok": True, "album": album})
+        finally:
+            conn.close()
+
+    @app.route("/api/storage/albums/smart-organize", methods=["POST"])
+    @require_csrf
+    def storage_albums_smart_organize():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        conn = get_db()
+        try:
+            result, msg = smart_organize_albums(
+                conn,
+                actor=actor,
+                strategy=data.get("strategy") or "folder",
+                visibility=data.get("visibility") or "private",
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
+            conn.commit()
+            audit(
+                "STORAGE_ALBUM_SMART_ORGANIZE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=(
+                    f"strategy={result.get('strategy')}, media={result.get('media_count')}, "
+                    f"albums={result.get('album_count')}, added={result.get('added_count')}"
+                ),
+            )
+            return json_resp({"ok": True, "result": result})
         finally:
             conn.close()
 
@@ -2385,6 +2567,18 @@ def register_file_routes(app, deps):
             if msg:
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
+            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (result["file_id"],)).fetchone()
+            storage_file, storage_msg = create_storage_file_entry(
+                conn,
+                actor=actor,
+                file_row=file_row,
+                virtual_path=(data.get("virtual_path") or f"/{filename}"),
+                display_name=filename,
+                source="text_document",
+            )
+            if storage_msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": storage_msg}), 400
             create_notification_if_enabled(
                 conn,
                 user_id=_actor_value(actor, "id"),
@@ -2395,7 +2589,7 @@ def register_file_routes(app, deps):
             )
             conn.commit()
             audit("CLOUD_DRIVE_TEXT_CREATED", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"file_id={result['file_id']},filename={filename}")
-            return json_resp({"ok": True, "file": {**result, "filename": filename}})
+            return json_resp({"ok": True, "file": {**result, "filename": filename}, "storage_file": storage_file})
         finally:
             conn.close()
 
@@ -2439,8 +2633,6 @@ def register_file_routes(app, deps):
             if parsed_remote["kind"] == "magnet":
                 return json_resp({"ok": False, "msg": "Direct link 不接受 magnet link，請使用 BT/torrent 按鈕"}), 400
             source_type = "direct"
-        if _user_has_active_remote_download(_actor_value(actor, "id")):
-            return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
         privacy_mode = str(data.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
         virtual_path = str(data.get("virtual_path") or "").strip()
         task_id = uuid.uuid4().hex
@@ -2524,10 +2716,6 @@ def register_file_routes(app, deps):
             if torrent_size > 2 * 1024 * 1024:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return json_resp({"ok": False, "msg": "BT 種子檔太大，請上傳 2MB 以內的 .torrent"}), 400
-            if _user_has_active_remote_download(_actor_value(actor, "id")):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return json_resp({"ok": False, "msg": "已有遠端下載正在進行，請等完成後再新增"}), 409
-
             privacy_mode = str(request.form.get("privacy_mode") or "standard_plain").strip() or "standard_plain"
             virtual_path = str(request.form.get("virtual_path") or "").strip()
             task_id = uuid.uuid4().hex
@@ -2675,20 +2863,19 @@ def register_file_routes(app, deps):
                 conn.rollback()
                 return json_resp({"ok": False, "msg": msg}), 400
 
-            storage_file = None
-            if virtual_path:
-                file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
-                storage_file, msg = create_storage_file_entry(
-                    conn,
-                    actor=actor,
-                    file_row=file_row,
-                    virtual_path=virtual_path,
-                    display_name=downloaded.filename,
-                    source="remote_download",
-                )
-                if msg:
-                    conn.rollback()
-                    return json_resp({"ok": False, "msg": msg}), 400
+            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (upload_result["file_id"],)).fetchone()
+            storage_path = _remote_download_storage_path(downloaded.filename, virtual_path)
+            storage_file, msg = create_storage_file_entry(
+                conn,
+                actor=actor,
+                file_row=file_row,
+                virtual_path=storage_path,
+                display_name=downloaded.filename,
+                source="remote_download",
+            )
+            if msg:
+                conn.rollback()
+                return json_resp({"ok": False, "msg": msg}), 400
             source_label = "BT 下載" if url.startswith("magnet:?") or url.lower().split("?", 1)[0].endswith(".torrent") else "遠端下載"
             create_notification_if_enabled(
                 conn,

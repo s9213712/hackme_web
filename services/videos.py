@@ -18,6 +18,9 @@ VIDEO_VIEW_MIN_SECONDS = 5
 VIDEO_TIP_MIN_POINTS = 1
 VIDEO_TIP_MAX_POINTS = 1_000_000
 UNSAFE_COMMENT_RE = re.compile(r"(<\s*script\b|on[a-z]+\s*=|javascript\s*:)", re.IGNORECASE)
+VIDEO_FILENAME_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"}
+AUDIO_FILENAME_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg"}
+MEDIA_FILENAME_EXTENSIONS = VIDEO_FILENAME_EXTENSIONS | AUDIO_FILENAME_EXTENSIONS
 
 
 def utc_now():
@@ -90,6 +93,7 @@ def ensure_video_schema(conn):
             video_uuid TEXT NOT NULL UNIQUE,
             owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             cloud_file_id TEXT NOT NULL UNIQUE REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            cover_file_id TEXT REFERENCES uploaded_files(id) ON DELETE SET NULL,
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             visibility TEXT NOT NULL DEFAULT 'public',
@@ -164,6 +168,7 @@ def ensure_video_schema(conn):
         """
     )
     _ensure_columns(conn, "video_views", {"counted": "INTEGER NOT NULL DEFAULT 0"})
+    _ensure_columns(conn, "videos", {"cover_file_id": "TEXT"})
     _ensure_columns(conn, "video_tips", {
         "net_points": "INTEGER NOT NULL DEFAULT 0",
         "fee_user_id": "INTEGER",
@@ -187,6 +192,8 @@ def serialize_video(row, *, actor=None, liked=False):
     data["liked_by_me"] = bool(liked)
     data["can_edit"] = bool(actor and (_safe_int(_actor_value(actor, "id")) == data["owner_user_id"] or is_manager_or_root(actor)))
     data["stream_url"] = f"/api/videos/{data['id']}/stream"
+    data["cover_url"] = f"/api/videos/{data['id']}/cover" if data.get("cover_file_id") else ""
+    data["media_type"] = _cloud_file_media_type(data)
     return data
 
 
@@ -197,10 +204,14 @@ def _video_base_select():
                u.nickname AS owner_nickname,
                f.original_filename_plain_for_public AS cloud_filename,
                f.mime_type_plain_for_public AS cloud_mime_type,
-               f.size_bytes AS cloud_size_bytes
+               f.size_bytes AS cloud_size_bytes,
+               cf.original_filename_plain_for_public AS cover_filename,
+               cf.mime_type_plain_for_public AS cover_mime_type,
+               cf.size_bytes AS cover_size_bytes
         FROM videos v
         LEFT JOIN users u ON u.id=v.owner_user_id
         LEFT JOIN uploaded_files f ON f.id=v.cloud_file_id
+        LEFT JOIN uploaded_files cf ON cf.id=v.cover_file_id AND cf.deleted_at IS NULL
     """
 
 
@@ -252,9 +263,20 @@ def _cloud_file_row(conn, cloud_file_id):
     return conn.execute("SELECT * FROM uploaded_files WHERE id=?", (str(cloud_file_id or ""),)).fetchone()
 
 
-def _cloud_file_is_video(row):
-    mime = str(row["mime_type_plain_for_public"] or "").lower() if row else ""
-    return mime.startswith("video/")
+def _cloud_file_is_media(row):
+    mime = str((row["mime_type_plain_for_public"] if "mime_type_plain_for_public" in row.keys() else row["cloud_mime_type"]) or "").lower() if row else ""
+    if mime.startswith("video/") or mime.startswith("audio/"):
+        return True
+    filename = str((row["original_filename_plain_for_public"] if "original_filename_plain_for_public" in row.keys() else row["cloud_filename"]) or "").lower() if row else ""
+    return any(filename.endswith(ext) for ext in MEDIA_FILENAME_EXTENSIONS)
+
+
+def _cloud_file_media_type(row):
+    mime = str((row["mime_type_plain_for_public"] if "mime_type_plain_for_public" in row.keys() else row["cloud_mime_type"]) or "").lower() if row else ""
+    filename = str((row["original_filename_plain_for_public"] if "original_filename_plain_for_public" in row.keys() else row["cloud_filename"]) or "").lower() if row else ""
+    if mime.startswith("audio/") or any(filename.endswith(ext) for ext in AUDIO_FILENAME_EXTENSIONS):
+        return "audio"
+    return "video"
 
 
 def validate_publishable_cloud_file(conn, *, actor, cloud_file_id):
@@ -264,43 +286,74 @@ def validate_publishable_cloud_file(conn, *, actor, cloud_file_id):
     if _safe_int(row["owner_user_id"]) != _safe_int(_actor_value(actor, "id")):
         raise PermissionError("cannot publish another user's file")
     if is_e2ee_file(row):
-        raise ValueError("E2EE video files cannot be server-streamed")
-    if not _cloud_file_is_video(row):
-        raise ValueError("cloud file must be a video file")
+        raise ValueError("E2EE media files cannot be server-streamed")
+    if not _cloud_file_is_media(row):
+        raise ValueError("cloud file must be a video or audio file")
     if str(row["scan_status"] or "") in {"infected", "quarantined"} or str(row["risk_level"] or "") == "blocked":
-        raise ValueError("video file is blocked by upload security policy")
+        raise ValueError("media file is blocked by upload security policy")
     return row
 
 
-def publish_video(conn, *, actor, cloud_file_id, title, description="", visibility="public"):
+def validate_video_cover_file(conn, *, actor, cover_file_id):
+    if not cover_file_id:
+        return None
+    row = _cloud_file_row(conn, cover_file_id)
+    if not row or row["deleted_at"]:
+        raise ValueError("cover file not found")
+    if _safe_int(row["owner_user_id"]) != _safe_int(_actor_value(actor, "id")):
+        raise PermissionError("cannot use another user's cover")
+    if is_e2ee_file(row):
+        raise ValueError("E2EE cover files cannot be displayed by the server")
+    mime = str(row["mime_type_plain_for_public"] or "").lower()
+    filename = str(row["original_filename_plain_for_public"] or "").lower()
+    if not (mime.startswith("image/") or filename.endswith((".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"))):
+        raise ValueError("cover file must be an image")
+    if str(row["scan_status"] or "") in {"infected", "quarantined"} or str(row["risk_level"] or "") == "blocked":
+        raise ValueError("cover file is blocked by upload security policy")
+    return row
+
+
+def publish_video(conn, *, actor, cloud_file_id, title, description="", visibility="public", cover_file_id=None):
     ensure_video_schema(conn)
     if not actor:
         raise PermissionError("login required")
     file_row = validate_publishable_cloud_file(conn, actor=actor, cloud_file_id=cloud_file_id)
+    cover_row = validate_video_cover_file(conn, actor=actor, cover_file_id=cover_file_id)
     now = utc_now()
     existing = conn.execute("SELECT * FROM videos WHERE cloud_file_id=?", (file_row["id"],)).fetchone()
     if existing:
+        cover_sql = ", cover_file_id=?" if cover_row or cover_file_id == "" else ""
+        params = [
+            normalize_title(title),
+            normalize_description(description),
+            normalize_visibility(visibility),
+            now,
+        ]
+        if cover_sql:
+            params.append(cover_row["id"] if cover_row else None)
+        params.append(existing["id"])
         conn.execute(
-            """
+            f"""
             UPDATE videos
-            SET title=?, description=?, visibility=?, status='ready', updated_at=?
+            SET title=?, description=?, visibility=?, status='ready', updated_at=?{cover_sql}
             WHERE id=?
             """,
-            (normalize_title(title), normalize_description(description), normalize_visibility(visibility), now, existing["id"]),
+            tuple(params),
         )
         video_id = existing["id"]
     else:
         cur = conn.execute(
             """
             INSERT INTO videos (
-                video_uuid, owner_user_id, cloud_file_id, title, description,
+                video_uuid, owner_user_id, cloud_file_id, cover_file_id, title, description,
                 visibility, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)
             """,
             (
                 uuid.uuid4().hex,
                 int(_actor_value(actor, "id")),
                 file_row["id"],
+                cover_row["id"] if cover_row else None,
                 normalize_title(title),
                 normalize_description(description),
                 normalize_visibility(visibility),

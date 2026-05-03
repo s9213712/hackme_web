@@ -1,6 +1,7 @@
 import gzip
 import io
 import sqlite3
+import threading
 import time
 import zipfile
 
@@ -257,6 +258,36 @@ def test_server_encrypted_upload_stores_ciphertext_but_downloads_plaintext(tmp_p
     download = client.get(f"/api/cloud-drive/files/{file_id}/download")
     assert download.status_code == 200
     assert download.data == b"secret note"
+
+
+def test_server_encrypted_media_preview_content_supports_range_requests(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    media_bytes = b"not-a-real-mp4-but-route-test"
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(media_bytes), "clip.mp4", "video/mp4"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    file_id = res.get_json()["file"]["file_id"]
+
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.headers["Accept-Ranges"] == "bytes"
+    assert content.data == media_bytes
+
+    ranged = client.get(f"/api/cloud-drive/files/{file_id}/preview/content", headers={"Range": "bytes=4-11"})
+    assert ranged.status_code == 206
+    assert ranged.headers["Content-Range"] == "bytes 4-11/29"
+    assert ranged.headers["Accept-Ranges"] == "bytes"
+    assert ranged.data == b"a-real-m"
 
 
 def test_cloud_drive_upload_repairs_legacy_uploaded_files_schema(tmp_path):
@@ -641,6 +672,52 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     assert client.get(f"/api/storage/albums/{album['id']}").status_code == 404
 
 
+def test_storage_album_smart_organize_groups_media_by_folder_without_duplicates(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    for filename, content, virtual_path in [
+        ("cover.jpg", b"jpg bytes", "/photos/trip/cover.jpg"),
+        ("clip.mp4", b"mp4 bytes", "/photos/trip/clip.mp4"),
+        ("notes.txt", b"not media", "/photos/trip/notes.txt"),
+        ("root.png", b"png bytes", "/root.png"),
+    ]:
+        uploaded = client.post(
+            "/api/storage/files",
+            data={"file": (io.BytesIO(content), filename), "virtual_path": virtual_path},
+            content_type="multipart/form-data",
+        )
+        assert uploaded.status_code == 200
+
+    organized = client.post("/api/storage/albums/smart-organize", json={"strategy": "folder"})
+    assert organized.status_code == 200
+    result = organized.get_json()["result"]
+    assert result["media_count"] == 3
+    assert result["album_count"] == 2
+    assert result["created_count"] == 2
+    assert result["added_count"] == 3
+    titles = {album["title"] for album in result["albums"]}
+    assert {"智慧整理 - /photos/trip", "智慧整理 - 根目錄"} <= titles
+
+    rerun = client.post("/api/storage/albums/smart-organize", json={"strategy": "folder"})
+    assert rerun.status_code == 200
+    rerun_result = rerun.get_json()["result"]
+    assert rerun_result["created_count"] == 0
+    assert rerun_result["updated_count"] == 2
+    assert rerun_result["added_count"] == 0
+
+    albums = client.get("/api/storage/albums").get_json()["albums"]
+    trip_album = next(album for album in albums if album["title"] == "智慧整理 - /photos/trip")
+    detail = client.get(f"/api/storage/albums/{trip_album['id']}")
+    assert detail.status_code == 200
+    files = detail.get_json()["album"]["files"]
+    assert [file["display_name"] for file in files] == ["clip.mp4", "cover.jpg"]
+
+
 def test_album_preview_uses_storage_display_name_when_uploaded_metadata_missing(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"
@@ -918,7 +995,10 @@ def test_cloud_drive_can_create_text_document_and_preview_extensionless_file(tmp
         json={"filename": "notes", "content": "# hello\nbody", "privacy_mode": "standard_plain"},
     )
     assert created.status_code == 200
-    file_id = created.get_json()["file"]["file_id"]
+    created_json = created.get_json()
+    file_id = created_json["file"]["file_id"]
+    assert created_json["storage_file"]["file_id"] == file_id
+    assert created_json["storage_file"]["virtual_path"] == "/notes"
     preview = client.get(f"/api/cloud-drive/files/{file_id}/preview")
     assert preview.status_code == 200
     body = preview.get_json()["preview"]
@@ -926,6 +1006,33 @@ def test_cloud_drive_can_create_text_document_and_preview_extensionless_file(tmp
     assert body["render_mode"] == "text"
     assert body["mime_type"] == "text/plain"
     assert "# hello" in body["text"]
+    storage_files = client.get("/api/storage/files")
+    assert storage_files.status_code == 200
+    assert [item["virtual_path"] for item in storage_files.get_json()["files"]] == ["/notes"]
+
+
+def test_storage_files_auto_syncs_orphan_cloud_uploads(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(b"orphan text"), "orphan.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    storage_files = client.get("/api/storage/files")
+    assert storage_files.status_code == 200
+    files = storage_files.get_json()["files"]
+    assert len(files) == 1
+    assert files[0]["file_id"] == file_id
+    assert files[0]["virtual_path"] == "/orphan.txt"
 
 
 def test_cloud_drive_delete_file_from_ui_api_invalidates_download(tmp_path):
@@ -1501,6 +1608,127 @@ def test_remote_download_task_reports_progress_and_completion(tmp_path, monkeypa
     assert body["loaded_bytes"] == len(source.read_bytes())
     assert body["total_bytes"] == len(source.read_bytes())
     assert body["storage_file"]["virtual_path"] == "/Downloads/remote-task.txt"
+
+
+def test_remote_download_tasks_queue_per_user_instead_of_rejecting(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    first_source = tmp_path / "first.txt"
+    second_source = tmp_path / "second.txt"
+    first_source.write_text("first content", encoding="utf-8")
+    second_source.write_text("second content", encoding="utf-8")
+    release_first = threading.Event()
+    first_started = threading.Event()
+
+    class FakeDownloaded:
+        def __init__(self, path, filename):
+            self.path = str(path)
+            self.filename = filename
+            self.mimetype = "text/plain"
+            self.cleanup_dir = None
+
+    def fake_download(url, **kwargs):
+        if url.endswith("/first.txt"):
+            first_started.set()
+            assert release_first.wait(timeout=2)
+            return FakeDownloaded(first_source, "first.txt")
+        return FakeDownloaded(second_source, "second.txt")
+
+    monkeypatch.setattr("routes.files.download_remote_url", fake_download)
+    first = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/first.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/first.txt",
+        },
+    )
+    assert first.status_code == 202
+    first_id = first.get_json()["task"]["id"]
+    assert first_started.wait(timeout=2)
+
+    second = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/second.txt",
+            "privacy_mode": "standard_plain",
+            "virtual_path": "/Downloads/second.txt",
+        },
+    )
+    assert second.status_code == 202
+    second_id = second.get_json()["task"]["id"]
+
+    second_status = client.get(f"/api/cloud-drive/remote-download/tasks/{second_id}")
+    assert second_status.status_code == 200
+    second_task = second_status.get_json()["task"]
+    assert second_task["status"] == "queued"
+    assert "等待" in second_task["msg"] or "佇列" in second_task["msg"]
+
+    release_first.set()
+    final_first = {}
+    final_second = {}
+    for _ in range(80):
+        final_first = client.get(f"/api/cloud-drive/remote-download/tasks/{first_id}").get_json()["task"]
+        final_second = client.get(f"/api/cloud-drive/remote-download/tasks/{second_id}").get_json()["task"]
+        if final_first["status"] == "completed" and final_second["status"] == "completed":
+            break
+        time.sleep(0.03)
+
+    assert final_first["status"] == "completed"
+    assert final_second["status"] == "completed"
+    assert final_first["storage_file"]["virtual_path"] == "/Downloads/first.txt"
+    assert final_second["storage_file"]["virtual_path"] == "/Downloads/second.txt"
+
+
+def test_remote_download_task_without_virtual_path_is_visible_in_storage(tmp_path, monkeypatch):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    source = tmp_path / "bt-result.txt"
+    source.write_text("bt result content", encoding="utf-8")
+
+    class FakeDownloaded:
+        path = str(source)
+        filename = "bt-result.txt"
+        mimetype = "text/plain"
+        cleanup_dir = None
+
+    monkeypatch.setattr("routes.files.download_torrent_url_with_aria2", lambda *args, **kwargs: FakeDownloaded())
+    created = client.post(
+        "/api/cloud-drive/remote-download/tasks",
+        json={
+            "url": "https://93.184.216.34/sample.torrent",
+            "download_mode": "bt",
+            "privacy_mode": "standard_plain",
+        },
+    )
+    assert created.status_code == 202
+    task_id = created.get_json()["task"]["id"]
+
+    body = {}
+    for _ in range(30):
+        status = client.get(f"/api/cloud-drive/remote-download/tasks/{task_id}")
+        assert status.status_code == 200
+        body = status.get_json()["task"]
+        if body["status"] == "completed":
+            break
+        time.sleep(0.02)
+
+    assert body["status"] == "completed"
+    assert body["storage_file"]["virtual_path"] == "/Downloads/bt-result.txt"
+    listed = client.get("/api/storage/files")
+    assert listed.status_code == 200
+    paths = [item["virtual_path"] for item in listed.get_json()["files"]]
+    assert "/Downloads/bt-result.txt" in paths
 
 
 def test_remote_download_task_direct_mode_keeps_torrent_file(tmp_path, monkeypatch):

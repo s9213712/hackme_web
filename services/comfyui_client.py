@@ -61,6 +61,16 @@ class ComfyUIClient:
             values = []
         return [str(item) for item in values if str(item).strip()]
 
+    def get_loras(self):
+        info = self._json_request("/object_info/LoraLoader")
+        node = info.get("LoraLoader") if isinstance(info, dict) else None
+        required = ((node or {}).get("input") or {}).get("required") or {}
+        lora = required.get("lora_name") or []
+        values = lora[0] if isinstance(lora, list) and lora else []
+        if not isinstance(values, list):
+            values = []
+        return [str(item) for item in values if str(item).strip()]
+
     def health_check(self, *, timeout=3):
         stats = self._json_request("/system_stats", timeout=timeout)
         if not isinstance(stats, dict):
@@ -85,7 +95,7 @@ class ComfyUIClient:
         }
 
     def build_text_to_image_workflow(self, params):
-        return {
+        workflow = {
             "3": {
                 "class_type": "KSampler",
                 "inputs": {
@@ -133,6 +143,31 @@ class ComfyUIClient:
                 },
             },
         }
+        final_model = ["4", 0]
+        final_clip = ["4", 1]
+        for index, item in enumerate(params.get("loras") or []):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            node_id = str(10 + index)
+            workflow[node_id] = {
+                "class_type": "LoraLoader",
+                "inputs": {
+                    "model": final_model,
+                    "clip": final_clip,
+                    "lora_name": name,
+                    "strength_model": float(item.get("strength_model", 1.0)),
+                    "strength_clip": float(item.get("strength_clip", 1.0)),
+                },
+            }
+            final_model = [node_id, 0]
+            final_clip = [node_id, 1]
+        workflow["3"]["inputs"]["model"] = final_model
+        workflow["6"]["inputs"]["clip"] = final_clip
+        workflow["7"]["inputs"]["clip"] = final_clip
+        return workflow
 
     def queue_prompt(self, workflow):
         client_id = uuid.uuid4().hex
@@ -192,19 +227,19 @@ class ComfyUIClient:
             raise ComfyUIError("ComfyUI 圖片內容為空")
         return ComfyUIImage(filename=filename, subfolder=subfolder, type=image_type, mime_type=content_type, data=data)
 
-    def _local_dir_for_type(self, image_type):
+    def _local_dir_for_type(self, image_type, *, local_base_dir=None):
         normalized = str(image_type or "output").strip().lower() or "output"
         if normalized not in {"output", "input", "temp"}:
             raise ComfyUIError("ComfyUI 圖片類型不支援刪除")
         explicit = os.environ.get(f"COMFYUI_{normalized.upper()}_DIR")
         if explicit:
             return Path(explicit).expanduser()
-        base_dir = os.environ.get("COMFYUI_BASE_DIR")
+        base_dir = local_base_dir or os.environ.get("COMFYUI_BASE_DIR")
         if base_dir:
             return Path(base_dir).expanduser() / normalized
         return None
 
-    def _safe_local_image_path(self, image_ref):
+    def _safe_local_image_path(self, image_ref, *, local_base_dir=None):
         filename = str((image_ref or {}).get("filename") or "").strip()
         subfolder = str((image_ref or {}).get("subfolder") or "").strip()
         image_type = str((image_ref or {}).get("type") or "output").strip() or "output"
@@ -212,7 +247,7 @@ class ComfyUIClient:
             raise ComfyUIError("缺少 ComfyUI 圖片檔名")
         if Path(filename).name != filename or filename in {".", ".."}:
             raise ComfyUIError("ComfyUI 圖片檔名不合法")
-        base_dir = self._local_dir_for_type(image_type)
+        base_dir = self._local_dir_for_type(image_type, local_base_dir=local_base_dir)
         if not base_dir:
             return None
         relative = Path(subfolder) / filename if subfolder else Path(filename)
@@ -226,14 +261,14 @@ class ComfyUIClient:
             raise ComfyUIError("ComfyUI 圖片路徑超出允許目錄") from exc
         return target
 
-    def discard_image(self, image_ref, *, prompt_id=None):
+    def discard_image(self, image_ref, *, prompt_id=None, local_base_dir=None, allow_api_delete=True):
         result = {
             "file_deleted": False,
             "file_missing": False,
             "file_delete_supported": False,
             "history_deleted": False,
         }
-        target = self._safe_local_image_path(image_ref)
+        target = self._safe_local_image_path(image_ref, local_base_dir=local_base_dir)
         if target:
             result["file_delete_supported"] = True
             if target.exists():
@@ -243,7 +278,7 @@ class ComfyUIClient:
                 result["file_deleted"] = True
             else:
                 result["file_missing"] = True
-        else:
+        elif allow_api_delete:
             filename = str((image_ref or {}).get("filename") or "").strip()
             subfolder = str((image_ref or {}).get("subfolder") or "").strip()
             image_type = str((image_ref or {}).get("type") or "output").strip() or "output"

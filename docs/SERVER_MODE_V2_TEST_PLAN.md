@@ -198,43 +198,45 @@ The current implementation is covered by these focused tests:
 Required command set before merging this work:
 
 ```bash
-PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 -m pytest \
-  /home/s92137/hackme_web_economy_fix/tests/test_snapshots.py \
-  /home/s92137/hackme_web_economy_fix/tests/test_account_lockout.py \
-  /home/s92137/hackme_web_economy_fix/tests/test_upload_security.py \
-  /home/s92137/hackme_web_economy_fix/tests/test_integrity_guard.py \
-  /home/s92137/hackme_web_economy_fix/tests/test_frontend_drive_preview.py \
-  /home/s92137/hackme_web_economy_fix/tests/test_release_policy.py \
-  /home/s92137/hackme_web_economy_fix/tests/test_mobile_responsive_layout.py
+PROJECT_ROOT=/path/to/hackme_web
 
-PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 -m py_compile \
-  /home/s92137/hackme_web_economy_fix/server.py \
-  /home/s92137/hackme_web_economy_fix/services/auth.py \
-  /home/s92137/hackme_web_economy_fix/services/snapshots.py \
-  /home/s92137/hackme_web_economy_fix/routes/public.py \
-  /home/s92137/hackme_web_economy_fix/routes/system_admin.py \
-  /home/s92137/hackme_web_economy_fix/routes/economy.py \
-  /home/s92137/hackme_web_economy_fix/services/upload_security.py
+PYTHONPATH="$PROJECT_ROOT" python3 -m pytest \
+  "$PROJECT_ROOT/tests/test_snapshots.py" \
+  "$PROJECT_ROOT/tests/test_account_lockout.py" \
+  "$PROJECT_ROOT/tests/test_upload_security.py" \
+  "$PROJECT_ROOT/tests/test_integrity_guard.py" \
+  "$PROJECT_ROOT/tests/test_frontend_drive_preview.py" \
+  "$PROJECT_ROOT/tests/test_release_policy.py" \
+  "$PROJECT_ROOT/tests/test_mobile_responsive_layout.py"
 
-git -C /home/s92137/hackme_web_economy_fix diff --check
+PYTHONPATH="$PROJECT_ROOT" python3 -m py_compile \
+  "$PROJECT_ROOT/server.py" \
+  "$PROJECT_ROOT/services/auth.py" \
+  "$PROJECT_ROOT/services/snapshots.py" \
+  "$PROJECT_ROOT/routes/public.py" \
+  "$PROJECT_ROOT/routes/system_admin.py" \
+  "$PROJECT_ROOT/routes/economy.py" \
+  "$PROJECT_ROOT/services/upload_security.py"
 
-PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
-  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_clean_smoke.py \
-  --out /home/s92137/hackme_web_economy_fix/security/reports
+git -C "$PROJECT_ROOT" diff --check
 
-PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
-  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_adversarial.py \
-  --out /home/s92137/hackme_web_economy_fix/security/reports
+PYTHONPATH="$PROJECT_ROOT" python3 \
+  "$PROJECT_ROOT/security/server_mode_v2_clean_smoke.py" \
+  --out "$PROJECT_ROOT/security/reports"
 
-PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
-  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_redteam_l2.py \
-  --out /home/s92137/hackme_web_economy_fix/security/reports
+PYTHONPATH="$PROJECT_ROOT" python3 \
+  "$PROJECT_ROOT/security/server_mode_v2_adversarial.py" \
+  --out "$PROJECT_ROOT/security/reports"
 
-PYTHONPATH=/home/s92137/hackme_web_economy_fix python3 \
-  /home/s92137/hackme_web_economy_fix/security/server_mode_v2_live_http_smoke.py \
-  --out /home/s92137/hackme_web_economy_fix/security/reports
+PYTHONPATH="$PROJECT_ROOT" python3 \
+  "$PROJECT_ROOT/security/server_mode_v2_redteam_l2.py" \
+  --out "$PROJECT_ROOT/security/reports"
 
-cd /home/s92137/hackme_web_economy_fix
+PYTHONPATH="$PROJECT_ROOT" python3 \
+  "$PROJECT_ROOT/security/server_mode_v2_live_http_smoke.py" \
+  --out "$PROJECT_ROOT/security/reports"
+
+cd "$PROJECT_ROOT"
 security/run_pentest.sh --only server-mode-v2 \
   --target http://127.0.0.1:5000 \
   --out security/reports

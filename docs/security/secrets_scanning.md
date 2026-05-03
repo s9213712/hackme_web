@@ -38,10 +38,8 @@ brew install gitleaks
 The local hook fails closed when `gitleaks` is missing so commits cannot
 silently skip the generic scanner.
 
-On this workstation, `gitleaks` was installed at
-`/home/s92137/.local/bin/gitleaks` and verified with version `8.30.1`. If a new
-shell cannot find `gitleaks`, add this line to `~/.bashrc` or the active shell
-startup file:
+If a new shell cannot find a user-local `gitleaks` install, add this line to
+`~/.bashrc` or the active shell startup file:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
