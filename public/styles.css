@@ -2436,6 +2436,13 @@
       font-size: .72rem;
     }
 
+    .chat-sticker-bar .chat-sticker-btn {
+      min-width: 2.5rem;
+      padding: .4rem .55rem;
+      font-size: 1.15rem;
+      line-height: 1;
+    }
+
     .chat-sticker {
       display: inline-grid;
       place-items: center;
@@ -2447,6 +2454,8 @@
       border-radius: 8px;
       background: rgba(130,177,255,.13);
       color: var(--text);
+      font-size: 1.8rem;
+      line-height: 1;
       font-weight: 700;
       letter-spacing: 0;
     }
@@ -2455,6 +2464,41 @@
       display: grid;
       gap: .35rem;
       margin-top: .45rem;
+    }
+
+    .chat-composer-tools {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      flex-wrap: wrap;
+      margin-top: .45rem;
+    }
+
+    .chat-composer-tools select {
+      min-width: min(100%, 260px);
+      flex: 1 1 220px;
+    }
+
+    .chat-composer-tools-hint {
+      font-size: .74rem;
+      color: var(--muted);
+      flex: 1 1 220px;
+    }
+
+    .chat-shared-attachments-panel {
+      margin-top: .75rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.03);
+      padding: .6rem .7rem;
+    }
+
+    .chat-shared-attachments-panel summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-weight: 700;
+      font-size: .82rem;
+      margin-bottom: .35rem;
     }
 
     .chat-pending-attachment {
@@ -4635,7 +4679,8 @@
     .community-actions,
     .drive-toolbar,
     .drive-file-actions,
-    .chat-composer-actions {
+    .chat-composer-actions,
+    .chat-composer-tools {
       gap: .4rem;
     }
 
@@ -4899,7 +4944,7 @@
     .trading-reference-chart {
       display: block;
       width: 100%;
-      height: clamp(180px, 26vh, 260px);
+      height: clamp(240px, 34vh, 340px);
       border: 1px solid rgba(148, 163, 184, .18);
       border-radius: 8px;
       background: #0f172a;
@@ -5389,6 +5434,7 @@
 
       .drive-file-actions,
       .community-actions,
+      .chat-composer-tools,
       .chat-composer-actions,
       .row-actions {
         justify-content: stretch;
@@ -5397,6 +5443,7 @@
 
       .drive-file-actions .btn,
       .community-actions .btn,
+      .chat-composer-tools .btn,
       .chat-composer-actions .btn,
       .drive-card-heading .btn,
       .compact-heading .btn,
@@ -5468,7 +5515,7 @@
       }
 
       .trading-reference-chart {
-        height: 230px;
+        height: 280px;
       }
 
       .trading-indicator-controls {

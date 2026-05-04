@@ -69,6 +69,13 @@ PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_tradin
 python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_followup
 ```
 
+若這次改到 workflow / Grid / backtest 驗證腳本本身，另外補跑：
+
+```bash
+PYTHONPATH=. python3 security/trading_workflow_template_validation.py --no-download --limit 200 --out /tmp/trading_workflow_validation_followup
+PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --json-out /tmp/trading_backtest_20000_followup.json
+```
+
 ### 腳本關係
 
 - `scripts/pre_push_checks.py`
@@ -118,6 +125,7 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
 ## 測試方式
 
 - 確認 README、Start Here、Feature Overview 都把這份文件列為測試主入口
+- 若改到 Cloud Drive 檔案瀏覽器，至少手動確認資料夾單擊不誤開、雙擊可進入、右側 `開啟` 按鈕仍可用，且雙擊不會誤觸刪除/下載等 action button
 - 確認功能新增後，同步更新 smoke / pentest / QA runbook / troubleshooting
 - 若本次改到 ComfyUI，至少補：
   - 設定頁的 `Civitai API Key` 與 root 本地模型下載工具，是否真的只在 `local` 模式出現；切到 `remote` 時不應殘留可操作入口
@@ -131,6 +139,11 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
 - 若本次改到認證 / CAPTCHA，至少補：
   - `Turnstile site key` 是否只在 `turnstile` 模式出現
   - 切到 `none / math / image` 後，token 欄位是否會隱藏而不是殘留在畫面上誤導部署者
+- 若本次改到公告 / 社群編輯流程，至少補：
+  - manager/root 是否可直接編輯既有公告，不必刪除重發
+  - 一般使用者是否仍會被 `403` 擋下，不能偷改公告
+  - 前端是否正確切到編輯模式，按鈕文案會從 `發布公告` 變成 `更新公告`
+  - 取消編輯後，公告表單是否恢復成新增模式，而不是把舊內容殘留到下一次發布
 - 若本次改到設定頁 / feature flags，至少補：
   - `全開` 是否真的把全部 feature flag 勾開，而不是只補勾目前畫面可見那幾個欄位
   - `最低維運` 是否會把站點收斂到帳號、Audit、健康燈、Server Mode、Snapshot 這組最小骨架，而不是保留舊勾選殘值
@@ -150,9 +163,19 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - `live-price` 回應是否含 `price_health / fallback_reason / excluded_sources / defaulted_market`
   - `live-price` 是否會同步刷新 DB 內 `trading_markets.manual_price_points / price_source` 快取，文件也要寫清楚這不是純 read-only API
   - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
+  - `security/trading_exchange_validation.py` 是否會額外檢查連續加倉後 `avg_cost_points` 仍維持合理，不會悄悄爆成異常大值
+- 若本次改到交易圖表 / 技術指標，至少補：
+  - 參考 K 線圖的 checkbox 是否有同步接進前端事件，不是只有 HTML 多了控制項
+  - `MA10 / MA30 / EMA50 / RSI14 / KD(9,3,3)` 是否真的會進入 chart render，而不是只出現在 legend
+  - `RSI / KD` 是否走副圖刻度，不可直接沿用價格軸
+  - tooltip 是否對價格線與震盪指標用不同格式顯示，不可把 RSI/KD 顯示成 `$54.3`
+  - 手機版下指標列是否仍可橫向滑動，不會因新增控制項直接換行爆版
 - 若本次改到借貸利息 / backtest 上限，至少補：
   - 現貨 fee 預設 `0.10%`、Grid fee 預設為 spot fee 的 `75%`（25% 折扣）時，
     spot / grid / backtest / 預估 UI 是否全部一致
+  - 若本次改到交易市場定義或 provider 對應，至少補 `tests/test_trading_markets.py`
+    與 `tests/test_trading_reference_prices.py`，確認 market catalog、display alias、
+    live/reference provider id 與 route normalization 都一致
   - `BTC / ETH 8% APR`、`USDT / POINTS 10% APR` 是否會依實際借入資產正確套用，
     而不是所有倉位都吃同一組利率
   - 每 `1` 小時計息、不足 `1` 小時以 `1` 小時計時，前台是否顯示 `累積利息`、
@@ -185,11 +208,13 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - `NaN / Infinity` 是否被 preview API 拒絕
   - `empty candles`、`single candle`、`negative / zero / NaN / missing tick` 是否被正確拒絕或明確標示略過
   - workflow `flat sequence` 是否仍不會誤觸發
+  - `security/trading_workflow_template_validation.py` 是否仍包含 workflow `flat sequence` guard，且不再用過時 replay oracle 誤判 graph workflow
   - workflow `stop_loss_percent` 是否使用 scan window low、`take_profit_percent`
     是否使用 scan window high，且目前只標示 long-only 語義
   - `100 -> 10 -> 150` 類 jump / gap collapse 是否有風險警示或 filter，不會製造不真實回測幻覺
   - `full tick [100,80,120]` 與 `sampled [100,120]` 是否仍會出現 stop-loss / liquidation 漏觸發
   - `wallet=0 + trial_credit_only` 與小本金利息案例是否仍維持正確帳務
+  - `scripts/trading_backtest_20000_probe.py` 的 Grid 20k case、single-candle reject、outlier skip、flat Bollinger guard 是否都與目前引擎一致
   - 詳細清單見 `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
 - 若本次改到站點外觀 / 個人外觀，至少補：
   - root 改全站預設後，未登入與一般使用者是否都先看到新預設

@@ -17,6 +17,8 @@ FORBIDDEN_PATTERNS = (
     ".integrity_key",
     ".chain_seed",
     "integrity_manifest.json",
+    "anchors/**",
+    "chats/**",
     "reports/**",
     "storage/**",
     "logs/**",
@@ -36,7 +38,7 @@ FORBIDDEN_PATTERNS = (
 def is_forbidden(rel: str) -> bool:
     if rel.endswith("/.gitkeep") or rel == ".gitkeep":
         return False
-    if any(rel == prefix or rel.startswith(prefix + "/") for prefix in ("reports", "storage", "logs", "runtime", "hackme_web_runtime", "html_learning_storage", "node_modules", "dist", "build")):
+    if any(rel == prefix or rel.startswith(prefix + "/") for prefix in ("anchors", "chats", "reports", "storage", "logs", "runtime", "hackme_web_runtime", "html_learning_storage", "node_modules", "dist", "build")):
         return True
     path = PurePosixPath(rel)
     return any(path.match(pattern) for pattern in FORBIDDEN_PATTERNS)

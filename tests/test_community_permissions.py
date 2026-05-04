@@ -640,6 +640,50 @@ def test_manager_can_assign_board_moderator_with_scoped_permissions(tmp_path):
     assert _post_row(db_path, ids["post"])["is_deleted"] == 1
 
 
+def test_manager_can_edit_announcement(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 2, "username": "admin", "role": "manager"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    edited = client.put(
+        f"/api/community/announcements/{ids['announcement']}",
+        json={"title": "更新公告", "content": "更新內容", "is_pinned": True},
+    )
+
+    assert edited.status_code == 200
+    payload = edited.get_json()
+    assert payload["ok"] is True
+    assert payload["msg"] == "公告已更新"
+    assert payload["announcement"]["title"] == "更新公告"
+    assert payload["announcement"]["is_pinned"] is True
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT title, content, is_pinned FROM announcements WHERE id=?",
+        (ids["announcement"],),
+    ).fetchone()
+    conn.close()
+    assert row["title"] == "更新公告"
+    assert row["content"] == "更新內容"
+    assert row["is_pinned"] == 1
+
+
+def test_non_manager_cannot_edit_announcement(tmp_path):
+    db_path = tmp_path / "community.db"
+    ids = _seed_community_db(db_path)
+    actor_box = {"actor": {"id": 3, "username": "alice", "role": "user"}}
+    client = _build_app(str(db_path), actor_box).test_client()
+
+    edited = client.put(
+        f"/api/community/announcements/{ids['announcement']}",
+        json={"title": "偷改", "content": "不應成功", "is_pinned": False},
+    )
+
+    assert edited.status_code == 403
+    assert edited.get_json()["ok"] is False
+
 def test_board_moderator_can_pin_thread_without_pin_post_permission(tmp_path):
     db_path = tmp_path / "community.db"
     ids = _seed_community_db(db_path)

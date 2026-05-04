@@ -311,17 +311,22 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '<option value="5m">5 分</option>' in trading_section
     assert '<option value="15m" selected>15 分</option>' in trading_section
     assert 'id="trading-indicator-ma5"' in trading_section
+    assert 'id="trading-indicator-ma10"' in trading_section
     assert 'id="trading-indicator-ma20" checked' in trading_section
+    assert 'id="trading-indicator-ma30"' in trading_section
     assert 'id="trading-indicator-ma60"' in trading_section
     assert 'id="trading-indicator-ema12"' in trading_section
     assert 'id="trading-indicator-ema26"' in trading_section
+    assert 'id="trading-indicator-ema50"' in trading_section
     assert 'id="trading-indicator-bollinger"' in trading_section
+    assert 'id="trading-indicator-rsi14"' in trading_section
+    assert 'id="trading-indicator-kd"' in trading_section
     assert 'id="trading-btc-trade-card"' not in trading_section
     assert 'id="trading-btc-trade-path"' not in trading_section
     assert "Binance 參考價格" in trading_section
     assert "蠟燭圖" in trading_section
     assert "root 可使用現貨與合約模擬交易" in trading_section
-    assert "root 以外用戶目前僅開放" in trading_section
+    assert "一般用戶可使用已啟用的積分現貨市場" in trading_section
     assert 'id="trading-root-contract-card"' in trading_section
     assert 'id="trading-contract-open-btn"' in trading_section
     assert 'id="trading-contract-position-list"' in trading_section
@@ -348,15 +353,21 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "放空價格風險" in trading_js
     assert "價格上漲會虧損並降低維持率" in trading_js
     assert "未實現盈虧" in trading_js
+    assert "損益平衡價" in trading_js
     assert "逐倉估算強平價" in trading_js
-    assert "實際清算依全倉維持率" in trading_js
+    assert "損益平衡價已含開倉費、累積利息與預估平倉手續費" in trading_js
+    assert "實際清算仍依全倉維持率" in trading_js
     assert "你填寫的保證金已超過本次買入名目金額，這不屬於融資交易" in trading_js
     assert "請改用現貨買入" in trading_js
     assert "且至少要借 1 點" in trading_js
     assert "原始保證金不足，至少需要" in trading_js
     assert "renderTradingMarginAccountSummary" in trading_js
     assert "liquidation_price_points" in trading_js
+    assert "breakeven_price_points" in trading_js
     assert "unrealized_pnl_points" in trading_js
+    assert "function tradingMarginLiveInterest" in trading_js
+    assert "function tradingMarginBreakEvenPrice" in trading_js
+    assert "function tradingMarginNextInterestAtMs" in trading_js
     assert 'id="economy-contract-position-count"' in economy_section
     assert 'id="economy-contract-position-summary"' in economy_section
     assert 'id="economy-trading-order-list"' in economy_section
@@ -578,9 +589,15 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function updateTradingReferenceTooltip" in trading_js
     assert "function tradingIndicatorSeries" in trading_js
     assert "function tradingBollingerSeries" in trading_js
+    assert "function tradingRsiSeries" in trading_js
+    assert "function tradingKdSeries" in trading_js
     assert "function buildTradingReferenceIndicators" in trading_js
+    assert "function drawTradingOscillatorPanel" in trading_js
     assert "drawTradingIndicatorLine" in trading_js
     assert "trading-indicator-ma20" in trading_js
+    assert "trading-indicator-rsi14" in trading_js
+    assert "trading-indicator-kd" in trading_js
+    assert "RSI / KD" in trading_js
     assert "布林線" in trading_section
     assert "function tradingReferenceTimeLabel" in trading_js
     assert "tradingReferenceChartModel" in trading_js
@@ -596,7 +613,9 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "已清除訂單" in trading_js
     assert "Binance 公開 API" in trading_js
     assert "function tradingDisplaySymbol" in trading_js
-    assert "BTC/USDT、ETH/USDT" in trading_js
+    assert "function tradingBaseAssetLabel" in trading_js
+    assert "目前對 root 以外用戶開放 ${publicSpotSymbols.join(\"、\") || \"已啟用的積分現貨市場\"} 現貨。" in trading_js
+    assert "直接輸入 ${assetLabel} 枚數。" in trading_js
     assert 'tradingDisplaySymbol(market.symbol)' in trading_js
     assert "ctx.fillRect(x - bodyW / 2, bodyTop, bodyW, bodyH)" in trading_js
     assert "ctx.strokeRect(x - bodyW / 2, bodyTop, bodyW, bodyH)" in trading_js

@@ -21,15 +21,15 @@ It does:
 - reset PointsChain live tables through `PointsLedgerService.reset_runtime_chain`
 - reset the secure audit chain through `reset_audit_chain_with_event`
 - remove local deployment-generated secrets and manifests:
-  - `.chain_seed`
-  - `.csrfkey`
-  - `.filekey`
-  - `.fkey`
+  - `runtime/.chain_seed`
+  - `runtime/.csrfkey`
+  - `runtime/.filekey`
+  - `runtime/.fkey`
   - `.fley`
-  - `.integrity_key`
-  - `integrity_manifest.json`
-  - `cert.pem`
-  - `key.pem`
+  - `runtime/.integrity_key`
+  - `runtime/integrity_manifest.json`
+  - `runtime/cert.pem`
+  - `runtime/key.pem`
 - switch the server back to management-only feature defaults
 - return `requires_restart: true`
 
@@ -52,9 +52,10 @@ It includes:
 
 It also includes configured runtime secret files. Snapshot metadata records
 `secrets_excluded: false` and lists `runtime_secret_files`, which currently
-cover deployment-local files such as `.fkey`, `.filekey`, `.csrfkey`,
-`.chain_seed`, `.integrity_key`, `integrity_manifest.json`, `cert.pem`, and
-`key.pem`. Restoring a snapshot replays those files and then validates their
+cover deployment-local files such as `runtime/.fkey`, `runtime/.filekey`,
+`runtime/.csrfkey`, `runtime/.chain_seed`, `runtime/.integrity_key`,
+`runtime/integrity_manifest.json`, `runtime/cert.pem`, and `runtime/key.pem`.
+Restoring a snapshot replays those files and then validates their
 hashes before the restore is accepted as complete.
 
 Server restore should be used for whole-server rollback, migration, or

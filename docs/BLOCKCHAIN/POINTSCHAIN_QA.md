@@ -13,7 +13,7 @@
 | # | 必測項 | 主要 phase | 驗證方法 |
 |---|---|---|---|
 | 1 | wallet address 不重複 | 1 | DB UNIQUE + migration 100k user 0 衝突 |
-| 2 | private key 不進 log | 1 / 5 | `grep -r "private key" logs/` = 0；pentest 故意觸發 ValueError 確認 |
+| 2 | private key 不進 log | 1 / 5 | `grep -r "private key" runtime/logs/` = 0；pentest 故意觸發 ValueError 確認 |
 | 3 | nonce replay 必拒 | 3 / 5 | 自動 100 筆同 nonce |
 | 4 | signature bypass 必拒 | 5 | 1000 mutated payload 驗 |
 | 5 | burn address 不可轉出 | 1+ | 嘗試 from_address=BURN 寫入必 ValueError |
@@ -31,16 +31,18 @@
 
 ## 2. Phase 0 出口 Gate（鏈化前清債）
 
-> **2026-05-04 update**: 多項已完成，#122 仍 OPEN。詳 [PRE_BLOCKCHAIN_READINESS_REPORT.md](../AGENTS/reports/claude/prechain_qa_2026-05-04/PRE_BLOCKCHAIN_READINESS_REPORT.md) verdict = CONDITIONAL GO。
+> **2026-05-04 final review update**: 原先 Phase 0 blockers / recommend / low issues 已完成收斂；
+> isolated live API 驗證、runtime cleanup、today feature regression 與 full pytest 皆通過。
+> `docs/AGENTS/reports/*` 只保留歷史 baseline / evidence，不作 current gate 的 canonical 規格來源。
 
 - [x] **#129 close** ✅ — `test_backtest_does_not_silently_replace_isolated_single_candle` PASS
 - [x] **#130 close** ✅ — `test_backtest_skips_outlier_jump_candles_instead_of_booking_fake_profit` PASS
 - [x] **#131 close** ✅ — `test_workflow_backtest_does_not_false_trigger_bollinger_on_flat_sequence` PASS
-- [ ] **#122 緩解** 🟡 — 唯一仍未閉合；建議至少完成 worker interval 可調 + safe_mode 自動觸發 + alert
+- [x] **#122 close** ✅ — scan window high/low 觸發、`last_scan_at` 成功後才更新、回歸與 full pytest 通過
 - [x] **PB-1 close** ✅ — `test_trading_order_invalid_decimal_is_sanitized_for_user` PASS
 - [x] `pytest -q tests/test_trading_engine.py tests/test_points_chain.py` 100% 綠
 - [x] `tests/test_release_policy.py` 含 needle test 100% 綠
-- [x] isolated QA replay（[`docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/`](../AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/)）100% 綠
+- [x] isolated QA replay 與 final isolated live API review 100% 綠
 - [x] Bot audit dashboard 落地（[`docs/TRADING_BOT_AUDIT.md`](../TRADING_BOT_AUDIT.md) 已升級反映現況）
 
 ---
@@ -212,7 +214,7 @@
 
 ### 7.2 私鑰紅線
 
-- [ ] `grep -r "private key" logs/ runtime/ /tmp/` = 0
+- [ ] `grep -r "private key" runtime/logs/ runtime/ /tmp/` = 0
 - [ ] 故意觸發 ValueError stack trace 不含 private key
 - [ ] API response 永遠不含 private key
 - [ ] secure_audit / bug-reports / mode_switch_logs 不含 private key

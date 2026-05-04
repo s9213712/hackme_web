@@ -72,6 +72,8 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 - `./deploy.sh` 是推薦入口，會幫你建立 `.venv`、安裝 requirements、委派
   `scripts/run_prod.sh` 的部署精靈，並初始化 DB / 啟動服務。
+- 若 `.venv` 已備妥、你只想在隔離環境做快速檢查，可用：
+  `./deploy.sh --check-only --skip-install`
 - repo 只追蹤原始碼；DB、logs、storage、keys、TLS 憑證、reports 都是
   runtime 檔，啟動後才生成。
 - 這種設計降低 clone 後的人工整理成本，也避免把別人的 runtime 狀態帶進來。

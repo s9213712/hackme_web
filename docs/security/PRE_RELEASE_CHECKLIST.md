@@ -60,11 +60,11 @@
 
 - [ ] HTTPS / SSL 設定確認。
   - root 設定 `server_ssl_enabled` 符合部署策略。
-  - `cert.pem` / `key.pem` 或反向代理 TLS 設定已就緒。
+  - `runtime/cert.pem` / `runtime/key.pem` 或反向代理 TLS 設定已就緒。
   - `SESSION_COOKIE_SECURE=true`。
 
 - [ ] Secrets 與 runtime 檔案確認。
-  - `.fkey`、`.filekey`、`.csrfkey`、`.chain_seed`、`.integrity_key` 由部署地生成或由 secret manager 注入。
+  - `runtime/.fkey`、`runtime/.filekey`、`runtime/.csrfkey`、`runtime/.chain_seed`、`runtime/.integrity_key` 由部署地生成或由 secret manager 注入。
   - 沒有把 database、log、chat、storage、hash chain、integrity manifest、測試報告殘留提交到 git。
   - `git status --ignored --short` 已檢查，只有預期忽略檔。
 

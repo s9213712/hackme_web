@@ -23,6 +23,9 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "closeDrivePreview()" in drive_js
     assert "async function previewDriveE2eeFile(fileId)" in drive_js
     assert "decryptDriveE2eeFileForSession" in drive_js
+    assert "function normalizeDrivePreviewBlobMime(blob, expectedMime = \"\")" in drive_js
+    assert "new Blob([blob], { type: targetMime })" in drive_js
+    assert 'fetchDrivePreviewContent(fileId, csrf, preview.mime_type || "")' in drive_js
     assert "driveE2eeSessionPassphrases" in drive_js
     assert "clearDriveE2eeSessionPassphrases" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
@@ -144,7 +147,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
-    assert '/js/35-drive.js?v=20260503-feature-bundles' in index_html
+    assert '/js/35-drive.js?v=20260504-folder-dblclick' in index_html
     assert '/styles.css?v=20260503-appearance-v2' in index_html
     assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
     assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html
@@ -170,18 +173,33 @@ def test_album_viewer_has_dedicated_module():
     assert "function renderAttachmentFileSelects" in drive_js
     assert "async function ensureAttachmentFileOptionsLoaded" in drive_js
     assert "請先從下拉選單選擇雲端檔案" in drive_js
+    assert "function openChatAttachmentPicker()" in drive_js
+    assert "function attachmentStoragePath(file, prefix = \"attachment\")" in drive_js
+    assert 'joinStoragePath("/attachments", uniqueName)' in drive_js
+    assert 'form.append("virtual_path", attachmentStoragePath(selectedFile, contextType || "attachment"))' in drive_js
+    assert 'form.append("display_name", selectedFile.name || "attachment.bin")' in drive_js
     assert 'data-drive-action="delete-context-attachment"' in drive_js
     assert "async function deleteContextAttachment" in drive_js
     assert "/cloud-drive/refs/${encodeURIComponent(refId)}/delete" in drive_js
     assert "附件編號讀取失敗" in drive_js
     assert "loadChatMessages(selectedChatRoomId" in drive_js
     assert '<select id="chat-attachment-existing-file-id">' in index_html
+    assert 'id="chat-attachment-pick-btn"' in index_html
+    assert 'id="chat-attachment-upload-btn"' not in index_html
+    assert 'id="chat-attachment-existing-btn"' not in index_html
+    assert 'form.append("virtual_path", attachmentStoragePath(selectedFile, "chat"))' in drive_js
+    assert 'form.append("virtual_path", attachmentStoragePath(selectedFile, "announcement"))' in drive_js
     assert "dm-attachment-existing-file-id" in drive_js
     assert '<select id="announcement-attachment-existing-file-id">' in index_html
     assert 'placeholder="file_id"' not in index_html
     assert "chat-message-image-preview" in drive_js
     assert "driveTransferRows" in drive_js
     assert "xhrUploadWithProgress" in drive_js
+    assert "data-folder-path" in drive_js
+    assert "function storageFolderRowPathFromEventTarget(target)" in drive_js
+    assert 'document.addEventListener("dblclick", (event) => {' in drive_js
+    assert 'target.closest(".drive-file-actions")' in drive_js
+    assert 'openStorageFolder(folderPath).catch((err) => alert(err.message || "開啟資料夾失敗"))' in drive_js
     assert "/cloud-drive/remote-download/tasks" in drive_js
     assert "async function restoreRemoteDownloadTasks()" in drive_js
     assert "resumeRemoteDownloadTaskPolling(task)" in drive_js

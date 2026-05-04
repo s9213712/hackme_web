@@ -395,10 +395,10 @@ login_smoke_user() {
 }
 
 check_local_tls_files() {
-  if [[ -s "$REPO_ROOT/cert.pem" && -s "$REPO_ROOT/key.pem" ]]; then
-    pass "local TLS files generated" "cert.pem and key.pem exist locally"
+  if [[ -s "$RUNTIME_ROOT/cert.pem" && -s "$RUNTIME_ROOT/key.pem" ]]; then
+    pass "local TLS files generated" "runtime/cert.pem and runtime/key.pem exist locally"
   else
-    fail "local TLS files generated" "cert.pem/key.pem missing after startup"
+    fail "local TLS files generated" "runtime/cert.pem or runtime/key.pem missing after startup"
   fi
 }
 
@@ -583,6 +583,18 @@ run_checks() {
     request "trading root manual price rejected" "POST" "/api/root/trading/markets/ETH%2FPOINTS" "400" '{"manual_price_points":5000,"max_price_jump_percent":10,"fee_rate_percent":0.3,"min_order_points":1,"max_order_points":100000,"enabled":true}'
     login_smoke_user || return 1
     request "trading user dashboard" "GET" "/api/trading/dashboard" "200"
+    request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"
+    if json_bool '"price_health" in data and "fallback_reason" in data and "excluded_sources" in data and "defaulted_market" in data and int(data.get("refresh_interval_ms") or 0) == 2000' "$(latest_raw "trading live price")"; then
+      pass "trading live price metadata" "price_health/fallback_reason/excluded_sources/defaulted_market/refresh_interval_ms=2000 present"
+    else
+      fail "trading live price metadata" "missing live-price metadata fields or unexpected refresh interval"
+    fi
+    request "trading grid preview" "POST" "/api/trading/grid/preview" "200" '{"market_symbol":"ETH/POINTS","lower_price_points":4500.5,"upper_price_points":5500.5,"grid_count":5,"order_amount_points":1000,"order_mode":"maker"}'
+    if json_bool '"fee_model" in data and "break_even" in data and "grid_profit" in data and "risk" in data' "$(latest_raw "trading grid preview")"; then
+      pass "trading grid preview payload" "fee_model/break_even/grid_profit/risk sections present"
+    else
+      fail "trading grid preview payload" "grid preview missing fee-aware sections"
+    fi
     request "trading market buy" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"market","quantity":"0.01"}'
     request "trading dashboard after buy" "GET" "/api/trading/dashboard" "200"
     request "trading open limit order" "POST" "/api/trading/orders" "200" '{"market_symbol":"ETH/POINTS","side":"buy","order_type":"limit","quantity":"0.01","limit_price_points":1}'
@@ -594,6 +606,9 @@ run_checks() {
     fi
     login_root || return 1
     request "trading root report after smoke trades" "GET" "/api/admin/trading/report" "200"
+    request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS" "200"
+    request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"
+    request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200" '{"force":true,"limit":10}'
   else
     skip "points admin credit smoke user" "smoke user id missing"
     skip "points chain seal/verify" "smoke user id missing"
@@ -601,6 +616,12 @@ run_checks() {
 
   request "community announcements list" "GET" "/api/community/announcements" "200"
   request "community create announcement" "POST" "/api/community/announcements" "200" '{"title":"Smoke Announcement","content":"functional smoke announcement","is_pinned":true}'
+  ANNOUNCEMENT_ID="$(json_expr 'data["announcement"]["id"]' "$(latest_raw "community create announcement")" || true)"
+  if [[ -n "${ANNOUNCEMENT_ID:-}" ]]; then
+    request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200" '{"title":"Smoke Announcement Updated","content":"functional smoke announcement updated","is_pinned":false}'
+  else
+    skip "community edit announcement" "announcement id not found"
+  fi
   request "community categories list" "GET" "/api/community/categories" "200"
   request "community boards list" "GET" "/api/community/boards" "200"
   create_community_flow
@@ -783,13 +804,13 @@ $(cat "$RESULTS_TSV")
 - administration: health, readiness, anomaly, DB integrity, audit chain, environment, settings, feature flags, access controls, member rules, platform stats, audit log
 - security center: aggregate security overview, root-only audit data, server log/live output, security controls, threshold update, custom profile creation, custom profile mode switch, integrity guard status/pending finding checks
 - PointsChain economy: wallet, catalog/rules, admin adjustment, ledger listing, root block sealing, chain verification, manual ledger backup, recovery status, economy stats
-- Trading engine: root trading report, manual market price update, user spot market buy, limit order creation/cancellation, root trading audit report
+- Trading engine: live-price metadata, fee-aware grid preview, root trading report, manual market price update, user spot market buy, limit order creation/cancellation, root price-fusion status, root bot-audit dashboard/manual run
 - snapshots/restore/reset: in-app snapshot creation/listing, restore verification that keeps only the baseline forum post, server reset must go offline within 20 seconds then reconnect within 180 seconds by default, reset verification that removes the baseline post, and TLS files regenerate after reset
-- deployment-local TLS: cert.pem/key.pem are generated on startup and regenerated after runtime reset
+- deployment-local TLS: runtime/cert.pem and runtime/key.pem are generated on startup and regenerated after runtime reset
 - storage and files: storage quota/listing, root storage capacity audit, root storage user list, cloud-drive storage upgrade catalog, cloud-drive upload/status/preview/download/delete, remote download capability checks
 - ComfyUI integration: model endpoint wiring and optional backend availability check
 - accounts: admin user creation/listing, account sessions when account-security feature is enabled
-- community: announcements, categories, boards, board approval, board moderator permission scope, thread create/detail/reply/reaction/reward/lock/sticky/curate
+- community: announcements create/edit, categories, boards, board approval, board moderator permission scope, thread create/detail/reply/reaction/reward/lock/sticky/curate
 - chat and DM: room listing, message send/list, DM thread/message flow
 - reports and moderation: bug reports, reports, notifications, appeals, moderation actions/proposals, violations, message reports, mod notes, reputation endpoints
 - hardening regression: unknown-path OPTIONS does not advertise unsafe methods

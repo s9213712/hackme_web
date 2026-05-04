@@ -34,7 +34,7 @@
 ## 原理
 
 - server snapshot：保護整站 DB + runtime file roots + config archive
-- server snapshot 也會帶入目前設定的 runtime secret files，例如 `.chain_seed`、`.csrfkey`、`.filekey`、`.fkey`、`.integrity_key`、`integrity_manifest.json`、`cert.pem`、`key.pem`
+- server snapshot 也會帶入目前設定的 runtime secret files，例如 `runtime/.chain_seed`、`runtime/.csrfkey`、`runtime/.filekey`、`runtime/.fkey`、`runtime/.integrity_key`、`runtime/integrity_manifest.json`、`runtime/cert.pem`、`runtime/key.pem`
 - PointsChain backup：只保護經濟 ledger / chain
 - runtime reset：清掉可重建 runtime 與 live data，並要求重啟
 - server mode checkpoint：保護 mode switch / rollback 場景

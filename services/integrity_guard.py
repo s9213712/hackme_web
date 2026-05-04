@@ -36,6 +36,7 @@ EXCLUDED_DIRS = {
     "logs",
     "node_modules",
     "reports",
+    "runtime",
     "snapshots",
     "storage",
     "uploads",
@@ -200,7 +201,7 @@ class IntegrityGuard:
             return "config"
         if low in {"requirements.txt", "package.json", "package-lock.json", "pyproject.toml"} or "vite.config" in low:
             return "dependencies"
-        if low.startswith("database/") or "bootstrap.schema.sql" in low or "bootstrap.py" in low:
+        if low == "bootstrap.schema.sql" or "bootstrap.py" in low:
             return "migration"
         if "auth" in low or "password" in low or "access_control" in low or low.startswith("routes/public.py"):
             return "auth"

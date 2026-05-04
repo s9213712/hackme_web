@@ -20,7 +20,7 @@
 | Appeals / Notices / Governance | 有審核流程的站點 | reports、notifications、identity/member governance | [WEB.md](WEB.md) |
 | Security Center / Server Mode | root | audit、integrity、snapshot/restore、health center | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md) |
 | PointsChain | 經濟功能 | wallet、ledger、video tips、trading | [07_POINTSCHAIN.md](07_POINTSCHAIN.md) |
-| Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md) |
+| Trading / Bots / Backtest | 交易站點 | PointsChain、economy、price feeds、chart indicators、QA scripts | [08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md) |
 | Snapshot / Restore / Reset | root / 運維 | server mode、audit、integrity、PointsChain | [09_SNAPSHOT_RESET_RESTORE.md](09_SNAPSHOT_RESET_RESTORE.md) |
 | WebTerminal | 已封存 | 不在 active main line | [10_WEB_TERMINAL.md](10_WEB_TERMINAL.md) |
 
@@ -50,7 +50,7 @@
 
 - 一句話說明：提供聊天室、站內信、討論區、公告與內容審核/檢舉流程。
 - 設計目的：驗證權限、審核、通知與治理流程在同一站內的互動。
-- 使用方法：使用者建房、發文、回覆、檢舉；管理者審核或處理異常內容。
+- 使用方法：使用者建房、發文、回覆、檢舉；聊天室表情包直接用 emoji 快捷鍵送出；聊天附件直接從訊息輸入框旁加入待送清單；管理者除了發布公告，也可直接編輯既有公告，不必先刪除重發；管理者可審核或處理異常內容。
 - 原理：聊天、論壇、檢舉、通知彼此連動，並受角色與 member level 限制。
 - 失敗情境與提示：無權發文、板權限不足、檢舉/公告功能未開啟時會顯示關閉或權限訊息。
 - 測試方式：逐角色測發文/回覆/檢舉/公告/管理工具，並驗證 UI/API/DB 對帳。
@@ -60,7 +60,7 @@
 
 - 一句話說明：提供上傳、分享、預覽、隱私模式、資料夾、垃圾桶與相簿。
 - 設計目的：集中處理檔案、權限、加密模式與媒體功能的共同基礎。
-- 使用方法：上傳檔案、選擇隱私模式、必要時建立相簿與分享連結；若容量不足，一般使用者目前可購買的預設方案是 `1GB / 7 天`。
+- 使用方法：上傳檔案、選擇隱私模式、必要時建立相簿與分享連結；Cloud Drive 現在可直接雙擊資料夾列進入，不必只靠右側 `開啟` 按鈕；若容量不足，一般使用者目前可購買的預設方案是 `1GB / 7 天`；音樂檔可直接在雲端硬碟 inline 預覽。
 - 原理：不同隱私模式決定 server 能否掃描 / 預覽 / 解密，並影響影片等上層模組。
 - 失敗情境與提示：配額不足、加密模式不支援某些預覽、權限不足、檔案被 quarantine。
 - 測試方式：上傳、預覽、分享、刪除、恢復、相簿操作、E2EE / server_encrypted 邊界。
@@ -70,7 +70,7 @@
 
 - 一句話說明：把 Cloud Drive 內的影片檔變成可觀看、評論、按讚、打賞的影音頁。
 - 設計目的：重用既有 storage/permission/PointsChain，而不是再造第二套媒體系統。
-- 使用方法：先上傳影片到 Cloud Drive，再從影音頁發布。
+- 使用方法：先上傳影片到 Cloud Drive，再從影音頁發布；不論是直接上傳影音，或從既有 Cloud Drive 影音檔發布，都可附上自訂封面圖。
 - 原理：影片 metadata 與互動是 presentation layer，實際檔案仍由 Cloud Drive 提供。
 - 失敗情境與提示：E2EE 檔案不可發布；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
 - 測試方式：發布、播放、private/unlisted、評論、打賞、權限與解密失敗情境。
@@ -120,10 +120,10 @@
 
 - 一句話說明：提供現貨交易、借貸交易、多交易所融合價格、DCA / 網格 / workflow bot 與回測。
 - 設計目的：驗證金額、風控、撮合、PointsChain 結算與策略流程。
-- 使用方法：root 先啟用 economy / trading，再決定價格來源是 `融合價格（多交易所加權平均）` 還是單一 Binance；若選融合價格，可維持 `依深度自動權重`，或切成 `root 手動權重` 自行調整各交易所占比。交易相關 root 設定現在已從 `計費` 拆成獨立 `交易所` 分頁。root 設定頁同時有 `融合價格即時比例` dashboard，可直接看到目前各 API 真實占比、被排除來源與是否已降級。現貨 fee 預設 `0.10%`，Grid 預設吃 spot fee 的 `75%`（25% 折扣）；借貸則分成 `BTC / ETH = 8% APR` 與 `USDT / POINTS = 10% APR` 兩組，並可調整每小時計息規則。一般使用者交易頁的 `目前價格` 會每 `2` 秒刷新一次，漲綠跌紅；買入/賣出預估也會跟著同一節奏重算；積分錢包裡的現貨/進階交易浮盈虧、root 虛擬總額也會同步跟著最新價格更新。現貨明細另外會直接列出 `持有成本`、`單顆成本` 與 `損益平均價格`，其中損益平均價格已把預估賣出手續費算進去；若來源已降級成 fallback / cached source，頁面會直接亮黃燈。Grid Bot 建立頁現在也會先試算最不利一格的毛利、手續費、扣費後淨利與損益兩平間距；紅燈直接阻擋，黃燈需二次確認，不再只看每格價差。root 同頁也有 `交易機器人定期稽核` dashboard；bot 在首筆成交或啟用滿 24 小時前會先標成 `未稽核`，之後才會進入綠 / 黃 / 紅燈。若你接了外部 `BTC_trade`，同一區也能先檢查腳本，再按 `一鍵啟動預測`，讓系統先判斷是否要更新資料 / 重訓模型，最後在背景等待新的預測 report。定投機器人的 `最多執行次數` 也可輸入 `-1` 代表不限制；回測若超過單批 `10,000` 根，後端會自動分段續跑，總上限為 `20,000` 根。一般使用者不需要自己理解這個上限代表多少天，因為回測頁會依目前週期即時提示「若保留開始時間，結束最晚可選到哪裡」或反過來提示開始最早可選到哪裡。
-- 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。融合價格模式會優先抓 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 的掛單簿中價與深度，依深度或 root 手動權重融合；若部分 API 失效，系統會自動用剩餘健康來源重新分配權重。交易頁每 `2` 秒輪詢一次輕量 `live-price` API，且每次拿到新價格後會同步重算買入/賣出預估；同一輪也會重算積分錢包裡的 spot / margin 浮盈虧與 root 虛擬總額，不再等到較慢的 full dashboard refresh 才跳一次。這支 API 不是純 read-only：它會在後端同步刷新 `trading_markets.manual_price_points / price_source` 的最新快取，讓後續撮合、估值與 dashboard 能共用同一份最新交易參考價。Grid Bot preview 也統一改由後端 `Decimal` 精算，會把每格毛利、買/賣手續費、扣費後淨利、損益兩平 spread 與紅/黃/綠燈一起回傳；前端只做顯示，不自行用浮點數偷算。交易帳本仍以整數 POINT 為最小單位，但手續費改用 `Decimal` 後端計算並採四捨五入到最近整點，避免舊版小額單長期偏向 `ceil` 超收；借貸利息則會先累積到 micropoints，再跨過整點時才真正記成 POINT，避免小本金被每次計息都直接進位。借貸 APR 依借入資產分組，多單與空單因此可能使用不同利率；前台會直接顯示 `累積利息`、`已實扣`、`下一次計息`。後端也會同步累積每位使用者的 spot / margin 名目成交量、總 fee 與成交次數，供後續 VIP 系統或 root report 使用。回測引擎則把單批執行上限和總上限拆開：內部分段每批最多 `10,000` 根，但整體回測最多可連續處理 `20,000` 根；若 `candles < 2`，只有顯式 opt-in 才會抓 reference candles，不再靜默把隔離資料換成 live public history。交易 bot 稽核則由後端 scheduler 執行，先用「首筆成交或啟用滿 24 小時」作為納入條件，再產生綠 / 黃 / 紅燈與 bug report 對照資訊。BTC_trade 一鍵啟動則改成背景工作：資料 / 模型檢查、必要更新、重訓與預測都在伺服器端串接，root 前端只輪詢工作狀態，不會把長時間訓練誤判成 timeout 失敗。
+- 使用方法：root 先啟用 economy / trading，再決定價格來源是 `融合價格（多交易所加權平均）` 還是單一 Binance；若選融合價格，可維持 `依深度自動權重`，或切成 `root 手動權重` 自行調整各交易所占比。交易相關 root 設定現在已從 `計費` 拆成獨立 `交易所` 分頁。root 設定頁同時有 `融合價格即時比例` dashboard，可直接看到目前各 API 真實占比、被排除來源與是否已降級。現貨 fee 預設 `0.10%`，Grid 預設吃 spot fee 的 `75%`（25% 折扣）；借貸則分成 `BTC / ETH = 8% APR` 與 `USDT / POINTS = 10% APR` 兩組，並可調整每小時計息規則。一般使用者交易頁的 `目前價格` 會每 `2` 秒刷新一次，漲綠跌紅；買入/賣出預估也會跟著同一節奏重算；積分錢包裡的現貨/進階交易浮盈虧、root 虛擬總額也會同步跟著最新價格更新。交易圖表除了原本的 `MA / EMA / 布林線`，現在也提供 `RSI14` 與 `KD(9,3,3)` 副圖，可直接在站內看趨勢與超買超賣。現貨明細另外會直接列出 `持有成本`、`單顆成本` 與 `損益平均價格`，其中損益平均價格已把預估賣出手續費算進去；借貸明細則會同時列出 `損益平衡價` 與 `逐倉估算強平價`，而且損益平衡價已把 `開倉費 / 累積利息 / 預估平倉手續費` 都算進去，兩個價格都會隨每小時計息與即時現價一起重算。若來源已降級成 fallback / cached source，頁面會直接亮黃燈。Grid Bot 建立頁現在也會先試算最不利一格的毛利、手續費、扣費後淨利與損益兩平間距；紅燈直接阻擋，黃燈需二次確認，不再只看每格價差。root 同頁也有 `交易機器人定期稽核` dashboard；bot 在首筆成交或啟用滿 24 小時前會先標成 `未稽核`，之後才會進入綠 / 黃 / 紅燈。若你接了外部 `BTC_trade`，同一區也能先檢查腳本，再按 `一鍵啟動預測`，讓系統先判斷是否要更新資料 / 重訓模型，最後在背景等待新的預測 report。定投機器人的 `最多執行次數` 也可輸入 `-1` 代表不限制；回測若超過單批 `10,000` 根，後端會自動分段續跑，總上限為 `20,000` 根。一般使用者不需要自己理解這個上限代表多少天，因為回測頁會依目前週期即時提示「若保留開始時間，結束最晚可選到哪裡」或反過來提示開始最早可選到哪裡。
+- 原理：前台顯示是輔助，實際撮合與結算由後端重新驗證；關鍵金額不信任前端。融合價格模式會優先抓 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 的掛單簿中價與深度，依深度或 root 手動權重融合；若部分 API 失效，系統會自動用剩餘健康來源重新分配權重。市場 symbol、顯示 symbol、各交易所 provider id、預設 seed 與 BTC_trade 支援條件現在統一集中在 `services/trading_markets.py`，未來要新增 `SOL`、`GOLD` 這類積分標的時，不必再同步維護多份 hardcode map。交易頁每 `2` 秒輪詢一次輕量 `live-price` API，且每次拿到新價格後會同步重算買入/賣出預估；同一輪也會重算積分錢包裡的 spot / margin 浮盈虧與 root 虛擬總額，不再等到較慢的 full dashboard refresh 才跳一次。這支 API 不是純 read-only：它會在後端同步刷新 `trading_markets.manual_price_points / price_source` 的最新快取，讓後續撮合、估值與 dashboard 能共用同一份最新交易參考價。Grid Bot preview 也統一改由後端 `Decimal` 精算，會把每格毛利、買/賣手續費、扣費後淨利、損益兩平 spread 與紅/黃/綠燈一起回傳；前端只做顯示，不自行用浮點數偷算。交易帳本仍以整數 POINT 為最小單位，但手續費改用 `Decimal` 後端計算並採四捨五入到最近整點，避免舊版小額單長期偏向 `ceil` 超收；借貸利息則會先累積到 micropoints，再跨過整點時才真正記成 POINT，避免小本金被每次計息都直接進位。借貸 APR 依借入資產分組，多單與空單因此可能使用不同利率；前台會直接顯示 `累積利息`、`已實扣`、`下一次計息`。後端也會同步累積每位使用者的 spot / margin 名目成交量、總 fee 與成交次數，供後續 VIP 系統或 root report 使用。回測引擎則把單批執行上限和總上限拆開：內部分段每批最多 `10,000` 根，但整體回測最多可連續處理 `20,000` 根；若 `candles < 2`，只有顯式 opt-in 才會抓 reference candles，不再靜默把隔離資料換成 live public history。交易 bot 稽核則由後端 scheduler 執行，先用「首筆成交或啟用滿 24 小時」作為納入條件，再產生綠 / 黃 / 紅燈與 bug report 對照資訊。BTC_trade 一鍵啟動則改成背景工作：資料 / 模型檢查、必要更新、重訓與預測都在伺服器端串接，root 前端只輪詢工作狀態，不會把長時間訓練誤判成 timeout 失敗。
 - 失敗情境與提示：餘額不足、價格來源失效、circuit breaker、借貸池不足、功能旗標未完整啟用；若融合價格手動權重全部設成 0，系統會退回自動深度權重，並在 root dashboard / log 直接標示 `manual weights invalid`；若 order book 全失敗，會顯示 `價格來源降級` 並進入保守模式，而不是靜默把單一 ticker 當成正常 fused price。若你在手算小額單手續費時看到與舊版不同，先確認是否已升到 `2026.05.03-063` 之後的 rounding 規則，也確認是否還誤把 Grid 當成舊版 `50%` 折扣。若你在借貸部位看到 `interest_points` 暫時仍是 0，但 `interest_exact_points` 已有小數，代表系統正在累積未滿 1 點的利息殘值；若 APR 看起來和你預期不同，也要先分辨目前借的是 `BTC / ETH` 還是 `USDT / POINTS`。若回測區間超過 `20,000` 根 K 線，前後端都會明確要求縮小區間，而不是靜默截斷；若 `candles < 2` 卻還看到回測像是自己變成真實行情，請先確認 server 是否已升到 `2026.05.04-070`。若交易頁的 `目前價格` 看起來跟參考 K 線最新收盤不同，這在 `2026.05.04-071` 之後是正常設計：前者是實際交易參考價，後者只是圖表參考資料。若 root 稽核 dashboard 顯示 `未稽核`，通常代表 bot 尚未成交且也未滿 24 小時，不是系統壞掉。若 BTC_trade 一鍵啟動長時間停在訓練中，先看背景工作狀態；新版不再因單純 timeout 就判成失敗，只有腳本實際退出錯誤或等不到新的 report 才會轉紅。
-- 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、單一交易所 API 失效後的融合價格重算、root-only 融合價格 dashboard、Grid Bot fee preview 的紅 / 黃 / 綠燈與 break-even 驗證、交易 bot `未稽核 -> 綠 / 黃 / 紅燈` 稽核流程、DCA `max_runs=-1` 連續執行、restore consistency、`BTC/USDT 1h` 全年歷史回測、超過 `10,000` 根時的後端自動分段續跑、`candles < 2` isolation 驗證、小本金借貸利息 carry 驗證，以及 `volume_stats / volume_summary` 是否正確累積。
+- 測試方式：正常交易、邊界輸入、精度、回測、stress pentest、單一交易所 API 失效後的融合價格重算、root-only 融合價格 dashboard、Grid Bot fee preview 的紅 / 黃 / 綠燈與 break-even 驗證、交易 bot `未稽核 -> 綠 / 黃 / 紅燈` 稽核流程、DCA `max_runs=-1` 連續執行、restore consistency、`BTC/USDT 1h` 全年歷史回測、超過 `10,000` 根時的後端自動分段續跑、`candles < 2` isolation 驗證、小本金借貸利息 carry 驗證、參考 K 線圖的 `MA10 / MA20 / MA30 / MA60 / EMA12 / EMA26 / EMA50 / 布林線 / RSI14 / KD` 指標顯示，以及 `volume_stats / volume_summary` 是否正確累積。
 - 相關文件連結：[08_TRADING_ENGINE.md](08_TRADING_ENGINE.md), [TRADING.md](TRADING.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### Snapshot / Restore / Reset

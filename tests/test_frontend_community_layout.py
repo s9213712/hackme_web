@@ -32,9 +32,10 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'id="community-thread-creator" style="display:none;"' in index_html
     assert 'id="community-mod-can-pin-threads"' in index_html
     assert 'id="community-thread-sticky-toggle"' in index_html
-    assert "/js/25-community.js?v=20260429-moderator-user-select" in index_html
+    assert "/js/25-community.js?v=20260504-announcement-edit" in index_html
 
     assert "communityAnnouncementEditorOpen = false" in community_js
+    assert "communityAnnouncementEditingId = null" in community_js
     assert "communityBoardRequestOpen = false" in community_js
     assert "communityThreadCreatorOpen = false" in community_js
     assert "communityModeratorManagerOpen = false" in community_js
@@ -53,6 +54,12 @@ def test_community_composers_are_button_opened_not_permanent():
     assert 'if (typeof canOpenCommunityReviewMode === "function") return canOpenCommunityReviewMode();' in core_js
     assert 'subButton.style.display = visible && canShowSidebarSubitem(sub) ? "" : "none";' in core_js
     assert "reactToCommunityThread" in community_js
+    assert "data-edit-announcement" in community_js
+    assert "function editAnnouncement" in community_js
+    assert "function resetCommunityAnnouncementEditor" in community_js
+    assert 'submitBtn.textContent = communityAnnouncementEditingId ? "更新公告" : "發布公告"' in community_js
+    assert 'method: isEditing ? "PUT" : "POST"' in community_js
+    assert '`/community/announcements/${editingId}`' in community_js
     assert "rewardCommunityThread" in community_js
     assert "penalizeCommunityPost" in community_js
     assert "can_pin_threads" in community_js

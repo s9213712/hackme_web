@@ -82,8 +82,10 @@ security/run_functional_smoke.sh --keep-runtime
 | cloud drive/storage files | `HTML_LEARNING_STORAGE_DIR` |
 | runtime reports | `HTML_LEARNING_REPORTS_DIR` |
 
-這代表測試不應修改 repo 內的 `database/`、`logs/`、`chats/`、`anchors/`、
-`storage/` 或 runtime report 檔案。
+這代表測試不應修改 tracked 的 `bootstrap.schema.sql`，也不應把 runtime
+狀態寫回 repo 根目錄；`runtime/logs/`、`runtime/chats/`、`runtime/anchors/`、
+`runtime/storage/`、`runtime/reports/` 等執行期資料應只存在於隔離 runtime
+或本地 `runtime/` 目錄。
 
 ## Functional Coverage
 
@@ -93,16 +95,17 @@ security/run_functional_smoke.sh --keep-runtime
 |---|---|
 | runtime safety | 啟動前 filesystem snapshot、隔離 runtime、結束清理或還原 runtime。 |
 | public API | index、site config、version、password strength、captcha challenge。 |
-| local TLS | `cert.pem` / `key.pem` 首次啟動自動生成，reset 後重啟也會重新生成。 |
+| local TLS | `runtime/cert.pem` / `runtime/key.pem` 首次啟動自動生成，reset 後重啟也會重新生成。 |
 | auth | CSRF token、root login、預設密碼強制修改、session identity。 |
 | admin | health、readiness、anomaly、DB integrity、audit chain、environment、settings、feature flags、access controls、member rules、platform stats、audit log。 |
 | security center | summary、server log、security controls、threshold update、自定義 profile、server mode switch。 |
 | snapshot/restore/reset | 建立 snapshot、restore 後只保留 baseline 發文、reset 後 baseline 發文也消失，並驗證 server 真的重啟或 `started_at` 已更新。 |
 | accounts | 建立 smoke user、列出 users、account sessions。 |
-| community/forum | announcement、category、board、board approval、thread、reply、lock、sticky、curate。 |
+| community/forum | announcement create/edit、category、board、board approval、thread、reply、lock、sticky、curate。 |
 | chat/DM | chat room、chat message、DM thread、DM message。 |
 | storage/cloud drive | quota/list、root storage capacity audit、root storage user list、storage upgrade catalog、cloud-drive upload、status、preview、download、delete。 |
 | PointsChain | wallet、catalog/rules、admin adjustment、ledger、seal/verify、manual backup、recovery status、一鍵異常鏈處理、economy stats。 |
+| trading extras | `live-price` metadata、fee-aware `grid/preview`、root `price-fusion-status`、root `bot-audit` dashboard / manual run。 |
 | reports/moderation | bug reports、reports、notifications、appeals、moderation actions/proposals、violations、message reports、mod notes、reputation endpoints。 |
 | hardening | unknown path `OPTIONS` 不應宣告 PUT/DELETE/PATCH 等危險方法。 |
 

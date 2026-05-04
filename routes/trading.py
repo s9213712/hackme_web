@@ -21,6 +21,14 @@ from services.btc_trade_bridge import (
     default_btc_trade_project_dir,
     expand_server_path,
 )
+from services.trading_markets import (
+    list_reference_price_markets,
+    market_display_symbol,
+    market_provider_id,
+    market_supports_btc_trade,
+    market_supports_reference_price,
+    normalize_market_symbol,
+)
 from services.trading_engine import BACKTEST_SEGMENT_CANDLES, MAX_BACKTEST_CANDLES, units_to_quantity
 
 
@@ -31,42 +39,6 @@ KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"
 GEMINI_CANDLES_URL_TEMPLATE = "https://api.gemini.com/v2/candles/{symbol}/{timeframe}"
 BITSTAMP_OHLC_URL_TEMPLATE = "https://www.bitstamp.net/api/v2/ohlc/{pair}/"
 USDT_TO_POINTS_RATE = 1
-REFERENCE_PRICE_MARKETS = {
-    "BTC/POINTS": "BTCUSDT",
-    "BTC/USDT": "BTCUSDT",
-    "ETH/POINTS": "ETHUSDT",
-    "ETH/USDT": "ETHUSDT",
-}
-COINBASE_REFERENCE_PRODUCTS = {
-    "BTC/POINTS": "BTC-USD",
-    "BTC/USDT": "BTC-USD",
-    "ETH/POINTS": "ETH-USD",
-    "ETH/USDT": "ETH-USD",
-}
-OKX_REFERENCE_INSTRUMENTS = {
-    "BTC/POINTS": "BTC-USDT",
-    "BTC/USDT": "BTC-USDT",
-    "ETH/POINTS": "ETH-USDT",
-    "ETH/USDT": "ETH-USDT",
-}
-KRAKEN_REFERENCE_PAIRS = {
-    "BTC/POINTS": "XBTUSD",
-    "BTC/USDT": "XBTUSD",
-    "ETH/POINTS": "ETHUSD",
-    "ETH/USDT": "ETHUSD",
-}
-GEMINI_REFERENCE_SYMBOLS = {
-    "BTC/POINTS": "btcusd",
-    "BTC/USDT": "btcusd",
-    "ETH/POINTS": "ethusd",
-    "ETH/USDT": "ethusd",
-}
-BITSTAMP_REFERENCE_PAIRS = {
-    "BTC/POINTS": "btcusd",
-    "BTC/USDT": "btcusd",
-    "ETH/POINTS": "ethusd",
-    "ETH/USDT": "ethusd",
-}
 REFERENCE_PRICE_INTERVALS = {"5m", "15m", "1h", "4h", "1d"}
 OKX_BAR_INTERVALS = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}
 COINBASE_GRANULARITY_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "1d": 86400}
@@ -295,7 +267,7 @@ def register_trading_routes(app, deps):
         return round(float(value) * USDT_TO_POINTS_RATE, 8)
 
     def display_market_symbol(symbol):
-        return str(symbol or "").upper().replace("/POINTS", "/USDT")
+        return market_display_symbol(symbol)
 
     def fetch_json_url(url, *, timeout=6, user_agent="hackme_web/1.0 reference-price-proxy"):
         req = Request(url, headers={"User-Agent": user_agent})
@@ -493,13 +465,14 @@ def register_trading_routes(app, deps):
         return {"source": "bitstamp_public_api", "symbol": pair, "candles": candles}
 
     def fetch_reference_candles_with_fallback(market_symbol, interval, limit):
+        market_symbol = normalize_market_symbol(market_symbol)
         providers = (
-            lambda: fetch_binance_reference_candles(REFERENCE_PRICE_MARKETS.get(market_symbol), interval, limit),
-            lambda: fetch_okx_reference_candles(OKX_REFERENCE_INSTRUMENTS.get(market_symbol), interval, limit),
-            lambda: fetch_coinbase_reference_candles(COINBASE_REFERENCE_PRODUCTS.get(market_symbol), interval, limit),
-            lambda: fetch_kraken_reference_candles(KRAKEN_REFERENCE_PAIRS.get(market_symbol), interval, limit),
-            lambda: fetch_gemini_reference_candles(GEMINI_REFERENCE_SYMBOLS.get(market_symbol), interval, limit),
-            lambda: fetch_bitstamp_reference_candles(BITSTAMP_REFERENCE_PAIRS.get(market_symbol), interval, limit),
+            lambda: fetch_binance_reference_candles(market_provider_id(market_symbol, "binance_public_api"), interval, limit),
+            lambda: fetch_okx_reference_candles(market_provider_id(market_symbol, "okx_public_api"), interval, limit),
+            lambda: fetch_coinbase_reference_candles(market_provider_id(market_symbol, "coinbase_exchange"), interval, limit),
+            lambda: fetch_kraken_reference_candles(market_provider_id(market_symbol, "kraken_public_api"), interval, limit),
+            lambda: fetch_gemini_reference_candles(market_provider_id(market_symbol, "gemini_public_api"), interval, limit),
+            lambda: fetch_bitstamp_reference_candles(market_provider_id(market_symbol, "bitstamp_public_api"), interval, limit),
         )
         errors = []
         for provider in providers:
@@ -534,8 +507,8 @@ def register_trading_routes(app, deps):
             raise ValueError("backtest time must be ISO datetime or unix timestamp")
 
     def fetch_reference_candles_for_backtest(data):
-        market_symbol = str(data.get("market_symbol") or data.get("market") or "BTC/USDT").strip().upper()
-        if market_symbol not in REFERENCE_PRICE_MARKETS:
+        market_symbol = normalize_market_symbol(data.get("market_symbol") or data.get("market") or "BTC/USDT")
+        if not market_supports_reference_price(market_symbol):
             raise ValueError("unsupported backtest market")
         interval = str(data.get("timeframe") or data.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
@@ -572,7 +545,7 @@ def register_trading_routes(app, deps):
         if start_ms is not None or end_ms is not None:
             try:
                 provider_result = fetch_binance_reference_candles(
-                    REFERENCE_PRICE_MARKETS.get(market_symbol),
+                    market_provider_id(market_symbol, "binance_public_api"),
                     interval,
                     download_limit,
                     start_ms=start_ms,
@@ -623,7 +596,7 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
-        market_symbol = str(request.args.get("market") or request.args.get("market_symbol") or "").strip().upper()
+        market_symbol = normalize_market_symbol(request.args.get("market") or request.args.get("market_symbol") or "")
         try:
             quote = trading_service.get_live_market_quote(market_symbol=market_symbol)
             return json_resp({"ok": True, **quote})
@@ -799,8 +772,8 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
-        market_symbol = str(request.args.get("market") or "BTC/USDT").strip().upper()
-        if market_symbol.replace("/POINTS", "/USDT") != "BTC/USDT":
+        market_symbol = normalize_market_symbol(request.args.get("market") or "BTC/USDT")
+        if not market_supports_btc_trade(market_symbol):
             return json_resp({"ok": True, "available": False, "hidden": True, "msg": "僅 BTC/USDT 顯示 BTC_trade 信號"})
         try:
             settings = trading_service.get_root_settings().get("settings", {})
@@ -887,9 +860,9 @@ def register_trading_routes(app, deps):
                 "msg": "參考價格查詢過於頻繁，請稍後再試",
                 "retry_after": retry_after,
             }), 429
-        market_symbol = str(request.args.get("market") or "BTC/USDT").strip().upper()
-        binance_symbol = REFERENCE_PRICE_MARKETS.get(market_symbol)
-        if not binance_symbol:
+        market_symbol = normalize_market_symbol(request.args.get("market") or "BTC/USDT")
+        binance_symbol = market_provider_id(market_symbol, "binance_public_api")
+        if not binance_symbol or not market_supports_reference_price(market_symbol):
             return json_resp({"ok": False, "msg": "不支援的參考價格市場"}), 400
         interval = str(request.args.get("interval") or "15m").strip()
         if interval not in REFERENCE_PRICE_INTERVALS:
@@ -1344,7 +1317,7 @@ def register_trading_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
-        market_symbol = str(request.args.get("market_symbol") or "").strip().upper()
+        market_symbol = normalize_market_symbol(request.args.get("market_symbol") or "")
         try:
             status = trading_service.get_root_price_fusion_status(market_symbol=market_symbol)
             return json_resp({"ok": True, "status": status})

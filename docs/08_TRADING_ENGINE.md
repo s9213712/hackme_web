@@ -144,6 +144,8 @@
   語義；若測到 short / futures 也需要這種條件，必須獨立設計與驗證
 - 交易機器人稽核 dashboard 是否正確區分 `未稽核` 與綠 / 黃 / 紅燈
 - `security/trading_stress_pentest.py`
+- `security/trading_workflow_template_validation.py`
+- `scripts/trading_backtest_20000_probe.py`
 - snapshot / restore 後狀態一致性
 
 ## 相關文件連結

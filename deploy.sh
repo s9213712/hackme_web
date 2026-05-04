@@ -10,6 +10,8 @@ COMFYUI_URL="${COMFYUI_URL:-http://127.0.0.1:8192}"
 WITH_TURNSTILE=0
 TURNSTILE_SECRET="${TURNSTILE_SECRET:-}"
 LITE_HINT=0
+SKIP_INSTALL=0
+ORIGINAL_ARGC="$#"
 
 usage() {
   cat <<'USAGE'
@@ -24,6 +26,7 @@ Options:
   --with-comfyui URL      Add COMFYUI_API_URL to .env before launch.
   --with-turnstile SECRET Add TURNSTILE_SECRET_KEY to .env before launch.
   --lite-hint             Print Raspberry Pi / low-end device deployment hints.
+  --skip-install          Reuse the current VENV_DIR and skip pip upgrade/install.
   --no-start              Alias for --check-only.
   -h, --help              Show this help.
 
@@ -32,8 +35,9 @@ Environment:
   VENV_DIR                Default: .venv
 
 The first run delegates the interactive setup wizard to scripts/run_prod.sh.
-Runtime secrets, cert.pem, key.pem, DB, logs, storage, and manifests are local
-generated files and are ignored by git.
+Runtime secrets, `runtime/cert.pem`, `runtime/key.pem`, `runtime/database/`,
+`runtime/logs/`, `runtime/storage/`, and related manifests are local generated
+files and are ignored by git.
 USAGE
 }
 
@@ -59,6 +63,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --lite-hint)
       LITE_HINT=1
+      shift
+      ;;
+    --skip-install)
+      SKIP_INSTALL=1
       shift
       ;;
     -h|--help)
@@ -91,9 +99,13 @@ ensure_venv() {
   fi
   # shellcheck disable=SC1091
   . "$VENV_DIR/bin/activate"
+  if [[ "$SKIP_INSTALL" == "1" ]]; then
+    say "skipping dependency install; using existing environment at $VENV_DIR"
+    return 0
+  fi
   say "installing Python dependencies"
-  python3 -m pip install --upgrade pip
-  python3 -m pip install -r "$ROOT_DIR/requirements.txt"
+  PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade pip
+  PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -r "$ROOT_DIR/requirements.txt"
 }
 
 append_or_replace_env() {
@@ -124,6 +136,10 @@ EOF
 
 main() {
   cd "$ROOT_DIR"
+  if [[ "$LITE_HINT" == "1" && "$ORIGINAL_ARGC" == "1" ]]; then
+    print_lite_hints
+    exit 0
+  fi
   ensure_python
   ensure_venv
 

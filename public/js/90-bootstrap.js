@@ -128,8 +128,9 @@ function bindUiEvents() {
   const chatFriendAddBtn = $("chat-friend-add-btn");
   const chatRoomInviteBtn = $("chat-room-invite-btn");
   const chatRoomExportBtn = $("chat-room-export-btn");
-  const chatAttachmentUploadBtn = $("chat-attachment-upload-btn");
-  const chatAttachmentExistingBtn = $("chat-attachment-existing-btn");
+  const chatAttachmentPickBtn = $("chat-attachment-pick-btn");
+  const chatAttachmentFile = $("chat-attachment-file");
+  const chatAttachmentExistingSelect = $("chat-attachment-existing-file-id");
   const chatInput = $("chat-message-input");
   const communityAnnouncementBtn = $("community-announcement-submit");
   const communityAnnouncementOpenBtn = $("community-announcement-open-btn");
@@ -284,8 +285,9 @@ function bindUiEvents() {
   document.querySelectorAll("[data-chat-sticker]").forEach((btn) => {
     btn.addEventListener("click", () => sendChatSticker(btn.dataset.chatSticker || ""));
   });
-  if (chatAttachmentUploadBtn) chatAttachmentUploadBtn.addEventListener("click", uploadChatAttachment);
-  if (chatAttachmentExistingBtn) chatAttachmentExistingBtn.addEventListener("click", attachExistingChatFile);
+  if (chatAttachmentPickBtn) chatAttachmentPickBtn.addEventListener("click", openChatAttachmentPicker);
+  if (chatAttachmentFile) chatAttachmentFile.addEventListener("change", uploadChatAttachment);
+  if (chatAttachmentExistingSelect) chatAttachmentExistingSelect.addEventListener("change", attachExistingChatFile);
   if (communityAnnouncementBtn) communityAnnouncementBtn.addEventListener("click", publishAnnouncement);
   if (communityAnnouncementOpenBtn) communityAnnouncementOpenBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(true));
   if (communityAnnouncementCancelBtn) communityAnnouncementCancelBtn.addEventListener("click", () => toggleCommunityAnnouncementEditor(false));

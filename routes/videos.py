@@ -104,6 +104,49 @@ def register_video_routes(app, deps):
         stem = Path(filename).stem.strip()
         return stem or "未命名影音"
 
+    def _parse_publish_request():
+        if request.files or request.form:
+            data = {
+                "cloud_file_id": (request.form.get("cloud_file_id") or "").strip(),
+                "title": (request.form.get("title") or "").strip(),
+                "description": request.form.get("description") or "",
+                "visibility": (request.form.get("visibility") or "public").strip() or "public",
+                "cover_file_id": (request.form.get("cover_file_id") or "").strip() or None,
+            }
+            return data, request.files.get("cover"), None, None
+        data, err, status = _parse_json_body()
+        return data, None, err, status
+
+    def _store_video_cover_upload(conn, *, actor, member_rule, cover_upload, privacy_mode):
+        if not cover_upload or not cover_upload.filename:
+            return None, None, None, None
+        if not _uploaded_file_is_image(cover_upload):
+            return None, None, "封面圖只接受圖片檔", "cover_not_image"
+        cover_result, cover_msg = store_cloud_upload(
+            conn,
+            actor=actor,
+            member_rule=member_rule,
+            storage_root=storage_root,
+            file_storage=cover_upload,
+            privacy_mode=privacy_mode,
+            scan_now=True,
+            server_file_fernet=server_file_fernet,
+        )
+        if cover_msg:
+            return None, None, cover_msg, "cover_upload_rejected"
+        cover_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (cover_result["file_id"],)).fetchone()
+        cover_storage_file, cover_storage_msg = create_storage_file_entry(
+            conn,
+            actor=actor,
+            file_row=cover_row,
+            virtual_path=f"/Media/Covers/{cover_result['file_id']}-{safe_public_filename(cover_upload.filename)}",
+            display_name=safe_public_filename(cover_upload.filename),
+            source="video_cover_upload",
+        )
+        if cover_storage_msg:
+            return None, None, cover_storage_msg, "cover_storage_entry_failed"
+        return cover_result, cover_storage_file, None, None
+
     def _parse_http_byte_range(range_header, total_size):
         if not range_header:
             return None, None
@@ -156,11 +199,25 @@ def register_video_routes(app, deps):
         actor, err = _actor_or_401()
         if err:
             return err
-        data, err, status = _parse_json_body()
+        data, cover_upload, err, status = _parse_publish_request()
         if err:
             return err, status
         conn = get_db()
         try:
+            cover_result = None
+            cover_storage_file = None
+            if cover_upload and cover_upload.filename:
+                rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
+                cover_result, cover_storage_file, cover_msg, cover_error = _store_video_cover_upload(
+                    conn,
+                    actor=actor,
+                    member_rule=rule,
+                    cover_upload=cover_upload,
+                    privacy_mode="standard_plain",
+                )
+                if cover_msg:
+                    conn.rollback()
+                    return json_resp({"ok": False, "msg": cover_msg, "error": cover_error}), 400
             video = publish_video(
                 conn,
                 actor=actor,
@@ -168,7 +225,7 @@ def register_video_routes(app, deps):
                 title=data.get("title"),
                 description=data.get("description") or "",
                 visibility=data.get("visibility") or "public",
-                cover_file_id=data.get("cover_file_id") or None,
+                cover_file_id=cover_result["file_id"] if cover_result else (data.get("cover_file_id") or None),
             )
             conn.commit()
             audit(
@@ -179,7 +236,12 @@ def register_video_routes(app, deps):
                 ua=get_ua(),
                 detail=f"video_id={video['id']},cloud_file_id={video['cloud_file_id']},visibility={video['visibility']}",
             )
-            return json_resp({"ok": True, "video": video})
+            return json_resp({
+                "ok": True,
+                "video": video,
+                "cover_file": ({**cover_result, "filename": safe_public_filename(cover_upload.filename)} if cover_result else None),
+                "cover_storage_file": cover_storage_file,
+            })
         except Exception as exc:
             conn.rollback()
             return _error_response(exc)
@@ -203,8 +265,6 @@ def register_video_routes(app, deps):
         if privacy_mode not in {"standard_plain", "server_encrypted"}:
             return json_resp({"ok": False, "msg": "影音隱私模式不支援", "error": "unsupported_privacy_mode"}), 400
         cover_upload = request.files.get("cover")
-        if cover_upload and cover_upload.filename and not _uploaded_file_is_image(cover_upload):
-            return json_resp({"ok": False, "msg": "封面圖只接受圖片檔", "error": "cover_not_image"}), 400
         conn = get_db()
         try:
             ensure_cloud_drive_attachment_schema(conn)
@@ -238,31 +298,16 @@ def register_video_routes(app, deps):
             cover_result = None
             cover_storage_file = None
             if cover_upload and cover_upload.filename:
-                cover_result, cover_msg = store_cloud_upload(
+                cover_result, cover_storage_file, cover_msg, cover_error = _store_video_cover_upload(
                     conn,
                     actor=actor,
                     member_rule=rule,
-                    storage_root=storage_root,
-                    file_storage=cover_upload,
                     privacy_mode="server_encrypted" if privacy_mode == "server_encrypted" else "standard_plain",
-                    scan_now=True,
-                    server_file_fernet=server_file_fernet,
+                    cover_upload=cover_upload,
                 )
                 if cover_msg:
                     conn.rollback()
-                    return json_resp({"ok": False, "msg": cover_msg, "error": "cover_upload_rejected"}), 400
-                cover_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (cover_result["file_id"],)).fetchone()
-                cover_storage_file, cover_storage_msg = create_storage_file_entry(
-                    conn,
-                    actor=actor,
-                    file_row=cover_row,
-                    virtual_path=f"/Media/Covers/{cover_result['file_id']}-{safe_public_filename(cover_upload.filename)}",
-                    display_name=safe_public_filename(cover_upload.filename),
-                    source="video_cover_upload",
-                )
-                if cover_storage_msg:
-                    conn.rollback()
-                    return json_resp({"ok": False, "msg": cover_storage_msg, "error": "cover_storage_entry_failed"}), 400
+                    return json_resp({"ok": False, "msg": cover_msg, "error": cover_error}), 400
             video = publish_video(
                 conn,
                 actor=actor,

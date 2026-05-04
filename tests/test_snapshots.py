@@ -54,7 +54,7 @@ def _init_db(path):
     conn.close()
 
 
-def _service(tmp_path, audit_log, *, runtime_secret_files=None):
+def _service(tmp_path, audit_log, *, runtime_secret_files=None, runtime_base_dir=None):
     base = tmp_path / "app"
     base.mkdir()
     db_path = base / "database.db"
@@ -71,6 +71,7 @@ def _service(tmp_path, audit_log, *, runtime_secret_files=None):
         get_db=get_db,
         db_path=db_path,
         base_dir=base,
+        runtime_base_dir=runtime_base_dir,
         storage_root=storage,
         audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
         file_roots=[uploads],
@@ -102,6 +103,36 @@ def test_root_service_creates_manual_snapshot_with_metadata(tmp_path):
     assert (snapshot_dir / "config.tar.gz").exists()
     assert (snapshot_dir / "checksums.sha256").exists()
     assert any(call[0][0] == "SNAPSHOT_CREATE_READY" for call in audit_log)
+
+
+def test_snapshot_runtime_secret_paths_use_runtime_prefix_for_external_runtime_dir(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime-root"
+    runtime_root.mkdir()
+    runtime_key = runtime_root / ".filekey"
+    service, _db_path, _uploads = _service(
+        tmp_path,
+        audit_log,
+        runtime_base_dir=runtime_root,
+        runtime_secret_files=[runtime_key],
+    )
+    runtime_key.write_text("secret-key-v1", encoding="utf-8")
+
+    result = service.create_snapshot(snapshot_type="manual", actor={"id": 1, "username": "root"}, notes="external runtime root")
+
+    assert result.ok is True
+    snapshot = service.get_snapshot(snapshot_id=result.snapshot_id, actor={"id": 1, "username": "root"})
+    assert snapshot["metadata"]["runtime_secret_files"][0]["path"] == "runtime/.filekey"
+
+
+def test_server_mode_hmac_key_defaults_to_runtime_subdir_without_snapshot_service(tmp_path, monkeypatch):
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    mode = ServerModeService(snapshot_service=None, get_db=lambda: None, audit=lambda *args, **kwargs: None)
+
+    path = mode._local_hmac_key_path("server_mode_log")
+
+    assert path == (tmp_path / "runtime" / ".server_mode_log_hmac_key").resolve()
 
 
 def test_restore_reverts_db_and_uploaded_files_and_creates_pre_restore(tmp_path):

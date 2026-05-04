@@ -307,7 +307,7 @@ reward ≥ 1000 一律 multisig（無論 severity）。
 | QA Mining / 貢獻獎勵（Phase 7） | [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) |
 | QA / Release Gate | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) |
 | 既有 PointsChain 概念（v1） | [07_POINTSCHAIN.md](../07_POINTSCHAIN.md) |
-| 鏈化前的清債（Phase 0） | GitHub #122 / #129 / #130 / #131 |
+| 鏈化前的清債（Phase 0） | 參考 [PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md) 的 final review 結論與歷史 evidence |
 
 ---
 

@@ -91,10 +91,27 @@ curl -ksS -X POST https://127.0.0.1:5000/api/root/trading/bot-audit/run
 # 5. 引擎內建 deterministic 驗證
 python3 security/trading_exchange_validation.py --out /tmp/trading_audit_check
 python3 security/trading_workflow_template_validation.py --no-download --limit 200 --out /tmp/trading_audit_check
+python3 scripts/trading_backtest_20000_probe.py --include-route --json-out /tmp/trading_audit_check/backtest_20000.json
 
 # 6. 既有 pytest 回歸
 PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_points_chain.py
 ```
+
+目前這三支交易驗證腳本的分工是：
+
+- `security/trading_exchange_validation.py`
+  - deterministic spot / DCA / workflow / grid / margin / liquidation 正確性
+  - 額外檢查連續加倉後 `avg_cost_points` 是否仍合理，避免交易腳本靜默接受異常成本基礎
+- `security/trading_workflow_template_validation.py`
+  - 12 個 official workflow templates 的 trigger semantics
+  - Bollinger 類模板的 `flat sequence` no-false-trigger guard
+  - graph workflow 改用 trigger scenario + flat guard + engine sanity 檢查，不再沿用舊的過時 replay oracle
+- `scripts/trading_backtest_20000_probe.py`
+  - `20,000` candle segmented backtest
+  - four bot families / route payload / over-limit reject
+  - `single_candle_rejected_without_silent_fetch`
+  - `backtest_outlier_jump_skipped`
+  - `workflow_flat_bollinger_guard`
 
 ## 相關文件連結
 

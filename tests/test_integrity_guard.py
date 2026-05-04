@@ -30,12 +30,11 @@ def _write_project(base):
     (base / "services").mkdir()
     (base / "routes").mkdir()
     (base / "public" / "js").mkdir(parents=True)
-    (base / "database").mkdir()
     (base / "server.py").write_text("print('server')\n", encoding="utf-8")
     (base / "services" / "auth.py").write_text("AUTH = True\n", encoding="utf-8")
     (base / "routes" / "system_admin.py").write_text("ROOT = True\n", encoding="utf-8")
     (base / "public" / "js" / "50-admin.js").write_text("const admin = true;\n", encoding="utf-8")
-    (base / "database" / "bootstrap.schema.sql").write_text("CREATE TABLE x(id);\n", encoding="utf-8")
+    (base / "bootstrap.schema.sql").write_text("CREATE TABLE x(id);\n", encoding="utf-8")
     (base / "requirements.txt").write_text("flask\n", encoding="utf-8")
     (base / "README.md").write_text("# test project\n", encoding="utf-8")
 

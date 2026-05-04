@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, make_response
+from werkzeug.exceptions import RequestEntityTooLarge
 from cryptography import x509
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
@@ -157,13 +158,23 @@ def _env_path(name, default_path):
         return default_path
     return value if os.path.isabs(value) else os.path.abspath(value)
 
-DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(BASE_DIR, "database"))
+RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", os.path.join(BASE_DIR, "runtime"))
+RUNTIME_DIR = os.path.abspath(RUNTIME_DIR)
+RUNTIME_SECRETS_DIR = _env_path("HTML_LEARNING_RUNTIME_SECRETS_DIR", RUNTIME_DIR)
+RUNTIME_SECRETS_DIR = os.path.abspath(RUNTIME_SECRETS_DIR)
+
+
+def _runtime_path(env_name, relative_path):
+    return _env_path(env_name, os.path.join(RUNTIME_SECRETS_DIR, relative_path))
+
+
+DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))
 DB_PATH = os.path.join(DB_DIR, "database.db")
-LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(BASE_DIR, "logs"))
-CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(BASE_DIR, "chats"))
-ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(BASE_DIR, "anchors"))
-STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(BASE_DIR, "storage"))
-REPORTS_DIR = _env_path("HTML_LEARNING_REPORTS_DIR", os.path.join(BASE_DIR, "reports"))
+LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))
+CHAT_DIR = _env_path("HTML_LEARNING_CHAT_DIR", os.path.join(RUNTIME_DIR, "chats"))
+ANCHOR_DIR = _env_path("HTML_LEARNING_ANCHOR_DIR", os.path.join(RUNTIME_DIR, "anchors"))
+STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(RUNTIME_DIR, "storage"))
+REPORTS_DIR = _env_path("HTML_LEARNING_REPORTS_DIR", os.path.join(RUNTIME_DIR, "reports"))
 POINTS_CHAIN_BACKUP_DIR = _env_path("POINTS_CHAIN_BACKUP_DIR", os.path.join(DB_DIR, "points_chain_backups"))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 AUDIT_LOG_PATH = os.path.join(LOG_DIR, "audit.log")
@@ -171,7 +182,18 @@ SERVER_LOG_PATH = os.path.join(LOG_DIR, "server.log")
 AUDIT_ANCHOR_PATH = os.path.join(ANCHOR_DIR, "audit_head.jsonl")
 AUDIT_ANCHOR_LATEST_PATH = os.path.join(ANCHOR_DIR, "audit_head_latest.json")
 AUDIT_ANCHOR_INTERVAL_SECONDS = 60
+CHAIN_SEED_PATH = _runtime_path("HTML_LEARNING_CHAIN_SEED_PATH", ".chain_seed")
+SESSION_SECRET_PATH = _runtime_path("HTML_LEARNING_SESSION_SECRET_FILE", ".fkey")
+SERVER_FILE_KEY_PATH = _runtime_path("HTML_LEARNING_SERVER_FILE_KEY_FILE", ".filekey")
+INTEGRITY_KEY_PATH = _runtime_path("HTML_LEARNING_INTEGRITY_KEY_PATH", ".integrity_key")
+CSRF_SECRET_PATH = _runtime_path("HTML_LEARNING_CSRF_KEY_PATH", ".csrfkey")
+SERVER_MODE_LOG_HMAC_KEY_PATH = _runtime_path("HTML_LEARNING_SERVER_MODE_LOG_HMAC_KEY_FILE", ".server_mode_log_hmac_key")
+INTEGRITY_MANIFEST_PATH = _runtime_path("HTML_LEARNING_INTEGRITY_MANIFEST_PATH", "integrity_manifest.json")
+CERT_FILE = _runtime_path("HTML_LEARNING_CERT_FILE", "cert.pem")
+KEY_FILE = _runtime_path("HTML_LEARNING_KEY_FILE", "key.pem")
 
+os.makedirs(RUNTIME_DIR, exist_ok=True)
+os.makedirs(RUNTIME_SECRETS_DIR, exist_ok=True)
 os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CHAT_DIR, exist_ok=True)
@@ -292,7 +314,7 @@ def ensure_local_tls_files(cert_file, key_file):
 
 # ── Hash-chain seed (server-side only, not exposed to client) ─────────────────
 def _get_chain_seed():
-    seed_file = os.path.join(BASE_DIR, ".chain_seed")
+    seed_file = CHAIN_SEED_PATH
     if os.path.exists(seed_file):
         try:
             with open(seed_file) as f:
@@ -310,19 +332,19 @@ CHAIN_SEED = _get_chain_seed()
 # ── Secrets ─────────────────────────────────────────────────────────────────
 SECRET_KEY = _load_or_create_text_secret(
     "SESSION_SECRET",
-    os.path.join(BASE_DIR, ".fkey"),
+    SESSION_SECRET_PATH,
     generator=lambda: secrets.token_hex(32),
 )
 
 SERVER_FILE_ENCRYPTION_KEY = _load_or_create_text_secret(
     "SERVER_FILE_ENCRYPTION_KEY",
-    os.path.join(BASE_DIR, ".filekey"),
+    SERVER_FILE_KEY_PATH,
     generator=lambda: Fernet.generate_key().decode("utf-8"),
 )
 
 _INTEGRITY_KEY = _load_or_create_binary_secret(
     "INTEGRITY_SECRET_KEY",
-    os.path.join(BASE_DIR, ".integrity_key"),
+    INTEGRITY_KEY_PATH,
     generator=lambda: secrets.token_bytes(32),
 )
 
@@ -355,9 +377,9 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
 
-LEGACY_FAIL_LOG = os.path.join(BASE_DIR, "fail_log.json")
-LEGACY_BLOCKED_IPS = os.path.join(BASE_DIR, "blocked_ips.json")
-LEGACY_RATE_LIMIT = os.path.join(BASE_DIR, "rate_limit.json")
+LEGACY_FAIL_LOG = _runtime_path("HTML_LEARNING_FAIL_LOG_PATH", "fail_log.json")
+LEGACY_BLOCKED_IPS = _runtime_path("HTML_LEARNING_BLOCKED_IPS_PATH", "blocked_ips.json")
+LEGACY_RATE_LIMIT = _runtime_path("HTML_LEARNING_RATE_LIMIT_PATH", "rate_limit.json")
 LEGACY_AUDIT_LOG = AUDIT_LOG_PATH
 
 # ── Sensitive field encryption helpers (PII) ─────────────────────────────
@@ -446,7 +468,7 @@ SESSION_COOKIE_SAMESITE = _env_session_samesite()
 # ── CSRF double-submit secret ─────────────────────────────────────────────────
 CSRF_SECRET_KEY = _load_or_create_text_secret(
     "CSRF_SECRET_KEY",
-    os.path.join(BASE_DIR, ".csrfkey"),
+    CSRF_SECRET_PATH,
     generator=lambda: secrets.token_hex(32),
 )
 
@@ -1051,7 +1073,7 @@ configure_security_events_service(
 configure_bootstrap_service(
     get_db=get_db,
     db_path=os.path.join(DB_DIR, "bootstrap"),
-    schema_path=os.path.join(BASE_DIR, "database", "bootstrap.schema.sql"),
+    schema_path=os.path.join(BASE_DIR, "bootstrap.schema.sql"),
     legacy_fail_log=LEGACY_FAIL_LOG,
     legacy_blocked_ips=LEGACY_BLOCKED_IPS,
     legacy_rate_limit=LEGACY_RATE_LIMIT,
@@ -1078,6 +1100,7 @@ snapshot_service = SnapshotService(
     get_db=get_db,
     db_path=DB_PATH,
     base_dir=BASE_DIR,
+    runtime_base_dir=RUNTIME_SECRETS_DIR,
     storage_root=STORAGE_DIR,
     audit=audit,
     file_roots=[
@@ -1093,15 +1116,16 @@ snapshot_service = SnapshotService(
         os.path.join(BASE_DIR, ".env"),
     ],
     runtime_secret_files=[
-        os.path.join(BASE_DIR, ".chain_seed"),
-        os.path.join(BASE_DIR, ".csrfkey"),
-        os.path.join(BASE_DIR, ".filekey"),
-        os.path.join(BASE_DIR, ".fkey"),
-        os.path.join(BASE_DIR, ".fley"),
-        os.path.join(BASE_DIR, ".integrity_key"),
-        os.path.join(BASE_DIR, "integrity_manifest.json"),
-        os.path.join(BASE_DIR, "cert.pem"),
-        os.path.join(BASE_DIR, "key.pem"),
+        CHAIN_SEED_PATH,
+        CSRF_SECRET_PATH,
+        SERVER_FILE_KEY_PATH,
+        SESSION_SECRET_PATH,
+        os.path.join(RUNTIME_SECRETS_DIR, ".fley"),
+        INTEGRITY_KEY_PATH,
+        INTEGRITY_MANIFEST_PATH,
+        CERT_FILE,
+        KEY_FILE,
+        SERVER_MODE_LOG_HMAC_KEY_PATH,
     ],
     reset_points_chain=lambda **kwargs: points_service.reset_runtime_chain(**kwargs),
     reset_audit_chain=reset_audit_chain_with_event,
@@ -1109,7 +1133,7 @@ snapshot_service = SnapshotService(
 ROOT_INTEGRITY_SIGNING_KEY = os.environ.get("ROOT_INTEGRITY_SIGNING_KEY", "").encode("utf-8") or _INTEGRITY_KEY
 integrity_guard = IntegrityGuard(
     base_dir=BASE_DIR,
-    manifest_path=os.path.join(BASE_DIR, "integrity_manifest.json"),
+    manifest_path=INTEGRITY_MANIFEST_PATH,
     signing_key=ROOT_INTEGRITY_SIGNING_KEY,
     get_db=get_db,
     audit=audit,
@@ -1140,7 +1164,8 @@ server_mode_service = ServerModeService(
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
 app.config["SECRET_KEY"] = SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB, per-level quota enforced in upload_security.py
+MAX_UPLOAD_REQUEST_MB = _env_int("HTML_LEARNING_MAX_CONTENT_MB", 1024, minimum=128)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024
 app.config["SESSION_COOKIE_SECURE"] = SESSION_COOKIE_SECURE
 app.config["SESSION_COOKIE_HTTPONLY"] = SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = SESSION_COOKIE_SAMESITE
@@ -1187,6 +1212,20 @@ def extra_security_headers(response):
 def api_not_found(error):
     if request.path.startswith("/api"):
         return json_resp({"ok": False, "msg": "Not found"}), 404
+    return error
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def api_request_too_large(error):
+    if request.path.startswith("/api"):
+        limit_bytes = int(app.config.get("MAX_CONTENT_LENGTH") or 0)
+        limit_mb = max(1, limit_bytes // (1024 * 1024)) if limit_bytes > 0 else 0
+        return json_resp({
+            "ok": False,
+            "msg": f"上傳內容超過伺服器單次請求上限（{limit_mb} MB）",
+            "error": "request_too_large",
+            "max_request_mb": limit_mb,
+        }), 413
     return error
 
 
@@ -1525,10 +1564,11 @@ register_operation_routes(app, {
     "DB_PATH": DB_PATH,
     "LOG_DIR": LOG_DIR,
     "REPORTS_DIR": REPORTS_DIR,
+    "RUNTIME_DIR": RUNTIME_DIR,
     "SERVER_LOG_PATH": SERVER_LOG_PATH,
     "STORAGE_DIR": STORAGE_DIR,
-    "CERT_FILE": os.path.join(BASE_DIR, "cert.pem"),
-    "KEY_FILE": os.path.join(BASE_DIR, "key.pem"),
+    "CERT_FILE": CERT_FILE,
+    "KEY_FILE": KEY_FILE,
     "SESSION_COOKIE_SAMESITE": SESSION_COOKIE_SAMESITE,
     "SESSION_COOKIE_SECURE": SESSION_COOKIE_SECURE,
     "VIOLATION_APPEAL_WINDOW_HOURS": VIOLATION_APPEAL_WINDOW_HOURS,
@@ -1857,9 +1897,6 @@ if __name__ == "__main__":
     start_points_chain_block_worker()
     start_trading_liquidation_worker()
     start_trading_bot_worker()
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
-    KEY_FILE  = os.path.join(BASE_DIR, "key.pem")
     tls_generation = ensure_local_tls_files(CERT_FILE, KEY_FILE)
     has_ssl_files = os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)
     ssl_state = effective_server_ssl(get_system_settings(), cert_exists=has_ssl_files)
@@ -1874,7 +1911,7 @@ if __name__ == "__main__":
     if has_ssl:
         ssl_label = "enabled"
     elif ssl_state["enabled_by_setting"] and not has_ssl_files:
-        ssl_label = "disabled (cert.pem + key.pem missing)"
+        ssl_label = "disabled (runtime/cert.pem + runtime/key.pem missing)"
     else:
         ssl_label = "disabled by root setting"
     print(f"    SSL: {ssl_label}")

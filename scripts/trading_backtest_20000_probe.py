@@ -198,6 +198,32 @@ def workflow_definition():
     }
 
 
+def flat_bollinger_workflow():
+    return {
+        "version": "1",
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {
+                "id": "bb_flat_guard",
+                "type": "condition",
+                "condition": {"type": "bb_position", "position": "below_lower"},
+            },
+            {"id": "no_pos", "type": "condition", "condition": {"type": "has_position", "value": False}},
+            {"id": "buy_and", "type": "logic", "operator": "AND"},
+            {"id": "buy_act", "type": "action", "priority": 10, "action": {"type": "buy_percent", "percent": 100, "order_type": "market"}},
+        ],
+        "edges": [
+            {"id": "e1", "from": "start", "from_port": "out", "to": "bb_flat_guard", "to_port": "in"},
+            {"id": "e2", "from": "start", "from_port": "out", "to": "no_pos", "to_port": "in"},
+            {"id": "e3", "from": "bb_flat_guard", "from_port": "true", "to": "buy_and", "to_port": "in"},
+            {"id": "e4", "from": "no_pos", "from_port": "true", "to": "buy_and", "to_port": "in"},
+            {"id": "e5", "from": "buy_and", "from_port": "true", "to": "buy_act", "to_port": "in"},
+        ],
+    }
+
+
 def workflow_probe(trading):
     candles = candle_series(20_000, 100, spike_map={**{idx: 200 for idx in range(9_999)}, 9_999: 90, 19_999: 120})
     result = trading.backtest_trading_bot(
@@ -251,6 +277,83 @@ def workflow_probe(trading):
             and result["final_value_points"] == expected_final
             and result["segmented_backtest"] is True
             and result["segmented_backtest_batches"] == 2
+        ),
+    }
+
+
+def flat_bollinger_probe(trading):
+    candles = [
+        {
+            "time": index,
+            "time_iso": f"2024-01-01T{index:02d}:00:00+00:00",
+            "open_points": 100,
+            "high_points": 100,
+            "low_points": 100,
+            "close_points": 100,
+            "price_points": 100,
+        }
+        for index in range(30)
+    ]
+    result = trading.backtest_trading_bot(
+        actor=actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "workflow",
+            "workflow_json": flat_bollinger_workflow(),
+            "initial_cash_points": 1000,
+            "candles": candles,
+        },
+    )
+    return {
+        "scenario": "workflow_flat_bollinger_guard",
+        "expected": {
+            "trade_count": 0,
+            "final_value_points": 1000,
+        },
+        "actual": {
+            "trade_count": result["trade_count"],
+            "final_value_points": result["final_value_points"],
+        },
+        "match": result["trade_count"] == 0 and result["final_value_points"] == 1000,
+    }
+
+
+def outlier_jump_probe(trading):
+    candles = [
+        {"time_iso": "2024-01-01T00:00:00+00:00", "close_points": 100, "price_points": 100},
+        {"time_iso": "2024-01-01T00:15:00+00:00", "close_points": 10, "price_points": 10},
+        {"time_iso": "2024-01-01T00:30:00+00:00", "close_points": 150, "price_points": 150},
+    ]
+    result = trading.backtest_trading_bot(
+        actor=actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "conditional",
+            "trigger_type": "price_below",
+            "trigger_price_points": 50,
+            "initial_cash_points": 1000,
+            "order_points": 100,
+            "candles": candles,
+        },
+    )
+    return {
+        "scenario": "backtest_outlier_jump_skipped",
+        "expected": {
+            "trade_count": 0,
+            "outlier_skipped_count": 1,
+            "final_value_points": 1000,
+        },
+        "actual": {
+            "trade_count": result["trade_count"],
+            "outlier_skipped_count": result.get("outlier_skipped_count"),
+            "final_value_points": result["final_value_points"],
+            "range_warnings": result.get("range_warnings") or [],
+        },
+        "match": (
+            result["trade_count"] == 0
+            and result.get("outlier_skipped_count") == 1
+            and result["final_value_points"] == 1000
+            and any("已略過跳價" in warning for warning in (result.get("range_warnings") or []))
         ),
     }
 
@@ -310,7 +413,7 @@ def grid_probe(trading):
         "expected": {
             "trade_count": 7,
             "trade_sides": ["buy", "sell", "sell", "sell", "buy", "buy", "buy"],
-            "final_value_points": 1_072,
+            "final_value_points": 1_073,
             "segmented_backtest": True,
             "segmented_backtest_batches": 2,
         },
@@ -324,14 +427,14 @@ def grid_probe(trading):
         "match": (
             result["trade_count"] == 7
             and [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
-            and result["final_value_points"] == 1_072
+            and result["final_value_points"] == 1_073
             and result["segmented_backtest"] is True
             and result["segmented_backtest_batches"] == 2
         ),
     }
 
 
-def route_probe(trading):
+def build_test_app(trading):
     app = Flask(__name__)
     app.testing = True
 
@@ -354,6 +457,11 @@ def route_probe(trading):
             "audit": lambda *args, **kwargs: None,
         },
     )
+    return app
+
+
+def route_probe(trading):
+    app = build_test_app(trading)
     client = app.test_client()
     candles = candle_series(20_000, 100)
     response = client.post(
@@ -391,11 +499,32 @@ def route_probe(trading):
     }
 
 
+def single_candle_rejected_probe(trading):
+    app = build_test_app(trading)
+    client = app.test_client()
+    response = client.post(
+        "/api/trading/bots/backtest",
+        json={
+            "market_symbol": "BTC/USDT",
+            "strategy": "dca",
+            "auto_fetch_reference_candles": True,
+            "candles": [{"time_iso": "2024-05-01T00:00:00+00:00", "close_points": 60000}],
+        },
+    )
+    payload = response.get_json() or {}
+    return {
+        "scenario": "single_candle_rejected_without_silent_fetch",
+        "status_code": response.status_code,
+        "message": payload.get("msg") or payload.get("message") or "",
+        "match": response.status_code == 400 and "candles" in str(payload.get("msg") or payload.get("message") or "").lower(),
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Probe 20,000-candle segmented backtests for all four bot strategies.")
     parser.add_argument(
         "--case",
-        choices=("all", "conditional", "dca", "workflow", "grid", "route", "over_limit"),
+        choices=("all", "conditional", "dca", "workflow", "grid", "route", "over_limit", "flat_bollinger", "outlier_jump", "single_candle_rejected"),
         default="all",
         help="Run one specific probe case or all cases.",
     )
@@ -422,9 +551,12 @@ def main():
         "grid": grid_probe,
         "route": route_probe,
         "over_limit": over_limit_probe,
+        "flat_bollinger": flat_bollinger_probe,
+        "outlier_jump": outlier_jump_probe,
+        "single_candle_rejected": single_candle_rejected_probe,
     }
     if args.case == "all":
-        case_names = ["conditional", "dca", "workflow", "grid", "over_limit"]
+        case_names = ["conditional", "dca", "workflow", "grid", "flat_bollinger", "outlier_jump", "single_candle_rejected", "over_limit"]
         if args.include_route:
             case_names.append("route")
     else:

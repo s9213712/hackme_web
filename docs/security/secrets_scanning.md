@@ -7,7 +7,7 @@ This project uses two layers of plaintext secret detection before code is merged
 
 The custom scanner checks project-specific plaintext patterns such as credential
 assignments, bearer authorization headers, private-key markers, and database
-connection URLs. It also treats `logs/` specially: behavior logs are allowed,
+connection URLs. It also treats `runtime/logs/` specially: behavior logs are allowed,
 but logs must not contain passwords, tokens, API keys, private keys, session IDs,
 Authorization headers, cookies, or JWT material.
 

@@ -17,6 +17,10 @@ Enabled in this line:
 
 - Spot trading for `BTC/USDT` and `ETH/USDT` display pairs.
 - Internal API symbols remain `BTC/POINTS` and `ETH/POINTS`.
+- Market/provider definitions are centralized in
+  `services/trading_markets.py`, so future points-quoted assets can reuse the
+  same live-price, reference-price, and UI mapping pipeline instead of adding
+  new hardcoded maps in multiple files.
 - `1 POINT = 1 USDT` for trading display and calculation.
 - Market orders, limit orders, cancellation, and scheduled limit-order matching.
 - Public reference prices and candlestick chart with Binance, OKX, Coinbase,
@@ -118,7 +122,16 @@ closed instead of using a root-entered manual price.
 The frontend shows a candlestick chart for reference. The chart endpoint tries
 Binance candles first, then OKX candles, Coinbase Exchange candles, Kraken
 OHLC, Gemini candles, and Bitstamp OHLC. The default chart interval is 15
-minutes, with other supported intervals available from the UI.
+minutes, with other supported intervals available from the UI. The chart now
+supports these built-in indicators directly in the trading page:
+
+- Overlay indicators: `MA5`, `MA10`, `MA20`, `MA30`, `MA60`, `EMA12`,
+  `EMA26`, `EMA50`, and Bollinger Bands.
+- Oscillator subpanel: `RSI14` and `KD(9,3,3)`.
+
+RSI and KD are rendered in a dedicated lower pane so they keep a meaningful
+`0-100` scale instead of being squashed onto the same price axis as the
+candlesticks.
 
 The backend always re-checks the execution price before order execution. The
 frontend chart is a reference display, not the source of final settlement.
@@ -317,6 +330,7 @@ Each open borrow position shows:
 - Accumulated interest.
 - Next interest billing time.
 - Billing cadence (`every N hours`, `minimum M hours`).
+- Break-even price (includes open fee, accumulated interest, and estimated close fee).
 - Principal.
 - Original margin.
 - Maintenance margin.
@@ -324,6 +338,11 @@ Each open borrow position shows:
 - Unrealized PnL.
 - Per-position liquidation price estimate.
 - Risk status and reason.
+
+The borrow-position detail panel recalculates accumulated interest, break-even
+price, and liquidation price on the same lightweight live-price refresh cadence
+as the trading page. That means both prices can drift upward or downward over
+time even if the user does not manually reload the whole dashboard.
 
 Borrow trading now uses a cross-margin account check:
 
@@ -597,3 +616,28 @@ PYTHONPATH=. python3 security/trading_stress_pentest.py \
 
 See [Trading Stress Pentest](security/TRADING_STRESS_PENTEST.md) for all modes
 and safety limits.
+
+Workflow / backtest validator follow-up:
+
+```bash
+PYTHONPATH=. python3 security/trading_workflow_template_validation.py \
+  --no-download --limit 200 --out /tmp/trading_workflow_validation_followup
+
+PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py \
+  --include-route --json-out /tmp/trading_backtest_20000_followup.json
+```
+
+What these two scripts now prove:
+
+- `trading_workflow_template_validation.py`
+  - all 12 official system templates still have valid trigger semantics
+  - Bollinger-based templates still pass the `flat sequence` no-false-trigger guard
+  - graph workflow templates are validated with trigger scenarios + flat guard +
+    engine backtest sanity, instead of an older stale replay oracle
+- `trading_backtest_20000_probe.py`
+  - all four bot families (`conditional / dca / workflow / grid`) still survive
+    a segmented `20,000` candle backtest
+  - the route still accepts `20,000` candles and rejects `20,001`
+  - `candles < 2` is rejected instead of silently fetching public candles
+  - outlier jump candles are skipped with warnings
+  - flat Bollinger sequences still do not false trigger

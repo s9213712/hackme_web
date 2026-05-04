@@ -10,7 +10,7 @@
 | 取捨 | 拍板結果 |
 |---|---|
 | 升級策略 | **漸進 v2 dual-write**，不另起 fork |
-| 鏈化前提 | **Phase 0 清債** 必須先處理 GitHub #122/#129/#130/#131 + NaN 例外字串外洩 |
+| 鏈化前提 | **Phase 0 清債** 已完成；進入 Phase 1 前仍需 root 對 `docs/BLOCKCHAIN/` 正式動工另行批准 |
 | 託管模型 | **Hybrid Custody**，預設 custodial，self-custody opt-in |
 | 官方錢包 | **永遠多簽**，禁止 root 一鍵 mint，連 internal_test 都不能 1-of-1 |
 | Supply | **Hybrid hard cap**：Core Points 有 cap，Reward Pool 不在 cap 內；改 cap 須 3-of-5 multisig |
@@ -28,7 +28,7 @@
 ## 1. 8-Phase 工程地圖
 
 ```
-Phase 0  清債       ~1 週    GitHub #122/#129/#130/#131 + NaN 收斂
+Phase 0  清債       ~1 週    blocker issues 收斂、isolated live API 驗證、runtime cleanup、full pytest
 Phase 1  地址化     ~2 週    wallet_addresses + 9 official + supply_state
 Phase 2  Ledger v2  ~3 週    address-centric + dual-write + state/supply root
 Phase 3  Transfer   ~2 週    custodial only + UUID nonce + preview + fee path
@@ -53,17 +53,17 @@ Phase 7  QA Mining  ~3-4 週  公式 reward + multisig + signer 排除 + trust s
 | backtest API 不再靜默 fetch binance 真實行情 | [#129](https://github.com/s9213712/hackme_web/issues/129) | S | ✅ **RESOLVED 2026-05-04** — route 改成 opt-in `auto_fetch_reference_candles=true`；`test_backtest_does_not_silently_replace_isolated_single_candle` PASS |
 | backtest engine 套用 max_price_jump_percent | [#130](https://github.com/s9213712/hackme_web/issues/130) | M | ✅ **RESOLVED 2026-05-04** — 主迴圈加 jump check + warning + skipped count；`test_backtest_skips_outlier_jump_candles_instead_of_booking_fake_profit` PASS |
 | BB std=0 邊界修正 | [#131](https://github.com/s9213712/hackme_web/issues/131) | S | ✅ **RESOLVED 2026-05-04** — `bb_std=0` 不產生穿越訊號；`bb_position` 改嚴格 `>` / `<`；`test_workflow_backtest_does_not_false_trigger_bollinger_on_flat_sequence` PASS |
-| 30s polling gap 緩解 | [#122](https://github.com/s9213712/hackme_web/issues/122) | M | 🟡 **OPEN** — 唯一未解 HIGH。鏈化前需評估 event-driven 或更短 interval；同時可在 prechain 階段先設定可調 + alert 緩解 |
+| 30s polling gap 緩解 | [#122](https://github.com/s9213712/hackme_web/issues/122) | M | ✅ **RESOLVED 2026-05-04** — scan window 改看 high/low、`last_scan_at` 只在成功 scan 後更新、full pytest + live API 驗證通過 |
 | NaN qty 例外字串外洩 (PB-1) | TBD | XS | ✅ **RESOLVED 2026-05-04** — service 層擋 non-finite + route 端訊息白名單化；`test_trading_order_invalid_decimal_is_sanitized_for_user` PASS |
 | Bot audit dashboard 落地 | follow-up | M | ✅ **RESOLVED 2026-05-04** — root-only 稽核 dashboard、scheduler、未稽核守門、bug-report 整合都已上線（[`docs/TRADING_BOT_AUDIT.md`](../TRADING_BOT_AUDIT.md) 「目前範圍」表升級）|
 
-**Phase 0 出口 gate**：4 件 GitHub HIGH issue 中 **3 件已 close（#129/#130/#131）**，**#122 仍 OPEN**。
-依 [PRE_BLOCKCHAIN_READINESS_REPORT.md](../AGENTS/reports/claude/prechain_qa_2026-05-04/PRE_BLOCKCHAIN_READINESS_REPORT.md) 最新 verdict 為 **CONDITIONAL GO**（無 release blocker，但 #122 建議鏈化前再緩解或記錄已知限制）。
+**Phase 0 出口 gate**：原先的 blocker / recommend / low issues 都已收斂，isolated live API 驗證與 full pytest 全綠。
+目前狀態是 **ALLOW PHASE 1 CANDIDATE**；root 若批准動工，可依 `IMPLEMENTATION_GUIDE.md` 開 `04.blockchain` 分支。
 
 **進 Phase 1 條件（拍板）**：
 - `#129/#130/#131/PB-1` 全 close ✅
 - 交易 follow-up 測試 58/58 PASS ✅
-- `#122` 至少完成「可調 worker interval + safe_mode 自動觸發 + alert」之最小緩解（具體完成度由 root 審查決定是否足以進 Phase 1）
+- root 對 `docs/BLOCKCHAIN/` 的 Phase 1 動工另行批准
 
 ---
 

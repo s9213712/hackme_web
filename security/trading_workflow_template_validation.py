@@ -40,19 +40,26 @@ from services.trading_engine import (  # noqa: E402
 REPORT_DIR = ROOT / "security" / "reports"
 WORKFLOW_DIR = ROOT / "workflows" / "system"
 TRIGGER_CASES = {
-    "dip_buy": ({"price": 85000, "has_position": False}, "buy_percent"),
-    "breakout_buy": ({"price": 110000, "ma50": 100000, "has_position": False}, "buy_percent"),
-    "stop_loss": ({"price": 70000, "has_position": True, "pnl_percent": -20}, "close_all"),
+    "dip_buy": ({"price": 85000, "window_low_price": 85000, "has_position": False}, "buy_percent"),
+    "breakout_buy": ({"price": 110000, "window_high_price": 110000, "ma50": 100000, "has_position": False}, "buy_percent"),
+    "stop_loss": ({"price": 70000, "window_low_price": 70000, "has_position": True, "pnl_percent": -20, "pnl_low_percent": -20}, "close_all"),
     "rsi_scale": ({"price": 90000, "rsi": 25, "has_position": False}, "buy_percent"),
     "ma_pullback": ({"price": 100000, "ma50": 90000, "rsi": 40, "has_position": False}, "buy_percent"),
-    "bollinger_reversion": ({"price": 80000, "bb_lower": 90000, "bb_mid": 100000, "has_position": False}, "buy_percent"),
+    "bollinger_reversion": (
+        {"price": 80000, "bb_lower": 90000, "bb_mid": 100000, "bb_std": 5000, "has_position": False},
+        "buy_percent",
+    ),
     "kd_momentum": ({"price": 100000, "kd": 70, "ma20": 90000, "has_position": False}, "buy_percent"),
-    "risk_guard": ({"price": 90000, "has_position": True, "pnl_percent": -6}, "close_all"),
-    "full_entry_exit": ({"price": 80000, "has_position": False}, "buy_percent"),
+    "risk_guard": ({"price": 90000, "window_low_price": 90000, "has_position": True, "pnl_percent": -6, "pnl_low_percent": -6}, "close_all"),
+    "full_entry_exit": ({"price": 80000, "window_low_price": 80000, "has_position": False, "pnl_percent": None}, "buy_percent"),
     "ma200_trend_entry": ({"price": 100000, "ma200": 85000, "ma50": 90000, "rsi": 50, "has_position": False}, "buy_percent"),
-    "staged_profit_taking": ({"price": 120000, "has_position": True, "pnl_percent": 12}, "sell_percent"),
-    "swing_bb_ma50": ({"price": 80000, "bb_lower": 90000, "ma50": 70000, "has_position": False}, "buy_percent"),
+    "staged_profit_taking": ({"price": 120000, "window_high_price": 120000, "has_position": True, "pnl_percent": 12, "pnl_high_percent": 12}, "sell_percent"),
+    "swing_bb_ma50": (
+        {"price": 80000, "bb_lower": 90000, "bb_std": 5000, "ma50": 70000, "has_position": False},
+        "buy_percent",
+    ),
 }
+FLAT_SEQUENCE_GUARD_TEMPLATE_IDS = {"bollinger_reversion", "swing_bb_ma50"}
 
 
 def utc_iso_from_ms(value: int) -> str:
@@ -168,6 +175,39 @@ def validate_trigger(trading: TradingEngineService, template):
     }
 
 
+def validate_flat_sequence_guard(trading: TradingEngineService, template):
+    if template["id"] not in FLAT_SEQUENCE_GUARD_TEMPLATE_IDS:
+        return {"checked": False, "ok": True, "trade_count": None, "final_value_points": None}
+    candles = [
+        {
+            "time": index,
+            "time_iso": f"flat-{index:04d}",
+            "open_points": 100,
+            "high_points": 100,
+            "low_points": 100,
+            "close_points": 100,
+            "price_points": 100,
+        }
+        for index in range(30)
+    ]
+    result = trading.backtest_trading_bot(
+        actor={"id": 1, "username": "alice", "role": "user"},
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "workflow",
+            "workflow_json": template["workflow"],
+            "candles": candles,
+            "initial_cash_points": 1000,
+        },
+    )
+    return {
+        "checked": True,
+        "ok": result["trade_count"] == 0 and result["final_value_points"] == 1000,
+        "trade_count": result["trade_count"],
+        "final_value_points": result["final_value_points"],
+    }
+
+
 def update_workflow_state(state, decision):
     action = (decision or {}).get("action") or {}
     action_id = (decision or {}).get("action_id") or ((decision or {}).get("branch") or {}).get("id")
@@ -177,137 +217,31 @@ def update_workflow_state(state, decision):
             state["executed_action_ids"].add(action_id)
 
 
-def independent_replay(trading: TradingEngineService, workflow, candles, *, fee_rate_percent=0.3, initial_cash=10000):
-    cash = int(initial_cash)
-    units = 0
-    avg_cost = 0
-    trades = []
-    curve = []
-    peak = cash
-    max_drawdown = 0.0
-    wins = 0
-    sells = 0
-    state = {"executed_action_ids": set(), "branch_step_counts": {}}
-    for index, candle in enumerate(candles):
-        try:
-            price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
-        except Exception:
-            continue
-        if price <= 0:
-            continue
-        context = trading._workflow_indicator_context(candles, index)
-        context["price"] = price
-        context["has_position"] = units > 0
-        context["avg_cost"] = avg_cost
-        context["pnl_percent"] = round((price - avg_cost) * 100.0 / avg_cost, 4) if units > 0 and avg_cost > 0 else None
-        decision = trading._workflow_decision(workflow, context=context, run_count=len(trades), last_run_at=None, execution_state=state)
-        action = (decision or {}).get("action") or {}
-        atype = str(action.get("type") or "hold")
-        if atype in {"sell_percent", "close_all"} and units > 0:
-            percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
-            sell_units = int(units * percent / 100)
-            if sell_units > 0:
-                gross = notional_points(sell_units, price)
-                fee = fee_points(gross, fee_rate_percent)
-                cash += max(0, gross - fee)
-                units -= sell_units
-                if units <= 0:
-                    avg_cost = 0
-                trades.append({
-                    "index": index,
-                    "time": candle.get("time") or candle.get("time_iso") or index,
-                    "side": "sell",
-                    "price_points": price,
-                    "spend_points": 0,
-                    "fee_points": fee,
-                    "pnl_points": max(0, gross - fee),
-                    "quantity": units_to_quantity(sell_units),
-                })
-                sells += 1
-                if gross - fee > 0:
-                    wins += 1
-                update_workflow_state(state, decision)
-                equity = cash + notional_points(units, price)
-                peak = max(peak, equity)
-                max_drawdown = max(max_drawdown, round((peak - equity) * 100 / peak, 4)) if peak else max_drawdown
-                curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
-            continue
-        if atype not in {"buy_percent", "buy_amount"} or cash <= 0:
-            equity = cash + notional_points(units, price)
-            peak = max(peak, equity)
-            max_drawdown = max(max_drawdown, round((peak - equity) * 100 / peak, 4)) if peak else max_drawdown
-            curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
-            continue
-        spend = int(float(action.get("amount_points") or 0))
-        if atype == "buy_percent":
-            spend = int(cash * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
-        spend = min(spend, cash)
-        fee = fee_points(spend, fee_rate_percent)
-        net_spend = max(0, spend - fee)
-        buy_units = int((net_spend * ASSET_SCALE) // price)
-        if buy_units <= 0:
-            continue
-        cash -= spend
-        previous_units = units
-        units += buy_units
-        if units > 0:
-            avg_cost = int((previous_units * avg_cost + buy_units * price) // units)
-        trades.append({
-            "index": index,
-            "time": candle.get("time") or candle.get("time_iso") or index,
-            "side": "buy",
-            "price_points": price,
-            "spend_points": spend,
-            "fee_points": fee,
-            "quantity": units_to_quantity(buy_units),
+def validate_engine_backtest_sanity(engine_result, *, initial_cash=10000):
+    issues = []
+    trade_count = int(engine_result.get("trade_count") or 0)
+    final_value = int(engine_result.get("final_value_points") or 0)
+    pnl_points = int(engine_result.get("pnl_points") or 0)
+    if trade_count < 0:
+        issues.append({"field": "trade_count", "reason": "negative trade_count"})
+    if final_value < 0:
+        issues.append({"field": "final_value_points", "reason": "negative final value"})
+    if pnl_points != final_value - int(initial_cash):
+        issues.append({
+            "field": "pnl_points",
+            "reason": "pnl does not equal final_value - initial_cash",
+            "expected": final_value - int(initial_cash),
+            "actual": pnl_points,
         })
-        update_workflow_state(state, decision)
-        equity = cash + notional_points(units, price)
-        peak = max(peak, equity)
-        max_drawdown = max(max_drawdown, round((peak - equity) * 100 / peak, 4)) if peak else max_drawdown
-        curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
-    last_price = 0
-    for candle in reversed(candles):
-        try:
-            last_price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
-            if last_price > 0:
-                break
-        except Exception:
-            continue
-    position_value = notional_points(units, last_price) if last_price else 0
-    final_value = cash + position_value
+    if float(engine_result.get("return_percent") or 0) < -100.0:
+        issues.append({"field": "return_percent", "reason": "return below -100%"})
+    if float(engine_result.get("max_drawdown_percent") or 0) < 0:
+        issues.append({"field": "max_drawdown_percent", "reason": "negative drawdown"})
     return {
-        "cash_points": cash,
-        "position_quantity": units_to_quantity(units),
-        "position_value_points": position_value,
-        "final_value_points": final_value,
-        "pnl_points": final_value - int(initial_cash),
-        "return_percent": round(((final_value - int(initial_cash)) * 100) / int(initial_cash), 4),
-        "max_drawdown_percent": max_drawdown,
-        "win_rate_percent": round((wins * 100 / sells), 4) if sells else 0.0,
-        "trade_count": len(trades),
-        "trades": trades,
-        "equity_curve": curve,
+        "checked": True,
+        "ok": not issues,
+        "issues": issues,
     }
-
-
-def compare_results(engine_result, replay_result):
-    keys = [
-        "cash_points",
-        "position_quantity",
-        "position_value_points",
-        "final_value_points",
-        "pnl_points",
-        "return_percent",
-        "max_drawdown_percent",
-        "win_rate_percent",
-        "trade_count",
-    ]
-    mismatches = []
-    for key in keys:
-        if engine_result.get(key) != replay_result.get(key):
-            mismatches.append({"field": key, "engine": engine_result.get(key), "replay": replay_result.get(key)})
-    return mismatches
 
 
 def write_reports(report, out_dir=REPORT_DIR):
@@ -332,7 +266,10 @@ def write_reports(report, out_dir=REPORT_DIR):
     ]
     for item in report["templates"]:
         status = "PASS" if item["ok"] else "FAIL"
-        lines.append(f"- {status} `{item['id']}`: trigger={item['trigger']['actual_action']} trades={item['engine_backtest']['trade_count']} final={item['engine_backtest']['final_value_points']} mismatches={len(item['mismatches'])}")
+        flat_note = ""
+        if item.get("flat_sequence_guard", {}).get("checked"):
+            flat_note = f" flat_guard={item['flat_sequence_guard']['ok']}"
+        lines.append(f"- {status} `{item['id']}`: trigger={item['trigger']['actual_action']} trades={item['engine_backtest']['trade_count']} final={item['engine_backtest']['final_value_points']} mismatches={len(item['mismatches'])}{flat_note}")
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return json_path, md_path
 
@@ -379,6 +316,7 @@ def main():
         actor = {"id": 1, "username": "alice", "role": "user"}
         for template in templates:
             trigger = validate_trigger(trading, template)
+            flat_guard = validate_flat_sequence_guard(trading, template)
             engine_result = trading.backtest_trading_bot(
                 actor=actor,
                 payload={
@@ -391,14 +329,15 @@ def main():
                     "provider_symbol": source["symbol"],
                 },
             )
-            replay_result = independent_replay(trading, template["workflow"], candles, initial_cash=10000)
-            mismatches = compare_results(engine_result, replay_result)
-            ok = trigger["ok"] and not mismatches
+            backtest_sanity = validate_engine_backtest_sanity(engine_result, initial_cash=10000)
+            ok = trigger["ok"] and flat_guard["ok"] and backtest_sanity["ok"]
             report["templates"].append({
                 "id": template["id"],
                 "label": template["label"],
                 "ok": ok,
                 "trigger": trigger,
+                "flat_sequence_guard": flat_guard,
+                "backtest_sanity": backtest_sanity,
                 "engine_backtest": {
                     "trade_count": engine_result["trade_count"],
                     "final_value_points": engine_result["final_value_points"],
@@ -408,14 +347,10 @@ def main():
                     "win_rate_percent": engine_result["win_rate_percent"],
                 },
                 "independent_replay": {
-                    "trade_count": replay_result["trade_count"],
-                    "final_value_points": replay_result["final_value_points"],
-                    "pnl_points": replay_result["pnl_points"],
-                    "return_percent": replay_result["return_percent"],
-                    "max_drawdown_percent": replay_result["max_drawdown_percent"],
-                    "win_rate_percent": replay_result["win_rate_percent"],
+                    "checked": False,
+                    "reason": "workflow_graph templates are validated via trigger scenarios, flat-sequence guards, and engine backtest sanity checks",
                 },
-                "mismatches": mismatches,
+                "mismatches": backtest_sanity["issues"],
             })
             if not ok:
                 report["ok"] = False

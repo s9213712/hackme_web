@@ -2360,7 +2360,7 @@ def test_comfyui_frontend_is_wired():
     assert "communityPreviewContentUrl" in community_js
     assert "csrf_token=${encodeURIComponent(token)}" not in community_js
     assert "/cloud-drive/files/${encodeURIComponent(fileId)}/preview/content" in community_js
-    assert "/js/25-community.js?v=20260429-moderator-user-select" in index_html
+    assert "/js/25-community.js?v=20260504-announcement-edit" in index_html
     assert 'isComfyuiAvailableForNavigation' in admin_js
     assert '"feature_comfyui_enabled": False' in settings_py
     assert '"comfyui_api_host": os.environ.get("COMFYUI_API_HOST", "localhost")' in settings_py

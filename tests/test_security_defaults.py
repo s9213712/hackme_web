@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from services.settings import DEFAULT_SETTINGS, MANAGEMENT_ONLY_RESET_SETTINGS
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_initial_deploy_security_defaults_enable_integrity_and_audit_chain():
@@ -35,3 +40,24 @@ def test_initial_deploy_defaults_only_enable_management_and_security_modules():
 def test_runtime_reset_keeps_integrity_and_audit_chain_enabled():
     assert MANAGEMENT_ONLY_RESET_SETTINGS["audit_chain_enabled"] is True
     assert MANAGEMENT_ONLY_RESET_SETTINGS["integrity_guard_enabled"] is True
+
+
+def test_server_upload_request_limit_is_env_driven_and_has_413_handler():
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+    assert 'HTML_LEARNING_MAX_CONTENT_MB' in server_py
+    assert 'MAX_UPLOAD_REQUEST_MB = _env_int("HTML_LEARNING_MAX_CONTENT_MB", 1024, minimum=128)' in server_py
+    assert 'app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_MB * 1024 * 1024' in server_py
+    assert "@app.errorhandler(RequestEntityTooLarge)" in server_py
+    assert '"error": "request_too_large"' in server_py
+    assert '"max_request_mb": limit_mb' in server_py
+
+
+def test_runtime_artifacts_default_to_runtime_subdir_and_not_repo_root():
+    server_py = (ROOT / "server.py").read_text(encoding="utf-8")
+    assert 'RUNTIME_DIR = _env_path("HACKME_RUNTIME_DIR", os.path.join(BASE_DIR, "runtime"))' in server_py
+    assert 'DB_DIR = _env_path("HTML_LEARNING_DB_DIR", os.path.join(RUNTIME_DIR, "database"))' in server_py
+    assert 'LOG_DIR = _env_path("HTML_LEARNING_LOG_DIR", os.path.join(RUNTIME_DIR, "logs"))' in server_py
+    assert 'STORAGE_DIR = _env_path("HTML_LEARNING_STORAGE_DIR", os.path.join(RUNTIME_DIR, "storage"))' in server_py
+    assert 'CHAIN_SEED_PATH = _runtime_path("HTML_LEARNING_CHAIN_SEED_PATH", ".chain_seed")' in server_py
+    assert 'CERT_FILE = _runtime_path("HTML_LEARNING_CERT_FILE", "cert.pem")' in server_py
+    assert 'KEY_FILE = _runtime_path("HTML_LEARNING_KEY_FILE", "key.pem")' in server_py

@@ -25,20 +25,25 @@ Useful modes:
 ./deploy.sh --with-comfyui http://127.0.0.1:8192
 ./deploy.sh --with-turnstile '<TURNSTILE_SECRET_KEY>'
 ./deploy.sh --lite-hint
+./deploy.sh --check-only --skip-install
 ```
+
+`--skip-install` 適合已經有可用 `.venv`、但當前環境不想每次重新碰 pip 網路的情境。
+單獨執行 `./deploy.sh --lite-hint` 時，現在只會輸出低配部署建議，不會先建立 `.venv`。
 
 Generated runtime files remain local and must not be committed:
 
 - `.env`
-- `.fkey`
-- `.filekey`
-- `.csrfkey`
-- `.chain_seed`
-- `.integrity_key`
-- `integrity_manifest.json`
-- `cert.pem`
-- `key.pem`
-- database, logs, storage, chats, anchors, and reports
+- `runtime/.fkey`
+- `runtime/.filekey`
+- `runtime/.csrfkey`
+- `runtime/.chain_seed`
+- `runtime/.integrity_key`
+- `runtime/integrity_manifest.json`
+- `runtime/cert.pem`
+- `runtime/key.pem`
+- `runtime/database/`, `runtime/logs/`, `runtime/storage/`, `runtime/chats/`,
+  `runtime/anchors/`, and `runtime/reports/`
 
 ## Functional Smoke
 

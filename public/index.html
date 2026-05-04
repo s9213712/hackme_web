@@ -302,30 +302,32 @@
             <textarea id="chat-message-input" rows="2" maxlength="500" placeholder="輸入訊息，最多 500 字"></textarea>
             <button class="btn btn-primary" id="chat-send-btn" type="button">送出</button>
           </div>
+          <div class="chat-composer-tools">
+            <input type="file" id="chat-attachment-file" hidden />
+            <button class="btn" id="chat-attachment-pick-btn" type="button">上傳附件</button>
+            <select id="chat-attachment-existing-file-id">
+              <option value="">從雲端檔案附加…</option>
+            </select>
+            <span class="chat-composer-tools-hint">選檔後會立即加入待送附件，可送出前先移除。</span>
+          </div>
           <div id="chat-pending-attachment-list" class="chat-pending-attachment-list">
             <div class="drive-empty">尚未選擇要隨訊息送出的附件</div>
           </div>
           <div class="chat-sticker-bar" id="chat-sticker-bar">
-            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="smile">微笑</button>
-            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="thanks">感謝</button>
-            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="ok">了解</button>
-            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="wow">驚訝</button>
-            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="cheer">加油</button>
-            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="sad">難過</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="smile" aria-label="微笑">🙂</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="thanks" aria-label="感謝">🥹</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="ok" aria-label="了解">😙</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="wow" aria-label="驚訝">😃</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="cheer" aria-label="加油">😚</button>
+            <button class="btn chat-sticker-btn" type="button" data-chat-sticker="sad" aria-label="難過">🥲</button>
           </div>
           <div class="chat-composer-actions">
             <button class="btn" id="chat-refresh-msg-btn" type="button">重新整理訊息</button>
           </div>
-          <div class="drive-card" style="margin-top:.75rem;">
-            <div class="drive-card-title">聊天室附件</div>
-            <div class="settings-option-grid">
-              <div class="field"><label>上傳新附件</label><input type="file" id="chat-attachment-file" /></div>
-              <div class="field"><label>選擇雲端檔案</label><select id="chat-attachment-existing-file-id"><option value="">請先選擇雲端檔案</option></select></div>
-              <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="chat-attachment-upload-btn" type="button">上傳附件</button></div>
-              <div class="field"><label>&nbsp;</label><button class="btn" id="chat-attachment-existing-btn" type="button">附加既有雲端檔</button></div>
-            </div>
+          <details class="chat-shared-attachments-panel" id="chat-shared-attachment-panel" hidden>
+            <summary>聊天室共用附件</summary>
             <div id="chat-attachment-list" class="drive-file-list"></div>
-          </div>
+          </details>
         </div>
       </div>
     </div>
@@ -1559,7 +1561,7 @@
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">現貨交易所</div>
-            <div class="drive-card-sub" id="trading-availability-note">root 可使用現貨與合約模擬交易；root 以外用戶目前僅開放 BTC/USDT、ETH/USDT 現貨。</div>
+            <div class="drive-card-sub" id="trading-availability-note">root 可使用現貨與合約模擬交易；一般用戶可使用已啟用的積分現貨市場。</div>
           </div>
           <button class="btn" id="trading-refresh-btn" type="button">重新整理</button>
         </div>
@@ -1593,7 +1595,7 @@
           <div class="field">
             <label id="trading-quantity-label">數量</label>
             <input type="number" id="trading-quantity" min="0.00000001" step="0.00000001" value="0.01" />
-            <div class="drive-card-sub" id="trading-input-mode-note" style="margin-top:.25rem;">直接輸入 BTC/ETH 枚數。</div>
+            <div class="drive-card-sub" id="trading-input-mode-note" style="margin-top:.25rem;">直接輸入資產枚數。</div>
           </div>
           <div class="field"><label>限價（USDT 等值 / 1 單位）</label><input type="number" id="trading-limit-price" min="1" step="1" placeholder="限價單才需要" /></div>
           <div class="field">
@@ -1891,15 +1893,20 @@
           </div>
           <div class="trading-indicator-controls" aria-label="技術指標">
             <label><input type="checkbox" id="trading-indicator-ma5"> MA5</label>
+            <label><input type="checkbox" id="trading-indicator-ma10"> MA10</label>
             <label><input type="checkbox" id="trading-indicator-ma20" checked> MA20</label>
+            <label><input type="checkbox" id="trading-indicator-ma30"> MA30</label>
             <label><input type="checkbox" id="trading-indicator-ma60"> MA60</label>
             <label><input type="checkbox" id="trading-indicator-ema12"> EMA12</label>
             <label><input type="checkbox" id="trading-indicator-ema26"> EMA26</label>
+            <label><input type="checkbox" id="trading-indicator-ema50"> EMA50</label>
             <label><input type="checkbox" id="trading-indicator-bollinger"> 布林線</label>
+            <label><input type="checkbox" id="trading-indicator-rsi14"> RSI14</label>
+            <label><input type="checkbox" id="trading-indicator-kd"> KD(9,3,3)</label>
             <button class="btn btn-sm" id="trading-chart-clear-overlay-btn" type="button" style="display:none;font-size:.75rem;padding:.15rem .45rem;">清除標記</button>
           </div>
           <div class="trading-reference-chart-wrap">
-            <canvas id="trading-reference-chart" class="trading-reference-chart" width="920" height="260" aria-label="Binance 參考價格蠟燭圖"></canvas>
+            <canvas id="trading-reference-chart" class="trading-reference-chart" width="920" height="320" aria-label="Binance 參考價格蠟燭圖"></canvas>
             <div id="trading-reference-tooltip" class="trading-reference-tooltip" hidden></div>
           </div>
         </div>
@@ -3013,7 +3020,7 @@
               </summary>
               <div class="drive-collapsible-body">
             <div class="field">
-              <label><input type="checkbox" id="s-server-ssl-enabled" /> 啟用 SSL / HTTPS（需 cert.pem 與 key.pem，重啟生效）</label>
+              <label><input type="checkbox" id="s-server-ssl-enabled" /> 啟用 SSL / HTTPS（需 runtime/cert.pem 與 runtime/key.pem，重啟生效）</label>
             </div>
             <div class="field">
               <label>Listen IP / Host（空白代表沿用環境變數）</label>
@@ -4248,11 +4255,11 @@
 <script src="/js/00-core.js?v=20260503-appearance-v2" defer></script>
 <script src="/js/10-users.js?v=20260503-account-delete-feedback" defer></script>
 <script src="/js/20-chat.js?v=20260429-official-chat-protect" defer></script>
-<script src="/js/25-community.js?v=20260429-moderator-user-select" defer></script>
+<script src="/js/25-community.js?v=20260504-announcement-edit" defer></script>
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260503-feature-bundles" defer></script>
+<script src="/js/35-drive.js?v=20260504-folder-dblclick" defer></script>
 <script src="/js/36-comfyui.js?v=20260503-comfyui-mode-badge" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>

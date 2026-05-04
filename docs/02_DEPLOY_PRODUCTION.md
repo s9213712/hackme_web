@@ -104,7 +104,7 @@ PYTHONPATH=. security/run_pentest.sh \
 
 - 上線後仍使用預設密碼：
   這不是小問題；立即 rotate，並檢查是否已有可疑登入。
-- 把 repo 內 `database/`、`logs/`、`storage/` 當 production runtime：
+- 把 repo 內 `bootstrap.schema.sql`、`logs/`、`storage/` 當 production runtime：
   之後很容易把營運資料誤提交或被開發流程覆蓋，應立即搬出 repo。
 - 開了 HTTPS 但 cookie 仍不安全：
   檢查 `FORCE_HTTPS`、`SESSION_COOKIE_SECURE`、proxy 設定與瀏覽器 response header。

@@ -2591,7 +2591,7 @@ async function loadSettings() {
   const sslStatus = $("server-ssl-status");
   if (sslStatus) {
     let detail = `目前 ${ssl.current_scheme || "http"}，下次啟動 ${ssl.scheme || "http"}。`;
-    if (ssl.cert_required) detail += " 已要求 HTTPS，但缺少 cert.pem 或 key.pem。";
+    if (ssl.cert_required) detail += " 已要求 HTTPS，但缺少 runtime/cert.pem 或 runtime/key.pem。";
     else if (!ssl.enabled_by_setting) detail += " root 設定為停用 HTTPS。";
     else detail += " HTTPS 憑證檢查通過。";
     if (ssl.restart_required) detail += " 需重啟才會套用。";
@@ -3726,7 +3726,7 @@ async function loadServerHealth() {
   ]);
   storageBox.innerHTML = renderHealthRows([
     { label: "SQLite DB", value: formatBytes(s.database_bytes), color: "#82b1ff" },
-    { label: "聊天檔案", value: `${s.chat_files || 0} / ${formatBytes(s.chat_bytes)}`, detail: s.chat_dir || "chats/", color: "#82b1ff" },
+    { label: "聊天檔案", value: `${s.chat_files || 0} / ${formatBytes(s.chat_bytes)}`, detail: s.chat_dir || "runtime/chats/", color: "#82b1ff" },
     { label: "Server logs", value: `${s.log_files || 0} / ${formatBytes(s.log_bytes)}`, color: "#82b1ff" },
     { label: "Anchor files", value: `${s.anchor_files || 0} / ${formatBytes(s.anchor_bytes)}`, color: "#82b1ff" },
     { label: "Storage root", value: `${s.storage_files || 0} / ${formatBytes(s.storage_bytes)}`, color: "#82b1ff" },

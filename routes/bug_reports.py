@@ -1,6 +1,7 @@
 import html
 import hashlib
 import json
+import os
 import re
 import uuid
 from datetime import datetime
@@ -89,7 +90,12 @@ def register_bug_report_routes(app, deps):
     require_csrf_safe = deps["require_csrf_safe"]
     check_user_rate_limit = deps.get("check_user_rate_limit", lambda *args, **kwargs: (False, {}))
     points_service = deps.get("points_service")
-    reports_dir = Path(deps.get("REPORTS_DIR", "reports")).resolve()
+    runtime_root = Path(
+        deps.get("RUNTIME_DIR")
+        or os.environ.get("HACKME_RUNTIME_DIR")
+        or (Path.cwd() / "runtime")
+    )
+    reports_dir = Path(deps.get("REPORTS_DIR") or (runtime_root / "reports")).resolve()
     bug_dir = reports_dir / "bugs"
 
     def _is_root(actor):

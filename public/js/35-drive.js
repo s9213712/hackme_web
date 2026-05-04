@@ -1660,15 +1660,26 @@ async function fetchDrivePreviewBlob(fileId, csrf) {
   return res.blob();
 }
 
-async function fetchDrivePreviewContent(fileId, csrf) {
-  const blob = await fetchDrivePreviewBlob(fileId, csrf);
+function normalizeDrivePreviewBlobMime(blob, expectedMime = "") {
+  const targetMime = String(expectedMime || "").trim().toLowerCase();
+  const currentMime = String(blob?.type || "").trim().toLowerCase();
+  if (!blob || !targetMime || targetMime === "application/octet-stream") return blob;
+  if (!currentMime || currentMime === "application/octet-stream") {
+    return new Blob([blob], { type: targetMime });
+  }
+  return blob;
+}
+
+async function fetchDrivePreviewContent(fileId, csrf, expectedMime = "") {
+  const blob = normalizeDrivePreviewBlobMime(await fetchDrivePreviewBlob(fileId, csrf), expectedMime);
   clearDrivePreviewUrl();
   currentDrivePreviewUrl = URL.createObjectURL(blob);
   return currentDrivePreviewUrl;
 }
 
 function renderDriveDecryptedPreviewMedia(preview, blob, { fullscreen = false } = {}) {
-  const url = URL.createObjectURL(blob);
+  const normalizedBlob = normalizeDrivePreviewBlobMime(blob, preview?.mime_type || "");
+  const url = URL.createObjectURL(normalizedBlob);
   const title = sanitize(preview.filename || "E2EE preview");
   if (fullscreen) {
     clearAlbumFullPreviewUrl();
@@ -1816,7 +1827,7 @@ async function previewDriveFile(fileId, options = {}) {
       return;
     }
     if (preview.render_mode === "media") {
-      const url = await fetchDrivePreviewContent(fileId, csrf);
+      const url = await fetchDrivePreviewContent(fileId, csrf, preview.mime_type || "");
       if (preview.category === "audio") panel.innerHTML += `<audio controls src="${url}"></audio>`;
       else if (preview.category === "video") panel.innerHTML += `<video controls src="${url}"></video>`;
       else if (preview.category === "image") panel.innerHTML += `<img src="${url}" alt="${sanitize(preview.filename || "image preview")}" />`;
@@ -1926,7 +1937,7 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     if (preview.render_mode !== "media") {
       throw new Error("這個檔案類型目前只提供右側 metadata 預覽");
     }
-    const blob = await fetchDrivePreviewBlob(fileId, csrf);
+    const blob = normalizeDrivePreviewBlobMime(await fetchDrivePreviewBlob(fileId, csrf), preview.mime_type || "");
     currentAlbumFullPreviewUrl = URL.createObjectURL(blob);
     if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || blob.type || "-"} · scan=${preview.scan_status || "-"}`;
     if (preview.category === "image") {
@@ -2108,14 +2119,16 @@ async function loadContextAttachments(contextType, contextId, targetId) {
   if (!json.ok) {
     const list = $(targetId);
     if (list) list.innerHTML = `<div class="drive-empty">${sanitize(json.msg || "附件讀取失敗")}</div>`;
-    return;
+    return null;
   }
   renderContextAttachmentRefs(targetId, json.refs || []);
+  return json.refs || [];
 }
 
 async function uploadContextAttachment({ fileInputId, contextType, contextId, grantUserIds = [], grantRole = null, refresh }) {
   const input = $(fileInputId);
-  if (!input?.files?.[0]) {
+  const selectedFile = input?.files?.[0];
+  if (!selectedFile) {
     alert("請先選擇附件檔案");
     return;
   }
@@ -2126,8 +2139,10 @@ async function uploadContextAttachment({ fileInputId, contextType, contextId, gr
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const form = new FormData();
-  form.append("file", input.files[0]);
+  form.append("file", selectedFile);
   form.append("privacy_mode", "standard_plain");
+  form.append("virtual_path", attachmentStoragePath(selectedFile, contextType || "attachment"));
+  form.append("display_name", selectedFile.name || "attachment.bin");
   form.append("context_type", contextType);
   form.append("context_id", String(contextId));
   grantUserIds.forEach((id) => form.append("grant_user_ids", String(id)));
@@ -2169,7 +2184,8 @@ async function attachExistingContextAttachment({ fileId, contextType, contextId,
 
 async function uploadPendingChatAttachment() {
   const input = $("chat-attachment-file");
-  if (!input?.files?.[0]) {
+  const selectedFile = input?.files?.[0];
+  if (!selectedFile) {
     alert("請先選擇附件檔案");
     return;
   }
@@ -2180,8 +2196,10 @@ async function uploadPendingChatAttachment() {
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const form = new FormData();
-  form.append("file", input.files[0]);
+  form.append("file", selectedFile);
   form.append("privacy_mode", "standard_plain");
+  form.append("virtual_path", attachmentStoragePath(selectedFile, "chat"));
+  form.append("display_name", selectedFile.name || "attachment.bin");
   const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",
@@ -2199,6 +2217,14 @@ async function uploadPendingChatAttachment() {
     addPendingChatAttachment(json.file || {});
   }
   setChatMsg("chat-room-warn", "附件已加入待送清單，按送出後會出現在該則訊息下方", true);
+}
+
+function openChatAttachmentPicker() {
+  if (!selectedChatRoomId) {
+    alert("請先選擇聊天室");
+    return;
+  }
+  $("chat-attachment-file")?.click?.();
 }
 
 async function addExistingChatFileToPending(fileId) {
@@ -2236,7 +2262,9 @@ async function uploadChatAttachment() {
 
 async function attachExistingChatFile() {
   await ensureAttachmentFileOptionsLoaded();
-  await addExistingChatFileToPending($("chat-attachment-existing-file-id")?.value.trim() || "");
+  const selectedFileId = $("chat-attachment-existing-file-id")?.value.trim() || "";
+  if (!selectedFileId) return;
+  await addExistingChatFileToPending(selectedFileId);
 }
 
 function currentDmGrantUserIds() {
@@ -2278,19 +2306,22 @@ async function createAnnouncementAttachmentRequest(fileId, announcementId, reaso
 async function uploadAnnouncementAttachmentRequest() {
   const announcementId = Number($("announcement-attachment-announcement-id")?.value || 0);
   const input = $("announcement-attachment-file");
+  const selectedFile = input?.files?.[0];
   if (!announcementId) {
     alert("請輸入公告 ID");
     return;
   }
-  if (!input?.files?.[0]) {
+  if (!selectedFile) {
     alert("請先選擇公告附件");
     return;
   }
   await fetchCsrfToken({ force: true });
   const csrf = getCsrfToken();
   const form = new FormData();
-  form.append("file", input.files[0]);
+  form.append("file", selectedFile);
   form.append("privacy_mode", "standard_plain");
+  form.append("virtual_path", attachmentStoragePath(selectedFile, "announcement"));
+  form.append("display_name", selectedFile.name || "attachment.bin");
   const res = await apiFetch(API + "/cloud-drive/upload", {
     method: "POST",
     credentials: "same-origin",
@@ -2347,6 +2378,13 @@ function joinStoragePath(folder, name) {
   return base === "/" ? `/${cleanName}` : `${base}/${cleanName}`;
 }
 
+function attachmentStoragePath(file, prefix = "attachment") {
+  const originalName = String(file?.name || "attachment.bin").replace(/\\/g, "/").split("/").filter(Boolean).pop() || "attachment.bin";
+  const normalizedPrefix = String(prefix || "attachment").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "attachment";
+  const uniqueName = `${normalizedPrefix}-${Date.now()}-${originalName}`;
+  return joinStoragePath("/attachments", uniqueName);
+}
+
 function storageUploadRelativePath(file) {
   const relative = String(file?.webkitRelativePath || file?.relativePath || file?.name || "").replace(/\\/g, "/");
   return relative.split("/").filter(Boolean).join("/");
@@ -2392,7 +2430,7 @@ function renderStorageBrowser() {
 
 function storageParentRow() {
   return `
-    <div class="drive-file-row storage-browser-row storage-browser-folder">
+    <div class="drive-file-row storage-browser-row storage-browser-folder" data-folder-path="${sanitize(storageDirName(currentStoragePath))}">
       <div>
         <strong>上一層</strong>
         <div class="drive-card-sub">資料夾 · ${sanitize(storageDirName(currentStoragePath))}</div>
@@ -2413,7 +2451,7 @@ function storageFolderRows(folders) {
     .map((folder) => {
       const name = storageBaseName(folder.virtual_path || folder.display_name || "folder");
       return `
-        <div class="drive-file-row storage-browser-row storage-browser-folder">
+        <div class="drive-file-row storage-browser-row storage-browser-folder" data-folder-path="${sanitize(folder.virtual_path || "")}">
           <div>
             <strong>${sanitize(name)}</strong>
             <div class="drive-card-sub">資料夾 · ${folder.is_explicit ? "已建立" : "由檔案路徑產生"} · 直接 ${Number(folder.file_count || 0)} 個 · 含子資料夾 ${Number(folder.recursive_file_count || 0)} 個</div>
@@ -2468,6 +2506,12 @@ function updateAlbumTargetSelect(albums) {
   if (previous && liveAlbums.some((album) => album.id === previous)) {
     select.value = previous;
   }
+}
+
+function storageFolderRowPathFromEventTarget(target) {
+  const row = target?.closest?.(".storage-browser-folder[data-folder-path]");
+  const path = row?.dataset?.folderPath || "";
+  return path ? normalizeStoragePath(path) : "";
 }
 
 function renderStorageTrash(files) {
@@ -3566,6 +3610,17 @@ document.addEventListener("click", (event) => {
     if (action === "refresh-albums") return loadAlbumGallery();
     if (action === "smart-organize-albums") return smartOrganizeAlbums();
   })().catch((err) => alert(err.message || "操作失敗"));
+});
+
+document.addEventListener("dblclick", (event) => {
+  const target = event.target;
+  if (!target?.closest) return;
+  if (target.closest(".drive-file-actions")) return;
+  if (target.closest("[data-drive-action]")) return;
+  const folderPath = storageFolderRowPathFromEventTarget(target);
+  if (!folderPath) return;
+  event.preventDefault();
+  openStorageFolder(folderPath).catch((err) => alert(err.message || "開啟資料夾失敗"));
 });
 
 document.addEventListener("focusin", (event) => {

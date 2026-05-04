@@ -11,7 +11,7 @@ separate locations so a downloaded release starts cleanly.
 | `routes/` | HTTP route modules. |
 | `services/` | Domain and persistence services. |
 | `public/` | Browser assets. |
-| `database/bootstrap.schema.sql` | Bootstrap schema only. Runtime SQLite databases are not tracked. |
+| `bootstrap.schema.sql` | Bootstrap schema only. Runtime SQLite databases are not tracked. |
 | `tests/` | Automated regression tests. |
 | `scripts/` | Operator and local validation scripts. |
 | `security/` | Security, smoke, and pentest runner scripts. |
@@ -28,17 +28,17 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 
 | Path | Runtime Data |
 |---|---|
-| `database/database.db` | SQLite runtime database. |
-| `storage/` | Cloud Drive user files. |
-| `reports/bugs/` | User bug reports. |
-| `chats/` | Chat sidecar logs. |
-| `anchors/` | Audit/integrity anchor files. |
-| `logs/` | Server and audit text logs. |
+| `runtime/database/database.db` | SQLite runtime database. |
+| `runtime/storage/` | Cloud Drive user files. |
+| `runtime/reports/bugs/` | User bug reports. |
+| `runtime/chats/` | Chat sidecar logs. |
+| `runtime/anchors/` | Audit/integrity anchor files. |
+| `runtime/logs/` | Server and audit text logs. |
 | `security/reports/` | Security, smoke, and pentest reports. |
 | `secure_backups/` | Legacy local PointsChain backup path; ignored. |
-| `<runtime>/points_chain_backups/` | Current PointsChain ledger backup location when configured by runtime env. |
-| `cert.pem`, `key.pem` | Local TLS files generated on first start. |
-| `.chain_seed`, `.csrfkey`, `.fkey`, `.filekey`, `.integrity_key`, `integrity_manifest.json` | Runtime secrets and integrity state generated locally. |
+| `runtime/database/points_chain_backups/` | Current PointsChain ledger backup location when using the default runtime layout. |
+| `runtime/cert.pem`, `runtime/key.pem` | Local TLS files generated on first start. |
+| `runtime/.chain_seed`, `runtime/.csrfkey`, `runtime/.fkey`, `runtime/.filekey`, `runtime/.integrity_key`, `runtime/integrity_manifest.json` | Runtime secrets and integrity state generated locally. |
 
 Tracked placeholder files such as `.gitkeep` are allowed only where an empty
 directory needs to exist in a fresh checkout.

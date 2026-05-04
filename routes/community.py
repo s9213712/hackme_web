@@ -807,21 +807,53 @@ def register_community_routes(app, deps):
         finally:
             conn.close()
 
-    @app.route("/api/community/announcements/<int:announcement_id>", methods=["DELETE"])
-    @require_csrf
-    def community_delete_announcement(announcement_id):
+    @app.route("/api/community/announcements/<int:announcement_id>", methods=["PUT", "DELETE"])
+    @require_csrf_by_method
+    def community_update_or_delete_announcement(announcement_id):
         actor = get_current_user_ctx()
         if not actor:
             return json_resp({"ok": False, "msg": "未登入"}), 401
         if not can_manage_community(actor):
-            return json_resp({"ok": False, "msg": "只有管理員以上可刪除公告"}), 403
+            action_label = "編輯" if request.method == "PUT" else "刪除"
+            return json_resp({"ok": False, "msg": f"只有管理員以上可{action_label}公告"}), 403
 
         conn = get_db()
         try:
             ensure_community_schema(conn)
-            row = conn.execute("SELECT id, title FROM announcements WHERE id=? AND is_active=1", (announcement_id,)).fetchone()
+            row = conn.execute(
+                "SELECT id, title, content, is_pinned FROM announcements WHERE id=? AND is_active=1",
+                (announcement_id,),
+            ).fetchone()
             if not row:
                 return json_resp({"ok": False, "msg": "找不到公告"}), 404
+            if request.method == "PUT":
+                try:
+                    data = request.get_json(force=True)
+                except Exception:
+                    return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+                title = normalize_text(data.get("title"))[:80]
+                content = normalize_text(data.get("content"))[:3000]
+                is_pinned = 1 if bool(data.get("is_pinned")) else 0
+                if not title or not content:
+                    return json_resp({"ok": False, "msg": "公告標題與內容不可為空"}), 400
+                now = datetime.now().isoformat()
+                conn.execute(
+                    "UPDATE announcements SET title=?, content=?, is_pinned=?, updated_at=? WHERE id=?",
+                    (title, content, is_pinned, now, announcement_id),
+                )
+                conn.commit()
+                audit("COMMUNITY_ANNOUNCEMENT_UPDATE", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=title)
+                return json_resp({
+                    "ok": True,
+                    "msg": "公告已更新",
+                    "announcement": {
+                        "id": announcement_id,
+                        "title": title,
+                        "content": content,
+                        "is_pinned": bool(is_pinned),
+                        "updated_at": now,
+                    },
+                })
             conn.execute(
                 "UPDATE announcements SET is_active=0, updated_at=? WHERE id=?",
                 (datetime.now().isoformat(), announcement_id)

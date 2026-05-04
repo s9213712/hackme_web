@@ -61,6 +61,14 @@ def expand_server_path(raw_path):
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
 
 
+def default_runtime_root(base_dir=None):
+    explicit = expand_server_path(os.environ.get("HACKME_RUNTIME_DIR"))
+    if explicit:
+        return explicit
+    root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[1]
+    return root / "runtime"
+
+
 def default_btc_trade_project_dir(base_dir=None):
     root = Path(base_dir).resolve() if base_dir else Path(__file__).resolve().parents[1]
     return root / "external" / "BTC_trade"
@@ -927,13 +935,14 @@ class BtcTradeBridge:
         state_path=None,
     ):
         self.hackme_dir = expand_server_path(hackme_dir) or Path.cwd()
+        self.runtime_root = default_runtime_root(self.hackme_dir)
         self.btc_trade_dir = expand_server_path(btc_trade_dir)
         self.bridge_username = str(bridge_username or "btc_bridge")
         self.market_symbol = str(market_symbol or "BTC/USDT").strip().upper()
         self.quantity_scale = float(quantity_scale or 0)
         self.min_btc_quantity = float(min_btc_quantity or 0)
-        self.db_path = Path(db_path) if db_path else self.hackme_dir / "database" / "database.db"
-        self.chain_seed_path = Path(chain_seed_path) if chain_seed_path else self.hackme_dir / ".chain_seed"
+        self.db_path = Path(db_path) if db_path else self.runtime_root / "database" / "database.db"
+        self.chain_seed_path = Path(chain_seed_path) if chain_seed_path else self.runtime_root / ".chain_seed"
         runtime = self.btc_trade_dir / "runtime" if self.btc_trade_dir else Path("runtime")
         self.trade_log_path = runtime / "trade_log_4h.json"
         self.state_path = Path(state_path) if state_path else runtime / "bridge_state.json"
@@ -982,7 +991,7 @@ class BtcTradeBridge:
         points_service = PointsLedgerService(
             get_db=self.get_db,
             chain_secret=self._chain_seed(),
-            backup_dir=self.hackme_dir / "database" / "points_chain_backups",
+            backup_dir=self.runtime_root / "database" / "points_chain_backups",
         )
         return TradingEngineService(get_db=self.get_db, points_service=points_service)
 

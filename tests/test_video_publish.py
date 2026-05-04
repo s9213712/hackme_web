@@ -1,5 +1,6 @@
 import io
 import sqlite3
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -216,6 +217,57 @@ def test_video_upload_endpoint_accepts_audio_and_streams_it(tmp_path):
     assert stream.status_code == 200
     assert stream.mimetype == "audio/mpeg"
     assert stream.data == b"not-a-real-mp3-but-route-test"
+
+
+def test_video_publish_endpoint_accepts_cover_upload_for_existing_cloud_media(tmp_path):
+    db_path = tmp_path / "publish.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_video_upload_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_video_upload_app(db_path, storage_root, fernet).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            """
+            INSERT INTO uploaded_files (
+                id, owner_user_id, storage_path, privacy_mode, risk_level, scan_status,
+                original_filename_plain_for_public, mime_type_plain_for_public, size_bytes, created_at
+            ) VALUES (?, ?, ?, 'standard_plain', 'low', 'clean', ?, ?, 18, '2026-01-01T00:00:00')
+            """,
+            ("drive-video", 1, "users/1/drive-video/from-drive.mp4", "from-drive.mp4", "video/mp4"),
+        )
+        Path(storage_root / "users" / "1" / "drive-video").mkdir(parents=True, exist_ok=True)
+        (storage_root / "users" / "1" / "drive-video" / "from-drive.mp4").write_bytes(b"cloud-backed-video")
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.post(
+        "/api/videos/publish",
+        data={
+            "cloud_file_id": "drive-video",
+            "title": "Cloud file with cover",
+            "description": "published from drive",
+            "visibility": "public",
+            "cover": (io.BytesIO(b"\xff\xd8\xff\xe0cover-from-drive\xff\xd9"), "cover.jpg", "image/jpeg"),
+        },
+        content_type="multipart/form-data",
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["ok"] is True
+    assert body["video"]["cloud_file_id"] == "drive-video"
+    assert body["video"]["cover_file_id"] == body["cover_file"]["file_id"]
+    assert body["video"]["cover_url"].endswith(f"/api/videos/{body['video']['id']}/cover")
+    assert body["cover_storage_file"]["virtual_path"].startswith("/Media/Covers/")
+
+    cover = client.get(f"/api/videos/{body['video']['id']}/cover")
+    assert cover.status_code == 200
+    assert cover.mimetype == "image/jpeg"
+    assert cover.data == b"\xff\xd8\xff\xe0cover-from-drive\xff\xd9"
 
 
 def test_video_server_encrypted_cover_and_stream_handle_rotated_key_without_500(tmp_path):

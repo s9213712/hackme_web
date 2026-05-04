@@ -37,11 +37,13 @@ def test_local_path_leak_reports_pattern_not_raw_line(tmp_path):
 
 
 def test_gitkeep_is_not_forbidden_runtime_artifact():
-    assert forbidden_paths_check.is_forbidden("storage/.gitkeep") is False
-    assert forbidden_paths_check.is_forbidden("reports/bugs/.gitkeep") is False
+    assert forbidden_paths_check.is_forbidden("runtime/.gitkeep") is False
+    assert forbidden_paths_check.is_forbidden("runtime/storage/.gitkeep") is False
 
 
 def test_db_log_storage_report_artifacts_are_forbidden():
+    assert forbidden_paths_check.is_forbidden("anchors/audit_head.jsonl")
+    assert forbidden_paths_check.is_forbidden("chats/room_1.jsonl")
     assert forbidden_paths_check.is_forbidden("database/database.db")
     assert forbidden_paths_check.is_forbidden("logs/server.log")
     assert forbidden_paths_check.is_forbidden("storage/u1/file.bin")
@@ -120,22 +122,22 @@ def test_clean_keeps_gitkeep_while_removing_cache_file(tmp_path):
 def test_clean_does_not_delete_runtime_or_user_data_dirs(tmp_path):
     protected_paths = [
         tmp_path / "database" / "database.db",
-        tmp_path / "logs" / "server.log",
-        tmp_path / "storage" / "user.bin",
-        tmp_path / "reports" / "summary.md",
+        tmp_path / "runtime" / "logs" / "server.log",
+        tmp_path / "runtime" / "storage" / "user.bin",
+        tmp_path / "runtime" / "reports" / "summary.md",
         tmp_path / "security" / "reports" / "scan.json",
-        tmp_path / "reports" / "bugs" / "bug.md",
-        tmp_path / "cert.pem",
-        tmp_path / "key.pem",
-        tmp_path / ".csrfkey",
-        tmp_path / ".integrity_key",
-        tmp_path / ".chain_seed",
-        tmp_path / "integrity_manifest.json",
+        tmp_path / "runtime" / "reports" / "bugs" / "bug.md",
+        tmp_path / "runtime" / "cert.pem",
+        tmp_path / "runtime" / "key.pem",
+        tmp_path / "runtime" / ".csrfkey",
+        tmp_path / "runtime" / ".integrity_key",
+        tmp_path / "runtime" / ".chain_seed",
+        tmp_path / "runtime" / "integrity_manifest.json",
     ]
     for path in protected_paths:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("do not delete", encoding="utf-8")
-    protected_cache = tmp_path / "storage" / "__pycache__" / "x.pyc"
+    protected_cache = tmp_path / "runtime" / "storage" / "__pycache__" / "x.pyc"
     protected_cache.parent.mkdir(parents=True, exist_ok=True)
     protected_cache.write_bytes(b"cache")
 

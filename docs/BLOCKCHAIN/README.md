@@ -1,6 +1,7 @@
 # BLOCKCHAIN/ — PointsChain v2 設計文件總集
 
-> Status: **Design approved (root, 2026-05-04). 🚫 BLOCK PHASE 1 — 須先完成 [PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md) 4 件 BLOCKER（#122/#135/#136/#137）。**
+> Status: **Design approved (root, 2026-05-04). ✅ Phase 0 cleanup closed the blocker issues and full verification passed.**
+> Current release verdict: **ALLOW PHASE 1 CANDIDATE**, pending root approval to start implementation work.
 
 本資料夾收斂 `hackme_web` 全站區塊鏈化（PointsChain v2）所有正式設計文件，包含 wallet 地址化、ledger v2、轉帳、多簽、self-custody、explorer、QA Mining。
 
@@ -14,7 +15,7 @@
 | dev / 架構師 | [POINTSCHAIN_ENGINEERING.md](POINTSCHAIN_ENGINEERING.md) — 8-phase 工程地圖 |
 | 動工 agent（任何要寫源碼的人）| [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) — **動工前必讀**：分支規則、紅線、提案流程 |
 | QA / Release | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) — 各 phase 出口 gate + invariants + Release Blocker |
-| 鏈化前清債負責人 | [PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md) — 4 BLOCKER + 3 RECOMMEND + 反 pattern；對應 issue #122/#135/#136/#137 (BLOCKER) + #138/#139/#140 + #141/#142 |
+| 鏈化前清債負責人 | [PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md) — Phase 0 cleanup 的 canonical 結果、歷史 issue 收斂、反 pattern 與 release verdict |
 
 ## 文件清單
 
@@ -23,7 +24,7 @@
 | [POINTSCHAIN_WHITEPAPER.md](POINTSCHAIN_WHITEPAPER.md) | user / admin / root / 外部審計 | 概念、承諾、Phase 對應 | all |
 | [POINTSCHAIN_ENGINEERING.md](POINTSCHAIN_ENGINEERING.md) | dev / qa | 8-phase 工程地圖 / schema / API / 風險 / 時程 | all |
 | **[IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)** | **動工 agent** | **動工前必讀**：分支規則 (`04.blockchain`) + 紅線 + 提案流程 + phase 動工模板 | all |
-| **[PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md)** | **Phase 0 動工 agent** | **Phase 1 前必過 19 項清單**：4 件 BLOCKER（#122/#135/#136/#137）+ 3 件 RECOMMEND + 4 條系統性反 pattern + 修法 + verification | Phase 0 |
+| **[PHASE_0_CLEANUP_GATE.md](PHASE_0_CLEANUP_GATE.md)** | **Phase 0 動工 agent / release owner** | **Phase 0 最終清單與結論**：歷史 blockers、recommend items、反 pattern 與 final review verdict | Phase 0 |
 | [POINTS_WALLET_ADDRESSING.md](POINTS_WALLET_ADDRESSING.md) | dev | PNT1 + base58check + ed25519 + 9 官方地址 + supply_state | Phase 1 |
 | [POINTS_TRANSFER_API.md](POINTS_TRANSFER_API.md) | dev | preview / transfer / nonce / fee 路徑 | Phase 3 |
 | [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md) | dev | 5-role signer / 3-of-5 / proposal / approve / execute | Phase 4 |
@@ -33,7 +34,7 @@
 ## Phase 順序與依賴
 
 ```
-Phase 0  鏈化前清債               #122/#135/#136/#137 (BLOCKER) + #138/#139/#140 (RECOMMEND) + 反 pattern audit
+Phase 0  鏈化前清債               已完成 final cleanup / runtime cleanup / live API validation / full pytest
    │                              ── 詳見 PHASE_0_CLEANUP_GATE.md
 Phase 1  地址化基礎建設            wallet_addresses + 9 official + supply_state
    │
@@ -64,15 +65,30 @@ Phase 7  QA Mining                 ★ 依賴 Phase 0/1/2/4/6
 5. **使用者自主但不被迫管私鑰** → Hybrid Custody，預設 custodial
 6. **獎勵不是印鈔** → reward_pool 補充走 multisig；不允許自動 mint / 自動 burn 用戶資產
 
-## 對應的 Issue / 報告
+## 歷史 Evidence / 設計討論存檔
 
 | 類型 | 路徑 |
 |---|---|
-| Pre-Blockchain Readiness Gate | [../AGENTS/reports/claude/prechain_qa_2026-05-04/](../AGENTS/reports/claude/prechain_qa_2026-05-04/) |
+| Pre-Blockchain Readiness baseline | [../AGENTS/reports/claude/prechain_qa_2026-05-04/](../AGENTS/reports/claude/prechain_qa_2026-05-04/) |
+| Final open-issues cleanup / isolated final review | [../AGENTS/reports/codex/](../AGENTS/reports/codex/) |
 | 全站鏈化設計討論存檔 | [../AGENTS/reports/claude/blockchain_design_2026-05-04/](../AGENTS/reports/claude/blockchain_design_2026-05-04/) |
 | QA Mining 設計討論存檔 | [../AGENTS/reports/claude/mining_design_2026-05-04/](../AGENTS/reports/claude/mining_design_2026-05-04/) |
+| Multi-role audit | [../AGENTS/reports/claude/multi_role_audit_2026-05-04/](../AGENTS/reports/claude/multi_role_audit_2026-05-04/) |
+| **AI Agent Stage A 設計（Design approved 2026-05-04，implementation NOT authorized）** | [../AGENTS/reports/claude/ai_agent_design_2026-05-04/](../AGENTS/reports/claude/ai_agent_design_2026-05-04/) |
 | Cross-Agent Issue Reconciliation | [../AGENTS/reports/README.md](../AGENTS/reports/README.md) |
 | 既有 PointsChain v1 概念 | [../07_POINTSCHAIN.md](../07_POINTSCHAIN.md) |
+
+> 上表全部是 **historical evidence / design discussion**。目前是否可動工、是否准進 Phase 1，
+> 以本資料夾的正式文件與最新 test / live validation 結果為準，不以 AGENTS 報告單獨決定。
+
+> **AI Agent Stage A 狀態（2026-05-04）**：
+> ```
+> Design approved.
+> Phase 0 cleanup blockers are closed,
+> but implementation still requires Stage A Implementation Authorization Gate
+> A1–A7 (incl. A7 skill layer) and explicit root approval.
+> ```
+> AI Agent 在 PointsChain v2 phase plan 中是平行軌道：Stage A read-only POC 不依賴 wallet_addresses；Stage B 啟用扣費後依賴 Phase 1+2 ledger v2，並新增第 10 個官方地址 `AI_AGENT_OPS` + escrow 子地址。詳細見上方連結資料夾。
 
 ## 動工門檻
 

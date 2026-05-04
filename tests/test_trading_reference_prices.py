@@ -207,7 +207,7 @@ def _live_price_app(actor, captured):
                     "price_source": "fused_weighted",
                     "fee_rate_percent": 0.1,
                 },
-                "refresh_interval_ms": 1000,
+                "refresh_interval_ms": 2000,
                 "server_time": "2026-05-04T00:00:00",
                 "price_health": "fallback" if defaulted else "healthy",
                 "fallback_reason": "orderbook unavailable" if defaulted else "",
@@ -255,7 +255,8 @@ def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch
     payload = response.get_json()
     assert payload["ok"] is True
     assert payload["source"] == "binance_public_api"
-    assert payload["market"] == "BTC/USDT"
+    assert payload["market"] == "BTC/POINTS"
+    assert payload["display_market"] == "BTC/USDT"
     assert payload["display_market"] == "BTC/USDT"
     assert payload["symbol"] == "BTCUSDT"
     assert payload["usdt_to_points_rate"] == 1
@@ -698,6 +699,32 @@ def test_btc_trade_bridge_dry_run_does_not_advance_state(tmp_path):
     assert not (runtime / "bridge_state.json").exists()
 
 
+def test_btc_trade_bridge_defaults_runtime_files_to_runtime_subdir(monkeypatch, tmp_path):
+    hackme_dir = tmp_path / "hackme"
+    monkeypatch.delenv("HACKME_RUNTIME_DIR", raising=False)
+    bridge = BtcTradeBridge(
+        hackme_dir=hackme_dir,
+        btc_trade_dir=tmp_path / "BTC_trade",
+    )
+
+    assert bridge.runtime_root == hackme_dir / "runtime"
+    assert bridge.db_path == hackme_dir / "runtime" / "database" / "database.db"
+    assert bridge.chain_seed_path == hackme_dir / "runtime" / ".chain_seed"
+
+
+def test_btc_trade_bridge_honors_explicit_runtime_root(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "isolated-runtime"
+    monkeypatch.setenv("HACKME_RUNTIME_DIR", str(runtime_root))
+    bridge = BtcTradeBridge(
+        hackme_dir=tmp_path / "hackme",
+        btc_trade_dir=tmp_path / "BTC_trade",
+    )
+
+    assert bridge.runtime_root == runtime_root
+    assert bridge.db_path == runtime_root / "database" / "database.db"
+    assert bridge.chain_seed_path == runtime_root / ".chain_seed"
+
+
 def test_trading_reference_prices_defaults_to_15m_chart_interval(monkeypatch):
     trading_routes.REFERENCE_PRICE_CACHE.clear()
     captured = {}
@@ -1054,6 +1081,17 @@ def test_root_price_fusion_status_route_passes_selected_market_symbol():
     assert captured["market_symbol"] == "ETH/POINTS"
 
 
+def test_root_price_fusion_status_route_normalizes_display_market_symbol():
+    captured = {}
+    client = _root_price_fusion_status_app({"id": 1, "username": "root", "role": "super_admin"}, captured).test_client()
+
+    response = client.get("/api/root/trading/price-fusion-status?market_symbol=ETH/USDT")
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert captured["market_symbol"] == "ETH/POINTS"
+
+
 def test_trading_live_price_route_returns_selected_market_quote():
     captured = {}
     client = _live_price_app({"id": 1, "username": "alice", "role": "user"}, captured).test_client()
@@ -1070,7 +1108,18 @@ def test_trading_live_price_route_returns_selected_market_quote():
     assert payload["fallback_reason"] == ""
     assert payload["excluded_sources"] == []
     assert payload["defaulted_market"] is False
-    assert payload["refresh_interval_ms"] == 1000
+    assert payload["refresh_interval_ms"] == 2000
+    assert captured["market_symbol"] == "BTC/POINTS"
+
+
+def test_trading_live_price_route_normalizes_display_market_symbol():
+    captured = {}
+    client = _live_price_app({"id": 1, "username": "alice", "role": "user"}, captured).test_client()
+
+    response = client.get("/api/trading/live-price?market=BTC/USDT")
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
     assert captured["market_symbol"] == "BTC/POINTS"
 
 

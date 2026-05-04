@@ -1,6 +1,182 @@
 # Update Summary
 
-Release ID: `2026.05.04-086`
+Release ID: `2026.05.04-098`
+
+## 2026.05.04-098
+
+- Runtime DB, logs, storage, chat data, generated secrets, TLS cert/key, and integrity manifest now default under `runtime/` instead of scattering across the repo root.
+- `HACKME_RUNTIME_DIR` still works for isolated runs, but the relative default layout is now `runtime/database`, `runtime/logs`, `runtime/storage`, `runtime/cert.pem`, `runtime/.chain_seed`, and related files.
+- `btc_trade_bridge` now follows the same runtime root for its default DB and chain seed lookup, so it no longer drifts back to repo-root `database.db` or `.chain_seed`.
+- Snapshot runtime-secret handling now understands the `runtime/` prefix and keeps restore/reset logic aligned with the new runtime layout.
+
+## 2026.05.04-097
+
+- Margin / lending position detail now shows `損益平衡價` alongside `逐倉估算強平價`.
+- Break-even price now includes `開倉費 + 累積利息 + 預估平倉手續費`, so it reflects the real exit threshold instead of raw entry price only.
+- Frontend live margin risk now recomputes interest, next billing time, break-even price, and liquidation price on the same `2` second rhythm as live price refresh, so hourly interest accrual is reflected without waiting for a full dashboard reload.
+
+## 2026.05.04-096
+
+## Highlights
+
+- `GET /api/trading/live-price` now reports `refresh_interval_ms = 2000`,
+  matching the current 2-second trading page polling interval instead of
+  advertising the old 1-second cadence.
+- This keeps live-price API metadata aligned with the frontend trading wallet
+  and PnL refresh loop, so diagnostics no longer claim a faster refresh than
+  the UI actually uses.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py tests/test_frontend_economy.py tests/test_release_policy.py`
+- `PYTHONPATH=. python3 -m pytest -q tests`
+- isolated live API validation script under `docs/AGENTS/reports/codex/final_open_issues_review_*/scripts/live_api_validation.sh`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-095
+
+## Highlights
+
+- Cloud Drive folder browsing now supports the common double-click-to-open
+  interaction, so users no longer have to rely only on the right-side `開啟`
+  button to enter a folder.
+- The explicit `開啟` button remains as a fallback, and the double-click target
+  excludes action buttons so download/delete controls do not accidentally
+  navigate.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_drive_preview.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-094
+
+## Highlights
+
+- Community announcements now support in-place editing for manager/root users.
+  Admins can revise title, content, and pinned state directly instead of
+  deleting and re-posting the announcement.
+- The announcement editor now switches cleanly between create mode and edit
+  mode, including different submit text and form reset on cancel.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_community_permissions.py tests/test_frontend_community_layout.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-093
+
+## Highlights
+
+- The trading reference chart now offers a broader built-in indicator set:
+  `MA10`, `MA30`, `EMA50`, `RSI14`, and `KD(9,3,3)` were added on top of the
+  existing MA / EMA / Bollinger overlays.
+- `RSI14` and `KD` now render in a dedicated oscillator subpanel, so the
+  trading page can show trend overlays and overbought/oversold signals without
+  squashing everything onto the same price axis.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-092
+
+## Highlights
+
+- Chat stickers now use emoji-style quick buttons and render sent stickers as
+  real emoji glyphs instead of text labels such as `微笑` or `感謝`.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_chat.py tests/test_release_policy.py`
+- `git diff --check`
+
+## 2026.05.04-091
+
+## Highlights
+
+- Trading market metadata is now centralized in `services/trading_markets.py`,
+  so internal symbols, display aliases, provider IDs, default seeded markets,
+  and BTC_trade support all come from one catalog instead of multiple hardcoded
+  maps.
+- Trading live-price, reference-price, backtest, market ordering, wallet spot
+  sections, and root price-fusion market selection now consume the same market
+  definitions, reducing the work needed to add future points-quoted assets such
+  as `SOL` or `GOLD`.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_markets.py tests/test_trading_reference_prices.py tests/test_trading_engine.py tests/test_frontend_economy.py`
+- `git diff --check`
+
+## 2026.05.04-090
+
+## Highlights
+
+- Cloud Drive audio previews now normalize blob MIME from preview metadata, so
+  music files can still inline-preview even when the browser first receives a
+  generic blob type.
+- Publishing a video from an existing Cloud Drive media file now supports an
+  uploaded custom cover image instead of silently ignoring the chosen cover.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_video_publish.py tests/test_cloud_drive_attachments.py -k 'audio_preview_content_supports_streamable_music or accepts_cover_upload_for_existing_cloud_media or video_upload_endpoint_accepts_audio_and_streams_it or video_upload_endpoint_stores_server_encrypted_video_and_streams_plaintext'`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_drive_preview.py tests/test_frontend_videos.py tests/test_release_policy.py`
+- `git diff --check`
+
+## 2026.05.04-089
+
+## Highlights
+
+- Large Cloud Drive uploads are no longer hard-blocked at `50 MB` before they
+  reach the real per-user quota and max-file policy checks.
+- The Flask request-body cap is now controlled by
+  `HTML_LEARNING_MAX_CONTENT_MB` with a default of `1024 MB`, and API callers
+  now get a structured `413 request_too_large` JSON payload instead of a bare
+  status code.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_security_defaults.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-088
+
+## Highlights
+
+- Uploaded chat, DM, and announcement attachments now land in the Cloud Drive
+  `/attachments/` folder instead of cluttering the drive root.
+- The stored display name remains the original filename while the underlying
+  storage path gets a unique attachment-prefixed name to avoid path collisions.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_drive_preview.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-087
+
+## Highlights
+
+- Chat attachment UX is now inline with the message composer instead of hiding
+  upload and existing-file actions inside a separate `聊天室附件` card.
+- Picking a file now immediately adds it to the pending send list, while room
+  scoped `聊天室共用附件` only appears when the current room actually has shared
+  attachments.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_chat.py tests/test_frontend_drive_preview.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.04-086
 

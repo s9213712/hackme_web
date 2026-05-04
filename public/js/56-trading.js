@@ -199,7 +199,17 @@ function renderTradingCurrentPrice(market, options = {}) {
 }
 
 function tradingDisplaySymbol(symbol) {
-  return String(symbol || "").replace("/POINTS", "/USDT");
+  const normalized = String(symbol || "").trim().toUpperCase();
+  const market = (tradingState.markets || []).find((row) => String(row?.symbol || "").trim().toUpperCase() === normalized);
+  if (market?.display_symbol) return String(market.display_symbol);
+  return normalized.replace("/POINTS", "/USDT");
+}
+
+function tradingBaseAssetLabel(marketOrSymbol) {
+  const market = typeof marketOrSymbol === "object"
+    ? marketOrSymbol
+    : tradingMarketBySymbol(String(marketOrSymbol || ""));
+  return String(market?.base_asset || tradingDisplaySymbol(market?.symbol || marketOrSymbol).split("/")[0] || "資產").toUpperCase();
 }
 
 function tradingBorrowAprGroupForMarket(market, positionType = "margin_long") {
@@ -424,9 +434,10 @@ function syncTradingOrderInputMode() {
     input.placeholder = inputMode === "points" ? "例如 1000" : "例如 0.01";
   }
   if (note) {
+    const assetLabel = tradingBaseAssetLabel(selectedTradingMarket());
     note.textContent = inputMode === "points"
       ? "買入時點數視為含手續費的總支出；賣出時點數視為成交名目金額，系統自動換算枚數。"
-      : "直接輸入 BTC/ETH 枚數。";
+      : `直接輸入 ${assetLabel} 枚數。`;
   }
 }
 
@@ -545,12 +556,7 @@ function tradingPositionLabel(row) {
 }
 
 function economySpotMarkets(markets = []) {
-  const desiredAssets = ["BTC", "ETH"];
-  return desiredAssets.map((asset) => (
-    markets.find((market) => String(market.base_asset || "").toUpperCase() === asset)
-    || markets.find((market) => String(market.symbol || "").toUpperCase().startsWith(`${asset}/`))
-    || { symbol: `${asset}/POINTS`, base_asset: asset, manual_price_points: 0, fee_rate_percent: 0, price_source: "-" }
-  ));
+  return (markets || []).filter((market) => String(market?.quote_currency || "POINTS").toUpperCase() === "POINTS");
 }
 
 function spotPositionNumber(position, key) {
@@ -621,6 +627,86 @@ function tradingSpotCostBasis(position, market) {
   return holdingCost + sellFeeEstimate;
 }
 
+const TRADING_POINT_MICRO_SCALE = 1000000;
+
+function tradingMarginPositionIsShort(row) {
+  const type = String(row?.position_type || "").toLowerCase();
+  return type === "short" || type === "margin_short";
+}
+
+function tradingMarginInterestTiming(row) {
+  return {
+    intervalHours: Math.max(1, tradingNumber(row?.interest_interval_hours, 1)),
+    minimumHours: Math.max(1, tradingNumber(row?.interest_minimum_hours, 1)),
+  };
+}
+
+function tradingMarginOpenedAtMs(row) {
+  const opened = row?.opened_at ? new Date(row.opened_at).getTime() : 0;
+  return Number.isFinite(opened) ? opened : 0;
+}
+
+function tradingMarginBillableInterestHours(row, nowMs = Date.now()) {
+  const principal = tradingNumber(row?.principal_points, 0);
+  const ratePercentDaily = tradingNumber(row?.interest_percent_daily, 0);
+  const openedAtMs = tradingMarginOpenedAtMs(row);
+  if (!principal || ratePercentDaily <= 0 || !openedAtMs || nowMs <= openedAtMs) return 0;
+  const { intervalHours, minimumHours } = tradingMarginInterestTiming(row);
+  const elapsedSeconds = Math.max(0, (nowMs - openedAtMs) / 1000);
+  if (!elapsedSeconds) return 0;
+  const billedHours = Math.ceil(elapsedSeconds / (intervalHours * 3600)) * intervalHours;
+  return Math.max(minimumHours, billedHours);
+}
+
+function tradingMarginLiveInterest(row, nowMs = Date.now()) {
+  const principal = tradingNumber(row?.principal_points, 0);
+  const ratePercentDaily = tradingNumber(row?.interest_percent_daily, 0);
+  const capitalized = tradingNumber(row?.interest_capitalized_points ?? row?.interest_points, 0);
+  const carryMicropoints = tradingNumber(row?.interest_carry_micropoints, 0);
+  const accruedHours = tradingNumber(row?.interest_accrued_hours, 0);
+  const totalHours = tradingMarginBillableInterestHours(row, nowMs);
+  const dueHours = Math.max(0, totalHours - accruedHours);
+  if (!principal || ratePercentDaily <= 0 || dueHours <= 0) {
+    const exact = capitalized + (carryMicropoints / TRADING_POINT_MICRO_SCALE);
+    return { points: capitalized, exactPoints: exact, totalHours, dueHours, totalMicropoints: carryMicropoints };
+  }
+  const hourlyRate = (ratePercentDaily / 100) / 24;
+  const dueMicropoints = Math.round(principal * hourlyRate * dueHours * TRADING_POINT_MICRO_SCALE);
+  const totalMicropoints = carryMicropoints + dueMicropoints;
+  const points = capitalized + Math.floor(totalMicropoints / TRADING_POINT_MICRO_SCALE);
+  const exactPoints = capitalized + (totalMicropoints / TRADING_POINT_MICRO_SCALE);
+  return { points, exactPoints, totalHours, dueHours, totalMicropoints };
+}
+
+function tradingMarginNextInterestAtMs(row, nowMs = Date.now()) {
+  const openedAtMs = tradingMarginOpenedAtMs(row);
+  if (!openedAtMs) return 0;
+  const { intervalHours } = tradingMarginInterestTiming(row);
+  const accruedHours = tradingNumber(row?.interest_accrued_hours, 0);
+  let nextBillingHours = tradingMarginBillableInterestHours(row, nowMs);
+  if (nextBillingHours && nextBillingHours <= accruedHours) {
+    nextBillingHours = accruedHours + intervalHours;
+  }
+  return nextBillingHours > 0 ? openedAtMs + (nextBillingHours * 3600 * 1000) : 0;
+}
+
+function tradingMarginBreakEvenPrice(row, interestExactPoints, market = null) {
+  const resolvedMarket = market || tradingMarketBySymbol(row?.market_symbol || "");
+  const quantity = tradingNumber(row?.quantity, 0);
+  const principal = tradingNumber(row?.principal_points, 0);
+  const collateral = tradingNumber(row?.collateral_points, 0);
+  const openFee = tradingNumber(row?.open_fee_points, 0);
+  const feeRate = tradingNumber(resolvedMarket?.fee_rate_percent, 0) / 100;
+  if (!resolvedMarket || !quantity || feeRate < 0 || feeRate >= 1) return 0;
+  if (tradingMarginPositionIsShort(row)) {
+    const recoverableValue = principal - openFee - interestExactPoints;
+    if (recoverableValue <= 0) return 0;
+    return recoverableValue / (quantity * (1 + feeRate));
+  }
+  const requiredExitValue = collateral + principal + openFee + interestExactPoints;
+  return requiredExitValue > 0 ? requiredExitValue / (quantity * (1 - feeRate)) : 0;
+}
+
 function tradingLiveMarginRisk(row, market = null) {
   const fallback = row?.risk && typeof row.risk === "object" ? row.risk : {};
   const resolvedMarket = market || tradingMarketBySymbol(row?.market_symbol || "");
@@ -629,23 +715,43 @@ function tradingLiveMarginRisk(row, market = null) {
   const currentPrice = tradingNumber(resolvedMarket.manual_price_points, tradingNumber(fallback.price_points, 0));
   const principal = tradingNumber(row.principal_points, 0);
   const collateral = tradingNumber(row.collateral_points, 0);
-  const interest = tradingNumber(row.interest_exact_points ?? fallback.interest_exact_points ?? row.interest_points, tradingNumber(fallback.interest_points, 0));
+  const dynamicInterest = tradingMarginLiveInterest(row);
+  const interest = tradingNumber(dynamicInterest.points, tradingNumber(fallback.interest_points, 0));
+  const interestExact = tradingNumber(dynamicInterest.exactPoints, tradingNumber(fallback.interest_exact_points ?? fallback.interest_points, 0));
   const feeRatePercent = tradingNumber(resolvedMarket.fee_rate_percent, 0);
   const maintenancePercent = tradingNumber(tradingState.settings?.margin_maintenance_percent, tradingNumber(fallback.maintenance_percent, 0));
   const exitNotional = quantity > 0 && currentPrice > 0 ? Math.ceil(quantity * currentPrice) : tradingNumber(fallback.exit_notional_points, 0);
   const closeFee = Math.max(0, Math.ceil(exitNotional * feeRatePercent / 100));
-  const equityAfter = row.position_type === "margin_short"
+  const isShort = tradingMarginPositionIsShort(row);
+  const equityAfter = isShort
     ? (collateral + principal - exitNotional - interest - closeFee)
     : (exitNotional - principal - interest - closeFee);
-  const delta = row.position_type === "margin_short"
+  const delta = isShort
     ? (principal - exitNotional - interest - closeFee)
     : (equityAfter - collateral);
   const maintenancePoints = Math.max(0, Math.ceil(exitNotional * maintenancePercent / 100));
+  const breakEvenPrice = tradingMarginBreakEvenPrice(row, interestExact, resolvedMarket);
+  let liquidationPrice = 0;
+  const quantityUnits = quantity * 100000000;
+  if (quantityUnits > 0) {
+    if (isShort) {
+      const denominatorPercent = 100 + feeRatePercent + maintenancePercent;
+      const liquidationBase = collateral + principal - interest;
+      if (denominatorPercent > 0 && liquidationBase > 0) {
+        liquidationPrice = (Math.ceil((liquidationBase * 100) / denominatorPercent) * 100000000) / quantityUnits;
+      }
+    } else {
+      const denominatorPercent = 100 - feeRatePercent - maintenancePercent;
+      if (denominatorPercent > 0) {
+        liquidationPrice = (Math.ceil(((principal + interest) * 100) / denominatorPercent) * 100000000) / quantityUnits;
+      }
+    }
+  }
   const maintenanceRatioPercent = maintenancePoints > 0
     ? Math.round((equityAfter * 10000) / maintenancePoints) / 100
     : tradingNumber(fallback.maintenance_ratio_percent, 0);
   let riskStatus = "normal";
-  let riskReason = row.position_type === "margin_short"
+  let riskReason = isShort
     ? "借券放空在價格上漲時會虧損，價格越高維持率越低"
     : "融資做多在價格下跌時會虧損，價格越低維持率越低";
   if (equityAfter <= maintenancePoints) {
@@ -654,7 +760,7 @@ function tradingLiveMarginRisk(row, market = null) {
   } else if (maintenanceRatioPercent < 150) {
     riskStatus = "warning";
     riskReason = "整體維持率偏低，建議補保證金或降低倉位";
-  } else if (row.position_type === "margin_short") {
+  } else if (isShort) {
     riskStatus = "short_price_risk";
   }
   return {
@@ -662,13 +768,18 @@ function tradingLiveMarginRisk(row, market = null) {
     price_points: currentPrice,
     close_fee_points: closeFee,
     exit_notional_points: exitNotional,
+    interest_points: interest,
+    interest_exact_points: interestExact,
+    interest_total_hours: dynamicInterest.totalHours,
     equity_after_points: equityAfter,
     unrealized_pnl_points: delta,
     delta_points: delta,
+    breakeven_price_points: breakEvenPrice,
     maintenance_percent: maintenancePercent,
     maintenance_points: maintenancePoints,
     maintenance_margin_percent: maintenancePercent,
     maintenance_margin_points: maintenancePoints,
+    liquidation_price_points: liquidationPrice || tradingNumber(fallback.liquidation_price_points, 0),
     maintenance_ratio_percent: maintenanceRatioPercent,
     risk_status: riskStatus,
     risk_reason: riskReason,
@@ -849,18 +960,19 @@ function tradingMarginRiskText(row) {
 
 function tradingMarginPositionRow(row, scope = "trading") {
   const liveRisk = tradingLiveMarginRisk(row);
-  const typeLabel = row.position_label || (row.position_type === "short" ? "借券放空" : "融資買入");
+  const isShort = tradingMarginPositionIsShort(row);
+  const typeLabel = row.position_label || (isShort ? "借券放空" : "融資買入");
   const principal = tradingNumber(row.principal_points, 0);
   const collateral = tradingNumber(liveRisk.initial_margin_points ?? row.initial_margin_points ?? row.collateral_points, 0);
   const fee = tradingNumber(row.open_fee_points, 0);
-  const interest = tradingNumber(row.interest_exact_points ?? liveRisk.interest_exact_points ?? row.interest_points, 0);
+  const interest = tradingNumber(liveRisk.interest_exact_points ?? row.interest_exact_points ?? row.interest_points, 0);
   const paidInterest = tradingNumber(row.interest_paid_points, 0);
-  const interestHours = tradingNumber(row.interest_accrued_hours, 0);
-  const totalElapsedHours = tradingNumber(row.total_elapsed_hours, 0);
+  const interestHours = tradingNumber(liveRisk.interest_total_hours ?? row.interest_accrued_hours, 0);
+  const totalElapsedHours = tradingMarginOpenedAtMs(row) ? Math.max(0, Math.floor((Date.now() - tradingMarginOpenedAtMs(row)) / 3600000)) : tradingNumber(row.total_elapsed_hours, 0);
   const interestAprPercent = tradingNumber(row.interest_apr_percent ?? ((tradingNumber(row.interest_percent_daily, 0) || 0) * 365), 0);
   const interestIntervalHours = tradingNumber(row.interest_interval_hours, 1);
   const minimumHours = tradingNumber(row.interest_minimum_hours, 1);
-  const nextInterestAt = row.next_interest_at ? new Date(row.next_interest_at).getTime() : 0;
+  const nextInterestAt = tradingMarginNextInterestAtMs(row);
   const nextInterestCountdown = (nextInterestAt && nextInterestAt > Date.now())
     ? `下次計息 ${formatTradingDuration(nextInterestAt - Date.now())} 後`
     : (totalElapsedHours > 0 ? "下次計息即將觸發" : "");
@@ -874,6 +986,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
   const initialMarginRatePercent = tradingNumber(liveRisk.initial_margin_percent ?? row.initial_margin_percent, 0);
   const maintenanceRatePercent = tradingNumber(liveRisk.maintenance_margin_percent ?? liveRisk.maintenance_percent ?? row.maintenance_margin_percent, 0);
   const unrealizedPnl = tradingNumber(liveRisk.unrealized_pnl_points ?? row.unrealized_pnl_points, 0);
+  const breakEvenPrice = tradingNumber(liveRisk.breakeven_price_points ?? row.breakeven_price_points, 0);
   const liquidationPrice = tradingNumber(liveRisk.liquidation_price_points ?? row.liquidation_price_points, 0);
   const pnlClass = unrealizedPnl > 0 ? "positive" : (unrealizedPnl < 0 ? "negative" : "");
   const leverageHint = collateral > 0 ? `${(principal / collateral).toFixed(2)}x 風險倍數` : "未提供風險倍數";
@@ -890,8 +1003,9 @@ function tradingMarginPositionRow(row, scope = "trading") {
           原始保證金率 ${formatTradingPointsValue(initialMarginRatePercent)}% · 維持率 ${sanitize(riskText.ratioText)} · 權益 ${formatTradingPointsValue(equity)} · 維持保證金 ${formatTradingPointsValue(maintenance)}（${formatTradingPointsValue(maintenanceRatePercent)}%） · ${sanitize(riskText.statusLabel)}
         </div>
         <div class="drive-card-sub">
-          未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 逐倉估算強平價 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"} · 實際清算依全倉維持率
+          未實現盈虧 <b class="trading-spot-pnl ${pnlClass}">${unrealizedPnl >= 0 ? "+" : ""}${formatTradingPointsValue(unrealizedPnl)} 點</b> · 損益平衡價 ${breakEvenPrice ? formatTradingPointsValue(breakEvenPrice) : "無法估算"} · 逐倉估算強平價 ${liquidationPrice ? formatTradingPointsValue(liquidationPrice) : "無法估算"}
         </div>
+        <div class="drive-card-sub">損益平衡價已含開倉費、累積利息與預估平倉手續費；實際清算仍依全倉維持率</div>
         <div class="drive-card-sub">${sanitize(riskText.reason || "")}</div>
         <div class="drive-card-sub">開倉費 ${formatTradingPointsValue(fee)} · 年利率 ${formatTradingPercent(interestAprPercent)}% APR · 累積利息 ${formatTradingPointsValue(interest)} 點 · 已實扣 ${formatTradingPointsValue(paidInterest)} 點 · 已持倉 ${totalElapsedHours} 小時 · 已計息 ${interestHours} 小時</div>
         <div class="drive-card-sub">下一次計息 ${sanitize(nextInterestLabel)}${nextInterestCountdown ? ` · ${sanitize(nextInterestCountdown)}` : ""} · 規則：每 ${formatTradingPointsValue(interestIntervalHours)} 小時、至少 ${formatTradingPointsValue(minimumHours)} 小時 · ${sanitize(leverageHint)}</div>
@@ -968,9 +1082,12 @@ function renderTradingSummary() {
   if ($("trading-funding-pool-rate-btc-eth")) $("trading-funding-pool-rate-btc-eth").textContent = formatTradingPercent(tradingBorrowEffectiveAprPercent("btc_eth"));
   if ($("trading-funding-pool-rate-usdt-points")) $("trading-funding-pool-rate-usdt-points").textContent = formatTradingPercent(tradingBorrowEffectiveAprPercent("usdt_points"));
   if (availabilityNote) {
+    const publicSpotSymbols = economySpotMarkets(tradingState.markets || [])
+      .map((row) => tradingDisplaySymbol(row.symbol))
+      .filter(Boolean);
     availabilityNote.textContent = currentUser === "root"
       ? "root 可使用現貨、進階交易與合約模擬；root 以外用戶目前僅開放現貨與已啟用的進階交易。"
-      : "目前僅對 root 以外用戶開放 BTC/USDT、ETH/USDT 現貨。";
+      : `目前對 root 以外用戶開放 ${publicSpotSymbols.join("、") || "已啟用的積分現貨市場"} 現貨。`;
   }
   const trial = funding.trial_credit || null;
   const trialAvailable = trial ? Number(trial.available_points || 0) : 0;
@@ -1036,7 +1153,7 @@ function renderTradingBtcSignal(payload = null) {
   const card = $("trading-btc-signal-card");
   if (!card) return;
   const market = selectedTradingMarket();
-  if (!market || tradingDisplaySymbol(market.symbol) !== "BTC/USDT" || !payload?.available || !payload.signal) {
+  if (!market || !market?.btc_trade_supported || !payload?.available || !payload.signal) {
     card.style.display = "none";
     return;
   }
@@ -1060,7 +1177,7 @@ function renderTradingBtcSignal(payload = null) {
   }
   if (body) {
     body.innerHTML = `
-      <div><span class="drive-card-sub">目前價格</span><strong>${sanitize(tradingReferenceLabel(signal.current_price))}</strong><small>BTC/USDT</small></div>
+      <div><span class="drive-card-sub">目前價格</span><strong>${sanitize(tradingReferenceLabel(signal.current_price))}</strong><small>${sanitize(tradingDisplaySymbol(market.symbol))}</small></div>
       <div><span class="drive-card-sub">七條件信號</span><strong>${sanitize(tradingSignalBoolLabel(signal.signal_ok))}</strong><small>${signalOk ? "可進場觀察" : "未全滿足"}</small></div>
       <div><span class="drive-card-sub">ML 過濾</span><strong>${sanitize(tradingSignalBoolLabel(signal.ml_ok))}</strong><small>${sanitize(ml.situation || (ml.blocked ? "已阻擋" : "未提供"))}</small></div>
       <div><span class="drive-card-sub">BTC_trade 持倉</span><strong>${sanitize(signal.position || signal.portfolio?.position || "空手")}</strong><small>${sanitize(signal.last_trade?.action || "無最新交易")}</small></div>
@@ -1076,7 +1193,7 @@ function renderTradingBtcSignal(payload = null) {
 
 async function loadTradingBtcSignal() {
   const market = selectedTradingMarket();
-  if (!market || tradingDisplaySymbol(market.symbol) !== "BTC/USDT") {
+  if (!market || !market?.btc_trade_supported) {
     renderTradingBtcSignal(null);
     return;
   }
@@ -1126,8 +1243,20 @@ function tradingIndicatorEnabled(id) {
   return !!el?.checked;
 }
 
+function tradingIndicatorClose(point) {
+  return Number(point?.close_usdt || point?.price_usdt || point?.close || 0);
+}
+
+function tradingIndicatorHigh(point) {
+  return Number(point?.high_usdt || point?.high_points || point?.price_usdt || point?.close_usdt || point?.close || 0);
+}
+
+function tradingIndicatorLow(point) {
+  return Number(point?.low_usdt || point?.low_points || point?.price_usdt || point?.close_usdt || point?.close || 0);
+}
+
 function tradingIndicatorSeries(candles, period, mode = "sma") {
-  const closes = candles.map((point) => Number(point.close_usdt || point.price_usdt || point.close || 0));
+  const closes = candles.map(tradingIndicatorClose);
   const values = Array(closes.length).fill(null);
   if (!period || period < 1 || closes.length < period) return values;
   if (mode === "ema") {
@@ -1148,8 +1277,19 @@ function tradingIndicatorSeries(candles, period, mode = "sma") {
   return values;
 }
 
+function tradingIndicatorWindowAverage(values, period) {
+  const output = Array(values.length).fill(null);
+  if (!period || period < 1) return output;
+  for (let index = period - 1; index < values.length; index += 1) {
+    const windowValues = values.slice(index - period + 1, index + 1);
+    if (windowValues.some((value) => !Number.isFinite(value))) continue;
+    output[index] = windowValues.reduce((sum, value) => sum + value, 0) / period;
+  }
+  return output;
+}
+
 function tradingBollingerSeries(candles, period = 20, multiplier = 2) {
-  const closes = candles.map((point) => Number(point.close_usdt || point.price_usdt || point.close || 0));
+  const closes = candles.map(tradingIndicatorClose);
   const upper = Array(closes.length).fill(null);
   const middle = Array(closes.length).fill(null);
   const lower = Array(closes.length).fill(null);
@@ -1166,30 +1306,96 @@ function tradingBollingerSeries(candles, period = 20, multiplier = 2) {
   return { upper, middle, lower };
 }
 
+function tradingRsiSeries(candles, period = 14) {
+  const closes = candles.map(tradingIndicatorClose);
+  const values = Array(closes.length).fill(null);
+  if (!period || period < 1 || closes.length <= period) return values;
+  let gains = 0;
+  let losses = 0;
+  for (let index = 1; index <= period; index += 1) {
+    const prev = closes[index - 1];
+    const current = closes[index];
+    if (!Number.isFinite(prev) || !Number.isFinite(current) || prev <= 0 || current <= 0) return values;
+    const delta = current - prev;
+    gains += Math.max(delta, 0);
+    losses += Math.max(-delta, 0);
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  values[period] = avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - (100 / (1 + (avgGain / avgLoss)));
+  for (let index = period + 1; index < closes.length; index += 1) {
+    const prev = closes[index - 1];
+    const current = closes[index];
+    if (!Number.isFinite(prev) || !Number.isFinite(current) || prev <= 0 || current <= 0) continue;
+    const delta = current - prev;
+    const gain = Math.max(delta, 0);
+    const loss = Math.max(-delta, 0);
+    avgGain = ((avgGain * (period - 1)) + gain) / period;
+    avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+    values[index] = avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - (100 / (1 + (avgGain / avgLoss)));
+  }
+  return values;
+}
+
+function tradingKdSeries(candles, lookback = 9, smoothK = 3, smoothD = 3) {
+  const rawK = Array(candles.length).fill(null);
+  for (let index = lookback - 1; index < candles.length; index += 1) {
+    const windowPoints = candles.slice(index - lookback + 1, index + 1);
+    const highs = windowPoints.map(tradingIndicatorHigh).filter((value) => Number.isFinite(value) && value > 0);
+    const lows = windowPoints.map(tradingIndicatorLow).filter((value) => Number.isFinite(value) && value > 0);
+    const close = tradingIndicatorClose(candles[index]);
+    if (highs.length !== lookback || lows.length !== lookback || !Number.isFinite(close) || close <= 0) continue;
+    const highest = Math.max(...highs);
+    const lowest = Math.min(...lows);
+    rawK[index] = highest === lowest ? 50 : ((close - lowest) * 100) / (highest - lowest);
+  }
+  const k = tradingIndicatorWindowAverage(rawK, smoothK);
+  const d = tradingIndicatorWindowAverage(k, smoothD);
+  return { k, d };
+}
+
 function buildTradingReferenceIndicators(candles) {
-  const indicators = [];
+  const overlays = [];
+  const oscillators = [];
   if (tradingIndicatorEnabled("trading-indicator-ma5")) {
-    indicators.push({ key: "ma5", label: "MA5", color: "#f59e0b", values: tradingIndicatorSeries(candles, 5) });
+    overlays.push({ key: "ma5", label: "MA5", color: "#f59e0b", values: tradingIndicatorSeries(candles, 5), axis: "price" });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ma10")) {
+    overlays.push({ key: "ma10", label: "MA10", color: "#fde047", values: tradingIndicatorSeries(candles, 10), axis: "price" });
   }
   if (tradingIndicatorEnabled("trading-indicator-ma20")) {
-    indicators.push({ key: "ma20", label: "MA20", color: "#38bdf8", values: tradingIndicatorSeries(candles, 20) });
+    overlays.push({ key: "ma20", label: "MA20", color: "#38bdf8", values: tradingIndicatorSeries(candles, 20), axis: "price" });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ma30")) {
+    overlays.push({ key: "ma30", label: "MA30", color: "#34d399", values: tradingIndicatorSeries(candles, 30), axis: "price" });
   }
   if (tradingIndicatorEnabled("trading-indicator-ma60")) {
-    indicators.push({ key: "ma60", label: "MA60", color: "#a78bfa", values: tradingIndicatorSeries(candles, 60) });
+    overlays.push({ key: "ma60", label: "MA60", color: "#a78bfa", values: tradingIndicatorSeries(candles, 60), axis: "price" });
   }
   if (tradingIndicatorEnabled("trading-indicator-ema12")) {
-    indicators.push({ key: "ema12", label: "EMA12", color: "#22d3ee", values: tradingIndicatorSeries(candles, 12, "ema") });
+    overlays.push({ key: "ema12", label: "EMA12", color: "#22d3ee", values: tradingIndicatorSeries(candles, 12, "ema"), axis: "price" });
   }
   if (tradingIndicatorEnabled("trading-indicator-ema26")) {
-    indicators.push({ key: "ema26", label: "EMA26", color: "#fb7185", values: tradingIndicatorSeries(candles, 26, "ema") });
+    overlays.push({ key: "ema26", label: "EMA26", color: "#fb7185", values: tradingIndicatorSeries(candles, 26, "ema"), axis: "price" });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-ema50")) {
+    overlays.push({ key: "ema50", label: "EMA50", color: "#f97316", values: tradingIndicatorSeries(candles, 50, "ema"), axis: "price" });
   }
   if (tradingIndicatorEnabled("trading-indicator-bollinger")) {
     const bands = tradingBollingerSeries(candles, 20, 2);
-    indicators.push({ key: "bb_upper", label: "BB上", color: "rgba(16, 185, 129, .82)", values: bands.upper, dash: [4, 4] });
-    indicators.push({ key: "bb_mid", label: "BB中", color: "rgba(16, 185, 129, .5)", values: bands.middle });
-    indicators.push({ key: "bb_lower", label: "BB下", color: "rgba(16, 185, 129, .82)", values: bands.lower, dash: [4, 4] });
+    overlays.push({ key: "bb_upper", label: "BB上", color: "rgba(16, 185, 129, .82)", values: bands.upper, dash: [4, 4], axis: "price" });
+    overlays.push({ key: "bb_mid", label: "BB中", color: "rgba(16, 185, 129, .5)", values: bands.middle, axis: "price" });
+    overlays.push({ key: "bb_lower", label: "BB下", color: "rgba(16, 185, 129, .82)", values: bands.lower, dash: [4, 4], axis: "price" });
   }
-  return indicators;
+  if (tradingIndicatorEnabled("trading-indicator-rsi14")) {
+    oscillators.push({ key: "rsi14", label: "RSI14", color: "#fbbf24", values: tradingRsiSeries(candles, 14), axis: "oscillator" });
+  }
+  if (tradingIndicatorEnabled("trading-indicator-kd")) {
+    const kd = tradingKdSeries(candles, 9, 3, 3);
+    oscillators.push({ key: "kd_k", label: "KD-K", color: "#f472b6", values: kd.k, axis: "oscillator" });
+    oscillators.push({ key: "kd_d", label: "KD-D", color: "#60a5fa", values: kd.d, axis: "oscillator" });
+  }
+  return { overlays, oscillators };
 }
 
 function drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice) {
@@ -1200,7 +1406,10 @@ function drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice) {
   let drawing = false;
   ctx.beginPath();
   indicator.values.forEach((value, index) => {
-    if (!Number.isFinite(value) || value <= 0 || !candleModels[index]) {
+    const invalid = indicator?.axis === "oscillator"
+      ? (!Number.isFinite(value) || value < 0)
+      : (!Number.isFinite(value) || value <= 0);
+    if (invalid || !candleModels[index]) {
       drawing = false;
       return;
     }
@@ -1217,11 +1426,60 @@ function drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice) {
   ctx.restore();
 }
 
+function tradingIndicatorValueLabel(indicator, value) {
+  if (!Number.isFinite(value)) return "-";
+  return indicator?.axis === "oscillator"
+    ? `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}`
+    : tradingReferenceLabel(value);
+}
+
+function tradingIndicatorHasValue(indicator, value) {
+  if (!Number.isFinite(value)) return false;
+  return indicator?.axis === "oscillator" ? value >= 0 : value > 0;
+}
+
 function tradingIndicatorLegend(indicators) {
   const active = indicators
-    .filter((item) => item.values.some((value) => Number.isFinite(value) && value > 0))
+    .filter((item) => item.values.some((value) => tradingIndicatorHasValue(item, value)))
     .map((item) => item.label);
   return active.length ? ` · 指標 ${active.join(" / ")}` : "";
+}
+
+function drawTradingOscillatorPanel(ctx, indicators, candleModels, panel, width, pad) {
+  if (!indicators.length) return;
+  const yForValue = (value) => panel.top + panel.height - ((value - panel.min) / panel.spread) * panel.height;
+  ctx.save();
+  ctx.strokeStyle = "rgba(148, 163, 184, .18)";
+  ctx.lineWidth = 1;
+  [0, 20, 50, 80, 100].forEach((level) => {
+    const y = yForValue(level);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = level === 50 ? "#e2e8f0" : "#94a3b8";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText(`${level}`, 12, y + 4);
+  });
+  [
+    { value: 70, color: "rgba(248, 113, 113, .55)" },
+    { value: 30, color: "rgba(74, 222, 128, .55)" },
+  ].forEach((line) => {
+    const y = yForValue(line.value);
+    ctx.save();
+    ctx.strokeStyle = line.color;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    ctx.restore();
+  });
+  indicators.forEach((indicator) => drawTradingIndicatorLine(ctx, indicator, candleModels, yForValue));
+  ctx.fillStyle = "#cbd5e1";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText("RSI / KD", pad.left, panel.top - 4);
+  ctx.restore();
 }
 
 function renderTradingReferenceChart(payload, errorText = "") {
@@ -1255,22 +1513,29 @@ function renderTradingReferenceChart(payload, errorText = "") {
     if (meta) meta.textContent = errorText || "公開 API 蠟燭圖載入中；成交引擎會由後端重新取得即時價。";
     return;
   }
-  const indicators = buildTradingReferenceIndicators(candles);
+  const indicatorGroups = buildTradingReferenceIndicators(candles);
+  const overlayIndicators = indicatorGroups.overlays;
+  const oscillatorIndicators = indicatorGroups.oscillators;
+  const indicators = overlayIndicators.concat(oscillatorIndicators);
   const prices = candles.flatMap((point) => [
     Number(point.high_usdt || point.high_points || point.price_usdt || point.price_points || 0),
     Number(point.low_usdt || point.low_points || point.price_usdt || point.price_points || 0),
-  ]).concat(indicators.flatMap((indicator) => indicator.values)).filter((value) => Number.isFinite(value) && value > 0);
+  ]).concat(overlayIndicators.flatMap((indicator) => indicator.values)).filter((value) => Number.isFinite(value) && value > 0);
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
   const spread = Math.max(1, maxPrice - minPrice);
   const pad = { left: 58, right: 18, top: 22, bottom: 34 };
   const chartW = width - pad.left - pad.right;
-  const chartH = height - pad.top - pad.bottom;
-  const yForPrice = (price) => pad.top + chartH - ((price - minPrice) / spread) * chartH;
+  const panelGap = oscillatorIndicators.some((indicator) => indicator.values.some((value) => Number.isFinite(value) && value >= 0)) ? 12 : 0;
+  const totalChartH = height - pad.top - pad.bottom;
+  const oscillatorH = panelGap ? Math.max(72, Math.round(totalChartH * 0.24)) : 0;
+  const mainChartH = totalChartH - oscillatorH - panelGap;
+  const oscillatorPanel = panelGap ? { top: pad.top + mainChartH + panelGap, height: oscillatorH, min: 0, max: 100, spread: 100 } : null;
+  const yForPrice = (price) => pad.top + mainChartH - ((price - minPrice) / spread) * mainChartH;
   ctx.strokeStyle = "rgba(148, 163, 184, .22)";
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
-    const y = pad.top + (chartH * i / 4);
+    const y = pad.top + (mainChartH * i / 4);
     ctx.beginPath();
     ctx.moveTo(pad.left, y);
     ctx.lineTo(width - pad.right, y);
@@ -1308,8 +1573,11 @@ function renderTradingReferenceChart(payload, errorText = "") {
     ctx.strokeRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
     return { ...point, index, open, high, low, close, x, yHigh, yLow, yOpen, yClose, bodyTop, bodyH };
   });
-  indicators.forEach((indicator) => drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice));
-  tradingReferenceChartModel = { payload, candles: candleModels, indicators, pad, width, height, chartW, chartH, slot };
+  overlayIndicators.forEach((indicator) => drawTradingIndicatorLine(ctx, indicator, candleModels, yForPrice));
+  if (oscillatorPanel) {
+    drawTradingOscillatorPanel(ctx, oscillatorIndicators, candleModels, oscillatorPanel, width, pad);
+  }
+  tradingReferenceChartModel = { payload, candles: candleModels, indicators, pad, width, height, chartW, chartH: mainChartH, slot, oscillatorPanel };
   if (tradingReferenceHoverIndex !== null && candleModels[tradingReferenceHoverIndex]) {
     const hover = candleModels[tradingReferenceHoverIndex];
     ctx.save();
@@ -1318,7 +1586,7 @@ function renderTradingReferenceChart(payload, errorText = "") {
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(hover.x, pad.top);
-    ctx.lineTo(hover.x, height - pad.bottom);
+    ctx.lineTo(hover.x, oscillatorPanel ? oscillatorPanel.top + oscillatorPanel.height : height - pad.bottom);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.strokeStyle = "rgba(248, 250, 252, .9)";
@@ -1344,7 +1612,7 @@ function renderTradingReferenceChart(payload, errorText = "") {
     meta.textContent = `${payload.display_market || payload.symbol || "-"} · ${payload.interval || "-"} · Binance 公開 API 蠟燭圖 · 最新 ${close} · O ${open} / H ${high} / L ${low} / C ${close}${tradingIndicatorLegend(indicators)}`;
   }
   if (tradingBotChartOverlay) {
-    drawBotChartOverlay(ctx, tradingBotChartOverlay, yForPrice, pad, width, chartH, candleModels);
+    drawBotChartOverlay(ctx, tradingBotChartOverlay, yForPrice, pad, width, mainChartH, candleModels);
   }
 }
 
@@ -1376,8 +1644,8 @@ function updateTradingReferenceTooltip(event) {
     <span>低 ${sanitize(tradingReferenceLabel(point.low))} · 收 ${sanitize(tradingReferenceLabel(point.close))}</span>
     ${model.indicators?.map((indicator) => {
       const value = indicator.values?.[index];
-      return Number.isFinite(value) && value > 0
-        ? `<span>${sanitize(indicator.label)} ${sanitize(tradingReferenceLabel(value))}</span>`
+      return tradingIndicatorHasValue(indicator, value)
+        ? `<span>${sanitize(indicator.label)} ${sanitize(tradingIndicatorValueLabel(indicator, value))}</span>`
         : "";
     }).join("") || ""}
   `;
@@ -4201,11 +4469,16 @@ function bindTradingEvents() {
   }
   [
     "trading-indicator-ma5",
+    "trading-indicator-ma10",
     "trading-indicator-ma20",
+    "trading-indicator-ma30",
     "trading-indicator-ma60",
     "trading-indicator-ema12",
     "trading-indicator-ema26",
+    "trading-indicator-ema50",
     "trading-indicator-bollinger",
+    "trading-indicator-rsi14",
+    "trading-indicator-kd",
   ].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("change", () => renderTradingReferenceChart(tradingState.referencePrices));

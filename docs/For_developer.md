@@ -13,11 +13,12 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.04-086`
+- Release ID: `2026.05.04-098`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
 - Branch and release policy: [BRANCHING_AND_RELEASE.md](BRANCHING_AND_RELEASE.md)
+- Upload request-body cap: `HTML_LEARNING_MAX_CONTENT_MB` (default `1024`, minimum `128`)
 
 ## Project Working Principles
 
@@ -55,9 +56,11 @@ Default local URL:
 https://127.0.0.1:5000/
 ```
 
-If `cert.pem` and `key.pem` are missing, startup generates a local self-signed
-certificate/key pair for local development. They are deployment-local runtime
-files and must not be committed.
+If `runtime/cert.pem` and `runtime/key.pem` are missing, startup generates a
+local self-signed certificate/key pair for local development. Runtime DB, logs,
+storage, secrets, and integrity files also default to `runtime/` so they stay
+out of the repo root. These deployment-local runtime files must not be
+committed.
 
 ## Runtime State
 
@@ -66,19 +69,20 @@ generated at boot and must not be committed.
 
 Ignored runtime state includes:
 
-- `database/database.db`
-- `logs/`
-- `storage/`
-- `chats/*.jsonl`
-- `anchors/*.json` and `anchors/*.jsonl`
-- `.fkey`, `.filekey`, `.csrfkey`, `.integrity_key`, `.chain_seed`
-- `cert.pem`, `key.pem`
-- `integrity_manifest.json`
-- `reports/bugs/`
+- `runtime/database/database.db`
+- `runtime/logs/`
+- `runtime/storage/`
+- `runtime/chats/*.jsonl`
+- `runtime/anchors/*.json` and `runtime/anchors/*.jsonl`
+- `runtime/.fkey`, `runtime/.filekey`, `runtime/.csrfkey`, `runtime/.integrity_key`, `runtime/.chain_seed`
+- `runtime/cert.pem`, `runtime/key.pem`
+- `runtime/integrity_manifest.json`
+- `runtime/reports/bugs/`
 - `security/reports/`
 
 Override paths with:
 
+- `HACKME_RUNTIME_DIR`
 - `HTML_LEARNING_DB_DIR`
 - `HTML_LEARNING_LOG_DIR`
 - `HTML_LEARNING_CHAT_DIR`
@@ -108,6 +112,29 @@ matches the bootstrap value. Override the first-boot passwords with
 All write endpoints require CSRF unless explicitly designed as public bootstrap
 or login flow. Authenticated browser clients should fetch `/api/csrf-token` and
 send `X-CSRF-Token`.
+
+## Trading Market Catalog
+
+Trading market metadata is now centralized in
+`services/trading_markets.py`. That module is the canonical source for:
+
+- internal symbols such as `BTC/POINTS`
+- user-facing display symbols such as `BTC/USDT`
+- per-provider identifiers for Binance / OKX / Coinbase / Kraken / Gemini /
+  Bitstamp / CoinGecko
+- which markets support live price, reference candles, and BTC_trade
+- default seeded markets and their sort order
+
+## Cloud Drive Browser UX
+
+Cloud Drive folder navigation now supports row-level double-click open in
+addition to the explicit `開啟` action button. Action buttons remain outside the
+double-click target path, so delete/download controls must not trigger folder
+navigation.
+
+If you need to add a new points-quoted asset such as `SOL` or `GOLD`, update
+the market catalog first, then extend provider support or UI behavior only if
+that asset needs custom handling.
 
 ### Public and Session
 

@@ -52,6 +52,13 @@ DEFAULT_ACCOUNT_NAMES = ("root", "admin", "test")
 TEST_ACCOUNT_NAMES = ("test",)
 
 
+def _default_runtime_base_dir():
+    raw = str(os.environ.get("HACKME_RUNTIME_DIR") or "").strip()
+    if raw:
+        return Path(os.path.expanduser(os.path.expandvars(raw))).resolve()
+    return (Path.cwd() / "runtime").resolve()
+
+
 def _json_hash(payload):
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -949,6 +956,7 @@ class SnapshotService:
         get_db,
         db_path,
         base_dir,
+        runtime_base_dir=None,
         storage_root,
         audit,
         file_roots=None,
@@ -961,6 +969,7 @@ class SnapshotService:
         self.get_db = get_db
         self.db_path = Path(db_path)
         self.base_dir = Path(base_dir)
+        self.runtime_base_dir = Path(runtime_base_dir or base_dir)
         self.storage_root = Path(storage_root)
         self.snapshots_root = self.storage_root / "snapshots"
         self.imports_root = self.snapshots_root / ".imports"
@@ -1117,10 +1126,34 @@ class SnapshotService:
             if not path.exists() or not path.is_file() or path.is_symlink():
                 continue
             try:
-                arcname = str(path.relative_to(self.base_dir))
+                if (
+                    self.runtime_base_dir.resolve(strict=False) != self.base_dir.resolve(strict=False)
+                    and (
+                        self.runtime_base_dir.resolve(strict=False) in path.resolve(strict=False).parents
+                        or path.resolve(strict=False) == self.runtime_base_dir.resolve(strict=False)
+                    )
+                ):
+                    arcname = str(Path("runtime") / path.relative_to(self.runtime_base_dir))
+                else:
+                    arcname = str(path.relative_to(self.base_dir))
             except Exception:
                 arcname = path.name
             yield path, arcname
+
+    def _resolve_runtime_secret_target(self, rel_path):
+        rel = Path(str(rel_path or "")).as_posix().strip("/")
+        if not rel:
+            return None, "invalid_path"
+        path_obj = Path(rel)
+        if path_obj.parts and path_obj.parts[0] == "runtime":
+            target = (self.runtime_base_dir / Path(*path_obj.parts[1:])).resolve(strict=False)
+            allowed_base = self.runtime_base_dir.resolve(strict=False)
+        else:
+            target = (self.base_dir / path_obj).resolve(strict=False)
+            allowed_base = self.base_dir.resolve(strict=False)
+        if target != allowed_base and allowed_base not in target.parents:
+            return None, "outside_runtime_base"
+        return target, None
 
     def _write_config_archive(self, archive_path):
         manifest = {"config_files": [], "runtime_secret_files": []}
@@ -1168,9 +1201,9 @@ class SnapshotService:
             digest = str((item or {}).get("sha256") or "").strip()
             if not rel_path or not digest:
                 continue
-            target = (self.base_dir / rel_path).resolve(strict=False)
-            if self.base_dir.resolve(strict=False) not in target.parents and target != self.base_dir.resolve(strict=False):
-                errors.append({"path": rel_path, "reason": "outside_base_dir"})
+            target, error = self._resolve_runtime_secret_target(rel_path)
+            if error:
+                errors.append({"path": rel_path, "reason": error})
                 continue
             checked += 1
             if not target.exists() or not target.is_file():
@@ -1552,14 +1585,14 @@ class SnapshotService:
     def _remove_runtime_secret_files(self):
         removed = []
         skipped = []
-        base = self.base_dir.resolve(strict=False)
+        allowed_base = self.runtime_base_dir.resolve(strict=False)
         for raw_path in self.runtime_secret_files:
             path = raw_path if raw_path.is_absolute() else self.base_dir / raw_path
             rel_text = self._rel_to_base_text(path)
             try:
                 resolved = path.resolve(strict=False)
-                if resolved != base and base not in resolved.parents:
-                    skipped.append({"path": str(path), "reason": "outside_base_dir"})
+                if resolved != allowed_base and allowed_base not in resolved.parents:
+                    skipped.append({"path": str(path), "reason": "outside_runtime_base"})
                     continue
                 if not path.exists() and not path.is_symlink():
                     continue
@@ -1571,6 +1604,45 @@ class SnapshotService:
             except Exception as exc:
                 skipped.append({"path": rel_text, "reason": str(exc)})
         return {"removed": removed, "skipped": skipped}
+
+    def _relocate_runtime_secret_files_from_restore(self, snapshot_dir):
+        metadata_path = snapshot_dir / "metadata.json"
+        if not metadata_path.exists():
+            return {"moved": [], "skipped": []}
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {"moved": [], "skipped": [{"path": "metadata.json", "reason": f"invalid metadata: {exc}"}]}
+        expected = metadata.get("runtime_secret_files") or []
+        moved = []
+        skipped = []
+        for item in expected:
+            rel_path = str((item or {}).get("path") or "").strip()
+            if not rel_path:
+                continue
+            staged = (self.base_dir / rel_path).resolve(strict=False)
+            target, error = self._resolve_runtime_secret_target(rel_path)
+            if error:
+                skipped.append({"path": rel_path, "reason": error})
+                continue
+            if staged == target:
+                continue
+            if not staged.exists() or not staged.is_file():
+                skipped.append({"path": rel_path, "reason": "staged_missing"})
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.unlink()
+            os.replace(staged, target)
+            moved.append({"path": rel_path, "target": str(target)})
+            try:
+                parent = staged.parent
+                while parent != self.base_dir and parent.exists():
+                    parent.rmdir()
+                    parent = parent.parent
+            except Exception:
+                pass
+        return {"moved": moved, "skipped": skipped}
 
     def _existing_resettable_tables(self, conn):
         rows = conn.execute(
@@ -1834,6 +1906,7 @@ class SnapshotService:
             self._clear_file_roots()
             _safe_extract_tar(snapshot_dir / "uploads.tar.gz", self.base_dir)
             _safe_extract_tar(snapshot_dir / "config.tar.gz", self.base_dir)
+            self._relocate_runtime_secret_files_from_restore(snapshot_dir)
             completed_at = datetime.now().isoformat()
             mode_log_merge = self._merge_mode_switch_logs(preserved_mode_switch_logs)
             conn = self.get_db()
@@ -2059,7 +2132,7 @@ class ServerModeService:
 
     def _local_hmac_key_path(self, purpose):
         filename = ".server_mode_log_hmac_key" if purpose == "server_mode_log" else f".{purpose}_hmac_key"
-        base_dir = Path(self.snapshot_service.base_dir) if self.snapshot_service else Path.cwd()
+        base_dir = Path(self.snapshot_service.runtime_base_dir) if self.snapshot_service else _default_runtime_base_dir()
         return base_dir / filename
 
     def _hmac_key(self, purpose="server_mode_log", current_mode=None):
@@ -2081,6 +2154,7 @@ class ServerModeService:
             key = path.read_text(encoding="utf-8").strip()
         else:
             key = secrets.token_urlsafe(48)
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(key + "\n", encoding="utf-8")
             try:
                 path.chmod(0o600)

@@ -315,7 +315,7 @@ def is_safe_dynamic_assignment(rule: Rule, match: re.Match[str]) -> bool:
 
 def scan_file(path: Path, allowlist: list[dict]) -> list[dict]:
     relative = relpath(path)
-    is_log = relative.startswith("logs/") or path.suffix.lower() == ".log"
+    is_log = relative.startswith(("logs/", "runtime/logs/")) or path.suffix.lower() == ".log"
     findings = []
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()

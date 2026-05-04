@@ -956,6 +956,39 @@ def test_cloud_drive_pdf_preview_content_and_e2ee_denied(tmp_path):
     assert encrypted_content.mimetype == "application/octet-stream"
 
 
+def test_cloud_drive_audio_preview_content_supports_streamable_music(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    audio_bytes = b"ID3fake-mp3-audio"
+    uploaded = client.post(
+        "/api/cloud-drive/upload",
+        data={
+            "file": (io.BytesIO(audio_bytes), "song.mp3", "audio/mpeg"),
+            "privacy_mode": "server_encrypted",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.get_json()["file"]["file_id"]
+
+    metadata = client.get(f"/api/cloud-drive/files/{file_id}/preview")
+    assert metadata.status_code == 200
+    preview = metadata.get_json()["preview"]
+    assert preview["category"] == "audio"
+    assert preview["render_mode"] == "media"
+    assert preview["mime_type"] == "audio/mpeg"
+
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.data == audio_bytes
+    assert content.mimetype == "audio/mpeg"
+
+
 def test_cloud_drive_text_file_can_be_edited_online(tmp_path):
     db_path = tmp_path / "drive.db"
     storage_root = tmp_path / "storage"

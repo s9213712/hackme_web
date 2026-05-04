@@ -26,3 +26,11 @@ def test_prompt_password_only_writes_secret_to_stdout():
     assert "printf '\\n' >&2" in script
     assert 'say "密碼至少建議 12 字元。" >&2' in script
     assert 'say "兩次輸入不一致。" >&2' in script
+
+
+def test_deploy_helper_supports_skip_install_and_hint_only():
+    script = (ROOT / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "--skip-install" in script
+    assert 'if [[ "$SKIP_INSTALL" == "1" ]]; then' in script
+    assert 'if [[ "$LITE_HINT" == "1" && "$ORIGINAL_ARGC" == "1" ]]; then' in script

@@ -1,15 +1,15 @@
 const CHAT_STICKER_LABELS = {
-  smile: "微笑 :)",
-  thanks: "感謝 THX",
-  ok: "了解 OK",
-  wow: "驚訝 WOW",
-  cheer: "加油 GO",
-  sad: "難過 :("
+  smile: "🙂",
+  thanks: "🥹",
+  ok: "😙",
+  wow: "😃",
+  cheer: "😚",
+  sad: "🥲"
 };
 let pendingChatAttachments = [];
 
 function chatStickerLabel(key, sticker) {
-  return (sticker && (sticker.label || sticker.glyph)) || CHAT_STICKER_LABELS[key] || "表情包";
+  return (sticker && (sticker.glyph || sticker.label)) || CHAT_STICKER_LABELS[key] || "🙂";
 }
 
 function chatAttachmentName(item) {
@@ -57,6 +57,16 @@ function addPendingChatAttachment(file) {
   renderPendingChatAttachments();
 }
 
+function syncChatSharedAttachmentPanel(refs) {
+  const panel = $("chat-shared-attachment-panel");
+  const list = $("chat-attachment-list");
+  if (!panel || !list) return;
+  const hasRows = Array.isArray(refs) ? refs.length > 0 : !!list.querySelector(".drive-file-row");
+  const hasError = !Array.isArray(refs) && !!list.textContent.trim();
+  panel.hidden = !hasRows && !hasError;
+  if (!hasRows && !hasError) panel.open = false;
+}
+
 document.addEventListener("click", (event) => {
   const list = $("chat-pending-attachment-list");
   if (list?.contains(event.target)) handlePendingChatAttachmentClick(event);
@@ -93,6 +103,9 @@ async function loadChatRooms() {
       if (memberLabel) memberLabel.textContent = "";
       const msgs = $("chat-room-messages");
       if (msgs) msgs.innerHTML = "<p style=\"color:var(--muted);\">尚未選擇聊天室</p>";
+      const attachments = $("chat-attachment-list");
+      if (attachments) attachments.innerHTML = "";
+      syncChatSharedAttachmentPanel([]);
     }
   } catch (_) {}
 }
@@ -225,7 +238,8 @@ async function openChatRoom(roomId, autoPoll = true) {
   }
   await loadChatMessages(id, false);
   if (typeof loadContextAttachments === "function") {
-    await loadContextAttachments("group_chat", id, "chat-attachment-list");
+    const refs = await loadContextAttachments("group_chat", id, "chat-attachment-list");
+    syncChatSharedAttachmentPanel(refs);
   }
   if (autoPoll) startChatPoll();
   const msgInput = $("chat-message-input");
@@ -558,6 +572,7 @@ async function deleteChatRoom(roomId) {
       if (msgs) msgs.innerHTML = "<p style=\"color:var(--muted);\">尚未選擇聊天室</p>";
       const attachments = $("chat-attachment-list");
       if (attachments) attachments.innerHTML = "";
+      syncChatSharedAttachmentPanel([]);
     }
     await loadChatRooms();
     return;

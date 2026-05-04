@@ -14,6 +14,7 @@ let communityThreadPage = 0;
 let communityThreadLimit = 10;
 let communityThreadTotal = 0;
 let communityAnnouncementEditorOpen = false;
+let communityAnnouncementEditingId = null;
 let communityBoardRequestOpen = false;
 let communityCategoryManagerOpen = false;
 let communityThreadCreatorOpen = false;
@@ -409,9 +410,11 @@ function renderCommunityAnnouncements() {
   const list = $("community-announcement-list");
   const editor = $("community-announcement-editor");
   const openBtn = $("community-announcement-open-btn");
+  const submitBtn = $("community-announcement-submit");
   const canPublish = currentRole === "manager" || currentRole === "super_admin";
   if (openBtn) openBtn.style.display = canPublish && !communityAnnouncementEditorOpen ? "" : "none";
   if (editor) editor.style.display = canPublish && communityAnnouncementEditorOpen ? "block" : "none";
+  if (submitBtn) submitBtn.textContent = communityAnnouncementEditingId ? "更新公告" : "發布公告";
   if (!list) return;
   if (!communityAnnouncements.length) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有公告</p>";
@@ -421,15 +424,43 @@ function renderCommunityAnnouncements() {
     <div class="community-card">
       <div class="community-card-head">
         <strong>${item.is_pinned ? "📌 " : ""}${sanitize(item.title || "")}</strong>
-        ${(currentRole === "manager" || currentRole === "super_admin") ? `<button class="btn community-mini-btn" type="button" data-del-announcement="${item.id}">刪除</button>` : ""}
+        ${(currentRole === "manager" || currentRole === "super_admin") ? `
+          <div style="display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end;">
+            <button class="btn community-mini-btn" type="button" data-edit-announcement="${item.id}">編輯</button>
+            <button class="btn community-mini-btn" type="button" data-del-announcement="${item.id}">刪除</button>
+          </div>
+        ` : ""}
       </div>
-      <div class="community-meta">${sanitize(item.author_username || "")} · ${sanitize(formatChatTime(item.created_at || ""))}</div>
+      <div class="community-meta">${sanitize(item.author_username || "")} · ${sanitize(formatChatTime(item.created_at || ""))}${item.updated_at && item.updated_at !== item.created_at ? ` · 更新於 ${sanitize(formatChatTime(item.updated_at || ""))}` : ""}</div>
       <div class="community-body markdown-rendered">${markdownToSafeHtml(item.content || "")}</div>
     </div>
   `).join("");
+  list.querySelectorAll("button[data-edit-announcement]").forEach((btn) => {
+    btn.addEventListener("click", () => editAnnouncement(parseInt(btn.getAttribute("data-edit-announcement"), 10)));
+  });
   list.querySelectorAll("button[data-del-announcement]").forEach((btn) => {
     btn.addEventListener("click", () => deleteAnnouncement(parseInt(btn.getAttribute("data-del-announcement"), 10)));
   });
+}
+
+function resetCommunityAnnouncementEditor() {
+  communityAnnouncementEditingId = null;
+  if ($("community-announcement-title")) $("community-announcement-title").value = "";
+  if ($("community-announcement-content")) $("community-announcement-content").value = "";
+  if ($("community-announcement-pinned")) $("community-announcement-pinned").checked = false;
+}
+
+function editAnnouncement(id) {
+  const item = communityAnnouncements.find((row) => Number(row?.id) === Number(id));
+  if (!item) {
+    flash($("community-msg"), "找不到要編輯的公告", false);
+    return;
+  }
+  communityAnnouncementEditingId = item.id;
+  if ($("community-announcement-title")) $("community-announcement-title").value = item.title || "";
+  if ($("community-announcement-content")) $("community-announcement-content").value = item.content || "";
+  if ($("community-announcement-pinned")) $("community-announcement-pinned").checked = !!item.is_pinned;
+  toggleCommunityAnnouncementEditor(true);
 }
 
 function renderCommunityBoardReviews() {
@@ -699,8 +730,10 @@ async function loadAnnouncements() {
 
 async function publishAnnouncement() {
   await fetchCsrfToken({ force: true });
-  const res = await apiFetch(API + "/community/announcements", {
-    method: "POST",
+  const editingId = Number(communityAnnouncementEditingId || 0);
+  const isEditing = editingId > 0;
+  const res = await apiFetch(API + (isEditing ? `/community/announcements/${editingId}` : "/community/announcements"), {
+    method: isEditing ? "PUT" : "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
     body: JSON.stringify({
@@ -710,11 +743,9 @@ async function publishAnnouncement() {
     })
   });
   const json = await res.json().catch(() => ({}));
-  flash($("community-msg"), json.msg || "公告發布失敗", !!json.ok);
+  flash($("community-msg"), json.msg || (isEditing ? "公告更新失敗" : "公告發布失敗"), !!json.ok);
   if (json.ok) {
-    if ($("community-announcement-title")) $("community-announcement-title").value = "";
-    if ($("community-announcement-content")) $("community-announcement-content").value = "";
-    if ($("community-announcement-pinned")) $("community-announcement-pinned").checked = false;
+    resetCommunityAnnouncementEditor();
     communityAnnouncementEditorOpen = false;
     renderCommunityAnnouncements();
     await loadAnnouncements();
@@ -1217,6 +1248,7 @@ async function loadCommunityHome() {
 
 function toggleCommunityAnnouncementEditor(forceOpen = null) {
   communityAnnouncementEditorOpen = forceOpen === null ? !communityAnnouncementEditorOpen : !!forceOpen;
+  if (!communityAnnouncementEditorOpen) resetCommunityAnnouncementEditor();
   renderCommunityAnnouncements();
 }
 

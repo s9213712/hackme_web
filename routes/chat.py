@@ -13,12 +13,12 @@ from services.sqlite_safe import table_columns as safe_table_columns
 
 CHAT_RECALL_WINDOW_SECONDS = 5 * 60
 CHAT_STICKERS = {
-    "smile": {"label": "微笑", "glyph": ":)"},
-    "thanks": {"label": "感謝", "glyph": "THX"},
-    "ok": {"label": "了解", "glyph": "OK"},
-    "wow": {"label": "驚訝", "glyph": "WOW"},
-    "cheer": {"label": "加油", "glyph": "GO"},
-    "sad": {"label": "難過", "glyph": ":("},
+    "smile": {"label": "微笑", "glyph": "🙂"},
+    "thanks": {"label": "感謝", "glyph": "🥹"},
+    "ok": {"label": "了解", "glyph": "😙"},
+    "wow": {"label": "驚訝", "glyph": "😃"},
+    "cheer": {"label": "加油", "glyph": "😚"},
+    "sad": {"label": "難過", "glyph": "🥲"},
 }
 CHAT_HTML_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
 

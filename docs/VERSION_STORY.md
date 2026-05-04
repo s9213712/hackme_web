@@ -18,17 +18,88 @@ that builds on top of the PointsChain foundation.
 
 ## Current Direction
 
-The active project emphasizes:
+The active project now sits at the end of the `03.Economy` cleanup line and is
+being prepared as a Phase 0 candidate for later PointsChain work. The current
+direction emphasizes:
 
-- simple single-node deployment
+- simple single-node deployment with isolated runtime directories
 - local runtime generation of secrets and TLS key material
-- SQLite-backed application state
-- root-controlled security center
-- PointsChain as an audit chain, not a decentralized cryptocurrency
-- full-feature smoke testing and role-based functional pentesting
-- practical install scripts that reduce manual host debugging
+- SQLite-backed application state that can be snapshotted and restored
+- root-controlled security center, feature flags, and incident lockdown
+- PointsChain as an audit chain and economy ledger, not a decentralized coin
+- full-feature smoke testing, role-based pentesting, and release-gate QA
+- modular trading services that can grow into more assets without copy-paste
 
-## Current Economy Work
+## Current Release Story
+
+The current published server line is `2026.05.04-096`.
+
+Recent work from `2026.05.04-083` through `2026.05.04-096` focused on Phase 0
+stabilization rather than starting a new product branch:
+
+- chat and Cloud Drive UX were tightened, including inline message attachments,
+  standardized `/attachments/` storage, and double-click folder navigation
+- large Cloud Drive uploads now honor real quota and request-size policy
+  instead of failing early at a stale `50 MB` Flask cap
+- ComfyUI interaction rules were hardened: unsupported LoRA families are
+  blocked, long generations can wait up to 30 minutes, and prompt helpers now
+  add and remove LoRA / Embedding tokens predictably
+- the trading system moved from a mostly single-source price model to a fused
+  multi-exchange model with price health, excluded-source reporting, and
+  root-visible diagnostics
+- live trading UI now refreshes on a documented 2-second cadence, keeps wallet
+  PnL in sync with the live price loop, and surfaces gross-vs-net Grid profit
+  instead of only raw spread
+- trading market metadata was centralized so future assets such as `SOL` or
+  `GOLD` can be added through one market catalog instead of multiple hardcoded
+  maps
+- root gained a dedicated trading settings page, bot-audit controls, BTC_trade
+  one-click orchestration, and clearer price-fusion status visibility
+- the final Phase 0 cleanup pass closed the remaining blockers around
+  validation, self-target guards, scan-window triggers, and stale docs drift
+
+The current release story is therefore less about one headline feature and more
+about making the existing stack trustworthy enough for future economy and
+PointsChain phases.
+
+## Economy Work Leading Into Phase 0
+
+Release `2026.05.04-091` introduced the centralized trading market catalog,
+which is the base needed for future points-quoted assets and later root
+configuration of which markets are available.
+
+Release `2026.05.04-089` removed the stale `50 MB` request cap for Cloud Drive
+uploads and made oversized requests return structured API errors.
+
+Release `2026.05.04-087` and `2026.05.04-088` cleaned up chat attachment UX and
+standardized attachment storage under `/attachments/`.
+
+Release `2026.05.04-086` through `2026.05.04-084` focused on ComfyUI safety and
+operator clarity: reversible LoRA/Embedding prompt helpers, unsupported base
+model blocking, and a longer default wait budget for heavy generation runs.
+
+Release `2026.05.04-083` through `2026.05.04-080` focused on operator-visible
+behavior in the trading UI: cleaner notification actions, wallet PnL refresh
+alignment, and clearer fee-aware position details.
+
+Release `2026.05.04-079` formalized fee-aware Grid Bot previews so the UI shows
+gross profit, fees, net profit, break-even spread, and risk color instead of
+only raw grid spacing.
+
+Release `2026.05.04-078` through `2026.05.04-075` cleaned up storage plan
+catalog behavior, lending APR defaults, grid fee discounts, and volume
+tracking needed for future VIP work.
+
+Release `2026.05.04-074` through `2026.05.04-068` reorganized the root trading
+settings surface, added price-fusion diagnostics, and aligned the live-price
+API with frontend behavior.
+
+Release `2026.05.04-067` removed the effective `5000` candle wall by making
+backtests auto-segment up to `20,000` candles while preserving strategy state
+across chunks.
+
+Release `2026.05.04-066` and the surrounding QA reports concentrated on
+historical backtest replay, open-issue closure, and Phase 0 evidence gathering.
 
 Release `2026.05.02-043` turns BTC_trade into a disabled-by-default optional
 signal integration, adds root-triggered automatic clone/update/build setup,

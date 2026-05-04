@@ -13,14 +13,15 @@ from scripts.prepush.result import CheckResult
 REPO_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "htmlcov", "dist", "build"}
 REPO_CACHE_FILE_NAMES = {".coverage"}
 REPO_CACHE_FILE_SUFFIXES = {".pyc", ".pyo"}
-PROTECTED_CLEAN_PATHS = {"database", "logs", "storage", "reports", "security/reports", "reports/bugs", "runtime"}
+PROTECTED_CLEAN_PATHS = {"runtime", "security/reports"}
 PROTECTED_CLEAN_FILES = {
-    "cert.pem",
-    "key.pem",
-    ".csrfkey",
-    ".integrity_key",
-    ".chain_seed",
-    "integrity_manifest.json",
+    "bootstrap.schema.sql",
+    "runtime/cert.pem",
+    "runtime/key.pem",
+    "runtime/.csrfkey",
+    "runtime/.integrity_key",
+    "runtime/.chain_seed",
+    "runtime/integrity_manifest.json",
 }
 TEMP_PREFIXES = ("html_learning_prepush_", "html_learning_secrets_")
 

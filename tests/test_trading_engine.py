@@ -3002,16 +3002,16 @@ def test_trading_volume_stats_accumulate_spot_and_margin_activity_for_future_vip
         actor=_actor(),
         market_symbol="ETH/POINTS",
         position_type="margin_long",
-        quantity="0.1",
-        collateral_points=200,
+        quantity="0.2",
+        collateral_points=500,
     )
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
 
     stats = trading.user_dashboard(user_id=1)["volume_stats"]
 
     assert stats["spot_notional_points"] == 500
-    assert stats["margin_notional_points"] == 1000
-    assert stats["total_notional_points"] == 1500
+    assert stats["margin_notional_points"] == 2000
+    assert stats["total_notional_points"] == 2500
     assert stats["total_trade_count"] == 3
     assert stats["total_fee_points"] == (
         spot["order"]["fee_points"]
@@ -3021,8 +3021,8 @@ def test_trading_volume_stats_accumulate_spot_and_margin_activity_for_future_vip
 
     root_summary = trading.root_report()["volume_summary"]
     assert root_summary["totals"]["spot_notional_points"] == 500
-    assert root_summary["totals"]["margin_notional_points"] == 1000
-    assert root_summary["totals"]["total_notional_points"] == 1500
+    assert root_summary["totals"]["margin_notional_points"] == 2000
+    assert root_summary["totals"]["total_notional_points"] == 2500
     assert root_summary["totals"]["total_trade_count"] == 3
     assert root_summary["top_users"][0]["username"] == "alice"
 
@@ -3307,6 +3307,51 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
     short_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
     assert short_risk["liquidation_price_points"] > short_position["position"]["entry_price_points"]
     assert trading.verify_state()["ok"] is True
+
+
+def test_margin_risk_includes_break_even_and_interest_raises_thresholds(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_apr_usdt_points_percent": 100,
+            "borrow_interest_pool_pressure_multiplier": 0,
+            "borrow_interest_interval_hours": 1,
+            "borrow_interest_minimum_hours": 1,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.5",
+        collateral_points=1000,
+    )
+
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_margin_positions SET opened_at='2026-05-04T10:00:00' WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        market = trading._market(conn, "ETH/POINTS")
+        before = trading._margin_risk_payload(conn, row, market=market, now_text="2026-05-04T10:30:00")
+        after = trading._margin_risk_payload(conn, row, market=market, now_text="2026-05-08T10:00:00")
+    finally:
+        conn.close()
+
+    assert before["breakeven_price_points"] > opened["position"]["entry_price_points"]
+    assert after["breakeven_price_points"] > before["breakeven_price_points"]
+    assert after["liquidation_price_points"] > before["liquidation_price_points"]
 
 
 def test_margin_open_is_idempotent_for_client_key(tmp_path):

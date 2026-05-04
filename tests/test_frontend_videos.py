@@ -23,6 +23,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "function videoThumbMarkup(video)" in videos_js
     assert "video.cover_url" in videos_js
     assert 'form.append("cover", coverFile)' in videos_js
+    assert 'form.append("cloud_file_id", payload.cloud_file_id)' in videos_js
+    assert "} else if (coverFile) {" in videos_js
     assert "video-thumb-image" in videos_js
     assert "video-thumb-audio" in videos_js
     assert ".video-audio-player" in styles

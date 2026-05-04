@@ -23,3 +23,17 @@ def test_functional_smoke_waits_for_reset_restart_reconnect():
     assert "20 秒內觀察連線失敗" in docs
     assert "started_at" in docs
     assert "3 分鐘內重新連線" in docs
+
+
+def test_functional_smoke_covers_latest_trading_and_announcement_paths():
+    script = (ROOT / "security" / "run_functional_smoke.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")
+
+    assert 'request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"' in script
+    assert 'request "trading grid preview" "POST" "/api/trading/grid/preview" "200"' in script
+    assert 'request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS" "200"' in script
+    assert 'request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"' in script
+    assert 'request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200"' in script
+    assert 'request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200"' in script
+    assert "trading extras" in docs
+    assert "announcement create/edit" in docs

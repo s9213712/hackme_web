@@ -74,7 +74,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     conn.commit()
     conn.close()
 
-    schema_path = Path(__file__).resolve().parents[1] / "database" / "bootstrap.schema.sql"
+    schema_path = Path(__file__).resolve().parents[1] / "bootstrap.schema.sql"
     missing_json = str(tmp_path / "missing.json")
     original_state = dict(bootstrap._STATE)
 
@@ -276,7 +276,7 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
 
 def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, monkeypatch):
     db_path = tmp_path / "existing-root.db"
-    schema_path = Path(__file__).resolve().parents[1] / "database" / "bootstrap.schema.sql"
+    schema_path = Path(__file__).resolve().parents[1] / "bootstrap.schema.sql"
 
     conn = sqlite3.connect(db_path)
     conn.executescript(schema_path.read_text(encoding="utf-8"))
@@ -349,7 +349,7 @@ def test_init_db_allows_existing_root_password_without_bootstrap_env(tmp_path, m
 
 def test_init_db_marks_existing_default_account_when_env_password_still_matches(tmp_path, monkeypatch):
     db_path = tmp_path / "existing-default.db"
-    schema_path = Path(__file__).resolve().parents[1] / "database" / "bootstrap.schema.sql"
+    schema_path = Path(__file__).resolve().parents[1] / "bootstrap.schema.sql"
 
     conn = sqlite3.connect(db_path)
     conn.executescript(schema_path.read_text(encoding="utf-8"))

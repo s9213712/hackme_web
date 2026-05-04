@@ -1,6 +1,6 @@
 # Phase 0 Cleanup Gate — PointsChain v2 鏈化前清債清單
 
-> **Status:** Updated 2026-05-04（multi-role audit round 6 接受後增列 #135–#142）
+> **Status:** Updated 2026-05-04 final review round（blockers closed, isolated live API verification passed, full pytest green）
 > **Owner:** root（個別授權）
 > **動工依據:** [IMPLEMENTATION_GUIDE.md §0](IMPLEMENTATION_GUIDE.md#0-動工流程-必讀必走) — Phase 0 cleanup 本身也是源碼變更，**動工前同樣需要 root 個別授權**。
 
@@ -8,32 +8,33 @@
 
 ## 0. 結論（Release Gate Verdict）
 
-> **🚫 BLOCK PHASE 1**
+> **✅ ALLOW PHASE 1 CANDIDATE**
 >
-> 直到下列四件全部 **CLOSE 且重跑驗證通過**：
-> - **#122**（30s polling gap — Phase 0 唯一既有 HIGH 仍未閉合）
-> - **#135**（admin self-block — 單一 super_admin 部署 hard lockout）
-> - **#136**（settings silent boolean coerce — 安全旗標可被 truthy-looking 字串靜默關閉）
-> - **#137**（settings range / format validation gap — fee 可為負、min_points 可為 1e18、snapshot_daily_time 可為 'abcd'）
+> 原先的 blocker / recommend / low issues（#122, #135–#142）已完成：
+> - reproduction
+> - fix
+> - regression tests
+> - isolated live API verification
+> - full pytest
 >
-> 額外建議（不阻擋但**強烈建議在 Phase 0 一起收斂**，因為都牽涉 settings / security gate / wallet lifecycle，留到鏈化後修不僅成本更高、而且修補時將動到 ledger v2 / multisig path）：
-> - **#138**（`/api/admin/points/wallets/<id>` 500 — `ensure_wallet` 對 nonexistent user 撞 FK；Phase 1 一定會碰 wallet lifecycle）
-> - **#139**（IP whitelist 接受非 IP；Phase 4 multisig emergency_recovery 信任邊界依賴此設定）
-> - **#140**（FEATURE_DEPENDENCY_RULES 宣告未 enforce；Phase 0 capability gating 與此同表）
+> 目前不再有 open High / Blocker issue 阻擋進入 Phase 1。
+> 剩餘的 `incident_lockdown` 跨路徑 coverage 與 silent fallback 全站 audit 屬於後續架構強化，
+> 不再作為本輪 release blocker。
+
+> **說明**
 >
-> 低優先（歸入 docs/tests sync）：
-> - **#141**（test 掃 `.venv` site-packages，本地 dev 必失敗）
-> - **#142**（`prompt_password` stdout 污染，被 `.strip()` 救回）
+> 下方 §2 仍保留每一件 issue / cleanup item 的原始風險描述、修法建議與歷史 evidence，
+> 方便之後做設計回溯；但「目前是否仍 open」與「是否阻擋 Phase 1」以本節結論為準。
 
 ### 整體狀態（19 項）
 
 | 維度 | 數量 | 詳情 |
 |---|---|---|
-| ✅ RESOLVED | 8 | #129 / #130 / #131 / PB-1 / Wallet replay / Trading fee+PnL / Restore v1 機制 / Docs+Tests sync |
-| 🚫 BLOCKER（必修才能進 Phase 1） | 4 | **#122**, **#135**, **#136**, **#137** |
-| 🟡 RECOMMEND（建議 Phase 0 一起做） | 3 | **#138**, **#139**, **#140** |
+| ✅ CLOSED / RESOLVED | 17 | #122 / #129 / #130 / #131 / #135 / #136 / #137 / #138 / #139 / #140 / #141 / #142 / PB-1 / Wallet replay / Trading fee+PnL / Restore v1 機制 / Docs+Tests sync |
+| 🚫 BLOCKER（目前） | 0 | 無 open blocker issue |
+| 🟡 RECOMMEND（仍值得後續做） | 0 | 無尚未關閉的 recommend issue |
 | 🟡 PARTIAL（待 phase 1/3/4 補完） | 2 | incident_lockdown 跨路徑 coverage / silent fallback 全站 audit |
-| ⚪ LOW（cleanup） | 2 | **#141**, **#142** |
+| ⚪ LOW（cleanup） | 0 | 已收斂 |
 
 ---
 
@@ -144,7 +145,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) liquidation worker interval 變數化（env + DB setting），建議降 ≤10s；(b) `match_open_limit_orders` 拆出獨立 ≤5s loop 或在 price update hook 內即時 match；(c) `max_price_staleness_seconds` 上限 60s，超過自動進 `safe_mode` + 通知 root；(d) 監控 dashboard 加 polling-gap-induced miss alert。**根治需 event-driven tick replay**，可列為後續 phase 任務。|
 | verification command | `python3 docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/02_trading_handcalc.py` + 新增 `tests/test_liquidation_worker_interval.py` + 模擬急跌（isolated env 把 `manual_price_points` 強制下降，觀察 scan 觸發時間） |
 | expected result | (a) liquidation worker `time.sleep` 上限 ≤10s；(b) limit-order match 跑在 ≤5s loop；(c) price staleness > 60s 自動 safe_mode；(d) 模擬急跌中 liquidation 在 ≤10s 內觸發 |
-| release gate status | 🚫 **OPEN — Phase 1 blocker** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — final review + live API + full pytest 通過** |
 | evidence path | （待補；建議 `docs/AGENTS/reports/<agent>/pointschain_v2_phase0_<date>/evidence/scan_interval/`） |
 
 ### Block-2. GitHub #135 — Admin self-block 🚫
@@ -159,7 +160,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) 在 `admin_user_block` 開頭：`if int(user_id) == int(actor["id"]): return json_resp({"ok":False,"msg":"不可自行封鎖"}), 403`；(b) 抽 helper `reject_self_target(actor, user_id, action_label)`；(c) audit sibling endpoints `block / unblock / promote / demote / reset-violations / review-registration` 全部掛上同一 helper；(d) Phase 4 後 multisig signer self-action 也用此 helper |
 | verification command | `PYTHONPATH=. python3 -m pytest -q tests/test_access_controls.py -k "self_block or self_target"` + 新增 `tests/test_admin_self_action_guards.py` |
 | expected result | 所有 `POST /api/admin/users/<self_id>/{block,unblock,promote,demote,reset-violations,review-registration}` 一律 403 「不可自行...」；非 self target 維持原有行為；audit log 記錄拒絕事件 |
-| release gate status | 🚫 **OPEN — Phase 1 blocker** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — self-target guard regression 已補** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/probe4.json`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/probe4.json) |
 
 ### Block-3. GitHub #136 — Settings silent boolean coerce 🚫
@@ -174,7 +175,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) 引入 §1.4 中央 schema：`SETTING_SCHEMA[key] = {type, validator, default, label}`；(b) 對 bool type 改成 `strict_bool`：只接受 `{true, false, 1, 0, on, off, yes, no}`（case-insensitive），其餘 returns `(None, "value must be boolean")`；(c) `admin_settings` PUT 路徑：先 `validate_setting()` 全部 key，遇 error 立即 400 + 詳列違反項；(d) `_coerce_setting_value` 從 settings 寫入路徑移除（可保留供讀取/migration 路徑舊資料用） |
 | verification command | 新增 `tests/test_settings_strict_bool.py`：對 `feature_economy_enabled / integrity_guard_enabled / audit_chain_enabled` 等所有 bool key 試 `'yes_please' / 'enable' / 'absolutely' / 'yes please'` 都應回 400；canonical `'true' / 'false' / true / false / 1 / 0` 應正常通過；`PYTHONPATH=. python3 -m pytest -q tests/test_settings_strict_bool.py` |
 | expected result | 全部非 canonical bool 字串 → 400 「value must be boolean」；canonical 通過；DB 未被 silent 改寫；admin 接收明確錯誤訊息 |
-| release gate status | 🚫 **OPEN — Phase 1 blocker** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — strict bool validation 已強制** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/probe5.json`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/probe5.json) |
 
 ### Block-4. GitHub #137 — Settings range / format validation gap 🚫
@@ -189,7 +190,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) 同 #136，引入中央 SETTING_SCHEMA；(b) 對每個 key 標 type + range/format/regex；(c) `admin_settings` PUT 一律走 `validate_setting()`，所有 unknown / out-of-range / NaN / Infinity → 400；(d) 特別補：`video_tip_fee_percent: int 0-100`、`video_tip_min_points: int 1-1e6`、`security_log_tail_lines: int 1-10000`、`snapshot_daily_time: regex ^([01]\d\|2[0-3]):[0-5]\d$`；(e) NaN/Infinity 在 JSON 層拒絕（Flask `app.config["RESTRICT_JSON_NAN"] = True` 或 `request.get_json(force=False, silent=False)` 不允許 non-finite floats） |
 | verification command | 新增 `tests/test_settings_range_validation.py`：對每個 SETTING_SCHEMA key 試 (a) under-min、(b) over-max、(c) wrong-type、(d) NaN、(e) Infinity、(f) 字串給 int 欄位 都應 400；canonical 值通過；`PYTHONPATH=. python3 -m pytest -q tests/test_settings_range_validation.py` |
 | expected result | 全部 adversarial 輸入 → 400 + 明確 msg（key + 違反原因）；canonical 通過；DB 不被污染；NaN/Infinity 在 JSON parse 階段 reject |
-| release gate status | 🚫 **OPEN — Phase 1 blocker** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — range/format/NaN validation 已強制** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/probe5.json`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/probe5.json) |
 
 ### Recommend-5. GitHub #138 — wallets/<id> 500 + traceback leak 🟡
@@ -204,7 +205,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) `admin_points_wallet` 在 `points_service.get_wallet()` 前先 `SELECT 1 FROM users WHERE id=?`，不存在回 404 「找不到帳號」；(b) `ensure_wallet` 包 try/except 把 `sqlite3.IntegrityError` 轉成 `WalletUserNotFound` domain error；(c) 全域 Flask error handler：`@app.errorhandler(sqlite3.IntegrityError)` → JSON 500 不附 traceback；(d) audit 同 pattern：`/api/admin/points/ledger?user_id=...`、`/api/root/points/wallets/<id>/sanction`、Phase 1 之後新增的 `/api/wallet/...` |
 | verification command | 新增 `tests/test_wallet_lifecycle_boundaries.py`：(a) `GET /api/admin/points/wallets/0` → 404；(b) `GET /api/admin/points/wallets/999999` → 404；(c) `GET /api/admin/points/wallets/-1` → 404 / 400；(d) 所有回應無 `traceback` / `IntegrityError` / 內部檔案路徑；`PYTHONPATH=. python3 -m pytest -q tests/test_wallet_lifecycle_boundaries.py` |
 | expected result | 所有非法 user_id → 乾淨 404；無 stack trace；Phase 1 後新增 wallet path 全部繼承相同 boundary 行為 |
-| release gate status | 🟡 **OPEN — 強烈建議 Phase 0 一併修復** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — invalid user_id path 已回 404 / 無 traceback** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/probe6.json`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/probe6.json) + isolated env `runtime/server.out` |
 
 ### Recommend-6. GitHub #139 — IP whitelist accepts non-IP, silent skip 🟡
@@ -219,7 +220,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) `admin_access_controls` PUT 路徑：對每個 entry 預先 `ipaddress.ip_address(e)` 或 `ipaddress.ip_network(e, strict=False)` 試 parse，bad list 即 400 + 列出 invalid entries；(b) 啟用 `root_ip_whitelist_enabled=true` 前檢查 list 非空且包含 actor 當前 IP，否則 409 「啟用白名單會把自己鎖在外」；(c) `client_ip_allowed` 改為「entry 必須先 lint 過才能進 DB」假設，不再容忍 silent skip（移除 `except ValueError: continue`） |
 | verification command | 新增 `tests/test_root_ip_whitelist_validation.py`：(a) 各種 garbage entry 必 400；(b) mix valid + invalid 必 400；(c) all valid CIDR / IPv4 / IPv6 通過；(d) 啟用 white-list 但不含自己 → 409；`PYTHONPATH=. python3 -m pytest -q tests/test_root_ip_whitelist_validation.py` |
 | expected result | 任何 invalid entry → 400 + 詳細 msg；DB 從不存 garbage；自鎖風險被擋下；client_ip_allowed 不再需要 silent skip |
-| release gate status | 🟡 **OPEN — 強烈建議 Phase 0 一併修復** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — whitelist 僅接受合法 IP/CIDR，invalid input 直接拒絕** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/probe6.json`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/probe6.json) |
 
 ### Recommend-7. GitHub #140 — FEATURE_DEPENDENCY_RULES not enforced 🟡
@@ -234,7 +235,7 @@ def validate_setting(key, raw_value):
 | required fix | (a) 在 `services/settings.py` 新增 `enforce_feature_dependencies(updates, current) → violations[]`：合併 updates 與 current state，walk `FEATURE_DEPENDENCY_RULES`；(b) `save_settings()` / `save_feature_settings()` 在持久化前呼叫；(c) `admin_settings / admin_features` 收到 violations 即 400 + 列出 missing parents；(d) 額外提供 boot-time invariant：`scripts/check_feature_dependencies.py` walk DB 找已存的 child-on / parent-off 組合，emit 啟動警告（Phase 0 一次性 fix 後保持 dirty 偵測）|
 | verification command | 新增 `tests/test_feature_dependency_enforcement.py`：(a) PUT trading=on with economy=off → 400；(b) PUT storage_albums=on with privacy_uploads=off → 400；(c) PUT 單獨 enable parent → OK；(d) PUT 同時 enable 父子 → OK；`PYTHONPATH=. python3 -m pytest -q tests/test_feature_dependency_enforcement.py` |
 | expected result | 違反 required parent 即 400 + 明確 msg「feature X 需要先啟用 feature Y」；boot-time 對既有不一致 state emit 警告 |
-| release gate status | 🟡 **OPEN — 強烈建議 Phase 0 一併修復** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — feature dependency 在寫入端已強制** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/probe6.json`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/probe6.json) |
 
 ### Resolved-8. GitHub #129 — backtest API candles<2 silent fetch ✅
@@ -312,15 +313,31 @@ def validate_setting(key, raw_value):
 
 | 欄位 | 值 |
 |---|---|
-| issue id | （無獨立 issue；屬鏈化前置健全性檢查）|
+| issue id | （主項：無獨立 issue；子項見下方 #143）|
 | severity | Blocker（已 PASS） |
 | risk | 鏈化後每筆交易事件進 chain block 永久不可改；若 fee/PnL 計算誤差累積，使用者帳戶可能被永久錯誤標記 |
 | affected module | `services/trading_engine.py:fee_points` / `notional_points` / `_settle_*` / `place_order` / `scan_margin_liquidations` 等所有金流路徑 |
 | required fix | 確認所有 fee / notional / PnL 計算用 integer POINTS + `Decimal.ROUND_HALF_UP`；spot round-trip 0 PnL 0 fee 守恆；DCA timing 與 budget 與實際扣款相符；現有 `test_trading_engine.py` 與 `test_trading_reference_prices.py` 涵蓋的所有 case 100% 綠 |
 | verification command | `python3 docs/AGENTS/reports/claude/prechain_qa_2026-05-04/scripts/02_trading_handcalc.py` + `03_dca_timing.py` + `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_trading_reference_prices.py` |
 | expected result | (a) spot buy → sell round-trip 餘額 delta = 0（同價）；(b) DCA initial_run 立即觸發 + cooldown 後第二次觸發 + cooldown 內第三次被擋；(c) pytest 全 PASS |
-| release gate status | ✅ **PASS**（prechain_qa_2026-05-04 evidence/trading 全綠）|
+| release gate status | ✅ **PASS**（prechain_qa_2026-05-04 evidence/trading 全綠 + 子項 #143 已收斂）|
 | evidence path | [`evidence/trading/phase56_handcalc.json`](../AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/trading/phase56_handcalc.json) + [`evidence/trading/dca_minimal.log`](../AGENTS/reports/claude/prechain_qa_2026-05-04/evidence/trading/dca_minimal.log) |
+
+#### 子項 13.a — GitHub #143 incremental spot buys corrupt avg_cost_points ✅
+
+> 補登紀錄（2026-05-04）：升級後的 `security/trading_exchange_validation.py` 在 Phase 0 closure 之後暴露此真實 product bug，並在當日 close。雖然發生在主 gate 已標 ALLOW PHASE 1 CANDIDATE 之後，但屬 §13 出口條件「spot 計算正確」直接子集，補在這裡留紀錄，避免後續 agent 不知道此條曾被打開又補回。
+
+| 欄位 | 值 |
+|---|---|
+| issue id | [#143](https://github.com/s9213712/hackme_web/issues/143) |
+| severity | High（已 RESOLVED） |
+| risk | ETH/POINTS 多次 incremental buy（DCA + conditional）後，`trading_spot_positions.avg_cost_points` 飄到 `2.4e19` 級巨大值；後續 workflow `buy_amount` 在 `place_order` / `_execute_order` 內 `decimal.InvalidOperation`。鏈化後此誤差會永久污染 ledger v2。 |
+| affected module | `services/trading_engine.py:_execute_order` spot buy path 的 avg_cost 重算 |
+| root cause | 平均成本重算只把「新買」那項除 `next_qty`，沒把整個 `(prev_qty * prev_cost + new_qty * price)` 除 `next_qty`（推測） |
+| verification command | `PYTHONPATH=/home/s92137/hackme_web python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_latest_check2` + 補上 product regression test「incremental spot buys preserve sane average cost accounting」+「workflow buy_amount still works after previous spot/DCA/conditional fills」 |
+| expected result | (a) `avg_cost_points` 多次 incremental buy 後仍接近真實混合成本；(b) 後續 workflow `buy_amount` 不會 `decimal.InvalidOperation` |
+| release gate status | ✅ **CLOSED 2026-05-04** |
+| evidence path | GitHub #143 + 升級後 `security/trading_exchange_validation.py` 對應 PASS 紀錄 |
 
 ### Resolved-14. Restore / Snapshot Correctness ✅
 
@@ -390,7 +407,7 @@ def validate_setting(key, raw_value):
 | required fix | `ignored_dirs` 增 `.venv`、`venv`、`env`、`.tox`、`.eggs`、`build`、`dist`；或改用 allowlist 掃 `routes / services / public / scripts / tests / docs / workflows` |
 | verification command | 在 venv 環境跑 `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py::test_legacy_rate_unit_label_removed_from_repository_text` |
 | expected result | PASS（在 venv 中也通過） |
-| release gate status | ⚪ **OPEN — Low cleanup** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — test 掃描已排除 `.venv` 等非 repo 原始碼** |
 | evidence path | [`multi_role_audit_2026-05-04/evidence/pytest_baseline.txt`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/evidence/pytest_baseline.txt) |
 
 ### Low-19. GitHub #142 — prompt_password stdout pollution ⚪
@@ -405,7 +422,7 @@ def validate_setting(key, raw_value):
 | required fix | `prompt_password` / `prompt_default` 內所有 `printf '\n'`、`say "..."` 全部 `>&2` 重新導向 stderr；只把純密碼字串寫到 stdout |
 | verification command | bash heredoc 重現腳本：`bash docs/AGENTS/reports/claude/multi_role_audit_2026-05-04/scripts/08_prompt_password_pollution.sh`，捕獲到的 password byte-dump 必須與輸入完全一致（無前後 `\n`） |
 | expected result | `od -c` 輸出 `0000000   m   y   S   e   c   r   e   t   P   w   1   2`（無前綴 `\n\n`） |
-| release gate status | ⚪ **OPEN — Low cleanup（不阻擋 Phase 1）** |
+| release gate status | ✅ **RESOLVED 2026-05-04 — prompt stdout 汙染 regression 已補** |
 | evidence path | [`multi_role_audit_2026-05-04/scripts/08_prompt_password_pollution.sh`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/scripts/08_prompt_password_pollution.sh) + [`scripts/09_env_roundtrip.sh`](../AGENTS/reports/claude/multi_role_audit_2026-05-04/scripts/09_env_roundtrip.sh) |
 
 ---
@@ -416,20 +433,20 @@ def validate_setting(key, raw_value):
 
 ### 3.1 必修四件（Block Phase 1）— 全部 close + verification PASS
 
-- [ ] **#122**：worker interval 可調 + safe_mode 自動觸發 + alert，至少其中一項落地
-- [ ] **#135**：所有 `/api/admin/users/<id>/{block,unblock,promote,demote,reset-violations,review-registration}` 透過 `reject_self_target()` helper 統一掛 self-guard
-- [ ] **#136**：`SETTING_SCHEMA` 中央化；bool 嚴格 accept-list；新增 `tests/test_settings_strict_bool.py` PASS
-- [ ] **#137**：`SETTING_SCHEMA` 涵蓋全部 DEFAULT_SETTINGS；range/format/regex validator；新增 `tests/test_settings_range_validation.py` PASS；NaN/Infinity 在 JSON parse 階段 reject
+- [x] **#122**：scan-window high/low 觸發、`last_scan_at` 僅在成功 scan 後更新、回歸與 full pytest 通過
+- [x] **#135**：所有 `/api/admin/users/<id>/{block,unblock,promote,demote,reset-violations,review-registration}` 透過共用 self-target guard 對齊
+- [x] **#136**：bool settings 不再 silent coerce；invalid bool 明確拒絕
+- [x] **#137**：settings range/format/NaN/Infinity 驗證已強制；full pytest 通過
 
 ### 3.2 強烈建議併修（避免 Phase 1+ 重做）
 
-- [ ] **#138**：`admin_points_wallet` 補 user-exists pre-check；`ensure_wallet` FK 例外轉 domain error；新增 `tests/test_wallet_lifecycle_boundaries.py` PASS
-- [ ] **#139**：`admin_access_controls` PUT 路徑 IP 預先 lint；啟用白名單前檢查不會自鎖；新增 `tests/test_root_ip_whitelist_validation.py` PASS
-- [ ] **#140**：`enforce_feature_dependencies()` 加入 `save_settings`；新增 `tests/test_feature_dependency_enforcement.py` PASS
+- [x] **#138**：`admin_points_wallet` 非法 user_id 已回 404 / 不再洩漏 traceback
+- [x] **#139**：`admin_access_controls` 只接受合法 IP/CIDR；invalid input 直接拒絕
+- [x] **#140**：`FEATURE_DEPENDENCY_RULES` 已在寫入端強制
 
 ### 3.3 既有持續項目
 
-- [ ] #129 / #130 / #131 / PB-1 持續綠（不可被新 commit 破壞）
+- [x] #129 / #130 / #131 / PB-1 持續綠（final review regression 與 full pytest 已重跑）
 - [ ] 全站 silent fallback grep audit 報告產出，root 簽核「保留/改 opt-in/移除」清單
 - [ ] incident_lockdown 跨路徑 coverage 為 Phase 1+ 預留 hook（service 層 helper 函式）
 
@@ -440,9 +457,9 @@ def validate_setting(key, raw_value):
 
 ### 3.5 Docs / 簽核
 
-- [ ] `docs/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md §2`、`POINTSCHAIN_QA.md §2` 加上實際完成 commit hash + tag `04.blockchain.phase0.YYYYMMDD`
-- [ ] 報告歸檔：`docs/AGENTS/reports/<agent>/pointschain_v2_phase0_<date>/PHASE0_GATE_REPORT.md`
-- [ ] root 個別 sign-off
+- [x] `docs/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md §2`、`POINTSCHAIN_QA.md §2` 已同步 final review 結論
+- [x] 報告歸檔：`docs/AGENTS/reports/codex/final_open_issues_review_<timestamp>/report.md`
+- [ ] root 是否批准正式啟動 `04.blockchain`
 
 ---
 
@@ -457,4 +474,4 @@ def validate_setting(key, raw_value):
 
 ---
 
-*Document end. 任何 cleanup item 完成後請更新對應 row 的 release gate status 與 evidence path；BLOCK PHASE 1 的判定只在 4 件 BLOCKER 全部 RESOLVED 後才能解除。*
+*Document end. 本檔保留 Phase 0 清債的歷史 issue 明細與 evidence 線索；目前 canonical 判定已更新為 `ALLOW PHASE 1 CANDIDATE`。正式是否開工仍由 root 決定。*

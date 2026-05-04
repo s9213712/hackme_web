@@ -2051,7 +2051,7 @@ class TradingEngineService:
             payload["price_source"] = str(price_source or payload.get("price_source") or "manual_root")
             return {
                 "market": payload,
-                "refresh_interval_ms": 1000,
+                "refresh_interval_ms": 2000,
                 "server_time": _now(),
                 "price_health": str((price_meta or {}).get("price_health") or "healthy"),
                 "fallback_reason": str((price_meta or {}).get("fallback_reason") or ""),
@@ -3151,6 +3151,28 @@ class TradingEngineService:
         maintenance_percent = float(settings.get("margin_maintenance_percent") or 0)
         maintenance_points = int(math.ceil(exit_notional * maintenance_percent / 100.0))
         fee_rate_percent = float(market["fee_rate_percent"] or 0)
+        fee_rate_decimal = Decimal(str(fee_rate_percent)) / Decimal("100")
+        break_even_price_points = None
+        quantity_decimal = Decimal(quantity_units)
+        if quantity_units > 0:
+            if position["position_type"] == "margin_long":
+                required_exit_value = Decimal(collateral + principal + int(position["open_fee_points"] or 0)) + Decimal(str(interest))
+                denominator = Decimal("1") - fee_rate_decimal
+                if denominator > 0:
+                    break_even_price_points = float(
+                        (
+                            required_exit_value * Decimal(ASSET_SCALE) / (quantity_decimal * denominator)
+                        ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                    )
+            else:
+                recoverable_value = Decimal(principal - int(position["open_fee_points"] or 0)) - Decimal(str(interest))
+                denominator = Decimal("1") + fee_rate_decimal
+                if recoverable_value > 0 and denominator > 0:
+                    break_even_price_points = float(
+                        (
+                            recoverable_value * Decimal(ASSET_SCALE) / (quantity_decimal * denominator)
+                        ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                    )
         denominator_percent = None
         liquidation_notional = None
         if position["position_type"] == "margin_long":
@@ -3196,6 +3218,7 @@ class TradingEngineService:
             "principal_points": principal,
             "delta_points": delta,
             "unrealized_pnl_points": delta,
+            "breakeven_price_points": break_even_price_points,
             "equity_after_points": equity_after,
             "maintenance_percent": maintenance_percent,
             "maintenance_points": maintenance_points,
@@ -3233,6 +3256,7 @@ class TradingEngineService:
         item["entry_notional_points"] = risk.get("entry_notional_points")
         item["current_price_points"] = risk.get("price_points")
         item["unrealized_pnl_points"] = risk.get("unrealized_pnl_points")
+        item["breakeven_price_points"] = risk.get("breakeven_price_points")
         item["liquidation_price_points"] = risk.get("liquidation_price_points")
         return item
 

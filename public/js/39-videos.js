@@ -118,6 +118,7 @@ async function loadVideoPublishFiles() {
 async function publishVideoFromDrive() {
   const button = $("video-publish-btn");
   const directFile = $("video-upload-file")?.files?.[0] || null;
+  const coverFile = $("video-cover-file")?.files?.[0] || null;
   const payload = {
     cloud_file_id: $("video-publish-file")?.value || "",
     title: ($("video-publish-title")?.value || "").trim(),
@@ -131,7 +132,6 @@ async function publishVideoFromDrive() {
     let res;
     if (directFile) {
       const form = new FormData();
-      const coverFile = $("video-cover-file")?.files?.[0] || null;
       form.append("video", directFile);
       form.append("title", payload.title || directFile.name.replace(/\.[^.]+$/, ""));
       form.append("description", payload.description);
@@ -140,6 +140,19 @@ async function publishVideoFromDrive() {
       if (coverFile) form.append("cover", coverFile);
       videoMsg("影音檔上傳中，請稍候...", true);
       res = await apiFetch(API + "/videos/upload", {
+        method: "POST",
+        credentials: "same-origin",
+        body: form,
+      });
+    } else if (coverFile) {
+      const form = new FormData();
+      form.append("cloud_file_id", payload.cloud_file_id);
+      form.append("title", payload.title);
+      form.append("description", payload.description);
+      form.append("visibility", payload.visibility);
+      form.append("cover", coverFile);
+      videoMsg("影音封面上傳中，請稍候...", true);
+      res = await apiFetch(API + "/videos/publish", {
         method: "POST",
         credentials: "same-origin",
         body: form,
