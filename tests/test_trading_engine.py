@@ -136,7 +136,11 @@ class _FakePriceResponse:
 
 def test_legacy_rate_unit_label_removed_from_repository_text():
     needle = "b" + "ps"
-    ignored_dirs = {".git", "__pycache__", ".pytest_cache", "node_modules", "storage", "reports", "secure_backups"}
+    ignored_dirs = {
+        ".git", ".venv", "venv", "env", ".tox", ".eggs",
+        "__pycache__", ".pytest_cache", "node_modules",
+        "storage", "reports", "secure_backups", "build", "dist",
+    }
     ignored_prefixes = {Path("security/reports")}
     ignored_suffixes = {".pyc", ".db", ".sqlite", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip", ".gz"}
     offenders = []
@@ -2216,9 +2220,17 @@ def test_root_trading_settings_default_to_fused_weighted_auto_depth(tmp_path):
     trading = TradingEngineService(get_db=get_db, points_service=points)
 
     settings = trading.get_root_settings()["settings"]
+    markets = trading.list_markets()
 
     assert settings["price_source"] == "fused_weighted"
     assert settings["price_fusion_mode"] == "auto_depth"
+    assert settings["price_fusion_live_markets"] == ["BTC/POINTS", "ETH/POINTS"]
+    assert [row["symbol"] for row in markets] == ["BTC/POINTS", "ETH/POINTS"]
+    assert markets[0]["display_symbol"] == "BTC/USDT"
+    assert markets[0]["live_price_supported"] is True
+    assert markets[0]["btc_trade_supported"] is True
+    assert markets[1]["display_symbol"] == "ETH/USDT"
+    assert markets[1]["btc_trade_supported"] is False
 
 
 def test_price_fusion_auto_depth_status_uses_depth_scores_and_sums_to_hundred(tmp_path, monkeypatch):

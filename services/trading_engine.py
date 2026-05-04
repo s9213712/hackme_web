@@ -8,6 +8,16 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from services.notifications import create_notification_if_enabled, create_root_notification_if_enabled
+from services.trading_markets import (
+    list_live_price_markets,
+    list_seed_markets,
+    market_display_symbol,
+    market_provider_id,
+    market_sort_key,
+    market_supports_btc_trade,
+    market_supports_live_price,
+    normalize_market_symbol,
+)
 
 
 ASSET_SCALE = 100_000_000
@@ -108,48 +118,6 @@ LIVE_PRICE_SOURCE_NAMES = {
     "bitstamp_public_api",
     "coingecko_simple_price",
     "test_live_price_provider",
-}
-LIVE_PRICE_MARKETS = {
-    "BTC/POINTS": "BTCUSDT",
-    "BTC/USDT": "BTCUSDT",
-    "ETH/POINTS": "ETHUSDT",
-    "ETH/USDT": "ETHUSDT",
-}
-COINBASE_PRICE_PRODUCTS = {
-    "BTC/POINTS": "BTC-USD",
-    "BTC/USDT": "BTC-USD",
-    "ETH/POINTS": "ETH-USD",
-    "ETH/USDT": "ETH-USD",
-}
-OKX_PRICE_INSTRUMENTS = {
-    "BTC/POINTS": "BTC-USDT",
-    "BTC/USDT": "BTC-USDT",
-    "ETH/POINTS": "ETH-USDT",
-    "ETH/USDT": "ETH-USDT",
-}
-KRAKEN_PRICE_PAIRS = {
-    "BTC/POINTS": "XBTUSD",
-    "BTC/USDT": "XBTUSD",
-    "ETH/POINTS": "ETHUSD",
-    "ETH/USDT": "ETHUSD",
-}
-GEMINI_PRICE_SYMBOLS = {
-    "BTC/POINTS": "btcusd",
-    "BTC/USDT": "btcusd",
-    "ETH/POINTS": "ethusd",
-    "ETH/USDT": "ethusd",
-}
-BITSTAMP_PRICE_PAIRS = {
-    "BTC/POINTS": "btcusd",
-    "BTC/USDT": "btcusd",
-    "ETH/POINTS": "ethusd",
-    "ETH/USDT": "ethusd",
-}
-COINGECKO_PRICE_IDS = {
-    "BTC/POINTS": "bitcoin",
-    "BTC/USDT": "bitcoin",
-    "ETH/POINTS": "ethereum",
-    "ETH/USDT": "ethereum",
 }
 
 
@@ -906,17 +874,22 @@ def ensure_trading_schema(conn):
             "INSERT OR IGNORE INTO trading_settings (key, value, updated_at) VALUES (?, ?, ?)",
             (key, value, now),
         )
-    for symbol, asset, price in (
-        ("BTC/POINTS", "BTC", 100000),
-        ("ETH/POINTS", "ETH", 5000),
-    ):
+    for definition in list_seed_markets():
         conn.execute(
             """
             INSERT OR IGNORE INTO trading_markets (
                 symbol, base_asset, quote_currency, manual_price_points, fee_rate_percent, updated_at, price_source
-            ) VALUES (?, ?, 'POINTS', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (symbol, asset, price, DEFAULT_SPOT_FEE_RATE_PERCENT, now, FUSED_PRICE_SOURCE),
+            (
+                definition["symbol"],
+                definition["base_asset"],
+                definition.get("quote_currency") or "POINTS",
+                definition.get("default_manual_price_points") or 1,
+                DEFAULT_SPOT_FEE_RATE_PERCENT,
+                now,
+                FUSED_PRICE_SOURCE,
+            ),
         )
     for table in ("trading_orders", "trading_fills"):
         cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -1066,7 +1039,7 @@ class TradingEngineService:
             raise ValueError("trading is disabled")
 
     def _market(self, conn, symbol):
-        row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (str(symbol or "").strip().upper(),)).fetchone()
+        row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (normalize_market_symbol(symbol),)).fetchone()
         if not row:
             raise ValueError("market not found")
         if not int(row["enabled"] or 0) or not int(row["spot_enabled"] or 0):
@@ -1272,7 +1245,7 @@ class TradingEngineService:
                     item["next_run_at"] = _now()
             except Exception:
                 item["next_run_at"] = None
-        item["display_symbol"] = str(item["market_symbol"] or "").replace("/POINTS", "/USDT")
+        item["display_symbol"] = market_display_symbol(item.get("market_symbol"))
         item["bot_type_label"] = "定投機器人" if item.get("bot_type") == "dca" else "條件機器人"
         item["workflow"] = _json_loads(item.get("workflow_json"), None)
         item["execution_state"] = _json_loads(item.get("execution_state_json"), {}) if "execution_state_json" in row.keys() else {}
@@ -1290,7 +1263,9 @@ class TradingEngineService:
         item["pvp_matching_enabled"] = bool(item["pvp_matching_enabled"])
         item["enabled"] = bool(item["enabled"])
         item["spot_enabled"] = bool(item["spot_enabled"])
-        item["display_symbol"] = str(item["symbol"] or "").replace("/POINTS", "/USDT")
+        item["display_symbol"] = market_display_symbol(item.get("symbol"), item.get("quote_currency"))
+        item["live_price_supported"] = market_supports_live_price(item.get("symbol"))
+        item["btc_trade_supported"] = market_supports_btc_trade(item.get("symbol"))
         return item
 
     def _settings_payload(self, conn):
@@ -1322,7 +1297,7 @@ class TradingEngineService:
             "price_fusion_manual_weights": _normalize_price_fusion_manual_weights(_json_loads(raw.get("trading.price_fusion_manual_weights_json"), DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
             "price_fusion_provider_labels": dict(PRICE_PROVIDER_LABELS),
             "price_fusion_providers": list(WEIGHTED_PRICE_PROVIDERS),
-            "price_fusion_live_markets": sorted(LIVE_PRICE_MARKETS.keys()),
+            "price_fusion_live_markets": list_live_price_markets(),
             "price_fusion_depth_band_percent": DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT,
             "price_fusion_depth_levels": DEFAULT_PRICE_FUSION_DEPTH_LEVELS,
             "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
@@ -1600,7 +1575,7 @@ class TradingEngineService:
             conn.close()
 
     def _live_price_symbol(self, market_symbol):
-        return LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
+        return market_provider_id(market_symbol, "binance_public_api")
 
     def _fetch_json_url(self, url, *, timeout=5, user_agent="hackme_web/1.0 trading-price"):
         req = Request(url, headers={"User-Agent": user_agent})
@@ -1620,7 +1595,7 @@ class TradingEngineService:
         return price_points
 
     def _fetch_binance_price_points(self, market_symbol):
-        symbol = LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
+        symbol = market_provider_id(market_symbol, "binance_public_api")
         if not symbol:
             raise ValueError("binance price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1631,7 +1606,7 @@ class TradingEngineService:
         return self._price_points_from_float(price, source="binance_public_api")
 
     def _fetch_okx_price_points(self, market_symbol):
-        instrument = OKX_PRICE_INSTRUMENTS.get(str(market_symbol or "").strip().upper())
+        instrument = market_provider_id(market_symbol, "okx_public_api")
         if not instrument:
             raise ValueError("okx price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1645,7 +1620,7 @@ class TradingEngineService:
         return self._price_points_from_float(price, source="okx_public_api")
 
     def _fetch_coinbase_price_points(self, market_symbol):
-        product_id = COINBASE_PRICE_PRODUCTS.get(str(market_symbol or "").strip().upper())
+        product_id = market_provider_id(market_symbol, "coinbase_exchange")
         if not product_id:
             raise ValueError("coinbase price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1657,7 +1632,7 @@ class TradingEngineService:
         return self._price_points_from_float(price, source="coinbase_exchange")
 
     def _fetch_kraken_price_points(self, market_symbol):
-        pair = KRAKEN_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        pair = market_provider_id(market_symbol, "kraken_public_api")
         if not pair:
             raise ValueError("kraken price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1673,7 +1648,7 @@ class TradingEngineService:
         return self._price_points_from_float(close, source="kraken_public_api")
 
     def _fetch_gemini_price_points(self, market_symbol):
-        symbol = GEMINI_PRICE_SYMBOLS.get(str(market_symbol or "").strip().upper())
+        symbol = market_provider_id(market_symbol, "gemini_public_api")
         if not symbol:
             raise ValueError("gemini price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1685,7 +1660,7 @@ class TradingEngineService:
         return self._price_points_from_float(price, source="gemini_public_api")
 
     def _fetch_bitstamp_price_points(self, market_symbol):
-        pair = BITSTAMP_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        pair = market_provider_id(market_symbol, "bitstamp_public_api")
         if not pair:
             raise ValueError("bitstamp price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1697,7 +1672,7 @@ class TradingEngineService:
         return self._price_points_from_float(price, source="bitstamp_public_api")
 
     def _fetch_coingecko_price_points(self, market_symbol):
-        coin_id = COINGECKO_PRICE_IDS.get(str(market_symbol or "").strip().upper())
+        coin_id = market_provider_id(market_symbol, "coingecko_simple_price")
         if not coin_id:
             raise ValueError("coingecko price is not supported for this market")
         payload = self._fetch_json_url(
@@ -1741,7 +1716,7 @@ class TradingEngineService:
         return midpoint, score
 
     def _fetch_binance_orderbook_snapshot(self, market_symbol):
-        symbol = LIVE_PRICE_MARKETS.get(str(market_symbol or "").strip().upper())
+        symbol = market_provider_id(market_symbol, "binance_public_api")
         if not symbol:
             raise ValueError("binance order book is not supported for this market")
         payload = self._fetch_json_url(
@@ -1752,7 +1727,7 @@ class TradingEngineService:
         return {"source": "binance_public_api", "price_points": self._price_points_from_float(midpoint, source="binance_public_api"), "depth_score": depth_score}
 
     def _fetch_okx_orderbook_snapshot(self, market_symbol):
-        instrument = OKX_PRICE_INSTRUMENTS.get(str(market_symbol or "").strip().upper())
+        instrument = market_provider_id(market_symbol, "okx_public_api")
         if not instrument:
             raise ValueError("okx order book is not supported for this market")
         payload = self._fetch_json_url(
@@ -1766,7 +1741,7 @@ class TradingEngineService:
         return {"source": "okx_public_api", "price_points": self._price_points_from_float(midpoint, source="okx_public_api"), "depth_score": depth_score}
 
     def _fetch_coinbase_orderbook_snapshot(self, market_symbol):
-        product_id = COINBASE_PRICE_PRODUCTS.get(str(market_symbol or "").strip().upper())
+        product_id = market_provider_id(market_symbol, "coinbase_exchange")
         if not product_id:
             raise ValueError("coinbase order book is not supported for this market")
         payload = self._fetch_json_url(
@@ -1778,7 +1753,7 @@ class TradingEngineService:
         return {"source": "coinbase_exchange", "price_points": self._price_points_from_float(midpoint, source="coinbase_exchange"), "depth_score": depth_score}
 
     def _fetch_kraken_orderbook_snapshot(self, market_symbol):
-        pair = KRAKEN_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        pair = market_provider_id(market_symbol, "kraken_public_api")
         if not pair:
             raise ValueError("kraken order book is not supported for this market")
         payload = self._fetch_json_url(
@@ -1794,7 +1769,7 @@ class TradingEngineService:
         return {"source": "kraken_public_api", "price_points": self._price_points_from_float(midpoint, source="kraken_public_api"), "depth_score": depth_score}
 
     def _fetch_gemini_orderbook_snapshot(self, market_symbol):
-        symbol = GEMINI_PRICE_SYMBOLS.get(str(market_symbol or "").strip().upper())
+        symbol = market_provider_id(market_symbol, "gemini_public_api")
         if not symbol:
             raise ValueError("gemini order book is not supported for this market")
         payload = self._fetch_json_url(
@@ -1808,7 +1783,7 @@ class TradingEngineService:
         return {"source": "gemini_public_api", "price_points": self._price_points_from_float(midpoint, source="gemini_public_api"), "depth_score": depth_score}
 
     def _fetch_bitstamp_orderbook_snapshot(self, market_symbol):
-        pair = BITSTAMP_PRICE_PAIRS.get(str(market_symbol or "").strip().upper())
+        pair = market_provider_id(market_symbol, "bitstamp_public_api")
         if not pair:
             raise ValueError("bitstamp order book is not supported for this market")
         payload = self._fetch_json_url(
@@ -1963,12 +1938,13 @@ class TradingEngineService:
         }
 
     def _default_price_fusion_market_symbol(self, conn):
-        rows = conn.execute("SELECT symbol FROM trading_markets ORDER BY symbol").fetchall()
-        for row in rows:
-            symbol = str(row["symbol"] or "").strip().upper()
+        rows = conn.execute("SELECT symbol FROM trading_markets").fetchall()
+        sorted_symbols = sorted((str(row["symbol"] or "").strip().upper() for row in rows), key=market_sort_key)
+        for symbol in sorted_symbols:
             if self._live_price_symbol(symbol):
                 return symbol
-        return next(iter(sorted(LIVE_PRICE_MARKETS.keys())), "")
+        catalog_symbols = list_live_price_markets()
+        return catalog_symbols[0] if catalog_symbols else ""
 
     def _root_price_fusion_status_on_conn(self, conn, *, market_symbol=""):
         settings = self._settings_payload(conn)
@@ -2055,14 +2031,15 @@ class TradingEngineService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            symbol = str(market_symbol or "").strip().upper()
+            symbol = normalize_market_symbol(market_symbol)
             defaulted_market = not bool(symbol)
             if symbol:
                 market_row = self._market(conn, symbol)
             else:
                 market_row = conn.execute(
-                    "SELECT * FROM trading_markets WHERE enabled=1 AND spot_enabled=1 ORDER BY symbol LIMIT 1"
-                ).fetchone()
+                    "SELECT * FROM trading_markets WHERE enabled=1 AND spot_enabled=1"
+                ).fetchall()
+                market_row = next(iter(sorted(market_row, key=lambda row: market_sort_key(row["symbol"]))), None)
                 if not market_row:
                     raise ValueError("market not found")
             market = self._market_payload(market_row)
@@ -2085,11 +2062,11 @@ class TradingEngineService:
             conn.close()
 
     def _fetch_live_price_points(self, market_symbol):
-        market_symbol = str(market_symbol or "").strip().upper()
+        market_symbol = normalize_market_symbol(market_symbol)
         if not self._live_price_symbol(market_symbol):
             raise ValueError("live price is not supported for this market")
         if self.live_price_provider:
-            price = self.live_price_provider(str(market_symbol or "").strip().upper())
+            price = self.live_price_provider(market_symbol)
             return self._price_points_from_float(price, source="test_live_price_provider"), "test_live_price_provider"
         errors = []
         providers = (
@@ -3569,8 +3546,9 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             where = "" if include_disabled else "WHERE enabled=1 AND spot_enabled=1"
-            rows = conn.execute(f"SELECT * FROM trading_markets {where} ORDER BY symbol").fetchall()
-            return [self._market_payload(row) for row in rows]
+            rows = conn.execute(f"SELECT * FROM trading_markets {where}").fetchall()
+            payloads = [self._market_payload(row) for row in rows]
+            return sorted(payloads, key=lambda item: market_sort_key(item.get("symbol")))
         finally:
             conn.close()
 
@@ -3581,7 +3559,10 @@ class TradingEngineService:
             self._ensure_trial_credit(conn, user_id)
             conn.commit()
             state = self._state(conn)
-            markets = [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1 ORDER BY symbol").fetchall()]
+            markets = sorted(
+                [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1").fetchall()],
+                key=lambda item: market_sort_key(item.get("symbol")),
+            )
             market_map = {row["symbol"]: row for row in markets}
             realized_map = self._spot_realized_map(conn, user_id)
             fee_map = self._spot_fee_map(conn, user_id)
@@ -8337,7 +8318,7 @@ class TradingEngineService:
         if audit_result.get("audit_status") in {"yellow", "red"}:
             label = self._bot_audit_label(audit_result.get("audit_status"))
             name = str(row.get("name") or row.get("market_symbol") or "bot")
-            body = f"{name}（{str(row.get('market_symbol') or '').replace('/POINTS', '/USDT')}）稽核結果 {label}。"
+            body = f"{name}（{market_display_symbol(row.get('market_symbol'))}）稽核結果 {label}。"
             link = "/trading"
             create_root_notification_if_enabled(
                 conn,
