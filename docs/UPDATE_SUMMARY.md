@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-107`
+Release ID: `2026.05.05-108`
+
+## 2026.05.05-108
+
+- Video streaming Phase C-1 now auto-prepares HLS derivatives for eligible public/unlisted media and `server_encrypted` uploads on publish, while keeping publish success intact if derivative packaging fails.
+- Video watch pages now show human-readable stream status and let owners or managers re-run HLS preparation directly from the UI.
+- The video publish form now explains when HLS derivatives are attempted automatically.
 
 ## 2026.05.05-107
 

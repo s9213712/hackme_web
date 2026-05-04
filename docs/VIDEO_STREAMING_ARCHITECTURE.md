@@ -13,6 +13,9 @@ Current status:
 
 - Video Platform v1 is implemented.
 - Phase C-1 HLS streaming foundation is implemented here.
+- Public/unlisted video publishes and `server_encrypted` media now try to
+  prepare HLS derivatives automatically, while owners can manually retry
+  preparation from the watch page.
 - Later Phase C stages are still not fully implemented yet.
 
 ## Problem Statement
@@ -76,6 +79,8 @@ Today:
 - Current implementation packages a single prepared HLS variant and lets the
   frontend prefer native-HLS playback when the derivative is ready. Browsers
   without native HLS support still fall back to `/api/videos/<id>/stream`.
+- Auto-prepare is currently best-effort and synchronous in the publish path.
+  A failed derivative must not block the base video publish action.
 
 This design keeps those v1 rules, but adds a media-derivative pipeline for
 larger assets.

@@ -18,6 +18,7 @@ from services.storage_paths import resolve_storage_path
 MEDIA_STREAM_ASSET_STATUSES = {"pending", "processing", "ready", "failed", "unavailable"}
 MEDIA_STREAM_STORAGE_MODE = "acl_protected_plain"
 DEFAULT_HLS_SEGMENT_SECONDS = 4
+DEFAULT_STREAM_AUTO_PREPARE_AUDIO_MIN_BYTES = 25 * 1024 * 1024
 
 
 def _now():
@@ -143,6 +144,38 @@ def _file_media_type(file_row):
     if mime.startswith("audio/") or any(filename.endswith(ext) for ext in (".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg")):
         return "audio"
     return "video"
+
+
+def should_auto_prepare_stream(file_row, *, visibility="public"):
+    if not file_row or _row_value(file_row, "deleted_at") or is_e2ee_file(file_row):
+        return {"enabled": False, "reason": "unavailable"}
+    media_type = _file_media_type(file_row)
+    privacy_mode = str(_row_value(file_row, "privacy_mode", "standard_plain") or "standard_plain")
+    visibility = str(visibility or "public").strip().lower() or "public"
+    size_bytes = _safe_int(_row_value(file_row, "size_bytes"), 0)
+    if privacy_mode == "server_encrypted":
+        return {
+            "enabled": True,
+            "reason": "server_encrypted_media",
+            "media_type": media_type,
+        }
+    if media_type == "video" and visibility in {"public", "unlisted"}:
+        return {
+            "enabled": True,
+            "reason": "published_video",
+            "media_type": media_type,
+        }
+    if media_type == "audio" and visibility in {"public", "unlisted"} and size_bytes >= DEFAULT_STREAM_AUTO_PREPARE_AUDIO_MIN_BYTES:
+        return {
+            "enabled": True,
+            "reason": "large_published_audio",
+            "media_type": media_type,
+        }
+    return {
+        "enabled": False,
+        "reason": "manual_prepare_only",
+        "media_type": media_type,
+    }
 
 
 def _derivative_root_relpath(uploaded_file_id):
@@ -559,8 +592,10 @@ def stream_playback_payload(conn, *, file_row, video_id):
         "stream_url": direct_url,
         "master_url": "",
         "status": status,
+        "streaming_ready": False,
     }
     if status and status.get("status") == "ready" and status.get("master_manifest_path"):
         payload["mode"] = "hls"
         payload["master_url"] = f"/api/videos/{int(video_id)}/hls/master.m3u8"
+        payload["streaming_ready"] = True
     return payload

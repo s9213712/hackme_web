@@ -31,6 +31,9 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "video-thumb-audio" in videos_js
     assert "browserSupportsNativeHls" in videos_js
     assert "HLS 串流" in videos_js
+    assert "function humanVideoStreamStatus" in videos_js
+    assert "data-video-prepare-stream" in videos_js
+    assert "prepareVideoStream" in videos_js
     assert ".video-audio-player" in styles
     assert ".video-thumb-image" in styles
 

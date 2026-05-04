@@ -295,6 +295,8 @@ def test_video_playback_and_hls_routes_use_ready_stream_asset(tmp_path, monkeypa
     assert playback.status_code == 200
     assert payload["ok"] is True
     assert payload["mode"] == "hls"
+    assert payload["streaming_ready"] is True
+    assert payload["can_prepare_stream"] is False
     assert payload["master_url"].endswith(f"/api/videos/{video_id}/hls/master.m3u8")
     assert payload["fallback_url"].endswith(f"/api/videos/{video_id}/stream")
 
@@ -339,3 +341,84 @@ def test_media_prepare_stream_route_requires_owner_or_manager(tmp_path, monkeypa
     response = viewer_client.post("/api/media/private-video/prepare-stream")
 
     assert response.status_code == 403
+
+
+def test_video_publish_auto_prepares_stream_asset_without_blocking_publish(tmp_path, monkeypatch):
+    db_path = tmp_path / "publish-route.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="video-1", owner_user_id=1, filename="movie.mp4", mime="video/mp4")
+        conn.commit()
+    finally:
+        conn.close()
+
+    called = {}
+
+    def fake_prepare(conn, *, file_row, storage_root, server_file_fernet=None, ffprobe_bin="ffprobe", ffmpeg_bin="ffmpeg"):
+        called["file_id"] = file_row["id"]
+        return {"status": "ready", "master_manifest_path": "media_derivatives/video-1/master.m3u8"}
+
+    monkeypatch.setattr(video_routes, "prepare_stream_asset", fake_prepare)
+    response = owner_client.post(
+        "/api/videos/publish",
+        json={
+            "cloud_file_id": "video-1",
+            "title": "Movie",
+            "visibility": "public",
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert called["file_id"] == "video-1"
+    assert body["video"]["title"] == "Movie"
+    assert body["stream_asset"]["status"] == "ready"
+    assert body["stream_warning"] == ""
+
+
+def test_video_publish_keeps_success_when_auto_prepare_fails(tmp_path, monkeypatch):
+    db_path = tmp_path / "publish-route-fail.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        fernet,
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(conn, storage_root, file_id="video-2", owner_user_id=1, filename="movie.mp4", mime="video/mp4")
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(video_routes, "prepare_stream_asset", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg missing")))
+    response = owner_client.post(
+        "/api/videos/publish",
+        json={
+            "cloud_file_id": "video-2",
+            "title": "Movie 2",
+            "visibility": "public",
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["video"]["title"] == "Movie 2"
+    assert body["stream_asset"] is None
+    assert "HLS 串流準備失敗" in body["stream_warning"]

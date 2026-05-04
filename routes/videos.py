@@ -15,6 +15,7 @@ from services.media_streaming import (
     ensure_media_stream_schema,
     get_stream_status,
     prepare_stream_asset,
+    should_auto_prepare_stream,
     stream_playback_payload,
 )
 from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
@@ -91,6 +92,12 @@ def register_video_routes(app, deps):
         except Exception:
             return float(default)
 
+    def _settings_bool(key, default):
+        raw = (get_system_settings() or {}).get(key, default)
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+
     def _is_manager_or_root(actor):
         if not actor:
             return False
@@ -112,6 +119,25 @@ def register_video_routes(app, deps):
         if int(row["owner_user_id"]) == int(actor["id"]) or _is_manager_or_root(actor):
             return
         raise PermissionError("只有檔案擁有者或管理者可以準備串流衍生檔")
+
+    def _maybe_prepare_stream_asset(conn, *, file_row, visibility):
+        if not _settings_bool("video_stream_auto_prepare_enabled", True):
+            return None, None
+        decision = should_auto_prepare_stream(file_row, visibility=visibility)
+        if not decision.get("enabled"):
+            return None, None
+        try:
+            asset = prepare_stream_asset(
+                conn,
+                file_row=file_row,
+                storage_root=storage_root,
+                server_file_fernet=server_file_fernet,
+                ffprobe_bin=ffprobe_bin,
+                ffmpeg_bin=ffmpeg_bin,
+            )
+            return asset, None
+        except Exception as exc:
+            return None, f"HLS 串流準備失敗：{exc}"
 
     def _uploaded_file_is_media(file_storage):
         filename = getattr(file_storage, "filename", "") or ""
@@ -258,6 +284,12 @@ def register_video_routes(app, deps):
                 visibility=data.get("visibility") or "public",
                 cover_file_id=cover_result["file_id"] if cover_result else (data.get("cover_file_id") or None),
             )
+            file_row = conn.execute("SELECT * FROM uploaded_files WHERE id=?", (video["cloud_file_id"],)).fetchone()
+            stream_asset, stream_warning = _maybe_prepare_stream_asset(
+                conn,
+                file_row=file_row,
+                visibility=video["visibility"],
+            )
             conn.commit()
             audit(
                 "VIDEO_PUBLISH",
@@ -270,6 +302,8 @@ def register_video_routes(app, deps):
             return json_resp({
                 "ok": True,
                 "video": video,
+                "stream_asset": stream_asset,
+                "stream_warning": stream_warning or "",
                 "cover_file": ({**cover_result, "filename": safe_public_filename(cover_upload.filename)} if cover_result else None),
                 "cover_storage_file": cover_storage_file,
             })
@@ -348,6 +382,11 @@ def register_video_routes(app, deps):
                 visibility=request.form.get("visibility") or "public",
                 cover_file_id=cover_result["file_id"] if cover_result else None,
             )
+            stream_asset, stream_warning = _maybe_prepare_stream_asset(
+                conn,
+                file_row=file_row,
+                visibility=video["visibility"],
+            )
             conn.commit()
             audit(
                 "VIDEO_UPLOAD_PUBLISH",
@@ -362,6 +401,8 @@ def register_video_routes(app, deps):
                 "video": video,
                 "file": {**upload_result, "filename": safe_public_filename(uploaded.filename)},
                 "storage_file": storage_file,
+                "stream_asset": stream_asset,
+                "stream_warning": stream_warning or "",
                 "cover_file": ({**cover_result, "filename": safe_public_filename(cover_upload.filename)} if cover_result else None),
                 "cover_storage_file": cover_storage_file,
             })
@@ -468,6 +509,8 @@ def register_video_routes(app, deps):
             row = _load_stream_file(conn, file_id=video["cloud_file_id"])
             payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
             payload["video_id"] = int(video_id)
+            payload["can_prepare_stream"] = bool(video.get("can_edit"))
+            payload["prepare_stream_url"] = video.get("prepare_stream_url") or ""
             return json_resp({"ok": True, **payload})
         except PermissionError as exc:
             return _error_response(exc)

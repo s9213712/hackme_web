@@ -176,7 +176,15 @@ async function publishVideoFromDrive() {
     if (input) input.value = "";
     const coverInput = $("video-cover-file");
     if (coverInput) coverInput.value = "";
-    videoMsg("影音已發布", true);
+    if (json.stream_warning) {
+      videoMsg(`影音已發布；${json.stream_warning}`, false);
+    } else if (json.stream_asset?.status === "ready") {
+      videoMsg("影音已發布，HLS 串流已就緒", true);
+    } else if (json.stream_asset?.status === "processing") {
+      videoMsg("影音已發布，HLS 串流準備中", true);
+    } else {
+      videoMsg("影音已發布", true);
+    }
     await loadVideoPublishFiles();
     await loadVideos(videoState.sort);
     openVideoDetail(json.video.id);
@@ -264,6 +272,37 @@ function playbackSourceForVideo(video, playback) {
   };
 }
 
+function humanVideoStreamStatus(playback) {
+  const status = playback?.status || {};
+  const streamStatus = String(status.status || "").trim();
+  if (streamStatus === "ready") return "HLS 串流已就緒";
+  if (streamStatus === "processing") return "HLS 串流準備中";
+  if (streamStatus === "failed") return `HLS 串流失敗：${status.error_message || "請稍後重試"}`;
+  if (streamStatus === "unavailable") return status.error_message || "目前檔案無法建立伺服器端串流衍生檔";
+  if (streamStatus === "pending") return "目前尚未建立 HLS 串流，可先用直接串流播放";
+  return "";
+}
+
+async function prepareVideoStream(fileId, videoId) {
+  if (!fileId) return videoMsg("找不到對應影音檔案", false);
+  const button = document.querySelector(`[data-video-prepare-stream="${String(fileId)}"]`);
+  if (button) button.disabled = true;
+  try {
+    const res = await apiFetch(`/api/media/${encodeURIComponent(fileId)}/prepare-stream`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
+    videoMsg("已更新 HLS 串流衍生檔", true);
+    await openVideoDetail(videoId);
+  } catch (err) {
+    videoMsg(err.message || "HLS 串流準備失敗", false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function renderVideoDetail(video, comments = [], playback = null) {
   const detail = $("video-detail");
   if (!detail) return;
@@ -271,6 +310,16 @@ function renderVideoDetail(video, comments = [], playback = null) {
   showVideoWatchView();
   const playbackSource = playbackSourceForVideo(video, playback);
   const playbackStatus = playback?.status || {};
+  const streamStatusText = humanVideoStreamStatus(playback);
+  const streamActions = video.can_edit
+    ? `
+      <div class="drive-file-actions" style="justify-content:flex-start;margin-top:.45rem;">
+        <button class="btn btn-sm" type="button" data-video-prepare-stream="${sanitize(video.cloud_file_id || "")}">
+          ${playbackStatus.status === "ready" ? "重新建立 HLS 串流" : "準備 HLS 串流"}
+        </button>
+      </div>
+    `
+    : "";
   const player = video.media_type === "audio"
     ? `<audio id="video-player" class="video-player video-audio-player" controls preload="metadata" src="${sanitize(playbackSource.src)}"></audio>`
     : `<video id="video-player" class="video-player" controls playsinline preload="metadata" src="${sanitize(playbackSource.src)}"></video>`;
@@ -283,8 +332,9 @@ function renderVideoDetail(video, comments = [], playback = null) {
       <div class="video-watch-main">
         ${player}
         <div class="drive-card-sub" id="video-playback-status">
-          ${sanitize(playbackSource.statusText || (playbackStatus.status === "ready" ? "HLS 串流已就緒" : ""))}
+          ${sanitize(playbackSource.statusText || streamStatusText)}
         </div>
+        ${streamActions}
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">${sanitize(video.title || "未命名影片")}</div>
@@ -520,6 +570,11 @@ document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-video-copy-link]");
   if (copy) {
     copyVideoLink(copy.dataset.videoCopyLink);
+    return;
+  }
+  const prepare = event.target.closest("[data-video-prepare-stream]");
+  if (prepare) {
+    prepareVideoStream(prepare.dataset.videoPrepareStream, videoState.current?.id || 0);
     return;
   }
   if (event.target.closest("#video-refresh-btn")) {

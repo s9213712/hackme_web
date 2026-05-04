@@ -13,7 +13,7 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-107`
+- Release ID: `2026.05.05-108`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -333,6 +333,8 @@ Streaming notes:
 - `server_encrypted` video can be prepared through a controlled
   decrypt-and-package path
 - strict `e2ee` remains unavailable for server-side streaming derivatives
+- eligible public/unlisted or `server_encrypted` media now auto-prepare HLS
+  derivatives on publish as a best-effort path
 - browsers without native HLS support still fall back to direct `/stream`
 
 ### ComfyUI

@@ -11,7 +11,8 @@ reference.
 The formal large-media HLS / segmented streaming design is documented in
 [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md). Video
 Platform v1 is still the user-facing baseline, but Phase C-1 foundation is now
-implemented for prepared HLS playback.
+implemented for prepared HLS playback, automatic stream preparation on eligible
+published media, and manual retry controls in the watch page.
 
 ## Architecture
 
@@ -61,6 +62,16 @@ GET  /api/videos/<id>/hls/master.m3u8
 GET  /api/videos/<id>/hls/<variant>/playlist.m3u8
 GET  /api/videos/<id>/hls/<variant>/<segment>
 ```
+
+Current playback behavior:
+
+- public / unlisted video publishes now try to prepare an HLS derivative
+  automatically
+- `server_encrypted` media also try to prepare HLS automatically so playback
+  does not stay on the whole-file decrypt path
+- owners and manager/root accounts can re-run stream preparation from the video
+  watch page when a derivative is still pending or failed
+- browsers without native HLS still fall back to direct `/stream`
 
 The stream endpoint resolves the file with the existing Cloud Drive safe path
 resolver, so path traversal, absolute paths, and storage-root escape are handled
@@ -176,6 +187,7 @@ tests/test_video_security.py
 ## Explicit Non-Goals For v1 / Phase C-1
 
 - No multi-bitrate ABR ladder yet.
+- Auto-prepare is currently synchronous/best-effort, not a queued worker yet.
 - No `hls.js` bundle for non-native browsers yet.
 - No CDN.
 - No recommendation algorithm.
