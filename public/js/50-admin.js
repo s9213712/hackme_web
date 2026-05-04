@@ -124,11 +124,11 @@ function switchServerTab(tab) {
 
 function switchSettingsSection(tab) {
   currentSettingsSection = tab;
-  ["security", "features", "appearance", "system", "billing", "drive", "member-levels"].forEach((name) => {
+  ["security", "features", "appearance", "system", "billing", "trading", "drive", "member-levels"].forEach((name) => {
     const sec = $("sec-settings-" + name);
     if (sec) sec.classList.toggle("active", name === tab);
   });
-  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system", "tab-settings-billing", "tab-settings-drive", "tab-settings-member-levels"].forEach((id) => {
+  ["tab-settings-security", "tab-settings-features", "tab-settings-appearance", "tab-settings-system", "tab-settings-billing", "tab-settings-trading", "tab-settings-drive", "tab-settings-member-levels"].forEach((id) => {
     const btn = $(id);
     if (!btn) return;
     btn.classList.toggle("active", id === "tab-settings-" + tab);
@@ -139,8 +139,8 @@ function switchSettingsSection(tab) {
   }
   if (tab === "billing") {
     loadRootEconomyCatalog();
-    loadRootTradingSettings();
   }
+  if (tab === "trading") loadRootTradingSettings();
   if (tab === "member-levels") loadEditableMemberLevelRules();
   if (typeof clearSettingsStatus === "function") {
     if (suppressNextSettingsStatusClear) suppressNextSettingsStatusClear = false;
@@ -1204,6 +1204,7 @@ async function clearRootStorageOverride() {
 let rootEconomyCatalogCache = [];
 let rootTradingSettingsCache = { settings: {}, markets: [] };
 let rootTradingPriceFusionStatusCache = null;
+let rootTradingBotAuditCache = null;
 
 function rootCatalogMsg(text, ok = true) {
   const msg = $("root-catalog-msg");
@@ -1353,6 +1354,20 @@ function rootTradingPriceFusionMsg(text, ok = true) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function rootTradingBotAuditMsg(text, ok = true) {
+  const msg = $("root-trading-bot-audit-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function tradingBotAuditColor(status) {
+  if (status === "red") return "#ff6b81";
+  if (status === "yellow") return "#ffb347";
+  if (status === "green") return "#4caf50";
+  return "#9ecbff";
+}
+
 function renderRootTradingPriceFusionMarketOptions(payload) {
   const select = $("root-trading-price-fusion-market");
   if (!select) return;
@@ -1478,6 +1493,148 @@ async function loadRootTradingPriceFusionStatus() {
   }
 }
 
+function renderRootTradingBotAuditDashboard(dashboard = {}, reports = []) {
+  rootTradingBotAuditCache = dashboard || {};
+  const summary = $("root-trading-bot-audit-summary");
+  const bots = $("root-trading-bot-audit-bots");
+  const bugReports = $("root-trading-bot-audit-bug-reports");
+  if (!summary || !bots || !bugReports) return;
+  const counts = dashboard.summary || {};
+  summary.innerHTML = `
+    <div class="drive-file-row">
+      <div>
+        <strong>稽核總覽</strong>
+        <div class="drive-card-sub">未稽核 ${Number(counts.unaudited || 0)} · 綠燈 ${Number(counts.green || 0)} · 黃燈 ${Number(counts.yellow || 0)} · 紅燈 ${Number(counts.red || 0)}</div>
+        <div class="drive-card-sub">自動稽核 ${dashboard.settings?.bot_audit_enabled === false ? "停用" : "啟用"} · 間隔 ${Number(dashboard.settings?.bot_audit_interval_seconds || 0)} 秒 · 納入條件：首筆成交或啟用滿 ${Math.round(Number(dashboard.settings?.bot_audit_min_enabled_seconds || 0) / 3600)} 小時</div>
+      </div>
+    </div>
+  `;
+  const items = Array.isArray(dashboard.items) ? dashboard.items.slice() : [];
+  items.sort((a, b) => {
+    const rank = { red: 0, yellow: 1, unaudited: 2, green: 3 };
+    return (rank[a.audit_status] ?? 9) - (rank[b.audit_status] ?? 9);
+  });
+  bots.innerHTML = items.length ? items.map((item) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(item.name || item.display_symbol || item.market_symbol || "-")}</strong>
+        <span style="display:inline-block;margin-left:.4rem;padding:.1rem .45rem;border-radius:999px;background:${tradingBotAuditColor(item.audit_status)}22;color:${tradingBotAuditColor(item.audit_status)};font-size:.78rem;">${sanitize(item.audit_label || "未稽核")}</span>
+        <div class="drive-card-sub">${sanitize(item.username || "-")} · ${sanitize(item.display_symbol || item.market_symbol || "-")} · ${item.bot_kind === "grid_bot" ? "網格機器人" : "交易機器人"}</div>
+        <div class="drive-card-sub">${sanitize(item.eligible_reason_label || "")}</div>
+        <div class="drive-card-sub">
+          ${item.bot_kind === "grid_bot"
+            ? `總成交 ${Number(item.total_trades || 0)} · 開單 ${Number(item.open_order_count || 0)}`
+            : `已成交觸發 ${Number(item.triggered_run_count || 0)} · 執行次數 ${Number(item.run_count || 0)}`
+          }
+          · 最近稽核 ${sanitize(item.last_audited_at || "尚未稽核")}
+        </div>
+        ${item.last_error ? `<div class="drive-card-sub" style="color:#ffb347;">最近錯誤：${sanitize(item.last_error)}</div>` : ""}
+      </div>
+    </div>
+  `).join("") : `<div class="drive-empty">目前沒有交易機器人</div>`;
+  const tradingReports = (Array.isArray(reports) ? reports : []).filter((item) => {
+    const feature = String(item.feature || "").toLowerCase();
+    const title = String(item.title || "").toLowerCase();
+    return feature === "trading" || title.includes("交易");
+  });
+  bugReports.innerHTML = tradingReports.length ? tradingReports.slice(0, 20).map((item) => `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(item.title || item.id || "-")}</strong>
+        <div class="drive-card-sub">${sanitize(item.status || "-")} · ${sanitize(item.severity || "-")} · ${sanitize(item.reporter || "-")} · ${sanitize(item.created_at || "")}</div>
+        <div class="drive-card-sub">${sanitize(item.feature || "trading")}</div>
+      </div>
+      <div class="admin-toolbar" style="gap:.35rem;flex-wrap:wrap;">
+        <button class="btn btn-sm" type="button" data-trading-audit-bug-approve="${sanitize(item.id || "")}">核准</button>
+        <button class="btn btn-sm btn-danger" type="button" data-trading-audit-bug-reject="${sanitize(item.id || "")}">駁回</button>
+      </div>
+    </div>
+  `).join("") : `<div class="drive-empty">目前沒有交易相關 bug 回報</div>`;
+  bugReports.querySelectorAll("[data-trading-audit-bug-approve]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewTradingAuditBugReport(btn.dataset.tradingAuditBugApprove, "approve"));
+  });
+  bugReports.querySelectorAll("[data-trading-audit-bug-reject]").forEach((btn) => {
+    btn.addEventListener("click", () => reviewTradingAuditBugReport(btn.dataset.tradingAuditBugReject, "reject"));
+  });
+}
+
+async function loadRootTradingBotAuditDashboard() {
+  if (currentUser !== "root" || !$("root-trading-bot-audit-summary")) return;
+  rootTradingBotAuditMsg("交易機器人稽核 dashboard 載入中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const [dashRes, bugRes] = await Promise.all([
+      apiFetch(API + "/root/trading/bot-audit/dashboard", {
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" },
+      }),
+      apiFetch(API + "/admin/bug-reports", {
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" },
+      }),
+    ]);
+    const dashJson = await parseRootTradingSettingsResponse(dashRes);
+    const bugJson = await parseRootTradingSettingsResponse(bugRes);
+    if (!dashRes.ok || !dashJson.ok) {
+      rootTradingBotAuditMsg(rootTradingSettingsHttpMessage(dashRes, dashJson, "交易機器人稽核 dashboard 讀取失敗"), false);
+      return;
+    }
+    renderRootTradingBotAuditDashboard(dashJson.dashboard || {}, Array.isArray(bugJson?.reports) ? bugJson.reports : []);
+    rootTradingBotAuditMsg("已更新交易機器人稽核 dashboard。");
+  } catch (err) {
+    rootTradingBotAuditMsg(err.message || "交易機器人稽核 dashboard 請求失敗", false);
+  }
+}
+
+async function runRootTradingBotAudit(force = true) {
+  if (currentUser !== "root") return;
+  rootTradingBotAuditMsg("交易機器人稽核執行中...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + "/root/trading/bot-audit/run", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ force }),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingBotAuditMsg(rootTradingSettingsHttpMessage(res, json, "交易機器人稽核執行失敗"), false);
+      return;
+    }
+    rootTradingBotAuditMsg(`交易機器人稽核完成：已稽核 ${Number((json.audited || []).length)} 個，略過 ${Number((json.skipped || []).length)} 個。`);
+    await loadRootTradingBotAuditDashboard();
+  } catch (err) {
+    rootTradingBotAuditMsg(err.message || "交易機器人稽核執行請求失敗", false);
+  }
+}
+
+async function reviewTradingAuditBugReport(reportId, decision) {
+  if (currentUser !== "root" || !reportId) return;
+  const reviewNote = window.prompt(decision === "approve" ? "核准原因（可留空）" : "駁回原因（可留空）", "") || "";
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/admin/bug-reports/${encodeURIComponent(reportId)}/review`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf || "" },
+      body: JSON.stringify({ decision, review_note: reviewNote }),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingBotAuditMsg(rootTradingSettingsHttpMessage(res, json, "交易 bug 回報審核失敗"), false);
+      return;
+    }
+    rootTradingBotAuditMsg(`交易 bug 回報 ${sanitize(reportId)} 已${decision === "approve" ? "核准" : "駁回"}。`);
+    await loadRootTradingBotAuditDashboard();
+  } catch (err) {
+    rootTradingBotAuditMsg(err.message || "交易 bug 回報審核請求失敗", false);
+  }
+}
+
 async function parseRootTradingSettingsResponse(res) {
   const json = await res.clone().json().catch(() => null);
   if (json && typeof json === "object") return json;
@@ -1568,12 +1725,40 @@ function renderRootTradingSettings(payload) {
     fusionMarketSelect.addEventListener("change", loadRootTradingPriceFusionStatus);
     fusionMarketSelect.dataset.fusionBound = "1";
   }
+  const botAuditRefreshBtn = $("root-trading-bot-audit-refresh-btn");
+  if (botAuditRefreshBtn && !botAuditRefreshBtn.dataset.auditBound) {
+    botAuditRefreshBtn.addEventListener("click", loadRootTradingBotAuditDashboard);
+    botAuditRefreshBtn.dataset.auditBound = "1";
+  }
+  const botAuditRunBtn = $("root-trading-bot-audit-run-btn");
+  if (botAuditRunBtn && !botAuditRunBtn.dataset.auditBound) {
+    botAuditRunBtn.addEventListener("click", () => runRootTradingBotAudit(true));
+    botAuditRunBtn.dataset.auditBound = "1";
+  }
+  const btcTradeCheckBtn = $("root-trading-btc-trade-check-btn");
+  if (btcTradeCheckBtn && !btcTradeCheckBtn.dataset.btcTradeBound) {
+    btcTradeCheckBtn.addEventListener("click", checkRootBtcTradeStatus);
+    btcTradeCheckBtn.dataset.btcTradeBound = "1";
+  }
+  const btcTradeSetupBtn = $("root-trading-btc-trade-setup-btn");
+  if (btcTradeSetupBtn && !btcTradeSetupBtn.dataset.btcTradeBound) {
+    btcTradeSetupBtn.addEventListener("click", () => setupRootBtcTrade({ automatic: false }));
+    btcTradeSetupBtn.dataset.btcTradeBound = "1";
+  }
+  const btcTradeStartBtn = $("root-trading-btc-trade-start-btn");
+  if (btcTradeStartBtn && !btcTradeStartBtn.dataset.btcTradeBound) {
+    btcTradeStartBtn.addEventListener("click", startRootBtcTradePrediction);
+    btcTradeStartBtn.dataset.btcTradeBound = "1";
+  }
   toggleRootTradingPriceFusionControls();
   if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
   if ($("root-trading-liquidation-enabled")) $("root-trading-liquidation-enabled").checked = settings.margin_liquidation_enabled !== false;
   if ($("root-trading-bot-auto-enabled")) $("root-trading-bot-auto-enabled").checked = settings.bot_auto_scan_enabled !== false;
   if ($("root-trading-bot-auto-interval")) $("root-trading-bot-auto-interval").value = settings.bot_auto_scan_interval_seconds ?? 30;
   if ($("root-trading-bot-auto-limit")) $("root-trading-bot-auto-limit").value = settings.bot_auto_scan_limit ?? 50;
+  if ($("root-trading-bot-audit-enabled")) $("root-trading-bot-audit-enabled").checked = settings.bot_audit_enabled !== false;
+  if ($("root-trading-bot-audit-interval")) $("root-trading-bot-audit-interval").value = settings.bot_audit_interval_seconds ?? 300;
+  if ($("root-trading-bot-audit-limit")) $("root-trading-bot-audit-limit").value = settings.bot_audit_limit ?? 50;
   if ($("root-trading-maintenance-percent")) $("root-trading-maintenance-percent").value = adminPercentValue(settings.margin_maintenance_percent ?? 15, 15);
   if ($("root-trading-futures-enabled")) $("root-trading-futures-enabled").checked = !!settings.futures_enabled;
   if ($("root-trading-pvp-enabled")) $("root-trading-pvp-enabled").checked = !!settings.pvp_matching_enabled;
@@ -1603,6 +1788,7 @@ function renderRootTradingSettings(payload) {
     </div>
   `).join("");
   loadRootTradingPriceFusionStatus();
+  loadRootTradingBotAuditDashboard();
 }
 
 async function loadRootTradingSettings() {
@@ -1663,6 +1849,9 @@ async function saveRootTradingSettings() {
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,
       bot_auto_scan_interval_seconds: Number($("root-trading-bot-auto-interval")?.value || 30),
       bot_auto_scan_limit: Number($("root-trading-bot-auto-limit")?.value || 50),
+      bot_audit_enabled: !!$("root-trading-bot-audit-enabled")?.checked,
+      bot_audit_interval_seconds: Number($("root-trading-bot-audit-interval")?.value || 300),
+      bot_audit_limit: Number($("root-trading-bot-audit-limit")?.value || 50),
       margin_maintenance_percent: adminInputPercent($("root-trading-maintenance-percent")?.value || 0),
       futures_enabled: !!$("root-trading-futures-enabled")?.checked,
       pvp_matching_enabled: !!$("root-trading-pvp-enabled")?.checked,
@@ -1691,6 +1880,7 @@ async function saveRootTradingSettings() {
       rootTradingSettingsCache = json;
       renderRootTradingSettings(json);
       loadRootTradingPriceFusionStatus();
+      loadRootTradingBotAuditDashboard();
       if (typeof loadTradingDashboard === "function") loadTradingDashboard();
       if (willBtcTradeEnable && !wasBtcTradeEnabled) {
         await setupRootBtcTrade({ automatic: true });
@@ -1724,10 +1914,9 @@ async function checkRootBtcTradeStatus() {
     const json = await parseRootTradingSettingsResponse(res);
     const info = json.status || {};
     if (status) {
-      const missing = Array.isArray(info.missing) && info.missing.length ? `；缺少 ${info.missing.join(", ")}` : "";
       const commands = Array.isArray(info.commands) && info.commands.length ? `；初始化：cd ${projectDir || "BTC_trade"} && ${info.commands.join(" && ")}` : "";
       status.textContent = res.ok && json.ok
-        ? `${info.available ? "可用" : "不可用"}：${info.message || "-"}${missing}${info.needs_initialization ? commands : ""}`
+        ? `${info.available ? "可用" : "不可用"}：${formatBtcTradeStatusSummary(info)}${info.needs_initialization ? commands : ""}`
         : (json.msg || `HTTP ${res.status}`);
       status.style.color = res.ok && json.ok && info.available ? "#4caf50" : "#ffb74d";
     }
@@ -1747,6 +1936,28 @@ function formatBtcTradeStepResult(step) {
   const state = step.ok ? "成功" : "失敗";
   const detail = step.message || step.error || (step.stderr_tail ? step.stderr_tail.split("\n").filter(Boolean).slice(-1)[0] : "");
   return `${label}${state}${detail ? `：${detail}` : ""}`;
+}
+
+function formatBtcTradeArtifactState(label, info = {}, options = {}) {
+  if (!info || typeof info !== "object") return `${label}：未知`;
+  const positiveLabel = options.positiveLabel || "已是最新";
+  const negativeLabel = options.negativeLabel || "需要處理";
+  const positive = info.needs_update === false && info.needs_retrain === false && info.needs_refresh === false;
+  const state = positive ? positiveLabel : negativeLabel;
+  const updatedAt = info.last_bar_at || info.generated_at || info.updated_at;
+  return `${label}：${state}${updatedAt ? `（${updatedAt}）` : ""}`;
+}
+
+function formatBtcTradeStatusSummary(info = {}) {
+  const parts = [];
+  if (info.message) parts.push(info.message);
+  if (info.artifacts && typeof info.artifacts === "object") {
+    parts.push(formatBtcTradeArtifactState("資料", info.artifacts.data || {}, { positiveLabel: "已是最新", negativeLabel: "需要更新" }));
+    parts.push(formatBtcTradeArtifactState("模型", info.artifacts.models || {}, { positiveLabel: "已完成重訓", negativeLabel: "需要重訓" }));
+    parts.push(formatBtcTradeArtifactState("預測", info.artifacts.prediction || {}, { positiveLabel: "可直接使用", negativeLabel: "需要刷新" }));
+  }
+  if (Array.isArray(info.missing) && info.missing.length) parts.push(`缺少 ${info.missing.join(", ")}`);
+  return parts.filter(Boolean).join("；");
 }
 
 async function setupRootBtcTrade(options = {}) {
@@ -1793,6 +2004,80 @@ async function setupRootBtcTrade(options = {}) {
     }
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+async function startRootBtcTradePrediction() {
+  if (currentUser !== "root") return;
+  const status = $("root-trading-btc-trade-status");
+  const button = $("root-trading-btc-trade-start-btn");
+  const projectDir = ($("root-trading-btc-trade-path")?.value || "").trim();
+  if (button) button.disabled = true;
+  if (status) {
+    status.textContent = "BTC_trade 一鍵啟動中：檢查資料 / 模型，必要時補更新與重訓，再執行預測腳本...";
+    status.style.color = "var(--muted)";
+  }
+  try {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + "/root/trading/btc-trade/start", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() || "" },
+      body: JSON.stringify({ project_dir: projectDir, timeframe: "4h" }),
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    const job = json.job || {};
+    if (json.project_dir && $("root-trading-btc-trade-path") && !$("root-trading-btc-trade-path").value.trim()) {
+      $("root-trading-btc-trade-path").value = json.project_dir;
+    }
+    if (status) {
+      status.textContent = res.ok && json.ok
+        ? `${json.message || "BTC_trade 一鍵啟動已開始"}${job.job_id ? `；工作編號 ${job.job_id}` : ""}`
+        : (json.msg || `HTTP ${res.status}`);
+      status.style.color = res.ok && json.ok && json.start_ok ? "#4caf50" : "#ffb74d";
+    }
+    if (res.ok && json.ok && job.job_id) {
+      await pollRootBtcTradeStartJob(job.job_id);
+    }
+    if (res.ok && json.ok && typeof loadTradingDashboard === "function") {
+      loadTradingDashboard();
+    }
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "BTC_trade 一鍵啟動失敗";
+      status.style.color = "#ff4f6d";
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function pollRootBtcTradeStartJob(jobId) {
+  if (!jobId || currentUser !== "root") return;
+  const status = $("root-trading-btc-trade-status");
+  while (true) {
+    await fetchCsrfToken({ force: true });
+    const res = await apiFetch(API + `/root/trading/btc-trade/start-status?job_id=${encodeURIComponent(jobId)}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": getCsrfToken() || "" }
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    const job = json.job || {};
+    const result = job.result || {};
+    if (status) {
+      const steps = Array.isArray(job.steps) && job.steps.length
+        ? `；步驟：${job.steps.map(formatBtcTradeStepResult).join(" / ")}`
+        : "";
+      const actionSummary = result.actions
+        ? `；資料${result.actions.data_updated ? "已更新" : "沿用"} / 模型${result.actions.model_retrained ? "已重訓" : "沿用"} / 預測${result.actions.prediction_refreshed ? "已刷新" : "沿用有效結果"}`
+        : "";
+      status.textContent = json.ok
+        ? `${job.status === "completed" ? "一鍵啟動完成" : (job.status === "error" ? "一鍵啟動失敗" : "一鍵啟動執行中")}：${job.message || "-"}${actionSummary}${steps}`
+        : (json.msg || `HTTP ${res.status}`);
+      status.style.color = job.status === "completed" ? "#4caf50" : (job.status === "error" ? "#ff4f6d" : "#ffb74d");
+    }
+    if (!json.ok || job.status === "completed" || job.status === "error") return;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
   }
 }
 

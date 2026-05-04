@@ -13,7 +13,10 @@ from flask import Response, request
 from services.btc_trade_bridge import (
     DEFAULT_BTC_TRADE_BRANCH,
     DEFAULT_BTC_TRADE_REPO_URL,
+    BTC_TRADE_START_WAIT_SECONDS,
     btc_trade_setup,
+    btc_trade_start_prediction_job,
+    btc_trade_start_prediction_job_status,
     btc_trade_status,
     default_btc_trade_project_dir,
     expand_server_path,
@@ -215,6 +218,9 @@ def register_trading_routes(app, deps):
         msg = str(exc) or exc.__class__.__name__
         status = 400
         lowered = msg.lower()
+        if "decimal.invalidoperation" in lowered or "conversionsyntax" in lowered:
+            msg = "交易數量格式錯誤，請輸入有效的數字"
+            lowered = msg.lower()
         if "spot position" in lowered or "持倉不足" in lowered:
             status = 409
             msg = "現貨持倉不足，請降低賣出數量或確認可賣現貨。"
@@ -610,6 +616,19 @@ def register_trading_routes(app, deps):
         if err:
             return err
         return json_resp({"ok": True, "trading": trading_service.user_dashboard(user_id=actor["id"])})
+
+    @app.route("/api/trading/live-price", methods=["GET"])
+    @require_csrf_safe
+    def trading_live_price():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        market_symbol = str(request.args.get("market") or request.args.get("market_symbol") or "").strip().upper()
+        try:
+            quote = trading_service.get_live_market_quote(market_symbol=market_symbol)
+            return json_resp({"ok": True, **quote})
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/trading/history/export.csv", methods=["GET"])
     @require_csrf_safe
@@ -1008,7 +1027,11 @@ def register_trading_routes(app, deps):
             return err
         try:
             fetched_meta = {}
-            if not isinstance(data.get("candles"), list) or len(data.get("candles") or []) < 2:
+            candles = data.get("candles")
+            auto_fetch_reference = str(data.get("auto_fetch_reference_candles") or "").strip().lower() in {"1", "true", "yes", "on"}
+            if isinstance(candles, list) and candles and len(candles) < 2:
+                raise ValueError("candles are required for backtest")
+            if (not isinstance(candles, list) or not candles) and auto_fetch_reference:
                 fetched = fetch_reference_candles_for_backtest(data)
                 data["candles"] = fetched["candles"]
                 data["data_source"] = fetched["source"]
@@ -1314,6 +1337,48 @@ def register_trading_routes(app, deps):
         except Exception as exc:
             return service_error(exc)
 
+    @app.route("/api/root/trading/bot-audit/dashboard", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_bot_audit_dashboard():
+        actor, err = root_or_403()
+        if err:
+            return err
+        try:
+            limit = int(request.args.get("limit") or 100)
+        except Exception:
+            limit = 100
+        try:
+            return json_resp({"ok": True, "dashboard": trading_service.get_bot_audit_dashboard(limit=limit)})
+        except Exception as exc:
+            return service_error(exc)
+
+    @app.route("/api/root/trading/bot-audit/run", methods=["POST"])
+    @require_csrf
+    def root_trading_bot_audit_run():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            result = trading_service.run_due_bot_audits(
+                actor=actor,
+                limit=data.get("limit") or 0,
+                force=bool(data.get("force")),
+            )
+            audit(
+                "TRADING_BOT_AUDIT_MANUAL_RUN",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"audited={len(result.get('audited') or [])}, skipped={len(result.get('skipped') or [])}",
+            )
+            return json_resp(result)
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/root/trading/settings", methods=["POST"])
     @require_csrf
     def root_trading_settings_update():
@@ -1392,6 +1457,54 @@ def register_trading_routes(app, deps):
             "result": result,
         }
         return json_resp(payload)
+
+    @app.route("/api/root/trading/btc-trade/start", methods=["POST"])
+    @require_csrf
+    def root_trading_btc_trade_start():
+        actor, err = root_or_403()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        settings = trading_service.get_root_settings().get("settings", {})
+        project_dir = data.get("project_dir") or settings.get("btc_trade_project_dir") or str(default_btc_trade_project_dir(Path(__file__).resolve().parents[1]))
+        timeframe = str(data.get("timeframe") or "4h").strip().lower() or "4h"
+        wait_seconds = int(data.get("wait_seconds") or BTC_TRADE_START_WAIT_SECONDS)
+        job_result = btc_trade_start_prediction_job(
+            project_dir,
+            timeframe=timeframe,
+            wait_seconds=wait_seconds,
+        )
+        audit(
+            "BTC_TRADE_START",
+            get_client_ip(),
+            user=actor["username"],
+            success=bool(job_result.get("ok")),
+            ua=get_ua(),
+            detail=f"project_dir={project_dir}; timeframe={timeframe}; started={job_result.get('started')}",
+        )
+        payload = {
+            "ok": True,
+            "start_ok": bool(job_result.get("ok")),
+            "started": bool(job_result.get("started")),
+            "project_dir": (job_result.get("job") or {}).get("project_dir"),
+            "message": "BTC_trade 一鍵啟動已在背景開始執行，請等待新的預測資料" if job_result.get("started") else "BTC_trade 一鍵啟動已在背景執行中，沿用同一個工作",
+            "job": job_result.get("job"),
+        }
+        return json_resp(payload)
+
+    @app.route("/api/root/trading/btc-trade/start-status", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_btc_trade_start_status():
+        actor, err = root_or_403()
+        if err:
+            return err
+        job_id = (request.args.get("job_id") or "").strip()
+        job = btc_trade_start_prediction_job_status(job_id)
+        if not job:
+            return json_resp({"ok": False, "msg": "找不到 BTC_trade 一鍵啟動工作"}, 404)
+        return json_resp({"ok": True, "job": job})
 
     @app.route("/api/root/trading/liquidations/scan", methods=["POST"])
     @require_csrf

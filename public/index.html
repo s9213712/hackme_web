@@ -1605,7 +1605,7 @@
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
           <div><span class="drive-card-sub">交易總可用</span><strong id="trading-funding-available">-</strong><small id="trading-funding-mode">-</small></div>
           <div><span class="drive-card-sub">交易所體驗金</span><strong id="trading-trial-credit-available">-</strong><small id="trading-trial-credit-note">root 不適用</small></div>
-          <div><span class="drive-card-sub">目前價格</span><strong id="trading-current-price">-</strong><small id="trading-current-market">-</small></div>
+          <div><span class="drive-card-sub">目前價格</span><strong id="trading-current-price">-</strong><small id="trading-current-delta">即時輪詢 1 秒</small><small id="trading-current-health">🟢 價格來源正常</small><small id="trading-current-market">-</small></div>
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
         </div>
@@ -2694,6 +2694,7 @@
             <button class="tab" type="button" id="tab-settings-appearance">外觀</button>
             <button class="tab" type="button" id="tab-settings-system">系統</button>
             <button class="tab" type="button" id="tab-settings-billing">計費</button>
+            <button class="tab" type="button" id="tab-settings-trading">交易所</button>
             <button class="tab" type="button" id="tab-settings-drive">雲端硬碟</button>
             <button class="tab" type="button" id="tab-settings-member-levels">會員等級</button>
           </div>
@@ -3276,11 +3277,19 @@
             <div id="root-catalog-list" class="drive-file-list billing-catalog-list" style="margin-top:.75rem;"></div>
               </div>
             </details>
-            <details class="drive-collapsible-panel settings-collapse">
+          </div>
+          <div class="form-section" id="sec-settings-trading">
+            <div class="drive-card-sub" style="margin-bottom:.85rem;">交易所設定已獨立成單獨分頁。這裡集中處理價格來源、借貸風控、機器人掃描、稽核與 BTC_trade 整合，避免和一般扣點 catalog 混在一起。</div>
+            <div class="admin-toolbar" style="margin-bottom:.75rem;gap:.5rem;flex-wrap:wrap;">
+              <button class="btn" type="button" id="root-trading-settings-refresh-btn">重新整理交易所參數</button>
+              <button class="btn btn-primary" type="button" id="root-trading-settings-save-btn">儲存交易所參數</button>
+            </div>
+            <div id="root-trading-settings-msg" style="margin-bottom:.75rem;font-size:.8rem;"></div>
+            <details class="drive-collapsible-panel settings-collapse" open>
               <summary>
                 <div>
-                  <div class="drive-card-title">交易所參數</div>
-                  <div class="drive-card-sub">設定現貨手續費、最低交易額、借貸開關與資金池統計；借貸交易目前仍屬實驗設定。</div>
+                  <div class="drive-card-title">基本開關與風控</div>
+                  <div class="drive-card-sub">交易開關、借貸利率、保證金與清算相關參數。</div>
                 </div>
               </summary>
               <div class="drive-collapsible-body">
@@ -3311,6 +3320,43 @@
                     <input type="number" id="root-trading-short-collateral-percent" min="0" max="100" step="0.01" value="60" />
                     <div class="field-hint">預設 60% = 借券六成，用於借券放空最低保證金。</div>
                   </div>
+                  <div class="field">
+                    <label>維持保證金比例（%）</label>
+                    <input type="number" id="root-trading-maintenance-percent" min="0" max="100" step="0.01" value="15" />
+                    <div class="field-hint">預設 15%。倉位淨值低於此比例時會列入清算。</div>
+                  </div>
+                  <div class="field">
+                    <label>即時價格備援秒數</label>
+                    <input type="number" id="root-trading-max-price-staleness" min="0" max="86400" step="1" value="900" />
+                    <div class="field-hint">即時價格暫時失敗時，可用最後成功價格的最長時間；0 代表不使用快取。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-liquidation-enabled" checked /> 啟用自動強平 / 清算排程</label>
+                    <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-futures-enabled" disabled /> 合約功能（保留，暫不開放）</label>
+                  </div>
+                  <div class="field">
+                    <label><input type="checkbox" id="root-trading-pvp-enabled" disabled /> PVP 撮合（保留，暫不開放）</label>
+                  </div>
+                  <div class="field">
+                    <label>資金池目前統計</label>
+                    <strong id="root-trading-reserve-pool">0 POINTS</strong>
+                    <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
+                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="drive-collapsible-panel settings-collapse" open>
+              <summary>
+                <div>
+                  <div class="drive-card-title">價格來源與融合比例</div>
+                  <div class="drive-card-sub">設定交易執行價來源，並查看目前真實融合占比與排除來源。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="settings-option-grid">
                   <div class="field">
                     <label>價格來源</label>
                     <select id="root-trading-price-source">
@@ -3344,15 +3390,18 @@
                     <div id="root-trading-price-fusion-provider-list" class="drive-file-list" style="margin-top:.55rem;"></div>
                     <div id="root-trading-price-fusion-excluded-list" class="drive-file-list" style="margin-top:.55rem;"></div>
                   </div>
-                  <div class="field">
-                    <label>即時價格備援秒數</label>
-                    <input type="number" id="root-trading-max-price-staleness" min="0" max="86400" step="1" value="900" />
-                    <div class="field-hint">即時價格暫時失敗時，可用最後成功價格的最長時間；0 代表不使用快取。</div>
-                  </div>
-                  <div class="field">
-                    <label><input type="checkbox" id="root-trading-liquidation-enabled" checked /> 啟用自動強平 / 清算排程</label>
-                    <div class="field-hint">系統會定期掃描低於維持保證金的借貸倉位，符合條件時自動平倉。</div>
-                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="drive-collapsible-panel settings-collapse">
+              <summary>
+                <div>
+                  <div class="drive-card-title">機器人掃描與稽核</div>
+                  <div class="drive-card-sub">自動掃描頻率、稽核條件與 root 專屬稽核 dashboard。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="settings-option-grid">
                   <div class="field">
                     <label><input type="checkbox" id="root-trading-bot-auto-enabled" checked /> 啟用交易機器人自動掃描</label>
                     <div class="field-hint">後端會定期掃描所有已啟用的交易機器人；仍受冷卻、次數上限、餘額與交易風控限制。</div>
@@ -3367,21 +3416,42 @@
                     <input type="number" id="root-trading-bot-auto-limit" min="1" max="200" step="1" value="50" />
                   </div>
                   <div class="field">
-                    <label>維持保證金比例（%）</label>
-                    <input type="number" id="root-trading-maintenance-percent" min="0" max="100" step="0.01" value="15" />
-                    <div class="field-hint">預設 15%。倉位淨值低於此比例時會列入清算。</div>
+                    <label><input type="checkbox" id="root-trading-bot-audit-enabled" checked /> 啟用交易機器人定期稽核</label>
+                    <div class="field-hint">僅 root 可見。機器人至少成交一筆，或啟用滿 24 小時後，才會納入定期稽核目標。</div>
                   </div>
                   <div class="field">
-                    <label><input type="checkbox" id="root-trading-futures-enabled" disabled /> 合約功能（保留，暫不開放）</label>
+                    <label>稽核間隔秒數</label>
+                    <input type="number" id="root-trading-bot-audit-interval" min="60" max="86400" step="60" value="300" />
+                    <div class="field-hint">預設 300 秒。稽核前顯示「未稽核」，稽核後才顯示綠燈 / 黃燈 / 紅燈。</div>
                   </div>
                   <div class="field">
-                    <label><input type="checkbox" id="root-trading-pvp-enabled" disabled /> PVP 撮合（保留，暫不開放）</label>
+                    <label>每輪最多稽核機器人數</label>
+                    <input type="number" id="root-trading-bot-audit-limit" min="1" max="200" step="1" value="50" />
                   </div>
                   <div class="field">
-                    <label>資金池目前統計</label>
-                    <strong id="root-trading-reserve-pool">0 POINTS</strong>
-                    <div class="field-hint">借貸交易的本金來源；手續費、借貸利息與 root 明確撥入會增加資金池。</div>
+                    <label>機器人稽核 dashboard（root 專用）</label>
+                    <div class="admin-toolbar" style="margin-top:.35rem;gap:.5rem;flex-wrap:wrap;">
+                      <button class="btn" type="button" id="root-trading-bot-audit-refresh-btn">重新整理稽核 dashboard</button>
+                      <button class="btn" type="button" id="root-trading-bot-audit-run-btn">立即執行稽核</button>
+                    </div>
+                    <div class="field-hint">未稽核代表尚未達到「首筆成交或啟用滿 24 小時」條件。黃燈 / 紅燈會同步提醒 root，並可在下方檢查最近的 trading bug 回報。</div>
+                    <div id="root-trading-bot-audit-msg" style="margin-top:.45rem;font-size:.8rem;"></div>
+                    <div id="root-trading-bot-audit-summary" class="drive-file-list" style="margin-top:.55rem;"></div>
+                    <div id="root-trading-bot-audit-bots" class="drive-file-list" style="margin-top:.55rem;"></div>
+                    <div id="root-trading-bot-audit-bug-reports" class="drive-file-list" style="margin-top:.55rem;"></div>
                   </div>
+                </div>
+              </div>
+            </details>
+            <details class="drive-collapsible-panel settings-collapse">
+              <summary>
+                <div>
+                  <div class="drive-card-title">BTC_trade 信號整合</div>
+                  <div class="drive-card-sub">外部 repo 路徑、建置檢查與一鍵啟動預測。</div>
+                </div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div class="settings-option-grid">
                   <div class="field">
                     <label><input type="checkbox" id="root-trading-btc-trade-enabled" /> 啟用 BTC_trade 比特幣信號</label>
                     <div class="field-hint">預設關閉。啟用後系統會嘗試下載/更新 BTC_trade、下載資料、訓練並產生預測；失敗只會隱藏信號，不影響交易所。</div>
@@ -3403,16 +3473,22 @@
                     <label>BTC_trade 狀態</label>
                     <button class="btn" type="button" id="root-trading-btc-trade-check-btn">檢查 BTC_trade</button>
                     <button class="btn" type="button" id="root-trading-btc-trade-setup-btn">下載/更新並建置</button>
+                    <button class="btn btn-primary" type="button" id="root-trading-btc-trade-start-btn">一鍵啟動預測</button>
+                    <div class="field-hint">會先檢查資料是否過期、模型是否晚於資料；必要時先更新資料與重訓模型，再執行預測腳本並等待新的預測資料。</div>
                     <div id="root-trading-btc-trade-status" class="field-hint">尚未檢查</div>
                   </div>
                 </div>
-                <div class="drive-card-sub" style="margin:.75rem 0 .4rem;">各交易對參數</div>
-                <div id="root-trading-market-settings" class="drive-file-list billing-catalog-list"></div>
-                <div class="admin-toolbar" style="margin-top:.55rem;">
-                  <button class="btn" type="button" id="root-trading-settings-refresh-btn">重新整理交易所參數</button>
-                  <button class="btn btn-primary" type="button" id="root-trading-settings-save-btn">儲存交易所參數</button>
+              </div>
+            </details>
+            <details class="drive-collapsible-panel settings-collapse" open>
+              <summary>
+                <div>
+                  <div class="drive-card-title">各交易對參數</div>
+                  <div class="drive-card-sub">每個市場自己的價格跳動上限、手續費與最大/最小交易額。</div>
                 </div>
-                <div id="root-trading-settings-msg" style="margin-top:.5rem;font-size:.8rem;"></div>
+              </summary>
+              <div class="drive-collapsible-body">
+                <div id="root-trading-market-settings" class="drive-file-list billing-catalog-list"></div>
               </div>
             </details>
           </div>

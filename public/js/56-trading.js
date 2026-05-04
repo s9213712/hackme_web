@@ -25,6 +25,8 @@ let tradingReferenceChartModel = null;
 let tradingReferenceHoverIndex = null;
 let tradingDashboardAutoTimer = null;
 let tradingDashboardAutoBusy = false;
+let tradingLivePriceTimer = null;
+let tradingLivePriceBusy = false;
 let tradingTrialCountdownTimer = null;
 let tradingBtcSignalCountdownTimer = null;
 let tradingBotCountdownTimer = null;
@@ -32,6 +34,7 @@ let tradingCurrentBotTab = "mybots";
 let tradingBotChartOverlay = null;
 const tradingGridExpandedBots = new Set();
 const TRADING_WORKFLOW_STORAGE_KEY = "hackme_trading_workflow_json";
+const TRADING_LIVE_PRICE_REFRESH_MS = 1000;
 
 function tradingRequestId(prefix = "trading") {
   if (typeof economyRequestId === "function") return economyRequestId(prefix);
@@ -65,10 +68,11 @@ function tradingErrorText(json, fallback = "操作失敗") {
 }
 
 async function fetchTradingJson(url, options = {}) {
-  await fetchCsrfToken({ force: true });
-  const headers = { ...(options.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
-  if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const res = await apiFetch(API + url, { credentials: "same-origin", ...options, headers });
+  const { forceCsrf = true, ...requestOptions } = options || {};
+  await fetchCsrfToken({ force: !!forceCsrf });
+  const headers = { ...(requestOptions.headers || {}), "X-CSRF-Token": getCsrfToken() || "" };
+  if (requestOptions.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  const res = await apiFetch(API + url, { credentials: "same-origin", ...requestOptions, headers });
   const raw = await res.text().catch(() => "");
   let json = {};
   try {
@@ -110,6 +114,87 @@ function bindTradingActionButton(el, handler, pendingText, fallbackText) {
 function selectedTradingMarket() {
   const symbol = $("trading-market-select")?.value || "";
   return tradingState.markets.find((market) => market.symbol === symbol) || tradingState.markets[0] || null;
+}
+
+function renderTradingCurrentPrice(market, options = {}) {
+  const priceEl = $("trading-current-price");
+  const marketEl = $("trading-current-market");
+  const deltaEl = $("trading-current-delta");
+  const healthEl = $("trading-current-health");
+  const animate = options.animate !== false;
+  const symbol = String(market?.symbol || "");
+  const nextPrice = Number(market?.manual_price_points || 0);
+  const priceHistory = tradingState.livePriceHistory || (tradingState.livePriceHistory = {});
+  const liveMeta = tradingState.livePriceMeta || {};
+  const health = options.priceHealth || liveMeta[symbol]?.price_health || "healthy";
+  const fallbackReason = options.fallbackReason || liveMeta[symbol]?.fallback_reason || "";
+  const excludedSources = Array.isArray(options.excludedSources) ? options.excludedSources : (liveMeta[symbol]?.excluded_sources || []);
+  const defaultedMarket = options.defaultedMarket === true || liveMeta[symbol]?.defaulted_market === true;
+  const previousPrice = symbol && Number.isFinite(priceHistory[symbol]) ? Number(priceHistory[symbol]) : null;
+  if (priceEl) {
+    priceEl.textContent = market ? formatTradingPointsValue(nextPrice) : "-";
+    priceEl.classList.remove("trading-price-up", "trading-price-down", "trading-price-flat", "trading-price-flash");
+  }
+  if (marketEl) {
+    marketEl.textContent = market
+      ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "last_good_cache"} · ${TRADING_LIVE_PRICE_REFRESH_MS / 1000} 秒更新`
+      : "-";
+  }
+  if (!market || !Number.isFinite(nextPrice)) {
+    if (deltaEl) {
+      deltaEl.textContent = "即時價格暫不可用";
+      deltaEl.classList.remove("positive", "negative");
+    }
+    if (healthEl) {
+      healthEl.textContent = "🟡 價格來源不可用";
+      healthEl.classList.add("warning");
+    }
+    return;
+  }
+  let direction = "flat";
+  let delta = 0;
+  if (previousPrice != null && Number.isFinite(previousPrice)) {
+    delta = nextPrice - previousPrice;
+    direction = delta > 0 ? "up" : (delta < 0 ? "down" : "flat");
+  }
+  priceHistory[symbol] = nextPrice;
+  if (priceEl) {
+    priceEl.classList.add(direction === "up" ? "trading-price-up" : (direction === "down" ? "trading-price-down" : "trading-price-flat"));
+    if (animate && direction !== "flat") {
+      void priceEl.offsetWidth;
+      priceEl.classList.add("trading-price-flash");
+    }
+  }
+  if (deltaEl) {
+    if (direction === "up") {
+      deltaEl.textContent = `▲ +${formatTradingPointsValue(delta)}`;
+      deltaEl.classList.add("positive");
+      deltaEl.classList.remove("negative");
+    } else if (direction === "down") {
+      deltaEl.textContent = `▼ ${formatTradingPointsValue(delta)}`;
+      deltaEl.classList.add("negative");
+      deltaEl.classList.remove("positive");
+    } else {
+      deltaEl.textContent = `即時輪詢 ${TRADING_LIVE_PRICE_REFRESH_MS / 1000} 秒`;
+      deltaEl.classList.remove("positive", "negative");
+    }
+  }
+  if (healthEl) {
+    if (health === "fallback" || excludedSources.length) {
+      const notes = [];
+      if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
+      if (fallbackReason) notes.push(fallbackReason);
+      if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
+      healthEl.textContent = `🟡 價格來源降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.classList.add("warning");
+    } else if (defaultedMarket) {
+      healthEl.textContent = `🟢 未指定市場，已自動選用 ${tradingDisplaySymbol(symbol)}`;
+      healthEl.classList.remove("warning");
+    } else {
+      healthEl.textContent = "🟢 價格來源正常";
+      healthEl.classList.remove("warning");
+    }
+  }
 }
 
 function tradingDisplaySymbol(symbol) {
@@ -705,8 +790,7 @@ function renderTradingSummary() {
     $("trading-trial-credit-available").textContent = trial ? `${formatTradingPointsValue(trialAvailable)} / ${formatTradingPointsValue(trialInitial)}` : "-";
   }
   updateTradingTrialCountdown();
-  if ($("trading-current-price")) $("trading-current-price").textContent = market ? String(Number(market.manual_price_points || 0)) : "-";
-  if ($("trading-current-market")) $("trading-current-market").textContent = market ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "last_good_cache"}` : "-";
+  renderTradingCurrentPrice(market, { animate: false, ...(tradingState.livePriceMeta?.[market?.symbol] || {}) });
   if ($("trading-fee-rate-percent")) $("trading-fee-rate-percent").textContent = market ? formatTradingPercent(market.fee_rate_percent || 0) : "-";
   const position = market ? tradingState.positions.find((row) => row.market_symbol === market.symbol) : null;
   if ($("trading-position-quantity")) $("trading-position-quantity").textContent = position ? sanitize(position.quantity || "0") : "0";
@@ -1233,13 +1317,12 @@ async function loadTradingReferencePrices(options = {}) {
     }
     const last = responseCandles[responseCandles.length - 1] || null;
     if (last && last.close_points) {
-      market.manual_price_points = Number(last.close_points || 0);
-      market.price_source = json.source || "binance_public_api";
-      if ($("trading-current-price")) $("trading-current-price").textContent = String(Number(market.manual_price_points || 0));
-      if ($("trading-current-market")) $("trading-current-market").textContent = `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "binance_public_api"}`;
-      updateTradingOrderEstimate();
-      if (currentModuleTab === "economy" && tradingState.positions.length) {
-        renderEconomySpotPositionDetails(tradingState.positions, tradingState.markets);
+      // Reference-price polling is for the chart only. The trading card's
+      // "current price" must keep using the live/fused market price returned
+      // by the trading dashboard, otherwise single-source reference candles can
+      // visually overwrite the real execution reference price.
+      if ($("trading-reference-price-meta")) {
+        $("trading-reference-price-meta").textContent = `參考價格來源：${json.source || "reference_price"} · 最新收盤 ${Number(last.close_points || 0)}`;
       }
     }
     if (!isPriceOnly && tradingReferencePayloadHasCandles(tradingState.referencePrices)) {
@@ -2769,6 +2852,7 @@ async function loadTradingDashboard() {
     }
     renderTradingMarketOptions();
     renderTradingSummary();
+    loadTradingLivePrice().catch(() => {});
     renderTradingOrders(tradingState.orders);
     renderTradingFills(tradingState.fills);
     renderTradingBots(tradingState.bots, tradingState.botRuns);
@@ -2786,6 +2870,45 @@ async function loadTradingDashboard() {
       status.textContent = err.message || "交易狀態讀取失敗";
       status.style.color = "#ff4f6d";
     }
+  }
+}
+
+async function loadTradingLivePrice() {
+  const market = selectedTradingMarket();
+  if (!currentUser || currentModuleTab !== "trading" || !market?.symbol) return;
+  try {
+    const json = await fetchTradingJson(`/trading/live-price?market=${encodeURIComponent(market.symbol)}`, { forceCsrf: false });
+    const nextMarket = json.market || null;
+    if (!nextMarket?.symbol) return;
+    const index = tradingState.markets.findIndex((row) => row.symbol === nextMarket.symbol);
+    if (index >= 0) {
+      tradingState.markets[index] = { ...tradingState.markets[index], ...nextMarket };
+    } else {
+      tradingState.markets.unshift(nextMarket);
+    }
+    const liveMeta = tradingState.livePriceMeta || (tradingState.livePriceMeta = {});
+    liveMeta[nextMarket.symbol] = {
+      price_health: json.price_health || "healthy",
+      fallback_reason: json.fallback_reason || "",
+      excluded_sources: Array.isArray(json.excluded_sources) ? json.excluded_sources : [],
+      defaulted_market: !!json.defaulted_market,
+    };
+    const selected = selectedTradingMarket();
+    renderTradingCurrentPrice(selected, {
+      animate: true,
+      priceHealth: json.price_health,
+      fallbackReason: json.fallback_reason,
+      excludedSources: json.excluded_sources,
+      defaultedMarket: !!json.defaulted_market,
+    });
+    updateTradingOrderEstimate();
+    updateTradingMarginEstimate();
+    const limit = $("trading-limit-price");
+    if (limit && selected) {
+      limit.placeholder = `目前 ${Number(selected.manual_price_points || 0)}`;
+    }
+  } catch (_) {
+    // Keep the last visible price; the 5s dashboard refresh handles surfaced errors.
   }
 }
 
@@ -3013,6 +3136,7 @@ async function backtestTradingBot() {
       tradingSetMsg(`回測區間約需 ${estimatedCandles.toLocaleString()} 根 K 線，超過單次上限 ${BACKTEST_TOTAL_CANDLE_LIMIT.toLocaleString()} 根。請縮小區間或改大時間週期。`, false);
       return;
     }
+    basePayload.auto_fetch_reference_candles = true;
     basePayload.candle_limit = estimatedCandles || 500;
     tradingSetMsg(
       estimatedCandles
@@ -3710,7 +3834,12 @@ function bindTradingEvents() {
     });
   }
   const marketSelect = $("trading-market-select");
-  if (marketSelect) marketSelect.addEventListener("change", renderTradingSummary);
+  if (marketSelect) {
+    marketSelect.addEventListener("change", () => {
+      renderTradingSummary();
+      loadTradingLivePrice().catch(() => {});
+    });
+  }
   const marginMarketSelect = $("trading-margin-market-select");
   if (marginMarketSelect) marginMarketSelect.addEventListener("change", updateTradingMarginEstimate);
   ["trading-margin-type", "trading-margin-quantity", "trading-margin-collateral"].forEach((id) => {
@@ -3771,6 +3900,17 @@ function bindTradingEvents() {
         tradingDashboardAutoBusy = false;
       }
     }, 5000);
+  }
+  if (!tradingLivePriceTimer) {
+    tradingLivePriceTimer = setInterval(async () => {
+      if (!currentUser || currentModuleTab !== "trading" || tradingLivePriceBusy) return;
+      tradingLivePriceBusy = true;
+      try {
+        await loadTradingLivePrice();
+      } finally {
+        tradingLivePriceBusy = false;
+      }
+    }, TRADING_LIVE_PRICE_REFRESH_MS);
   }
   if (!tradingTrialCountdownTimer) {
     tradingTrialCountdownTimer = setInterval(updateTradingTrialCountdown, 1000);

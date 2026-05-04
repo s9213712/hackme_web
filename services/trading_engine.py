@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from services.notifications import create_notification_if_enabled
+from services.notifications import create_notification_if_enabled, create_root_notification_if_enabled
 
 
 ASSET_SCALE = 100_000_000
@@ -26,6 +26,9 @@ TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
 TRADING_BOT_TYPES = {"conditional", "dca"}
 BACKTEST_SEGMENT_CANDLES = 10_000
 MAX_BACKTEST_CANDLES = 20_000
+TRADING_BOT_AUDIT_INTERVAL_SECONDS = 300
+TRADING_BOT_AUDIT_LIMIT = 50
+TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS = 86_400
 WORKFLOW_CONDITION_TYPES = {
     "price_below",
     "price_above",
@@ -226,6 +229,8 @@ def quantity_to_units(value):
         dec = Decimal(str(value or "")).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("quantity must be a positive number") from exc
+    if not dec.is_finite():
+        raise ValueError("quantity must be a positive number")
     if dec <= 0:
         raise ValueError("quantity must be positive")
     units = int(dec * ASSET_SCALE)
@@ -607,6 +612,7 @@ def ensure_trading_schema(conn):
             execution_state_json TEXT,
             last_run_at TEXT,
             last_error TEXT,
+            enabled_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             CHECK (bot_type IN ('conditional', 'dca')),
@@ -659,6 +665,7 @@ def ensure_trading_schema(conn):
             grid_levels_json TEXT,
             last_scan_at TEXT,
             last_error TEXT,
+            enabled_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             CHECK (upper_price_points > lower_price_points)
@@ -680,6 +687,39 @@ def ensure_trading_schema(conn):
             status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'filled', 'cancelled')),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_bot_audit_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_uuid TEXT NOT NULL UNIQUE,
+            bot_kind TEXT NOT NULL CHECK (bot_kind IN ('trading_bot', 'grid_bot')),
+            bot_uuid TEXT NOT NULL,
+            bot_id INTEGER,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            market_symbol TEXT NOT NULL,
+            audit_status TEXT NOT NULL CHECK (audit_status IN ('green', 'yellow', 'red')),
+            eligible_reason TEXT NOT NULL,
+            findings_json TEXT,
+            finding_count INTEGER NOT NULL DEFAULT 0,
+            warning_count INTEGER NOT NULL DEFAULT 0,
+            blocker_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trading_bot_audit_findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL REFERENCES trading_bot_audit_runs(id) ON DELETE CASCADE,
+            severity TEXT NOT NULL CHECK (severity IN ('warning', 'blocker')),
+            code TEXT NOT NULL,
+            message TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -813,6 +853,13 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_bots ADD COLUMN workflow_json TEXT")
     if "execution_state_json" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN execution_state_json TEXT")
+    if "enabled_at" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN enabled_at TEXT")
+        conn.execute("UPDATE trading_bots SET enabled_at=COALESCE(created_at, updated_at) WHERE enabled=1 AND COALESCE(enabled_at, '')=''")
+    grid_bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_grid_bots)").fetchall()}
+    if "enabled_at" not in grid_bot_cols:
+        conn.execute("ALTER TABLE trading_grid_bots ADD COLUMN enabled_at TEXT")
+        conn.execute("UPDATE trading_grid_bots SET enabled_at=COALESCE(created_at, updated_at) WHERE enabled=1 AND COALESCE(enabled_at, '')=''")
 
 
 class TradingEngineService:
@@ -1087,6 +1134,10 @@ class TradingEngineService:
             "bot_auto_scan_enabled": str(raw.get("trading.bot_auto_scan_enabled", "true")).lower() in {"true", "1", "yes"},
             "bot_auto_scan_interval_seconds": _to_int(raw.get("trading.bot_auto_scan_interval_seconds", "30"), name="bot_auto_scan_interval_seconds", minimum=10, maximum=3600),
             "bot_auto_scan_limit": _to_int(raw.get("trading.bot_auto_scan_limit", "50"), name="bot_auto_scan_limit", minimum=1, maximum=200),
+            "bot_audit_enabled": str(raw.get("trading.bot_audit_enabled", "true")).lower() in {"true", "1", "yes"},
+            "bot_audit_interval_seconds": _to_int(raw.get("trading.bot_audit_interval_seconds", str(TRADING_BOT_AUDIT_INTERVAL_SECONDS)), name="bot_audit_interval_seconds", minimum=60, maximum=86400),
+            "bot_audit_limit": _to_int(raw.get("trading.bot_audit_limit", str(TRADING_BOT_AUDIT_LIMIT)), name="bot_audit_limit", minimum=1, maximum=200),
+            "bot_audit_min_enabled_seconds": _to_int(raw.get("trading.bot_audit_min_enabled_seconds", str(TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS)), name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800),
             "raw": raw,
         }
 
@@ -1120,6 +1171,7 @@ class TradingEngineService:
                 "borrowing_enabled": "trading.borrowing_enabled",
                 "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
                 "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
+                "bot_audit_enabled": "trading.bot_audit_enabled",
                 "btc_trade_enabled": "trading.btc_trade_enabled",
             }
             for input_key, storage_key in bool_keys.items():
@@ -1183,6 +1235,27 @@ class TradingEngineService:
                     ("trading.bot_auto_scan_limit", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.bot_auto_scan_limit"] = value
+            if "bot_audit_interval_seconds" in settings:
+                value = str(_to_int(settings.get("bot_audit_interval_seconds"), name="bot_audit_interval_seconds", minimum=60, maximum=86400))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.bot_audit_interval_seconds", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.bot_audit_interval_seconds"] = value
+            if "bot_audit_limit" in settings:
+                value = str(_to_int(settings.get("bot_audit_limit"), name="bot_audit_limit", minimum=1, maximum=200))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.bot_audit_limit", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.bot_audit_limit"] = value
+            if "bot_audit_min_enabled_seconds" in settings:
+                value = str(_to_int(settings.get("bot_audit_min_enabled_seconds"), name="bot_audit_min_enabled_seconds", minimum=3600, maximum=604800))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.bot_audit_min_enabled_seconds", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.bot_audit_min_enabled_seconds"] = value
             if "price_source" in settings:
                 value = str(settings.get("price_source") or "").strip()
                 if value not in {FUSED_PRICE_SOURCE, "binance_public_api", "manual_root"}:
@@ -1734,6 +1807,39 @@ class TradingEngineService:
         finally:
             conn.close()
 
+    def get_live_market_quote(self, *, market_symbol=""):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            symbol = str(market_symbol or "").strip().upper()
+            defaulted_market = not bool(symbol)
+            if symbol:
+                market_row = self._market(conn, symbol)
+            else:
+                market_row = conn.execute(
+                    "SELECT * FROM trading_markets WHERE enabled=1 AND spot_enabled=1 ORDER BY symbol LIMIT 1"
+                ).fetchone()
+                if not market_row:
+                    raise ValueError("market not found")
+            market = self._market_payload(market_row)
+            current_price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True)
+            updated_row = conn.execute("SELECT * FROM trading_markets WHERE symbol=?", (market["symbol"],)).fetchone()
+            conn.commit()
+            payload = self._market_payload(updated_row or market_row)
+            payload["manual_price_points"] = current_price
+            payload["price_source"] = str(price_source or payload.get("price_source") or "manual_root")
+            return {
+                "market": payload,
+                "refresh_interval_ms": 1000,
+                "server_time": _now(),
+                "price_health": str((price_meta or {}).get("price_health") or "healthy"),
+                "fallback_reason": str((price_meta or {}).get("fallback_reason") or ""),
+                "excluded_sources": list((price_meta or {}).get("excluded_sources") or []),
+                "defaulted_market": defaulted_market,
+            }
+        finally:
+            conn.close()
+
     def _fetch_live_price_points(self, market_symbol):
         market_symbol = str(market_symbol or "").strip().upper()
         if not self._live_price_symbol(market_symbol):
@@ -1821,13 +1927,21 @@ class TradingEngineService:
             )
         return context
 
-    def _current_market_price_points(self, conn, market):
+    def _current_market_price_points(self, conn, market, *, with_meta=False):
         symbol = market["symbol"]
         settings = self._settings_payload(conn)
         configured_source = settings.get("price_source") or FUSED_PRICE_SOURCE
+        price_meta = {
+            "price_health": "healthy",
+            "fallback_reason": "",
+            "excluded_sources": [],
+        }
         if configured_source == "manual_root" or not self._live_price_symbol(symbol):
-            return int(market["manual_price_points"]), str(market["price_source"] or "manual_root")
-        old_price = int(market["manual_price_points"] or 0)
+            price = market["manual_price_points"]
+            source = str(market["price_source"] or "manual_root")
+            return (price, source, price_meta) if with_meta else (price, source)
+        old_price_decimal = Decimal(str(market["manual_price_points"] or "0"))
+        old_price = int(old_price_decimal) if old_price_decimal == old_price_decimal.to_integral_value() else float(old_price_decimal)
         old_source = str(market["price_source"] or "")
         fusion_details = None
         try:
@@ -1846,7 +1960,12 @@ class TradingEngineService:
             except Exception:
                 stale_seconds = max_stale + 1
             cached_source = old_source[:-7] if old_source.endswith("_cached") else old_source
-            if old_price > 0 and max_stale > 0 and stale_seconds <= max_stale and cached_source in LIVE_PRICE_SOURCE_NAMES:
+            if old_price_decimal > 0 and max_stale > 0 and stale_seconds <= max_stale and cached_source in LIVE_PRICE_SOURCE_NAMES:
+                price_meta.update({
+                    "price_health": "fallback",
+                    "fallback_reason": str(exc),
+                    "excluded_sources": [],
+                })
                 self._audit_event(
                     conn,
                     "TRADING_PRICE_FALLBACK_USED",
@@ -1855,7 +1974,8 @@ class TradingEngineService:
                     severity="warning",
                     metadata={"error": str(exc), "cached_price_points": old_price, "stale_seconds": stale_seconds, "max_stale_seconds": max_stale},
                 )
-                return old_price, f"{cached_source}_cached"
+                source = f"{cached_source}_cached"
+                return (old_price, source, price_meta) if with_meta else (old_price, source)
             raise ValueError(f"live trading price unavailable for {symbol}: {exc}") from exc
         has_live_history = bool(conn.execute(
             """
@@ -1870,8 +1990,8 @@ class TradingEngineService:
             """,
             (symbol, symbol, symbol),
         ).fetchone())
-        if old_price > 0 and old_source in LIVE_PRICE_SOURCE_NAMES and has_live_history:
-            jump_percent = float(abs(price - old_price) * 100 / old_price) if old_price else 0.0
+        if old_price_decimal > 0 and old_source in LIVE_PRICE_SOURCE_NAMES and has_live_history:
+            jump_percent = float((abs(Decimal(str(price)) - old_price_decimal) * Decimal("100")) / old_price_decimal)
             allowed_percent = float(market["max_price_jump_percent"] or 0)
             if allowed_percent and jump_percent > allowed_percent:
                 self._audit_event(
@@ -1886,6 +2006,15 @@ class TradingEngineService:
         if configured_source == FUSED_PRICE_SOURCE and fusion_details and (
             fusion_details.get("degraded") or fusion_details.get("warning_code") or fusion_details.get("excluded_providers")
         ):
+            price_meta.update({
+                "price_health": "fallback" if fusion_details.get("fallback_active") else "warning",
+                "fallback_reason": str(fusion_details.get("warning_message") or fusion_details.get("warning_code") or ""),
+                "excluded_sources": [
+                    str(item.get("source") or "")
+                    for item in (fusion_details.get("excluded_providers") or [])
+                    if str(item.get("source") or "").strip()
+                ],
+            })
             self._audit_event(
                 conn,
                 "TRADING_PRICE_FUSION_DEGRADED",
@@ -1910,7 +2039,7 @@ class TradingEngineService:
             "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
             (price, live_source, now, symbol),
         )
-        return price, live_source
+        return (price, live_source, price_meta) if with_meta else (price, live_source)
 
     def _root_sim_account(self, conn, user_id, *, actor=None):
         user_id = int(user_id)
@@ -3580,7 +3709,8 @@ class TradingEngineService:
                     SET bot_type=?, name=?, market_symbol=?, side=?, order_type=?, quantity_text=?,
                         limit_price_points=?, trigger_type=?, trigger_price_points=?,
                         enabled=?, max_runs=?, cooldown_seconds=?, interval_hours=?, budget_points=?,
-                        workflow_json=?, execution_state_json='{}', last_error='', updated_at=?
+                        workflow_json=?, execution_state_json='{}', last_error='',
+                        enabled_at=?, updated_at=?
                     WHERE id=?
                     """,
                     (
@@ -3588,7 +3718,9 @@ class TradingEngineService:
                         data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
                         1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
                         data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
-                        now, existing["id"],
+                        now if data["enabled"] and not bool(existing["enabled"]) else (existing["enabled_at"] if data["enabled"] else None),
+                        now,
+                        existing["id"],
                     ),
                 )
                 bot_id = existing["id"]
@@ -3599,15 +3731,17 @@ class TradingEngineService:
                     INSERT INTO trading_bots (
                         bot_uuid, user_id, bot_type, name, market_symbol, side, order_type, quantity_text,
                         limit_price_points, trigger_type, trigger_price_points, enabled,
-                        max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, execution_state_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, '{}', ?, ?)
+                        max_runs, run_count, cooldown_seconds, interval_hours, budget_points, workflow_json, execution_state_json, enabled_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, '{}', ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()), user_id, data["bot_type"], data["name"], data["market_symbol"], data["side"], data["order_type"],
                         data["quantity_text"], data["limit_price_points"], data["trigger_type"], data["trigger_price_points"],
                         1 if data["enabled"] else 0, data["max_runs"], data["cooldown_seconds"],
                         data["interval_hours"], data["budget_points"], _json_dumps(data["workflow"]) if data["workflow"] else None,
-                        now, now,
+                        now if data["enabled"] else None,
+                        now,
+                        now,
                     ),
                 )
                 bot_id = cur.lastrowid
@@ -3764,12 +3898,12 @@ class TradingEngineService:
                 INSERT INTO trading_grid_bots
                   (bot_uuid, user_id, name, market_symbol, upper_price_points, lower_price_points,
                    grid_count, order_amount_points, enabled, initial_price_points, grid_levels_json,
-                   created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?)
+                   enabled_at, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)
                 """,
                 (bot_uuid, user_id, name, market_symbol, upper_price, lower_price,
                  grid_count, order_amount, current_price,
-                 json.dumps(grid_levels), now, now),
+                 json.dumps(grid_levels), now, now, now),
             )
             grid_bot_id = conn.execute(
                 "SELECT id FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)
@@ -3886,7 +4020,10 @@ class TradingEngineService:
             if not row:
                 raise ValueError("grid bot not found")
             now = _now()
-            conn.execute("UPDATE trading_grid_bots SET enabled=?, updated_at=? WHERE id=?", (1 if enabled else 0, now, row["id"]))
+            conn.execute(
+                "UPDATE trading_grid_bots SET enabled=?, enabled_at=?, updated_at=? WHERE id=?",
+                (1 if enabled else 0, now if enabled and not bool(row["enabled"]) else (row["enabled_at"] if enabled else None), now, row["id"]),
+            )
             conn.commit()
             return {"ok": True, "bot_uuid": bot_uuid, "enabled": bool(enabled)}
         except Exception:
@@ -4181,11 +4318,13 @@ class TradingEngineService:
         bb_mid = ma20
         bb_upper = None
         bb_lower = None
+        bb_std = None
         if ma20 is not None and len(closes) >= 20:
             variance = sum((value - ma20) ** 2 for value in closes[-20:]) / 20
-            std = math.sqrt(variance)
-            bb_upper = ma20 + 2 * std
-            bb_lower = ma20 - 2 * std
+            bb_std = math.sqrt(variance)
+            if bb_std > 0:
+                bb_upper = ma20 + 2 * bb_std
+                bb_lower = ma20 - 2 * bb_std
         kd_k = None
         if len(closes) >= 9 and highs and lows:
             high9 = max(highs[-9:])
@@ -4199,6 +4338,7 @@ class TradingEngineService:
             "bb_mid": bb_mid,
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
+            "bb_std": bb_std,
             "rsi": rsi(14),
             "kd": kd_k,
         }
@@ -4246,9 +4386,17 @@ class TradingEngineService:
             if position == "below_mid":
                 return context.get("bb_mid") is not None and price <= float(context["bb_mid"])
             if position == "above_upper":
-                return context.get("bb_upper") is not None and price >= float(context["bb_upper"])
+                return (
+                    context.get("bb_upper") is not None
+                    and float(context.get("bb_std") or 0) > 0
+                    and price > float(context["bb_upper"])
+                )
             if position == "below_lower":
-                return context.get("bb_lower") is not None and price <= float(context["bb_lower"])
+                return (
+                    context.get("bb_lower") is not None
+                    and float(context.get("bb_std") or 0) > 0
+                    and price < float(context["bb_lower"])
+                )
         if ctype == "stop_loss_percent":
             pnl = context.get("pnl_percent")
             return pnl is not None and bool(context.get("has_position")) and pnl <= -abs(value)
@@ -4699,6 +4847,10 @@ class TradingEngineService:
             self.ensure_schema(conn)
             market = self._market(conn, payload.get("market_symbol"))
             fee_rate_percent = float(market["fee_rate_percent"] or 0)
+            if payload.get("max_price_jump_percent") is not None:
+                max_price_jump_percent = float(payload.get("max_price_jump_percent"))
+            else:
+                max_price_jump_percent = max(float(market["max_price_jump_percent"] or 0), 70.0)
         finally:
             conn.close()
         strategy = str(payload.get("strategy") or payload.get("bot_type") or "conditional").strip().lower()
@@ -4716,6 +4868,7 @@ class TradingEngineService:
         interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
         initial_cash = cash
         initial_workflow_state = payload.get("initial_workflow_state") if isinstance(payload.get("initial_workflow_state"), dict) else {}
+        range_warnings = []
         state = {
             "cash": cash,
             "units": int(payload.get("initial_units") or 0),
@@ -4740,6 +4893,9 @@ class TradingEngineService:
             "grid_levels": [],
             "grid_order_amount": 0,
             "grid_fee_rate": fee_rate_percent * 0.5,
+            "last_valid_price": None,
+            "recent_valid_prices": [],
+            "outlier_skipped_count": 0,
         }
 
         def _record_equity(global_index, candle, price):
@@ -4821,6 +4977,26 @@ class TradingEngineService:
                     continue
                 if price <= 0:
                     continue
+                anchor_prices = [int(value) for value in (state.get("recent_valid_prices") or []) if int(value or 0) > 0]
+                anchor_price = 0
+                if anchor_prices:
+                    sorted_anchor = sorted(anchor_prices)
+                    anchor_price = int(sorted_anchor[len(sorted_anchor) // 2])
+                elif state["last_valid_price"]:
+                    anchor_price = int(state["last_valid_price"])
+                if anchor_price > 0 and max_price_jump_percent > 0:
+                    jump_percent = abs(price - anchor_price) * 100.0 / anchor_price
+                    if jump_percent > max_price_jump_percent:
+                        state["outlier_skipped_count"] += 1
+                        if state["outlier_skipped_count"] <= 5:
+                            candle_time = candle.get("time_iso") or candle.get("time") or global_index
+                            range_warnings.append(
+                                f"已略過跳價 {jump_percent:.2f}% 的 K 線（時間 {candle_time}，價格 {price}，參考價 {anchor_price}，上限 {max_price_jump_percent:.2f}%）"
+                            )
+                        continue
+                state["last_valid_price"] = price
+                state["recent_valid_prices"].append(price)
+                state["recent_valid_prices"] = state["recent_valid_prices"][-5:]
 
                 if strategy == "grid":
                     try:
@@ -5007,16 +5183,9 @@ class TradingEngineService:
             if chunk:
                 _run_chunk(chunk)
         last_price = 0
-        for candle in reversed(candles):
-            try:
-                last_price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
-                if last_price > 0:
-                    break
-            except Exception:
-                continue
+        last_price = int(state["last_valid_price"] or 0)
         position_value = notional_points(state["units"], last_price) if last_price else 0
         final_value = state["cash"] + position_value
-        range_warnings = []
         all_candles_raw = payload.get("candles") or []
         if start_time and all_candles_raw:
             first_raw = str(all_candles_raw[0].get("time_iso") or all_candles_raw[0].get("time") or "")
@@ -5030,6 +5199,8 @@ class TradingEngineService:
             range_warnings.append(f"K 線數量達到上限 {MAX_BACKTEST_CANDLES} 根，更早的歷史資料可能未被包含")
         if segment_count > 1:
             range_warnings.append(f"回測資料共 {len(candles)} 根 K 線，後端已自動分成 {segment_count} 批連續執行（每批最多 {BACKTEST_SEGMENT_CANDLES} 根）")
+        if state["outlier_skipped_count"] > 5:
+            range_warnings.append(f"另有 {state['outlier_skipped_count'] - 5} 根跳價 K 線超過 {max_price_jump_percent:.2f}% 已被略過")
         return {
             "ok": True,
             "strategy": strategy,
@@ -5057,6 +5228,8 @@ class TradingEngineService:
             "start_time": start_time,
             "end_time": end_time,
             "range_warnings": range_warnings,
+            "outlier_skipped_count": state["outlier_skipped_count"],
+            "max_price_jump_percent": max_price_jump_percent,
             "end_units": state["units"],
             "end_avg_cost": state["avg_cost_bt"],
             "end_cash_points": state["cash"],
@@ -7094,6 +7267,440 @@ class TradingEngineService:
         finally:
             conn.close()
 
+    def _bot_audit_latest_map(self, conn):
+        latest = {}
+        rows = conn.execute(
+            "SELECT * FROM trading_bot_audit_runs ORDER BY id DESC LIMIT 1000"
+        ).fetchall()
+        for row in rows:
+            key = (str(row["bot_kind"]), str(row["bot_uuid"]))
+            if key not in latest:
+                latest[key] = dict(row)
+        return latest
+
+    def _bot_audit_label(self, status):
+        mapping = {
+            "unaudited": "未稽核",
+            "green": "綠燈",
+            "yellow": "黃燈",
+            "red": "紅燈",
+        }
+        return mapping.get(str(status or ""), "未稽核")
+
+    def _bot_audit_eligibility_reason_label(self, reason):
+        mapping = {
+            "has_trade": "已至少成交一筆，納入稽核",
+            "aged_24h": "啟用已滿 24 小時，納入稽核",
+            "awaiting_first_trade": "尚未成交，且未滿 24 小時",
+            "disabled": "機器人目前停用中",
+            "audit_disabled": "root 已關閉自動稽核",
+        }
+        return mapping.get(str(reason or ""), str(reason or ""))
+
+    def _bot_audit_enabled_at(self, row):
+        raw = row.get("enabled_at") or row.get("updated_at") or row.get("created_at") or ""
+        try:
+            return datetime.fromisoformat(str(raw))
+        except Exception:
+            return datetime.fromisoformat(_now())
+
+    def _bot_audit_is_eligible(self, row, *, bot_kind, min_enabled_seconds):
+        if not bool(row.get("enabled")):
+            return False, "disabled"
+        enabled_at = self._bot_audit_enabled_at(row)
+        age_seconds = max(0, int((datetime.fromisoformat(_now()) - enabled_at).total_seconds()))
+        has_trade = False
+        if bot_kind == "trading_bot":
+            has_trade = int(row.get("triggered_run_count") or 0) > 0
+        else:
+            has_trade = int(row.get("total_trades") or 0) > 0
+        if has_trade:
+            return True, "has_trade"
+        if age_seconds >= int(min_enabled_seconds or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS):
+            return True, "aged_24h"
+        return False, "awaiting_first_trade"
+
+    def _bot_audit_run_findings(self, conn, row, *, bot_kind, min_enabled_seconds):
+        findings = []
+        state = self._state(conn)
+        if bool(state.get("safe_mode")):
+            findings.append({
+                "severity": "blocker",
+                "code": "safe_mode_active",
+                "message": "交易系統目前處於 safe mode，機器人結果不可信，需先排除全域交易異常。",
+                "metadata": {"reason": state.get("reason") or ""},
+            })
+        eligible, eligible_reason = self._bot_audit_is_eligible(
+            row,
+            bot_kind=bot_kind,
+            min_enabled_seconds=min_enabled_seconds,
+        )
+        if bot_kind == "trading_bot":
+            recent_runs = [
+                dict(item)
+                for item in conn.execute(
+                    "SELECT status, error, created_at, order_uuid FROM trading_bot_runs WHERE bot_id=? ORDER BY id DESC LIMIT 10",
+                    (int(row["id"]),),
+                ).fetchall()
+            ]
+            failed_runs = [item for item in recent_runs if item.get("status") == "failed"]
+            if str(row.get("last_error") or "").strip():
+                findings.append({
+                    "severity": "blocker" if failed_runs else "warning",
+                    "code": "bot_last_error_present",
+                    "message": f"最近一次 bot 執行留下錯誤：{str(row.get('last_error') or '')[:180]}",
+                    "metadata": {"last_error": str(row.get("last_error") or "")[:240]},
+                })
+            if eligible_reason == "aged_24h" and int(row.get("triggered_run_count") or 0) <= 0:
+                findings.append({
+                    "severity": "warning",
+                    "code": "no_trade_after_24h",
+                    "message": "機器人啟用已滿 24 小時，但尚未產生任何成交，請檢查條件是否過嚴或市場是否不活躍。",
+                    "metadata": {"enabled_at": row.get("enabled_at") or row.get("created_at") or ""},
+                })
+            if len(failed_runs) >= 3 and int(row.get("triggered_run_count") or 0) <= 0:
+                findings.append({
+                    "severity": "blocker",
+                    "code": "repeated_failed_runs",
+                    "message": "最近 bot 巡檢多次失敗且沒有成功成交，請先排除錯誤再繼續啟用。",
+                    "metadata": {"failed_runs": len(failed_runs)},
+                })
+            elif failed_runs:
+                findings.append({
+                    "severity": "warning",
+                    "code": "recent_failed_runs",
+                    "message": f"最近 {len(failed_runs)} 次 bot 巡檢失敗，建議 root 追查執行錯誤。",
+                    "metadata": {"failed_runs": len(failed_runs)},
+                })
+        else:
+            open_orders = conn.execute(
+                "SELECT COUNT(*) AS c FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
+                (int(row["id"]),),
+            ).fetchone()["c"]
+            orphan_open_orders = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM trading_grid_orders go
+                LEFT JOIN trading_orders o ON o.order_uuid=go.trading_order_uuid
+                WHERE go.grid_bot_id=? AND go.status='open' AND (
+                    go.trading_order_uuid IS NULL OR o.id IS NULL OR COALESCE(o.status, '') NOT IN ('open', 'partially_filled')
+                )
+                """,
+                (int(row["id"]),),
+            ).fetchone()["c"]
+            if str(row.get("last_error") or "").strip():
+                findings.append({
+                    "severity": "blocker",
+                    "code": "grid_last_error_present",
+                    "message": f"網格機器人最近一次掃描失敗：{str(row.get('last_error') or '')[:180]}",
+                    "metadata": {"last_error": str(row.get("last_error") or "")[:240]},
+                })
+            if int(orphan_open_orders or 0) > 0:
+                findings.append({
+                    "severity": "blocker",
+                    "code": "grid_orphan_open_orders",
+                    "message": f"仍有 {int(orphan_open_orders)} 筆網格開單找不到對應 trading_orders 或狀態不同步。",
+                    "metadata": {"orphan_open_orders": int(orphan_open_orders or 0)},
+                })
+            if bool(row.get("enabled")) and int(open_orders or 0) <= 0:
+                findings.append({
+                    "severity": "warning",
+                    "code": "grid_has_no_open_orders",
+                    "message": "網格機器人目前啟用中，但沒有任何有效開單，可能已漏掛單或需要人工檢查。",
+                    "metadata": {"open_orders": int(open_orders or 0)},
+                })
+            if eligible_reason == "aged_24h" and int(row.get("total_trades") or 0) <= 0:
+                findings.append({
+                    "severity": "warning",
+                    "code": "grid_no_trade_after_24h",
+                    "message": "網格機器人啟用已滿 24 小時，但尚未成交，請檢查網格範圍或市場波動是否不足。",
+                    "metadata": {"enabled_at": row.get("enabled_at") or row.get("created_at") or ""},
+                })
+        blocker_count = sum(1 for item in findings if item["severity"] == "blocker")
+        warning_count = sum(1 for item in findings if item["severity"] == "warning")
+        audit_status = "red" if blocker_count else ("yellow" if warning_count else "green")
+        return {
+            "eligible": eligible,
+            "eligible_reason": eligible_reason,
+            "audit_status": audit_status,
+            "findings": findings,
+            "blocker_count": blocker_count,
+            "warning_count": warning_count,
+        }
+
+    def _record_bot_audit_run(self, conn, row, *, bot_kind, audit_result):
+        now = _now()
+        findings = audit_result.get("findings") or []
+        run_uuid = str(uuid.uuid4())
+        cur = conn.execute(
+            """
+            INSERT INTO trading_bot_audit_runs (
+                run_uuid, bot_kind, bot_uuid, bot_id, user_id, market_symbol,
+                audit_status, eligible_reason, findings_json, finding_count,
+                warning_count, blocker_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_uuid,
+                bot_kind,
+                str(row["bot_uuid"]),
+                int(row["id"]),
+                int(row["user_id"]),
+                str(row["market_symbol"]),
+                str(audit_result.get("audit_status") or "green"),
+                str(audit_result.get("eligible_reason") or ""),
+                _json_dumps(findings),
+                len(findings),
+                int(audit_result.get("warning_count") or 0),
+                int(audit_result.get("blocker_count") or 0),
+                now,
+            ),
+        )
+        run_id = cur.lastrowid
+        for finding in findings:
+            conn.execute(
+                """
+                INSERT INTO trading_bot_audit_findings (
+                    run_id, severity, code, message, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(run_id),
+                    str(finding.get("severity") or "warning"),
+                    str(finding.get("code") or "unknown"),
+                    str(finding.get("message") or "")[:500],
+                    _json_dumps(finding.get("metadata") or {}),
+                    now,
+                ),
+            )
+        if audit_result.get("audit_status") in {"yellow", "red"}:
+            label = self._bot_audit_label(audit_result.get("audit_status"))
+            name = str(row.get("name") or row.get("market_symbol") or "bot")
+            body = f"{name}（{str(row.get('market_symbol') or '').replace('/POINTS', '/USDT')}）稽核結果 {label}。"
+            link = "/trading"
+            create_root_notification_if_enabled(
+                conn,
+                type=f"trading_bot_audit_{audit_result.get('audit_status')}",
+                title="交易機器人稽核警示",
+                body=body,
+                link=link,
+                once=True,
+            )
+            create_notification_if_enabled(
+                conn,
+                user_id=int(row["user_id"]),
+                type="trading_bot_audit_warning",
+                title="交易機器人需要檢查",
+                body=body,
+                link=link,
+            )
+        self._audit_event(
+            conn,
+            "TRADING_BOT_AUDIT_RUN",
+            "trading bot audit completed",
+            actor={"id": None, "username": "system", "role": "system"},
+            target_user_id=int(row["user_id"]),
+            market_symbol=str(row["market_symbol"]),
+            severity="warning" if audit_result.get("audit_status") in {"yellow", "red"} else "info",
+            metadata={
+                "bot_kind": bot_kind,
+                "bot_uuid": str(row["bot_uuid"]),
+                "audit_status": str(audit_result.get("audit_status") or "green"),
+                "finding_count": len(findings),
+                "warning_count": int(audit_result.get("warning_count") or 0),
+                "blocker_count": int(audit_result.get("blocker_count") or 0),
+            },
+        )
+        return run_uuid
+
+    def _bot_audit_candidates(self, conn, *, limit):
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        active_clauses = []
+        if "status" in user_cols:
+            active_clauses.append("COALESCE(u.status, 'active') = 'active'")
+        if "deleted_at" in user_cols:
+            active_clauses.append("COALESCE(u.deleted_at, '') = ''")
+        active_sql = " AND ".join(active_clauses) if active_clauses else "1=1"
+        bot_rows = [
+            {
+                **dict(row),
+                "bot_kind": "trading_bot",
+                "triggered_run_count": row["triggered_run_count"],
+            }
+            for row in conn.execute(
+                f"""
+                SELECT b.*, u.username, u.role,
+                       (SELECT COUNT(*) FROM trading_bot_runs r WHERE r.bot_id=b.id AND r.status='triggered') AS triggered_run_count
+                FROM trading_bots b
+                JOIN users u ON u.id=b.user_id
+                WHERE {active_sql}
+                ORDER BY b.enabled DESC, COALESCE(b.enabled_at, b.created_at, b.updated_at) ASC, b.id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        grid_rows = [
+            {**dict(row), "bot_kind": "grid_bot"}
+            for row in conn.execute(
+                f"""
+                SELECT g.*, u.username, u.role
+                FROM trading_grid_bots g
+                JOIN users u ON u.id=g.user_id
+                WHERE {active_sql}
+                ORDER BY g.enabled DESC, COALESCE(g.enabled_at, g.created_at, g.updated_at) ASC, g.id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        return [*bot_rows, *grid_rows]
+
+    def _bot_audit_dashboard_on_conn(self, conn, *, limit, settings=None):
+        settings = settings or self._settings_payload(conn)
+        latest_map = self._bot_audit_latest_map(conn)
+        min_enabled_seconds = int(settings.get("bot_audit_min_enabled_seconds") or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS)
+        items = []
+        summary = {"unaudited": 0, "green": 0, "yellow": 0, "red": 0}
+        for row in self._bot_audit_candidates(conn, limit=_to_int(limit, name="limit", minimum=1, maximum=300)):
+            latest = latest_map.get((row["bot_kind"], str(row["bot_uuid"])))
+            eligible, eligible_reason = self._bot_audit_is_eligible(
+                row,
+                bot_kind=row["bot_kind"],
+                min_enabled_seconds=min_enabled_seconds,
+            )
+            audit_status = str((latest or {}).get("audit_status") or "unaudited")
+            summary[audit_status] = summary.get(audit_status, 0) + 1
+            item = {
+                "bot_kind": row["bot_kind"],
+                "bot_uuid": str(row["bot_uuid"]),
+                "name": str(row.get("name") or row.get("market_symbol") or ""),
+                "market_symbol": str(row.get("market_symbol") or ""),
+                "display_symbol": str(row.get("market_symbol") or "").replace("/POINTS", "/USDT"),
+                "user_id": int(row["user_id"]),
+                "username": str(row.get("username") or ""),
+                "enabled": bool(row.get("enabled")),
+                "enabled_at": row.get("enabled_at") or row.get("created_at") or "",
+                "eligible": bool(eligible),
+                "eligible_reason": eligible_reason,
+                "eligible_reason_label": self._bot_audit_eligibility_reason_label(eligible_reason),
+                "audit_status": audit_status,
+                "audit_label": self._bot_audit_label(audit_status),
+                "last_audited_at": (latest or {}).get("created_at") or "",
+                "warning_count": int((latest or {}).get("warning_count") or 0),
+                "blocker_count": int((latest or {}).get("blocker_count") or 0),
+                "finding_count": int((latest or {}).get("finding_count") or 0),
+                "last_error": str(row.get("last_error") or "")[:240],
+            }
+            if row["bot_kind"] == "trading_bot":
+                item["triggered_run_count"] = int(row.get("triggered_run_count") or 0)
+                item["run_count"] = int(row.get("run_count") or 0)
+            else:
+                item["total_trades"] = int(row.get("total_trades") or 0)
+                item["open_order_count"] = int(
+                    conn.execute(
+                        "SELECT COUNT(*) AS c FROM trading_grid_orders WHERE grid_bot_id=? AND status='open'",
+                        (int(row["id"]),),
+                    ).fetchone()["c"]
+                )
+            items.append(item)
+        recent_runs = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM trading_bot_audit_runs ORDER BY id DESC LIMIT 80"
+            ).fetchall()
+        ]
+        return {
+            "ok": True,
+            "settings": {
+                "bot_audit_enabled": settings.get("bot_audit_enabled", True),
+                "bot_audit_interval_seconds": settings.get("bot_audit_interval_seconds", TRADING_BOT_AUDIT_INTERVAL_SECONDS),
+                "bot_audit_limit": settings.get("bot_audit_limit", TRADING_BOT_AUDIT_LIMIT),
+                "bot_audit_min_enabled_seconds": settings.get("bot_audit_min_enabled_seconds", TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS),
+            },
+            "summary": summary,
+            "items": items,
+            "recent_runs": recent_runs,
+        }
+
+    def run_due_bot_audits(self, *, actor=None, limit=0, force=False):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            settings = self._settings_payload(conn)
+            if not settings.get("bot_audit_enabled", True) and not force:
+                return {"ok": True, "enabled": False, "reason": "audit_disabled", "scanned": 0, "audited": [], "skipped": []}
+            limit = _to_int(limit or settings.get("bot_audit_limit") or TRADING_BOT_AUDIT_LIMIT, name="bot_audit_limit", minimum=1, maximum=200)
+            interval_seconds = int(settings.get("bot_audit_interval_seconds") or TRADING_BOT_AUDIT_INTERVAL_SECONDS)
+            min_enabled_seconds = int(settings.get("bot_audit_min_enabled_seconds") or TRADING_BOT_AUDIT_MIN_ENABLED_SECONDS)
+            latest_map = self._bot_audit_latest_map(conn)
+            audited = []
+            skipped = []
+            for row in self._bot_audit_candidates(conn, limit=limit):
+                latest = latest_map.get((row["bot_kind"], str(row["bot_uuid"])))
+                audit_result = self._bot_audit_run_findings(
+                    conn,
+                    row,
+                    bot_kind=row["bot_kind"],
+                    min_enabled_seconds=min_enabled_seconds,
+                )
+                if not audit_result["eligible"]:
+                    skipped.append({
+                        "bot_kind": row["bot_kind"],
+                        "bot_uuid": row["bot_uuid"],
+                        "reason": audit_result["eligible_reason"],
+                    })
+                    continue
+                if not force and latest:
+                    try:
+                        last_dt = datetime.fromisoformat(str(latest["created_at"]))
+                    except Exception:
+                        last_dt = None
+                    if last_dt and (datetime.fromisoformat(_now()) - last_dt).total_seconds() < interval_seconds:
+                        skipped.append({
+                            "bot_kind": row["bot_kind"],
+                            "bot_uuid": row["bot_uuid"],
+                            "reason": "interval_not_elapsed",
+                        })
+                        continue
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                run_uuid = self._record_bot_audit_run(
+                    conn,
+                    row,
+                    bot_kind=row["bot_kind"],
+                    audit_result=audit_result,
+                )
+                conn.commit()
+                audited.append({
+                    "run_uuid": run_uuid,
+                    "bot_kind": row["bot_kind"],
+                    "bot_uuid": row["bot_uuid"],
+                    "audit_status": audit_result["audit_status"],
+                    "finding_count": len(audit_result["findings"]),
+                })
+            return {
+                "ok": True,
+                "enabled": True,
+                "scanned": len(audited) + len(skipped),
+                "audited": audited,
+                "skipped": skipped,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def get_bot_audit_dashboard(self, *, limit=100):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            settings = self._settings_payload(conn)
+            return self._bot_audit_dashboard_on_conn(conn, limit=limit, settings=settings)
+        finally:
+            conn.close()
+
     def root_report(self):
         conn = self.get_db()
         try:
@@ -7111,6 +7718,7 @@ class TradingEngineService:
                 "markets": markets,
                 "reserve_events": reserve_events,
                 "audit_events": audit_events,
+                "bot_audit_dashboard": self._bot_audit_dashboard_on_conn(conn, limit=80),
                 "verification": self._verify_state_on_conn(conn, enter_safe_mode=False),
             }
         finally:

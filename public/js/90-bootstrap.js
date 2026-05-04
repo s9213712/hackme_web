@@ -26,6 +26,7 @@ function bindUiEvents() {
   const tabSettingsAppearance = $("tab-settings-appearance");
   const tabSettingsSystem = $("tab-settings-system");
   const tabSettingsBilling = $("tab-settings-billing");
+  const tabSettingsTrading = $("tab-settings-trading");
   const tabSettingsDrive = $("tab-settings-drive");
   const tabSettingsMemberLevels = $("tab-settings-member-levels");
   const tabUsers    = $("tab-users");
@@ -232,6 +233,7 @@ function bindUiEvents() {
   if (tabSettingsAppearance) tabSettingsAppearance.addEventListener("click", () => switchSettingsSection("appearance"));
   if (tabSettingsSystem) tabSettingsSystem.addEventListener("click", () => switchSettingsSection("system"));
   if (tabSettingsBilling) tabSettingsBilling.addEventListener("click", () => switchSettingsSection("billing"));
+  if (tabSettingsTrading) tabSettingsTrading.addEventListener("click", () => switchSettingsSection("trading"));
   if (tabSettingsDrive) tabSettingsDrive.addEventListener("click", () => switchSettingsSection("drive"));
   if (tabSettingsMemberLevels) tabSettingsMemberLevels.addEventListener("click", () => switchSettingsSection("member-levels"));
   if (tabUsers)    tabUsers.addEventListener("click",    () => switchAdminTab("users"));

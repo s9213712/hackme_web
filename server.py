@@ -242,7 +242,7 @@ def ensure_local_tls_files(cert_file, key_file):
         return {"created": False, "cert_file": cert_file, "key_file": key_file}
 
     os.makedirs(os.path.dirname(os.path.abspath(cert_file)), exist_ok=True)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)  # allowlist: generate local TLS keypair at runtime
     subject = issuer = x509.Name(
         [
             x509.NameAttribute(NameOID.COUNTRY_NAME, "TW"),
@@ -329,8 +329,8 @@ _INTEGRITY_KEY = _load_or_create_binary_secret(
 
 def _build_fernet(secret):
     if isinstance(secret, bytes):
-        secret = secret.decode("utf-8", errors="ignore")
-    secret = str(secret).strip()
+        secret = secret.decode("utf-8", errors="ignore")  # allowlist: normalize runtime secret bytes
+    secret = str(secret).strip()  # allowlist: normalize runtime secret string
     try:
         return Fernet(secret.encode("utf-8"))
     except Exception:
@@ -402,8 +402,8 @@ def parse_ip_set(raw_value):
     if not raw_value:
         return set()
     values = set()
-    for token in str(raw_value).split(","):
-        token = token.strip()
+    for token in str(raw_value).split(","):  # allowlist: token here means CSV item, not a credential
+        token = token.strip()  # allowlist: normalize trusted-proxy CSV item
         if not token:
             continue
         try:
@@ -536,14 +536,14 @@ def get_runtime_server_mode():
 
 
 def tester_token_username_from_request(req):
-    token = (
+    token = (  # allowlist: tester token header parsing, not a hardcoded secret
         req.headers.get("X-Tester-Token", "")
         or req.headers.get("X-Internal-Test-Token", "")
         or ""
     ).strip()
     auth_header = req.headers.get("Authorization", "")
     if not token and auth_header.lower().startswith("bearer "):
-        token = auth_header[7:].strip()
+        token = auth_header[7:].strip()  # allowlist: parse bearer token from request header
     if not token:
         return None
     raw_uri = (
@@ -1747,6 +1747,7 @@ def start_trading_bot_worker():
 
     def loop():
         actor = {"username": "system", "role": "system"}
+        last_audit_started_at = 0.0
         while True:
             interval = fallback_interval
             try:
@@ -1775,6 +1776,22 @@ def start_trading_bot_worker():
                         success=False,
                         detail=json.dumps(failed[:5], ensure_ascii=False),
                     )
+                audit_enabled = settings.get("bot_audit_enabled", True)
+                audit_interval = max(60, min(int(settings.get("bot_audit_interval_seconds") or 300), 86400))
+                audit_limit = max(1, min(int(settings.get("bot_audit_limit") or 50), 200))
+                now_mono = time.monotonic()
+                if audit_enabled and now_mono - last_audit_started_at >= audit_interval:
+                    audit_result = trading_service.run_due_bot_audits(actor=actor, limit=audit_limit, force=False)
+                    last_audit_started_at = now_mono
+                    audited_rows = audit_result.get("audited") or []
+                    if audited_rows:
+                        audit(
+                            "TRADING_BOT_AUDIT_AUTO_RUN",
+                            "0.0.0.0",
+                            user="system",
+                            success=True,
+                            detail=f"audited={len(audited_rows)}, skipped={len(audit_result.get('skipped') or [])}",
+                        )
             except Exception as exc:
                 audit("TRADING_BOT_AUTO_SCAN_FAILED", "0.0.0.0", user="system", success=False, detail=str(exc))
             time.sleep(interval)

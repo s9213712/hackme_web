@@ -5009,6 +5009,45 @@
       color: #ff6b7a;
     }
 
+    #trading-current-price {
+      display: block;
+      transition: color .16s ease, text-shadow .16s ease, transform .16s ease;
+    }
+
+    #trading-current-delta {
+      display: block;
+      min-height: 1.15rem;
+    }
+
+    #trading-current-health {
+      display: block;
+      min-height: 1.15rem;
+      color: var(--muted);
+    }
+
+    #trading-current-price.trading-price-up,
+    #trading-current-delta.positive {
+      color: #22c55e;
+    }
+
+    #trading-current-price.trading-price-down,
+    #trading-current-delta.negative {
+      color: #ff6b7a;
+    }
+
+    #trading-current-price.trading-price-flat {
+      color: inherit;
+    }
+
+    #trading-current-price.trading-price-flash {
+      text-shadow: 0 0 12px rgba(255,255,255,.18);
+      transform: translateY(-1px);
+    }
+
+    #trading-current-health.warning {
+      color: #ffb74d;
+    }
+
     .trading-spot-actions {
       display: grid;
       grid-template-columns: minmax(72px, .8fr) minmax(80px, .9fr) minmax(64px, auto) minmax(86px, auto);

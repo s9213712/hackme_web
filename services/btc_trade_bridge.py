@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,10 @@ BTC_TRADE_BUILD_STEPS = [
 ]
 BTC_TRADE_FALLBACK_DEPENDENCIES = ["pandas", "numpy", "ccxt", "requests", "scikit-learn", "ta", "pytest"]
 BTC_TRADE_TIMEFRAME_SECONDS = {"1h": 60 * 60, "4h": 4 * 60 * 60, "1d": 24 * 60 * 60}
+BTC_TRADE_FRESHNESS_GRACE_SECONDS = 30 * 60
+BTC_TRADE_START_WAIT_SECONDS = 180
+BTC_TRADE_MODEL_SEARCH_DIRS = ("models", "artifacts", "checkpoints", "runtime/models", "outputs")
+BTC_TRADE_MODEL_FILE_PATTERNS = ("*.pkl", "*.joblib", "*.pt", "*.pth", "*.onnx", "*.keras", "*.h5", "*.cbm")
 BTC_TRADE_SIGNAL_KEYS = {
     "bar_ts",
     "generated_at",
@@ -45,6 +50,8 @@ BTC_TRADE_SIGNAL_KEYS = {
     "telegram_text",
     "timeframe",
 }
+BTC_TRADE_START_JOBS = {}
+BTC_TRADE_START_JOB_LOCK = threading.Lock()
 
 
 def expand_server_path(raw_path):
@@ -67,14 +74,15 @@ def _safe_text_tail(value, limit=2000):
 def _run_step(command, *, cwd, timeout):
     started = time.time()
     try:
-        proc = subprocess.run(
-            command,
-            cwd=str(cwd),
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
+        run_kwargs = {
+            "cwd": str(cwd),
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+        if timeout is not None:
+            run_kwargs["timeout"] = timeout
+        proc = subprocess.run(command, **run_kwargs)
         return {
             "command": " ".join(command),
             "ok": proc.returncode == 0,
@@ -140,6 +148,192 @@ def _seed_btc_trade_report_log(root):
     with open(report_path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
     return {"ok": True, "skipped": False, "message": "bootstrap report log created", "path": str(report_path)}
+
+
+def _utc_iso_from_timestamp(ts):
+    if not ts:
+        return None
+    return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+
+
+def _tail_csv_timestamp(path):
+    if not path.is_file():
+        return None
+    last_row = None
+    with open(path, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if row:
+                last_row = row
+    if not last_row:
+        return None
+    for key in ("timestamp", "time", "datetime", "date"):
+        parsed = _parse_btc_trade_time(last_row.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+def _collect_model_artifacts(root):
+    found = []
+    for relative in BTC_TRADE_MODEL_SEARCH_DIRS:
+        directory = root / relative
+        if not directory.is_dir():
+            continue
+        for pattern in BTC_TRADE_MODEL_FILE_PATTERNS:
+            found.extend(path for path in directory.rglob(pattern) if path.is_file())
+    deduped = []
+    seen = set()
+    for path in sorted(found):
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _artifact_freshness_info(path, *, now_ts, freshness_window_seconds, reference_ts=None):
+    info = {
+        "path": str(path) if path else "",
+        "exists": bool(path and path.is_file()),
+        "updated_at": None,
+        "age_seconds": None,
+        "fresh": False,
+        "needs_refresh": True,
+        "reason": "missing",
+    }
+    if not path or not path.is_file():
+        return info
+    stat = path.stat()
+    age_seconds = max(0, int(now_ts - stat.st_mtime))
+    info["updated_at"] = _utc_iso_from_timestamp(stat.st_mtime)
+    info["age_seconds"] = age_seconds
+    is_fresh_by_age = age_seconds <= freshness_window_seconds
+    is_fresh_by_reference = reference_ts is None or stat.st_mtime + 1 >= reference_ts
+    info["fresh"] = bool(is_fresh_by_age and is_fresh_by_reference)
+    info["needs_refresh"] = not info["fresh"]
+    if info["fresh"]:
+        info["reason"] = "fresh"
+    elif not is_fresh_by_age:
+        info["reason"] = "stale"
+    else:
+        info["reason"] = "older_than_reference"
+    return info
+
+
+def btc_trade_artifact_status(project_dir, *, timeframe=DEFAULT_TIMEFRAME, now_ts=None):
+    root = expand_server_path(project_dir)
+    now_ts = float(now_ts if now_ts is not None else time.time())
+    interval_seconds = BTC_TRADE_TIMEFRAME_SECONDS.get(str(timeframe or DEFAULT_TIMEFRAME).lower(), 4 * 60 * 60)
+    freshness_window_seconds = interval_seconds + BTC_TRADE_FRESHNESS_GRACE_SECONDS
+    if not root or not root.is_dir():
+        return {
+            "project_dir": str(root) if root else "",
+            "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+            "data": {"exists": False, "fresh": False, "needs_update": True, "reason": "missing"},
+            "models": {"exists": False, "fresh": False, "needs_retrain": True, "reason": "missing", "count": 0},
+            "prediction": {"exists": False, "fresh": False, "needs_refresh": True, "reason": "missing"},
+        }
+    data_path = root / "data" / f"btc_{str(timeframe or DEFAULT_TIMEFRAME).lower()}.csv"
+    report_path = root / "runtime" / f"report_log_{str(timeframe or DEFAULT_TIMEFRAME).lower()}.jsonl"
+    model_files = _collect_model_artifacts(root)
+    data_last_bar = _tail_csv_timestamp(data_path)
+    data_reference_ts = data_last_bar.timestamp() if data_last_bar else None
+    data_info = _artifact_freshness_info(
+        data_path,
+        now_ts=now_ts,
+        freshness_window_seconds=freshness_window_seconds,
+        reference_ts=data_reference_ts,
+    )
+    data_info["last_bar_at"] = data_last_bar.isoformat() if data_last_bar else None
+    data_info["needs_update"] = bool(not data_info["exists"] or not data_info["fresh"])
+    latest_model = max(model_files, key=lambda path: path.stat().st_mtime) if model_files else None
+    model_reference_ts = None
+    if data_path.is_file():
+        model_reference_ts = data_path.stat().st_mtime
+    model_info = _artifact_freshness_info(
+        latest_model,
+        now_ts=now_ts,
+        freshness_window_seconds=freshness_window_seconds * 7,
+        reference_ts=model_reference_ts,
+    )
+    model_info["count"] = len(model_files)
+    model_info["latest_path"] = str(latest_model) if latest_model else ""
+    model_info["needs_retrain"] = bool(not model_info["exists"] or model_info["reason"] == "older_than_reference")
+    prediction_reference_ts = max(
+        ts for ts in (
+            data_path.stat().st_mtime if data_path.is_file() else None,
+            latest_model.stat().st_mtime if latest_model and latest_model.is_file() else None,
+        )
+        if ts is not None
+    ) if (data_path.is_file() or latest_model) else None
+    prediction_info = _artifact_freshness_info(
+        report_path,
+        now_ts=now_ts,
+        freshness_window_seconds=freshness_window_seconds,
+        reference_ts=prediction_reference_ts,
+    )
+    prediction_info["needs_refresh"] = bool(not prediction_info["exists"] or not prediction_info["fresh"])
+    try:
+        latest_report = _latest_jsonl_record(report_path)
+        prediction_info["generated_at"] = latest_report.get("generated_at")
+        prediction_info["bar_ts"] = latest_report.get("bar_ts")
+        prediction_info["strategy_version"] = latest_report.get("strategy_version")
+    except Exception:
+        pass
+    return {
+        "project_dir": str(root),
+        "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+        "freshness_window_seconds": freshness_window_seconds,
+        "data": data_info,
+        "models": model_info,
+        "prediction": prediction_info,
+    }
+
+
+def _wait_for_prediction_report(root, *, timeframe=DEFAULT_TIMEFRAME, previous_mtime=None, previous_generated_at=None, timeout_seconds=BTC_TRADE_START_WAIT_SECONDS):
+    report_path = root / "runtime" / f"report_log_{str(timeframe or DEFAULT_TIMEFRAME).lower()}.jsonl"
+    deadline = time.time() + max(1, int(timeout_seconds or BTC_TRADE_START_WAIT_SECONDS))
+    while time.time() <= deadline:
+        if report_path.is_file():
+            current_mtime = report_path.stat().st_mtime
+            generated_at = None
+            try:
+                latest = _latest_jsonl_record(report_path)
+                generated_at = latest.get("generated_at")
+            except Exception:
+                latest = None
+            if previous_mtime is None or current_mtime > previous_mtime + 0.5:
+                return {
+                    "ok": True,
+                    "refreshed": True,
+                    "report_mtime": current_mtime,
+                    "generated_at": generated_at,
+                    "message": "已等到新的 BTC_trade 預測資料",
+                }
+            if generated_at and generated_at != previous_generated_at:
+                return {
+                    "ok": True,
+                    "refreshed": True,
+                    "report_mtime": current_mtime,
+                    "generated_at": generated_at,
+                    "message": "BTC_trade 預測資料已更新",
+                }
+            readiness = btc_trade_artifact_status(root, timeframe=timeframe, now_ts=time.time())
+            if readiness.get("prediction", {}).get("exists") and not readiness.get("prediction", {}).get("needs_refresh"):
+                return {
+                    "ok": True,
+                    "refreshed": False,
+                    "report_mtime": current_mtime,
+                    "generated_at": generated_at,
+                    "message": "預測腳本已執行，沿用仍在有效期內的最新預測資料",
+                }
+        time.sleep(1)
+    return {
+        "ok": False,
+        "refreshed": False,
+        "message": "預測腳本已執行，但在等待時間內沒有看到新的預測資料",
+    }
 
 
 def _validate_repo_url(repo_url):
@@ -404,6 +598,7 @@ def btc_trade_status(project_dir):
         "checks": checks,
         "missing": missing,
         "message": "",
+        "project_dir": str(root),
         "commands": [
             "python3 -m pip install pandas numpy ccxt requests scikit-learn ta pytest",
             "python3 update_data.py",
@@ -411,6 +606,7 @@ def btc_trade_status(project_dir):
             "python3 hourly_check.py --timeframe 4h",
             "python3 backtest_report.py --timeframe 4h",
         ],
+        "artifacts": btc_trade_artifact_status(root),
     }
     if missing:
         payload["message"] = "BTC_trade 專案尚未可用，請先在該資料夾執行初始化或產生信號報告"
@@ -468,7 +664,240 @@ def btc_trade_status(project_dir):
     payload["needs_initialization"] = False
     payload["message"] = "BTC_trade 信號可用"
     payload["signal"] = signal
+    payload["artifacts"] = btc_trade_artifact_status(root, timeframe=timeframe)
     return payload
+
+
+def _btc_trade_job_payload(job):
+    return {
+        "job_id": job.get("job_id"),
+        "project_dir": job.get("project_dir"),
+        "timeframe": job.get("timeframe"),
+        "status": job.get("status"),
+        "message": job.get("message"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "steps": list(job.get("steps") or []),
+        "result": job.get("result"),
+    }
+
+
+def btc_trade_start_prediction_pipeline(project_dir, *, timeframe=DEFAULT_TIMEFRAME, timeout_per_step=None, wait_seconds=BTC_TRADE_START_WAIT_SECONDS, progress_cb=None):
+    root = expand_server_path(project_dir)
+    status = btc_trade_status(root)
+    steps = []
+    def record_step(step):
+        steps.append(step)
+        if callable(progress_cb):
+            progress_cb({"steps": list(steps), "latest_step": step})
+    if not root:
+        return {
+            "ok": False,
+            "project_dir": "",
+            "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+            "steps": steps,
+            "status": status,
+            "message": "尚未設定 BTC_trade 專案資料夾",
+        }
+    required_scripts = {
+        "update_data.py": root / "update_data.py",
+        "retrain_models.py": root / "retrain_models.py",
+        "hourly_check.py": root / "hourly_check.py",
+    }
+    missing_scripts = [name for name, path in required_scripts.items() if not path.is_file()]
+    if missing_scripts:
+        return {
+            "ok": False,
+            "project_dir": str(root),
+            "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+            "steps": steps,
+            "status": status,
+            "message": f"BTC_trade 缺少必要腳本：{', '.join(missing_scripts)}",
+        }
+
+    readiness_before = btc_trade_artifact_status(root, timeframe=timeframe)
+    record_step({
+        "label": "檢查資料與模型狀態",
+        "ok": True,
+        "skipped": False,
+        "message": (
+            f"data={'需更新' if readiness_before['data']['needs_update'] else '已是最新'}；"
+            f"model={'需重訓' if readiness_before['models']['needs_retrain'] else '已是最新'}；"
+            f"prediction={'需刷新' if readiness_before['prediction']['needs_refresh'] else '可沿用'}"
+        ),
+        "readiness": readiness_before,
+    })
+
+    data_updated = False
+    model_retrained = False
+
+    if readiness_before["data"]["needs_update"]:
+        step = _run_step([sys.executable, "update_data.py"], cwd=root, timeout=timeout_per_step)
+        step["label"] = "更新 BTC_trade 資料"
+        record_step(step)
+        if not step["ok"]:
+            return {
+                "ok": False,
+                "project_dir": str(root),
+                "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+                "steps": steps,
+                "status": btc_trade_status(root),
+                "message": "BTC_trade 資料更新失敗",
+            }
+        data_updated = True
+    else:
+        record_step({"label": "更新 BTC_trade 資料", "ok": True, "skipped": True, "message": "資料仍在有效期內，略過更新"})
+
+    readiness_after_data = btc_trade_artifact_status(root, timeframe=timeframe)
+    retrain_needed = bool(data_updated or readiness_after_data["models"]["needs_retrain"])
+    if retrain_needed:
+        step = _run_step([sys.executable, "retrain_models.py", "--timeframe", str(timeframe or DEFAULT_TIMEFRAME)], cwd=root, timeout=timeout_per_step)
+        step["label"] = "重訓 BTC_trade 模型"
+        record_step(step)
+        if not step["ok"]:
+            return {
+                "ok": False,
+                "project_dir": str(root),
+                "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+                "steps": steps,
+                "status": btc_trade_status(root),
+                "message": "BTC_trade 模型重訓失敗",
+            }
+        model_retrained = True
+    else:
+        record_step({"label": "重訓 BTC_trade 模型", "ok": True, "skipped": True, "message": "模型已晚於資料，不需重訓"})
+
+    report_path = root / "runtime" / f"report_log_{str(timeframe or DEFAULT_TIMEFRAME).lower()}.jsonl"
+    before_mtime = report_path.stat().st_mtime if report_path.is_file() else None
+    before_generated_at = None
+    if report_path.is_file():
+        try:
+            before_generated_at = _latest_jsonl_record(report_path).get("generated_at")
+        except Exception:
+            before_generated_at = None
+    prediction_step = _run_step([sys.executable, "hourly_check.py", "--timeframe", str(timeframe or DEFAULT_TIMEFRAME)], cwd=root, timeout=timeout_per_step)
+    prediction_step["label"] = "執行 BTC_trade 預測"
+    record_step(prediction_step)
+    if not prediction_step["ok"]:
+        return {
+            "ok": False,
+            "project_dir": str(root),
+            "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+            "steps": steps,
+            "status": btc_trade_status(root),
+            "message": "BTC_trade 預測腳本執行失敗",
+        }
+
+    wait_result = _wait_for_prediction_report(
+        root,
+        timeframe=timeframe,
+        previous_mtime=before_mtime,
+        previous_generated_at=before_generated_at,
+        timeout_seconds=wait_seconds,
+    )
+    wait_step = {
+        "label": "等待 BTC_trade 預測資料",
+        "ok": bool(wait_result.get("ok")),
+        "skipped": False,
+        "message": wait_result.get("message"),
+        "refreshed": bool(wait_result.get("refreshed")),
+    }
+    record_step(wait_step)
+    final_status = btc_trade_status(root)
+    return {
+        "ok": bool(wait_result.get("ok")) and bool(final_status.get("available")),
+        "project_dir": str(root),
+        "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+        "steps": steps,
+        "status": final_status,
+        "actions": {
+            "data_updated": data_updated,
+            "model_retrained": model_retrained,
+            "prediction_refreshed": bool(wait_result.get("refreshed")),
+        },
+        "message": wait_result.get("message") if wait_result.get("ok") else (wait_result.get("message") or "BTC_trade 預測資料未完成"),
+    }
+
+
+def btc_trade_start_prediction_job(project_dir, *, timeframe=DEFAULT_TIMEFRAME, wait_seconds=BTC_TRADE_START_WAIT_SECONDS):
+    root = expand_server_path(project_dir)
+    project_key = f"{str(root) if root else ''}|{str(timeframe or DEFAULT_TIMEFRAME).lower()}"
+    with BTC_TRADE_START_JOB_LOCK:
+        for job in BTC_TRADE_START_JOBS.values():
+            if job.get("project_key") == project_key and job.get("status") in {"queued", "running"}:
+                return {"ok": True, "started": False, "job": _btc_trade_job_payload(job)}
+        job_id = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        job = {
+            "job_id": job_id,
+            "project_key": project_key,
+            "project_dir": str(root) if root else "",
+            "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+            "status": "queued",
+            "message": "已建立 BTC_trade 一鍵啟動工作，等待背景執行",
+            "created_at": now,
+            "started_at": None,
+            "finished_at": None,
+            "steps": [],
+            "result": None,
+        }
+        BTC_TRADE_START_JOBS[job_id] = job
+
+    def update_job(payload):
+        with BTC_TRADE_START_JOB_LOCK:
+            current = BTC_TRADE_START_JOBS.get(job_id)
+            if not current:
+                return
+            current.update(payload)
+
+    def worker():
+        update_job({
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "message": "BTC_trade 背景工作執行中：檢查資料 / 模型，必要時更新並重訓",
+        })
+        try:
+            result = btc_trade_start_prediction_pipeline(
+                root,
+                timeframe=timeframe,
+                timeout_per_step=None,
+                wait_seconds=wait_seconds,
+                progress_cb=lambda payload: update_job({
+                    "steps": payload.get("steps"),
+                    "message": payload.get("latest_step", {}).get("message") or payload.get("latest_step", {}).get("label") or "BTC_trade 背景工作執行中",
+                }),
+            )
+            update_job({
+                "status": "completed" if result.get("ok") else "error",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "message": result.get("message") or ("BTC_trade 一鍵啟動完成" if result.get("ok") else "BTC_trade 一鍵啟動失敗"),
+                "steps": list(result.get("steps") or []),
+                "result": result,
+            })
+        except Exception as exc:
+            update_job({
+                "status": "error",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "message": f"BTC_trade 背景工作失敗：{exc.__class__.__name__}",
+                "result": {
+                    "ok": False,
+                    "project_dir": str(root) if root else "",
+                    "timeframe": str(timeframe or DEFAULT_TIMEFRAME).lower(),
+                    "steps": list(BTC_TRADE_START_JOBS.get(job_id, {}).get("steps") or []),
+                    "message": f"BTC_trade 背景工作失敗：{exc.__class__.__name__}",
+                },
+            })
+
+    threading.Thread(target=worker, name=f"btc-trade-start-{job_id[:8]}", daemon=True).start()
+    with BTC_TRADE_START_JOB_LOCK:
+        return {"ok": True, "started": True, "job": _btc_trade_job_payload(BTC_TRADE_START_JOBS[job_id])}
+
+
+def btc_trade_start_prediction_job_status(job_id):
+    with BTC_TRADE_START_JOB_LOCK:
+        job = BTC_TRADE_START_JOBS.get(str(job_id or "").strip())
+        return _btc_trade_job_payload(job) if job else None
 
 
 def btc_to_units(btc_amount):
