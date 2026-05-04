@@ -2,6 +2,7 @@ import io
 import json
 import sqlite3
 import time
+import urllib.parse
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response, request
@@ -1360,7 +1361,8 @@ def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
             }
             return _FakeResponse(url=url, body=json.dumps(payload), headers={"Content-Type": "application/json; charset=utf-8"})
         if url.startswith("https://civitai.com/api/download/models/2002"):
-            assert "token=secret-token" in url
+            parsed = urllib.parse.urlsplit(url)
+            assert urllib.parse.parse_qs(parsed.query).get("token") == ["secret-token"]
             return _FakeResponse(
                 url=url,
                 body=b"fake-model-bytes",
@@ -2129,6 +2131,7 @@ def test_comfyui_frontend_is_wired():
     assert '目前模式：讀取中' in index_html
     assert '模式讀取中' in index_html
     assert 'id="comfyui-root-model-details"' in index_html
+    assert 'id="comfyui-root-model-mode-hint"' in index_html
     assert 'root 模型下載（Civitai）' in index_html
     assert '和上方生圖表單分開' in index_html
     assert '<option value="embedding">Embedding / TI</option>' in index_html
@@ -2143,6 +2146,8 @@ def test_comfyui_frontend_is_wired():
     assert 'id="s-comfyui-local-start-script"' in index_html
     assert 'id="comfyui-civitai-settings" style="display:none;"' in index_html
     assert 'id="s-comfyui-civitai-api-key"' in index_html
+    assert 'const show = currentUser === "root";' in comfyui_js
+    assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要用 Civitai 下載模型到本站的本地 ComfyUI，請先把 backend 切回本地模式。' in comfyui_js
     assert "/js/36-comfyui.js?v=20260503-comfyui-mode-badge" in index_html
     assert "/styles.css?v=20260503-appearance-v2" in index_html
     assert "width: min(420px, 100%);" in css

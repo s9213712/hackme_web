@@ -130,7 +130,7 @@ QA 不只要找 bug，還要檢查功能是否符合
 | Cloud Drive / 上傳 / 相簿 / 下載器 | `public/js/35-drive.js` | `routes/files.py` | `services/cloud_drive.py`, `services/file_previews.py`, `services/upload_security.py`, `services/storage_albums.py`, `services/storage_paths.py`, `services/storage_maintenance.py`, `services/storage_capacity_audit.py`, `services/storage_quota_*`, `services/remote_downloads.py` | `test_upload_security.py`, `test_cloud_drive_attachments.py`, `test_remote_downloads.py`, `test_storage_paths.py`, `test_storage_maintenance.py`, `test_storage_albums_schema.py`, `test_frontend_drive_preview.py` | `WEB.md`, `For_developer.md`, `VIDEO_PLATFORM.md` |
 | 影片分享平台 | `public/js/35-drive.js`, `public/js/32-notifications.js`, 前端影音模組 | `routes/videos.py` | `services/videos.py`, `services/cloud_drive.py`, `services/points_chain.py` | `test_video_publish.py`, `test_video_permission.py`, `test_video_comments.py`, `test_video_tips.py`, `test_video_security.py`, `test_frontend_videos.py` | `VIDEO_PLATFORM.md`, `WEB.md`, `For_developer.md` |
 | PointsChain / Economy / 健康度 | `public/js/50-admin.js`, `public/js/55-economy.js` | `routes/economy.py`, `routes/system_admin.py` | `services/points_chain.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/settings.py` | `test_points_chain.py`, `test_health_center.py`, `test_integrity_guard.py`, `test_integrity_repair.py`, `test_frontend_economy.py`, `test_settings_audit_reseal.py` | `WEB.md`, `For_developer.md`, `docs/security/*.md` |
-| 交易 / Bot / Workflow / BTC_trade | `public/js/56-trading.js`, `public/js/trading-workflow-editor.js` | `routes/trading.py`, `routes/economy.py` | `services/trading_engine.py`, `services/btc_trade_bridge.py`, `services/points_chain.py` | `test_trading_engine.py`, `test_trading_reference_prices.py`, `test_trading_workflow_editor_ui.py`, `test_frontend_economy.py` | `TRADING.md`, `WEB.md`, `docs/security/TRADING_STRESS_PENTEST.md` |
+| 交易 / Bot / Workflow / BTC_trade | `public/js/56-trading.js`, `public/js/trading-workflow-editor.js` | `routes/trading.py`, `routes/economy.py` | `services/trading_engine.py`, `services/btc_trade_bridge.py`, `services/points_chain.py` | `test_trading_engine.py`, `test_trading_reference_prices.py`, `test_trading_workflow_editor_ui.py`, `test_frontend_economy.py` | `TRADING.md`, `WEB.md`, `docs/security/TRADING_STRESS_PENTEST.md`, `TRADING_QA_REGRESSION_MATRIX.md` |
 | ComfyUI 整合 | `public/js/36-comfyui.js` | `routes/comfyui.py` | `services/comfyui_client.py`, `services/cloud_drive.py` | `test_comfyui_integration.py`, `test_cloud_drive_attachments.py` | `WEB.md`, `For_developer.md` |
 | Server Mode / Security Center / Access Controls | `public/js/50-admin.js`, `public/js/90-bootstrap.js` | `routes/system_admin.py`, `routes/operations.py`, `routes/public.py` | `services/access_controls.py`, `services/audit.py`, `services/security_events.py`, `services/integrity_guard.py`, `services/server_bind.py`, `services/settings.py` | `test_security_defaults.py`, `test_security_events.py`, `test_frontend_security_center_layout.py`, `test_frontend_health_center.py`, `test_server_update_feature.py` | `SERVER_MODE_V2_*.md`, `docs/security/*.md`, `For_developer.md` |
 | Snapshot / Restore / Reset / Bootstrap | root 管理頁 | `routes/operations.py`, `routes/system_admin.py` | `services/snapshots.py`, `services/bootstrap.py`, `services/points_chain.py` | `test_snapshots.py`, `test_bootstrap_compat.py`, `test_release_policy.py` | `RUNTIME_RESET_AND_RECOVERY.md`, `For_developer.md`, `PRE_RELEASE_CHECKLIST.md` |
@@ -150,6 +150,28 @@ QA 不只要找 bug，還要檢查功能是否符合
 ```bash
 rg -n "webterminal|terminal" routes services public docs -g '!*.pyc'
 ```
+
+## 交易 QA 固定回歸矩陣
+
+只要這輪 QA 有碰到：
+
+- `routes/trading.py`
+- `services/trading_engine.py`
+- `public/js/56-trading.js`
+- `public/js/trading-workflow-editor.js`
+- price-source / scheduler / liquidation / DCA / grid / backtest
+
+就不能只跑一般 smoke / pytest。必須另外套用：
+
+- [TRADING_QA_REGRESSION_MATRIX.md](TRADING_QA_REGRESSION_MATRIX.md)
+
+最低要求：
+
+1. `empty / single / invalid / over-limit candles` reject-path
+2. workflow `flat sequence` 與 `no-trigger` 語義驗證
+3. `jump / gap collapse / sampled vs full tick` 對抗序列
+4. 小本金利息、`trial_credit-only`、negative balance invariant
+5. 真實歷史區間與 synthetic 對抗序列雙線並跑
 
 ## 先建立功能地圖
 
@@ -300,13 +322,13 @@ qa_csrf() {
 
 qa_login() {
   local username="$1"
-  local password="$2"
-  local token
-  token="$(qa_csrf | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')"
+  local user_pass="$2"
+  local csrf_value
+  csrf_value="$(qa_csrf | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')"
   curl -ksS -b "$QA_COOKIE_JAR" -c "$QA_COOKIE_JAR" \
     -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: $token" \
-    -d "{\"username\":\"${username}\",\"password\":\"${password}\"}" \
+    -H "X-CSRF-Token: $csrf_value" \
+    -d "{\"username\":\"${username}\",\"password\":\"${user_pass}\"}" \
     "$QA_BASE_URL/api/login"
 }
 
@@ -314,13 +336,13 @@ qa_api() {
   local method="$1"
   local path="$2"
   local body="${3:-}"
-  local token
-  token="$(qa_csrf | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')"
+  local csrf_value
+  csrf_value="$(qa_csrf | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')"
   if [ -n "$body" ]; then
     curl -ksS -b "$QA_COOKIE_JAR" -c "$QA_COOKIE_JAR" \
       -X "$method" \
       -H "Content-Type: application/json" \
-      -H "X-CSRF-Token: $token" \
+      -H "X-CSRF-Token: $csrf_value" \
       -d "$body" \
       "$QA_BASE_URL$path"
   else

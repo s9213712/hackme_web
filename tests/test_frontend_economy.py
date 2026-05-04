@@ -166,6 +166,12 @@ def test_root_points_page_is_chain_operations_console():
     assert 'value="fused_weighted"' in index_html
     assert 'id="root-trading-price-fusion-mode"' in index_html
     assert 'id="root-trading-price-fusion-weights"' in index_html
+    assert 'id="root-trading-price-fusion-market"' in index_html
+    assert 'id="root-trading-price-fusion-refresh-btn"' in index_html
+    assert 'id="root-trading-price-fusion-summary"' in index_html
+    assert 'id="root-trading-price-fusion-provider-list"' in index_html
+    assert 'id="root-trading-price-fusion-excluded-list"' in index_html
+    assert "價格來源降級" in admin_js
     assert 'id="root-trading-max-price-staleness"' in index_html
     assert 'id="root-trading-liquidation-enabled"' in index_html
     assert 'id="root-trading-maintenance-percent"' in index_html
@@ -187,11 +193,15 @@ def test_root_points_page_is_chain_operations_console():
     assert "function loadRootTradingSettings()" in admin_js
     assert "function saveRootTradingSettings()" in admin_js
     assert "function renderRootTradingFusionWeightInputs" in admin_js
+    assert "function renderRootTradingPriceFusionMarketOptions" in admin_js
+    assert "function renderRootTradingPriceFusionStatus" in admin_js
+    assert "function loadRootTradingPriceFusionStatus" in admin_js
     assert "function toggleRootTradingPriceFusionControls" in admin_js
     assert "collectRootTradingFusionWeights" in admin_js
     assert "adminInputPercent" in admin_js
     assert "adminFormatPercent" in admin_js
     assert 'apiFetch(API + "/root/trading/settings"' in admin_js
+    assert 'apiFetch(API + `/root/trading/price-fusion-status?market_symbol=${encodeURIComponent(selectedMarket)}`' in admin_js
     assert "parseRootTradingSettingsResponse" in admin_js
     assert "交易所參數 API 找不到" in admin_js
     assert "交易所參數儲存中" in admin_js
@@ -401,11 +411,14 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'id="trading-auto-bot-market"' in trading_section
     assert 'id="trading-dca-bot-market"' in trading_section
     assert 'id="trading-backtest-market"' in trading_section
+    assert 'id="trading-backtest-date-hint"' in trading_section
     assert 'id="trading-bot-type"' not in trading_section
     assert "function saveTradingBot" in trading_js
     assert "function saveTradingDcaBot" in trading_js
     assert "function scanTradingBots" in trading_js
     assert "function backtestTradingBot" in trading_js
+    assert "function formatBacktestDatetimeLocal" in trading_js
+    assert "function updateBacktestDateRangeGuidance" in trading_js
     assert "function tradingBotRecentFills" in trading_js
     assert "function renderTradingBotFillDetails" in trading_js
     assert "function increaseTradingBotMaxRuns" in trading_js
@@ -439,7 +452,13 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "stop_loss_percent" in workflow_templates
     assert "take_profit_percent" in workflow_templates
     assert "未載入圖表，正在由後端下載歷史 K 線後回測" in trading_js
-    assert "candle_limit = 500" in trading_js
+    assert "estimateBacktestRequestedCandles" in trading_js
+    assert "BACKTEST_TOTAL_CANDLE_LIMIT" in trading_js
+    assert "若保留開始時間，結束最晚可選" in trading_js
+    assert "若保留結束時間，開始最早可選" in trading_js
+    assert "先選開始或結束時間" in trading_js
+    assert "basePayload.candle_limit = estimatedCandles || 500" in trading_js
+    assert "後端自動分" in trading_js
     assert "資料來源" in trading_js
     assert "prepareTradingBacktestFromBot" in trading_js
     assert '"/trading/bots/scan"' in trading_js

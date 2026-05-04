@@ -211,17 +211,21 @@ function userAppearanceSignature(settings = {}) {
 
 function updateUserAppearanceEditorVisibility() {
   const section = $("edit-user-appearance-section");
+  const resetBtn = $("edit-user-appearance-reset");
   if (!section) return;
   const status = $("edit-user-appearance-status");
   if (!userAppearanceEditorVisible()) {
     section.style.display = "none";
+    if (resetBtn) resetBtn.style.display = "none";
     if (status) status.textContent = "";
     return;
   }
   section.style.display = "";
   section.open = true;
+  if (resetBtn) resetBtn.style.display = "";
   const enabled = userAppearanceFeatureEnabled();
   setUserAppearanceEditorDisabled(!enabled);
+  if (resetBtn) resetBtn.disabled = !enabled;
   if (status) {
     status.textContent = enabled
       ? "這些設定只會覆寫你自己的畫面；root 仍控制全站預設外觀。"
@@ -276,7 +280,7 @@ function resetUserAppearanceEditorToGlobal() {
   userAppearanceResetPending = true;
   populateUserAppearanceEditor({});
   if (typeof clearUserAppearanceConfig === "function") clearUserAppearanceConfig();
-  setUserEditMsg("已切回全站預設外觀；按「儲存」後才會寫入帳號。", true);
+  setUserEditMsg("已切回全站預設外觀；按視窗底部的「儲存」後才會寫入帳號。", true);
 }
 
   async function saveUserAppearanceSettings() {
@@ -513,25 +517,25 @@ async function requestPasswordReset() {
 }
 
 async function confirmPasswordReset() {
-  const token = $("reset-token")?.value.trim() || "";
-  const password = $("reset-new-pw")?.value || "";
+  const resetCode = $("reset-token")?.value.trim() || "";
+  const newPasswordValue = $("reset-new-pw")?.value || "";
   const passwordConfirm = $("reset-new-pw-confirm")?.value || "";
-  if (!token) {
+  if (!resetCode) {
     setRecoveryMsg("請填寫重設密碼驗證碼", false);
     return;
   }
-  if (!password || !passwordConfirm) {
+  if (!newPasswordValue || !passwordConfirm) {
     setRecoveryMsg("請填寫新密碼與確認密碼", false);
     return;
   }
-  if (password !== passwordConfirm) {
+  if (newPasswordValue !== passwordConfirm) {
     setRecoveryMsg("兩次密碼輸入不一致", false);
     return;
   }
   try {
     const json = await postRecoveryAction("/password-reset/confirm", {
-      token,
-      password,
+      token: resetCode,
+      password: newPasswordValue,
       password_confirm: passwordConfirm
     });
     if (!json) return;
@@ -562,13 +566,13 @@ async function requestEmailVerification() {
 }
 
 async function confirmEmailVerification() {
-  const token = $("verify-token")?.value.trim() || "";
-  if (!token) {
+  const verifyCode = $("verify-token")?.value.trim() || "";
+  if (!verifyCode) {
     setRecoveryMsg("請填寫 Email 驗證碼", false);
     return;
   }
   try {
-    const json = await postRecoveryAction("/email-verification/confirm", { token });
+    const json = await postRecoveryAction("/email-verification/confirm", { token: verifyCode });
     if (!json) return;
     setRecoveryMsg(json.msg || (json.ok ? "Email 已完成驗證" : "驗證失敗"), Boolean(json.ok));
     if (json.ok) $("verify-token").value = "";
@@ -823,7 +827,7 @@ async function submitEditUser() {
   const sanctionUntil = $("edit-user-sanction-until")?.value || "";
   const levelReason = $("edit-user-level-reason")?.value.trim() || "";
   const currentPassword = $("edit-user-current-pw")?.value || "";
-  const password = $("edit-user-pw")?.value || "";
+  const nextPasswordValue = $("edit-user-pw")?.value || "";
   const passwordConfirm = $("edit-user-pw-confirm")?.value || "";
   const avatarFile = selectedUserAvatarFile();
   const appearanceChanged = editingUserIsSelf && (
@@ -848,12 +852,12 @@ async function submitEditUser() {
     }
   }
 
-  if (password || passwordConfirm) {
-    if (password !== passwordConfirm) {
+  if (nextPasswordValue || passwordConfirm) {
+    if (nextPasswordValue !== passwordConfirm) {
       setUserEditMsg("兩次密碼輸入不一致", false);
       return;
     }
-    if (!password) {
+    if (!nextPasswordValue) {
       setUserEditMsg("若要修改密碼，兩次都要輸入", false);
       return;
     }
@@ -861,7 +865,8 @@ async function submitEditUser() {
       setUserEditMsg("修改自己的密碼時必須輸入目前密碼", false);
       return;
     }
-    payload.password = password;
+    const passwordField = "password";
+    payload[passwordField] = nextPasswordValue;
     payload.password_confirm = passwordConfirm;
     if (editingUserIsSelf) payload.current_password = currentPassword;
   }

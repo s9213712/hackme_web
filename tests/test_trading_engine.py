@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,17 @@ def _services(tmp_path):
 
 def _actor(user_id=1, username="alice", role="user"):
     return {"id": user_id, "username": username, "role": role}
+
+
+def _depth_snapshot(trading, source, quantity_per_level, *, price=100.0):
+    bids = [[price, quantity_per_level] for _ in range(10)] + [[price * 0.98, 9999]]
+    asks = [[price, quantity_per_level] for _ in range(10)] + [[price * 1.02, 9999]]
+    midpoint, depth_score = trading._depth_notional_score(bids, asks)
+    return {
+        "source": source,
+        "price_points": trading._price_points_from_float(midpoint, source=source),
+        "depth_score": depth_score,
+    }
 
 
 def _notifications(trading, user_id):
@@ -222,6 +234,279 @@ def test_small_spot_buy_does_not_overcharge_integer_fee(tmp_path):
     assert fill["notional_points"] == 100
     assert fill["fee_points"] == 0
     assert dashboard["funding"]["trial_credit"]["available_points"] == 900
+
+
+def test_backtest_accepts_full_year_hourly_window_under_new_limit(tmp_path):
+    _, trading = _services(tmp_path)
+    candles = [
+        {
+            "time": i,
+            "time_iso": f"2024-01-01T{(i % 24):02d}:00:00+00:00",
+            "open_points": 100 + (i % 5),
+            "high_points": 101 + (i % 5),
+            "low_points": 99 + (i % 5),
+            "close_points": 100 + (i % 5),
+            "price_points": 100 + (i % 5),
+        }
+        for i in range(8784)
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "conditional",
+            "trigger_type": "price_below",
+            "trigger_price_points": 0,
+            "candles": candles,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["candle_count"] == 8784
+    assert result["max_backtest_candles"] == trading_engine_module.MAX_BACKTEST_CANDLES
+
+
+def test_dca_backtest_preserves_interval_across_segment_boundaries(tmp_path):
+    _, trading = _services(tmp_path)
+    candle_count = trading_engine_module.BACKTEST_SEGMENT_CANDLES + 5
+    candles = [
+        {
+            "time": i,
+            "time_iso": f"2024-01-01T{(i % 24):02d}:00:00+00:00",
+            "open_points": 100,
+            "high_points": 100,
+            "low_points": 100,
+            "close_points": 100,
+            "price_points": 100,
+        }
+        for i in range(candle_count)
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "dca",
+            "interval_candles": 3,
+            "order_points": 1,
+            "initial_cash_points": 5000,
+            "candles": candles,
+        },
+    )
+
+    expected_trades = ((candle_count - 1) // 3) + 1
+    assert result["ok"] is True
+    assert result["segmented_backtest"] is True
+    assert result["segmented_backtest_batches"] == 2
+    assert result["candle_count"] == candle_count
+    assert result["trade_count"] == expected_trades
+
+
+def test_workflow_backtest_preserves_position_across_segment_boundaries(tmp_path):
+    _, trading = _services(tmp_path)
+    candles = [
+        {
+            "time": i,
+            "time_iso": f"2024-01-01T{(i % 24):02d}:00:00+00:00",
+            "open_points": 200,
+            "high_points": 200,
+            "low_points": 200,
+            "close_points": 200,
+            "price_points": 200,
+        }
+        for i in range(trading_engine_module.BACKTEST_SEGMENT_CANDLES - 1)
+    ]
+    candles.extend([
+        {
+            "time": trading_engine_module.BACKTEST_SEGMENT_CANDLES - 1,
+            "time_iso": "2024-02-20T00:00:00+00:00",
+            "open_points": 90,
+            "high_points": 90,
+            "low_points": 90,
+            "close_points": 90,
+            "price_points": 90,
+        },
+        {
+            "time": trading_engine_module.BACKTEST_SEGMENT_CANDLES,
+            "time_iso": "2024-02-20T01:00:00+00:00",
+            "open_points": 120,
+            "high_points": 120,
+            "low_points": 120,
+            "close_points": 120,
+            "price_points": 120,
+        },
+    ])
+    workflow = {
+        "version": "1",
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "buy_cond", "type": "condition", "condition": {"type": "price_below", "value": 100}},
+            {"id": "no_pos", "type": "condition", "condition": {"type": "has_position", "value": False}},
+            {"id": "buy_and", "type": "logic", "operator": "AND"},
+            {"id": "buy_act", "type": "action", "priority": 10, "action": {"type": "buy_percent", "percent": 100, "order_type": "market"}},
+            {"id": "sell_cond", "type": "condition", "condition": {"type": "price_above", "value": 110}},
+            {"id": "has_pos", "type": "condition", "condition": {"type": "has_position", "value": True}},
+            {"id": "sell_and", "type": "logic", "operator": "AND"},
+            {"id": "sell_act", "type": "action", "priority": 20, "action": {"type": "sell_percent", "percent": 100, "order_type": "market"}},
+        ],
+        "edges": [
+            {"id": "e1", "from": "start", "from_port": "out", "to": "buy_cond", "to_port": "in"},
+            {"id": "e2", "from": "start", "from_port": "out", "to": "no_pos", "to_port": "in"},
+            {"id": "e3", "from": "buy_cond", "from_port": "true", "to": "buy_and", "to_port": "in"},
+            {"id": "e4", "from": "no_pos", "from_port": "true", "to": "buy_and", "to_port": "in"},
+            {"id": "e5", "from": "buy_and", "from_port": "true", "to": "buy_act", "to_port": "in"},
+            {"id": "e6", "from": "start", "from_port": "out", "to": "sell_cond", "to_port": "in"},
+            {"id": "e7", "from": "start", "from_port": "out", "to": "has_pos", "to_port": "in"},
+            {"id": "e8", "from": "sell_cond", "from_port": "true", "to": "sell_and", "to_port": "in"},
+            {"id": "e9", "from": "has_pos", "from_port": "true", "to": "sell_and", "to_port": "in"},
+            {"id": "e10", "from": "sell_and", "from_port": "true", "to": "sell_act", "to_port": "in"},
+        ],
+    }
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "workflow",
+            "workflow_json": workflow,
+            "initial_cash_points": 1000,
+            "candles": candles,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["segmented_backtest"] is True
+    assert result["trade_count"] == 2
+    assert result["end_units"] == 0
+    assert result["final_value_points"] > result["initial_cash_points"]
+
+
+def test_dca_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+
+    candles = [
+        {
+            "time_iso": f"2026-01-{1 + (idx // 1440):02d}T{(idx // 60) % 24:02d}:{idx % 60:02d}:00+00:00",
+            "open_points": 100,
+            "high_points": 100,
+            "low_points": 100,
+            "close_points": 100,
+        }
+        for idx in range(trading_engine_module.MAX_BACKTEST_CANDLES)
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "dca",
+            "initial_cash_points": 10_000,
+            "order_points": 100,
+            "interval_candles": 250,
+            "candles": candles,
+        },
+    )
+
+    expected_trades = ((len(candles) - 1) // 250) + 1
+    assert len(candles) == trading_engine_module.MAX_BACKTEST_CANDLES == 20_000
+    assert result["segmented_backtest"] is True
+    assert result["segmented_backtest_batches"] == 2
+    assert result["trade_count"] == expected_trades == 80
+    assert result["cash_points"] == 2_000
+    assert result["end_units"] == 80 * trading_engine_module.ASSET_SCALE
+    assert result["position_value_points"] == 8_000
+    assert result["final_value_points"] == 10_000
+    assert result["pnl_points"] == 0
+
+
+def test_conditional_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+
+    candles = [
+        {
+            "time_iso": f"2026-01-{1 + (idx // 1440):02d}T{(idx // 60) % 24:02d}:{idx % 60:02d}:00+00:00",
+            "open_points": 100 if idx == 9_999 else 200,
+            "high_points": 100 if idx == 9_999 else 200,
+            "low_points": 100 if idx == 9_999 else 200,
+            "close_points": 100 if idx == 9_999 else 200,
+        }
+        for idx in range(trading_engine_module.MAX_BACKTEST_CANDLES)
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "conditional",
+            "initial_cash_points": 100,
+            "order_points": 100,
+            "trigger_type": "price_below",
+            "trigger_price_points": 100,
+            "candles": candles,
+        },
+    )
+
+    assert result["segmented_backtest"] is True
+    assert result["segmented_backtest_batches"] == 2
+    assert result["trade_count"] == 1
+    assert result["trades"][0]["price_points"] == 100
+    assert result["trades"][0]["fee_points"] == 0
+    assert result["cash_points"] == 0
+    assert result["end_units"] == trading_engine_module.ASSET_SCALE
+    assert result["position_value_points"] == 200
+    assert result["final_value_points"] == 200
+    assert result["pnl_points"] == 100
+
+
+def test_grid_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+
+    candles = [
+        {
+            "time_iso": f"2026-01-{1 + (idx // 1440):02d}T{(idx // 60) % 24:02d}:{idx % 60:02d}:00+00:00",
+            "open_points": 100,
+            "high_points": 100,
+            "low_points": 100,
+            "close_points": 100,
+        }
+        for idx in range(19_996)
+    ] + [
+        {"time_iso": "2026-01-07T22:38:00+00:00", "open_points": 100, "high_points": 100, "low_points": 100, "close_points": 100},
+        {"time_iso": "2026-01-07T22:39:00+00:00", "open_points": 100, "high_points": 100, "low_points": 90, "close_points": 90},
+        {"time_iso": "2026-01-07T22:40:00+00:00", "open_points": 90, "high_points": 110, "low_points": 90, "close_points": 110},
+        {"time_iso": "2026-01-07T22:41:00+00:00", "open_points": 110, "high_points": 120, "low_points": 80, "close_points": 100},
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "grid",
+            "initial_cash_points": 1_000,
+            "lower_price_points": 80,
+            "upper_price_points": 120,
+            "grid_count": 5,
+            "order_amount_points": 100,
+            "candles": candles,
+        },
+    )
+
+    assert len(candles) == trading_engine_module.MAX_BACKTEST_CANDLES == 20_000
+    assert result["segmented_backtest"] is True
+    assert result["segmented_backtest_batches"] == 2
+    assert result["trade_count"] == 7
+    assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
+    assert result["final_value_points"] == 1_072
+    assert result["pnl_points"] == 72
 
 
 def test_trading_bot_workflow_triggers_existing_order_path(tmp_path):
@@ -951,7 +1236,10 @@ def test_backtest_trading_bot_rejects_excessive_candle_count(tmp_path):
             payload={
                 "market_symbol": "ETH/POINTS",
                 "strategy": "dca",
-                "candles": [{"time": index, "close_points": 5000} for index in range(5001)],
+                "candles": [
+                    {"time": index, "close_points": 5000}
+                    for index in range(trading_engine_module.MAX_BACKTEST_CANDLES + 1)
+                ],
             },
         )
 
@@ -1270,6 +1558,88 @@ def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monk
     assert updated["price_source"] == "fused_weighted"
 
 
+def test_root_trading_settings_default_to_fused_weighted_auto_depth(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+
+    settings = trading.get_root_settings()["settings"]
+
+    assert settings["price_source"] == "fused_weighted"
+    assert settings["price_fusion_mode"] == "auto_depth"
+
+
+def test_price_fusion_auto_depth_status_uses_depth_scores_and_sums_to_hundred(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 2))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "coinbase_exchange", 3))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "kraken_public_api", 4))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "gemini_public_api", 5))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "bitstamp_public_api", 6))
+
+    status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    used = {row["source"]: row for row in status["providers_used"]}
+
+    assert status["configured_source"] == "fused_weighted"
+    assert status["requested_mode"] == "auto_depth"
+    assert status["resolved_mode"] == "auto_depth"
+    assert status["state"] == "healthy"
+    assert status["degraded"] is False
+    assert status["excluded_providers"] == []
+    assert status["weights_sum_percent"] == pytest.approx(100.0, abs=0.01)
+    assert used["bitstamp_public_api"]["normalized_weight_percent"] > used["gemini_public_api"]["normalized_weight_percent"] > used["kraken_public_api"]["normalized_weight_percent"] > used["coinbase_exchange"]["normalized_weight_percent"] > used["okx_public_api"]["normalized_weight_percent"] > used["binance_public_api"]["normalized_weight_percent"]
+    assert used["binance_public_api"]["normalized_weight_percent"] == pytest.approx(100.0 / 21.0, abs=0.01)
+    assert used["bitstamp_public_api"]["normalized_weight_percent"] == pytest.approx((6.0 / 21.0) * 100.0, abs=0.01)
+
+
+def test_price_fusion_status_and_audit_mark_excluded_failed_sources(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+
+    def boom(_symbol):
+        raise TimeoutError("timeout")
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 2))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 3))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "gemini_public_api", 5))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "bitstamp_public_api", 7))
+
+    status = trading.get_root_price_fusion_status(market_symbol="ETH/POINTS")
+    excluded = {row["source"]: row for row in status["excluded_providers"]}
+    assert status["state"] == "degraded"
+    assert status["degraded"] is True
+    assert status["weights_sum_percent"] == pytest.approx(100.0, abs=0.01)
+    assert excluded["coinbase_exchange"]["reason"] == "fetch_failed"
+    assert excluded["kraken_public_api"]["reason"] == "fetch_failed"
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "ETH/POINTS")
+        price, source = trading._current_market_price_points(conn, market)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert price > 0
+    assert source == "fused_weighted"
+    audit = next(row for row in trading.root_report()["audit_events"] if row["event_type"] == "TRADING_PRICE_FUSION_DEGRADED")
+    metadata = json.loads(audit["metadata_json"] or "{}")
+    excluded_sources = {row["source"] for row in metadata.get("excluded_providers") or []}
+    assert {"coinbase_exchange", "kraken_public_api"} <= excluded_sources
+
+
 def test_live_price_fusion_manual_weights_renormalize_after_provider_failure(tmp_path, monkeypatch):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
@@ -1315,6 +1685,137 @@ def test_live_price_fusion_manual_weights_renormalize_after_provider_failure(tmp
     settings = trading.get_root_settings()["settings"]
     assert settings["price_fusion_mode"] == "manual_weights"
     assert settings["price_fusion_manual_weights"]["okx_public_api"] == 3
+
+
+def test_price_fusion_manual_weights_default_equal_weight_and_zero_weight_exclusion(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "manual_weights"}, markets=[])
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "coinbase_exchange", 1))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "kraken_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "gemini_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "bitstamp_public_api", 1))
+
+    equal_status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    assert equal_status["requested_mode"] == "manual_weights"
+    assert equal_status["resolved_mode"] == "manual_weights"
+    for row in equal_status["providers_used"]:
+        assert row["normalized_weight_percent"] == pytest.approx(100.0 / 6.0, abs=0.02)
+
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "manual_weights",
+            "price_fusion_manual_weights": {
+                "binance_public_api": 2,
+                "okx_public_api": 1,
+                "coinbase_exchange": 0,
+                "kraken_public_api": 0,
+                "gemini_public_api": 0,
+                "bitstamp_public_api": 0,
+            },
+        },
+        markets=[],
+    )
+    partial_status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    used_sources = {row["source"] for row in partial_status["providers_used"]}
+    excluded_sources = {row["source"]: row for row in partial_status["excluded_providers"]}
+    assert used_sources == {"binance_public_api", "okx_public_api"}
+    assert excluded_sources["coinbase_exchange"]["reason"] == "manual_weight_zero"
+    assert excluded_sources["kraken_public_api"]["reason"] == "manual_weight_zero"
+
+
+def test_price_fusion_manual_all_zero_reports_invalid_and_logs_auto_depth_fallback(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "manual_weights",
+            "price_fusion_manual_weights": {provider: 0 for provider in trading_engine_module.WEIGHTED_PRICE_PROVIDERS},
+        },
+        markets=[],
+    )
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 2))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "coinbase_exchange", 3))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "kraken_public_api", 4))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "gemini_public_api", 5))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "bitstamp_public_api", 6))
+
+    status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    assert status["resolved_mode"] == "auto_depth_fallback"
+    assert status["warning_code"] == "manual_weights_invalid"
+    assert "手動權重全部為 0" in status["message"]
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "BTC/POINTS")
+        _price, source = trading._current_market_price_points(conn, market)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert source == "fused_weighted"
+    audit = next(row for row in trading.root_report()["audit_events"] if row["event_type"] == "TRADING_PRICE_FUSION_DEGRADED")
+    metadata = json.loads(audit["metadata_json"] or "{}")
+    assert metadata["warning_code"] == "manual_weights_invalid"
+    assert metadata["resolved_mode"] == "auto_depth_fallback"
+
+
+def test_price_fusion_orderbook_total_failure_enters_conservative_single_source_fallback(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+
+    def boom(_symbol):
+        raise ValueError("malformed response")
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", boom)
+    monkeypatch.setattr(trading, "_fetch_live_price_points", lambda _symbol: (321, "coingecko_simple_price"))
+
+    status = trading.get_root_price_fusion_status(market_symbol="ETH/POINTS")
+    assert status["state"] == "conservative"
+    assert status["fallback_active"] is True
+    assert status["conservative_mode"] is True
+    assert status["resolved_source"] == "coingecko_simple_price"
+    assert "降級" in status["message"]
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "ETH/POINTS")
+        price, source = trading._current_market_price_points(conn, market)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert price == 321
+    assert source == "coingecko_simple_price"
+    audit = next(row for row in trading.root_report()["audit_events"] if row["event_type"] == "TRADING_PRICE_FUSION_DEGRADED")
+    metadata = json.loads(audit["metadata_json"] or "{}")
+    assert audit["event_type"] == "TRADING_PRICE_FUSION_DEGRADED"
+    assert metadata["fallback_active"] is True
+    assert metadata["conservative_mode"] is True
+    assert metadata["resolved_source"] == "coingecko_simple_price"
 
 
 def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_path):
@@ -1650,12 +2151,12 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
     assert closed["position"]["status"] == "closed"
     assert closed["interest_points"] == 0
-    assert closed["position"]["interest_paid_points"] == 2
+    assert closed["position"]["interest_paid_points"] == 1
     assert closed["delta_points"] == -2
     assert points.get_wallet(1)["points_frozen"] == 0
     assert closed["funding"]["trial_credit"]["available_points"] == 996
     assert closed["funding"]["trial_credit"]["deployed_points"] == 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10006
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10005
     assert trading.verify_state()["ok"] is True
 
 
@@ -1724,13 +2225,71 @@ def test_margin_interest_charges_by_started_hour_not_whole_day(tmp_path):
             "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
             (opened["position"]["position_uuid"],),
         ).fetchone()
-        assert trading._margin_interest_points(row, now_text="2026-05-02T10:00:01") == 4
-        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == 4
-        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == 4
-        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:01") == 7
-        assert trading._margin_interest_points(row, now_text="2026-05-03T09:59:59") == 81
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:00:01") == 3
+        assert trading._margin_interest_points(row, now_text="2026-05-02T10:59:59") == 3
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:00") == 3
+        assert trading._margin_interest_points(row, now_text="2026-05-02T11:00:01") == 6
+        assert trading._margin_interest_points(row, now_text="2026-05-03T09:59:59") == 80
     finally:
         conn.close()
+
+
+def test_margin_interest_accumulates_fractional_carry_for_small_principal(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_interest_percent_daily": 1,
+            "borrow_interest_pool_pressure_multiplier": 0,
+            "price_source": "manual_root",
+        },
+        markets=[{"symbol": "ETH/POINTS", "manual_price_points": 5000}],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.02",
+        collateral_points=50,
+    )
+
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_margin_positions SET opened_at='2026-05-02T10:00:00' WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        accrued = trading._accrue_margin_interest(conn, row, actor={"username": "system"}, now_text="2026-05-03T10:00:00")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert accrued["interest_points"] == 0
+    assert accrued["interest_paid_points"] == 0
+    assert accrued["interest_carry_micropoints"] == 500000
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM trading_margin_positions WHERE position_uuid=?",
+            (opened["position"]["position_uuid"],),
+        ).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        accrued_again = trading._accrue_margin_interest(conn, row, actor={"username": "system"}, now_text="2026-05-04T10:00:00")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert accrued_again["interest_points"] == 1
+    assert accrued_again["interest_carry_micropoints"] == 0
+    assert trading.verify_state()["ok"] is True
 
 
 def test_margin_open_rejects_when_funding_pool_is_insufficient(tmp_path):
@@ -1853,8 +2412,8 @@ def test_margin_open_is_idempotent_for_client_key(tmp_path):
     assert second["position"]["position_uuid"] == first["position"]["position_uuid"]
     dashboard = trading.user_dashboard(user_id=1)
     assert len([row for row in dashboard["margin_positions"] if row["status"] == "open"]) == 1
-    assert dashboard["margin_positions"][0]["interest_paid_points"] == 1
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9703
+    assert dashboard["margin_positions"][0]["interest_paid_points"] == 0
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9702
     assert trading.verify_state()["ok"] is True
 
 
@@ -1893,7 +2452,8 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
 
     assert accrued["interest_accrued_hours"] == 2
     assert accrued["interest_paid_points"] == 0
-    assert accrued["interest_points"] == 7
+    assert accrued["interest_points"] == 6
+    assert accrued["interest_carry_micropoints"] == 720000
     conn = trading.get_db()
     try:
         position = conn.execute(
@@ -1902,7 +2462,8 @@ def test_hourly_margin_interest_capitalizes_when_wallet_balance_is_insufficient(
         ).fetchone()
     finally:
         conn.close()
-    assert position["interest_points"] == 7
+    assert position["interest_points"] == 6
+    assert position["interest_carry_micropoints"] == 720000
     assert trading.verify_state()["ok"] is True
 
 
@@ -2024,9 +2585,9 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
 
     assert closed["position"]["status"] == "closed"
     assert closed["interest_points"] == 0
-    assert closed["position"]["interest_paid_points"] == 13
+    assert closed["position"]["interest_paid_points"] == 12
     assert closed["delta_points"] == 99
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9917
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9916
     assert trading.verify_state()["ok"] is True
 
 

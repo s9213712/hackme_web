@@ -1787,6 +1787,9 @@
                 <div class="field"><label>初始資金</label><input type="number" id="trading-backtest-initial-cash" min="1" step="1" value="10000" /></div>
                 <div class="field"><label>滑價百分比</label><input type="number" id="trading-backtest-slippage-percent" min="0" max="20" step="0.01" value="0" /></div>
               </div>
+              <div class="drive-card-sub" id="trading-backtest-date-hint" style="margin-top:.35rem;line-height:1.6;">
+                先選開始或結束時間，系統會依目前週期提示另一側最遠可選到哪裡。
+              </div>
               <!-- 定投選項 -->
               <div id="trading-backtest-dca-options" class="settings-option-grid" style="margin-top:.4rem;">
                 <div class="field"><label>每次定投金額（點）</label><input type="number" id="trading-backtest-order-points" min="1" step="1" value="100" /></div>
@@ -3328,6 +3331,18 @@
                     <label>手動權重</label>
                     <div id="root-trading-price-fusion-weights" class="settings-option-grid"></div>
                     <div class="field-hint">只有在「root 手動權重」模式下會生效。填 0 代表該交易所不參與融合價格。</div>
+                  </div>
+                  <div class="field">
+                    <label>融合價格即時比例（root 專用）</label>
+                    <div class="admin-toolbar" style="margin-top:.35rem;gap:.5rem;flex-wrap:wrap;">
+                      <select id="root-trading-price-fusion-market"></select>
+                      <button class="btn" type="button" id="root-trading-price-fusion-refresh-btn">重新整理即時比例</button>
+                    </div>
+                    <div class="field-hint">這裡顯示目前已生效設定下的實際融合占比。若出現來源降級、排除來源或 manual weights invalid，會直接在這裡標示。</div>
+                    <div id="root-trading-price-fusion-msg" style="margin-top:.45rem;font-size:.8rem;"></div>
+                    <div id="root-trading-price-fusion-summary" class="drive-file-list" style="margin-top:.55rem;"></div>
+                    <div id="root-trading-price-fusion-provider-list" class="drive-file-list" style="margin-top:.55rem;"></div>
+                    <div id="root-trading-price-fusion-excluded-list" class="drive-file-list" style="margin-top:.55rem;"></div>
                   </div>
                   <div class="field">
                     <label>即時價格備援秒數</label>

@@ -18,7 +18,7 @@ from services.btc_trade_bridge import (
     default_btc_trade_project_dir,
     expand_server_path,
 )
-from services.trading_engine import MAX_BACKTEST_CANDLES, units_to_quantity
+from services.trading_engine import BACKTEST_SEGMENT_CANDLES, MAX_BACKTEST_CANDLES, units_to_quantity
 
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
@@ -75,7 +75,7 @@ INTERVAL_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 BINANCE_MAX_CANDLES_PER_REQUEST = 1000
 REFERENCE_PRICE_CACHE = {}
 REFERENCE_PRICE_CACHE_TTL_SECONDS = 1.0
-BACKTEST_PROVIDER_CANDLE_LIMIT = 5000
+BACKTEST_PROVIDER_CANDLE_LIMIT = MAX_BACKTEST_CANDLES
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1] / "workflows"
 WORKFLOW_SYSTEM_DIR = WORKFLOW_ROOT / "system"
 WORKFLOW_CUSTOM_DIR = WORKFLOW_ROOT / "custom"
@@ -591,6 +591,7 @@ def register_trading_routes(app, deps):
             "actual_candle_count": len(candles),
             "actual_days": actual_days,
             "max_backtest_candles": MAX_BACKTEST_CANDLES,
+            "max_backtest_candles_per_batch": BACKTEST_SEGMENT_CANDLES,
             "max_backtest_days": max_days_for_interval,
         }
 
@@ -1020,12 +1021,14 @@ def register_trading_routes(app, deps):
                     "actual_candle_count": fetched.get("actual_candle_count"),
                     "actual_backtest_days": fetched.get("actual_days"),
                     "max_backtest_candles": fetched.get("max_backtest_candles"),
+                    "max_backtest_candles_per_batch": fetched.get("max_backtest_candles_per_batch"),
                     "max_backtest_days": fetched.get("max_backtest_days"),
                 }
             result = trading_service.backtest_trading_bot(actor=actor, payload=data)
             result["data_source"] = result.get("data_source") or data.get("data_source") or ("browser_loaded_chart" if isinstance((data or {}).get("candles"), list) else "")
             result["provider_symbol"] = result.get("provider_symbol") or data.get("provider_symbol") or ""
             result["max_backtest_candles"] = MAX_BACKTEST_CANDLES
+            result["max_backtest_candles_per_batch"] = result.get("max_backtest_candles_per_batch") or fetched_meta.get("max_backtest_candles_per_batch") or BACKTEST_SEGMENT_CANDLES
             result["provider_candle_limit"] = BACKTEST_PROVIDER_CANDLE_LIMIT
             result["requested_candle_limit"] = data.get("requested_candle_limit") or data.get("candle_limit") or data.get("limit") or len(data.get("candles") or [])
             result["download_candle_limit"] = data.get("download_candle_limit") or len(data.get("candles") or [])
@@ -1297,6 +1300,19 @@ def register_trading_routes(app, deps):
         if err:
             return err
         return json_resp({"ok": True, **trading_service.get_root_settings()})
+
+    @app.route("/api/root/trading/price-fusion-status", methods=["GET"])
+    @require_csrf_safe
+    def root_trading_price_fusion_status():
+        actor, err = root_or_403()
+        if err:
+            return err
+        market_symbol = str(request.args.get("market_symbol") or "").strip().upper()
+        try:
+            status = trading_service.get_root_price_fusion_status(market_symbol=market_symbol)
+            return json_resp({"ok": True, "status": status})
+        except Exception as exc:
+            return service_error(exc)
 
     @app.route("/api/root/trading/settings", methods=["POST"])
     @require_csrf

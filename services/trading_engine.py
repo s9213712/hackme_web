@@ -11,6 +11,7 @@ from services.notifications import create_notification_if_enabled
 
 
 ASSET_SCALE = 100_000_000
+POINT_MICRO_SCALE = 1_000_000
 USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
 TRIAL_CREDIT_INITIAL_POINTS = 1_000
@@ -23,7 +24,8 @@ SUPPORTED_EXECUTION_MODES = {"house_counterparty", "pvp_matching", "hybrid_liqui
 OPEN_ORDER_STATUSES = {"open", "partially_filled"}
 TRADING_BOT_TRIGGER_TYPES = {"always", "price_above", "price_below"}
 TRADING_BOT_TYPES = {"conditional", "dca"}
-MAX_BACKTEST_CANDLES = 5000
+BACKTEST_SEGMENT_CANDLES = 10_000
+MAX_BACKTEST_CANDLES = 20_000
 WORKFLOW_CONDITION_TYPES = {
     "price_below",
     "price_above",
@@ -494,6 +496,7 @@ def ensure_trading_schema(conn):
             interest_points INTEGER NOT NULL DEFAULT 0,
             interest_paid_points INTEGER NOT NULL DEFAULT 0,
             interest_accrued_hours INTEGER NOT NULL DEFAULT 0,
+            interest_carry_micropoints INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'open',
             opened_at TEXT NOT NULL,
             closed_at TEXT,
@@ -793,6 +796,8 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_paid_points INTEGER NOT NULL DEFAULT 0")
     if "interest_accrued_hours" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_accrued_hours INTEGER NOT NULL DEFAULT 0")
+    if "interest_carry_micropoints" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_carry_micropoints INTEGER NOT NULL DEFAULT 0")
     if "exit_price_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN exit_price_points INTEGER")
     if "realized_pnl_points" not in margin_cols:
@@ -954,7 +959,8 @@ class TradingEngineService:
         utilization = (outstanding / capacity) if capacity > 0 else 0.0
         projected_utilization = (projected_outstanding / projected_capacity) if projected_capacity > 0 else 1.0
         base_rate = float(settings.get("borrow_interest_percent_daily") or 0)
-        pressure = float(settings.get("borrow_interest_pool_pressure_multiplier") or TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)
+        raw_pressure = settings.get("borrow_interest_pool_pressure_multiplier")
+        pressure = float(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER if raw_pressure is None else raw_pressure)
         effective_rate = base_rate * (1.0 + max(0.0, utilization) * max(0.0, pressure))
         projected_rate = base_rate * (1.0 + max(0.0, projected_utilization) * max(0.0, pressure))
         return {
@@ -1071,6 +1077,7 @@ class TradingEngineService:
             "price_fusion_manual_weights": _normalize_price_fusion_manual_weights(_json_loads(raw.get("trading.price_fusion_manual_weights_json"), DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
             "price_fusion_provider_labels": dict(PRICE_PROVIDER_LABELS),
             "price_fusion_providers": list(WEIGHTED_PRICE_PROVIDERS),
+            "price_fusion_live_markets": sorted(LIVE_PRICE_MARKETS.keys()),
             "price_fusion_depth_band_percent": DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT,
             "price_fusion_depth_levels": DEFAULT_PRICE_FUSION_DEPTH_LEVELS,
             "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
@@ -1502,6 +1509,7 @@ class TradingEngineService:
         market_symbol = str(market_symbol or "").strip().upper()
         snapshots = []
         errors = []
+        provider_failures = {}
         fetchers = (
             ("binance_public_api", self._fetch_binance_orderbook_snapshot),
             ("okx_public_api", self._fetch_okx_orderbook_snapshot),
@@ -1514,12 +1522,29 @@ class TradingEngineService:
             try:
                 snapshots.append(fetcher(market_symbol))
             except Exception as exc:
-                errors.append(f"{source}: {str(exc)[:120]}")
+                short_error = str(exc)[:120]
+                errors.append(f"{source}: {short_error}")
+                provider_failures[source] = short_error
         if not snapshots:
             try:
                 fallback_price, fallback_source = self._fetch_live_price_points(market_symbol)
+                excluded = [
+                    {
+                        "source": source,
+                        "label": PRICE_PROVIDER_LABELS.get(source, source),
+                        "reason": "fetch_failed",
+                        "error": provider_failures.get(source, ""),
+                    }
+                    for source, _fetcher in fetchers
+                ]
                 return fallback_price, {
+                    "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
                     "mode": "emergency_single_source",
+                    "warning_code": "orderbook_unavailable",
+                    "warning_message": f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                    "degraded": True,
+                    "fallback_active": True,
+                    "conservative_mode": True,
                     "providers_used": [{
                         "source": fallback_source,
                         "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
@@ -1527,7 +1552,9 @@ class TradingEngineService:
                         "depth_score": 0.0,
                         "weight": 1.0,
                         "normalized_weight": 1.0,
+                        "normalized_weight_percent": 100.0,
                     }],
+                    "excluded_providers": excluded,
                     "provider_errors": errors,
                     "resolved_source": fallback_source,
                 }
@@ -1538,18 +1565,31 @@ class TradingEngineService:
         weight_map = self._price_fusion_manual_weights(settings)
         weighted_rows = []
         resolved_mode = mode
+        warning_code = ""
+        warning_message = ""
         if mode == "manual_weights":
+            manual_positive_total = 0.0
             for snap in snapshots:
                 weight = float(weight_map.get(snap["source"], 0.0))
                 if weight > 0:
                     weighted_rows.append((snap, weight))
+                    manual_positive_total += weight
+            if manual_positive_total <= 0:
+                warning_code = "manual_weights_invalid"
+                warning_message = "root 手動權重全部為 0，已改用自動深度權重"
         if not weighted_rows:
             if mode == "manual_weights":
                 resolved_mode = "auto_depth_fallback"
+                if not warning_code:
+                    warning_code = "manual_weights_unusable"
+                    warning_message = "root 手動權重目前沒有可用來源，已改用自動深度權重"
             auto_rows = [(snap, max(float(snap.get("depth_score") or 0.0), 0.0)) for snap in snapshots]
             total_auto = sum(weight for _, weight in auto_rows)
             if total_auto <= 0:
                 resolved_mode = "equal_weight_fallback"
+                if not warning_code:
+                    warning_code = "depth_score_invalid"
+                    warning_message = "所有來源深度分數都無效，已改用等權平均"
                 equal_weight = 1.0 / len(snapshots)
                 weighted_rows = [(snap, equal_weight) for snap in snapshots]
             else:
@@ -1558,8 +1598,36 @@ class TradingEngineService:
         if total_weight <= 0:
             raise ValueError("weighted fused price has no positive provider weight")
         weighted_price = sum(int(snap["price_points"]) * float(weight) for snap, weight in weighted_rows) / total_weight
+        used_sources = {snap["source"] for snap, _weight in weighted_rows}
+        excluded_providers = []
+        for source, _fetcher in fetchers:
+            if source in used_sources:
+                continue
+            if source in provider_failures:
+                excluded_providers.append({
+                    "source": source,
+                    "label": PRICE_PROVIDER_LABELS.get(source, source),
+                    "reason": "fetch_failed",
+                    "error": provider_failures.get(source, ""),
+                    "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
+                })
+                continue
+            if mode == "manual_weights":
+                excluded_providers.append({
+                    "source": source,
+                    "label": PRICE_PROVIDER_LABELS.get(source, source),
+                    "reason": "manual_weight_zero",
+                    "error": "",
+                    "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
+                })
         return int(Decimal(str(weighted_price)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)), {
+            "requested_mode": mode,
             "mode": resolved_mode,
+            "warning_code": warning_code,
+            "warning_message": warning_message,
+            "degraded": bool(provider_failures) or resolved_mode != mode or bool(warning_code),
+            "fallback_active": resolved_mode in {"auto_depth_fallback", "equal_weight_fallback"},
+            "conservative_mode": False,
             "providers_used": [
                 {
                     "source": snap["source"],
@@ -1568,12 +1636,103 @@ class TradingEngineService:
                     "depth_score": round(float(snap.get("depth_score") or 0.0), 8),
                     "weight": round(float(weight), 8),
                     "normalized_weight": round(float(weight) / total_weight, 8),
+                    "normalized_weight_percent": round(float(weight) * 100.0 / total_weight, 4),
                 }
                 for snap, weight in weighted_rows
             ],
+            "excluded_providers": excluded_providers,
             "provider_errors": errors,
             "resolved_source": FUSED_PRICE_SOURCE,
         }
+
+    def _default_price_fusion_market_symbol(self, conn):
+        rows = conn.execute("SELECT symbol FROM trading_markets ORDER BY symbol").fetchall()
+        for row in rows:
+            symbol = str(row["symbol"] or "").strip().upper()
+            if self._live_price_symbol(symbol):
+                return symbol
+        return next(iter(sorted(LIVE_PRICE_MARKETS.keys())), "")
+
+    def _root_price_fusion_status_on_conn(self, conn, *, market_symbol=""):
+        settings = self._settings_payload(conn)
+        configured_source = str(settings.get("price_source") or FUSED_PRICE_SOURCE)
+        requested_mode = str(settings.get("price_fusion_mode") or "auto_depth")
+        requested_symbol = str(market_symbol or "").strip().upper()
+        symbol = requested_symbol or self._default_price_fusion_market_symbol(conn)
+        live_supported = bool(symbol and self._live_price_symbol(symbol))
+        payload = {
+            "configured_source": configured_source,
+            "configured_source_label": PRICE_PROVIDER_LABELS.get(configured_source, configured_source),
+            "requested_mode": requested_mode,
+            "market_symbol": symbol,
+            "live_supported": live_supported,
+            "providers_configured": list(WEIGHTED_PRICE_PROVIDERS),
+            "manual_weights": self._price_fusion_manual_weights(settings),
+        }
+        if configured_source != FUSED_PRICE_SOURCE:
+            payload.update({
+                "state": "inactive",
+                "message": "目前價格來源不是融合價格；只有切回融合價格後才會計算各 API 即時占比。",
+                "degraded": False,
+                "fallback_active": False,
+                "conservative_mode": False,
+                "weights_sum_percent": 0.0,
+                "providers_used": [],
+                "excluded_providers": [],
+                "resolved_mode": requested_mode,
+                "resolved_source": configured_source,
+                "price_points": None,
+            })
+            return payload
+        if not live_supported:
+            payload.update({
+                "state": "unsupported",
+                "message": "這個市場目前沒有支援即時融合價格來源。",
+                "degraded": True,
+                "fallback_active": False,
+                "conservative_mode": False,
+                "weights_sum_percent": 0.0,
+                "providers_used": [],
+                "excluded_providers": [],
+                "resolved_mode": requested_mode,
+                "resolved_source": FUSED_PRICE_SOURCE,
+                "price_points": None,
+            })
+            return payload
+        price_points, details = self._fetch_weighted_fused_price_points(symbol, settings=settings)
+        providers_used = list((details or {}).get("providers_used") or [])
+        weights_sum_percent = round(sum(float(row.get("normalized_weight_percent") or 0.0) for row in providers_used), 4)
+        degraded = bool((details or {}).get("degraded"))
+        conservative_mode = bool((details or {}).get("conservative_mode"))
+        warning_message = str((details or {}).get("warning_message") or "").strip()
+        if conservative_mode and not warning_message:
+            warning_message = "價格來源降級：目前已退回單一 ticker，建議暫停高風險交易。"
+        elif degraded and not warning_message and (details or {}).get("excluded_providers"):
+            warning_message = "部分交易所來源已被排除，系統已用剩餘健康來源重新分配權重。"
+        payload.update({
+            "state": "conservative" if conservative_mode else ("degraded" if degraded else "healthy"),
+            "message": warning_message,
+            "degraded": degraded,
+            "fallback_active": bool((details or {}).get("fallback_active")),
+            "conservative_mode": conservative_mode,
+            "weights_sum_percent": weights_sum_percent,
+            "providers_used": providers_used,
+            "excluded_providers": list((details or {}).get("excluded_providers") or []),
+            "resolved_mode": str((details or {}).get("mode") or requested_mode),
+            "resolved_source": str((details or {}).get("resolved_source") or FUSED_PRICE_SOURCE),
+            "price_points": int(price_points),
+            "warning_code": str((details or {}).get("warning_code") or ""),
+            "provider_errors": list((details or {}).get("provider_errors") or []),
+        })
+        return payload
+
+    def get_root_price_fusion_status(self, *, market_symbol=""):
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            return self._root_price_fusion_status_on_conn(conn, market_symbol=market_symbol)
+        finally:
+            conn.close()
 
     def _fetch_live_price_points(self, market_symbol):
         market_symbol = str(market_symbol or "").strip().upper()
@@ -1670,6 +1829,7 @@ class TradingEngineService:
             return int(market["manual_price_points"]), str(market["price_source"] or "manual_root")
         old_price = int(market["manual_price_points"] or 0)
         old_source = str(market["price_source"] or "")
+        fusion_details = None
         try:
             if self.live_price_provider:
                 price, live_source = self._fetch_live_price_points(symbol)
@@ -1723,6 +1883,28 @@ class TradingEngineService:
                     metadata={"old_price_points": old_price, "new_price_points": price, "jump_percent": jump_percent, "allowed_percent": allowed_percent},
                 )
                 raise ValueError(f"live trading price jump {jump_percent:.2f}% exceeds max {allowed_percent:.2f}% for {symbol}")
+        if configured_source == FUSED_PRICE_SOURCE and fusion_details and (
+            fusion_details.get("degraded") or fusion_details.get("warning_code") or fusion_details.get("excluded_providers")
+        ):
+            self._audit_event(
+                conn,
+                "TRADING_PRICE_FUSION_DEGRADED",
+                "fused trading price degraded or partially excluded providers",
+                market_symbol=symbol,
+                severity="critical" if fusion_details.get("conservative_mode") else "warning",
+                metadata={
+                    "resolved_source": live_source,
+                    "requested_mode": fusion_details.get("requested_mode"),
+                    "resolved_mode": fusion_details.get("mode"),
+                    "warning_code": fusion_details.get("warning_code"),
+                    "warning_message": fusion_details.get("warning_message"),
+                    "excluded_providers": fusion_details.get("excluded_providers"),
+                    "providers_used": fusion_details.get("providers_used"),
+                    "provider_errors": fusion_details.get("provider_errors"),
+                    "fallback_active": bool(fusion_details.get("fallback_active")),
+                    "conservative_mode": bool(fusion_details.get("conservative_mode")),
+                },
+            )
         now = _now()
         conn.execute(
             "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
@@ -2241,6 +2423,11 @@ class TradingEngineService:
         item["interest_capitalized_points"] = int(item.get("interest_points") or 0)
         item["interest_paid_points"] = int(item.get("interest_paid_points") or 0)
         item["interest_accrued_hours"] = int(item.get("interest_accrued_hours") or 0)
+        item["interest_carry_micropoints"] = int(item.get("interest_carry_micropoints") or 0)
+        item["interest_exact_points"] = round(
+            item["interest_capitalized_points"] + (item["interest_carry_micropoints"] / POINT_MICRO_SCALE),
+            6,
+        )
         # Compute total elapsed hours and next interest tick
         try:
             opened_at_dt = datetime.fromisoformat(str(item.get("opened_at") or ""))
@@ -2348,15 +2535,32 @@ class TradingEngineService:
         hours = max(0, int(hours or 0))
         if principal <= 0 or rate_percent <= 0 or hours <= 0:
             return 0
-        hourly_rate = (rate_percent / 100.0) / 24.0
-        return int(math.ceil(principal * hourly_rate * hours))
+        carry = int(row["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in row.keys() else 0
+        total_micro = self._margin_interest_due_micropoints(principal=principal, rate_percent=rate_percent, hours=hours) + carry
+        return int(total_micro // POINT_MICRO_SCALE)
+
+    def _margin_interest_due_micropoints(self, *, principal, rate_percent, hours):
+        principal = int(principal or 0)
+        rate_percent = float(rate_percent or 0)
+        hours = max(0, int(hours or 0))
+        if principal <= 0 or rate_percent <= 0 or hours <= 0:
+            return 0
+        hourly_rate = (Decimal(str(rate_percent)) / Decimal("100")) / Decimal("24")
+        total_micro = Decimal(principal) * hourly_rate * Decimal(hours) * Decimal(POINT_MICRO_SCALE)
+        return int(total_micro.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
     def _margin_interest_points(self, row, now_text=None):
         accrued_hours = int(row["interest_accrued_hours"] or 0) if "interest_accrued_hours" in row.keys() else 0
         total_hours = self._margin_interest_total_hours(row, now_text=now_text)
         due_hours = max(0, total_hours - accrued_hours)
         capitalized = int(row["interest_points"] or 0)
-        return capitalized + self._margin_interest_due_points(row, hours=due_hours)
+        carry = int(row["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in row.keys() else 0
+        due_micro = self._margin_interest_due_micropoints(
+            principal=int(row["principal_points"] or 0),
+            rate_percent=float(row["interest_percent_daily"] or 0),
+            hours=due_hours,
+        )
+        return capitalized + int((carry + due_micro) // POINT_MICRO_SCALE)
 
     def _accrue_margin_interest(self, conn, position, *, actor=None, now_text=None):
         if not position or position["status"] != "open":
@@ -2368,11 +2572,19 @@ class TradingEngineService:
         due_hours = max(0, total_hours - accrued_hours)
         if due_hours <= 0:
             return position
-        due_points = self._margin_interest_due_points(position, hours=due_hours)
+        carry = int(position["interest_carry_micropoints"] or 0) if "interest_carry_micropoints" in position.keys() else 0
+        due_micro = self._margin_interest_due_micropoints(
+            principal=int(position["principal_points"] or 0),
+            rate_percent=float(position["interest_percent_daily"] or 0),
+            hours=due_hours,
+        )
+        total_micro = carry + due_micro
+        due_points = int(total_micro // POINT_MICRO_SCALE)
+        next_carry = int(total_micro % POINT_MICRO_SCALE)
         if due_points <= 0:
             conn.execute(
-                "UPDATE trading_margin_positions SET interest_accrued_hours=?, updated_at=? WHERE id=?",
-                (total_hours, _now(), position["id"]),
+                "UPDATE trading_margin_positions SET interest_accrued_hours=?, interest_carry_micropoints=?, updated_at=? WHERE id=?",
+                (total_hours, next_carry, _now(), position["id"]),
             )
             return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
 
@@ -2400,6 +2612,7 @@ class TradingEngineService:
                     "charged_hours": due_hours,
                     "total_accrued_hours": total_hours,
                     "capitalized_interest_points": capitalized,
+                    "carry_micropoints": next_carry,
                 },
                 actor=actor,
             )["ledger_uuid"]
@@ -2421,10 +2634,11 @@ class TradingEngineService:
             SET interest_points=interest_points+?,
                 interest_paid_points=interest_paid_points+?,
                 interest_accrued_hours=?,
+                interest_carry_micropoints=?,
                 updated_at=?
             WHERE id=?
             """,
-            (capitalized, paid, total_hours, now, position["id"]),
+            (capitalized, paid, total_hours, next_carry, now, position["id"]),
         )
         self._audit_event(
             conn,
@@ -2441,6 +2655,7 @@ class TradingEngineService:
                 "capitalized_points": capitalized,
                 "charged_hours": due_hours,
                 "total_accrued_hours": total_hours,
+                "carry_micropoints": next_carry,
                 "ledger_uuid": ledger_uuid,
             },
         )
@@ -4500,41 +4715,66 @@ class TradingEngineService:
         trigger_price = int(payload.get("trigger_price_points") or 0)
         interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
         initial_cash = cash
-        units = int(payload.get("initial_units") or 0)
-        avg_cost_bt = int(payload.get("initial_avg_cost") or 0)
-        trades = []
-        equity_curve = []
-        peak_value = initial_cash
-        max_drawdown_percent = 0.0
-        wins = 0
-        sells = 0
-        workflow_state = {"executed_action_ids": set(), "branch_step_counts": {}}
+        initial_workflow_state = payload.get("initial_workflow_state") if isinstance(payload.get("initial_workflow_state"), dict) else {}
+        state = {
+            "cash": cash,
+            "units": int(payload.get("initial_units") or 0),
+            "avg_cost_bt": int(payload.get("initial_avg_cost") or 0),
+            "trades": [],
+            "equity_curve": [],
+            "peak_value": cash,
+            "max_drawdown_percent": 0.0,
+            "wins": 0,
+            "sells": 0,
+            "trade_count": int(payload.get("initial_trade_count") or 0),
+            "processed_candles": int(payload.get("initial_candle_offset") or 0),
+            "workflow_state": {
+                "executed_action_ids": set(initial_workflow_state.get("executed_action_ids") or []),
+                "branch_step_counts": {
+                    str(k): int(v)
+                    for k, v in (initial_workflow_state.get("branch_step_counts") or {}).items()
+                },
+            },
+            "grid_initialized": False,
+            "grid_state": {},
+            "grid_levels": [],
+            "grid_order_amount": 0,
+            "grid_fee_rate": fee_rate_percent * 0.5,
+        }
 
-        # ── Grid backtest setup ──────────────────────────────────────────────
-        grid_state = {}  # level_price -> "buy" | "sell" | None
-        grid_levels = []
-        grid_order_amount = 0
-        grid_fee_rate = fee_rate_percent * 0.5
-        if strategy == "grid":
+        def _record_equity(global_index, candle, price):
+            equity = state["cash"] + notional_points(state["units"], price)
+            state["peak_value"] = max(state["peak_value"], equity)
+            if state["peak_value"] > 0:
+                state["max_drawdown_percent"] = max(
+                    state["max_drawdown_percent"],
+                    round((state["peak_value"] - equity) * 100 / state["peak_value"], 4),
+                )
+            state["equity_curve"].append({
+                "index": global_index,
+                "time": candle.get("time") or candle.get("time_iso") or global_index,
+                "equity_points": equity,
+                "price_points": price,
+            })
+
+        def _ensure_grid_state(chunk_candles):
+            if strategy != "grid" or state["grid_initialized"]:
+                return
             g_lower = _to_int(payload.get("lower_price_points", 0), name="lower_price_points", minimum=1)
             g_upper = _to_int(payload.get("upper_price_points", 0), name="upper_price_points", minimum=2)
             g_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=500)
-            grid_order_amount = _to_int(payload.get("order_amount_points", 100), name="order_amount_points", minimum=1)
+            state["grid_order_amount"] = _to_int(payload.get("order_amount_points", 100), name="order_amount_points", minimum=1)
             g_mode = str(payload.get("spacing_mode") or "arithmetic").strip().lower()
             if g_upper <= g_lower:
                 raise ValueError("upper_price_points must be greater than lower_price_points")
-            # Build levels
             if g_mode == "geometric":
                 g_ratio = (g_upper / g_lower) ** (1 / (g_count - 1))
-                for i in range(g_count):
-                    grid_levels.append(round(g_lower * (g_ratio ** i)))
+                state["grid_levels"] = [round(g_lower * (g_ratio ** i)) for i in range(g_count)]
             else:
                 g_step = (g_upper - g_lower) / (g_count - 1)
-                for i in range(g_count):
-                    grid_levels.append(round(g_lower + g_step * i))
-            # Starting price from first valid candle
+                state["grid_levels"] = [round(g_lower + g_step * i) for i in range(g_count)]
             g_start = 0
-            for _c in candles:
+            for _c in chunk_candles:
                 try:
                     g_start = int(round(float(_c.get("close_points") or _c.get("price_points") or _c.get("close_usdt") or _c.get("price_usdt") or 0)))
                     if g_start > 0:
@@ -4543,209 +4783,229 @@ class TradingEngineService:
                     pass
             if g_start <= 0:
                 raise ValueError("no valid starting price in candles for grid backtest")
-            # Spot needed for sell levels
-            sell_lvls = [p for p in grid_levels if p > g_start]
-            buy_lvls = [p for p in grid_levels if p < g_start]
-            spot_units_needed = sum(int((grid_order_amount * ASSET_SCALE) // p) for p in sell_lvls if p > 0)
+            sell_lvls = [p for p in state["grid_levels"] if p > g_start]
+            buy_lvls = [p for p in state["grid_levels"] if p < g_start]
+            spot_units_needed = sum(int((state["grid_order_amount"] * ASSET_SCALE) // p) for p in sell_lvls if p > 0)
             spot_cost = notional_points(spot_units_needed, g_start)
             spot_fee_cost = fee_points(spot_cost, fee_rate_percent)
             spot_total = spot_cost + spot_fee_cost
-            buy_fee_per = fee_points(grid_order_amount, grid_fee_rate)
-            buy_total = len(buy_lvls) * (grid_order_amount + buy_fee_per)
-            # Allocate initial capital
-            if cash >= spot_total + buy_total:
-                cash -= spot_total
-                units = spot_units_needed
+            buy_fee_per = fee_points(state["grid_order_amount"], state["grid_fee_rate"])
+            buy_total = len(buy_lvls) * (state["grid_order_amount"] + buy_fee_per)
+            if state["cash"] >= spot_total + buy_total:
+                state["cash"] -= spot_total
+                state["units"] = spot_units_needed
             else:
-                affordable_spot = max(0, cash - buy_total)
+                affordable_spot = max(0, state["cash"] - buy_total)
                 if affordable_spot > 0 and g_start > 0:
-                    units = int(affordable_spot * ASSET_SCALE // g_start)
-                    cash -= notional_points(units, g_start) + fee_points(notional_points(units, g_start), fee_rate_percent)
-                    if cash < 0:
-                        cash = 0
-            # Assign initial grid state
-            for p in grid_levels:
-                if p < g_start:
-                    grid_state[p] = "buy"
-                elif p > g_start:
-                    grid_state[p] = "sell"
+                    state["units"] = int(affordable_spot * ASSET_SCALE // g_start)
+                    state["cash"] -= notional_points(state["units"], g_start) + fee_points(notional_points(state["units"], g_start), fee_rate_percent)
+                    if state["cash"] < 0:
+                        state["cash"] = 0
+            state["grid_state"] = {}
+            for price_level in state["grid_levels"]:
+                if price_level < g_start:
+                    state["grid_state"][price_level] = "buy"
+                elif price_level > g_start:
+                    state["grid_state"][price_level] = "sell"
                 else:
-                    grid_state[p] = None
+                    state["grid_state"][price_level] = None
+            state["grid_initialized"] = True
 
-        for index, candle in enumerate(candles):
-            try:
-                price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
-            except Exception:
-                continue
-            if price <= 0:
-                continue
-
-            # ── Grid candle simulation ───────────────────────────────────────
-            if strategy == "grid":
+        def _run_chunk(chunk_candles):
+            _ensure_grid_state(chunk_candles)
+            for local_index, candle in enumerate(chunk_candles):
+                global_index = state["processed_candles"] + local_index
                 try:
-                    low_p = int(round(float(candle.get("low_points") or candle.get("low_usdt") or price)))
-                    high_p = int(round(float(candle.get("high_points") or candle.get("high_usdt") or price)))
+                    price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
                 except Exception:
-                    low_p = high_p = price
-                # Process only orders that existed at candle open. Counter orders
-                # created by a fill are not eligible until the next candle; this
-                # keeps the simulation aligned with the live grid scanner.
-                state_at_open = dict(grid_state)
-                # Process sell crossings first (price rose above sell level)
-                for lvl in sorted(state_at_open):
-                    if state_at_open[lvl] == "sell" and high_p >= lvl:
-                        sell_u = int((grid_order_amount * ASSET_SCALE) // lvl)
-                        if units >= sell_u > 0:
-                            gross = notional_points(sell_u, lvl)
-                            fee = fee_points(gross, grid_fee_rate)
-                            net = max(0, gross - fee)
-                            cash += net
-                            units -= sell_u
-                            trades.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "side": "sell", "price_points": lvl, "spend_points": 0, "fee_points": fee, "quantity": units_to_quantity(sell_u)})
-                            grid_state[lvl] = None
-                            try:
-                                counter_idx = grid_levels.index(lvl) - 1
-                            except ValueError:
-                                counter_idx = -1
-                            if counter_idx >= 0:
-                                counter_lvl = grid_levels[counter_idx]
-                                if grid_state.get(counter_lvl) is None:
-                                    grid_state[counter_lvl] = "buy"
-                            sells += 1
-                            wins += 1
-                # Process buy crossings (price dropped to or below buy level)
-                for lvl in sorted(state_at_open, reverse=True):
-                    if state_at_open[lvl] == "buy" and low_p <= lvl:
-                        fee = fee_points(grid_order_amount, grid_fee_rate)
-                        spend = grid_order_amount + fee
-                        if cash >= spend:
-                            buy_u = int((grid_order_amount * ASSET_SCALE) // lvl)
-                            if buy_u > 0:
-                                cash -= spend
-                                prev_u = units
-                                units += buy_u
-                                if units > 0:
-                                    avg_cost_bt = int((prev_u * avg_cost_bt + buy_u * lvl) // units)
-                                trades.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "side": "buy", "price_points": lvl, "spend_points": spend, "fee_points": fee, "quantity": units_to_quantity(buy_u)})
-                                grid_state[lvl] = None
-                                try:
-                                    counter_idx = grid_levels.index(lvl) + 1
-                                except ValueError:
-                                    counter_idx = len(grid_levels)
-                                if counter_idx < len(grid_levels):
-                                    counter_lvl = grid_levels[counter_idx]
-                                    if grid_state.get(counter_lvl) is None:
-                                        grid_state[counter_lvl] = "sell"
-                eq = cash + notional_points(units, price)
-                peak_value = max(peak_value, eq)
-                if peak_value > 0:
-                    max_drawdown_percent = max(max_drawdown_percent, round((peak_value - eq) * 100 / peak_value, 4))
-                equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": eq, "price_points": price})
-                continue
+                    continue
+                if price <= 0:
+                    continue
 
-            should_buy = False
-            should_sell = False
-            workflow_spend = order_points
-            workflow_sell_percent = 0.0
-            if strategy == "dca":
-                should_buy = index % interval_candles == 0
-            elif strategy == "workflow":
-                context = self._workflow_indicator_context(candles, index)
-                context["price"] = price
-                context["has_position"] = units > 0
-                context["avg_cost"] = avg_cost_bt
-                context["pnl_percent"] = round((price - avg_cost_bt) * 100.0 / avg_cost_bt, 4) if units > 0 and avg_cost_bt > 0 else None
-                decision = self._workflow_decision(workflow, context=context, run_count=len(trades), last_run_at=None, execution_state=workflow_state)
-                action = (decision or {}).get("action") or {}
-                atype = str(action.get("type") or "hold")
-                if atype in {"buy_percent", "buy_amount"}:
+                if strategy == "grid":
+                    try:
+                        low_p = int(round(float(candle.get("low_points") or candle.get("low_usdt") or price)))
+                        high_p = int(round(float(candle.get("high_points") or candle.get("high_usdt") or price)))
+                    except Exception:
+                        low_p = high_p = price
+                    state_at_open = dict(state["grid_state"])
+                    for lvl in sorted(state_at_open):
+                        if state_at_open[lvl] == "sell" and high_p >= lvl:
+                            sell_u = int((state["grid_order_amount"] * ASSET_SCALE) // lvl)
+                            if state["units"] >= sell_u > 0:
+                                gross = notional_points(sell_u, lvl)
+                                fee = fee_points(gross, state["grid_fee_rate"])
+                                net = max(0, gross - fee)
+                                state["cash"] += net
+                                state["units"] -= sell_u
+                                state["trades"].append({
+                                    "index": global_index,
+                                    "time": candle.get("time") or candle.get("time_iso") or global_index,
+                                    "side": "sell",
+                                    "price_points": lvl,
+                                    "spend_points": 0,
+                                    "fee_points": fee,
+                                    "quantity": units_to_quantity(sell_u),
+                                })
+                                state["trade_count"] += 1
+                                state["grid_state"][lvl] = None
+                                try:
+                                    counter_idx = state["grid_levels"].index(lvl) - 1
+                                except ValueError:
+                                    counter_idx = -1
+                                if counter_idx >= 0:
+                                    counter_lvl = state["grid_levels"][counter_idx]
+                                    if state["grid_state"].get(counter_lvl) is None:
+                                        state["grid_state"][counter_lvl] = "buy"
+                                state["sells"] += 1
+                                state["wins"] += 1
+                    for lvl in sorted(state_at_open, reverse=True):
+                        if state_at_open[lvl] == "buy" and low_p <= lvl:
+                            fee = fee_points(state["grid_order_amount"], state["grid_fee_rate"])
+                            spend = state["grid_order_amount"] + fee
+                            if state["cash"] >= spend:
+                                buy_u = int((state["grid_order_amount"] * ASSET_SCALE) // lvl)
+                                if buy_u > 0:
+                                    state["cash"] -= spend
+                                    prev_u = state["units"]
+                                    state["units"] += buy_u
+                                    if state["units"] > 0:
+                                        state["avg_cost_bt"] = int((prev_u * state["avg_cost_bt"] + buy_u * lvl) // state["units"])
+                                    state["trades"].append({
+                                        "index": global_index,
+                                        "time": candle.get("time") or candle.get("time_iso") or global_index,
+                                        "side": "buy",
+                                        "price_points": lvl,
+                                        "spend_points": spend,
+                                        "fee_points": fee,
+                                        "quantity": units_to_quantity(buy_u),
+                                    })
+                                    state["trade_count"] += 1
+                                    state["grid_state"][lvl] = None
+                                    try:
+                                        counter_idx = state["grid_levels"].index(lvl) + 1
+                                    except ValueError:
+                                        counter_idx = len(state["grid_levels"])
+                                    if counter_idx < len(state["grid_levels"]):
+                                        counter_lvl = state["grid_levels"][counter_idx]
+                                        if state["grid_state"].get(counter_lvl) is None:
+                                            state["grid_state"][counter_lvl] = "sell"
+                    _record_equity(global_index, candle, price)
+                    continue
+
+                should_buy = False
+                should_sell = False
+                workflow_spend = order_points
+                workflow_sell_percent = 0.0
+                decision = None
+                if strategy == "dca":
+                    should_buy = global_index % interval_candles == 0
+                elif strategy == "workflow":
+                    context = self._workflow_indicator_context(candles, global_index)
+                    context["price"] = price
+                    context["has_position"] = state["units"] > 0
+                    context["avg_cost"] = state["avg_cost_bt"]
+                    context["pnl_percent"] = round((price - state["avg_cost_bt"]) * 100.0 / state["avg_cost_bt"], 4) if state["units"] > 0 and state["avg_cost_bt"] > 0 else None
+                    decision = self._workflow_decision(
+                        workflow,
+                        context=context,
+                        run_count=state["trade_count"],
+                        last_run_at=None,
+                        execution_state=state["workflow_state"],
+                    )
+                    action = (decision or {}).get("action") or {}
+                    atype = str(action.get("type") or "hold")
+                    if atype in {"buy_percent", "buy_amount"}:
+                        should_buy = True
+                        workflow_spend = int(float(action.get("amount_points") or 0))
+                        if atype == "buy_percent":
+                            workflow_spend = int(state["cash"] * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
+                    elif atype in {"sell_percent", "close_all"}:
+                        should_sell = True
+                        workflow_sell_percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
+                elif trigger_type == "price_below":
+                    should_buy = trigger_price > 0 and price <= trigger_price
+                elif trigger_type == "price_above":
+                    should_buy = trigger_price > 0 and price >= trigger_price
+                elif trigger_type == "always":
                     should_buy = True
-                    workflow_spend = int(float(action.get("amount_points") or 0))
-                    if atype == "buy_percent":
-                        workflow_spend = int(cash * max(0.0, min(float(action.get("percent") or 0), 100.0)) / 100)
-                elif atype in {"sell_percent", "close_all"}:
-                    should_sell = True
-                    workflow_sell_percent = 100.0 if atype == "close_all" else max(0.0, min(float(action.get("percent") or 0), 100.0))
-            elif trigger_type == "price_below":
-                should_buy = trigger_price > 0 and price <= trigger_price
-            elif trigger_type == "price_above":
-                should_buy = trigger_price > 0 and price >= trigger_price
-            elif trigger_type == "always":
-                should_buy = True
-            if should_sell and units > 0:
-                sell_units = int(units * workflow_sell_percent / 100)
-                if sell_units > 0:
-                    gross = notional_points(sell_units, price)
-                    fee = fee_points(gross, fee_rate_percent)
-                    cash += max(0, gross - fee)
-                    units -= sell_units
-                    if units <= 0:
-                        avg_cost_bt = 0
-                    trades.append({
-                        "index": index,
-                        "time": candle.get("time") or candle.get("time_iso") or index,
-                        "side": "sell",
-                        "price_points": price,
-                        "spend_points": 0,
-                        "fee_points": fee,
-                        "pnl_points": max(0, gross - fee),
-                        "quantity": units_to_quantity(sell_units),
-                    })
-                    sells += 1
-                    if gross - fee > 0:
-                        wins += 1
-                    if strategy == "workflow" and decision:
-                        action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
-                        if action_id:
-                            workflow_state["executed_action_ids"].add(action_id)
-                        branch_id = (decision.get("branch") or {}).get("id")
-                        if branch_id:
-                            workflow_state["branch_step_counts"][branch_id] = int(workflow_state["branch_step_counts"].get(branch_id, 0)) + 1
-                    equity = cash + notional_points(units, price)
-                    peak_value = max(peak_value, equity)
-                    if peak_value > 0:
-                        max_drawdown_percent = max(max_drawdown_percent, round((peak_value - equity) * 100 / peak_value, 4))
-                    equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
-                continue
-            if not should_buy or cash <= 0:
-                equity = cash + notional_points(units, price)
-                peak_value = max(peak_value, equity)
-                if peak_value > 0:
-                    max_drawdown_percent = max(max_drawdown_percent, round((peak_value - equity) * 100 / peak_value, 4))
-                equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
-                continue
-            spend = min(workflow_spend, cash)
-            fee = fee_points(spend, fee_rate_percent)
-            net_spend = max(0, spend - fee)
-            buy_units = int((net_spend * ASSET_SCALE) // price)
-            if buy_units <= 0:
-                continue
-            cash -= spend
-            prev_units = units
-            units += buy_units
-            if units > 0:
-                avg_cost_bt = int((prev_units * avg_cost_bt + buy_units * price) // units)
-            trades.append({
-                "index": index,
-                "time": candle.get("time") or candle.get("time_iso") or index,
-                "side": "buy",
-                "price_points": price,
-                "spend_points": spend,
-                "fee_points": fee,
-                "quantity": units_to_quantity(buy_units),
-            })
-            if strategy == "workflow" and decision:
-                action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
-                if action_id:
-                    workflow_state["executed_action_ids"].add(action_id)
-                branch_id = (decision.get("branch") or {}).get("id")
-                if branch_id:
-                    workflow_state["branch_step_counts"][branch_id] = int(workflow_state["branch_step_counts"].get(branch_id, 0)) + 1
-            equity = cash + notional_points(units, price)
-            peak_value = max(peak_value, equity)
-            if peak_value > 0:
-                max_drawdown_percent = max(max_drawdown_percent, round((peak_value - equity) * 100 / peak_value, 4))
-            equity_curve.append({"index": index, "time": candle.get("time") or candle.get("time_iso") or index, "equity_points": equity, "price_points": price})
+                if should_sell and state["units"] > 0:
+                    sell_units = int(state["units"] * workflow_sell_percent / 100)
+                    if sell_units > 0:
+                        gross = notional_points(sell_units, price)
+                        fee = fee_points(gross, fee_rate_percent)
+                        state["cash"] += max(0, gross - fee)
+                        state["units"] -= sell_units
+                        if state["units"] <= 0:
+                            state["avg_cost_bt"] = 0
+                        state["trades"].append({
+                            "index": global_index,
+                            "time": candle.get("time") or candle.get("time_iso") or global_index,
+                            "side": "sell",
+                            "price_points": price,
+                            "spend_points": 0,
+                            "fee_points": fee,
+                            "pnl_points": max(0, gross - fee),
+                            "quantity": units_to_quantity(sell_units),
+                        })
+                        state["trade_count"] += 1
+                        state["sells"] += 1
+                        if gross - fee > 0:
+                            state["wins"] += 1
+                        if strategy == "workflow" and decision:
+                            action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
+                            if action_id:
+                                state["workflow_state"]["executed_action_ids"].add(action_id)
+                            branch_id = (decision.get("branch") or {}).get("id")
+                            if branch_id:
+                                state["workflow_state"]["branch_step_counts"][branch_id] = int(state["workflow_state"]["branch_step_counts"].get(branch_id, 0)) + 1
+                        _record_equity(global_index, candle, price)
+                    else:
+                        _record_equity(global_index, candle, price)
+                    continue
+                if not should_buy or state["cash"] <= 0:
+                    _record_equity(global_index, candle, price)
+                    continue
+                spend = min(workflow_spend, state["cash"])
+                fee = fee_points(spend, fee_rate_percent)
+                net_spend = max(0, spend - fee)
+                buy_units = int((net_spend * ASSET_SCALE) // price)
+                if buy_units <= 0:
+                    _record_equity(global_index, candle, price)
+                    continue
+                state["cash"] -= spend
+                prev_units = state["units"]
+                state["units"] += buy_units
+                if state["units"] > 0:
+                    state["avg_cost_bt"] = int((prev_units * state["avg_cost_bt"] + buy_units * price) // state["units"])
+                state["trades"].append({
+                    "index": global_index,
+                    "time": candle.get("time") or candle.get("time_iso") or global_index,
+                    "side": "buy",
+                    "price_points": price,
+                    "spend_points": spend,
+                    "fee_points": fee,
+                    "quantity": units_to_quantity(buy_units),
+                })
+                state["trade_count"] += 1
+                if strategy == "workflow" and decision:
+                    action_id = decision.get("action_id") or (decision.get("branch") or {}).get("id")
+                    if action_id:
+                        state["workflow_state"]["executed_action_ids"].add(action_id)
+                    branch_id = (decision.get("branch") or {}).get("id")
+                    if branch_id:
+                        state["workflow_state"]["branch_step_counts"][branch_id] = int(state["workflow_state"]["branch_step_counts"].get(branch_id, 0)) + 1
+                _record_equity(global_index, candle, price)
+            state["processed_candles"] += len(chunk_candles)
+
+        segment_count = max(1, math.ceil(len(candles) / BACKTEST_SEGMENT_CANDLES))
+        for segment_index in range(segment_count):
+            chunk = candles[
+                segment_index * BACKTEST_SEGMENT_CANDLES:
+                (segment_index + 1) * BACKTEST_SEGMENT_CANDLES
+            ]
+            if chunk:
+                _run_chunk(chunk)
         last_price = 0
         for candle in reversed(candles):
             try:
@@ -4754,8 +5014,8 @@ class TradingEngineService:
                     break
             except Exception:
                 continue
-        position_value = notional_points(units, last_price) if last_price else 0
-        final_value = cash + position_value
+        position_value = notional_points(state["units"], last_price) if last_price else 0
+        final_value = state["cash"] + position_value
         range_warnings = []
         all_candles_raw = payload.get("candles") or []
         if start_time and all_candles_raw:
@@ -4768,6 +5028,8 @@ class TradingEngineService:
                 range_warnings.append(f"請求結束時間 {end_time} 晚於資料最新 K 線 {last_raw}，實際回測至 {last_raw}")
         if len(all_candles_raw) >= MAX_BACKTEST_CANDLES:
             range_warnings.append(f"K 線數量達到上限 {MAX_BACKTEST_CANDLES} 根，更早的歷史資料可能未被包含")
+        if segment_count > 1:
+            range_warnings.append(f"回測資料共 {len(candles)} 根 K 線，後端已自動分成 {segment_count} 批連續執行（每批最多 {BACKTEST_SEGMENT_CANDLES} 根）")
         return {
             "ok": True,
             "strategy": strategy,
@@ -4776,27 +5038,30 @@ class TradingEngineService:
             "provider_symbol": str(payload.get("provider_symbol") or ""),
             "candle_count": len(candles),
             "max_backtest_candles": MAX_BACKTEST_CANDLES,
+            "max_backtest_candles_per_batch": BACKTEST_SEGMENT_CANDLES,
             "requested_candle_limit": payload.get("requested_candle_limit") or payload.get("candle_limit") or payload.get("limit") or len(candles),
             "first_candle_time": candles[0].get("time_iso") or candles[0].get("time") if candles else "",
             "last_candle_time": candles[-1].get("time_iso") or candles[-1].get("time") if candles else "",
             "initial_cash_points": initial_cash,
-            "cash_points": cash,
-            "position_quantity": units_to_quantity(units),
+            "cash_points": state["cash"],
+            "position_quantity": units_to_quantity(state["units"]),
             "position_value_points": position_value,
             "final_value_points": final_value,
             "pnl_points": final_value - initial_cash,
             "return_percent": round(((final_value - initial_cash) * 100) / initial_cash, 4),
-            "max_drawdown_percent": max_drawdown_percent,
-            "win_rate_percent": round((wins * 100 / sells), 4) if sells else 0.0,
-            "trade_count": len(trades),
-            "trades": trades,
-            "equity_curve": equity_curve,
+            "max_drawdown_percent": state["max_drawdown_percent"],
+            "win_rate_percent": round((state["wins"] * 100 / state["sells"]), 4) if state["sells"] else 0.0,
+            "trade_count": len(state["trades"]),
+            "trades": state["trades"],
+            "equity_curve": state["equity_curve"],
             "start_time": start_time,
             "end_time": end_time,
             "range_warnings": range_warnings,
-            "end_units": units,
-            "end_avg_cost": avg_cost_bt,
-            "end_cash_points": cash,
+            "end_units": state["units"],
+            "end_avg_cost": state["avg_cost_bt"],
+            "end_cash_points": state["cash"],
+            "segmented_backtest": segment_count > 1,
+            "segmented_backtest_batches": segment_count,
         }
 
     def _record_bot_run(self, bot, *, status, observed_price=None, order_uuid=None, error="", execution_state=None):

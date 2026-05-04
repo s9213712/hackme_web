@@ -468,12 +468,21 @@ used.
 
 Backtest length limits:
 
-- The engine accepts at most 5000 candles per backtest.
+- The engine accepts at most `20,000` candles per backtest.
+- Internal execution is segmented automatically in contiguous batches of at
+  most `10,000` candles, so users no longer need to hand-split ranges that are
+  larger than a single batch but still within the total limit.
+- The user-facing backtest panel now converts that cap into date guidance.
+  When the user picks a start or end datetime, the other field immediately
+  shows how far it can be moved at the current timeframe instead of forcing the
+  user to understand candle counts.
 - When the browser has not loaded chart candles, the backend downloads candles
   automatically. One automatic provider request currently downloads at most
-  1000 candles.
-- Long historical periods should be split into multiple runs until paginated
-  historical download is added.
+  `1000` candles per provider call, then paginates until it reaches the
+  requested backtest range or the total cap.
+- If the requested period still exceeds `20,000` candles, the UI and backend
+  both reject it explicitly and ask the user to shrink the range or pick a
+  larger timeframe.
 
 Backtest output includes:
 

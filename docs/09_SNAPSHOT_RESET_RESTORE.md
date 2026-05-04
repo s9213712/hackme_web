@@ -34,14 +34,15 @@
 ## 原理
 
 - server snapshot：保護整站 DB + runtime file roots + config archive
+- server snapshot 也會帶入目前設定的 runtime secret files，例如 `.chain_seed`、`.csrfkey`、`.filekey`、`.fkey`、`.integrity_key`、`integrity_manifest.json`、`cert.pem`、`key.pem`
 - PointsChain backup：只保護經濟 ledger / chain
 - runtime reset：清掉可重建 runtime 與 live data，並要求重啟
 - server mode checkpoint：保護 mode switch / rollback 場景
 
 ## 失敗情境與提示
 
-- restore 完還期待 `.fkey`、`.csrfkey`、TLS cert 跟著回來：
-  不會，這些是 deployment-local secrets。
+- restore 完後 runtime key / TLS cert 沒回來，或 hash 驗證失敗：
+  先看 snapshot metadata 的 `runtime_secret_files`，以及 restore event 的 `runtime secret validation failed`。目前 server snapshot 會一起帶入這些檔案。
 - reset 後發現東西都沒了：
   這是設計目的；先去找 `pre_reset` snapshot。
 - 只壞了 PointsChain 卻直接做整站 restore：

@@ -103,7 +103,7 @@ Runtime reset, server snapshot/restore, and PointsChain backup/restore now have
 separate jobs:
 
 - runtime reset clears generated runtime state and local secrets
-- server snapshot restores whole-site state but excludes deployment secrets
+- server snapshot restores whole-site state and replays configured runtime secret files
 - PointsChain backup/restore repairs economy ledger state independently and
   rebuilds wallets from ledger replay
 

@@ -649,7 +649,7 @@ def test_storage_album_crud_and_file_membership(tmp_path):
     assert protected_public.status_code == 200
     protected_download = protected_public.get_json()["album"]["files"][0]["download_url"]
     assert client.get(protected_download).status_code == 401
-    assert client.get(f"{protected_download}?password=AlbumPass123").status_code == 200
+    assert client.get(protected_download, query_string={"password": "AlbumPass123"}).status_code == 200
 
     updated = client.put(f"/api/storage/albums/{album['id']}", json={"title": "Trip 2", "visibility": "public"})
     assert updated.status_code == 200
@@ -1248,6 +1248,53 @@ def test_root_storage_user_quota_override_api(tmp_path):
     cleared = client.delete("/api/root/storage/users/1/quota-override")
     assert cleared.status_code == 200
     assert cleared.get_json()["user"]["quota_source"] == "member_level_rules.attachment_quota_mb"
+
+
+def test_storage_summaries_follow_live_quota_after_override(tmp_path):
+    db_path = tmp_path / "drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(5, "root", "super_admin")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    saved = client.put(
+        "/api/root/storage/users/1/quota-override",
+        json={
+            "quota_mb": 2,
+            "max_file_size_mb": 1,
+            "reason": "quota summary regression",
+        },
+    )
+    assert saved.status_code == 200
+
+    actor_box["actor"] = _actor(1, "alice")
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"quota check"), "quota.txt"),
+            "virtual_path": "docs/quota.txt",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+
+    listing = client.get("/api/storage/files")
+    assert listing.status_code == 200
+    quota = client.get("/api/files/quota")
+    assert quota.status_code == 200
+    listing_payload = listing.get_json()
+    quota_payload = quota.get_json()["quota"]
+    assert listing_payload["storage"]["quota_bytes"] == 2 * 1024 * 1024
+    assert listing_payload["storage"]["quota_bytes"] == quota_payload["total_bytes"]
+    assert listing_payload["storage"]["remaining_bytes"] == quota_payload["remaining_bytes"]
+
+    actor_box["actor"] = _actor(4, "admin", "manager")
+    users = client.get("/api/admin/storage/users")
+    assert users.status_code == 200
+    alice = next(row for row in users.get_json()["users"] if row["username"] == "alice")
+    assert alice["quota_bytes"] == 2 * 1024 * 1024
+    assert alice["used_bytes"] == len(b"quota check")
 
 
 def test_attach_existing_does_not_duplicate_file_and_delete_invalidates_reference(tmp_path):

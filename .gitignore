@@ -44,7 +44,8 @@ cert.pem
 key.pem
 attack_test/
 pentest_artifacts/
-research/
+/research/
+docs/AGENTS/reports/**/*.db
 reports/*
 !reports/attacks/
 reports/attacks/*

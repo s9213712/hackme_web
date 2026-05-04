@@ -86,6 +86,9 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   避免污染同一個測試 runtime。
 - `QA_MISSION_FOR_AGENTS.md`
   是 agent 深度 QA runbook，包含人工逐步測試、DB 對帳、異常輸入矩陣與直接修正模式。
+- `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
+  是交易系統專用的固定回歸清單；只要改到 backtest / workflow / grid / DCA / liquidation /
+  融合價格，就不能只跑 `test_trading_engine.py` 或歷史回測。
 
 ## 原理
 
@@ -136,12 +139,27 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - `融合價格（多交易所加權平均）` 是否真會抓多家交易所，而不是只回單一來源
   - `自動依深度權重` 是否會在單一 API 掛掉時自動用剩餘來源重算，不會整個交易頁直接停擺
   - `root 手動權重` 是否能個別調整 Binance / OKX / Coinbase / Kraken / Gemini / Bitstamp 占比
-  - 所有手動權重設成 0 時，是否會安全退回自動深度權重
+  - 所有手動權重設成 0 時，是否會安全退回自動深度權重，且 root dashboard / log 會明確標成 `manual weights invalid`
+  - root-only `融合價格即時比例` dashboard 是否會列出實際 normalized weights、excluded source 與 `價格來源降級`
+  - order book 全失敗時，是否明確標示 fallback source，且不把它當成正常 fused price
   - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
+- 若本次改到借貸利息 / backtest 上限，至少補：
+  - `principal=50, daily_rate=1%, 24h` 是否改成保留 `0.5` 點殘值，而不是直接記成 `1`
+  - root 把 `borrow_interest_pool_pressure_multiplier` 設成 `0` 時，實際利率是否真的不再被額外放大
+  - `BTC/USDT 2024-01-01 ~ 2024-12-31 @ 1h` 是否可直接回測，不再被 `5000` 根上限擋住
+  - 回測頁在使用者選 `start_time / end_time / timeframe` 時，是否會直接提示另一側日期最遠可設到哪裡，而不是只丟出 `20,000` 根上限
+  - 改變 `timeframe` 後，開始 / 結束日期欄位的 `min / max` 是否同步更新
 - 若本次改到 DCA 機器人，至少補：
   - `max_runs=-1` 是否會被正確保存為不限制，而不是被前端或後端偷偷改回 1
   - 跑過一次後再 backdate/重啟，是否仍可繼續執行，不會被誤判為已達上限
   - 不限制模式下 UI 是否不再顯示「增加次數」這種多餘操作
+- 若本次改到任何交易核心邏輯，另外強制補：
+  - `empty candles`、`single candle`、`negative / zero / NaN / missing tick` 是否被正確拒絕或明確標示略過
+  - workflow `flat sequence` 是否仍不會誤觸發
+  - `100 -> 10 -> 150` 類 jump / gap collapse 是否有風險警示或 filter，不會製造不真實回測幻覺
+  - `full tick [100,80,120]` 與 `sampled [100,120]` 是否仍會出現 stop-loss / liquidation 漏觸發
+  - `wallet=0 + trial_credit_only` 與小本金利息案例是否仍維持正確帳務
+  - 詳細清單見 `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
 - 若本次改到站點外觀 / 個人外觀，至少補：
   - root 改全站預設後，未登入與一般使用者是否都先看到新預設
   - 一般使用者儲存個人外觀後，重新整理與重新登入是否仍會套用
@@ -153,6 +171,7 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
 ## 相關文件連結
 
 - [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)
+- [AGENTS/TRADING_QA_REGRESSION_MATRIX.md](AGENTS/TRADING_QA_REGRESSION_MATRIX.md)
 - [security/FUNCTIONAL_SMOKE.md](security/FUNCTIONAL_SMOKE.md)
 - [security/PENTEST.md](security/PENTEST.md)
 - [security/FUNCTIONAL_PERMISSION_PENTEST.md](security/FUNCTIONAL_PERMISSION_PENTEST.md)

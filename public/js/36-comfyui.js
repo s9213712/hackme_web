@@ -408,11 +408,23 @@ function restoreComfyuiDraft({ includeDynamicSelects = true } = {}) {
 function updateComfyuiRootPanelVisibility(modeOverride = null) {
   const panel = $("comfyui-root-model-panel");
   const details = $("comfyui-root-model-details");
+  const hint = $("comfyui-root-model-mode-hint");
   const mode = String(modeOverride || comfyuiConnectionMode || "remote").trim().toLowerCase();
-  const show = currentUser === "root" && mode === "local";
+  const show = currentUser === "root";
+  const localReady = mode === "local";
   updateComfyuiModeNote(mode);
   if (panel) panel.style.display = show ? "" : "none";
   if (details && !show) details.open = false;
+  if (!panel) return;
+  panel.querySelectorAll("input, select, button").forEach((el) => {
+    el.disabled = !localReady;
+  });
+  panel.dataset.mode = localReady ? "local" : "remote";
+  if (hint) {
+    hint.textContent = localReady
+      ? "目前是本地模式，可在這裡管理 Civitai 模型下載。"
+      : "目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要用 Civitai 下載模型到本站的本地 ComfyUI，請先把 backend 切回本地模式。";
+  }
 }
 
 function renderComfyuiSelectedLoras() {
@@ -501,8 +513,8 @@ function insertComfyuiEmbeddingToken(name) {
   const prompt = $("comfyui-prompt");
   const cleanName = String(name || "").trim();
   if (!prompt || !cleanName) return;
-  const token = `<embeddings:${cleanName}>`;
-  if ((prompt.value || "").includes(token)) {
+  const embeddingTag = `<embeddings:${cleanName}>`;
+  if ((prompt.value || "").includes(embeddingTag)) {
     setComfyuiMessage("這個 Embedding 已經在提示詞裡。", false);
     prompt.focus();
     return;
@@ -512,8 +524,8 @@ function insertComfyuiEmbeddingToken(name) {
   const end = Number.isInteger(prompt.selectionEnd) ? prompt.selectionEnd : raw.length;
   const prefix = start > 0 && !/[\s,\n]$/.test(raw.slice(0, start)) ? ", " : "";
   const suffix = end < raw.length && !/^[\s,]/.test(raw.slice(end)) ? " " : "";
-  prompt.value = `${raw.slice(0, start)}${prefix}${token}${suffix}${raw.slice(end)}`;
-  const cursor = start + prefix.length + token.length + suffix.length;
+  prompt.value = `${raw.slice(0, start)}${prefix}${embeddingTag}${suffix}${raw.slice(end)}`;
+  const cursor = start + prefix.length + embeddingTag.length + suffix.length;
   prompt.focus();
   if (typeof prompt.setSelectionRange === "function") prompt.setSelectionRange(cursor, cursor);
   writeComfyuiDraft();
@@ -1269,9 +1281,9 @@ function renderComfyuiCivitaiTrainedWords(versionId) {
   )).join("");
   box.querySelectorAll("[data-comfyui-trained-word]").forEach((button) => {
     button.addEventListener("click", () => {
-      const token = button.getAttribute("data-comfyui-trained-word") || "";
-      if (!token) return;
-      setComfyuiMessage(`這個版本的 trigger word：${token}`, true);
+      const triggerWord = button.getAttribute("data-comfyui-trained-word") || "";
+      if (!triggerWord) return;
+      setComfyuiMessage(`這個版本的 trigger word：${triggerWord}`, true);
     });
   });
 }

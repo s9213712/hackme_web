@@ -34,8 +34,6 @@ The repository root keeps only [README.md](../README.md) and
 - [11_QA_TESTING.md](11_QA_TESTING.md): test-layer map, script relationships,
   and operator-facing validation route
 - [12_TROUBLESHOOTING.md](12_TROUBLESHOOTING.md): common errors and first-pass diagnosis
-- [DOCUMENTATION_AUDIT_REPORT.md](DOCUMENTATION_AUDIT_REPORT.md): what was
-  merged, split, deprecated, and still needs manual confirmation
 
 ## Deep Reference
 
@@ -47,10 +45,12 @@ The repository root keeps only [README.md](../README.md) and
 - [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md): detailed
   reset/snapshot/PointsChain boundary notes
 - [DEPLOYMENT.md](DEPLOYMENT.md): script-level deployment and operations reference
-- [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md): deep QA runbook for
-  agents and manual exploratory testing
-- [RULES_FOR_AGENTS.md](RULES_FOR_AGENTS.md): project-wide completion rules for
-  docs, tests, UX, mobile checks, and delivery reporting
+- [AGENTS/README.md](AGENTS/README.md): entry for agent rules, QA runbooks, and
+  archived QA reports
+- [AGENTS/QA_MISSION_FOR_AGENTS.md](AGENTS/QA_MISSION_FOR_AGENTS.md): deep QA
+  runbook for agents and manual exploratory testing
+- [AGENTS/RULES_FOR_AGENTS.md](AGENTS/RULES_FOR_AGENTS.md): project-wide
+  completion rules for docs, tests, UX, mobile checks, and delivery reporting
 
 ## Release, Security, And Testing
 
@@ -72,8 +72,8 @@ The repository root keeps only [README.md](../README.md) and
 ## History, Research, And Archive
 
 - [README.zh-TW.md](README.zh-TW.md): concise Traditional Chinese shortcut
-- [PHASE_STATUS.md](PHASE_STATUS.md): current phase snapshot
 - [VERSION_STORY.md](VERSION_STORY.md): project history and abandoned branches
-- [implementation_workflow.md](implementation_workflow.md): historic implementation workflow
+- [archive/research/README.md](archive/research/README.md): archived research
+  notes and retired implementation workflows
 - [research/GRID_TRADING_BOT_DESIGN_REPORT.md](research/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
 - [archive/webterminal/README.md](archive/webterminal/README.md): archived WebTerminal attempts

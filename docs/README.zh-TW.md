@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.03-065`**
+**目前 Release ID：`2026.05.04-069`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -78,8 +78,9 @@ python3 server.py
 - [TRADING.md](TRADING.md)
 - [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md)
 - [DEPLOYMENT.md](DEPLOYMENT.md)
-- [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)
-- [RULES_FOR_AGENTS.md](RULES_FOR_AGENTS.md)
+- [AGENTS/README.md](AGENTS/README.md)
+- [AGENTS/QA_MISSION_FOR_AGENTS.md](AGENTS/QA_MISSION_FOR_AGENTS.md)
+- [AGENTS/RULES_FOR_AGENTS.md](AGENTS/RULES_FOR_AGENTS.md)
 
 ### 測試與上線
 
@@ -92,6 +93,6 @@ python3 server.py
 ### 變更與歷史
 
 - [UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)
-- [DOCUMENTATION_AUDIT_REPORT.md](DOCUMENTATION_AUDIT_REPORT.md)
 - [VERSION_STORY.md](VERSION_STORY.md)
+- [archive/research/README.md](archive/research/README.md)
 - [archive/webterminal/README.md](archive/webterminal/README.md)

@@ -1,6 +1,81 @@
 # Update Summary
 
-Release ID: `2026.05.03-065`
+Release ID: `2026.05.04-069`
+
+## 2026.05.04-069
+
+## Highlights
+
+- Trading backtest date pickers no longer expect users to understand the
+  `20,000`-candle cap. When a user picks a start or end datetime, the UI now
+  immediately explains how far the other side can be extended at the current
+  timeframe and clamps the input range accordingly.
+
+## 2026.05.04-068
+
+## Highlights
+
+- Root trading settings now include a root-only live fusion dashboard. It can
+  show the currently effective provider ratios, excluded exchanges, degraded
+  states, and whether the fused price has fallen back into conservative
+  single-source mode.
+- Fused-price diagnostics are now explicit instead of silent. Failed exchange
+  order books are exposed as excluded providers, `manual_weights` with all
+  zeros is flagged as invalid and shown as an `auto_depth` fallback, and
+  order-book total failure is surfaced as `價格來源降級` instead of pretending
+  it is still a normal fused price.
+- Price-fusion QA now covers default mode, auto-depth weighting, provider
+  exclusion, manual-weight equal weighting, all-zero manual fallback, and the
+  single-source ticker fallback chain.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py -k "price_fusion or live_price_fusion or root_trading_settings_default_to_fused_weighted_auto_depth"`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py -k "price_fusion or fused_price"`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py -k "root_trading or trading_exchange_is_separate_from_wallet_page"`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-067
+
+## Highlights
+
+- Trading backtests no longer force users to manually split any range above a
+  single execution batch. The backend now accepts up to `20,000` candles per
+  run and internally continues long windows in contiguous `10,000`-candle
+  segments, so large windows keep one result set while still staying inside a
+  bounded resource cap.
+- The browser no longer tries to carry segmented backtest state itself. It now
+  sends one request, lets the backend preserve DCA intervals, workflow state,
+  and grid state across internal batches, and clearly tells the user when a
+  run was segmented automatically.
+- Backtest download metadata now reports both the overall candle cap and the
+  per-batch execution cap, so deployers and QA can tell whether a run was
+  blocked by the total limit or simply split into multiple backend chunks.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_trading_reference_prices.py`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-066
+
+## Highlights
+
+- Margin interest now keeps fractional carry in micropoints instead of rounding
+  every small accrual straight up to the next full POINT. Small-principal
+  positions now accumulate residual interest until it crosses a whole point,
+  which removes the old `50 @ 1% / day -> 1 point after 1 day` overcharge.
+- Historical backtests now allow up to `10,000` candles end-to-end, so
+  full-year `BTC/USDT 1h` windows like `2024-01-01 ~ 2024-12-31` are no longer
+  blocked by the old `5000`-candle ceiling.
+- The funding-pool pressure multiplier now respects an explicit root value of
+  `0` instead of silently falling back to the default multiplier.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_release_policy.py tests/test_smoke_suite_regressions.py tests/test_pentest_script.py tests/test_functional_permission_pentest.py tests/test_trading_engine.py tests/test_trading_reference_prices.py tests/test_frontend_economy.py`
+- `python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_issue_followup`
+- `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.03-065
 

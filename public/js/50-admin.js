@@ -1203,6 +1203,7 @@ async function clearRootStorageOverride() {
 
 let rootEconomyCatalogCache = [];
 let rootTradingSettingsCache = { settings: {}, markets: [] };
+let rootTradingPriceFusionStatusCache = null;
 
 function rootCatalogMsg(text, ok = true) {
   const msg = $("root-catalog-msg");
@@ -1345,6 +1346,138 @@ function rootTradingSettingsMsg(text, ok = true) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
+function rootTradingPriceFusionMsg(text, ok = true) {
+  const msg = $("root-trading-price-fusion-msg");
+  if (!msg) return;
+  msg.textContent = text || "";
+  msg.style.color = ok ? "#4caf50" : "#ff4f6d";
+}
+
+function renderRootTradingPriceFusionMarketOptions(payload) {
+  const select = $("root-trading-price-fusion-market");
+  if (!select) return;
+  const settings = payload?.settings || {};
+  const liveMarkets = Array.isArray(settings.price_fusion_live_markets) ? settings.price_fusion_live_markets : [];
+  const labels = new Map(
+    (Array.isArray(payload?.markets) ? payload.markets : [])
+      .filter((market) => liveMarkets.includes(market.symbol))
+      .map((market) => [market.symbol, market.display_symbol || market.symbol])
+  );
+  const options = liveMarkets.map((symbol) => ({ symbol, label: labels.get(symbol) || symbol.replace("/POINTS", "/USDT") }));
+  const previous = select.value;
+  if (!options.length) {
+    select.innerHTML = `<option value="">沒有支援融合價格的市場</option>`;
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = options.map((item) => `
+    <option value="${sanitize(item.symbol)}">${sanitize(item.label)}</option>
+  `).join("");
+  select.value = options.some((item) => item.symbol === previous) ? previous : options[0].symbol;
+}
+
+function renderRootTradingPriceFusionStatus(status = {}) {
+  rootTradingPriceFusionStatusCache = status || {};
+  const summary = $("root-trading-price-fusion-summary");
+  const providers = $("root-trading-price-fusion-provider-list");
+  const excluded = $("root-trading-price-fusion-excluded-list");
+  if (!summary || !providers || !excluded) return;
+  const state = String(status.state || "inactive");
+  const resolvedSource = String(status.resolved_source || "-");
+  const resolvedMode = String(status.resolved_mode || status.requested_mode || "-");
+  const pricePoints = status.price_points == null ? "-" : `${Number(status.price_points || 0).toLocaleString()} POINTS`;
+  const weightsSum = Number(status.weights_sum_percent || 0).toFixed(2);
+  const usedRows = Array.isArray(status.providers_used) ? status.providers_used : [];
+  const excludedRows = Array.isArray(status.excluded_providers) ? status.excluded_providers : [];
+  const message = String(status.message || "").trim();
+  const stateLabel = state === "healthy"
+    ? "正常"
+    : state === "conservative"
+      ? "價格來源降級"
+      : state === "degraded"
+        ? "部分來源排除"
+        : state === "unsupported"
+          ? "市場不支援"
+          : "未啟用融合";
+  summary.innerHTML = `
+    <div class="drive-file-row">
+      <div>
+        <strong>${sanitize(String(status.market_symbol || "-").replace("/POINTS", "/USDT"))}</strong>
+        <div class="drive-card-sub">狀態 ${sanitize(stateLabel)} · 目前價格 ${sanitize(pricePoints)}</div>
+        <div class="drive-card-sub">設定來源 ${sanitize(status.configured_source || "-")} · 實際來源 ${sanitize(resolvedSource)} · 模式 ${sanitize(resolvedMode)} · 權重合計 ${sanitize(weightsSum)}%</div>
+        ${message ? `<div class="drive-card-sub" style="color:${state === "healthy" ? "#9ecbff" : "#ffb347"};">${sanitize(message)}</div>` : ""}
+        ${status.conservative_mode ? `<div class="drive-card-sub" style="color:#ff9aa8;">已進入保守模式：目前不是正常 fused price，建議避免高風險交易。</div>` : ""}
+      </div>
+    </div>
+  `;
+  providers.innerHTML = usedRows.length
+    ? usedRows.map((row) => `
+      <div class="drive-file-row">
+        <div>
+          <strong>${sanitize(row.label || row.source || "-")}</strong>
+          <div class="drive-card-sub">即時占比 ${Number(row.normalized_weight_percent || 0).toFixed(2)}% · 價格 ${Number(row.price_points || 0).toLocaleString()} POINTS</div>
+          <div class="drive-card-sub">原始權重 ${Number(row.weight || 0).toFixed(4)} · 深度分數 ${Number(row.depth_score || 0).toFixed(4)}</div>
+        </div>
+      </div>
+    `).join("")
+    : `<div class="drive-empty">目前沒有可用的融合來源</div>`;
+  excluded.innerHTML = excludedRows.length
+    ? excludedRows.map((row) => {
+      const reason = row.reason === "fetch_failed"
+        ? `API 失效 / timeout / 格式錯誤：${row.error || "未提供細節"}`
+        : row.reason === "manual_weight_zero"
+          ? "手動權重為 0，因此不參與融合"
+          : row.error || row.reason || "已排除";
+      return `
+        <div class="drive-file-row">
+          <div>
+            <strong>${sanitize(row.label || row.source || "-")}</strong>
+            <div class="drive-card-sub">${sanitize(reason)}</div>
+          </div>
+        </div>
+      `;
+    }).join("")
+    : `<div class="drive-empty">目前沒有被排除的來源</div>`;
+}
+
+async function loadRootTradingPriceFusionStatus() {
+  if (currentUser !== "root" || !$("root-trading-price-fusion-summary")) return;
+  const selectedMarket = $("root-trading-price-fusion-market")?.value || "";
+  if (!selectedMarket) {
+    renderRootTradingPriceFusionStatus({
+      state: "unsupported",
+      market_symbol: "",
+      message: "尚無支援融合價格的市場可供檢查。",
+      providers_used: [],
+      excluded_providers: [],
+    });
+    return;
+  }
+  rootTradingPriceFusionMsg("正在抓取目前生效中的融合價格占比...");
+  await fetchCsrfToken({ force: true });
+  const csrf = getCsrfToken();
+  try {
+    const res = await apiFetch(API + `/root/trading/price-fusion-status?market_symbol=${encodeURIComponent(selectedMarket)}`, {
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrf || "" }
+    });
+    const json = await parseRootTradingSettingsResponse(res);
+    if (!res.ok || !json.ok) {
+      rootTradingPriceFusionMsg(rootTradingSettingsHttpMessage(res, json, "融合價格診斷讀取失敗"), false);
+      return;
+    }
+    renderRootTradingPriceFusionStatus(json.status || {});
+    rootTradingPriceFusionMsg(
+      json.status?.conservative_mode
+        ? "已抓取融合價格占比，但目前處於價格來源降級/保守模式。"
+        : "已更新目前生效中的融合價格占比。"
+    );
+  } catch (err) {
+    rootTradingPriceFusionMsg(err.message || "融合價格診斷請求失敗", false);
+  }
+}
+
 async function parseRootTradingSettingsResponse(res) {
   const json = await res.clone().json().catch(() => null);
   if (json && typeof json === "object") return json;
@@ -1414,6 +1547,7 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "fused_weighted";
   if ($("root-trading-price-fusion-mode")) $("root-trading-price-fusion-mode").value = settings.price_fusion_mode || "auto_depth";
   renderRootTradingFusionWeightInputs(settings);
+  renderRootTradingPriceFusionMarketOptions(payload);
   const priceSourceSelect = $("root-trading-price-source");
   if (priceSourceSelect && !priceSourceSelect.dataset.fusionBound) {
     priceSourceSelect.addEventListener("change", toggleRootTradingPriceFusionControls);
@@ -1423,6 +1557,16 @@ function renderRootTradingSettings(payload) {
   if (fusionModeSelect && !fusionModeSelect.dataset.fusionBound) {
     fusionModeSelect.addEventListener("change", toggleRootTradingPriceFusionControls);
     fusionModeSelect.dataset.fusionBound = "1";
+  }
+  const fusionRefreshBtn = $("root-trading-price-fusion-refresh-btn");
+  if (fusionRefreshBtn && !fusionRefreshBtn.dataset.fusionBound) {
+    fusionRefreshBtn.addEventListener("click", loadRootTradingPriceFusionStatus);
+    fusionRefreshBtn.dataset.fusionBound = "1";
+  }
+  const fusionMarketSelect = $("root-trading-price-fusion-market");
+  if (fusionMarketSelect && !fusionMarketSelect.dataset.fusionBound) {
+    fusionMarketSelect.addEventListener("change", loadRootTradingPriceFusionStatus);
+    fusionMarketSelect.dataset.fusionBound = "1";
   }
   toggleRootTradingPriceFusionControls();
   if ($("root-trading-max-price-staleness")) $("root-trading-max-price-staleness").value = settings.max_price_staleness_seconds ?? 900;
@@ -1458,6 +1602,7 @@ function renderRootTradingSettings(payload) {
       </div>
     </div>
   `).join("");
+  loadRootTradingPriceFusionStatus();
 }
 
 async function loadRootTradingSettings() {
@@ -1545,6 +1690,7 @@ async function saveRootTradingSettings() {
     if (res.ok && json.ok) {
       rootTradingSettingsCache = json;
       renderRootTradingSettings(json);
+      loadRootTradingPriceFusionStatus();
       if (typeof loadTradingDashboard === "function") loadTradingDashboard();
       if (willBtcTradeEnable && !wasBtcTradeEnabled) {
         await setupRootBtcTrade({ automatic: true });

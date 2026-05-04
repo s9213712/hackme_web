@@ -1,5 +1,9 @@
 # hackme_web 大工程實作工作流程
 
+> 歷史檔案。此文件只保留舊分期規劃與設計脈絡，不再作為現行開發任務書。
+> 現行執行依據請改看 `docs/00_START_HERE.md`、`docs/05_FEATURES_OVERVIEW.md`、
+> `docs/AGENTS/README.md`、`docs/BRANCHING_AND_RELEASE.md`。
+
 最後更新：2026-04-27  
 目前分支：`feature/forum-governance-security-modes`
 

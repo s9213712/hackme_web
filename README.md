@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.03-065`**
+**Current Release ID: `2026.05.04-069`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -62,6 +62,13 @@ python3 server.py
 ```bash
 curl -k -sS https://127.0.0.1:5000/api/version
 ```
+
+交易回測現在會在後端自動分段執行長區間資料；單次總上限為 `20,000` 根 K 線，
+單批內部分段上限為 `10,000` 根。回測面板的開始 / 結束日期也會依目前週期直接提示
+另一側最遠可選到哪裡，避免使用者自己換算資料根數。超過總量時，前後端都會明確要求
+你縮小區間或改大時間週期。
+root 另外可在交易所參數裡看到「融合價格即時比例」dashboard，直接檢查目前各 API 的真實占比、
+被排除來源、以及是否已降級成保守模式。
 
 Fresh local databases create `root/root`, `admin/admin`, and `test/test`, then
 force those accounts to change password on first login. Set

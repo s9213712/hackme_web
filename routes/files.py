@@ -56,6 +56,7 @@ from services.storage_albums import (
     ensure_output_album,
     ensure_storage_album_schema,
     get_album,
+    get_user_storage_summary,
     get_storage_file,
     list_albums,
     list_share_links,
@@ -522,6 +523,20 @@ def register_file_routes(app, deps):
         usage["effective_level"] = data.get("effective_level") or usage.get("effective_level")
         usage["override"] = get_storage_quota_override(conn, data.get("id"))
         return usage
+
+    def _storage_summary_with_live_quota(summary, usage):
+        data = dict(summary or {})
+        total_bytes = usage.get("total_bytes")
+        data["quota_bytes"] = int(total_bytes) if total_bytes is not None else int(data.get("quota_bytes") or 0)
+        data["remaining_bytes"] = usage.get("remaining_bytes")
+        data["quota_source"] = usage.get("quota_source")
+        data["percent_used"] = usage.get("percent_used")
+        data["warning_active"] = bool(usage.get("warning_active"))
+        data["warning_threshold_bytes"] = usage.get("warning_threshold_bytes")
+        data["warning_threshold_percent"] = usage.get("warning_threshold_percent")
+        data["max_file_size_bytes"] = usage.get("max_file_size_bytes")
+        data["upload_rate_limit_per_day"] = usage.get("upload_rate_limit_per_day")
+        return data
 
     def _requires_download_warning(policy, row):
         if not policy.get("warn_high_risk_downloads"):
@@ -1070,22 +1085,28 @@ def register_file_routes(app, deps):
         conn = get_db()
         try:
             ensure_storage_album_schema(conn)
-            rows = conn.execute(
-                """
-                SELECT u.id AS user_id, u.username, COALESCE(us.quota_bytes, 0) AS quota_bytes,
-                       COALESCE(us.used_bytes, 0) AS used_bytes,
-                       COALESCE(us.reserved_bytes, 0) AS reserved_bytes,
-                       COALESCE(us.file_count, 0) AS file_count,
-                       COALESCE(SUM(CASE WHEN sf.is_trashed=1 AND sf.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS trashed_files
-                FROM users u
-                LEFT JOIN user_storage us ON us.user_id=u.id
-                LEFT JOIN storage_files sf ON sf.owner_user_id=u.id
-                GROUP BY u.id, u.username, us.quota_bytes, us.used_bytes, us.reserved_bytes, us.file_count
-                ORDER BY used_bytes DESC, file_count DESC, u.id ASC
-                LIMIT 200
-                """
-            ).fetchall()
-            return json_resp({"ok": True, "users": [dict(row) for row in rows]})
+            rows = conn.execute("SELECT * FROM users ORDER BY username ASC, id ASC LIMIT 200").fetchall()
+            trashed = {
+                int(row["owner_user_id"]): int(row["trashed_files"] or 0)
+                for row in conn.execute(
+                    """
+                    SELECT owner_user_id, COUNT(*) AS trashed_files
+                    FROM storage_files
+                    WHERE is_trashed=1 AND deleted_at IS NULL
+                    GROUP BY owner_user_id
+                    """
+                ).fetchall()
+            }
+            users = []
+            for row in rows:
+                usage = _storage_usage_for_user_row(conn, row)
+                summary = get_user_storage_summary(conn, row["id"])
+                usage["quota_bytes"] = int(usage["total_bytes"]) if usage.get("total_bytes") is not None else int(summary.get("quota_bytes") or 0)
+                usage["reserved_bytes"] = int(summary.get("reserved_bytes") or 0)
+                usage["trashed_files"] = int(trashed.get(int(row["id"]), 0))
+                users.append(usage)
+            users.sort(key=lambda item: (-int(item.get("used_bytes") or 0), -int(item.get("file_count") or 0), int(item.get("user_id") or 0)))
+            return json_resp({"ok": True, "users": users})
         finally:
             conn.close()
 
@@ -1275,7 +1296,10 @@ def register_file_routes(app, deps):
             rows = conn.execute("SELECT id FROM users ORDER BY id ASC").fetchall()
             synced = []
             for row in rows:
-                synced.append(sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_sync_quota"))
+                target = conn.execute("SELECT * FROM users WHERE id=?", (row["id"],)).fetchone()
+                usage = _storage_usage_for_user_row(conn, target) if target else {}
+                summary = sync_user_storage_summary(conn, row["id"], actor_user_id=actor["id"], source="admin", reason="admin_sync_quota")
+                synced.append(_storage_summary_with_live_quota(summary, usage))
             conn.commit()
             audit("STORAGE_ADMIN_SYNC_QUOTA", get_client_ip(), user=actor["username"], success=True, ua=get_ua(), detail=f"users={len(synced)}")
             return json_resp({"ok": True, "synced": synced})
@@ -1643,7 +1667,10 @@ def register_file_routes(app, deps):
                 _sync_orphan_cloud_files_to_storage_browser(conn, actor)
                 include_trashed = request.args.get("include_trashed") in {"1", "true", "yes"}
                 files = list_storage_files(conn, actor=actor, include_trashed=include_trashed, limit=100, offset=0)
+                rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
+                usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
                 summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="list", reason="storage_files_list")
+                summary = _storage_summary_with_live_quota(summary, usage)
                 conn.commit()
                 return json_resp({"ok": True, "files": files, "storage": summary})
             if "file" not in request.files:
@@ -1885,7 +1912,10 @@ def register_file_routes(app, deps):
         try:
             ensure_storage_album_schema(conn)
             files = list_storage_trash(conn, actor=actor, limit=100, offset=0)
+            rule = get_member_level_rule(conn, actor["effective_level"] or actor["member_level"])
+            usage = get_user_cloud_drive_usage(conn, actor, member_rule=rule, storage_root=storage_root)
             summary = sync_user_storage_summary(conn, actor["id"], actor_user_id=actor["id"], source="trash", reason="storage_trash_list")
+            summary = _storage_summary_with_live_quota(summary, usage)
             conn.commit()
             return json_resp({"ok": True, "files": files, "storage": summary})
         finally:
@@ -2285,7 +2315,7 @@ def register_file_routes(app, deps):
     <div class="grid" id="album-files"></div>
   </main>
   <script>
-  const TOKEN = {safe_token};
+  const SHARE_KEY = {safe_token};
   const titleEl = document.getElementById("album-title");
   const metaEl = document.getElementById("album-meta");
   const filesEl = document.getElementById("album-files");
@@ -2314,7 +2344,7 @@ def register_file_routes(app, deps):
   }}
   function loadAlbum() {{
     const headers = sharePassword ? {{ "X-Album-Share-Password": sharePassword }} : {{}};
-    fetch(`/api/storage/shared/albums/${{encodeURIComponent(TOKEN)}}`, {{ headers }})
+    fetch(`/api/storage/shared/albums/${{encodeURIComponent(SHARE_KEY)}}`, {{ headers }})
     .then((res) => res.json().then((body) => ({{ status: res.status, body }})))
     .then((result) => {{
       if (!result.body.ok) {{
@@ -2386,7 +2416,7 @@ def register_file_routes(app, deps):
     def storage_album_share_api(token):
         conn = get_db()
         try:
-            row, reason = resolve_album_share_token(conn, token, password=_album_share_password_from_request())
+            row, reason = resolve_album_share_token(conn, token, _album_share_password_from_request())
             if not row:
                 return _album_share_error_response(reason)
             album = public_album_payload(conn, row)
@@ -2400,7 +2430,7 @@ def register_file_routes(app, deps):
     def storage_album_share_file_download(token, file_id):
         conn = get_db()
         try:
-            resolved, reason = resolve_album_share_file(conn, token, file_id, password=_album_share_password_from_request())
+            resolved, reason = resolve_album_share_file(conn, token, file_id, _album_share_password_from_request())
             if not resolved:
                 if reason in {"password_required", "password_invalid"}:
                     return _album_share_error_response(reason)

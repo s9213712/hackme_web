@@ -11,10 +11,11 @@ def test_personal_appearance_editor_and_routes_are_wired():
     public_py = (ROOT / "routes" / "public.py").read_text(encoding="utf-8")
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
 
-    assert "/js/40-auth-users.js?v=20260503-appearance-v2" in index_html
+    assert "/js/40-auth-users.js?v=20260503-appearance-reset" in index_html
     assert 'id="edit-user-appearance-section" style="display:none;"' in index_html
     assert 'id="edit-user-appearance-preset"' in index_html
     assert 'id="edit-user-appearance-reset"' in index_html
+    assert '視窗底部的「恢復全站預設」' in index_html
     assert 'id="edit-user-appearance-status"' in index_html
     assert 'id="edit-user-site-radius-px"' in index_html
     assert 'id="edit-user-site-font-scale"' in index_html
@@ -40,6 +41,8 @@ def test_personal_appearance_editor_and_routes_are_wired():
     assert 'const USER_APPEARANCE_PRESETS = {' in auth_js
     assert 'function userAppearanceFeatureEnabled()' in auth_js
     assert 'function setUserAppearanceEditorDisabled(disabled)' in auth_js
+    assert 'if (resetBtn) resetBtn.style.display = "none";' in auth_js
+    assert 'if (resetBtn) resetBtn.disabled = !enabled;' in auth_js
     assert 'function saveUserAppearanceSettings()' in auth_js
     assert 'API + "/me/appearance"' in auth_js
     assert 'function updateUserAppearanceEditorVisibility()' in auth_js

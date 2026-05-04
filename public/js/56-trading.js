@@ -149,6 +149,78 @@ function formatTradingDuration(ms) {
   return `${seconds}秒`;
 }
 
+const BACKTEST_TOTAL_CANDLE_LIMIT = 20000;
+
+function tradingTimeframeMinutes(timeframe) {
+  const mapping = { "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
+  return mapping[String(timeframe || "15m").trim()] || 15;
+}
+
+function estimateBacktestRequestedCandles(startTime, endTime, timeframe) {
+  const startMs = startTime ? Date.parse(startTime) : NaN;
+  const endMs = endTime ? Date.parse(endTime) : NaN;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 0;
+  const intervalMs = tradingTimeframeMinutes(timeframe) * 60 * 1000;
+  return Math.max(2, Math.floor((endMs - startMs) / intervalMs) + 1);
+}
+
+function formatBacktestDatetimeLocal(ms) {
+  if (!Number.isFinite(ms)) return "";
+  const date = new Date(ms);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function backtestTimeframeLabel() {
+  const select = $("trading-backtest-timeframe");
+  return select?.selectedOptions?.[0]?.textContent?.trim() || `${tradingTimeframeMinutes(select?.value)} 分`;
+}
+
+function updateBacktestDateRangeGuidance() {
+  const hint = $("trading-backtest-date-hint");
+  const startEl = $("trading-backtest-start");
+  const endEl = $("trading-backtest-end");
+  if (!hint || !startEl || !endEl) return;
+  const timeframe = $("trading-backtest-timeframe")?.value || "15m";
+  const timeframeText = backtestTimeframeLabel();
+  const intervalMs = tradingTimeframeMinutes(timeframe) * 60 * 1000;
+  const maxSpanMs = Math.max(0, (BACKTEST_TOTAL_CANDLE_LIMIT - 1) * intervalMs);
+  const maxSpanText = formatTradingDuration(maxSpanMs);
+  const startMs = startEl.value ? Date.parse(startEl.value) : NaN;
+  const endMs = endEl.value ? Date.parse(endEl.value) : NaN;
+
+  endEl.min = Number.isFinite(startMs) ? formatBacktestDatetimeLocal(startMs) : "";
+  endEl.max = Number.isFinite(startMs) ? formatBacktestDatetimeLocal(startMs + maxSpanMs) : "";
+  startEl.max = Number.isFinite(endMs) ? formatBacktestDatetimeLocal(endMs) : "";
+  startEl.min = Number.isFinite(endMs) ? formatBacktestDatetimeLocal(endMs - maxSpanMs) : "";
+
+  let text = `以目前 ${timeframeText} 週期，單次回測最多約 ${maxSpanText}。`;
+  let color = "var(--muted)";
+
+  if (!Number.isFinite(startMs) && !Number.isFinite(endMs)) {
+    text += " 先選開始或結束時間，系統會提示另一側最遠可選到哪裡。";
+  } else if (Number.isFinite(startMs) && !Number.isFinite(endMs)) {
+    text += ` 若保留開始時間，結束最晚可選 ${formatBacktestDatetimeLocal(startMs + maxSpanMs)}。`;
+  } else if (!Number.isFinite(startMs) && Number.isFinite(endMs)) {
+    text += ` 若保留結束時間，開始最早可選 ${formatBacktestDatetimeLocal(endMs - maxSpanMs)}。`;
+  } else if (endMs < startMs) {
+    color = "#ff4f6d";
+    text = `結束時間不能早於開始時間。若保留開始時間，結束至少要從 ${formatBacktestDatetimeLocal(startMs)} 開始。`;
+  } else {
+    const estimatedCandles = estimateBacktestRequestedCandles(startEl.value, endEl.value, timeframe);
+    const selectedWindowMs = Math.max(0, endMs - startMs);
+    if (estimatedCandles > BACKTEST_TOTAL_CANDLE_LIMIT) {
+      color = "#ffb74d";
+      text = `這段時間對 ${timeframeText} 週期來說太長了。若保留開始時間，結束最晚可選 ${formatBacktestDatetimeLocal(startMs + maxSpanMs)}；若保留結束時間，開始最早可選 ${formatBacktestDatetimeLocal(endMs - maxSpanMs)}。`;
+    } else {
+      text += ` 目前區間約 ${formatTradingDuration(selectedWindowMs)}，仍在單次回測範圍內。若保留開始時間，結束最晚可選 ${formatBacktestDatetimeLocal(startMs + maxSpanMs)}。`;
+    }
+  }
+
+  hint.textContent = text;
+  hint.style.color = color;
+}
+
 function tradingTrialCountdownText(trial) {
   if (!trial || trial.status !== "active") return "";
   const expiresAt = trial.expires_at ? new Date(trial.expires_at).getTime() : 0;
@@ -2853,8 +2925,6 @@ async function saveTradingDcaBot() {
   }
 }
 
-const BACKTEST_BATCH_SIZE = 5000;
-
 function downloadBacktestTrades(trades, marketSymbol) {
   if (!trades || !trades.length) return;
   const header = "時間,方向,數量,價格（點）,金額（點）,手續費（點）";
@@ -2938,41 +3008,33 @@ async function backtestTradingBot() {
   };
   const hasCandleData = Array.isArray(allCandles) && allCandles.length >= 2;
   if (!hasCandleData) {
-    basePayload.candle_limit = 500;
-    tradingSetMsg("未載入圖表，正在由後端下載歷史 K 線後回測...");
+    const estimatedCandles = estimateBacktestRequestedCandles(basePayload.start_time, basePayload.end_time, basePayload.timeframe);
+    if (estimatedCandles > BACKTEST_TOTAL_CANDLE_LIMIT) {
+      tradingSetMsg(`回測區間約需 ${estimatedCandles.toLocaleString()} 根 K 線，超過單次上限 ${BACKTEST_TOTAL_CANDLE_LIMIT.toLocaleString()} 根。請縮小區間或改大時間週期。`, false);
+      return;
+    }
+    basePayload.candle_limit = estimatedCandles || 500;
+    tradingSetMsg(
+      estimatedCandles
+        ? `未載入圖表，正在由後端分批下載約 ${estimatedCandles.toLocaleString()} 根歷史 K 線後回測...`
+        : "未載入圖表，正在由後端下載歷史 K 線後回測..."
+    );
   } else {
+    if (allCandles.length > BACKTEST_TOTAL_CANDLE_LIMIT) {
+      tradingSetMsg(`目前單次回測最多 ${BACKTEST_TOTAL_CANDLE_LIMIT.toLocaleString()} 根 K 線；你目前載入了 ${allCandles.length.toLocaleString()} 根。請縮小圖表區間或改大時間週期。`, false);
+      return;
+    }
     basePayload.data_source = tradingState.referencePrices?.source || "browser_loaded_chart";
     basePayload.provider_symbol = tradingState.referencePrices?.symbol || "";
   }
   try {
-    let combinedJson = null;
-    let allTrades = [];
-    let totalCandles = 0;
-    if (botType !== "grid" && hasCandleData && allCandles.length > BACKTEST_BATCH_SIZE) {
-      const batches = [];
-      for (let i = 0; i < allCandles.length; i += BACKTEST_BATCH_SIZE) {
-        batches.push(allCandles.slice(i, i + BACKTEST_BATCH_SIZE));
-      }
-      tradingSetMsg(`K 線共 ${allCandles.length} 根，自動分 ${batches.length} 批回測中...`);
-      let carryUnits = 0, carryCash = basePayload.initial_cash_points, carryAvgCost = 0;
-      for (let bi = 0; bi < batches.length; bi++) {
-        const batchPayload = { ...basePayload, candles: batches[bi], initial_cash_points: carryCash, initial_units: carryUnits, initial_avg_cost: carryAvgCost };
-        if (result) result.textContent = `分批回測中…第 ${bi + 1}/${batches.length} 批`;
-        const batchJson = await fetchTradingJson("/trading/bots/backtest", { method: "POST", body: JSON.stringify(batchPayload) });
-        allTrades = allTrades.concat(Array.isArray(batchJson.trades) ? batchJson.trades : []);
-        totalCandles += Number(batchJson.candle_count || 0);
-        carryUnits = batchJson.end_units ?? 0;
-        carryCash = batchJson.end_cash_points ?? carryCash;
-        carryAvgCost = batchJson.end_avg_cost ?? 0;
-        combinedJson = { ...batchJson, candle_count: totalCandles, trades: allTrades, trade_count: allTrades.length };
-      }
-    } else {
-      if (hasCandleData) basePayload.candles = allCandles;
-      combinedJson = await fetchTradingJson("/trading/bots/backtest", { method: "POST", body: JSON.stringify(basePayload) });
-      allTrades = Array.isArray(combinedJson.trades) ? combinedJson.trades : [];
-    }
+    if (hasCandleData) basePayload.candles = allCandles;
+    if (result) result.textContent = "回測中…";
+    const combinedJson = await fetchTradingJson("/trading/bots/backtest", { method: "POST", body: JSON.stringify(basePayload) });
     const sourceText = combinedJson.data_source ? `，資料 ${sanitize(combinedJson.data_source)} ${Number(combinedJson.candle_count || 0)} 根` : "";
-    const batchNote = hasCandleData && allCandles.length > BACKTEST_BATCH_SIZE ? `（分 ${Math.ceil(allCandles.length / BACKTEST_BATCH_SIZE)} 批）` : "";
+    const batchNote = combinedJson.segmented_backtest
+      ? `（後端自動分 ${Number(combinedJson.segmented_backtest_batches || 0)} 批）`
+      : "";
     const text = `回測完成${batchNote}：交易 ${Number(combinedJson.trade_count || 0)} 次，期末 ${formatTradingPointsValue(combinedJson.final_value_points)} 點，損益 ${Number(combinedJson.pnl_points || 0) >= 0 ? "+" : ""}${formatTradingPointsValue(combinedJson.pnl_points)} 點，報酬 ${formatTradingPointsValue(combinedJson.return_percent)}%${sourceText}`;
     if (result) result.textContent = text;
     renderTradingBacktestResult(combinedJson);
@@ -3003,7 +3065,7 @@ function renderTradingBacktestResult(json) {
       <div><span class="drive-card-sub">交易次數</span><strong>${Number(json.trade_count || 0)}</strong><small>回測未修改帳本</small></div>
       <div><span class="drive-card-sub">資料來源</span><strong>${sanitize(json.data_source || "-")}</strong><small>${Number(json.candle_count || 0)} 根 K 線</small></div>
       <div><span class="drive-card-sub">資料範圍</span><strong>${sanitize(String(json.first_candle_time || "-"))}</strong><small>～ ${sanitize(String(json.last_candle_time || "-"))}</small></div>
-      <div><span class="drive-card-sub">回測上限</span><strong>${Number(json.max_backtest_candles || 0).toLocaleString()} 根</strong><small>已使用 ${Number(json.candle_count || 0).toLocaleString()} 根</small></div>
+      <div><span class="drive-card-sub">回測上限</span><strong>${Number(json.max_backtest_candles || 0).toLocaleString()} 根</strong><small>單批最多 ${Number(json.max_backtest_candles_per_batch || json.max_backtest_candles || 0).toLocaleString()} 根 · 已使用 ${Number(json.candle_count || 0).toLocaleString()} 根</small></div>
     `;
   }
   if (trades) {
@@ -3085,6 +3147,7 @@ function updateBacktestStrategyUI() {
     }
   }
   populateBacktestWorkflowTemplates();
+  updateBacktestDateRangeGuidance();
 }
 
 function populateBacktestWorkflowTemplates() {
@@ -3601,6 +3664,12 @@ function bindTradingEvents() {
   if (backtestStrategy) backtestStrategy.addEventListener("change", updateBacktestStrategyUI);
   const backtestBotSelect = $("trading-backtest-bot-select");
   if (backtestBotSelect) backtestBotSelect.addEventListener("change", updateBacktestStrategyUI);
+  ["trading-backtest-timeframe", "trading-backtest-start", "trading-backtest-end"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", updateBacktestDateRangeGuidance);
+    el.addEventListener("input", updateBacktestDateRangeGuidance);
+  });
   updateBacktestStrategyUI();
   // Grid bot wiring
   const gridCreateBtn = $("trading-grid-bot-create-btn");

@@ -50,9 +50,12 @@ It includes:
 - selected config archive with `.env` redacted
 - manifest, checksums, metadata, and snapshot audit events
 
-It excludes deployment secrets. Snapshot metadata records
-`secrets_excluded: true`. Restoring a snapshot does not restore `.fkey`, `.filekey`,
-`.csrfkey`, `.chain_seed`, `.integrity_key`, `cert.pem`, or `key.pem`.
+It also includes configured runtime secret files. Snapshot metadata records
+`secrets_excluded: false` and lists `runtime_secret_files`, which currently
+cover deployment-local files such as `.fkey`, `.filekey`, `.csrfkey`,
+`.chain_seed`, `.integrity_key`, `integrity_manifest.json`, `cert.pem`, and
+`key.pem`. Restoring a snapshot replays those files and then validates their
+hashes before the restore is accepted as complete.
 
 Server restore should be used for whole-server rollback, migration, or
 cross-machine restore.
@@ -96,8 +99,10 @@ required instead of overwriting the live ledger.
   new chain verification fails and safe mode prepares a restore plan.
 - Reset may create a pre-reset server snapshot, but reset itself intentionally
   creates a fresh PointsChain and audit chain.
-- Deployment secrets are local-only runtime files. They are not snapshot
-  payloads and are regenerated after reset or first boot.
+- Runtime reset still clears local runtime secrets and generated manifests.
+  Snapshot restore and runtime reset therefore have different boundaries:
+  snapshot restore replays the captured runtime secrets, while reset deletes
+  them and expects regeneration or reinjection on next boot.
 
 These boundaries prevent a server snapshot from silently overriding the
 independent ledger-backup policy, and prevent wallet balances from being trusted

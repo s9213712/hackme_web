@@ -1,4 +1,5 @@
 import json
+from urllib.parse import parse_qs, urlparse
 
 from flask import Flask, jsonify
 
@@ -119,6 +120,49 @@ def _backtest_app(actor):
     return app
 
 
+def _root_price_fusion_status_app(actor, captured):
+    app = Flask(__name__)
+    app.testing = True
+
+    class FakeTradingService:
+        def get_root_price_fusion_status(self, *, market_symbol=""):
+            captured["market_symbol"] = market_symbol
+            return {
+                "market_symbol": market_symbol or "BTC/POINTS",
+                "configured_source": "fused_weighted",
+                "requested_mode": "auto_depth",
+                "resolved_mode": "auto_depth",
+                "resolved_source": "fused_weighted",
+                "state": "healthy",
+                "weights_sum_percent": 100.0,
+                "providers_used": [{"source": "binance_public_api", "label": "Binance", "normalized_weight_percent": 100.0, "weight": 1.0, "depth_score": 1.0, "price_points": 100}],
+                "excluded_providers": [],
+                "degraded": False,
+                "fallback_active": False,
+                "conservative_mode": False,
+                "message": "",
+                "price_points": 100,
+            }
+
+    def passthrough(fn):
+        return fn
+
+    def json_resp(payload, status=None):
+        response = jsonify(payload)
+        return (response, status) if status else response
+
+    register_trading_routes(app, {
+        "trading_service": FakeTradingService(),
+        "get_current_user_ctx": lambda: actor,
+        "json_resp": json_resp,
+        "require_csrf": passthrough,
+        "require_csrf_safe": passthrough,
+        "check_user_rate_limit": lambda *args, **kwargs: (False, {}),
+        "audit": lambda *args, **kwargs: None,
+    })
+    return app
+
+
 def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch):
     trading_routes.REFERENCE_PRICE_CACHE.clear()
     captured = {}
@@ -192,6 +236,87 @@ def test_backtest_downloads_historical_candles_when_browser_did_not_send_any(mon
     assert "interval=15m" in captured["url"]
     assert "startTime=" in captured["url"]
     assert "endTime=" in captured["url"]
+
+
+def test_backtest_download_supports_full_year_hourly_window(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    requested_limits = []
+
+    def fake_urlopen(request, timeout=0):
+        parsed = urlparse(request.full_url)
+        query = parse_qs(parsed.query)
+        limit = int(query["limit"][0])
+        requested_limits.append(limit)
+        start_ms = int(query.get("startTime", ["1714500000000"])[0])
+        candles = []
+        for idx in range(limit):
+            open_time = start_ms + idx * trading_routes.INTERVAL_MILLISECONDS["1h"]
+            price = 60000 + (idx % 24)
+            candles.append([open_time, str(price), str(price + 10), str(price - 10), str(price + 5)])
+        return _FakeBinanceResponse(candles)
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _backtest_app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.post("/api/trading/bots/backtest", json={
+        "market_symbol": "BTC/USDT",
+        "strategy": "dca",
+        "timeframe": "1h",
+        "candle_limit": 8784,
+        "start_time": "2024-01-01T00:00:00+00:00",
+        "end_time": "2024-12-31T23:00:00+00:00",
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["candle_count"] == 8784
+    assert payload["max_backtest_candles"] == trading_routes.MAX_BACKTEST_CANDLES
+    assert payload["max_backtest_candles_per_batch"] == trading_routes.BACKTEST_SEGMENT_CANDLES
+    assert payload["provider_candle_limit"] == trading_routes.BACKTEST_PROVIDER_CANDLE_LIMIT
+    assert requested_limits[:3] == [1000, 1000, 1000]
+    assert requested_limits[-1] == 784
+
+
+def test_backtest_download_supports_ranges_above_single_execution_batch(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+    requested_limits = []
+
+    def fake_urlopen(request, timeout=0):
+        parsed = urlparse(request.full_url)
+        query = parse_qs(parsed.query)
+        limit = int(query["limit"][0])
+        requested_limits.append(limit)
+        start_ms = int(query.get("startTime", ["1714500000000"])[0])
+        candles = []
+        for idx in range(limit):
+            open_time = start_ms + idx * trading_routes.INTERVAL_MILLISECONDS["1h"]
+            price = 60000 + (idx % 24)
+            candles.append([open_time, str(price), str(price + 10), str(price - 10), str(price + 5)])
+        return _FakeBinanceResponse(candles)
+
+    monkeypatch.setattr(trading_routes, "urlopen", fake_urlopen)
+    client = _backtest_app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.post("/api/trading/bots/backtest", json={
+        "market_symbol": "BTC/USDT",
+        "strategy": "dca",
+        "timeframe": "1h",
+        "candle_limit": 12000,
+        "start_time": "2024-01-01T00:00:00+00:00",
+        "end_time": "2025-05-14T23:00:00+00:00",
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["candle_count"] == 12000
+    assert payload["max_backtest_candles"] == trading_routes.MAX_BACKTEST_CANDLES
+    assert payload["max_backtest_candles_per_batch"] == trading_routes.BACKTEST_SEGMENT_CANDLES
+    assert payload["provider_candle_limit"] == trading_routes.BACKTEST_PROVIDER_CANDLE_LIMIT
+    assert requested_limits[:3] == [1000, 1000, 1000]
+    assert requested_limits[-1] == 1000
+    assert len(requested_limits) == 12
 
 
 def test_btc_trade_signal_hidden_when_project_missing(tmp_path):
@@ -712,3 +837,16 @@ def test_root_trading_routes_accept_fused_price_settings_payload():
     assert captured["settings"]["price_source"] == "fused_weighted"
     assert captured["settings"]["price_fusion_mode"] == "manual_weights"
     assert captured["settings"]["price_fusion_manual_weights"]["binance_public_api"] == 2
+
+
+def test_root_price_fusion_status_route_passes_selected_market_symbol():
+    captured = {}
+    client = _root_price_fusion_status_app({"id": 1, "username": "root", "role": "super_admin"}, captured).test_client()
+
+    response = client.get("/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["status"]["market_symbol"] == "ETH/POINTS"
+    assert captured["market_symbol"] == "ETH/POINTS"

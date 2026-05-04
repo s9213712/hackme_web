@@ -147,7 +147,7 @@ def test_album_viewer_has_dedicated_module():
     assert '/js/35-drive.js?v=20260503-feature-bundles' in index_html
     assert '/styles.css?v=20260503-appearance-v2' in index_html
     assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
-    assert '/js/40-auth-users.js?v=20260503-appearance-v2' in index_html
+    assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html
     assert 'src="/js/50-admin.js' in index_html
     assert 'id="root-storage-user-select"' in index_html
     assert 'id="root-storage-save-btn"' in index_html

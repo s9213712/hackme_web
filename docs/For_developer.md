@@ -13,7 +13,7 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.03-065`
+- Release ID: `2026.05.04-069`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -364,6 +364,7 @@ Root/admin trading APIs:
 
 - `GET /api/admin/trading/report`
 - `GET /api/root/trading/settings`
+- `GET /api/root/trading/price-fusion-status`
 - `POST /api/root/trading/settings`
 - `POST /api/root/trading/markets/{symbol}`
 - `POST /api/root/trading/orders/match`
