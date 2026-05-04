@@ -234,6 +234,17 @@ def validation_scenarios():
         )
 
         # Workflow bot with nested AND/OR and two scaling steps.
+        workflow_tmp = Path(tmp) / "workflow_case"
+        workflow_tmp.mkdir(parents=True, exist_ok=True)
+        workflow_points, workflow_trading, _workflow_prices, _workflow_db = make_services(workflow_tmp)
+        workflow_points.record_transaction(
+            user_id=1,
+            currency_type="points",
+            direction="credit",
+            amount=5000,
+            action_type="validation_workflow_funding",
+            actor=root,
+        )
         workflow = {
             "version": 1,
             "strategy_kind": "workflow",
@@ -255,7 +266,7 @@ def validation_scenarios():
                 }
             ],
         }
-        bot = trading.save_trading_bot(
+        bot = workflow_trading.save_trading_bot(
             actor=alice,
             payload={
                 "bot_type": "conditional",
@@ -269,9 +280,9 @@ def validation_scenarios():
                 "workflow": workflow,
             },
         )
-        first_workflow = trading.run_trading_bots(actor=alice)
-        second_workflow = trading.run_trading_bots(actor=alice)
-        third_workflow = trading.run_trading_bots(actor=alice)
+        first_workflow = workflow_trading.run_trading_bots(actor=alice)
+        second_workflow = workflow_trading.run_trading_bots(actor=alice)
+        third_workflow = workflow_trading.run_trading_bots(actor=alice)
         ok(
             results,
             "workflow bot honors nested condition and does not repeat exhausted scaling steps",
@@ -282,6 +293,26 @@ def validation_scenarios():
             first=first_workflow,
             second=second_workflow,
             third=third_workflow,
+        )
+
+        position_conn = get_db()
+        try:
+            position_after_incremental_buys = position_conn.execute(
+                "SELECT * FROM trading_spot_positions WHERE user_id=? AND market_symbol=?",
+                (1, "ETH/POINTS"),
+            ).fetchone()
+        finally:
+            position_conn.close()
+        avg_cost_after_incremental_buys = float(position_after_incremental_buys["avg_cost_points"] or 0) if position_after_incremental_buys else 0.0
+        ok(
+            results,
+            "incremental spot buys preserve sane average cost accounting",
+            bool(position_after_incremental_buys)
+            and avg_cost_after_incremental_buys > 0
+            and avg_cost_after_incremental_buys < 10_000,
+            avg_cost_points=avg_cost_after_incremental_buys,
+            quantity_units=int(position_after_incremental_buys["quantity_units"] or 0) if position_after_incremental_buys else 0,
+            note="ETH/POINTS live price is 1000; average cost should stay in a sane range after DCA and conditional buys.",
         )
 
         # Backtest correctness with hand-computable DCA data.

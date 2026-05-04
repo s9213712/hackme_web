@@ -6412,15 +6412,17 @@ class TradingEngineService:
                     )["ledger_uuid"])
             position = self._position(conn, user_id, market["symbol"])
             prev_qty = int(position["quantity_units"])
-            prev_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
+            prev_cost = _to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0)
             next_qty = prev_qty + quantity_units
             next_avg = (
                 float(
                     (
-                        (Decimal(prev_qty) * Decimal(str(prev_cost)))
-                        + (Decimal(quantity_units) * Decimal(str(price)))
-                    / Decimal(next_qty)
-                ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                        (
+                            (Decimal(prev_qty) * prev_cost)
+                            + (Decimal(quantity_units) * Decimal(str(price)))
+                        )
+                        / Decimal(next_qty)
+                    ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
                 )
                 if next_qty
                 else 0

@@ -3887,6 +3887,147 @@ def test_workflow_branch_steps_are_persisted_and_do_not_repeat(tmp_path):
     assert dashboard["bots"][0]["execution_state"]["branch_step_counts"]["entry"] == 2
 
 
+def test_incremental_spot_buys_keep_average_cost_sane(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=15000, action_type="test_funding")
+
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.5")
+
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "avg cost dca",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 1,
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    trading.run_trading_bots(actor=_actor(), limit=10)
+
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "avg cost conditional",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "trigger_type": "price_below",
+            "trigger_price_points": 6000,
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    trading.run_trading_bots(actor=_actor(), limit=10)
+
+    dashboard = trading.user_dashboard(user_id=1)
+    position = next(row for row in dashboard["positions"] if row["market_symbol"] == "ETH/POINTS")
+
+    assert position["quantity"] == "1.53998001"
+    assert 5000.0 <= float(position["avg_cost_points"]) < 5100.0
+
+
+def test_workflow_buy_amount_runs_after_incremental_spot_buys(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=15000, action_type="test_funding")
+
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.5")
+
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "dca",
+            "name": "workflow dca seed",
+            "market_symbol": "ETH/POINTS",
+            "budget_points": 100,
+            "interval_hours": 1,
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    trading.run_trading_bots(actor=_actor(), limit=10)
+
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "workflow conditional seed",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "trigger_type": "price_below",
+            "trigger_price_points": 6000,
+            "max_runs": 1,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+    trading.run_trading_bots(actor=_actor(), limit=10)
+
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [{
+            "id": "entry",
+            "name": "分批加倉",
+            "priority": 10,
+            "logic": "AND",
+            "cooldown_seconds": 0,
+            "conditions": [{"type": "price_below", "value": 6000}],
+            "actions": [
+                {"type": "buy_amount", "amount_points": 100, "step": 1, "order_type": "market"},
+                {"type": "buy_amount", "amount_points": 200, "step": 2, "order_type": "market"},
+            ],
+        }],
+    }
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "workflow avg cost guard",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "max_runs": 3,
+            "cooldown_seconds": 0,
+            "workflow_json": workflow,
+            "enabled": True,
+        },
+    )
+
+    first = trading.run_trading_bots(actor=_actor(), limit=10)
+    second = trading.run_trading_bots(actor=_actor(), limit=10)
+    third = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert len(first["triggered"]) == 1
+    assert first["failed"] == []
+    assert len(second["triggered"]) == 1
+    assert second["failed"] == []
+    assert third["triggered"] == []
+
+    dashboard = trading.user_dashboard(user_id=1)
+    workflow_bot = next(row for row in dashboard["bots"] if row["name"] == "workflow avg cost guard")
+    workflow_orders = [row for row in dashboard["orders"] if row.get("bot_name") == "workflow avg cost guard"]
+    position = next(row for row in dashboard["positions"] if row["market_symbol"] == "ETH/POINTS")
+
+    assert len(workflow_orders) == 2
+    assert workflow_bot["run_count"] == 2
+    assert workflow_bot["execution_state"]["branch_step_counts"]["entry"] == 2
+    assert 5000.0 <= float(position["avg_cost_points"]) < 5100.0
+
+
 def test_workflow_graph_rejects_action_unreachable_from_start(tmp_path):
     _, trading = _services(tmp_path)
     workflow = {
