@@ -119,15 +119,15 @@ prompt_password() {
   local value confirm
   while true; do
     read -r -s -p "$label: " value
-    printf '\n'
+    printf '\n' >&2
     if [[ ${#value} -lt 12 ]]; then
-      say "密碼至少建議 12 字元。"
+      say "密碼至少建議 12 字元。" >&2
       continue
     fi
     read -r -s -p "再次輸入 $label: " confirm
-    printf '\n'
+    printf '\n' >&2
     if [[ "$value" != "$confirm" ]]; then
-      say "兩次輸入不一致。"
+      say "兩次輸入不一致。" >&2
       continue
     fi
     printf '%s' "$value"

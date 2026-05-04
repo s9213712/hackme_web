@@ -1,0 +1,59 @@
+import sqlite3
+
+from flask import Flask, jsonify, make_response
+
+from routes.economy import register_economy_routes
+from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+
+
+def _json_resp(payload, status=200):
+    return make_response(jsonify(payload), status)
+
+
+def _passthrough(fn):
+    return fn
+
+
+def _get_db_factory(path):
+    def get_db():
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    return get_db
+
+
+def test_admin_points_wallet_returns_404_for_missing_user(tmp_path):
+    db_path = tmp_path / "wallets.db"
+    get_db = _get_db_factory(db_path)
+    conn = get_db()
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active')"
+    )
+    conn.execute("INSERT INTO users (id, username, role, status) VALUES (1, 'root', 'super_admin', 'active')")
+    ensure_points_economy_schema(conn)
+    conn.commit()
+    conn.close()
+
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "backups")
+    app = Flask(__name__)
+    app.testing = True
+    register_economy_routes(app, {
+        "get_current_user_ctx": lambda: {"id": 1, "username": "root", "role": "super_admin"},
+        "json_resp": _json_resp,
+        "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
+        "points_service": points,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+        "audit": lambda *args, **kwargs: None,
+        "get_db": get_db,
+    })
+
+    res_zero = app.test_client().get("/api/admin/points/wallets/0")
+    res_missing = app.test_client().get("/api/admin/points/wallets/999999")
+
+    assert res_zero.status_code == 404
+    assert res_zero.get_json()["msg"] == "找不到帳號"
+    assert res_missing.status_code == 404
+    assert res_missing.get_json()["msg"] == "找不到帳號"

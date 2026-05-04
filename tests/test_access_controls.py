@@ -147,6 +147,35 @@ def test_admin_access_controls_endpoint_updates_safe_payload():
     assert state["maintenance_bypass_token_hash"] == ""
 
 
+def test_admin_access_controls_reject_invalid_root_ip_whitelist_entries():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/access-controls", json={
+        "root_ip_whitelist_enabled": True,
+        "root_ip_whitelist": "127.0.0.1,javascript:alert(1),999.999.999.999",
+    })
+
+    assert res.status_code == 400
+    assert "無效的 IP / CIDR" in res.get_json()["msg"]
+    assert state["root_ip_whitelist"] == ""
+    assert state["root_ip_whitelist_enabled"] is False
+
+
+def test_admin_access_controls_reject_enabling_empty_root_ip_whitelist():
+    app, state = _admin_app()
+    client = app.test_client()
+
+    res = client.put("/api/admin/access-controls", json={
+        "root_ip_whitelist_enabled": True,
+        "root_ip_whitelist": "",
+    })
+
+    assert res.status_code == 400
+    assert "至少要填入一個有效的 IP 或 CIDR" in res.get_json()["msg"]
+    assert state["root_ip_whitelist_enabled"] is False
+
+
 def test_admin_rotates_maintenance_bypass_token_once():
     audit_log = []
     app, state = _admin_app(audit_log=audit_log)

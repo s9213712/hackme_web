@@ -1,4 +1,5 @@
 import json
+import ipaddress
 import os
 import platform
 import re
@@ -42,6 +43,7 @@ from services.upload_security import (
     get_cloud_drive_security_policy,
     update_cloud_drive_security_policy,
 )
+from services.settings import find_feature_dependency_violations
 
 
 SECURITY_TEST_JOBS = {}
@@ -88,6 +90,36 @@ def _parse_int_in_range(value, minimum, maximum):
 def _is_hhmm(value):
     text = str(value or "").strip()
     return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", text))
+
+
+def _normalize_ip_whitelist_or_none(raw):
+    entries = []
+    bad = []
+    for item in str(raw or "").replace("\n", ",").split(","):
+        value = item.strip()
+        if not value:
+            continue
+        try:
+            if "/" in value:
+                ipaddress.ip_network(value, strict=False)
+            else:
+                ipaddress.ip_address(value)
+            entries.append(value)
+        except ValueError:
+            bad.append(value)
+    if bad:
+        return None, bad
+    return ",".join(entries), []
+
+
+def _feature_dependency_error_payload(violations):
+    first = violations[0]
+    missing_labels = "、".join(item["required_label"] for item in violations)
+    return {
+        "ok": False,
+        "msg": f"{first['feature_label']} 需要先啟用：{missing_labels}",
+        "violations": violations,
+    }
 
 
 def public_relative_path(path, base_dir):
@@ -1944,9 +1976,18 @@ def register_system_admin_routes(app, deps):
         if "storage_maintenance_daily_time" in data:
             if not re.fullmatch(r"\d{2}:\d{2}", str(data.get("storage_maintenance_daily_time") or "")):
                 return json_resp({"ok":False,"msg":"storage_maintenance_daily_time 必須是 HH:MM"}), 400
+        violations = find_feature_dependency_violations(current_settings, data)
+        if violations:
+            return json_resp(_feature_dependency_error_payload(violations)), 400
 
         before_settings = dict(current_settings)
-        settings = save_settings(data)
+        try:
+            settings = save_settings(data)
+        except ValueError as exc:
+            if "requires" in str(exc):
+                violations = find_feature_dependency_violations(current_settings, data)
+                return json_resp(_feature_dependency_error_payload(violations or [{"feature": "", "feature_label": "功能", "required": "", "required_label": "父功能"}])), 400
+            raise
         if not settings:
             return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
 
@@ -2009,7 +2050,16 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
         before_settings = get_system_settings()
-        updates = save_feature_settings(data)
+        violations = find_feature_dependency_violations(before_settings, data)
+        if violations:
+            return json_resp(_feature_dependency_error_payload(violations)), 400
+        try:
+            updates = save_feature_settings(data)
+        except ValueError as exc:
+            if "requires" in str(exc):
+                violations = find_feature_dependency_violations(before_settings, data)
+                return json_resp(_feature_dependency_error_payload(violations or [{"feature": "", "feature_label": "功能", "required": "", "required_label": "父功能"}])), 400
+            raise
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的功能開關"}), 400
         _audit_settings_changed("FEATURE_FLAGS_CHANGED", actor, before_settings, updates, scope="feature_flags")
@@ -2029,10 +2079,18 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        before_settings = get_system_settings()
         updates = {}
         for key in ("root_ip_whitelist_enabled", "root_ip_whitelist", "browser_only_mode_enabled"):
             if key in data:
                 updates[key] = data[key]
+        if "root_ip_whitelist" in updates:
+            normalized_whitelist, bad_entries = _normalize_ip_whitelist_or_none(updates["root_ip_whitelist"])
+            if bad_entries:
+                return json_resp({"ok":False,"msg":f"無效的 IP / CIDR：{', '.join(bad_entries)}"}), 400
+            updates["root_ip_whitelist"] = normalized_whitelist
+        if _parse_strict_bool(updates.get("root_ip_whitelist_enabled")) and not str(updates.get("root_ip_whitelist") or before_settings.get("root_ip_whitelist") or "").strip():
+            return json_resp({"ok":False,"msg":"啟用 root IP 白名單前，至少要填入一個有效的 IP 或 CIDR"}), 400
         if "clear_maintenance_bypass_token" in data and data.get("clear_maintenance_bypass_token"):
             updates["maintenance_bypass_token_hash"] = ""
             updates["maintenance_bypass_token_expires_at"] = ""
@@ -2041,7 +2099,6 @@ def register_system_admin_routes(app, deps):
             updates["internal_test_login_token_expires_at"] = ""
         if not updates:
             return json_resp({"ok":False,"msg":"沒有可寫入的存取控制設定"}), 400
-        before_settings = get_system_settings()
         saved = save_settings(updates)
         _audit_settings_changed("ACCESS_CONTROLS_CHANGED", actor, before_settings, saved, scope="access_controls")
         return json_resp({"ok":True,"msg":"存取控制設定已更新","access_controls":access_control_settings_payload(get_system_settings())})

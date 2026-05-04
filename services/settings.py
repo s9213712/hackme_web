@@ -282,6 +282,28 @@ def get_feature_dependency_details(feature_key):
     }
 
 
+def find_feature_dependency_violations(current_settings, updates):
+    if not isinstance(updates, dict):
+        return []
+    merged = dict(DEFAULT_SETTINGS)
+    if isinstance(current_settings, dict):
+        merged.update(current_settings)
+    merged.update({key: value for key, value in updates.items() if key in DEFAULT_SETTINGS})
+    violations = []
+    for child, rule in FEATURE_DEPENDENCY_RULES.items():
+        if not bool(merged.get(child)):
+            continue
+        for parent in tuple(rule.get("required", ()) or ()):
+            if not bool(merged.get(parent)):
+                violations.append({
+                    "feature": child,
+                    "feature_label": get_feature_setting_label(child),
+                    "required": parent,
+                    "required_label": get_feature_setting_label(parent),
+                })
+    return violations
+
+
 def build_feature_disabled_payload(feature_key):
     details = get_feature_dependency_details(feature_key)
     label = details["feature_label"]
@@ -425,6 +447,10 @@ def save_settings(data):
         if key not in DEFAULT_SETTINGS:
             continue
         updates[key] = _coerce_setting_value(key, value)
+    violations = find_feature_dependency_violations(current_settings, updates)
+    if violations:
+        first = violations[0]
+        raise ValueError(f"{first['feature']} requires {first['required']}")
     if (
         "audit_chain_enabled" in updates
         and bool(updates["audit_chain_enabled"])

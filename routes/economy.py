@@ -381,6 +381,13 @@ def register_economy_routes(app, deps):
         actor, err = manager_or_403()
         if err:
             return err
+        conn = get_db()
+        try:
+            row = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return json_resp({"ok": False, "msg": "找不到帳號"}), 404
         return json_resp({
             "ok": True,
             "wallet": points_service.get_wallet(user_id),

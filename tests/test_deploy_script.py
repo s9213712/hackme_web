@@ -18,3 +18,11 @@ def test_run_prod_init_db_uses_current_bootstrap_signature():
     assert "server.hash_password" in script
     assert "server.ensure_trading_schema(conn)" in script
     assert "\ninit_db()\n" not in script
+
+
+def test_prompt_password_only_writes_secret_to_stdout():
+    script = (ROOT / "scripts" / "run_prod.sh").read_text(encoding="utf-8")
+
+    assert "printf '\\n' >&2" in script
+    assert 'say "密碼至少建議 12 字元。" >&2' in script
+    assert 'say "兩次輸入不一致。" >&2' in script

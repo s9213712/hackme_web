@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import pytest
 
 from flask import Flask, jsonify, make_response
 
@@ -140,6 +141,94 @@ def test_feature_disabled_payload_lists_enabled_dependents_of_blocked_parent():
         settings._STATE.clear()
         settings._STATE.update(original_state)
         settings._SYSTEM_SETTINGS = original_cache
+
+
+def test_save_feature_settings_rejects_required_child_without_parent(tmp_path):
+    db_path = tmp_path / "settings.db"
+
+    def get_db():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    original_state = dict(settings._STATE)
+    original_cache = settings._SYSTEM_SETTINGS
+    try:
+        settings.configure_settings_service(get_db=get_db, load_json=lambda path: {}, base_dir=str(tmp_path))
+        conn = get_db()
+        settings.init_system_settings_table(conn)
+        settings._seed_missing_settings_to_db(conn)
+        conn.commit()
+        conn.close()
+        settings.refresh_system_settings()
+
+        with pytest.raises(ValueError, match="feature_trading_enabled requires feature_economy_enabled"):
+            settings.save_feature_settings({
+                "feature_economy_enabled": False,
+                "feature_trading_enabled": True,
+            })
+    finally:
+        settings._STATE.clear()
+        settings._STATE.update(original_state)
+        settings._SYSTEM_SETTINGS = original_cache
+
+
+def test_admin_feature_routes_reject_required_child_without_parent():
+    app = Flask(__name__)
+    app.testing = True
+    actor_box = {"actor": {"id": 1, "username": "root", "role": "super_admin"}}
+    feature_state = {
+        **settings.DEFAULT_SETTINGS,
+        "feature_economy_enabled": False,
+        "feature_trading_enabled": False,
+        "feature_privacy_uploads_enabled": False,
+        "feature_storage_albums_enabled": False,
+    }
+
+    def save_feature_settings(data):
+        feature_state.update(data)
+        return dict(data)
+
+    register_system_admin_routes(app, {
+        "ANCHOR_DIR": ".",
+        "BASE_DIR": ".",
+        "CERT_FILE": "missing-cert.pem",
+        "CHAT_DIR": ".",
+        "CURRENT_SERVER_BIND_STATE": {"host": "0.0.0.0", "port": 5000, "ssl_enabled": False},
+        "DB_PATH": "missing.db",
+        "KEY_FILE": "missing-key.pem",
+        "LOG_DIR": ".",
+        "SERVER_LOG_PATH": "server.log",
+        "activate_emergency_lockdown": lambda reason: None,
+        "audit": lambda *args, **kwargs: None,
+        "get_client_ip": lambda: "127.0.0.1",
+        "get_current_user_ctx": lambda: actor_box["actor"],
+        "get_db": lambda: None,
+        "get_feature_settings": lambda: {key: feature_state[key] for key in settings.FEATURE_FLAG_KEYS},
+        "get_system_settings": lambda: dict(feature_state),
+        "get_ua": lambda: "pytest",
+        "is_audit_chain_enabled": lambda: False,
+        "json_resp": _json_resp,
+        "repair_audit_chain": lambda **kwargs: {"entries_resealed": 0},
+        "repair_violation_chains": lambda: {"entries_resealed": 0},
+        "require_csrf": _passthrough,
+        "require_csrf_safe": _passthrough,
+        "role_rank": lambda role: {"user": 0, "manager": 1, "super_admin": 2}.get(role or "user", 0),
+        "save_feature_settings": save_feature_settings,
+        "save_settings": lambda data: dict(data),
+        "server_mode_service": None,
+        "snapshot_service": None,
+        "verify_audit_integrity": lambda: (True, None, "ok"),
+    })
+    client = app.test_client()
+
+    trading_res = client.put("/api/admin/features", json={"feature_economy_enabled": False, "feature_trading_enabled": True})
+    storage_res = client.put("/api/admin/features", json={"feature_privacy_uploads_enabled": False, "feature_storage_albums_enabled": True})
+
+    assert trading_res.status_code == 400
+    assert "積分交易所 需要先啟用" in trading_res.get_json()["msg"]
+    assert storage_res.status_code == 400
+    assert "Storage / 相簿 需要先啟用" in storage_res.get_json()["msg"]
 
 
 def test_file_quota_endpoint_returns_user_usage(tmp_path):
