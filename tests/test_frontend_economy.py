@@ -148,6 +148,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "bindEconomyInlineEvents" in bootstrap_js
     assert 'id="tab-settings-billing"' in index_html
     assert 'id="sec-settings-billing"' in index_html
+    assert 'id="tab-settings-trading"' in index_html
+    assert 'id="sec-settings-trading"' in index_html
     assert 'id="root-catalog-item-key"' in index_html
     assert 'id="root-catalog-storage-gb"' in index_html
     assert 'id="root-catalog-save-btn"' in index_html
@@ -214,6 +216,13 @@ def test_root_points_page_is_chain_operations_console():
     assert "btc_trade_repo_url" in admin_js
     assert "btc_trade_branch" in admin_js
     assert "btc_trade_project_dir" in admin_js
+    assert "root-trading-btc-trade-start-btn" in index_html
+    assert "/root/trading/btc-trade/start" in admin_js
+    assert "/root/trading/btc-trade/start-status" in admin_js
+    assert "pollRootBtcTradeStartJob" in admin_js
+    assert "一鍵啟動預測" in index_html
+    assert "資料是否過期" in index_html
+    assert "重訓模型，再執行預測腳本並等待新的預測資料" in index_html
     assert "function checkRootBtcTradeStatus" in admin_js
     assert 'apiFetch(API + "/root/trading/btc-trade/check"' in admin_js
     assert "function setupRootBtcTrade" in admin_js
@@ -222,9 +231,20 @@ def test_root_points_page_is_chain_operations_console():
     assert "margin_maintenance_percent" in admin_js
     assert "collectRootTradingMarketSettings" in admin_js
     assert 'switchSettingsSection("billing")' in bootstrap_js
+    assert 'switchSettingsSection("trading")' in bootstrap_js
     assert "loadRootTradingSettings" in bootstrap_js
     assert "checkRootBtcTradeStatus" in bootstrap_js
     assert "setupRootBtcTrade" in bootstrap_js
+    billing_section = index_html.split('id="sec-settings-billing"', 1)[1].split('id="sec-settings-trading"', 1)[0]
+    trading_settings_section = index_html.split('id="sec-settings-trading"', 1)[1].split('id="sec-settings-drive"', 1)[0]
+    assert 'id="root-trading-enabled"' not in billing_section
+    assert "服務扣點與容量商品" in billing_section
+    assert "交易所設定已獨立成單獨分頁" in trading_settings_section
+    assert "基本開關與風控" in trading_settings_section
+    assert "價格來源與融合比例" in trading_settings_section
+    assert "機器人掃描與稽核" in trading_settings_section
+    assert "BTC_trade 信號整合" in trading_settings_section
+    assert "各交易對參數" in trading_settings_section
 
 
 def test_trading_exchange_is_separate_from_wallet_page():
@@ -452,12 +472,18 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "stop_loss_percent" in workflow_templates
     assert "take_profit_percent" in workflow_templates
     assert "未載入圖表，正在由後端下載歷史 K 線後回測" in trading_js
+    assert "auto_fetch_reference_candles = true" in trading_js
     assert "estimateBacktestRequestedCandles" in trading_js
     assert "BACKTEST_TOTAL_CANDLE_LIMIT" in trading_js
     assert "若保留開始時間，結束最晚可選" in trading_js
     assert "若保留結束時間，開始最早可選" in trading_js
     assert "先選開始或結束時間" in trading_js
     assert "basePayload.candle_limit = estimatedCandles || 500" in trading_js
+    assert 'id="root-trading-bot-audit-summary"' in index_html
+    assert 'id="root-trading-bot-audit-run-btn"' in index_html
+    assert "function loadRootTradingBotAuditDashboard" in admin_js
+    assert "function runRootTradingBotAudit" in admin_js
+    assert "function reviewTradingAuditBugReport" in admin_js
     assert "後端自動分" in trading_js
     assert "資料來源" in trading_js
     assert "prepareTradingBacktestFromBot" in trading_js
@@ -569,6 +595,18 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert 'renderTradingOrders(orders, "economy-trading-order-list", false)' in trading_js
     assert '"economy-trading-open-btn", openTradingModuleFromWallet' in trading_js
     assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' in trading_js
+    assert 'id="trading-current-delta"' in trading_section
+    assert 'id="trading-current-health"' in trading_section
+    assert "TRADING_LIVE_PRICE_REFRESH_MS = 1000" in trading_js
+    assert "function loadTradingLivePrice()" in trading_js
+    assert "function renderTradingCurrentPrice" in trading_js
+    assert "/trading/live-price?market=" in trading_js
+    assert "price_health" in trading_js
+    assert "fallback_reason" in trading_js
+    assert "excluded_sources" in trading_js
+    assert "defaulted_market" in trading_js
+    assert "🟡 價格來源降級" in trading_js
+    assert "🟢 價格來源正常" in trading_js
 
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
     workflow_editor_js = (ROOT / "public" / "js" / "trading-workflow-editor.js").read_text(encoding="utf-8")
@@ -591,3 +629,22 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "function handleDrop" in workflow_editor_surface
     assert "function handleInput" in workflow_editor_surface
     assert "HackmeTradingWorkflowEditor" in workflow_editor_surface
+
+
+def test_trading_reference_polling_does_not_overwrite_live_execution_price():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+
+    assert 'Reference-price polling is for the chart only.' in trading_js
+    assert 'market.manual_price_points = Number(last.close_points || 0);' not in trading_js
+    assert 'market.price_source = json.source || "binance_public_api";' not in trading_js
+
+
+def test_trading_live_price_polling_uses_one_second_timer_and_health_badges():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+
+    assert "tradingLivePriceTimer = setInterval" in trading_js
+    assert "TRADING_LIVE_PRICE_REFRESH_MS" in trading_js
+    assert "#trading-current-price.trading-price-up" in styles
+    assert "#trading-current-price.trading-price-down" in styles
+    assert "#trading-current-health.warning" in styles

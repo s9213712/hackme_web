@@ -384,6 +384,205 @@ def test_workflow_backtest_preserves_position_across_segment_boundaries(tmp_path
     assert result["final_value_points"] > result["initial_cash_points"]
 
 
+def test_workflow_backtest_does_not_false_trigger_bollinger_on_flat_sequence(tmp_path):
+    _, trading = _services(tmp_path)
+    candles = [
+        {
+            "time": i,
+            "time_iso": f"2024-01-01T{(i % 24):02d}:00:00+00:00",
+            "open_points": 100,
+            "high_points": 100,
+            "low_points": 100,
+            "close_points": 100,
+            "price_points": 100,
+        }
+        for i in range(30)
+    ]
+    workflow = {
+        "version": "1",
+        "strategy_kind": "workflow_graph",
+        "start_node_id": "start",
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {
+                "id": "bb_flat_guard",
+                "type": "condition",
+                "condition": {"type": "bb_position", "position": "below_lower"},
+            },
+            {"id": "no_pos", "type": "condition", "condition": {"type": "has_position", "value": False}},
+            {"id": "buy_and", "type": "logic", "operator": "AND"},
+            {"id": "buy_act", "type": "action", "priority": 10, "action": {"type": "buy_percent", "percent": 100, "order_type": "market"}},
+        ],
+        "edges": [
+            {"id": "e1", "from": "start", "from_port": "out", "to": "bb_flat_guard", "to_port": "in"},
+            {"id": "e2", "from": "start", "from_port": "out", "to": "no_pos", "to_port": "in"},
+            {"id": "e3", "from": "bb_flat_guard", "from_port": "true", "to": "buy_and", "to_port": "in"},
+            {"id": "e4", "from": "no_pos", "from_port": "true", "to": "buy_and", "to_port": "in"},
+            {"id": "e5", "from": "buy_and", "from_port": "true", "to": "buy_act", "to_port": "in"},
+        ],
+    }
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "workflow",
+            "workflow_json": workflow,
+            "initial_cash_points": 1000,
+            "candles": candles,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["trade_count"] == 0
+    assert result["final_value_points"] == result["initial_cash_points"]
+
+
+def test_backtest_skips_outlier_jump_candles_instead_of_booking_fake_profit(tmp_path):
+    _, trading = _services(tmp_path)
+    candles = [
+        {"time_iso": "2024-01-01T00:00:00+00:00", "close_points": 100, "price_points": 100},
+        {"time_iso": "2024-01-01T00:15:00+00:00", "close_points": 10, "price_points": 10},
+        {"time_iso": "2024-01-01T00:30:00+00:00", "close_points": 150, "price_points": 150},
+    ]
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "BTC/POINTS",
+            "strategy": "conditional",
+            "trigger_type": "price_below",
+            "trigger_price_points": 50,
+            "initial_cash_points": 1000,
+            "order_points": 100,
+            "candles": candles,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["trade_count"] == 0
+    assert result["outlier_skipped_count"] == 1
+    assert result["final_value_points"] == result["initial_cash_points"]
+    assert any("已略過跳價" in warning for warning in result["range_warnings"])
+
+
+def test_bot_audit_dashboard_marks_new_bot_as_unaudited_until_trade_or_24h(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "bot_type": "dca",
+            "name": "fresh dca",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "enabled": True,
+            "max_runs": -1,
+        },
+    )
+
+    dashboard = trading.get_bot_audit_dashboard(limit=20)
+    item = next(row for row in dashboard["items"] if row["bot_uuid"] == created["bot"]["bot_uuid"])
+
+    assert item["audit_status"] == "unaudited"
+    assert item["eligible"] is False
+    assert item["eligible_reason"] == "awaiting_first_trade"
+
+
+def test_bot_audit_runs_green_after_first_successful_trade(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "bot_type": "dca",
+            "name": "audited dca",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "enabled": True,
+            "max_runs": -1,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+    trading.run_trading_bot_once(actor=_actor(), bot_uuid=bot_uuid)
+
+    result = trading.run_due_bot_audits(force=True)
+    dashboard = trading.get_bot_audit_dashboard(limit=20)
+    item = next(row for row in dashboard["items"] if row["bot_uuid"] == bot_uuid)
+
+    assert any(row["bot_uuid"] == bot_uuid for row in result["audited"])
+    assert item["audit_status"] == "green"
+    assert item["eligible"] is True
+    assert item["eligible_reason"] == "has_trade"
+
+
+def test_bot_audit_warns_after_24_hours_without_any_trade(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "bot_type": "dca",
+            "name": "idle dca",
+            "budget_points": 100,
+            "interval_hours": 24,
+            "enabled": True,
+            "max_runs": -1,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+    conn = trading.get_db()
+    try:
+        conn.execute("UPDATE trading_bots SET enabled_at='2024-01-01T00:00:00' WHERE bot_uuid=?", (bot_uuid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = trading.run_due_bot_audits(force=True)
+    dashboard = trading.get_bot_audit_dashboard(limit=20)
+    item = next(row for row in dashboard["items"] if row["bot_uuid"] == bot_uuid)
+
+    assert any(row["bot_uuid"] == bot_uuid for row in result["audited"])
+    assert item["audit_status"] == "yellow"
+    assert item["warning_count"] >= 1
+    assert item["eligible_reason"] == "aged_24h"
+
+
+def test_grid_bot_audit_marks_orphan_open_orders_as_red(tmp_path):
+    _, trading = _services(tmp_path)
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "grid orphan",
+            "market_symbol": "ETH/POINTS",
+            "upper_price_points": 120,
+            "lower_price_points": 80,
+            "grid_count": 5,
+            "order_amount_points": 100,
+        },
+    )
+    bot_uuid = created["bot"]["bot_uuid"]
+    conn = trading.get_db()
+    try:
+        bot_row = conn.execute("SELECT id FROM trading_grid_bots WHERE bot_uuid=?", (bot_uuid,)).fetchone()
+        conn.execute("UPDATE trading_grid_bots SET enabled_at='2024-01-01T00:00:00' WHERE id=?", (int(bot_row["id"]),))
+        open_row = conn.execute(
+            "SELECT * FROM trading_grid_orders WHERE grid_bot_id=? AND status='open' ORDER BY id ASC LIMIT 1",
+            (int(bot_row["id"]),),
+        ).fetchone()
+        conn.execute("UPDATE trading_orders SET status='cancelled' WHERE order_uuid=?", (open_row["trading_order_uuid"],))
+        conn.commit()
+    finally:
+        conn.close()
+
+    trading.run_due_bot_audits(force=True)
+    dashboard = trading.get_bot_audit_dashboard(limit=20)
+    item = next(row for row in dashboard["items"] if row["bot_uuid"] == bot_uuid)
+
+    assert item["audit_status"] == "red"
+    assert item["blocker_count"] >= 1
+
+
 def test_dca_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
@@ -1816,6 +2015,81 @@ def test_price_fusion_orderbook_total_failure_enters_conservative_single_source_
     assert metadata["fallback_active"] is True
     assert metadata["conservative_mode"] is True
     assert metadata["resolved_source"] == "coingecko_simple_price"
+
+
+def test_cached_fallback_preserves_fractional_subunit_price(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "binance_public_api", "max_price_staleness_seconds": 900}, markets=[])
+
+    def boom(_symbol):
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading, "_fetch_live_price_points", boom)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market_payload(trading._market(conn, "BTC/POINTS"))
+        market["manual_price_points"] = "0.12345678"
+        market["price_source"] = "binance_public_api"
+        price, source = trading._current_market_price_points(conn, market)
+    finally:
+        conn.close()
+
+    assert price == pytest.approx(0.12345678)
+    assert source == "binance_public_api_cached"
+
+
+def test_cached_fallback_preserves_decimal_part_for_whole_point_price(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "binance_public_api", "max_price_staleness_seconds": 900}, markets=[])
+
+    def boom(_symbol):
+        raise OSError("provider unavailable")
+
+    monkeypatch.setattr(trading, "_fetch_live_price_points", boom)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market_payload(trading._market(conn, "BTC/POINTS"))
+        market["manual_price_points"] = "123.99"
+        market["price_source"] = "binance_public_api"
+        price, source = trading._current_market_price_points(conn, market)
+    finally:
+        conn.close()
+
+    assert price == pytest.approx(123.99)
+    assert price != 123
+    assert source == "binance_public_api_cached"
+
+
+def test_live_market_quote_with_fractional_cached_fallback_is_json_serializable(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+
+    monkeypatch.setattr(
+        trading,
+        "_current_market_price_points",
+        lambda conn, market, with_meta=False: (
+            (0.12345678, "binance_public_api_cached", {"price_health": "fallback", "fallback_reason": "provider unavailable", "excluded_sources": []})
+            if with_meta else
+            (0.12345678, "binance_public_api_cached")
+        ),
+    )
+
+    quote = trading.get_live_market_quote(market_symbol="BTC/POINTS")
+
+    assert quote["market"]["manual_price_points"] == pytest.approx(0.12345678)
+    assert quote["price_health"] == "fallback"
+    assert json.dumps(quote)
 
 
 def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_path):

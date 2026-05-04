@@ -1,9 +1,12 @@
 import json
+import os
+import time
 from urllib.parse import parse_qs, urlparse
 
 from flask import Flask, jsonify
 
 import routes.trading as trading_routes
+import services.btc_trade_bridge as btc_bridge
 from routes.trading import register_trading_routes
 from services.btc_trade_bridge import BtcTradeBridge
 
@@ -120,6 +123,32 @@ def _backtest_app(actor):
     return app
 
 
+def _order_error_app(actor, exc):
+    app = Flask(__name__)
+    app.testing = True
+
+    class FakeTradingService:
+        def place_order(self, **kwargs):
+            raise exc
+
+    def passthrough(fn):
+        return fn
+
+    def json_resp(payload, status=None):
+        response = jsonify(payload)
+        return (response, status) if status else response
+
+    register_trading_routes(app, {
+        "trading_service": FakeTradingService(),
+        "get_current_user_ctx": lambda: actor,
+        "json_resp": json_resp,
+        "require_csrf": passthrough,
+        "require_csrf_safe": passthrough,
+        "audit": lambda *args, **kwargs: None,
+    })
+    return app
+
+
 def _root_price_fusion_status_app(actor, captured):
     app = Flask(__name__)
     app.testing = True
@@ -142,6 +171,48 @@ def _root_price_fusion_status_app(actor, captured):
                 "conservative_mode": False,
                 "message": "",
                 "price_points": 100,
+            }
+
+    def passthrough(fn):
+        return fn
+
+    def json_resp(payload, status=None):
+        response = jsonify(payload)
+        return (response, status) if status else response
+
+    register_trading_routes(app, {
+        "trading_service": FakeTradingService(),
+        "get_current_user_ctx": lambda: actor,
+        "json_resp": json_resp,
+        "require_csrf": passthrough,
+        "require_csrf_safe": passthrough,
+        "check_user_rate_limit": lambda *args, **kwargs: (False, {}),
+        "audit": lambda *args, **kwargs: None,
+    })
+    return app
+
+
+def _live_price_app(actor, captured):
+    app = Flask(__name__)
+    app.testing = True
+
+    class FakeTradingService:
+        def get_live_market_quote(self, *, market_symbol=""):
+            captured["market_symbol"] = market_symbol
+            defaulted = not bool(market_symbol)
+            return {
+                "market": {
+                    "symbol": market_symbol or "BTC/POINTS",
+                    "manual_price_points": 81234,
+                    "price_source": "fused_weighted",
+                    "fee_rate_percent": 0.3,
+                },
+                "refresh_interval_ms": 1000,
+                "server_time": "2026-05-04T00:00:00",
+                "price_health": "fallback" if defaulted else "healthy",
+                "fallback_reason": "orderbook unavailable" if defaulted else "",
+                "excluded_sources": ["okx_public_api"] if defaulted else [],
+                "defaulted_market": defaulted,
             }
 
     def passthrough(fn):
@@ -216,6 +287,7 @@ def test_backtest_downloads_historical_candles_when_browser_did_not_send_any(mon
     response = client.post("/api/trading/bots/backtest", json={
         "market_symbol": "BTC/USDT",
         "strategy": "dca",
+        "auto_fetch_reference_candles": True,
         "timeframe": "15m",
         "candle_limit": 2,
         "start_time": "2024-05-01T00:00:00+00:00",
@@ -261,6 +333,7 @@ def test_backtest_download_supports_full_year_hourly_window(monkeypatch):
     response = client.post("/api/trading/bots/backtest", json={
         "market_symbol": "BTC/USDT",
         "strategy": "dca",
+        "auto_fetch_reference_candles": True,
         "timeframe": "1h",
         "candle_limit": 8784,
         "start_time": "2024-01-01T00:00:00+00:00",
@@ -301,6 +374,7 @@ def test_backtest_download_supports_ranges_above_single_execution_batch(monkeypa
     response = client.post("/api/trading/bots/backtest", json={
         "market_symbol": "BTC/USDT",
         "strategy": "dca",
+        "auto_fetch_reference_candles": True,
         "timeframe": "1h",
         "candle_limit": 12000,
         "start_time": "2024-01-01T00:00:00+00:00",
@@ -317,6 +391,47 @@ def test_backtest_download_supports_ranges_above_single_execution_batch(monkeypa
     assert requested_limits[:3] == [1000, 1000, 1000]
     assert requested_limits[-1] == 1000
     assert len(requested_limits) == 12
+
+
+def test_backtest_does_not_silently_replace_isolated_single_candle(monkeypatch):
+    trading_routes.REFERENCE_PRICE_CACHE.clear()
+
+    def should_not_fetch(request, timeout=0):
+        raise AssertionError("historical price provider should not be called for isolated single-candle payloads")
+
+    monkeypatch.setattr(trading_routes, "urlopen", should_not_fetch)
+    client = _backtest_app({"id": 1, "username": "alice", "role": "user"}).test_client()
+
+    response = client.post("/api/trading/bots/backtest", json={
+        "market_symbol": "BTC/USDT",
+        "strategy": "dca",
+        "auto_fetch_reference_candles": True,
+        "candles": [{"time_iso": "2024-05-01T00:00:00+00:00", "close_points": 60000}],
+    })
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert "candles" in payload["msg"].lower()
+
+
+def test_trading_order_invalid_decimal_is_sanitized_for_user():
+    client = _order_error_app(
+        {"id": 1, "username": "alice", "role": "user"},
+        ValueError("[<class 'decimal.InvalidOperation'>]"),
+    ).test_client()
+
+    response = client.post("/api/trading/orders", json={
+        "market_symbol": "BTC/POINTS",
+        "side": "buy",
+        "order_type": "market",
+        "quantity": "NaN",
+    })
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["msg"] == "交易數量格式錯誤，請輸入有效的數字"
 
 
 def test_btc_trade_signal_hidden_when_project_missing(tmp_path):
@@ -464,6 +579,93 @@ def test_root_btc_trade_setup_rejects_bad_repo_without_500(tmp_path):
     assert payload["ok"] is True
     assert payload["setup_ok"] is False
     assert "建置失敗" in payload["message"]
+
+
+def test_root_btc_trade_start_returns_background_job(monkeypatch, tmp_path):
+    def fake_start(project_dir, *, timeframe="4h", wait_seconds=0):
+        return {
+            "ok": True,
+            "started": True,
+            "job": {
+                "job_id": "job-123",
+                "project_dir": str(project_dir),
+                "timeframe": timeframe,
+                "status": "queued",
+                "message": "已建立背景工作",
+                "steps": [],
+                "result": None,
+            },
+        }
+
+    monkeypatch.setattr(trading_routes, "btc_trade_start_prediction_job", fake_start)
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.post("/api/root/trading/btc-trade/start", json={"project_dir": str(tmp_path / "BTC_trade"), "timeframe": "4h"})
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["start_ok"] is True
+    assert payload["started"] is True
+    assert payload["job"]["job_id"] == "job-123"
+
+
+def test_root_btc_trade_start_status_returns_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(trading_routes, "btc_trade_start_prediction_job_status", lambda job_id: {
+        "job_id": job_id,
+        "project_dir": str(tmp_path / "BTC_trade"),
+        "timeframe": "4h",
+        "status": "running",
+        "message": "重訓中",
+        "steps": [{"label": "重訓 BTC_trade 模型", "ok": True, "message": "正在執行"}],
+        "result": None,
+    })
+    client = _btc_signal_app({"id": 1, "username": "root", "role": "super_admin"}, tmp_path / "BTC_trade").test_client()
+
+    response = client.get("/api/root/trading/btc-trade/start-status?job_id=job-456")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["job"]["status"] == "running"
+    assert payload["job"]["job_id"] == "job-456"
+
+
+def test_btc_trade_status_reports_artifact_freshness(tmp_path):
+    project = tmp_path / "BTC_trade"
+    data_dir = project / "data"
+    runtime = project / "runtime"
+    models = project / "models"
+    data_dir.mkdir(parents=True)
+    runtime.mkdir(parents=True)
+    models.mkdir(parents=True)
+    now = time.time()
+    data_ts = int(now - 2 * 60 * 60)
+    model_ts = data_ts + 60
+    report_ts = model_ts + 60
+    data_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(data_ts))
+    report_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(report_ts))
+    for name in ("hourly_check.py", "update_data.py", "retrain_models.py", "backtest_report.py"):
+        (project / name).write_text("# test\n", encoding="utf-8")
+    (data_dir / "btc_4h.csv").write_text(f"timestamp,close\n{data_iso},96000\n", encoding="utf-8")
+    (models / "btc_model.pkl").write_text("model", encoding="utf-8")
+    (runtime / "report_log_4h.jsonl").write_text(json.dumps({
+        "generated_at": report_iso,
+        "bar_ts": data_iso,
+        "signal_ok": True,
+        "current_price": 96000,
+        "timeframe": "4h",
+    }), encoding="utf-8")
+    os.utime(data_dir / "btc_4h.csv", (data_ts, data_ts))
+    os.utime(models / "btc_model.pkl", (model_ts, model_ts))
+    os.utime(runtime / "report_log_4h.jsonl", (report_ts, report_ts))
+
+    status = btc_bridge.btc_trade_status(project)
+
+    assert status["available"] is True
+    assert status["artifacts"]["data"]["needs_update"] is False
+    assert status["artifacts"]["models"]["needs_retrain"] is False
+    assert status["artifacts"]["prediction"]["needs_refresh"] is False
 
 
 def test_btc_trade_bridge_script_lives_in_hackme_project():
@@ -850,3 +1052,40 @@ def test_root_price_fusion_status_route_passes_selected_market_symbol():
     assert payload["ok"] is True
     assert payload["status"]["market_symbol"] == "ETH/POINTS"
     assert captured["market_symbol"] == "ETH/POINTS"
+
+
+def test_trading_live_price_route_returns_selected_market_quote():
+    captured = {}
+    client = _live_price_app({"id": 1, "username": "alice", "role": "user"}, captured).test_client()
+
+    response = client.get("/api/trading/live-price?market=BTC/POINTS")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["market"]["symbol"] == "BTC/POINTS"
+    assert payload["market"]["manual_price_points"] == 81234
+    assert payload["market"]["price_source"] == "fused_weighted"
+    assert payload["price_health"] == "healthy"
+    assert payload["fallback_reason"] == ""
+    assert payload["excluded_sources"] == []
+    assert payload["defaulted_market"] is False
+    assert payload["refresh_interval_ms"] == 1000
+    assert captured["market_symbol"] == "BTC/POINTS"
+
+
+def test_trading_live_price_route_marks_defaulted_market_when_missing():
+    captured = {}
+    client = _live_price_app({"id": 1, "username": "alice", "role": "user"}, captured).test_client()
+
+    response = client.get("/api/trading/live-price")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["market"]["symbol"] == "BTC/POINTS"
+    assert payload["price_health"] == "fallback"
+    assert payload["fallback_reason"] == "orderbook unavailable"
+    assert payload["excluded_sources"] == ["okx_public_api"]
+    assert payload["defaulted_market"] is True
+    assert captured["market_symbol"] == ""
