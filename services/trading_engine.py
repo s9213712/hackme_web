@@ -1,6 +1,7 @@
 import hashlib
 import json
 import math
+import time
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
@@ -90,15 +91,23 @@ PRICE_PROVIDER_LABELS = {
     "coingecko_simple_price": "CoinGecko",
 }
 DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS = {
-    "binance_public_api": 1.0,
-    "okx_public_api": 1.0,
-    "coinbase_exchange": 1.0,
-    "kraken_public_api": 1.0,
-    "gemini_public_api": 1.0,
-    "bitstamp_public_api": 1.0,
+    "binance_public_api": 40.0,
+    "okx_public_api": 25.0,
+    "coinbase_exchange": 15.0,
+    "kraken_public_api": 10.0,
+    "bitstamp_public_api": 8.0,
+    "gemini_public_api": 2.0,
 }
 DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT = 1.0
-DEFAULT_PRICE_FUSION_DEPTH_LEVELS = 10
+DEFAULT_PRICE_FUSION_DEPTH_LEVELS = 100
+MAX_PRICE_FUSION_DEPTH_LEVELS = 1000
+DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT = 0.5
+DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT = 40.0
+DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS = 15
+DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS = 2500
+DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT = 0.50
+DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO = 0.10
+DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 3
 DEFAULT_SPOT_FEE_RATE_PERCENT = 0.10
 DEFAULT_GRID_FEE_DISCOUNT_PERCENT = 25.0
 GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT = Decimal("0.10")
@@ -208,6 +217,16 @@ def _normalize_price_fusion_manual_weights(raw):
             number = DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS.get(provider, 1.0)
         out[provider] = max(0.0, min(number, 1000.0))
     return out
+
+
+def _median_float(values):
+    numbers = sorted(float(value) for value in (values or []))
+    if not numbers:
+        return 0.0
+    middle = len(numbers) // 2
+    if len(numbers) % 2:
+        return numbers[middle]
+    return (numbers[middle - 1] + numbers[middle]) / 2.0
 
 
 def _bot_max_runs_from_storage(value):
@@ -862,6 +881,11 @@ def ensure_trading_schema(conn):
         ("trading.price_source", FUSED_PRICE_SOURCE),
         ("trading.price_fusion_mode", "auto_depth"),
         ("trading.price_fusion_manual_weights_json", _json_dumps(DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS)),
+        ("trading.price_fusion_depth_band_percent", str(DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT)),
+        ("trading.price_fusion_depth_levels", str(DEFAULT_PRICE_FUSION_DEPTH_LEVELS)),
+        ("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)),
+        ("trading.price_fusion_max_single_provider_weight_percent", str(DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)),
+        ("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)),
         ("trading.btc_trade_enabled", "false"),
         ("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
         ("trading.btc_trade_branch", "strategy/v15b-plus"),
@@ -1298,8 +1322,15 @@ class TradingEngineService:
             "price_fusion_provider_labels": dict(PRICE_PROVIDER_LABELS),
             "price_fusion_providers": list(WEIGHTED_PRICE_PROVIDERS),
             "price_fusion_live_markets": list_live_price_markets(),
-            "price_fusion_depth_band_percent": DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT,
-            "price_fusion_depth_levels": DEFAULT_PRICE_FUSION_DEPTH_LEVELS,
+            "price_fusion_depth_band_percent": _to_float(raw.get("trading.price_fusion_depth_band_percent", str(DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT)), name="price_fusion_depth_band_percent", minimum=0.1, maximum=10),
+            "price_fusion_depth_levels": _to_int(raw.get("trading.price_fusion_depth_levels", str(DEFAULT_PRICE_FUSION_DEPTH_LEVELS)), name="price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS),
+            "price_fusion_min_orderbook_coverage_percent": _to_float(raw.get("trading.price_fusion_min_orderbook_coverage_percent", str(DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)), name="price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10),
+            "price_fusion_max_single_provider_weight_percent": _to_float(raw.get("trading.price_fusion_max_single_provider_weight_percent", str(DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)), name="price_fusion_max_single_provider_weight_percent", minimum=0, maximum=100),
+            "price_fusion_max_provider_age_seconds": DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS,
+            "price_fusion_max_provider_latency_ms": DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS,
+            "price_fusion_max_midpoint_deviation_percent": DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT,
+            "price_fusion_min_side_balance_ratio_percent": round(DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0, 2),
+            "price_fusion_min_provider_count": _to_int(raw.get("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)), name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)),
             "btc_trade_enabled": str(raw.get("trading.btc_trade_enabled", "false")).lower() in {"true", "1", "yes"},
             "btc_trade_project_dir": raw.get("trading.btc_trade_project_dir", ""),
             "btc_trade_repo_url": raw.get("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
@@ -1497,6 +1528,41 @@ class TradingEngineService:
                     ("trading.price_fusion_manual_weights_json", _json_dumps(value), now, self._actor_id(actor)),
                 )
                 setting_changes["trading.price_fusion_manual_weights_json"] = value
+            if "price_fusion_depth_levels" in settings:
+                value = str(_to_int(settings.get("price_fusion_depth_levels"), name="price_fusion_depth_levels", minimum=10, maximum=MAX_PRICE_FUSION_DEPTH_LEVELS))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_depth_levels", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_depth_levels"] = value
+            if "price_fusion_depth_band_percent" in settings:
+                value = str(_to_float(settings.get("price_fusion_depth_band_percent"), name="price_fusion_depth_band_percent", minimum=0.1, maximum=10))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_depth_band_percent", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_depth_band_percent"] = value
+            if "price_fusion_min_orderbook_coverage_percent" in settings:
+                value = str(_to_float(settings.get("price_fusion_min_orderbook_coverage_percent"), name="price_fusion_min_orderbook_coverage_percent", minimum=0.1, maximum=10))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_min_orderbook_coverage_percent", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_min_orderbook_coverage_percent"] = value
+            if "price_fusion_max_single_provider_weight_percent" in settings:
+                value = str(_to_float(settings.get("price_fusion_max_single_provider_weight_percent"), name="price_fusion_max_single_provider_weight_percent", minimum=0, maximum=100))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_max_single_provider_weight_percent", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_max_single_provider_weight_percent"] = value
+            if "price_fusion_min_provider_count" in settings:
+                value = str(_to_int(settings.get("price_fusion_min_provider_count"), name="price_fusion_min_provider_count", minimum=1, maximum=len(WEIGHTED_PRICE_PROVIDERS)))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.price_fusion_min_provider_count", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.price_fusion_min_provider_count"] = value
             if "btc_trade_project_dir" in settings:
                 value = str(settings.get("btc_trade_project_dir") or "").strip()
                 if len(value) > 500:
@@ -1577,10 +1643,20 @@ class TradingEngineService:
     def _live_price_symbol(self, market_symbol):
         return market_provider_id(market_symbol, "binance_public_api")
 
-    def _fetch_json_url(self, url, *, timeout=5, user_agent="hackme_web/1.0 trading-price"):
+    def _fetch_json_url(self, url, *, timeout=5, user_agent="hackme_web/1.0 trading-price", with_meta=False):
         req = Request(url, headers={"User-Agent": user_agent})
+        started = time.perf_counter()
         with urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
+        fetched_at = _now()
+        payload = json.loads(raw)
+        if not with_meta:
+            return payload
+        latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        return payload, {
+            "fetched_at": fetched_at,
+            "latency_ms": latency_ms,
+        }
 
     def _price_points_from_float(self, price, *, source):
         try:
@@ -1684,19 +1760,151 @@ class TradingEngineService:
         price = coin.get("usd") if isinstance(coin, dict) else None
         return self._price_points_from_float(price, source="coingecko_simple_price")
 
-    def _depth_notional_score(self, bids, asks, *, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        bid_levels = []
-        ask_levels = []
-        for price, quantity in bids[:max_levels]:
+    def _price_fusion_depth_levels(self, settings):
+        try:
+            return int((settings or {}).get("price_fusion_depth_levels") or DEFAULT_PRICE_FUSION_DEPTH_LEVELS)
+        except Exception:
+            return DEFAULT_PRICE_FUSION_DEPTH_LEVELS
+
+    def _price_fusion_depth_band_percent(self, settings):
+        try:
+            return float((settings or {}).get("price_fusion_depth_band_percent") or DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT)
+        except Exception:
+            return DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT
+
+    def _price_fusion_min_orderbook_coverage_percent(self, settings):
+        try:
+            return float((settings or {}).get("price_fusion_min_orderbook_coverage_percent") or DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT)
+        except Exception:
+            return DEFAULT_PRICE_FUSION_MIN_ORDERBOOK_COVERAGE_PERCENT
+
+    def _price_fusion_provider_weight_cap_percent(self, settings):
+        try:
+            return float((settings or {}).get("price_fusion_max_single_provider_weight_percent") or DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT)
+        except Exception:
+            return DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT
+
+    def _price_fusion_min_provider_count(self, settings):
+        try:
+            return int((settings or {}).get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)
+        except Exception:
+            return DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT
+
+    def _provider_quantity_unit_info(self, source):
+        return {
+            "quantity_unit": "base_asset",
+            "quantity_unit_label": "base asset",
+            "quantity_unit_confirmed": True,
+            "quantity_unit_note": f"{PRICE_PROVIDER_LABELS.get(source, source)} spot order book quantity is parsed as base asset size.",
+            "contract_size_adjusted": False,
+        }
+
+    def _price_fusion_warning(self, code, message, *, severity="warning"):
+        return {
+            "code": str(code or "").strip(),
+            "message": str(message or "").strip(),
+            "severity": str(severity or "warning").strip() or "warning",
+        }
+
+    def _append_price_fusion_warning(self, warnings, code, message, *, severity="warning"):
+        warning = self._price_fusion_warning(code, message, severity=severity)
+        if not warning["code"]:
+            return warnings
+        existing = list(warnings or [])
+        if not any(str(item.get("code") or "") == warning["code"] for item in existing if isinstance(item, dict)):
+            existing.append(warning)
+        return existing
+
+    def _primary_price_fusion_warning(self, warnings):
+        for warning in warnings or []:
+            if isinstance(warning, dict) and str(warning.get("code") or "").strip():
+                return warning
+        return {}
+
+    def _price_fusion_effective_score(self, snapshot):
+        try:
+            return max(float(snapshot.get("effective_depth_score")), 0.0)
+        except Exception:
             try:
-                bid_levels.append((float(price), float(quantity)))
+                return max(float(snapshot.get("depth_score") or 0.0), 0.0)
+            except Exception:
+                return 0.0
+
+    def _price_fusion_reference_score(self, snapshot):
+        try:
+            density_score = max(float(snapshot.get("depth_density_score") or 0.0), 0.0)
+            if density_score > 0:
+                return density_score
+        except Exception:
+            pass
+        try:
+            return max(float(snapshot.get("depth_score") or 0.0), 0.0)
+        except Exception:
+            return 0.0
+
+    def _assert_price_meta_allows_high_risk_use(self, conn, *, actor=None, market_symbol="", usage="", price_meta=None):
+        meta = price_meta or {}
+        if not bool(meta.get("high_risk_blocked")):
+            return
+        reason = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "price source is in conservative mode").strip()
+        self._audit_event(
+            conn,
+            "TRADING_PRICE_HEALTH_BLOCKED",
+            "high-risk trading path blocked by degraded fused price health",
+            actor=actor,
+            market_symbol=market_symbol,
+            severity="critical",
+            metadata={
+                "usage": usage,
+                "reason": reason,
+                "price_health": meta.get("price_health"),
+                "warnings": meta.get("warnings") or [],
+                "excluded_sources": meta.get("excluded_sources") or [],
+            },
+        )
+        raise ValueError(f"{usage or 'high-risk trading action'} is blocked while fused price is in conservative mode: {reason}")
+
+    def _provider_depth_request_limit(self, source, depth_levels):
+        requested = max(1, int(depth_levels or DEFAULT_PRICE_FUSION_DEPTH_LEVELS))
+        if source == "binance_public_api":
+            for value in (5, 10, 20, 50, 100, 500, 1000, 5000):
+                if requested <= value:
+                    return value
+            return 5000
+        if source == "okx_public_api":
+            return max(1, min(requested, 400))
+        if source == "kraken_public_api":
+            return max(1, min(requested, 500))
+        if source == "gemini_public_api":
+            return max(1, min(requested, 500))
+        return requested
+
+    def _parse_orderbook_side(self, rows, *, max_levels):
+        raw_rows = list(rows or [])
+        parsed = []
+        for row in raw_rows[:max_levels]:
+            if isinstance(row, dict):
+                price = row.get("price")
+                quantity = row.get("amount", row.get("quantity", row.get("size")))
+            elif isinstance(row, (list, tuple)) and len(row) >= 2:
+                price, quantity = row[0], row[1]
+            else:
+                continue
+            try:
+                parsed.append((float(price), float(quantity)))
             except Exception:
                 continue
-        for price, quantity in asks[:max_levels]:
-            try:
-                ask_levels.append((float(price), float(quantity)))
-            except Exception:
-                continue
+        return {
+            "raw_count": len(raw_rows),
+            "used_count": len(parsed),
+            "levels": parsed,
+        }
+
+    def _depth_notional_snapshot(self, bids, asks, *, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
+        bid_info = self._parse_orderbook_side(bids, max_levels=max_levels)
+        ask_info = self._parse_orderbook_side(asks, max_levels=max_levels)
+        bid_levels = bid_info["levels"]
+        ask_levels = ask_info["levels"]
         if not bid_levels or not ask_levels:
             raise ValueError("order book is empty")
         best_bid = bid_levels[0][0]
@@ -1706,6 +1914,19 @@ class TradingEngineService:
         midpoint = (best_bid + best_ask) / 2.0
         lower_bound = midpoint * (1.0 - band_percent / 100.0)
         upper_bound = midpoint * (1.0 + band_percent / 100.0)
+        min_bid = min(price for price, _quantity in bid_levels)
+        max_ask = max(price for price, _quantity in ask_levels)
+        bid_coverage_percent = min(
+            max(((midpoint - min_bid) / midpoint) * 100.0, 0.0) if midpoint > 0 else 0.0,
+            float(band_percent),
+        )
+        ask_coverage_percent = min(
+            max(((max_ask - midpoint) / midpoint) * 100.0, 0.0) if midpoint > 0 else 0.0,
+            float(band_percent),
+        )
+        bid_reached_lower_bound = min_bid <= lower_bound + 1e-12
+        ask_reached_upper_bound = max_ask >= upper_bound - 1e-12
+        orderbook_truncated = not (bid_reached_lower_bound and ask_reached_upper_bound)
         bid_notional = sum(price * quantity for price, quantity in bid_levels if price >= lower_bound)
         ask_notional = sum(price * quantity for price, quantity in ask_levels if price <= upper_bound)
         score = min(bid_notional, ask_notional)
@@ -1713,95 +1934,326 @@ class TradingEngineService:
             score = (bid_notional + ask_notional) / 2.0
         if score <= 0:
             raise ValueError("order book depth score is invalid")
-        return midpoint, score
+        coverage_ratio = 1.0
+        if float(band_percent) > 0:
+            coverage_ratio = max(0.0, min(min(bid_coverage_percent, ask_coverage_percent) / float(band_percent), 1.0))
+        effective_depth_score = score * coverage_ratio
+        min_coverage_percent = min(float(bid_coverage_percent or 0.0), float(ask_coverage_percent or 0.0))
+        depth_density_score = (score / min_coverage_percent) if min_coverage_percent > 0 else 0.0
+        spread_points = best_ask - best_bid
+        spread_percent = (spread_points / midpoint * 100.0) if midpoint > 0 else 0.0
+        stronger_side = max(bid_notional, ask_notional)
+        side_balance_ratio = (score / stronger_side) if stronger_side > 0 else 0.0
+        return {
+            "midpoint": midpoint,
+            "depth_score": score,
+            "effective_depth_score": effective_depth_score,
+            "depth_density_score": depth_density_score,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread_points": spread_points,
+            "spread_percent": spread_percent,
+            "bid_notional": bid_notional,
+            "ask_notional": ask_notional,
+            "side_balance_ratio": side_balance_ratio,
+            "bid_coverage_percent": bid_coverage_percent,
+            "ask_coverage_percent": ask_coverage_percent,
+            "bid_reached_lower_bound": bid_reached_lower_bound,
+            "ask_reached_upper_bound": ask_reached_upper_bound,
+            "orderbook_truncated": orderbook_truncated,
+            "coverage_ratio_percent": coverage_ratio * 100.0,
+            "raw_bid_levels_count": bid_info["raw_count"],
+            "raw_ask_levels_count": ask_info["raw_count"],
+            "used_bid_levels_count": bid_info["used_count"],
+            "used_ask_levels_count": ask_info["used_count"],
+            "band_percent": float(band_percent),
+            "depth_levels_requested": int(max_levels),
+        }
 
-    def _fetch_binance_orderbook_snapshot(self, market_symbol):
+    def _depth_notional_score(self, bids, asks, *, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
+        snapshot = self._depth_notional_snapshot(bids, asks, max_levels=max_levels, band_percent=band_percent)
+        return snapshot["midpoint"], snapshot["depth_score"]
+
+    def _build_orderbook_snapshot(self, *, source, bids, asks, fetch_meta=None, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, request_limit=None):
+        stats = self._depth_notional_snapshot(bids, asks, max_levels=max_levels, band_percent=band_percent)
+        fetched_at = str((fetch_meta or {}).get("fetched_at") or _now())
+        latency_ms = round(float((fetch_meta or {}).get("latency_ms") or 0.0), 2)
+        try:
+            age_seconds = max(0.0, round((datetime.now() - datetime.fromisoformat(fetched_at)).total_seconds(), 3))
+        except Exception:
+            age_seconds = 0.0
+        snapshot = {
+            "source": source,
+            "price_points": self._price_points_from_float(stats["midpoint"], source=source),
+            "midpoint_points": round(float(stats["midpoint"]), 8),
+            "depth_score": round(float(stats["depth_score"]), 8),
+            "effective_depth_score": round(float(stats["effective_depth_score"]), 8),
+            "depth_density_score": round(float(stats["depth_density_score"]), 8),
+            "best_bid_points": round(float(stats["best_bid"]), 8),
+            "best_ask_points": round(float(stats["best_ask"]), 8),
+            "spread_points": round(float(stats["spread_points"]), 8),
+            "spread_percent": round(float(stats["spread_percent"]), 8),
+            "bid_notional_points": round(float(stats["bid_notional"]), 8),
+            "ask_notional_points": round(float(stats["ask_notional"]), 8),
+            "side_balance_ratio_percent": round(float(stats["side_balance_ratio"]) * 100.0, 4),
+            "bid_coverage_percent": round(float(stats["bid_coverage_percent"]), 6),
+            "ask_coverage_percent": round(float(stats["ask_coverage_percent"]), 6),
+            "bid_reached_lower_bound": bool(stats["bid_reached_lower_bound"]),
+            "ask_reached_upper_bound": bool(stats["ask_reached_upper_bound"]),
+            "orderbook_truncated": bool(stats["orderbook_truncated"]),
+            "coverage_ratio_percent": round(float(stats["coverage_ratio_percent"]), 4),
+            "raw_bid_levels_count": int(stats["raw_bid_levels_count"]),
+            "raw_ask_levels_count": int(stats["raw_ask_levels_count"]),
+            "used_bid_levels_count": int(stats["used_bid_levels_count"]),
+            "used_ask_levels_count": int(stats["used_ask_levels_count"]),
+            "depth_levels_requested": int(stats["depth_levels_requested"]),
+            "provider_depth_request_limit": int(request_limit or max_levels or DEFAULT_PRICE_FUSION_DEPTH_LEVELS),
+            "provider_depth_limit_reached": bool(request_limit and (
+                int(stats["raw_bid_levels_count"]) >= int(request_limit)
+                or int(stats["raw_ask_levels_count"]) >= int(request_limit)
+            )),
+            "depth_band_percent": round(float(stats["band_percent"]), 4),
+            "fetched_at": fetched_at,
+            "age_seconds": age_seconds,
+            "latency_ms": latency_ms,
+        }
+        snapshot.update(self._provider_quantity_unit_info(source))
+        return snapshot
+
+    def _normalize_orderbook_fetch_result(self, fetch_result):
+        if isinstance(fetch_result, tuple) and len(fetch_result) == 2:
+            payload, fetch_meta = fetch_result
+            return payload, fetch_meta if isinstance(fetch_meta, dict) else {}
+        return fetch_result, {}
+
+    def _fetch_binance_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
         symbol = market_provider_id(market_symbol, "binance_public_api")
         if not symbol:
             raise ValueError("binance order book is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{BINANCE_DEPTH_URL}?{urlencode({'symbol': symbol, 'limit': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+        request_limit = self._provider_depth_request_limit("binance_public_api", depth_levels)
+        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
+            f"{BINANCE_DEPTH_URL}?{urlencode({'symbol': symbol, 'limit': request_limit})}",
             timeout=5,
+            with_meta=True,
+        ))
+        return self._build_orderbook_snapshot(
+            source="binance_public_api",
+            bids=payload.get("bids") or [],
+            asks=payload.get("asks") or [],
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
         )
-        midpoint, depth_score = self._depth_notional_score(payload.get("bids") or [], payload.get("asks") or [])
-        return {"source": "binance_public_api", "price_points": self._price_points_from_float(midpoint, source="binance_public_api"), "depth_score": depth_score}
 
-    def _fetch_okx_orderbook_snapshot(self, market_symbol):
+    def _fetch_okx_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
         instrument = market_provider_id(market_symbol, "okx_public_api")
         if not instrument:
             raise ValueError("okx order book is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{OKX_BOOKS_URL}?{urlencode({'instId': instrument, 'sz': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+        request_limit = self._provider_depth_request_limit("okx_public_api", depth_levels)
+        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
+            f"{OKX_BOOKS_URL}?{urlencode({'instId': instrument, 'sz': request_limit})}",
             timeout=5,
             user_agent="hackme_web/1.0 trading-depth okx",
-        )
+            with_meta=True,
+        ))
         data = payload.get("data") if isinstance(payload, dict) else None
         book = data[0] if isinstance(data, list) and data else None
-        midpoint, depth_score = self._depth_notional_score(book.get("bids") or [], book.get("asks") or [])
-        return {"source": "okx_public_api", "price_points": self._price_points_from_float(midpoint, source="okx_public_api"), "depth_score": depth_score}
+        if not isinstance(book, dict):
+            raise ValueError("okx order book payload is invalid")
+        return self._build_orderbook_snapshot(
+            source="okx_public_api",
+            bids=book.get("bids") or [],
+            asks=book.get("asks") or [],
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
+        )
 
-    def _fetch_coinbase_orderbook_snapshot(self, market_symbol):
+    def _fetch_coinbase_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
         product_id = market_provider_id(market_symbol, "coinbase_exchange")
         if not product_id:
             raise ValueError("coinbase order book is not supported for this market")
-        payload = self._fetch_json_url(
+        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
             f"{COINBASE_BOOK_URL_TEMPLATE.format(product_id=product_id)}?{urlencode({'level': 2})}",
             timeout=5,
             user_agent="hackme_web/1.0 trading-depth coinbase",
+            with_meta=True,
+        ))
+        return self._build_orderbook_snapshot(
+            source="coinbase_exchange",
+            bids=payload.get("bids") or [],
+            asks=payload.get("asks") or [],
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=2,
         )
-        midpoint, depth_score = self._depth_notional_score(payload.get("bids") or [], payload.get("asks") or [])
-        return {"source": "coinbase_exchange", "price_points": self._price_points_from_float(midpoint, source="coinbase_exchange"), "depth_score": depth_score}
 
-    def _fetch_kraken_orderbook_snapshot(self, market_symbol):
+    def _fetch_kraken_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
         pair = market_provider_id(market_symbol, "kraken_public_api")
         if not pair:
             raise ValueError("kraken order book is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{KRAKEN_DEPTH_URL}?{urlencode({'pair': pair, 'count': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+        request_limit = self._provider_depth_request_limit("kraken_public_api", depth_levels)
+        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
+            f"{KRAKEN_DEPTH_URL}?{urlencode({'pair': pair, 'count': request_limit})}",
             timeout=5,
             user_agent="hackme_web/1.0 trading-depth kraken",
-        )
+            with_meta=True,
+        ))
         if not isinstance(payload, dict) or payload.get("error"):
             raise ValueError(f"kraken depth error: {payload.get('error') if isinstance(payload, dict) else 'invalid payload'}")
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
         book = next(iter(result.values()), None)
-        midpoint, depth_score = self._depth_notional_score(book.get("bids") or [], book.get("asks") or [])
-        return {"source": "kraken_public_api", "price_points": self._price_points_from_float(midpoint, source="kraken_public_api"), "depth_score": depth_score}
+        if not isinstance(book, dict):
+            raise ValueError("kraken order book payload is invalid")
+        return self._build_orderbook_snapshot(
+            source="kraken_public_api",
+            bids=book.get("bids") or [],
+            asks=book.get("asks") or [],
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
+        )
 
-    def _fetch_gemini_orderbook_snapshot(self, market_symbol):
+    def _fetch_gemini_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
         symbol = market_provider_id(market_symbol, "gemini_public_api")
         if not symbol:
             raise ValueError("gemini order book is not supported for this market")
-        payload = self._fetch_json_url(
-            f"{GEMINI_BOOK_URL_TEMPLATE.format(symbol=symbol)}?{urlencode({'limit_bids': DEFAULT_PRICE_FUSION_DEPTH_LEVELS, 'limit_asks': DEFAULT_PRICE_FUSION_DEPTH_LEVELS})}",
+        request_limit = self._provider_depth_request_limit("gemini_public_api", depth_levels)
+        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
+            f"{GEMINI_BOOK_URL_TEMPLATE.format(symbol=symbol)}?{urlencode({'limit_bids': request_limit, 'limit_asks': request_limit})}",
             timeout=5,
             user_agent="hackme_web/1.0 trading-depth gemini",
-        )
+            with_meta=True,
+        ))
         bids = [[row.get("price"), row.get("amount")] for row in (payload.get("bids") or []) if isinstance(row, dict)]
         asks = [[row.get("price"), row.get("amount")] for row in (payload.get("asks") or []) if isinstance(row, dict)]
-        midpoint, depth_score = self._depth_notional_score(bids, asks)
-        return {"source": "gemini_public_api", "price_points": self._price_points_from_float(midpoint, source="gemini_public_api"), "depth_score": depth_score}
+        return self._build_orderbook_snapshot(
+            source="gemini_public_api",
+            bids=bids,
+            asks=asks,
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=request_limit,
+        )
 
-    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol):
+    def _fetch_bitstamp_orderbook_snapshot(self, market_symbol, *, depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
         pair = market_provider_id(market_symbol, "bitstamp_public_api")
         if not pair:
             raise ValueError("bitstamp order book is not supported for this market")
-        payload = self._fetch_json_url(
+        payload, fetch_meta = self._normalize_orderbook_fetch_result(self._fetch_json_url(
             BITSTAMP_ORDER_BOOK_URL_TEMPLATE.format(pair=pair),
             timeout=5,
             user_agent="hackme_web/1.0 trading-depth bitstamp",
+            with_meta=True,
+        ))
+        return self._build_orderbook_snapshot(
+            source="bitstamp_public_api",
+            bids=payload.get("bids") or [],
+            asks=payload.get("asks") or [],
+            fetch_meta=fetch_meta,
+            max_levels=depth_levels,
+            band_percent=band_percent,
+            request_limit=depth_levels,
         )
-        midpoint, depth_score = self._depth_notional_score(payload.get("bids") or [], payload.get("asks") or [])
-        return {"source": "bitstamp_public_api", "price_points": self._price_points_from_float(midpoint, source="bitstamp_public_api"), "depth_score": depth_score}
 
     def _price_fusion_manual_weights(self, settings):
         return _normalize_price_fusion_manual_weights((settings or {}).get("price_fusion_manual_weights"))
+
+    def _apply_price_fusion_weight_cap(self, weighted_rows, *, max_single_provider_weight_percent):
+        total_raw = sum(max(float(weight), 0.0) for _snap, weight in weighted_rows)
+        if total_raw <= 0:
+            raise ValueError("weighted fused price has no positive provider weight")
+        normalized = {
+            snap["source"]: max(float(weight), 0.0) / total_raw
+            for snap, weight in weighted_rows
+        }
+        cap_fraction = max(0.0, min(float(max_single_provider_weight_percent or 0.0), 100.0)) / 100.0
+        if cap_fraction <= 0 or cap_fraction >= 1.0:
+            return normalized, False, False
+        if len(weighted_rows) * cap_fraction < 1.0 - 1e-9:
+            return normalized, False, True
+        remaining = {snap["source"]: max(float(weight), 0.0) for snap, weight in weighted_rows}
+        capped = {}
+        remaining_fraction = 1.0
+        while remaining:
+            raw_sum = sum(remaining.values())
+            if raw_sum <= 0 or remaining_fraction <= 1e-9:
+                break
+            over = [
+                source
+                for source, value in remaining.items()
+                if (value / raw_sum) * remaining_fraction > cap_fraction + 1e-12
+            ]
+            if not over:
+                for source, value in remaining.items():
+                    capped[source] = (value / raw_sum) * remaining_fraction
+                remaining = {}
+                break
+            for source in over:
+                capped[source] = cap_fraction
+                del remaining[source]
+                remaining_fraction -= cap_fraction
+                if remaining_fraction <= 1e-9:
+                    remaining_fraction = 0.0
+                    break
+        if remaining:
+            raw_sum = sum(remaining.values())
+            if raw_sum > 0 and remaining_fraction > 0:
+                for source, value in remaining.items():
+                    capped[source] = (value / raw_sum) * remaining_fraction
+        cap_applied = any(abs(capped.get(source, 0.0) - normalized.get(source, 0.0)) > 1e-12 for source in normalized)
+        return capped or normalized, cap_applied, False
+
+    def _build_price_fusion_weight_model(self, snapshots, *, mode, weight_map, max_single_provider_weight_percent, score_getter):
+        rows = []
+        resolved_mode = mode
+        if mode == "manual_weights":
+            manual_positive_total = 0.0
+            for snap in snapshots:
+                weight = float(weight_map.get(snap["source"], 0.0))
+                if weight > 0:
+                    rows.append((snap, weight))
+                    manual_positive_total += weight
+            if manual_positive_total <= 0:
+                resolved_mode = "auto_depth_fallback"
+                rows = []
+        if not rows:
+            rows = [(snap, float(score_getter(snap))) for snap in snapshots]
+        total_raw_weight = sum(max(float(weight), 0.0) for _snap, weight in rows)
+        if total_raw_weight <= 0:
+            equal_weight = 1.0 / len(snapshots)
+            resolved_mode = "equal_weight_fallback"
+            rows = [(snap, equal_weight) for snap in snapshots]
+            total_raw_weight = sum(weight for _snap, weight in rows)
+        normalized_weights, cap_applied, cap_unenforceable = self._apply_price_fusion_weight_cap(
+            rows,
+            max_single_provider_weight_percent=max_single_provider_weight_percent,
+        )
+        return {
+            "rows": rows,
+            "resolved_mode": resolved_mode,
+            "total_raw_weight": total_raw_weight,
+            "normalized_weights": normalized_weights,
+            "cap_applied": cap_applied,
+            "cap_unenforceable": cap_unenforceable,
+        }
 
     def _fetch_weighted_fused_price_points(self, market_symbol, *, settings):
         market_symbol = str(market_symbol or "").strip().upper()
         snapshots = []
         errors = []
         provider_failures = {}
+        warnings = []
+        depth_levels = self._price_fusion_depth_levels(settings)
+        depth_band_percent = self._price_fusion_depth_band_percent(settings)
+        min_orderbook_coverage_percent = self._price_fusion_min_orderbook_coverage_percent(settings)
+        max_single_provider_weight_percent = self._price_fusion_provider_weight_cap_percent(settings)
+        min_provider_count = self._price_fusion_min_provider_count(settings)
         fetchers = (
             ("binance_public_api", self._fetch_binance_orderbook_snapshot),
             ("okx_public_api", self._fetch_okx_orderbook_snapshot),
@@ -1812,7 +2264,13 @@ class TradingEngineService:
         )
         for source, fetcher in fetchers:
             try:
-                snapshots.append(fetcher(market_symbol))
+                try:
+                    snapshots.append(fetcher(market_symbol, depth_levels=depth_levels, band_percent=depth_band_percent))
+                except TypeError:
+                    try:
+                        snapshots.append(fetcher(market_symbol, depth_levels=depth_levels))
+                    except TypeError:
+                        snapshots.append(fetcher(market_symbol))
             except Exception as exc:
                 short_error = str(exc)[:120]
                 errors.append(f"{source}: {short_error}")
@@ -1820,6 +2278,19 @@ class TradingEngineService:
         if not snapshots:
             try:
                 fallback_price, fallback_source = self._fetch_live_price_points(market_symbol)
+                warnings = self._append_price_fusion_warning(
+                    warnings,
+                    "orderbook_unavailable",
+                    f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                    severity="critical",
+                )
+                warnings = self._append_price_fusion_warning(
+                    warnings,
+                    "provider_count_low",
+                    f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
+                    severity="critical",
+                )
+                primary_warning = self._primary_price_fusion_warning(warnings)
                 excluded = [
                     {
                         "source": source,
@@ -1829,82 +2300,406 @@ class TradingEngineService:
                     }
                     for source, _fetcher in fetchers
                 ]
+                fallback_value = float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001))
                 return fallback_price, {
                     "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
                     "mode": "emergency_single_source",
-                    "warning_code": "orderbook_unavailable",
-                    "warning_message": f"多交易所 order book 全部失敗，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                    "reference_mode": "ticker_fallback",
+                    "risk_grade_mode": "unavailable",
+                    "warnings": warnings,
+                    "warning_code": str(primary_warning.get("code") or ""),
+                    "warning_message": "；".join(
+                        warning.get("message") or ""
+                        for warning in warnings
+                        if isinstance(warning, dict) and str(warning.get("message") or "").strip()
+                    ),
                     "degraded": True,
                     "fallback_active": True,
                     "conservative_mode": True,
+                    "high_risk_blocked": True,
+                    "high_risk_block_reason": "目前可用 order book 來源不足，只能提供 degraded reference price",
                     "providers_used": [{
                         "source": fallback_source,
                         "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
-                        "price_points": float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001)),
+                        "price_points": fallback_value,
+                        "midpoint_points": fallback_value,
                         "depth_score": 0.0,
-                        "weight": 1.0,
-                        "normalized_weight": 1.0,
+                        "effective_depth_score": 0.0,
+                        "depth_density_score": 0.0,
+                        "reference_weight_percent": 100.0,
+                        "risk_grade_weight_percent": 0.0,
                         "normalized_weight_percent": 100.0,
+                        "raw_normalized_weight_percent": 100.0,
+                        "risk_grade_eligible": False,
+                        "coverage_insufficient": True,
+                        "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                        "quantity_unit": "n/a",
+                        "quantity_unit_label": "n/a",
+                        "quantity_unit_confirmed": False,
+                        "quantity_unit_note": "ticker fallback has no order book depth snapshot",
+                        "best_bid_points": None,
+                        "best_ask_points": None,
+                        "spread_percent": None,
+                        "bid_notional_points": None,
+                        "ask_notional_points": None,
+                        "fetched_at": _now(),
+                        "age_seconds": 0.0,
+                        "latency_ms": 0.0,
+                        "midpoint_deviation_percent": 0.0,
+                        "raw_bid_levels_count": 0,
+                        "raw_ask_levels_count": 0,
+                        "used_bid_levels_count": 0,
+                        "used_ask_levels_count": 0,
+                        "bid_coverage_percent": 0.0,
+                        "ask_coverage_percent": 0.0,
+                        "bid_reached_lower_bound": False,
+                        "ask_reached_upper_bound": False,
+                        "orderbook_truncated": True,
+                        "coverage_ratio_percent": 0.0,
+                        "depth_levels_requested": depth_levels,
+                        "provider_depth_request_limit": 0,
+                        "provider_depth_limit_reached": False,
                     }],
                     "excluded_providers": excluded,
                     "provider_errors": errors,
                     "resolved_source": fallback_source,
+                    "reference_price_points": fallback_value,
+                    "risk_grade_price_points": None,
+                    "reference_provider_count": 1,
+                    "risk_grade_provider_count": 0,
+                    "reference_weights_sum_percent": 100.0,
+                    "risk_grade_weights_sum_percent": 0.0,
+                    "depth_levels": depth_levels,
+                    "depth_band_percent": depth_band_percent,
+                    "min_orderbook_coverage_percent": min_orderbook_coverage_percent,
+                    "max_single_provider_weight_percent": max_single_provider_weight_percent,
+                    "min_provider_count": min_provider_count,
+                    "median_midpoint_points": fallback_value,
                 }
             except Exception as fallback_exc:
                 errors.append(f"single_source_fallback: {str(fallback_exc)[:120]}")
                 raise ValueError("; ".join(errors) or "all fused price providers failed") from fallback_exc
-        mode = str((settings or {}).get("price_fusion_mode") or "auto_depth").strip()
+
+        median_midpoint = _median_float([snap.get("midpoint_points") or snap.get("price_points") or 0.0 for snap in snapshots])
         weight_map = self._price_fusion_manual_weights(settings)
-        weighted_rows = []
-        resolved_mode = mode
-        warning_code = ""
-        warning_message = ""
-        if mode == "manual_weights":
-            manual_positive_total = 0.0
-            for snap in snapshots:
-                weight = float(weight_map.get(snap["source"], 0.0))
-                if weight > 0:
-                    weighted_rows.append((snap, weight))
-                    manual_positive_total += weight
-            if manual_positive_total <= 0:
-                warning_code = "manual_weights_invalid"
-                warning_message = "root 手動權重全部為 0，已改用自動深度權重"
-        if not weighted_rows:
-            if mode == "manual_weights":
-                resolved_mode = "auto_depth_fallback"
-                if not warning_code:
-                    warning_code = "manual_weights_unusable"
-                    warning_message = "root 手動權重目前沒有可用來源，已改用自動深度權重"
-            auto_rows = [(snap, max(float(snap.get("depth_score") or 0.0), 0.0)) for snap in snapshots]
-            total_auto = sum(weight for _, weight in auto_rows)
-            if total_auto <= 0:
-                resolved_mode = "equal_weight_fallback"
-                if not warning_code:
-                    warning_code = "depth_score_invalid"
-                    warning_message = "所有來源深度分數都無效，已改用等權平均"
-                equal_weight = 1.0 / len(snapshots)
-                weighted_rows = [(snap, equal_weight) for snap in snapshots]
-            else:
-                weighted_rows = auto_rows
-        total_weight = sum(weight for _, weight in weighted_rows)
-        if total_weight <= 0:
-            raise ValueError("weighted fused price has no positive provider weight")
-        weighted_price = sum(float(_to_decimal(snap["price_points"], name="price_points", minimum=0.00000001)) * float(weight) for snap, weight in weighted_rows) / total_weight
-        used_sources = {snap["source"] for snap, _weight in weighted_rows}
-        excluded_providers = []
-        for source, _fetcher in fetchers:
-            if source in used_sources:
-                continue
-            if source in provider_failures:
+        excluded_providers = [
+            {
+                "source": source,
+                "label": PRICE_PROVIDER_LABELS.get(source, source),
+                "reason": "fetch_failed",
+                "error": provider_failures.get(source, ""),
+                "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
+            }
+            for source, _fetcher in fetchers
+            if source in provider_failures
+        ]
+
+        reference_snapshots = []
+        for snap in snapshots:
+            midpoint = float(snap.get("midpoint_points") or snap.get("price_points") or 0.0)
+            deviation_percent = 0.0
+            if median_midpoint > 0 and midpoint > 0:
+                deviation_percent = abs(midpoint - median_midpoint) * 100.0 / median_midpoint
+            snap["midpoint_deviation_percent"] = round(deviation_percent, 8)
+            age_seconds = snap.get("age_seconds")
+            latency_ms = snap.get("latency_ms")
+            side_balance_ratio_percent = snap.get("side_balance_ratio_percent")
+            bid_coverage_percent = float(snap.get("bid_coverage_percent") or 0.0)
+            ask_coverage_percent = float(snap.get("ask_coverage_percent") or 0.0)
+            coverage_insufficient = bid_coverage_percent < min_orderbook_coverage_percent or ask_coverage_percent < min_orderbook_coverage_percent
+            snap["risk_grade_eligible"] = not coverage_insufficient
+            snap["coverage_insufficient"] = coverage_insufficient
+            snap["coverage_warning_message"] = (
+                "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。"
+                if coverage_insufficient or bool(snap.get("orderbook_truncated"))
+                else ""
+            )
+            reason = ""
+            message = ""
+            if age_seconds is not None and float(age_seconds or 0.0) > DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS:
+                reason = "stale_orderbook"
+                message = f"order book age {snap.get('age_seconds')}s exceeds {DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS}s"
+            elif latency_ms is not None and float(latency_ms or 0.0) > DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS:
+                reason = "latency_too_high"
+                message = f"order book latency {snap.get('latency_ms')}ms exceeds {DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS}ms"
+            elif side_balance_ratio_percent is not None and float(side_balance_ratio_percent or 0.0) < DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0:
+                reason = "one_sided_depth"
+                message = f"single-sided depth ratio {snap.get('side_balance_ratio_percent')}% is below {round(DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0, 2)}%"
+            elif deviation_percent > DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT:
+                reason = "midpoint_deviation_exceeded"
+                message = f"midpoint deviates {round(deviation_percent, 4)}% from median"
+            if reason:
                 excluded_providers.append({
-                    "source": source,
-                    "label": PRICE_PROVIDER_LABELS.get(source, source),
-                    "reason": "fetch_failed",
-                    "error": provider_failures.get(source, ""),
-                    "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
+                    "source": snap["source"],
+                    "label": PRICE_PROVIDER_LABELS.get(snap["source"], snap["source"]),
+                    "reason": reason,
+                    "error": message,
+                    "manual_weight": round(float(weight_map.get(snap["source"], 0.0)), 8),
+                    "price_points": round(float(snap.get("price_points") or 0.0), 8),
+                    "midpoint_deviation_percent": round(float(deviation_percent), 8),
+                    "latency_ms": round(float(snap.get("latency_ms") or 0.0), 2),
+                    "age_seconds": round(float(snap.get("age_seconds") or 0.0), 3),
+                    "side_balance_ratio_percent": round(float(snap.get("side_balance_ratio_percent") or 0.0), 4),
+                    "best_bid_points": snap.get("best_bid_points"),
+                    "best_ask_points": snap.get("best_ask_points"),
+                    "spread_percent": snap.get("spread_percent"),
+                    "bid_notional_points": snap.get("bid_notional_points"),
+                    "ask_notional_points": snap.get("ask_notional_points"),
+                    "depth_density_score": snap.get("depth_density_score"),
+                    "raw_bid_levels_count": snap.get("raw_bid_levels_count"),
+                    "raw_ask_levels_count": snap.get("raw_ask_levels_count"),
+                    "used_bid_levels_count": snap.get("used_bid_levels_count"),
+                    "used_ask_levels_count": snap.get("used_ask_levels_count"),
+                    "provider_depth_request_limit": snap.get("provider_depth_request_limit"),
+                    "provider_depth_limit_reached": bool(snap.get("provider_depth_limit_reached")),
+                    "bid_coverage_percent": round(bid_coverage_percent, 6),
+                    "ask_coverage_percent": round(ask_coverage_percent, 6),
+                    "bid_reached_lower_bound": bool(snap.get("bid_reached_lower_bound")),
+                    "ask_reached_upper_bound": bool(snap.get("ask_reached_upper_bound")),
+                    "orderbook_truncated": bool(snap.get("orderbook_truncated")),
+                    "coverage_ratio_percent": round(float(snap.get("coverage_ratio_percent") or 0.0), 4),
+                    "quantity_unit_label": snap.get("quantity_unit_label"),
                 })
                 continue
-            if mode == "manual_weights":
+            reference_snapshots.append(snap)
+
+        snapshots = reference_snapshots
+        if not snapshots:
+            try:
+                fallback_price, fallback_source = self._fetch_live_price_points(market_symbol)
+                warnings = self._append_price_fusion_warning(
+                    warnings,
+                    "orderbook_quality_rejected",
+                    f"多交易所 order book 已抓到，但全部被品質規則排除，已降級為單一 ticker 價格來源 {PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source)}",
+                    severity="critical",
+                )
+                warnings = self._append_price_fusion_warning(
+                    warnings,
+                    "provider_count_low",
+                    f"風控級可用 order book 來源只剩 1 家，低於建議下限 {min_provider_count} 家",
+                    severity="critical",
+                )
+                primary_warning = self._primary_price_fusion_warning(warnings)
+                fallback_value = float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001))
+                return fallback_price, {
+                    "requested_mode": str((settings or {}).get("price_fusion_mode") or "auto_depth").strip(),
+                    "mode": "quality_filtered_single_source",
+                    "reference_mode": "ticker_fallback",
+                    "risk_grade_mode": "unavailable",
+                    "warnings": warnings,
+                    "warning_code": str(primary_warning.get("code") or ""),
+                    "warning_message": "；".join(
+                        warning.get("message") or ""
+                        for warning in warnings
+                        if isinstance(warning, dict) and str(warning.get("message") or "").strip()
+                    ),
+                    "degraded": True,
+                    "fallback_active": True,
+                    "conservative_mode": True,
+                    "high_risk_blocked": True,
+                    "high_risk_block_reason": "目前可用 order book 來源不足，只能提供 degraded reference price",
+                    "providers_used": [{
+                        "source": fallback_source,
+                        "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
+                        "price_points": fallback_value,
+                        "midpoint_points": fallback_value,
+                        "depth_score": 0.0,
+                        "effective_depth_score": 0.0,
+                        "depth_density_score": 0.0,
+                        "reference_weight_percent": 100.0,
+                        "risk_grade_weight_percent": 0.0,
+                        "normalized_weight_percent": 100.0,
+                        "raw_normalized_weight_percent": 100.0,
+                        "risk_grade_eligible": False,
+                        "coverage_insufficient": True,
+                        "coverage_warning_message": "資料截斷，不代表該交易所真實深度不足；目前僅納入 reference price，不納入高風險風控權重。",
+                        "quantity_unit": "n/a",
+                        "quantity_unit_label": "n/a",
+                        "quantity_unit_confirmed": False,
+                        "quantity_unit_note": "ticker fallback has no order book depth snapshot",
+                        "best_bid_points": None,
+                        "best_ask_points": None,
+                        "spread_percent": None,
+                        "bid_notional_points": None,
+                        "ask_notional_points": None,
+                        "fetched_at": _now(),
+                        "age_seconds": 0.0,
+                        "latency_ms": 0.0,
+                        "midpoint_deviation_percent": 0.0,
+                        "raw_bid_levels_count": 0,
+                        "raw_ask_levels_count": 0,
+                        "used_bid_levels_count": 0,
+                        "used_ask_levels_count": 0,
+                        "bid_coverage_percent": 0.0,
+                        "ask_coverage_percent": 0.0,
+                        "bid_reached_lower_bound": False,
+                        "ask_reached_upper_bound": False,
+                        "orderbook_truncated": True,
+                        "coverage_ratio_percent": 0.0,
+                        "depth_levels_requested": depth_levels,
+                        "provider_depth_request_limit": 0,
+                        "provider_depth_limit_reached": False,
+                    }],
+                    "excluded_providers": excluded_providers,
+                    "provider_errors": errors,
+                    "resolved_source": fallback_source,
+                    "reference_price_points": fallback_value,
+                    "risk_grade_price_points": None,
+                    "reference_provider_count": 1,
+                    "risk_grade_provider_count": 0,
+                    "reference_weights_sum_percent": 100.0,
+                    "risk_grade_weights_sum_percent": 0.0,
+                    "depth_levels": depth_levels,
+                    "depth_band_percent": depth_band_percent,
+                    "min_orderbook_coverage_percent": min_orderbook_coverage_percent,
+                    "max_single_provider_weight_percent": max_single_provider_weight_percent,
+                    "min_provider_count": min_provider_count,
+                    "median_midpoint_points": median_midpoint,
+                }
+            except Exception as fallback_exc:
+                errors.append(f"quality_filtered_single_source: {str(fallback_exc)[:120]}")
+                raise ValueError("; ".join(errors) or "all fused price providers failed quality checks") from fallback_exc
+
+        mode = str((settings or {}).get("price_fusion_mode") or "auto_depth").strip()
+        manual_positive_reference = sum(max(float(weight_map.get(snap["source"], 0.0)), 0.0) for snap in snapshots)
+        if mode == "manual_weights" and manual_positive_reference > 0:
+            weighted_reference_snapshots = []
+            for snap in snapshots:
+                if max(float(weight_map.get(snap["source"], 0.0)), 0.0) > 0:
+                    weighted_reference_snapshots.append(snap)
+                    continue
+                excluded_providers.append({
+                    "source": snap["source"],
+                    "label": PRICE_PROVIDER_LABELS.get(snap["source"], snap["source"]),
+                    "reason": "manual_weight_zero",
+                    "error": "",
+                    "manual_weight": round(float(weight_map.get(snap["source"], 0.0)), 8),
+                    "price_points": round(float(snap.get("price_points") or 0.0), 8),
+                    "midpoint_deviation_percent": round(float(snap.get("midpoint_deviation_percent") or 0.0), 8),
+                    "latency_ms": round(float(snap.get("latency_ms") or 0.0), 2),
+                    "age_seconds": round(float(snap.get("age_seconds") or 0.0), 3),
+                    "side_balance_ratio_percent": round(float(snap.get("side_balance_ratio_percent") or 0.0), 4),
+                    "best_bid_points": snap.get("best_bid_points"),
+                    "best_ask_points": snap.get("best_ask_points"),
+                    "spread_percent": snap.get("spread_percent"),
+                    "bid_notional_points": snap.get("bid_notional_points"),
+                    "ask_notional_points": snap.get("ask_notional_points"),
+                    "depth_density_score": snap.get("depth_density_score"),
+                    "raw_bid_levels_count": snap.get("raw_bid_levels_count"),
+                    "raw_ask_levels_count": snap.get("raw_ask_levels_count"),
+                    "used_bid_levels_count": snap.get("used_bid_levels_count"),
+                    "used_ask_levels_count": snap.get("used_ask_levels_count"),
+                    "provider_depth_request_limit": snap.get("provider_depth_request_limit"),
+                    "provider_depth_limit_reached": bool(snap.get("provider_depth_limit_reached")),
+                    "bid_coverage_percent": round(float(snap.get("bid_coverage_percent") or 0.0), 6),
+                    "ask_coverage_percent": round(float(snap.get("ask_coverage_percent") or 0.0), 6),
+                    "bid_reached_lower_bound": bool(snap.get("bid_reached_lower_bound")),
+                    "ask_reached_upper_bound": bool(snap.get("ask_reached_upper_bound")),
+                    "orderbook_truncated": bool(snap.get("orderbook_truncated")),
+                    "coverage_ratio_percent": round(float(snap.get("coverage_ratio_percent") or 0.0), 4),
+                    "quantity_unit_label": snap.get("quantity_unit_label"),
+                })
+            snapshots = weighted_reference_snapshots
+        reference_mode_input = mode
+        if mode == "manual_weights" and manual_positive_reference <= 0:
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "manual_weights_invalid",
+                "root 手動權重全部為 0，已改用自動深度權重",
+            )
+        reference_model = self._build_price_fusion_weight_model(
+            snapshots,
+            mode=reference_mode_input,
+            weight_map=weight_map,
+            max_single_provider_weight_percent=max_single_provider_weight_percent,
+            score_getter=self._price_fusion_reference_score,
+        )
+        if mode == "manual_weights" and manual_positive_reference <= 0:
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "manual_weights_unusable",
+                "root 手動權重目前沒有可用來源，已改用自動深度權重",
+            )
+        if reference_model["resolved_mode"] == "equal_weight_fallback":
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "depth_score_invalid",
+                "所有來源 reference price 分數都無效，已改用等權平均",
+            )
+        if reference_model["cap_unenforceable"]:
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "provider_weight_cap_unenforceable",
+                f"目前 reference price 可用來源太少，無法滿足單一來源權重上限 {max_single_provider_weight_percent:.2f}%",
+            )
+        elif reference_model["cap_applied"]:
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "provider_weight_cap_applied",
+                f"已套用單一來源權重上限 {max_single_provider_weight_percent:.2f}%",
+            )
+
+        risk_snapshots = [snap for snap in snapshots if bool(snap.get("risk_grade_eligible"))]
+        manual_positive_risk = sum(max(float(weight_map.get(snap["source"], 0.0)), 0.0) for snap in risk_snapshots)
+        risk_model = None
+        if risk_snapshots:
+            risk_mode_input = mode
+            risk_model = self._build_price_fusion_weight_model(
+                risk_snapshots,
+                mode=risk_mode_input,
+                weight_map=weight_map,
+                max_single_provider_weight_percent=max_single_provider_weight_percent,
+                score_getter=self._price_fusion_effective_score,
+            )
+        reference_weights = reference_model["normalized_weights"]
+        reference_rows = reference_model["rows"]
+        reference_total_raw_weight = reference_model["total_raw_weight"]
+        reference_raw_map = {
+            snap["source"]: float(weight)
+            for snap, weight in reference_rows
+        }
+        risk_weights = risk_model["normalized_weights"] if risk_model else {}
+        risk_rows = risk_model["rows"] if risk_model else []
+        risk_total_raw_weight = risk_model["total_raw_weight"] if risk_model else 0.0
+        risk_raw_map = {
+            snap["source"]: float(weight)
+            for snap, weight in risk_rows
+        }
+
+        reference_price = sum(
+            float(_to_decimal(snap["price_points"], name="price_points", minimum=0.00000001)) * float(reference_weights.get(snap["source"], 0.0))
+            for snap in snapshots
+        )
+        risk_grade_price = None
+        if risk_rows:
+            risk_grade_price = sum(
+                float(_to_decimal(snap["price_points"], name="price_points", minimum=0.00000001)) * float(risk_weights.get(snap["source"], 0.0))
+                for snap in risk_snapshots
+            )
+
+        if any(bool(snap.get("orderbook_truncated")) or bool(snap.get("coverage_insufficient")) for snap in snapshots):
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "provider_coverage_partial",
+                "部分來源資料截斷，不代表該交易所真實深度不足；reference price 仍會納入，但不作為高風險風控權重。",
+            )
+        reference_sources = {snap["source"] for snap in snapshots}
+        risk_sources = {snap["source"] for snap in risk_snapshots}
+        conservative_mode = len(risk_sources) < min_provider_count
+        if conservative_mode:
+            warnings = self._append_price_fusion_warning(
+                warnings,
+                "provider_count_low",
+                f"風控級可用 order book 來源只剩 {len(risk_sources)} 家，低於建議下限 {min_provider_count} 家",
+                severity="critical",
+            )
+
+        for source, _fetcher in fetchers:
+            if source in reference_sources or source in provider_failures:
+                continue
+            if any(str(item.get("source") or "") == source for item in excluded_providers if isinstance(item, dict)):
+                continue
+            if mode == "manual_weights" and float(weight_map.get(source, 0.0)) <= 0:
                 excluded_providers.append({
                     "source": source,
                     "label": PRICE_PROVIDER_LABELS.get(source, source),
@@ -1912,29 +2707,98 @@ class TradingEngineService:
                     "error": "",
                     "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
                 })
-        return float(Decimal(str(weighted_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)), {
+
+        primary_warning = self._primary_price_fusion_warning(warnings)
+        warning_message = "；".join(
+            warning.get("message") or ""
+            for warning in warnings
+            if isinstance(warning, dict) and str(warning.get("message") or "").strip()
+        )
+        degraded = bool(excluded_providers) or bool(warnings) or reference_model["resolved_mode"] != mode or conservative_mode
+        reference_value = float(Decimal(str(reference_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+        risk_value = float(Decimal(str(risk_grade_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)) if risk_grade_price is not None else None
+        return reference_value, {
             "requested_mode": mode,
-            "mode": resolved_mode,
-            "warning_code": warning_code,
+            "mode": reference_model["resolved_mode"],
+            "reference_mode": "reference_price",
+            "risk_grade_mode": risk_model["resolved_mode"] if risk_model else "unavailable",
+            "warnings": warnings,
+            "warning_code": str(primary_warning.get("code") or ""),
             "warning_message": warning_message,
-            "degraded": bool(provider_failures) or resolved_mode != mode or bool(warning_code),
-            "fallback_active": resolved_mode in {"auto_depth_fallback", "equal_weight_fallback"},
-            "conservative_mode": False,
+            "degraded": degraded,
+            "fallback_active": reference_model["resolved_mode"] in {"auto_depth_fallback", "equal_weight_fallback"},
+            "conservative_mode": conservative_mode,
+            "high_risk_blocked": conservative_mode,
+            "high_risk_block_reason": "目前風控級可用來源數不足，只能提供 reference price" if conservative_mode else "",
+            "reference_price_points": reference_value,
+            "risk_grade_price_points": risk_value,
+            "reference_provider_count": len(reference_sources),
+            "risk_grade_provider_count": len(risk_sources),
             "providers_used": [
                 {
                     "source": snap["source"],
                     "label": PRICE_PROVIDER_LABELS.get(snap["source"], snap["source"]),
                     "price_points": float(_to_decimal(snap["price_points"], name="price_points", minimum=0.00000001)),
+                    "midpoint_points": round(float(snap.get("midpoint_points") or snap["price_points"]), 8),
+                    "best_bid_points": round(float(snap.get("best_bid_points") or 0.0), 8),
+                    "best_ask_points": round(float(snap.get("best_ask_points") or 0.0), 8),
+                    "spread_points": round(float(snap.get("spread_points") or 0.0), 8),
+                    "spread_percent": round(float(snap.get("spread_percent") or 0.0), 8),
+                    "bid_notional_points": round(float(snap.get("bid_notional_points") or 0.0), 8),
+                    "ask_notional_points": round(float(snap.get("ask_notional_points") or 0.0), 8),
                     "depth_score": round(float(snap.get("depth_score") or 0.0), 8),
-                    "weight": round(float(weight), 8),
-                    "normalized_weight": round(float(weight) / total_weight, 8),
-                    "normalized_weight_percent": round(float(weight) * 100.0 / total_weight, 4),
+                    "effective_depth_score": round(float(self._price_fusion_effective_score(snap)), 8),
+                    "depth_density_score": round(float(snap.get("depth_density_score") or 0.0), 8),
+                    "weight": round(float(reference_weights.get(snap["source"], 0.0)), 8),
+                    "raw_weight": round(float(reference_raw_map.get(snap["source"], 0.0)), 8),
+                    "normalized_weight": round(float(reference_weights.get(snap["source"], 0.0)), 8),
+                    "raw_normalized_weight": round((float(reference_raw_map.get(snap["source"], 0.0)) / reference_total_raw_weight) if reference_total_raw_weight > 0 else 0.0, 8),
+                    "normalized_weight_percent": round(float(reference_weights.get(snap["source"], 0.0)) * 100.0, 4),
+                    "raw_normalized_weight_percent": round(((float(reference_raw_map.get(snap["source"], 0.0)) / reference_total_raw_weight) * 100.0) if reference_total_raw_weight > 0 else 0.0, 4),
+                    "reference_weight_percent": round(float(reference_weights.get(snap["source"], 0.0)) * 100.0, 4),
+                    "risk_grade_weight_percent": round(float(risk_weights.get(snap["source"], 0.0)) * 100.0, 4),
+                    "risk_grade_eligible": bool(snap.get("risk_grade_eligible")),
+                    "coverage_insufficient": bool(snap.get("coverage_insufficient")),
+                    "coverage_warning_message": str(snap.get("coverage_warning_message") or ""),
+                    "weight_cap_applied": abs(float(reference_weights.get(snap["source"], 0.0)) - ((float(reference_raw_map.get(snap["source"], 0.0)) / reference_total_raw_weight) if reference_total_raw_weight > 0 else 0.0)) > 1e-12,
+                    "fetched_at": str(snap.get("fetched_at") or ""),
+                    "age_seconds": round(float(snap.get("age_seconds") or 0.0), 3),
+                    "latency_ms": round(float(snap.get("latency_ms") or 0.0), 2),
+                    "midpoint_deviation_percent": round(float(snap.get("midpoint_deviation_percent") or 0.0), 8),
+                    "raw_bid_levels_count": int(snap.get("raw_bid_levels_count") or 0),
+                    "raw_ask_levels_count": int(snap.get("raw_ask_levels_count") or 0),
+                    "used_bid_levels_count": int(snap.get("used_bid_levels_count") or 0),
+                    "used_ask_levels_count": int(snap.get("used_ask_levels_count") or 0),
+                    "depth_levels_requested": int(snap.get("depth_levels_requested") or depth_levels),
+                    "provider_depth_request_limit": int(snap.get("provider_depth_request_limit") or snap.get("depth_levels_requested") or depth_levels),
+                    "provider_depth_limit_reached": bool(snap.get("provider_depth_limit_reached")),
+                    "depth_band_percent": round(float(snap.get("depth_band_percent") or DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT), 4),
+                    "bid_coverage_percent": round(float(snap.get("bid_coverage_percent") or 0.0), 6),
+                    "ask_coverage_percent": round(float(snap.get("ask_coverage_percent") or 0.0), 6),
+                    "bid_reached_lower_bound": bool(snap.get("bid_reached_lower_bound")),
+                    "ask_reached_upper_bound": bool(snap.get("ask_reached_upper_bound")),
+                    "orderbook_truncated": bool(snap.get("orderbook_truncated")),
+                    "coverage_ratio_percent": round(float(snap.get("coverage_ratio_percent") or 0.0), 4),
+                    "side_balance_ratio_percent": round(float(snap.get("side_balance_ratio_percent") or 0.0), 4),
+                    "quantity_unit": str(snap.get("quantity_unit") or "base_asset"),
+                    "quantity_unit_label": str(snap.get("quantity_unit_label") or "base asset"),
+                    "quantity_unit_confirmed": bool(snap.get("quantity_unit_confirmed")),
+                    "quantity_unit_note": str(snap.get("quantity_unit_note") or ""),
+                    "contract_size_adjusted": bool(snap.get("contract_size_adjusted")),
                 }
-                for snap, weight in weighted_rows
+                for snap in snapshots
             ],
             "excluded_providers": excluded_providers,
             "provider_errors": errors,
             "resolved_source": FUSED_PRICE_SOURCE,
+            "depth_levels": depth_levels,
+            "depth_band_percent": round(float(depth_band_percent), 4),
+            "min_orderbook_coverage_percent": round(float(min_orderbook_coverage_percent), 4),
+            "max_single_provider_weight_percent": round(float(max_single_provider_weight_percent), 4),
+            "min_provider_count": min_provider_count,
+            "median_midpoint_points": round(float(median_midpoint), 8),
+            "reference_weights_sum_percent": round(sum(float(reference_weights.get(snap["source"], 0.0)) * 100.0 for snap in snapshots), 4),
+            "risk_grade_weights_sum_percent": round(sum(float(risk_weights.get(snap["source"], 0.0)) * 100.0 for snap in snapshots), 4),
         }
 
     def _default_price_fusion_market_symbol(self, conn):
@@ -1951,16 +2815,29 @@ class TradingEngineService:
         configured_source = str(settings.get("price_source") or FUSED_PRICE_SOURCE)
         requested_mode = str(settings.get("price_fusion_mode") or "auto_depth")
         requested_symbol = str(market_symbol or "").strip().upper()
-        symbol = requested_symbol or self._default_price_fusion_market_symbol(conn)
+        resolved_symbol = normalize_market_symbol(requested_symbol) if requested_symbol else ""
+        symbol = resolved_symbol or self._default_price_fusion_market_symbol(conn)
+        display_symbol = market_display_symbol(symbol)
         live_supported = bool(symbol and self._live_price_symbol(symbol))
         payload = {
             "configured_source": configured_source,
             "configured_source_label": PRICE_PROVIDER_LABELS.get(configured_source, configured_source),
             "requested_mode": requested_mode,
             "market_symbol": symbol,
+            "requested_market_symbol": requested_symbol,
+            "resolved_market_symbol": symbol,
+            "display_market_symbol": display_symbol,
             "live_supported": live_supported,
             "providers_configured": list(WEIGHTED_PRICE_PROVIDERS),
             "manual_weights": self._price_fusion_manual_weights(settings),
+            "depth_levels": self._price_fusion_depth_levels(settings),
+            "depth_band_percent": float(settings.get("price_fusion_depth_band_percent") or DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT),
+            "max_single_provider_weight_percent": float(settings.get("price_fusion_max_single_provider_weight_percent") or DEFAULT_PRICE_FUSION_MAX_SINGLE_PROVIDER_WEIGHT_PERCENT),
+            "max_provider_age_seconds": int(settings.get("price_fusion_max_provider_age_seconds") or DEFAULT_PRICE_FUSION_MAX_PROVIDER_AGE_SECONDS),
+            "max_provider_latency_ms": int(settings.get("price_fusion_max_provider_latency_ms") or DEFAULT_PRICE_FUSION_MAX_PROVIDER_LATENCY_MS),
+            "max_midpoint_deviation_percent": float(settings.get("price_fusion_max_midpoint_deviation_percent") or DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT),
+            "min_side_balance_ratio_percent": float(settings.get("price_fusion_min_side_balance_ratio_percent") or round(DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO * 100.0, 2)),
+            "min_provider_count": int(settings.get("price_fusion_min_provider_count") or DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT),
         }
         if configured_source != FUSED_PRICE_SOURCE:
             payload.update({
@@ -1997,6 +2874,9 @@ class TradingEngineService:
         weights_sum_percent = round(sum(float(row.get("normalized_weight_percent") or 0.0) for row in providers_used), 4)
         degraded = bool((details or {}).get("degraded"))
         conservative_mode = bool((details or {}).get("conservative_mode"))
+        high_risk_blocked = bool((details or {}).get("high_risk_blocked"))
+        high_risk_block_reason = str((details or {}).get("high_risk_block_reason") or "").strip()
+        warnings = list((details or {}).get("warnings") or [])
         warning_message = str((details or {}).get("warning_message") or "").strip()
         if conservative_mode and not warning_message:
             warning_message = "價格來源降級：目前已退回單一 ticker，建議暫停高風險交易。"
@@ -2008,14 +2888,26 @@ class TradingEngineService:
             "degraded": degraded,
             "fallback_active": bool((details or {}).get("fallback_active")),
             "conservative_mode": conservative_mode,
+            "high_risk_blocked": high_risk_blocked,
+            "high_risk_block_reason": high_risk_block_reason,
             "weights_sum_percent": weights_sum_percent,
             "providers_used": providers_used,
             "excluded_providers": list((details or {}).get("excluded_providers") or []),
             "resolved_mode": str((details or {}).get("mode") or requested_mode),
+            "reference_mode": str((details or {}).get("reference_mode") or "reference_price"),
+            "risk_grade_mode": str((details or {}).get("risk_grade_mode") or "unavailable"),
             "resolved_source": str((details or {}).get("resolved_source") or FUSED_PRICE_SOURCE),
             "price_points": float(_to_decimal(price_points, name="price_points", minimum=0.00000001)),
+            "reference_price_points": (details or {}).get("reference_price_points"),
+            "risk_grade_price_points": (details or {}).get("risk_grade_price_points"),
+            "reference_provider_count": int((details or {}).get("reference_provider_count") or 0),
+            "risk_grade_provider_count": int((details or {}).get("risk_grade_provider_count") or 0),
+            "median_midpoint_points": (details or {}).get("median_midpoint_points"),
+            "warnings": warnings,
             "warning_code": str((details or {}).get("warning_code") or ""),
             "provider_errors": list((details or {}).get("provider_errors") or []),
+            "reference_weights_sum_percent": float((details or {}).get("reference_weights_sum_percent") or 0.0),
+            "risk_grade_weights_sum_percent": float((details or {}).get("risk_grade_weights_sum_percent") or 0.0),
         })
         return payload
 
@@ -2031,7 +2923,8 @@ class TradingEngineService:
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
-            symbol = normalize_market_symbol(market_symbol)
+            requested_symbol = str(market_symbol or "").strip().upper()
+            symbol = normalize_market_symbol(requested_symbol)
             defaulted_market = not bool(symbol)
             if symbol:
                 market_row = self._market(conn, symbol)
@@ -2049,13 +2942,20 @@ class TradingEngineService:
             payload = self._market_payload(updated_row or market_row)
             payload["manual_price_points"] = current_price
             payload["price_source"] = str(price_source or payload.get("price_source") or "manual_root")
+            resolved_symbol = str(payload.get("symbol") or "").strip().upper()
             return {
                 "market": payload,
+                "requested_market_symbol": requested_symbol,
+                "resolved_market_symbol": resolved_symbol,
+                "display_market_symbol": market_display_symbol(resolved_symbol),
                 "refresh_interval_ms": 2000,
                 "server_time": _now(),
                 "price_health": str((price_meta or {}).get("price_health") or "healthy"),
                 "fallback_reason": str((price_meta or {}).get("fallback_reason") or ""),
                 "excluded_sources": list((price_meta or {}).get("excluded_sources") or []),
+                "warnings": list((price_meta or {}).get("warnings") or []),
+                "high_risk_blocked": bool((price_meta or {}).get("high_risk_blocked")),
+                "high_risk_block_reason": str((price_meta or {}).get("high_risk_block_reason") or ""),
                 "defaulted_market": defaulted_market,
             }
         finally:
@@ -2240,7 +3140,7 @@ class TradingEngineService:
             )
         return context
 
-    def _current_market_price_points(self, conn, market, *, with_meta=False):
+    def _current_market_price_points(self, conn, market, *, with_meta=False, high_risk=False):
         symbol = market["symbol"]
         settings = self._settings_payload(conn)
         configured_source = settings.get("price_source") or FUSED_PRICE_SOURCE
@@ -2248,10 +3148,18 @@ class TradingEngineService:
             "price_health": "healthy",
             "fallback_reason": "",
             "excluded_sources": [],
+            "warnings": [],
+            "high_risk_blocked": False,
+            "high_risk_block_reason": "",
+            "requested_price_mode": "risk_grade" if high_risk else "reference",
+            "reference_price_points": None,
+            "risk_grade_price_points": None,
         }
         if configured_source == "manual_root" or not self._live_price_symbol(symbol):
             price = market["manual_price_points"]
             source = str(market["price_source"] or "manual_root")
+            price_meta["reference_price_points"] = float(Decimal(str(price or "0")))
+            price_meta["risk_grade_price_points"] = float(Decimal(str(price or "0")))
             return (price, source, price_meta) if with_meta else (price, source)
         old_price_decimal = Decimal(str(market["manual_price_points"] or "0"))
         old_price = float(old_price_decimal)
@@ -2278,6 +3186,8 @@ class TradingEngineService:
                     "price_health": "fallback",
                     "fallback_reason": str(exc),
                     "excluded_sources": [],
+                    "reference_price_points": old_price,
+                    "risk_grade_price_points": old_price,
                 })
                 self._audit_event(
                     conn,
@@ -2319,14 +3229,31 @@ class TradingEngineService:
         if configured_source == FUSED_PRICE_SOURCE and fusion_details and (
             fusion_details.get("degraded") or fusion_details.get("warning_code") or fusion_details.get("excluded_providers")
         ):
+            warnings = list(fusion_details.get("warnings") or [])
+            primary_warning = self._primary_price_fusion_warning(warnings)
+            conservative_mode = bool(fusion_details.get("conservative_mode"))
+            fallback_active = bool(fusion_details.get("fallback_active"))
+            price_health = "conservative" if conservative_mode else ("fallback" if fallback_active else "degraded")
+            reason_text = str(
+                fusion_details.get("high_risk_block_reason")
+                or fusion_details.get("warning_message")
+                or primary_warning.get("message")
+                or primary_warning.get("code")
+                or ""
+            )
             price_meta.update({
-                "price_health": "fallback" if fusion_details.get("fallback_active") else "warning",
-                "fallback_reason": str(fusion_details.get("warning_message") or fusion_details.get("warning_code") or ""),
+                "price_health": price_health,
+                "fallback_reason": reason_text,
                 "excluded_sources": [
                     str(item.get("source") or "")
                     for item in (fusion_details.get("excluded_providers") or [])
                     if str(item.get("source") or "").strip()
                 ],
+                "warnings": warnings,
+                "high_risk_blocked": bool(fusion_details.get("high_risk_blocked")),
+                "high_risk_block_reason": str(fusion_details.get("high_risk_block_reason") or ""),
+                "reference_price_points": fusion_details.get("reference_price_points"),
+                "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
             })
             self._audit_event(
                 conn,
@@ -2339,14 +3266,31 @@ class TradingEngineService:
                     "requested_mode": fusion_details.get("requested_mode"),
                     "resolved_mode": fusion_details.get("mode"),
                     "warning_code": fusion_details.get("warning_code"),
+                    "warnings": warnings,
                     "warning_message": fusion_details.get("warning_message"),
                     "excluded_providers": fusion_details.get("excluded_providers"),
                     "providers_used": fusion_details.get("providers_used"),
                     "provider_errors": fusion_details.get("provider_errors"),
                     "fallback_active": bool(fusion_details.get("fallback_active")),
                     "conservative_mode": bool(fusion_details.get("conservative_mode")),
+                    "high_risk_blocked": bool(fusion_details.get("high_risk_blocked")),
+                    "high_risk_block_reason": str(fusion_details.get("high_risk_block_reason") or ""),
+                    "requested_price_mode": "risk_grade" if high_risk else "reference",
+                    "reference_price_points": fusion_details.get("reference_price_points"),
+                    "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
                 },
             )
+        elif configured_source == FUSED_PRICE_SOURCE and fusion_details:
+            price_meta.update({
+                "reference_price_points": fusion_details.get("reference_price_points"),
+                "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
+            })
+        else:
+            live_price = float(_to_decimal(price, name="live_price_points", minimum=0.00000001))
+            price_meta["reference_price_points"] = live_price
+            price_meta["risk_grade_price_points"] = live_price
+        if configured_source == FUSED_PRICE_SOURCE and fusion_details and high_risk and fusion_details.get("risk_grade_price_points") is not None:
+            price = float(_to_decimal(fusion_details.get("risk_grade_price_points"), name="risk_grade_price_points", minimum=0.00000001))
         now = _now()
         conn.execute(
             "UPDATE trading_markets SET manual_price_points=?, price_source=?, updated_at=? WHERE symbol=?",
@@ -4724,7 +5668,14 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             market = self._market(conn, bot["market_symbol"])
-            current_price, _ = self._current_market_price_points(conn, market)
+            current_price, _price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+            self._assert_price_meta_allows_high_risk_use(
+                conn,
+                actor=actor,
+                market_symbol=market["symbol"],
+                usage="grid bot scan",
+                price_meta=price_meta,
+            )
             price_window = self._recent_price_window(
                 market["symbol"],
                 lookback_seconds=65,
@@ -5461,7 +6412,14 @@ class TradingEngineService:
                 self.ensure_schema(price_conn)
                 market = self._market(price_conn, row["market_symbol"])
                 settings = self._settings_payload(price_conn)
-                observed_price, price_source = self._current_market_price_points(price_conn, market)
+                observed_price, price_source, price_meta = self._current_market_price_points(price_conn, market, with_meta=True, high_risk=True)
+                self._assert_price_meta_allows_high_risk_use(
+                    price_conn,
+                    actor={"id": int(row["user_id"]), "username": row["username"], "role": row["role"]},
+                    market_symbol=market["symbol"],
+                    usage="trading bot trigger",
+                    price_meta=price_meta,
+                )
                 price_window = self._recent_price_window(
                     market["symbol"],
                     lookback_seconds=max(60, int(settings.get("bot_auto_scan_interval_seconds") or 30) + 5),
@@ -6102,7 +7060,15 @@ class TradingEngineService:
                 raise ValueError("futures interface is reserved but not enabled in v1")
             if int(market["pvp_matching_enabled"] or 0):
                 raise ValueError("pvp matching interface is reserved but not enabled in v1")
-            current_price, price_source = self._current_market_price_points(conn, market)
+            current_price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=(order_type == "market"))
+            if order_type == "market":
+                self._assert_price_meta_allows_high_risk_use(
+                    conn,
+                    actor=actor,
+                    market_symbol=market["symbol"],
+                    usage="market order",
+                    price_meta=price_meta,
+                )
             if order_type == "limit":
                 limit_price = _to_price_float(limit_price_points, name="limit_price_points", minimum=0.00000001)
             else:
@@ -6714,7 +7680,14 @@ class TradingEngineService:
                     raise ValueError("duplicate margin open request is still processing")
             borrow_settings = self._assert_borrowing_enabled(conn)
             market = self._market(conn, market_symbol)
-            price, price_source = self._current_market_price_points(conn, market)
+            price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+            self._assert_price_meta_allows_high_risk_use(
+                conn,
+                actor=actor,
+                market_symbol=market["symbol"],
+                usage="margin financing risk evaluation",
+                price_meta=price_meta,
+            )
             notional = notional_points(quantity_units, price)
             min_collateral = self._minimum_margin_collateral_points(
                 conn,
@@ -7292,7 +8265,15 @@ class TradingEngineService:
                 try:
                     position = self._accrue_margin_interest(conn, position, actor=actor)
                     market = self._market(conn, position["market_symbol"])
-                    current_price, price_source = self._current_market_price_points(conn, market)
+                    current_price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+                    if bool(price_meta.get("high_risk_blocked")):
+                        errors.append({
+                            "position_uuid": position["position_uuid"],
+                            "user_id": int(position["user_id"]),
+                            "error": str(price_meta.get("high_risk_block_reason") or "price source is in conservative mode"),
+                            "price_health": str(price_meta.get("price_health") or ""),
+                        })
+                        continue
                     price_window = self._recent_price_window(market["symbol"], lookback_seconds=65, interval="1m")
                     replay_price = float(current_price)
                     if price_window:
@@ -7490,7 +8471,14 @@ class TradingEngineService:
             settings = self._settings_payload(conn)
             if not settings.get("futures_enabled") or not int(market["futures_enabled"] or 0):
                 raise ValueError("contract trading is disabled")
-            price, price_source = self._current_market_price_points(conn, market)
+            price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+            self._assert_price_meta_allows_high_risk_use(
+                conn,
+                actor=actor,
+                market_symbol=market["symbol"],
+                usage="contract position open",
+                price_meta=price_meta,
+            )
             exposure = notional_points(quantity_units, price)
             if exposure > margin_points * leverage:
                 raise ValueError("contract exposure exceeds margin and leverage")

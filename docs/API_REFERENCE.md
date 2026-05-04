@@ -1,0 +1,490 @@
+# API Reference
+
+一句話說明：這份文件是目前 **已實作** 的 `hackme_web` API 路徑總表，專門給開發者、整合腳本與 CLI 操作使用。
+
+## 設計目的
+
+原本 API 說明分散在：
+
+- [For_developer.md](For_developer.md)
+- [TRADING.md](TRADING.md)
+- [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)
+- [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
+- [SECURITY.md](SECURITY.md)
+
+這份文件把 **目前可用的正式 API** 收斂成單一入口。
+
+不在這份文件內的內容：
+
+- `docs/research/*` 的設計稿 API
+- `docs/BLOCKCHAIN/POINTS_TRANSFER_API.md` 這種「已拍板但尚未實作」規格
+- 細到每個 JSON 欄位的完整 schema
+
+如果某支 API 已有專屬深層文件，這份文件會優先連過去，而不是重複抄第二份規格。
+
+## 使用方法
+
+### 認證與 CSRF
+
+- 公開讀取：
+  - `GET /api/version`
+  - `GET /api/site-config`
+  - `GET /api/csrf-token`
+- 所有寫入 API 預設都需要：
+  - session cookie
+  - `X-CSRF-Token`
+- 本地 HTTPS 開發通常要用：
+
+```bash
+curl -k -sS https://127.0.0.1:5000/api/version
+```
+
+### 角色約定
+
+| 角色 | 說明 |
+|---|---|
+| `anonymous` | 未登入 |
+| `logged-in` | 任意已登入使用者 |
+| `manager` | admin / manager |
+| `root` | super_admin / root-only |
+
+## API 總覽
+
+### Public / Session
+
+來源：`routes/public.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/` | anonymous | 首頁 |
+| GET | `/videos` | anonymous | 影音入口 |
+| GET | `/api/csrf-token` | anonymous | 取得目前 session 的 CSRF token |
+| GET | `/api/site-config` | anonymous | 前台 site config |
+| GET | `/api/version` | anonymous | 版本資訊 |
+| GET | `/api/password-strength` | anonymous | 密碼強度提示 |
+| GET | `/api/captcha/challenge` | anonymous | CAPTCHA challenge |
+| POST | `/api/register` | anonymous | 註冊 |
+| POST | `/api/login` | anonymous | 登入 |
+| POST | `/api/logout` | logged-in | 登出 |
+| GET | `/api/session/idle-timeout` | logged-in | 閒置登出設定 |
+| GET | `/api/me` | logged-in | 目前登入者資訊 |
+| PUT | `/api/me/appearance` | logged-in | 個人外觀 |
+| POST | `/api/password-reset/request` | anonymous | 發起重設密碼 |
+| POST | `/api/password-reset/confirm` | anonymous | 確認重設密碼 |
+| POST | `/api/email-verification/request` | logged-in | 發送驗證郵件 |
+| POST | `/api/email-verification/confirm` | anonymous | 確認驗證 |
+
+### Account / Users / Sessions
+
+來源：`routes/users.py`, `routes/moderation.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/account/sessions` | logged-in | 查看自己的 session |
+| DELETE | `/api/account/sessions/<session_id>` | logged-in | 登出單一 session |
+| POST | `/api/account/sessions/logout-all` | logged-in | 全部登出 |
+| GET | `/api/account/reputation/summary` | logged-in | 信譽摘要 |
+| GET | `/api/account/reputation/history` | logged-in | 信譽歷史 |
+| GET | `/api/admin/users` | manager | 使用者列表 |
+| POST | `/api/admin/users` | manager | 新增帳號 |
+| GET | `/api/admin/users/<user_id>` | manager | 讀單一使用者 |
+| PUT | `/api/admin/users/<user_id>` | manager | 編輯使用者 |
+| DELETE | `/api/admin/users/<user_id>` | manager | 停用 / 軟刪除 |
+| POST | `/api/admin/users/<user_id>/review-registration` | manager | 審核註冊 |
+| POST | `/api/admin/users/<user_id>/block` | manager | 封鎖帳號 |
+| POST | `/api/admin/users/<user_id>/promote` | manager | 升權 |
+| POST | `/api/admin/users/<user_id>/demote` | manager | 降權 |
+| POST | `/api/admin/users/<user_id>/violation` | manager | 記違規 |
+| POST | `/api/admin/users/<user_id>/reset-violations` | manager | 清違規 |
+| GET | `/api/admin/password-reset-requests` | manager | 密碼重設審核列表 |
+| POST | `/api/admin/password-reset-requests/<request_id>/approve` | manager | 通過重設 |
+| POST | `/api/admin/password-reset-requests/<request_id>/reject` | manager | 駁回重設 |
+| GET | `/api/admin/member-level-rules` | manager | 會員等級規則 |
+| PUT | `/api/admin/member-level-rules/<level>` | manager | 更新會員等級規則 |
+| GET | `/api/admin/moderation-actions` | manager | 治理動作列表 |
+| GET | `/api/admin/mod-notes/<user_id>` | manager | 管理備註 |
+| GET | `/api/admin/moderation/proposals` | manager | 治理提案列表 |
+| GET | `/api/admin/moderation/proposals/<proposal_id>` | manager | 單一提案 |
+| POST | `/api/admin/moderation/proposals/<proposal_id>/vote` | manager | 提案投票 |
+| POST | `/api/admin/moderation/proposals/<proposal_id>/execute` | manager | 執行提案 |
+| POST | `/api/root/moderation/proposals/<proposal_id>/override` | root | root override |
+
+### Chat / Friends / Audit Export
+
+來源：`routes/chat.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET/POST | `/api/chat/rooms` | logged-in | 列表 / 建立聊天室 |
+| POST | `/api/chat/rooms/<room_id>/join` | logged-in | 加入聊天室 |
+| GET/DELETE | `/api/chat/rooms/<room_id>` | logged-in | 讀 / 離開 / 管理聊天室 |
+| POST | `/api/chat/rooms/<room_id>/invites` | logged-in | 邀請好友 |
+| GET | `/api/chat/rooms/<room_id>/export` | logged-in | 匯出聊天室 |
+| GET/POST | `/api/chat/rooms/<room_id>/messages` | logged-in | 訊息列表 / 發送訊息 |
+| POST | `/api/chat/messages/<message_id>/report` | logged-in | 檢舉訊息 |
+| DELETE | `/api/chat/messages/<message_id>` | logged-in | 刪除訊息 |
+| GET | `/api/chat/friends` | logged-in | 朋友列表 |
+| GET/POST | `/api/chat/friends/requests` | logged-in | 好友邀請列表 / 發送邀請 |
+| POST | `/api/chat/friends/requests/<request_id>/<decision>` | logged-in | 接受 / 拒絕邀請 |
+| DELETE | `/api/chat/friends/<friend_user_id>` | logged-in | 移除好友 |
+| GET | `/api/audit` | logged-in | 個人可見 audit |
+
+### Community / Forum / Announcements
+
+來源：`routes/community.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET/POST | `/api/community/announcements` | logged-in / manager | 列表 / 發布公告 |
+| PUT/DELETE | `/api/community/announcements/<announcement_id>` | manager | 編輯 / 刪除公告 |
+| GET/POST | `/api/community/categories` | logged-in / manager | 分類列表 / 建立分類 |
+| PUT/DELETE | `/api/community/categories/<category_id>` | manager | 編輯 / 刪除分類 |
+| GET/POST | `/api/community/boards` | logged-in / manager | 看板列表 / 建立看板 |
+| GET | `/api/community/boards/reviews` | manager | 看板審核列表 |
+| POST | `/api/community/boards/<board_id>/review` | manager | 看板審核 |
+| GET/PUT/DELETE | `/api/community/boards/<board_id>` | logged-in / manager | 讀 / 編輯 / 刪除看板 |
+| GET/POST | `/api/community/boards/<board_id>/moderators` | manager | 看板管理員列表 / 新增 |
+| DELETE | `/api/community/boards/<board_id>/moderators/<user_id>` | manager | 移除看板管理員 |
+| GET/POST | `/api/community/boards/<board_id>/threads` | logged-in | 文章列表 / 發文 |
+| GET | `/api/community/threads/reviews` | manager | 文章審核 |
+| POST | `/api/community/threads/<thread_id>/review` | manager | 文章審核處理 |
+| GET/PUT/DELETE | `/api/community/threads/<thread_id>` | logged-in | 讀 / 編輯 / 刪除文章 |
+| POST | `/api/community/threads/<thread_id>/reaction` | logged-in | 文章反應 |
+| POST | `/api/community/threads/<thread_id>/reward` | logged-in | 打賞文章 |
+| GET/POST | `/api/community/threads/<thread_id>/posts` | logged-in | 回覆列表 / 回覆 |
+| POST | `/api/community/posts/<post_id>/reaction` | logged-in | 回覆反應 |
+| POST | `/api/community/posts/<post_id>/pin` | manager | 置頂回覆 |
+| POST | `/api/community/posts/<post_id>/penalty` | manager | 回覆處分 |
+| PUT/DELETE | `/api/community/posts/<post_id>` | logged-in / manager | 編輯 / 刪除回覆 |
+| POST | `/api/community/threads/<thread_id>/lock` | manager | 鎖文 |
+| POST | `/api/community/threads/<thread_id>/sticky` | manager | 置頂文章 |
+| POST | `/api/community/threads/<thread_id>/curate` | manager | 精選文章 |
+
+### Notifications / Reports / Appeals
+
+來源：`routes/reports_notifications.py`, `routes/appeals.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/notifications` | logged-in | 通知列表 |
+| POST | `/api/notifications/<notification_id>/read` | logged-in | 單筆已讀 |
+| POST | `/api/notifications/read-all` | logged-in | 全部已讀 |
+| POST | `/api/admin/notifications/send` | manager | 發送通知 |
+| POST | `/api/reports` | logged-in | 一般檢舉 |
+| GET | `/api/admin/reports` | manager | 檢舉列表 |
+| POST | `/api/admin/reports/<report_id>/claim` | manager | 認領檢舉 |
+| POST | `/api/admin/reports/<report_id>/resolve` | manager | 結案檢舉 |
+| GET/POST | `/api/appeals` | logged-in | 申覆列表 / 建立申覆 |
+| GET | `/api/admin/appeals` | manager | 申覆列表 |
+| POST | `/api/admin/appeals/<appeal_id>/review` | manager | 審核申覆 |
+
+### Cloud Drive / Files / Remote Download
+
+來源：`routes/files.py`
+
+這組 API 很多，建議搭配 [04_USER_GUIDE.md](04_USER_GUIDE.md) 與 [WEB.md](WEB.md) 一起看。
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/files/quota` | logged-in | quota 摘要 |
+| GET | `/api/files/security-policy` | logged-in | 檔案安全規則 |
+| GET | `/api/files/privacy-modes` | logged-in | 隱私模式選項 |
+| POST | `/api/files/upload` | logged-in | 舊上傳入口 |
+| POST | `/api/cloud-drive/upload` | logged-in | 主上傳入口 |
+| GET/POST | `/api/cloud-drive/files` | logged-in | 檔案列表 / 建立文字檔 |
+| GET | `/api/storage/files` | logged-in | storage file listing |
+| POST | `/api/storage/files/attach-existing` | logged-in | 附加既有檔案 |
+| POST | `/api/storage/folders` | logged-in | 建資料夾 |
+| POST | `/api/storage/folders/trash` | logged-in | 資料夾丟垃圾桶 |
+| POST | `/api/storage/folders/move` | logged-in | 移動資料夾 |
+| POST | `/api/storage/folders/album` | logged-in | 資料夾轉相簿 |
+| POST | `/api/storage/files/<storage_file_id>/organize` | logged-in | 整理檔案 |
+| GET | `/api/storage/files/<storage_file_id>/download` | logged-in | 下載 |
+| GET/POST | `/api/storage/trash` | logged-in | 垃圾桶列表 / 操作 |
+| GET/POST | `/api/storage/albums` | logged-in | 相簿列表 / 建立相簿 |
+| POST | `/api/storage/albums/smart-organize` | logged-in | 智慧整理相簿 |
+| GET/PUT/DELETE | `/api/storage/albums/<album_id>` | logged-in | 單一相簿 |
+| GET/POST | `/api/storage/share-links` | logged-in | 建立分享 |
+| POST | `/api/storage/share-links/<link_id>/revoke` | logged-in | 撤銷分享 |
+| GET | `/api/storage/shared/<token>/download` | anonymous | 共享下載 |
+| GET | `/api/storage/shared/albums/<token>` | anonymous | 共享相簿 |
+| GET | `/api/storage/shared/albums/<token>/files/<file_id>/download` | anonymous | 共享相簿檔案下載 |
+| GET/POST | `/api/cloud-drive/remote-download/tasks` | logged-in | 遠端下載任務 |
+| GET/DELETE | `/api/cloud-drive/remote-download/tasks/<task_id>` | logged-in | 單一遠端下載任務 |
+| GET/POST | `/api/cloud-drive/remote-download/torrent-tasks` | logged-in | BT 任務 |
+| GET/POST | `/api/cloud-drive/refs` | logged-in | 雲端引用 |
+| DELETE | `/api/cloud-drive/refs/<ref_id>` | logged-in | 刪除引用 |
+| GET | `/api/cloud-drive/files/<file_id>/preview` | logged-in | 預覽 metadata |
+| GET | `/api/cloud-drive/files/<file_id>/preview/content` | logged-in | 預覽內容 |
+| GET | `/api/cloud-drive/files/<file_id>/text` | logged-in | 文字內容 |
+| GET | `/api/cloud-drive/files/<file_id>/download` | logged-in | 下載檔案 |
+| GET | `/api/cloud-drive/files/<file_id>/e2ee-key` | logged-in | E2EE key |
+| POST | `/api/files/<file_id>/share` | logged-in | 建立分享 |
+| POST | `/api/files/<file_id>/share/revoke` | logged-in | 撤銷分享 |
+| POST | `/api/cloud-drive/announcement-attachment-requests` | logged-in | 公告附件請求 |
+| POST | `/api/root/announcement-attachment-requests/<request_id>/review` | root | 審核公告附件 |
+| GET | `/api/admin/storage/summary` | manager | storage 總覽 |
+| GET | `/api/admin/storage/users` | manager | 使用者 storage 列表 |
+| GET | `/api/root/storage/users` | root | root storage 列表 |
+| GET | `/api/root/storage/users/<user_id>` | root | 單一使用者 storage |
+| PUT/DELETE | `/api/root/storage/users/<user_id>/quota-override` | root | quota override |
+
+### Videos
+
+來源：`routes/videos.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| POST | `/api/videos/publish` | logged-in | 發布影音 |
+| POST | `/api/videos/upload` | logged-in | 上傳影音 |
+| GET | `/api/videos` | anonymous | 影音列表 |
+| GET/PUT/DELETE | `/api/videos/<video_id>` | logged-in / manager | 單一影音 |
+| POST | `/api/media/<file_id>/prepare-stream` | logged-in / manager | 建立 HLS 衍生檔 |
+| GET | `/api/media/<file_id>/stream-status` | logged-in / manager | 查影音衍生狀態 |
+| GET | `/api/videos/<video_id>/playback` | anonymous | 取得 direct / HLS 播放決策 |
+| GET | `/api/videos/<video_id>/stream` | anonymous | 串流 |
+| GET | `/api/videos/<video_id>/hls/master.m3u8` | anonymous | HLS master manifest |
+| GET | `/api/videos/<video_id>/hls/<variant>/playlist.m3u8` | anonymous | HLS variant manifest |
+| GET | `/api/videos/<video_id>/hls/<variant>/<segment>` | anonymous | HLS segment / init |
+| GET | `/api/videos/<video_id>/cover` | anonymous | 封面 |
+| POST | `/api/videos/<video_id>/view` | anonymous | 記觀看 |
+| POST | `/api/videos/<video_id>/like` | logged-in | 按讚 |
+| GET | `/api/videos/<video_id>/comments` | anonymous | 評論列表 |
+| POST | `/api/videos/<video_id>/comment` | logged-in | 留言 |
+| POST | `/api/videos/<video_id>/tip` | logged-in | 打賞 |
+
+### Games
+
+來源：`routes/games.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/games/catalog` | logged-in | 遊戲列表 |
+| GET | `/api/games/users` | logged-in | 遊戲玩家摘要 |
+| GET/POST | `/api/games/chess/invites` | logged-in | 西洋棋邀請 |
+| POST | `/api/games/chess/invites/<invite_id>/<action>` | logged-in | 接受 / 拒絕邀請 |
+| POST | `/api/games/chess/practice` | logged-in | 練習局 |
+| GET/POST | `/api/games/chess/matches` | logged-in | 對局列表 / 建立 |
+| GET/DELETE | `/api/games/chess/matches/<match_id>` | logged-in | 對局詳情 |
+| POST | `/api/games/chess/matches/<match_id>/move` | logged-in | 落子 |
+| POST | `/api/games/chess/matches/<match_id>/resign` | logged-in | 認輸 |
+| GET | `/api/games/chess/leaderboard` | logged-in | 排行榜 |
+| GET | `/api/games/<game_key>/solo-leaderboard` | logged-in | 單機排行榜 |
+| POST | `/api/games/<game_key>/solo-scores` | logged-in | 單機分數 |
+| POST | `/api/root/games/chess/weekly-rewards/award` | root | 發周獎勵 |
+
+### Economy / PointsChain
+
+來源：`routes/economy.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/points/wallet` | logged-in | 積分錢包 |
+| GET | `/api/points/ledger` | logged-in | 個人 ledger |
+| GET | `/api/points/wallet/export.csv` | logged-in | 匯出錢包 |
+| GET | `/api/points/catalog` | logged-in | 點數商品目錄 |
+| GET/PUT | `/api/root/economy/catalog` | root | root 調整商品目錄 |
+| GET | `/api/points/rules` | logged-in | 點數規則 |
+| POST | `/api/points/spend` | logged-in | 消費點數 |
+| GET | `/api/points/ledger/<ledger_uuid>/proof` | logged-in | ledger proof |
+| GET | `/api/admin/points/wallets/<user_id>` | manager | 單一使用者錢包 |
+| POST | `/api/root/points/wallets/<user_id>/sanction` | root | 錢包處分 |
+| GET | `/api/admin/points/ledger` | manager | 全域 ledger |
+| POST | `/api/admin/points/adjust` | manager | 調整積分 |
+| GET | `/api/admin/points/pending-rewards` | manager | 待審獎勵 |
+| POST | `/api/admin/points/pending-rewards/<pending_reward_id>/review` | manager | 審核獎勵 |
+| POST | `/api/root/points/chain/seal` | root | seal chain |
+| GET | `/api/root/points/chain/verify` | root | verify chain |
+| POST | `/api/root/points/chain/recovery` | root | recovery |
+| POST | `/api/root/points/chain/recovery/auto-handle` | root | auto recovery |
+| GET | `/api/root/points/chain/backups` | root | backups |
+| POST | `/api/root/points/chain/recovery/approve` | root | approve recovery |
+| GET | `/api/root/points/report` | root | points 報表 |
+| GET | `/api/root/points/audit` | root | points audit |
+| POST | `/api/root/points/ledger/<ledger_uuid>/rollback` | root | rollback |
+| GET | `/api/admin/points/economy/stats` | manager | economy stats |
+
+> 注意：`docs/BLOCKCHAIN/POINTS_TRANSFER_API.md` 是 Phase 3 規格，不代表現在已可呼叫。
+
+### Trading / Bots / Margin
+
+來源：`routes/trading.py`
+深層規格請看 [TRADING.md](TRADING.md) 與 [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)。
+
+目前 market catalog 已包含：
+
+- display symbols: `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, `PAXG/USDT`
+- internal canonical symbols: `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
+  `BNB/POINTS`, `PAXG/POINTS`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/trading/markets` | logged-in | 市場列表 |
+| GET | `/api/trading/dashboard` | logged-in | 交易頁摘要 |
+| GET | `/api/trading/live-price` | logged-in | 即時價格 / price health |
+| GET | `/api/trading/history/export.csv` | logged-in | 匯出交易歷史 |
+| GET | `/api/trading/btc-signal` | logged-in | BTC_trade signal |
+| GET | `/api/trading/workflow-templates` | logged-in | workflow 模板 |
+| POST | `/api/trading/workflow-templates/custom` | logged-in | 儲存自訂模板 |
+| GET | `/api/trading/reference-prices` | logged-in | K 線 / 指標資料 |
+| GET/POST | `/api/trading/orders` | logged-in | 訂單列表 / 下現貨單 |
+| POST | `/api/trading/orders/<order_uuid>/cancel` | logged-in | 取消現貨單 |
+| GET/POST | `/api/trading/bots` | logged-in | DCA / workflow bot 列表 / 建立 |
+| POST | `/api/trading/bots/backtest` | logged-in | 回測 |
+| GET/PUT/DELETE | `/api/trading/bots/<bot_uuid>` | logged-in | 單一 bot |
+| POST | `/api/trading/bots/<bot_uuid>/increase-runs` | logged-in | 增加 runs |
+| POST | `/api/trading/bots/scan` | logged-in | 手動掃 bot |
+| POST | `/api/trading/grid/preview` | logged-in | Grid 預估毛利/淨利/風險燈號 |
+| GET/POST | `/api/trading/grid-bots` | logged-in | Grid bot 列表 / 建立 |
+| POST | `/api/trading/grid-bots/<bot_uuid>/toggle` | logged-in | 啟停 grid bot |
+| DELETE | `/api/trading/grid-bots/<bot_uuid>` | logged-in | 刪除 grid bot |
+| POST | `/api/trading/grid-bots/scan` | logged-in | 手動掃 grid |
+| POST | `/api/trading/margin/open` | logged-in | 開借貸單 |
+| POST | `/api/trading/margin/<position_uuid>/close` | logged-in | 平倉 |
+| POST | `/api/trading/margin/<position_uuid>/collateral` | logged-in | 補保證金 |
+| GET | `/api/admin/trading/report` | manager | 交易報表 |
+| GET/PUT | `/api/root/trading/settings` | root | root 交易設定 |
+| GET | `/api/root/trading/price-fusion-status` | root | 融合價格診斷 |
+| GET | `/api/root/trading/bot-audit/dashboard` | root | bot audit dashboard |
+| POST | `/api/root/trading/bot-audit/run` | root | 立即跑 bot audit |
+| GET | `/api/root/trading/btc-trade/check` | root | 檢查 BTC_trade |
+| POST | `/api/root/trading/btc-trade/setup` | root | clone / update / install |
+| POST | `/api/root/trading/btc-trade/start` | root | 一鍵啟動預測 |
+| GET | `/api/root/trading/btc-trade/start-status` | root | 背景 job 狀態 |
+| POST | `/api/root/trading/liquidations/scan` | root | 手動掃清算 |
+| POST | `/api/root/trading/orders/match` | root | 手動撮合 |
+| GET/PUT | `/api/root/trading/markets/<symbol>` | root | root 市場設定 / 手動價 |
+| POST | `/api/root/trading/reserve/allocate` | root | 撥資金池 |
+| POST | `/api/root/trading/simulated-balance/reset` | root | 重置 root 模擬資金 |
+| GET | `/api/root/trading/contracts` | root | root 合約模擬列表 |
+| POST | `/api/root/trading/contracts/<position_uuid>/close` | root | root 合約平倉 |
+| GET | `/api/root/trading/verify` | root | 交易對帳 |
+
+### ComfyUI
+
+來源：`routes/comfyui.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/comfyui/status` | logged-in | ComfyUI 狀態 |
+| POST | `/api/comfyui/start` | logged-in | 啟動本地 ComfyUI |
+| GET | `/api/comfyui/models` | logged-in | 模型 / LoRA / embedding / VAE 列表 |
+| POST | `/api/comfyui/billing-quote` | logged-in | 扣點預估 |
+| POST | `/api/comfyui/generate` | logged-in | 生成圖片 |
+| GET | `/api/comfyui/jobs/<job_id>` | logged-in | job 狀態 |
+| POST | `/api/comfyui/interrupt` | logged-in | 中斷生成 |
+| POST | `/api/comfyui/save` | logged-in | 儲存結果 |
+| POST | `/api/comfyui/discard` | logged-in | 丟棄結果 |
+| POST | `/api/comfyui/share` | logged-in | 分享結果 |
+| POST | `/api/root/comfyui/test-connection` | root | 測試連線 |
+| POST | `/api/root/comfyui/stop` | root | 停止本地 ComfyUI |
+| POST | `/api/root/comfyui/civitai/inspect` | root | 讀 Civitai metadata |
+| POST | `/api/root/comfyui/civitai/download` | root | 下載模型 |
+| GET | `/api/root/comfyui/download-jobs/<job_id>` | root | 下載 job 狀態 |
+
+### Security Center / Server Mode / Snapshots / Root Ops
+
+來源：`routes/system_admin.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| GET | `/api/admin/health` | manager | 健康度 |
+| GET | `/api/admin/environment` | manager | 環境資訊 |
+| GET | `/api/admin/health/readiness` | manager | readiness |
+| GET | `/api/admin/health/anomaly` | manager | anomaly |
+| GET | `/api/admin/health/audit-chain` | manager | audit chain 健康 |
+| GET | `/api/admin/health/db-integrity` | manager | DB integrity |
+| GET | `/api/admin/security-center` | manager | 安全中心摘要 |
+| GET | `/api/admin/server-output` | manager | server output |
+| GET/PUT | `/api/admin/settings` | manager | 系統設定 |
+| GET/PUT | `/api/admin/features` | manager | feature flags |
+| GET/PUT | `/api/admin/access-controls` | manager | ACL / whitelist / lockdown |
+| POST | `/api/admin/access-controls/maintenance-bypass-token` | manager | 維護繞過 token |
+| POST | `/api/admin/access-controls/internal-test-token` | manager | internal-test token |
+| GET/POST | `/api/admin/snapshots` | manager | 列快照 / 建快照 |
+| GET/POST | `/api/admin/snapshots/daily` | manager | 日常快照設定 |
+| POST | `/api/admin/system-reset` | manager | 系統重置 |
+| GET/DELETE | `/api/admin/snapshots/<snapshot_id>` | manager | 單一快照 |
+| GET | `/api/admin/snapshots/<snapshot_id>/download` | manager | 下載快照 |
+| POST | `/api/admin/snapshots/upload-restore` | manager | 上傳快照恢復 |
+| POST | `/api/admin/snapshots/<snapshot_id>/restore` | manager | 恢復快照 |
+| GET/POST | `/api/admin/server-mode` | manager/root | 讀 mode / 切相容入口 |
+| POST | `/api/admin/server-mode/exit-superweak` | manager | 離開 superweak |
+| GET | `/api/root/server-mode` | root | root mode 狀態 |
+| POST | `/api/root/server-mode/checkpoint` | root | 建 checkpoint |
+| POST | `/api/root/server-mode/restore-check` | root | restore 前檢查 |
+| POST | `/api/root/server-mode/switch` | root | 切 mode |
+| GET | `/api/root/server-mode/requirements` | root | mode requirement |
+| GET | `/api/root/server-mode/logs` | root | mode logs |
+| GET | `/api/server-mode/logs/verify` | root | verify logs |
+| GET | `/api/root/integrity/status` | root | integrity 狀態 |
+| POST | `/api/root/integrity/rescan` | root | 重掃 integrity |
+| GET | `/api/root/integrity/findings` | root | findings |
+| GET | `/api/root/integrity/findings/<finding_id>` | root | 單一 finding |
+| POST | `/api/root/integrity/findings/bulk-review` | root | 批次處理 findings |
+| POST | `/api/root/integrity/findings/<finding_id>/approve` | root | 核准 finding |
+| POST | `/api/root/integrity/findings/<finding_id>/reject` | root | 拒絕 finding |
+| POST | `/api/root/integrity/findings/<finding_id>/ignore` | root | 忽略 finding |
+| GET | `/api/root/integrity/report` | root | integrity 報告 |
+| POST | `/api/admin/integrity/repair` | manager | 相容 repair 入口 |
+| POST | `/api/admin/restart` | manager | 重啟站台 |
+| GET | `/api/admin/platform-stats` | manager | 平台統計 |
+| GET/POST | `/api/root/security-tests` | root | security jobs 列表 |
+| GET | `/api/root/security-tests/<job_id>` | root | 單一 security job |
+| POST | `/api/root/security-tests/pentest` | root | 啟動 pentest |
+| POST | `/api/root/security-tests/functional` | root | 啟動 functional test |
+| POST | `/api/root/security-tests/stress` | root | 啟動 stress test |
+| GET/PUT | `/api/admin/security-center/thresholds` | manager | security thresholds |
+| GET/PUT | `/api/admin/security-center/controls` | manager | security controls |
+| GET | `/api/root/server-update/status` | root | 更新狀態 |
+| POST | `/api/root/server-update/preview` | root | 更新預覽 |
+| POST | `/api/root/server-update/apply` | root | 套用更新 |
+| GET | `/api/admin/security-center/profiles` | manager | 安全 profile |
+| POST | `/api/root/production-report/upload` | root | 上傳 production report |
+| GET | `/api/root/production-report/status` | root | production report 狀態 |
+| POST | `/api/root/production/enter` | root | 進 production |
+| POST | `/api/root/tester-token/create` | root | 建 tester token |
+| POST | `/api/root/tester-token/revoke` | root | 撤 tester token |
+| GET | `/api/root/tester-token/list` | root | tester token 列表 |
+| GET | `/api/tester/shadow-state` | tester | shadow state |
+| GET | `/api/tester/shadow-role` | tester | shadow role |
+| GET | `/api/tester/shadow-wallet` | tester | shadow wallet |
+| POST | `/api/root/incident/enter` | root | 進 incident lockdown |
+| GET | `/api/root/incident/status` | root | incident 狀態 |
+| POST | `/api/root/incident/resolve` | root | 解除 incident |
+
+### Bug Reports
+
+來源：`routes/bug_reports.py`
+
+| Method | Path | 角色 | 用途 |
+|---|---|---|---|
+| POST | `/api/bug-reports` | logged-in | 提交 bug |
+| GET | `/api/admin/bug-reports` | manager | bug report 列表 |
+| POST | `/api/admin/bug-reports/<report_id>/review` | manager | 審核 bug report |
+
+## 失敗情境與提示
+
+- `200 OK` 不代表輸入一定原樣存入。若你在驗證設定、ACL、交易或風控，請同步查回讀 API 或 DB evidence。
+- `docs/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
+- `live-price` 不是純 read-only，它會同步刷新後端快取價格狀態，請不要把它當成完全無副作用的 health probe。
+
+## 測試方式
+
+- 用 [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md) 的 `curl` 範例逐條驗證
+- 搭配 [11_QA_TESTING.md](11_QA_TESTING.md) 跑 functional smoke / pentest / trading validation
+- 若改到交易 / 權限 / settings，至少補回歸：
+
+```bash
+python3 scripts/pre_push_checks.py --ci
+PYTHONPATH=. python3 -m pytest -q tests
+```
+
+## 相關文件連結
+
+- [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md)
+- [For_developer.md](For_developer.md)
+- [TRADING.md](TRADING.md)
+- [TRADING_BOT_AUDIT.md](TRADING_BOT_AUDIT.md)
+- [07_POINTSCHAIN.md](07_POINTSCHAIN.md)
+- [SECURITY.md](SECURITY.md)

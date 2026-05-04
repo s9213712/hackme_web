@@ -8,6 +8,11 @@ For the shorter deployer-facing summary, start with
 [04_USER_GUIDE.md](04_USER_GUIDE.md). This file keeps the detailed module
 reference.
 
+The formal large-media HLS / segmented streaming design is documented in
+[VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md). Video
+Platform v1 is still the user-facing baseline, but Phase C-1 foundation is now
+implemented for prepared HLS playback.
+
 ## Architecture
 
 - Cloud Drive is the storage layer.
@@ -44,6 +49,17 @@ The server never exposes `storage_path` to the browser. Playback goes through:
 
 ```text
 GET /api/videos/<id>/stream
+```
+
+Prepared stream assets can now also be served through:
+
+```text
+POST /api/media/<file_id>/prepare-stream
+GET  /api/media/<file_id>/stream-status
+GET  /api/videos/<id>/playback
+GET  /api/videos/<id>/hls/master.m3u8
+GET  /api/videos/<id>/hls/<variant>/playlist.m3u8
+GET  /api/videos/<id>/hls/<variant>/<segment>
 ```
 
 The stream endpoint resolves the file with the existing Cloud Drive safe path
@@ -87,8 +103,14 @@ video_tip_min_points
 POST   /api/videos/publish
 GET    /api/videos?sort=new|hot|trending&page=1
 GET    /api/videos/<id>
+POST   /api/media/<file_id>/prepare-stream
+GET    /api/media/<file_id>/stream-status
+GET    /api/videos/<id>/playback
 GET    /api/videos/<id>/cover
 GET    /api/videos/<id>/stream
+GET    /api/videos/<id>/hls/master.m3u8
+GET    /api/videos/<id>/hls/<variant>/playlist.m3u8
+GET    /api/videos/<id>/hls/<variant>/<segment>
 POST   /api/videos/<id>/view
 POST   /api/videos/<id>/like
 DELETE /api/videos/<id>/like
@@ -151,11 +173,19 @@ tests/test_video_comments.py
 tests/test_video_security.py
 ```
 
-## Explicit Non-Goals For v1
+## Explicit Non-Goals For v1 / Phase C-1
 
-- No transcoding.
+- No multi-bitrate ABR ladder yet.
+- No `hls.js` bundle for non-native browsers yet.
 - No CDN.
 - No recommendation algorithm.
 - No subscription/follow system.
 - No livestreaming.
 - No advertising revenue split.
+
+Current note:
+
+- HLS-based large-media streaming is no longer only a paper design. Phase C-1
+  provides prepare/status/playback/HLS routes and derivative packaging for
+  plain or `server_encrypted` video, but direct `/stream` remains the fallback
+  and strict `e2ee` still stays non-streamable on the server side.

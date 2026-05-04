@@ -15,8 +15,10 @@ It is not a real-money exchange.
 
 Enabled in this line:
 
-- Spot trading for `BTC/USDT` and `ETH/USDT` display pairs.
-- Internal API symbols remain `BTC/POINTS` and `ETH/POINTS`.
+- Spot trading for `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, and
+  `PAXG/USDT` display pairs.
+- Internal API symbols remain `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
+  `BNB/POINTS`, and `PAXG/POINTS`.
 - Market/provider definitions are centralized in
   `services/trading_markets.py`, so future points-quoted assets can reuse the
   same live-price, reference-price, and UI mapping pipeline instead of adding
@@ -79,7 +81,8 @@ The trading funding pool is conservative:
 
 Use the trading page to:
 
-1. Select market: `BTC/USDT` or `ETH/USDT`.
+1. Select market: `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, or
+   `PAXG/USDT`.
 2. Choose buy or sell.
 3. Choose market or limit order.
 4. Enter quantity.
@@ -104,7 +107,11 @@ configured spot fee at double rate.
 
 ## Price Source And Chart
 
-By default the backend tries public live providers for `BTCUSDT` and `ETHUSDT`.
+By default the backend tries public live providers through the centralized
+market catalog in `services/trading_markets.py`. That means display markets such
+as `BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, and `PAXG/USDT` are resolved
+to their provider-specific symbols before live-price and reference-price
+requests are sent.
 Execution price fallback is attempted in this order:
 
 1. Binance public ticker.

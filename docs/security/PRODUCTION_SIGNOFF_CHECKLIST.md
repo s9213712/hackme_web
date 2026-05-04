@@ -30,7 +30,7 @@ Mode switch logs:
 Audit export:
 
 - [ ] Every mode switch creates a JSON event under
-  `security/audit_exports/server_mode/`.
+  `runtime/reports/server_mode_audit/`.
 - [ ] Daily JSONL bundle and `.sha256` digest are generated.
 - [ ] Restore and superweak rollback do not remove audit exports.
 - [ ] Export failure blocks `production` / `dev_ready` and enters

@@ -46,6 +46,7 @@ let userSiteAppearanceConfig = {};
 let serverMeta = {};
 let currentSettingsSection = "security";
 let serverConnectionFailures = 0;
+let serverConnectionSlowStreak = 0;
 let serverConnectionTimer = null;
 let notificationPollTimer = null;
 let notificationsOpen = false;
@@ -716,6 +717,11 @@ function setServerConnectionState(state, label) {
   });
 }
 
+const SERVER_CONNECTION_UNSTABLE_FAILURE_COUNT = 2;
+const SERVER_CONNECTION_OFFLINE_FAILURE_COUNT = 3;
+const SERVER_CONNECTION_UNSTABLE_LATENCY_MS = 2500;
+const SERVER_CONNECTION_UNSTABLE_SLOW_STREAK = 2;
+
 async function checkServerConnection() {
   const started = Date.now();
   const ctrl = new AbortController();
@@ -732,18 +738,28 @@ async function checkServerConnection() {
     if (!res.ok || !json.ok) throw new Error("bad status");
     serverConnectionFailures = 0;
     if (json.maintenance_mode) {
+      serverConnectionSlowStreak = 0;
       setServerConnectionState("unstable", "維護模式");
-    } else if (latency > 1800) {
-      setServerConnectionState("unstable", `連線不穩 ${latency}ms`);
-    } else {
-      setServerConnectionState("online", "伺服器正常");
+      return;
     }
+    if (latency > SERVER_CONNECTION_UNSTABLE_LATENCY_MS) {
+      serverConnectionSlowStreak += 1;
+      if (serverConnectionSlowStreak >= SERVER_CONNECTION_UNSTABLE_SLOW_STREAK) {
+        setServerConnectionState("unstable", `連線偏慢 ${latency}ms`);
+      } else {
+        setServerConnectionState("online", "伺服器正常");
+      }
+      return;
+    }
+    serverConnectionSlowStreak = 0;
+    setServerConnectionState("online", "伺服器正常");
   } catch (_) {
     clearTimeout(timeout);
+    serverConnectionSlowStreak = 0;
     serverConnectionFailures += 1;
-    if (serverConnectionFailures >= 2) {
+    if (serverConnectionFailures >= SERVER_CONNECTION_OFFLINE_FAILURE_COUNT) {
       setServerConnectionState("offline", "伺服器離線");
-    } else {
+    } else if (serverConnectionFailures >= SERVER_CONNECTION_UNSTABLE_FAILURE_COUNT) {
       setServerConnectionState("unstable", "連線不穩");
     }
   }
@@ -924,10 +940,10 @@ function renderChatRooms() {
     btn.type = "button";
     btn.className = "chat-room-item" + (Number(prevId) === Number(r.id) ? " active" : "");
     const lock = r.is_private ? "🔒 " : "";
-    const password = r.join_password_required ? " · 密碼" : "";
+    const passwordLabel = r.join_password_required ? " · 密碼" : "";
     const memberCount = r.member_count ? ` · ${r.member_count}人` : "";
-    btn.textContent = `${lock}#${r.id} ${r.name}${memberCount}${password}`;
-    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}${password}`);
+    btn.textContent = `${lock}#${r.id} ${r.name}${memberCount}${passwordLabel}`;
+    btn.setAttribute("title", `聊天室持有者：${r.owner_username || "未知"}${r.is_private ? " · 私人訊息" : ""}${passwordLabel}`);
     btn.addEventListener("click", () => openChatRoom(r.id, true));
     row.appendChild(btn);
     if (canDeleteChatRoom(r)) {

@@ -2049,8 +2049,8 @@ class ServerModeService:
         self.audit = audit
         self.integrity_guard = integrity_guard
         self.save_settings = save_settings
-        base_dir = Path(snapshot_service.base_dir) if snapshot_service else Path.cwd()
-        self.audit_export_dir = base_dir / "security" / "audit_exports" / "server_mode"
+        runtime_base_dir = Path(snapshot_service.runtime_base_dir) if snapshot_service else _default_runtime_base_dir()
+        self.audit_export_dir = runtime_base_dir / "reports" / "server_mode_audit"
 
     def ensure_schema(self, conn):
         ensure_snapshot_schema(conn)

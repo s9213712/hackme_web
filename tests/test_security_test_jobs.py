@@ -158,6 +158,45 @@ def test_root_can_start_stress_job(tmp_path, monkeypatch):
     assert "5" in commands[0]
 
 
+def test_root_can_start_duration_stress_job(tmp_path, monkeypatch):
+    system_admin.SECURITY_TEST_JOBS.clear()
+    commands = []
+
+    class CaptureProcess(_FakeProcess):
+        def __init__(self, command, **kwargs):
+            commands.append(command)
+            super().__init__(command, **kwargs)
+
+    monkeypatch.setattr(system_admin.subprocess, "Popen", CaptureProcess)
+    client = _app(tmp_path).test_client()
+
+    res = client.post("/api/root/security-tests/stress", json={
+        "target": "https://127.0.0.1:5000",
+        "mode": "duration",
+        "duration_seconds": 15,
+        "max_requests": 800,
+        "concurrency": 8,
+        "burst_size": 20,
+        "burst_interval_ms": 250,
+    })
+    data = res.get_json()
+    job = _wait_for_job_done(client, data["job"]["job_id"])
+
+    assert res.status_code == 202
+    assert data["job"]["kind"] == "stress"
+    assert job["status"] == "passed"
+    assert "--mode" in commands[0]
+    assert "duration" in commands[0]
+    assert "--duration-seconds" in commands[0]
+    assert "15" in commands[0]
+    assert "--max-requests" in commands[0]
+    assert "800" in commands[0]
+    assert "--burst-size" in commands[0]
+    assert "20" in commands[0]
+    assert "--burst-interval-ms" in commands[0]
+    assert "250" in commands[0]
+
+
 def test_security_test_jobs_are_root_only(tmp_path):
     system_admin.SECURITY_TEST_JOBS.clear()
     client = _app(tmp_path, actor={"id": 2, "username": "admin", "role": "manager"}).test_client()

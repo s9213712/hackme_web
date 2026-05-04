@@ -192,6 +192,9 @@ def serialize_video(row, *, actor=None, liked=False):
     data["liked_by_me"] = bool(liked)
     data["can_edit"] = bool(actor and (_safe_int(_actor_value(actor, "id")) == data["owner_user_id"] or is_manager_or_root(actor)))
     data["stream_url"] = f"/api/videos/{data['id']}/stream"
+    data["playback_url"] = f"/api/videos/{data['id']}/playback"
+    data["stream_status_url"] = f"/api/media/{data['cloud_file_id']}/stream-status"
+    data["prepare_stream_url"] = f"/api/media/{data['cloud_file_id']}/prepare-stream" if data["can_edit"] else ""
     data["cover_url"] = f"/api/videos/{data['id']}/cover" if data.get("cover_file_id") else ""
     data["media_type"] = _cloud_file_media_type(data)
     return data

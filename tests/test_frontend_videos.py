@@ -22,11 +22,15 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "video-audio-player" in videos_js
     assert "function videoThumbMarkup(video)" in videos_js
     assert "video.cover_url" in videos_js
+    assert "function videoPlaybackUrl(video)" in videos_js
+    assert "playback_url" in videos_js
     assert 'form.append("cover", coverFile)' in videos_js
     assert 'form.append("cloud_file_id", payload.cloud_file_id)' in videos_js
     assert "} else if (coverFile) {" in videos_js
     assert "video-thumb-image" in videos_js
     assert "video-thumb-audio" in videos_js
+    assert "browserSupportsNativeHls" in videos_js
+    assert "HLS 串流" in videos_js
     assert ".video-audio-player" in styles
     assert ".video-thumb-image" in styles
 
@@ -40,6 +44,7 @@ def test_video_platform_uses_separate_watch_view_and_mobile_layout():
     assert 'id="video-watch-view"' in index_html
     assert "function showVideoBrowseView" in videos_js
     assert "function showVideoWatchView" in videos_js
+    assert "/playback" in videos_js
     assert "video-back-btn" in videos_js
     assert "#videos/" in videos_js
     assert '<a class="video-card" href="#videos/${Number(video.id || 0)}" data-video-open=' in videos_js

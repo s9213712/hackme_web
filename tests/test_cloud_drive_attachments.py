@@ -292,6 +292,38 @@ def test_server_encrypted_media_preview_content_supports_range_requests(tmp_path
     assert ranged.data == b"a-real-m"
 
 
+def test_server_encrypted_media_preview_content_encodes_unicode_filename_safely(tmp_path):
+    db_path = tmp_path / "unicode-drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    media_bytes = b"unicode-mp3-preview"
+    res = client.post(
+        "/api/cloud-drive/upload",
+        data={"file": (io.BytesIO(media_bytes), "測試音樂.mp3", "audio/mpeg"), "privacy_mode": "server_encrypted"},
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    file_id = res.get_json()["file"]["file_id"]
+
+    content = client.get(f"/api/cloud-drive/files/{file_id}/preview/content")
+    assert content.status_code == 200
+    assert content.data == media_bytes
+    disposition = content.headers["Content-Disposition"]
+    assert 'filename="' in disposition
+    assert "filename*=UTF-8''" in disposition
+    assert "%E6%B8%AC%E8%A9%A6%E9%9F%B3%E6%A8%82.mp3" in disposition
+
+    ranged = client.get(f"/api/cloud-drive/files/{file_id}/preview/content", headers={"Range": "bytes=0-6"})
+    assert ranged.status_code == 206
+    assert ranged.data == b"unicode"
+    assert "filename*=UTF-8''" in ranged.headers["Content-Disposition"]
+
+
 def test_cloud_drive_upload_repairs_legacy_uploaded_files_schema(tmp_path):
     db_path = tmp_path / "legacy-drive.db"
     storage_root = tmp_path / "storage"
@@ -503,6 +535,50 @@ def test_storage_folders_and_file_organize_flow(tmp_path):
     assert client.get("/api/storage/files").get_json()["files"] == []
     trash = client.get("/api/storage/trash").get_json()["files"]
     assert trash[0]["virtual_path"] == "/archive/final/image.txt"
+
+
+def test_storage_file_and_folder_can_be_renamed_with_unicode_paths(tmp_path):
+    db_path = tmp_path / "rename-drive.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    actor_box = {"actor": _actor(1, "alice")}
+    client = _build_app(db_path, storage_root, actor_box).test_client()
+
+    created_folder = client.post("/api/storage/folders", json={"path": "/音樂"})
+    assert created_folder.status_code == 200
+
+    uploaded = client.post(
+        "/api/storage/files",
+        data={
+            "file": (io.BytesIO(b"rename me"), "sample.mp3", "audio/mpeg"),
+            "virtual_path": "/音樂/sample.mp3",
+        },
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    storage_file_id = uploaded.get_json()["storage_file"]["id"]
+
+    renamed_file = client.put(
+        f"/api/storage/files/{storage_file_id}/organize",
+        json={"virtual_path": "/音樂/テスト音楽.mp3"},
+    )
+    assert renamed_file.status_code == 200
+    renamed_file_body = renamed_file.get_json()["storage_file"]
+    assert renamed_file_body["display_name"] == "テスト音楽.mp3"
+    assert renamed_file_body["virtual_path"] == "/音樂/テスト音楽.mp3"
+
+    renamed_folder = client.put("/api/storage/folders/move", json={"old_path": "/音樂", "new_path": "/音楽"})
+    assert renamed_folder.status_code == 200
+    assert renamed_folder.get_json()["folder_move"]["moved_files"] == 1
+
+    listing = client.get("/api/storage/files").get_json()["files"]
+    assert listing[0]["display_name"] == "テスト音楽.mp3"
+    assert listing[0]["virtual_path"] == "/音楽/テスト音楽.mp3"
+
+    folders = client.get("/api/storage/folders").get_json()["folders"]
+    folder_paths = {folder["virtual_path"] for folder in folders}
+    assert "/音楽" in folder_paths
 
 
 def test_storage_folder_trash_endpoint_handles_empty_explicit_folder(tmp_path):

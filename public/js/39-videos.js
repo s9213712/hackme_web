@@ -46,6 +46,11 @@ function videoStreamUrl(video) {
   return video?.stream_url || (id ? `/api/videos/${id}/stream` : "");
 }
 
+function videoPlaybackUrl(video) {
+  const id = Number(video?.id || 0);
+  return video?.playback_url || (id ? `/api/videos/${id}/playback` : "");
+}
+
 function videoThumbMarkup(video) {
   if (video.cover_url) {
     return `
@@ -228,14 +233,47 @@ function renderVideoComments(comments) {
   `).join("");
 }
 
-function renderVideoDetail(video, comments = []) {
+function hlsMimeForVideo(mediaType = "video") {
+  return mediaType === "audio" ? "application/vnd.apple.mpegurl" : "application/vnd.apple.mpegurl";
+}
+
+function browserSupportsNativeHls(mediaType = "video") {
+  const probe = document.createElement(mediaType === "audio" ? "audio" : "video");
+  return !!(probe && typeof probe.canPlayType === "function" && probe.canPlayType(hlsMimeForVideo(mediaType)));
+}
+
+function playbackSourceForVideo(video, playback) {
+  if (!playback || playback.mode !== "hls") {
+    return {
+      mode: "direct",
+      src: videoStreamUrl(video),
+      statusText: "",
+    };
+  }
+  if (browserSupportsNativeHls(video.media_type)) {
+    return {
+      mode: "hls",
+      src: playback.master_url || playback.fallback_url || videoStreamUrl(video),
+      statusText: "HLS 串流已啟用",
+    };
+  }
+  return {
+    mode: "direct",
+    src: playback.fallback_url || videoStreamUrl(video),
+    statusText: "目前瀏覽器不支援原生 HLS，已改用直接串流",
+  };
+}
+
+function renderVideoDetail(video, comments = [], playback = null) {
   const detail = $("video-detail");
   if (!detail) return;
   videoState.current = video;
   showVideoWatchView();
+  const playbackSource = playbackSourceForVideo(video, playback);
+  const playbackStatus = playback?.status || {};
   const player = video.media_type === "audio"
-    ? `<audio id="video-player" class="video-player video-audio-player" controls preload="metadata" src="${sanitize(video.stream_url || `/api/videos/${video.id}/stream`)}"></audio>`
-    : `<video id="video-player" class="video-player" controls playsinline preload="metadata" src="${sanitize(video.stream_url || `/api/videos/${video.id}/stream`)}"></video>`;
+    ? `<audio id="video-player" class="video-player video-audio-player" controls preload="metadata" src="${sanitize(playbackSource.src)}"></audio>`
+    : `<video id="video-player" class="video-player" controls playsinline preload="metadata" src="${sanitize(playbackSource.src)}"></video>`;
   detail.innerHTML = `
     <div class="video-watch-topbar">
       <button class="btn btn-sm" type="button" id="video-back-btn">← 返回影音列表</button>
@@ -244,6 +282,9 @@ function renderVideoDetail(video, comments = []) {
     <div class="video-watch-layout">
       <div class="video-watch-main">
         ${player}
+        <div class="drive-card-sub" id="video-playback-status">
+          ${sanitize(playbackSource.statusText || (playbackStatus.status === "ready" ? "HLS 串流已就緒" : ""))}
+        </div>
         <div class="drive-card-heading">
           <div>
             <div class="drive-card-title">${sanitize(video.title || "未命名影片")}</div>
@@ -341,7 +382,17 @@ async function openVideoDetail(videoId) {
     const res = await apiFetch(API + `/videos/${encodeURIComponent(videoId)}`, { credentials: "same-origin" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok) throw new Error(json.msg || `HTTP ${res.status}`);
-    renderVideoDetail(json.video, json.comments || []);
+    let playback = null;
+    try {
+      const playbackRes = await apiFetch(videoPlaybackUrl(json.video), { credentials: "same-origin" });
+      const playbackJson = await playbackRes.json().catch(() => ({}));
+      if (playbackRes.ok && playbackJson.ok) {
+        playback = playbackJson;
+      }
+    } catch (_) {
+      playback = null;
+    }
+    renderVideoDetail(json.video, json.comments || [], playback);
   } catch (err) {
     if (detail) detail.innerHTML = `<div class="drive-empty">${sanitize(err.message || "影音載入失敗")}</div>`;
   }

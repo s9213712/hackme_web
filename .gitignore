@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 test_backtest_full.py
 runtime/
+*:Zone.Identifier
 
 *.log
 *.json
@@ -24,4 +25,3 @@ architecture_scan.md
 notes/
 security/reports/*
 !security/reports/.gitkeep
-security/audit_exports/

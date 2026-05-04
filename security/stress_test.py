@@ -3,6 +3,7 @@ import argparse
 import json
 import statistics
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -39,6 +40,48 @@ def request_once(base_url, path, timeout):
     return {"path": path, "status": status, "elapsed_ms": elapsed_ms}
 
 
+class _RequestBudget:
+    def __init__(self, *, mode, paths, request_goal, max_requests, deadline):
+        self.mode = mode
+        self.paths = list(paths)
+        self.request_goal = int(request_goal)
+        self.max_requests = int(max_requests)
+        self.deadline = deadline
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def claim(self):
+        with self._lock:
+            if self.mode == "duration":
+                if time.perf_counter() >= self.deadline:
+                    return None
+                if self._count >= self.max_requests:
+                    return None
+            else:
+                if self._count >= self.request_goal:
+                    return None
+            idx = self._count
+            self._count += 1
+            return idx, self.paths[idx % len(self.paths)]
+
+
+def _worker(base_url, timeout, budget, *, burst_size=1, burst_interval_ms=0):
+    local = []
+    issued_in_burst = 0
+    burst_size = max(1, int(burst_size or 1))
+    while True:
+        slot = budget.claim()
+        if slot is None:
+            break
+        _idx, path = slot
+        local.append(request_once(base_url, path, timeout))
+        issued_in_burst += 1
+        if burst_interval_ms > 0 and issued_in_burst >= burst_size:
+            time.sleep(burst_interval_ms / 1000.0)
+            issued_in_burst = 0
+    return local
+
+
 def percentile(values, pct):
     if not values:
         return None
@@ -53,15 +96,37 @@ def run(args):
     paths = [item.strip() for item in args.paths.split(",") if item.strip()] if args.paths else DEFAULT_PATHS
     total = max(1, args.requests)
     concurrency = min(MAX_CONCURRENCY, max(1, args.concurrency))
+    mode = str(args.mode or "count").strip().lower()
+    if mode not in {"count", "duration"}:
+        raise SystemExit("--mode must be count or duration")
+    duration_seconds = int(args.duration_seconds or 0)
+    max_requests = max(1, int(args.max_requests or total))
+    burst_size = max(1, int(args.burst_size or 1))
+    burst_interval_ms = max(0, int(args.burst_interval_ms or 0))
+    deadline = time.perf_counter() + duration_seconds if mode == "duration" else None
+    budget = _RequestBudget(
+        mode=mode,
+        paths=paths,
+        request_goal=total,
+        max_requests=max_requests,
+        deadline=deadline,
+    )
     results = []
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = []
-        for idx in range(total):
-            path = paths[idx % len(paths)]
-            futures.append(pool.submit(request_once, args.target, path, args.timeout))
+        futures = [
+            pool.submit(
+                _worker,
+                args.target,
+                args.timeout,
+                budget,
+                burst_size=burst_size,
+                burst_interval_ms=burst_interval_ms,
+            )
+            for _ in range(concurrency)
+        ]
         for fut in as_completed(futures):
-            results.append(fut.result())
+            results.extend(fut.result())
     duration = max(time.perf_counter() - started, 0.001)
     latencies = [item["elapsed_ms"] for item in results if item["status"] > 0]
     ok_count = sum(1 for item in results if 200 <= item["status"] < 400)
@@ -72,11 +137,17 @@ def run(args):
         by_status[str(item["status"])] = by_status.get(str(item["status"]), 0) + 1
     summary = {
         "target": args.target,
+        "mode": mode,
         "paths": paths,
-        "requests": total,
+        "requests": len(results),
+        "request_goal": total if mode == "count" else None,
+        "duration_seconds_requested": duration_seconds if mode == "duration" else None,
+        "max_requests": max_requests if mode == "duration" else None,
         "concurrency": concurrency,
+        "burst_size": burst_size,
+        "burst_interval_ms": burst_interval_ms,
         "duration_seconds": round(duration, 3),
-        "approx_requests_per_second": round(total / duration, 2),
+        "approx_requests_per_second": round(len(results) / duration, 2),
         "ok_count": ok_count,
         "failed_count": failed,
         "server_error_count": server_errors,
@@ -106,8 +177,11 @@ def write_report(summary, out_dir):
                 "# Hackme Web Stress Test",
                 "",
                 f"- target: `{summary['target']}`",
-                f"- requests: `{summary['requests']}`",
+                f"- mode: `{summary['mode']}`",
+                f"- requests completed: `{summary['requests']}`",
+                f"- request goal: `{summary['request_goal']}`" if summary["request_goal"] is not None else f"- duration requested: `{summary['duration_seconds_requested']}s`",
                 f"- concurrency: `{summary['concurrency']}`",
+                f"- burst size / interval ms: `{summary['burst_size']}` / `{summary['burst_interval_ms']}`",
                 f"- approximate RPS: `{summary['approx_requests_per_second']}`",
                 f"- failed: `{summary['failed_count']}`",
                 f"- server errors: `{summary['server_error_count']}`",
@@ -129,8 +203,13 @@ def write_report(summary, out_dir):
 def main():
     parser = argparse.ArgumentParser(description="Estimate Hackme Web HTTP traffic capacity.")
     parser.add_argument("--target", default="http://127.0.0.1:5000", help="Base URL to test.")
+    parser.add_argument("--mode", choices=["count", "duration"], default="count", help="Run by fixed request count or fixed duration.")
     parser.add_argument("--requests", type=int, default=200, help="Total requests.")
+    parser.add_argument("--duration-seconds", type=int, default=30, help="Requested duration when --mode duration.")
+    parser.add_argument("--max-requests", type=int, default=5000, help="Safety cap for duration mode.")
     parser.add_argument("--concurrency", type=int, default=20, help="Concurrent workers.")
+    parser.add_argument("--burst-size", type=int, default=1, help="Requests per worker burst before sleeping.")
+    parser.add_argument("--burst-interval-ms", type=int, default=0, help="Sleep interval between bursts per worker.")
     parser.add_argument("--paths", default=",".join(DEFAULT_PATHS), help="Comma-separated GET paths.")
     parser.add_argument("--timeout", type=float, default=8.0, help="Per-request timeout seconds.")
     parser.add_argument("--out", default="security/reports", help="Report output directory.")

@@ -98,6 +98,7 @@ from services.storage_quota_purchases import (
     record_storage_quota_purchase,
 )
 from services.storage_capacity_audit import audit_storage_capacity, can_allocate_storage_bytes
+from services.http_headers import build_content_disposition
 from flask import Response, after_this_request, request, send_file, stream_with_context
 
 
@@ -285,7 +286,10 @@ def register_file_routes(app, deps):
         response = Response(_generate(), mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream")
         if total_size is not None:
             response.headers["Content-Length"] = str(total_size)
-        response.headers.set("Content-Disposition", "attachment" if as_attachment else "inline", filename=download_name)
+        response.headers["Content-Disposition"] = build_content_disposition(
+            "attachment" if as_attachment else "inline",
+            download_name,
+        )
         response.headers["X-Cloud-Drive-Rate-Limit-KB-Per-Sec"] = str(kb_per_sec)
         return response
 
@@ -332,7 +336,10 @@ def register_file_routes(app, deps):
             response = Response(raw, status=200, mimetype=mimetype or mimetypes.guess_type(download_name)[0] or "application/octet-stream")
             response.headers["Content-Length"] = str(total_size)
         response.headers["Accept-Ranges"] = "bytes"
-        response.headers.set("Content-Disposition", "attachment" if as_attachment else "inline", filename=download_name)
+        response.headers["Content-Disposition"] = build_content_disposition(
+            "attachment" if as_attachment else "inline",
+            download_name,
+        )
         return response
 
     def _send_readable_file(row, *, as_attachment, download_name, mimetype=None, conditional=False, actor=None):

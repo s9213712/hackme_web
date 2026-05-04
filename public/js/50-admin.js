@@ -1398,14 +1398,36 @@ function renderRootTradingPriceFusionStatus(status = {}) {
   const providers = $("root-trading-price-fusion-provider-list");
   const excluded = $("root-trading-price-fusion-excluded-list");
   if (!summary || !providers || !excluded) return;
+  const formatNumber = (value, digits = 4) => {
+    if (value == null || value === "" || Number.isNaN(Number(value))) return "-";
+    return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+  };
   const state = String(status.state || "inactive");
   const resolvedSource = String(status.resolved_source || "-");
   const resolvedMode = String(status.resolved_mode || status.requested_mode || "-");
+  const requestedMarketSymbol = String(status.requested_market_symbol || "");
+  const resolvedMarketSymbol = String(status.resolved_market_symbol || status.market_symbol || "");
+  const displayMarketSymbol = String(status.display_market_symbol || status.market_symbol || "-");
   const pricePoints = status.price_points == null ? "-" : `${Number(status.price_points || 0).toLocaleString()} POINTS`;
   const weightsSum = Number(status.weights_sum_percent || 0).toFixed(2);
+  const depthLevels = Number(status.depth_levels || 0);
+  const bandPercent = Number(status.depth_band_percent || 0);
+  const minCoveragePercent = Number(status.min_orderbook_coverage_percent || 0);
+  const minProviderCount = Number(status.min_provider_count || 0);
+  const providerCap = Number(status.max_single_provider_weight_percent || 0).toFixed(2);
+  const medianMidpoint = status.median_midpoint_points == null ? "-" : `${formatNumber(status.median_midpoint_points, 8)} POINTS`;
   const usedRows = Array.isArray(status.providers_used) ? status.providers_used : [];
   const excludedRows = Array.isArray(status.excluded_providers) ? status.excluded_providers : [];
+  const warnings = Array.isArray(status.warnings) ? status.warnings : [];
   const message = String(status.message || "").trim();
+  const riskEligibleRows = usedRows.filter((row) => row && row.risk_grade_eligible);
+  const referenceSourceText = usedRows.length === 1
+    ? `reference 來源：${usedRows[0]?.label || usedRows[0]?.source || "-"}`
+    : `reference 來源：${usedRows.map((row) => row.label || row.source || "-").join("、") || "0 家"}`;
+  const qualifiedSourceText = riskEligibleRows.length === 1
+    ? `唯一合格來源：${riskEligibleRows[0]?.label || riskEligibleRows[0]?.source || "-"}`
+    : `風控級合格來源：${riskEligibleRows.map((row) => row.label || row.source || "-").join("、") || "0 家"}`;
+  const providerCountSummary = `reference 可用來源 ${Number(status.reference_provider_count || usedRows.length)}/${usedRows.length || 0} · 風控級 ${Number(status.risk_grade_provider_count || riskEligibleRows.length)}/${minProviderCount || 0}`;
   const stateLabel = state === "healthy"
     ? "正常"
     : state === "conservative"
@@ -1418,11 +1440,17 @@ function renderRootTradingPriceFusionStatus(status = {}) {
   summary.innerHTML = `
     <div class="drive-file-row">
       <div>
-        <strong>${sanitize(String(status.market_symbol || "-").replace("/POINTS", "/USDT"))}</strong>
+        <strong>${sanitize(displayMarketSymbol)}</strong>
         <div class="drive-card-sub">狀態 ${sanitize(stateLabel)} · 目前價格 ${sanitize(pricePoints)}</div>
-        <div class="drive-card-sub">設定來源 ${sanitize(status.configured_source || "-")} · 實際來源 ${sanitize(resolvedSource)} · 模式 ${sanitize(resolvedMode)} · 權重合計 ${sanitize(weightsSum)}%</div>
+        ${requestedMarketSymbol || resolvedMarketSymbol ? `<div class="drive-card-sub">請求市場 ${sanitize(requestedMarketSymbol || "（未指定）")} · 內部市場 ${sanitize(resolvedMarketSymbol || "-")}</div>` : ""}
+        <div class="drive-card-sub">設定來源 ${sanitize(status.configured_source || "-")} · 實際來源 ${sanitize(resolvedSource)} · reference 模式 ${sanitize(status.reference_mode || resolvedMode)} · 風控級模式 ${sanitize(status.risk_grade_mode || "-")}</div>
+        <div class="drive-card-sub">reference 價格 ${sanitize(status.reference_price_points == null ? "-" : `${formatNumber(status.reference_price_points, 8)} POINTS`)} · 風控級價格 ${sanitize(status.risk_grade_price_points == null ? "-" : `${formatNumber(status.risk_grade_price_points, 8)} POINTS`)} · reference 權重合計 ${sanitize(Number(status.reference_weights_sum_percent || weightsSum).toFixed(2))}% · 風控級權重合計 ${sanitize(Number(status.risk_grade_weights_sum_percent || 0).toFixed(2))}%</div>
+        <div class="drive-card-sub">每家最多採樣 ${sanitize(String(depthLevels || "-"))} 檔 · 目標深度區間 ±${sanitize(String(bandPercent || "-"))}% · 最低覆蓋門檻 ${sanitize(String(minCoveragePercent || "-"))}% · 最少來源 ${sanitize(String(minProviderCount || "-"))} 家 · 單一來源上限 ${sanitize(providerCap)}% · 中位 midpoint ${sanitize(medianMidpoint)}</div>
+        <div class="drive-card-sub">${sanitize(referenceSourceText)} · ${sanitize(qualifiedSourceText)} · ${sanitize(providerCountSummary)}</div>
         ${message ? `<div class="drive-card-sub" style="color:${state === "healthy" ? "#9ecbff" : "#ffb347"};">${sanitize(message)}</div>` : ""}
-        ${status.conservative_mode ? `<div class="drive-card-sub" style="color:#ff9aa8;">已進入保守模式：目前不是正常 fused price，建議避免高風險交易。</div>` : ""}
+        ${warnings.length ? `<div class="drive-card-sub" style="color:#ffcf85;">${warnings.map((warning) => sanitize(String(warning?.message || warning?.code || ""))).filter(Boolean).join("；")}</div>` : ""}
+        ${status.conservative_mode ? `<div class="drive-card-sub" style="color:#ff9aa8;">已進入保守模式：目前不是正常 fused price，僅能作為 degraded reference price，不建議高風險交易。</div>` : ""}
+        <div class="drive-card-sub" style="color:#ffcf85;">目前這套 auto_depth 融合較適合作為 v1 reference price 與流動性 sanity check，不建議單獨作為強平、機器人或實際成交的唯一依據。</div>
       </div>
     </div>
   `;
@@ -1431,8 +1459,16 @@ function renderRootTradingPriceFusionStatus(status = {}) {
       <div class="drive-file-row">
         <div>
           <strong>${sanitize(row.label || row.source || "-")}</strong>
-          <div class="drive-card-sub">即時占比 ${Number(row.normalized_weight_percent || 0).toFixed(2)}% · 價格 ${Number(row.price_points || 0).toLocaleString()} POINTS</div>
-          <div class="drive-card-sub">原始權重 ${Number(row.weight || 0).toFixed(4)} · 深度分數 ${Number(row.depth_score || 0).toFixed(4)}</div>
+          <div class="drive-card-sub">reference 占比 ${Number((row.reference_weight_percent ?? row.normalized_weight_percent) || 0).toFixed(2)}% · 風控級占比 ${Number(row.risk_grade_weight_percent || 0).toFixed(2)}% · 價格 ${formatNumber(row.price_points, 8)} POINTS · midpoint ${formatNumber(row.midpoint_points, 8)}</div>
+          <div class="drive-card-sub">best bid ${formatNumber(row.best_bid_points, 8)} · best ask ${formatNumber(row.best_ask_points, 8)} · spread ${formatNumber(row.spread_percent, 6)}%</div>
+          <div class="drive-card-sub">bid notional ${formatNumber(row.bid_notional_points, 4)} · ask notional ${formatNumber(row.ask_notional_points, 4)} · depth score ${formatNumber(row.depth_score, 4)} · density ${formatNumber(row.depth_density_score, 4)}</div>
+          <div class="drive-card-sub">bid coverage ${formatNumber(row.bid_coverage_percent, 6)}%${row.bid_reached_lower_bound ? " ✓" : ""} · ask coverage ${formatNumber(row.ask_coverage_percent, 6)}%${row.ask_reached_upper_bound ? " ✓" : ""} · ${row.orderbook_truncated ? "coverage truncated" : "coverage complete"}</div>
+          <div class="drive-card-sub">midpoint deviation ${formatNumber(row.midpoint_deviation_percent, 6)}% · age ${formatNumber(row.age_seconds, 3)}s · latency ${formatNumber(row.latency_ms, 2)}ms</div>
+          <div class="drive-card-sub">raw levels bid/ask ${Number(row.raw_bid_levels_count || 0)}/${Number(row.raw_ask_levels_count || 0)} · used ${Number(row.used_bid_levels_count || 0)}/${Number(row.used_ask_levels_count || 0)} · balance ${formatNumber(row.side_balance_ratio_percent, 4)}%</div>
+          <div class="drive-card-sub">數量單位 ${sanitize(row.quantity_unit_label || row.quantity_unit || "-")} · raw ${Number(row.raw_normalized_weight_percent || 0).toFixed(2)}% · effective score ${formatNumber(row.effective_depth_score, 4)}${row.weight_cap_applied ? ` · capped to ${Number((row.reference_weight_percent ?? row.normalized_weight_percent) || 0).toFixed(2)}%` : ""}</div>
+          <div class="drive-card-sub">provider depth limit ${Number(row.provider_depth_request_limit || 0)}${row.provider_depth_limit_reached ? " · provider depth limit reached" : ""}</div>
+          ${row.coverage_warning_message ? `<div class="drive-card-sub" style="color:#ffcf85;">${sanitize(row.coverage_warning_message)}</div>` : ""}
+          ${row.risk_grade_eligible ? "" : `<div class="drive-card-sub" style="color:#ff9aa8;">coverage 未達門檻，已排除風控級權重；資料截斷，不代表該交易所真實深度不足。</div>`}
         </div>
       </div>
     `).join("")
@@ -1443,12 +1479,25 @@ function renderRootTradingPriceFusionStatus(status = {}) {
         ? `API 失效 / timeout / 格式錯誤：${row.error || "未提供細節"}`
         : row.reason === "manual_weight_zero"
           ? "手動權重為 0，因此不參與融合"
+          : row.reason === "midpoint_deviation_exceeded"
+            ? `midpoint deviation 過大：${row.error || "已排除"}`
+            : row.reason === "one_sided_depth"
+              ? `單邊深度過高：${row.error || "已排除"}`
+              : row.reason === "insufficient_coverage"
+                ? `深度覆蓋不足：${row.error || "已排除"}`
+              : row.reason === "latency_too_high"
+                ? `order book latency 過高：${row.error || "已排除"}`
+                : row.reason === "stale_orderbook"
+                  ? `order book stale：${row.error || "已排除"}`
           : row.error || row.reason || "已排除";
       return `
         <div class="drive-file-row">
           <div>
             <strong>${sanitize(row.label || row.source || "-")}</strong>
             <div class="drive-card-sub">${sanitize(reason)}</div>
+            ${row.best_bid_points != null ? `<div class="drive-card-sub">best bid ${sanitize(formatNumber(row.best_bid_points, 8))} · best ask ${sanitize(formatNumber(row.best_ask_points, 8))} · spread ${sanitize(formatNumber(row.spread_percent, 6))}%</div>` : ""}
+            ${row.bid_notional_points != null ? `<div class="drive-card-sub">bid notional ${sanitize(formatNumber(row.bid_notional_points, 4))} · ask notional ${sanitize(formatNumber(row.ask_notional_points, 4))} · bid coverage ${sanitize(formatNumber(row.bid_coverage_percent, 6))}% · ask coverage ${sanitize(formatNumber(row.ask_coverage_percent, 6))}%</div>` : ""}
+            ${row.bid_notional_points != null ? `<div class="drive-card-sub">deviation ${sanitize(formatNumber(row.midpoint_deviation_percent, 6))}% · latency ${sanitize(formatNumber(row.latency_ms, 2))}ms · ${row.orderbook_truncated ? "coverage truncated" : "coverage complete"}${row.provider_depth_limit_reached ? " · provider depth limit reached" : ""}</div>` : ""}
           </div>
         </div>
       `;
@@ -1666,9 +1715,12 @@ function renderRootTradingFusionWeightInputs(settings = {}) {
     ? settings.price_fusion_manual_weights
     : {};
   container.innerHTML = providers.map((provider) => `
-    <label>
-      ${sanitize(labels[provider] || provider)}
-      <input type="number" min="0" max="1000" step="0.1" data-trading-price-weight="${sanitize(provider)}" value="${Number(weights[provider] ?? 1)}" />
+    <label class="trading-fusion-weight-chip">
+      <span class="trading-fusion-weight-label">${sanitize(labels[provider] || provider)}</span>
+      <span class="trading-fusion-weight-input-wrap">
+        <input type="number" min="0" max="1000" step="0.1" data-trading-price-weight="${sanitize(provider)}" value="${Number(weights[provider] ?? 1)}" />
+        <span class="trading-fusion-weight-unit">%</span>
+      </span>
     </label>
   `).join("");
 }
@@ -1707,6 +1759,11 @@ function renderRootTradingSettings(payload) {
   if ($("root-trading-short-collateral-percent")) $("root-trading-short-collateral-percent").value = adminPercentValue(settings.short_collateral_percent ?? 60, 60);
   if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "fused_weighted";
   if ($("root-trading-price-fusion-mode")) $("root-trading-price-fusion-mode").value = settings.price_fusion_mode || "auto_depth";
+  if ($("root-trading-price-fusion-depth-band-percent")) $("root-trading-price-fusion-depth-band-percent").value = Number(settings.price_fusion_depth_band_percent ?? 1);
+  if ($("root-trading-price-fusion-depth-levels")) $("root-trading-price-fusion-depth-levels").value = Number(settings.price_fusion_depth_levels ?? 100);
+  if ($("root-trading-price-fusion-min-coverage-percent")) $("root-trading-price-fusion-min-coverage-percent").value = Number(settings.price_fusion_min_orderbook_coverage_percent ?? 0.5);
+  if ($("root-trading-price-fusion-max-provider-weight")) $("root-trading-price-fusion-max-provider-weight").value = adminPercentValue(settings.price_fusion_max_single_provider_weight_percent ?? 40, 40);
+  if ($("root-trading-price-fusion-min-provider-count")) $("root-trading-price-fusion-min-provider-count").value = Number(settings.price_fusion_min_provider_count ?? 3);
   renderRootTradingFusionWeightInputs(settings);
   renderRootTradingPriceFusionMarketOptions(payload);
   const priceSourceSelect = $("root-trading-price-source");
@@ -1852,6 +1909,11 @@ async function saveRootTradingSettings() {
       price_source: ($("root-trading-price-source")?.value || "fused_weighted"),
       price_fusion_mode: ($("root-trading-price-fusion-mode")?.value || "auto_depth"),
       price_fusion_manual_weights: collectRootTradingFusionWeights(),
+      price_fusion_depth_band_percent: Number($("root-trading-price-fusion-depth-band-percent")?.value || 1),
+      price_fusion_depth_levels: Number($("root-trading-price-fusion-depth-levels")?.value || 100),
+      price_fusion_min_orderbook_coverage_percent: Number($("root-trading-price-fusion-min-coverage-percent")?.value || 0.5),
+      price_fusion_max_single_provider_weight_percent: adminInputPercent($("root-trading-price-fusion-max-provider-weight")?.value || 40),
+      price_fusion_min_provider_count: Number($("root-trading-price-fusion-min-provider-count")?.value || 3),
       max_price_staleness_seconds: Number($("root-trading-max-price-staleness")?.value || 0),
       margin_liquidation_enabled: !!$("root-trading-liquidation-enabled")?.checked,
       bot_auto_scan_enabled: !!$("root-trading-bot-auto-enabled")?.checked,

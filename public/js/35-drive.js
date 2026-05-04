@@ -1677,6 +1677,20 @@ async function fetchDrivePreviewContent(fileId, csrf, expectedMime = "") {
   return currentDrivePreviewUrl;
 }
 
+function drivePreviewUsesDirectStream(preview) {
+  const category = String(preview?.category || "");
+  return category === "audio" || category === "video";
+}
+
+async function resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen = false } = {}) {
+  if (drivePreviewUsesDirectStream(preview)) {
+    if (fullscreen) clearAlbumFullPreviewUrl();
+    else clearDrivePreviewUrl();
+    return drivePreviewContentUrl(fileId);
+  }
+  return fetchDrivePreviewContent(fileId, csrf, preview?.mime_type || "");
+}
+
 function renderDriveDecryptedPreviewMedia(preview, blob, { fullscreen = false } = {}) {
   const normalizedBlob = normalizeDrivePreviewBlobMime(blob, preview?.mime_type || "");
   const url = URL.createObjectURL(normalizedBlob);
@@ -1827,9 +1841,9 @@ async function previewDriveFile(fileId, options = {}) {
       return;
     }
     if (preview.render_mode === "media") {
-      const url = await fetchDrivePreviewContent(fileId, csrf, preview.mime_type || "");
-      if (preview.category === "audio") panel.innerHTML += `<audio controls src="${url}"></audio>`;
-      else if (preview.category === "video") panel.innerHTML += `<video controls src="${url}"></video>`;
+      const url = await resolveDrivePreviewMediaUrl(fileId, csrf, preview);
+      if (preview.category === "audio") panel.innerHTML += `<audio controls preload="metadata" src="${url}"></audio>`;
+      else if (preview.category === "video") panel.innerHTML += `<video controls preload="metadata" playsinline src="${url}"></video>`;
       else if (preview.category === "image") panel.innerHTML += `<img src="${url}" alt="${sanitize(preview.filename || "image preview")}" />`;
       else if (preview.category === "pdf") panel.innerHTML += `<iframe src="${url}" title="PDF preview"></iframe>`;
       else panel.innerHTML += `<div class="drive-empty">此檔案無可用預覽。</div>`;
@@ -1937,17 +1951,17 @@ async function previewAlbumFileFullscreen(fileId, fileName = "", options = {}) {
     if (preview.render_mode !== "media") {
       throw new Error("這個檔案類型目前只提供右側 metadata 預覽");
     }
-    const blob = normalizeDrivePreviewBlobMime(await fetchDrivePreviewBlob(fileId, csrf), preview.mime_type || "");
-    currentAlbumFullPreviewUrl = URL.createObjectURL(blob);
-    if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || blob.type || "-"} · scan=${preview.scan_status || "-"}`;
+    const url = await resolveDrivePreviewMediaUrl(fileId, csrf, preview, { fullscreen: true });
+    currentAlbumFullPreviewUrl = drivePreviewUsesDirectStream(preview) ? "" : url;
+    if (meta) meta.textContent = `${formatDriveBytes(preview.size_bytes || 0)} · ${preview.mime_type || "-"} · scan=${preview.scan_status || "-"}`;
     if (preview.category === "image") {
-      body.innerHTML = `<img src="${currentAlbumFullPreviewUrl}" alt="${sanitize(preview.filename || fileName || "image preview")}" />`;
+      body.innerHTML = `<img src="${url}" alt="${sanitize(preview.filename || fileName || "image preview")}" />`;
     } else if (preview.category === "video") {
-      body.innerHTML = `<video controls autoplay src="${currentAlbumFullPreviewUrl}"></video>`;
+      body.innerHTML = `<video controls autoplay preload="metadata" playsinline src="${url}"></video>`;
     } else if (preview.category === "audio") {
-      body.innerHTML = `<audio controls autoplay src="${currentAlbumFullPreviewUrl}"></audio>`;
+      body.innerHTML = `<audio controls autoplay preload="metadata" src="${url}"></audio>`;
     } else if (preview.category === "pdf") {
-      body.innerHTML = `<iframe src="${currentAlbumFullPreviewUrl}" title="${sanitize(preview.filename || fileName || "PDF preview")}"></iframe>`;
+      body.innerHTML = `<iframe src="${url}" title="${sanitize(preview.filename || fileName || "PDF preview")}"></iframe>`;
     } else {
       throw new Error("這個檔案類型目前只支援右側預覽");
     }
@@ -2458,6 +2472,7 @@ function storageFolderRows(folders) {
           </div>
           <div class="drive-file-actions">
             <button class="btn btn-primary" type="button" data-drive-action="open-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">開啟</button>
+            <button class="btn" type="button" data-drive-action="rename-storage-folder" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(name)}">重新命名</button>
             <button class="btn" type="button" data-drive-action="folder-to-album" data-path="${sanitize(folder.virtual_path || "")}" data-name="${sanitize(name)}">設為相簿</button>
             <button class="btn" type="button" data-drive-action="select-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">移動</button>
             <button class="btn btn-danger" type="button" data-drive-action="trash-storage-folder" data-path="${sanitize(folder.virtual_path || "")}">刪除</button>
@@ -2485,6 +2500,7 @@ function storageFileRows(files) {
       </div>
       <div class="drive-file-actions">
         <button class="btn" type="button" data-drive-action="${sanitize(primary.action)}" data-file-id="${sanitize(file.file_id)}">${sanitize(primary.label)}</button>
+        <button class="btn" type="button" data-drive-action="rename-storage-file" data-storage-file-id="${sanitize(file.id)}" data-path="${sanitize(file.virtual_path || "")}" data-name="${sanitize(file.display_name || storageBaseName(file.virtual_path) || file.id)}">重新命名</button>
         <button class="btn" type="button" data-drive-action="move-storage-file" data-storage-file-id="${sanitize(file.id)}" data-path="${sanitize(file.virtual_path || "")}">移動</button>
         <button class="btn" type="button" data-drive-action="download-storage" data-storage-file-id="${sanitize(file.id)}">下載</button>
         ${albumButton}
@@ -2670,6 +2686,31 @@ async function moveStorageFileFromRow(id, currentPath) {
   }
 }
 
+async function renameStorageFile(id, currentPath, currentName = "") {
+  const oldPath = normalizeStoragePath(currentPath);
+  const currentDir = storageDirName(oldPath);
+  const fallbackName = currentName || storageBaseName(oldPath) || "file";
+  const requested = window.prompt("重新命名檔案", fallbackName);
+  if (requested === null) return;
+  const cleanName = String(requested).trim();
+  if (!cleanName) {
+    alert("檔名不可為空");
+    return;
+  }
+  if (cleanName.includes("/")) {
+    alert("重新命名只接受檔名，不可包含 /");
+    return;
+  }
+  const path = joinStoragePath(currentDir, cleanName);
+  try {
+    await storageAction(`/storage/files/${encodeURIComponent(id)}/organize`, "PUT", { virtual_path: path });
+    setStorageSelection("", "");
+    await loadDriveDashboard();
+  } catch (err) {
+    alert(err.message || "重新命名檔案失敗");
+  }
+}
+
 function selectStorageFolderForMove(path) {
   const oldPath = normalizeStoragePath(path);
   const requested = window.prompt("移動資料夾到", oldPath);
@@ -2677,6 +2718,35 @@ function selectStorageFolderForMove(path) {
   if ($("storage-folder-move-old")) $("storage-folder-move-old").value = oldPath;
   if ($("storage-folder-move-new")) $("storage-folder-move-new").value = requested.startsWith("/") ? requested : joinStoragePath(storageDirName(oldPath), requested);
   moveStorageFolder();
+}
+
+async function renameStorageFolder(path, currentName = "") {
+  const oldPath = normalizeStoragePath(path);
+  const currentDir = storageDirName(oldPath);
+  const fallbackName = currentName || storageBaseName(oldPath) || "folder";
+  const requested = window.prompt("重新命名資料夾", fallbackName);
+  if (requested === null) return;
+  const cleanName = String(requested).trim();
+  if (!cleanName) {
+    alert("資料夾名稱不可為空");
+    return;
+  }
+  if (cleanName.includes("/")) {
+    alert("重新命名只接受資料夾名稱，不可包含 /");
+    return;
+  }
+  const newPath = joinStoragePath(currentDir, cleanName);
+  try {
+    await storageAction("/storage/folders/move", "PUT", { old_path: oldPath, new_path: newPath });
+    if (currentStoragePath === oldPath || currentStoragePath.startsWith(`${oldPath}/`)) {
+      currentStoragePath = currentStoragePath === oldPath
+        ? newPath
+        : currentStoragePath.replace(oldPath, newPath);
+    }
+    await loadDriveDashboard();
+  } catch (err) {
+    alert(err.message || "重新命名資料夾失敗");
+  }
 }
 
 async function moveStorageFolder() {
@@ -3587,6 +3657,7 @@ document.addEventListener("click", (event) => {
     if (action === "close-preview") return closeDrivePreview();
     if (action === "close-album-full-preview") return closeAlbumFullPreview();
     if (action === "download-storage") return downloadStorageFile(storageFileId);
+    if (action === "rename-storage-file") return renameStorageFile(storageFileId, path, name);
     if (action === "select-storage-file") return selectStorageFileForOrganize(storageFileId, path);
     if (action === "move-storage-file") return moveStorageFileFromRow(storageFileId, path);
     if (action === "open-storage-folder") return openStorageFolder(path);
@@ -3594,6 +3665,7 @@ document.addEventListener("click", (event) => {
     if (action === "trash-storage") return trashStorageFile(storageFileId);
     if (action === "restore-storage") return restoreStorageFile(storageFileId);
     if (action === "purge-storage") return purgeStorageFile(storageFileId);
+    if (action === "rename-storage-folder") return renameStorageFolder(path, name);
     if (action === "trash-storage-folder") return trashStorageFolder(path);
     if (action === "folder-to-album") return createAlbumFromFolder(path, name);
     if (action === "restore-storage-trash") return restoreStorageTrash();

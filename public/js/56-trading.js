@@ -130,6 +130,8 @@ function renderTradingCurrentPrice(market, options = {}) {
   const health = options.priceHealth || liveMeta[symbol]?.price_health || "healthy";
   const fallbackReason = options.fallbackReason || liveMeta[symbol]?.fallback_reason || "";
   const excludedSources = Array.isArray(options.excludedSources) ? options.excludedSources : (liveMeta[symbol]?.excluded_sources || []);
+  const warnings = Array.isArray(options.warnings) ? options.warnings : (liveMeta[symbol]?.warnings || []);
+  const highRiskBlockReason = options.highRiskBlockReason || liveMeta[symbol]?.high_risk_block_reason || "";
   const defaultedMarket = options.defaultedMarket === true || liveMeta[symbol]?.defaulted_market === true;
   const previousPrice = symbol && Number.isFinite(priceHistory[symbol]) ? Number(priceHistory[symbol]) : null;
   if (priceEl) {
@@ -181,10 +183,18 @@ function renderTradingCurrentPrice(market, options = {}) {
     }
   }
   if (healthEl) {
-    if (health === "fallback" || excludedSources.length) {
+    if (health === "conservative") {
+      const notes = [];
+      if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
+      if (highRiskBlockReason) notes.push(highRiskBlockReason);
+      if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
+      healthEl.textContent = `🟡 價格來源保守模式${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.classList.add("warning");
+    } else if (health === "fallback" || health === "degraded" || excludedSources.length) {
       const notes = [];
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
       if (fallbackReason) notes.push(fallbackReason);
+      if (!fallbackReason && warnings.length) notes.push(String(warnings[0]?.message || warnings[0]?.code || ""));
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
       healthEl.textContent = `🟡 價格來源降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
@@ -3478,6 +3488,9 @@ async function loadTradingLivePrice() {
           price_health: json.price_health || "healthy",
           fallback_reason: json.fallback_reason || "",
           excluded_sources: Array.isArray(json.excluded_sources) ? json.excluded_sources : [],
+          warnings: Array.isArray(json.warnings) ? json.warnings : [],
+          high_risk_blocked: !!json.high_risk_blocked,
+          high_risk_block_reason: json.high_risk_block_reason || "",
           defaulted_market: !!json.defaulted_market,
         };
         if (nextMarket.symbol === selectedSymbol) selectedMeta = liveMeta[nextMarket.symbol];

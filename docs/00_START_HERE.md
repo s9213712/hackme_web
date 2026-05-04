@@ -73,9 +73,11 @@
 1. 先看 [05_FEATURES_OVERVIEW.md](05_FEATURES_OVERVIEW.md)。
 2. 再看 [For_developer.md](For_developer.md) 了解 API、schema、runtime、
    feature flags。
-3. QA 與驗車流程看 [11_QA_TESTING.md](11_QA_TESTING.md)；
+3. 若你要規劃大檔影音串流、HLS、E2EE / `server_encrypted` 的媒體衍生策略，
+   再看 [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md)。
+4. QA 與驗車流程看 [11_QA_TESTING.md](11_QA_TESTING.md)；
    agent 級深度 runbook 看 [QA_MISSION_FOR_AGENTS.md](QA_MISSION_FOR_AGENTS.md)。
-4. 若你要直接接手 smoke / pentest，自 `2026.05.03-063` 起，
+5. 若你要直接接手 smoke / pentest，自 `2026.05.03-063` 起，
    `smoke_suite.py`、`run_functional_smoke.sh` 與
    `run_pentest.sh --only functional-permissions` 的預設 smoke 帳密已對齊，
    可先沿用 `RootSmoke123! / ManagerSmoke123! / TestSmoke123!` 這組隔離測試密碼。
@@ -88,7 +90,8 @@
 2. 第二層：主題導引，如 `06_SECURITY_MODEL.md`、`07_POINTSCHAIN.md`、
    `08_TRADING_ENGINE.md`、`09_SNAPSHOT_RESET_RESTORE.md`、`10_WEB_TERMINAL.md`。
 3. 第三層：現有深層參考文件與 runbook，如 `WEB.md`、`TRADING.md`、
-   `VIDEO_PLATFORM.md`、`For_developer.md`、`docs/security/*.md`、
+   `VIDEO_PLATFORM.md`、`VIDEO_STREAMING_ARCHITECTURE.md`、
+   `For_developer.md`、`docs/security/*.md`、
    `QA_MISSION_FOR_AGENTS.md`。
 
 原則是先讓部署者完成正確決策，再進細節，不反過來。

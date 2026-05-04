@@ -13,7 +13,7 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.04-098`
+- Release ID: `2026.05.05-107`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -109,6 +109,25 @@ matches the bootstrap value. Override the first-boot passwords with
 
 ## API Overview
 
+Canonical API route listing now lives in [API_REFERENCE.md](API_REFERENCE.md).
+Use this file for:
+
+- runtime layout
+- schema / release / environment notes
+- high-level API grouping
+
+Use [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md) when you want to operate the
+site with `curl` / shell commands instead of the web UI.
+
+The formal HLS / segmented streaming Phase C design for large media now lives
+in [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md). Use that
+document for:
+
+- large-video streaming architecture
+- `server_encrypted` media derivative strategy
+- strict E2EE streaming boundaries
+- rollout sequencing for HLS playback
+
 All write endpoints require CSRF unless explicitly designed as public bootstrap
 or login flow. Authenticated browser clients should fetch `/api/csrf-token` and
 send `X-CSRF-Token`.
@@ -118,8 +137,10 @@ send `X-CSRF-Token`.
 Trading market metadata is now centralized in
 `services/trading_markets.py`. That module is the canonical source for:
 
-- internal symbols such as `BTC/POINTS`
-- user-facing display symbols such as `BTC/USDT`
+- internal symbols such as `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`,
+  `BNB/POINTS`, and `PAXG/POINTS`
+- user-facing display symbols such as `BTC/USDT`, `ETH/USDT`, `XRP/USDT`,
+  `BNB/USDT`, and `PAXG/USDT`
 - per-provider identifiers for Binance / OKX / Coinbase / Kraken / Gemini /
   Bitstamp / CoinGecko
 - which markets support live price, reference candles, and BTC_trade
@@ -287,7 +308,13 @@ accepts or returns a raw storage path.
 - `POST /api/videos/publish`
 - `GET /api/videos`
 - `GET /api/videos/{id}`
+- `POST /api/media/{file_id}/prepare-stream`
+- `GET /api/media/{file_id}/stream-status`
+- `GET /api/videos/{id}/playback`
 - `GET /api/videos/{id}/stream`
+- `GET /api/videos/{id}/hls/master.m3u8`
+- `GET /api/videos/{id}/hls/{variant}/playlist.m3u8`
+- `GET /api/videos/{id}/hls/{variant}/{segment}`
 - `POST /api/videos/{id}/view`
 - `POST /api/videos/{id}/like`
 - `DELETE /api/videos/{id}/like`
@@ -299,6 +326,14 @@ Tips are PointsChain ledger operations. The viewer is debited for the gross
 amount, the uploader receives the net amount, and the official `root` fee
 account receives the platform fee. All rows are written in one database
 transaction, and retry protection uses `Idempotency-Key` when supplied.
+
+Streaming notes:
+
+- plain video can now be prepared into HLS derivatives
+- `server_encrypted` video can be prepared through a controlled
+  decrypt-and-package path
+- strict `e2ee` remains unavailable for server-side streaming derivatives
+- browsers without native HLS support still fall back to direct `/stream`
 
 ### ComfyUI
 
@@ -407,8 +442,9 @@ Root/admin trading APIs:
 
 Trading API notes:
 
-- Public UI pairs are displayed as `BTC/USDT` and `ETH/USDT`; internal symbols
-  remain `BTC/POINTS` and `ETH/POINTS`.
+- Public UI pairs are displayed as `BTC/USDT`, `ETH/USDT`, `XRP/USDT`,
+  `BNB/USDT`, and `PAXG/USDT`; internal symbols remain `BTC/POINTS`,
+  `ETH/POINTS`, `XRP/POINTS`, `BNB/POINTS`, and `PAXG/POINTS`.
 - Trading uses `1 POINT = 1 USDT`.
 - User funds must flow through PointsChain. Do not directly update wallet
   balances for trading.
@@ -666,9 +702,10 @@ Cleanup helpers:
 python3 scripts/pre_push_checks.py --clean --clean-temp --yes
 ```
 
-- `--clean` removes safe repository caches only: `__pycache__`,
+- `--clean` removes safe repository caches and repo-root `runtime/`: `__pycache__`,
   `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.coverage`, `htmlcov`,
-  `dist`, `build`, `*.pyc`, and `*.pyo`.
+  `dist`, `build`, `*.pyc`, `*.pyo`, and a mistakenly generated `runtime/`
+  directory.
 - `--clean` never removes DB/log/storage/report data, security reports, bug
   reports, key material, `.gitkeep`, or tracked files unless they are explicit
   cache artifacts.
@@ -683,8 +720,8 @@ Install the blocking hook:
 bash hooks/install-hooks.sh
 ```
 
-The hook bumps `APP_RELEASE_ID`, amends the tip commit, runs the local gate in
-`--ci` mode, and blocks the push if it fails.
+The hook bumps `APP_RELEASE_ID`, amends the tip commit, runs `--clean --yes
+--ci`, and blocks the push if the cleanup or validation fails.
 
 Focused test run:
 

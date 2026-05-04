@@ -31,6 +31,7 @@ weekly salary jobs are not run at startup unless the operator explicitly sets
 | `runtime/database/database.db` | SQLite runtime database. |
 | `runtime/storage/` | Cloud Drive user files. |
 | `runtime/reports/bugs/` | User bug reports. |
+| `runtime/reports/server_mode_audit/` | Server mode audit export JSON / JSONL / SHA256 bundles. |
 | `runtime/chats/` | Chat sidecar logs. |
 | `runtime/anchors/` | Audit/integrity anchor files. |
 | `runtime/logs/` | Server and audit text logs. |

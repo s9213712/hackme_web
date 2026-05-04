@@ -15,7 +15,7 @@
 | 個人外觀 / 站點主題 | 全用戶 + root | root 全站預設、個人外觀覆寫開關 | [03_ADMIN_GUIDE.md](03_ADMIN_GUIDE.md), [04_USER_GUIDE.md](04_USER_GUIDE.md), [WEB.md](WEB.md) |
 | 社群 / Chat / 論壇 / 公告 | 一般站點 | reports / notifications / moderation | [WEB.md](WEB.md) |
 | Cloud Drive / 相簿 | 全用戶 | attachments、albums、upload security | [WEB.md](WEB.md) |
-| Video Platform | 內容站點 | Cloud Drive、PointsChain | [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md) |
+| Video Platform | 內容站點 | Cloud Drive、PointsChain | [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md) |
 | ComfyUI | AI 站點 | feature_comfyui、local/remote ComfyUI、Civitai 僅本地模式 | [WEB.md](WEB.md), [For_developer.md](For_developer.md) |
 | Appeals / Notices / Governance | 有審核流程的站點 | reports、notifications、identity/member governance | [WEB.md](WEB.md) |
 | Security Center / Server Mode | root | audit、integrity、snapshot/restore、health center | [06_SECURITY_MODEL.md](06_SECURITY_MODEL.md), [SERVER_MODE_V2_PROFILE_MATRIX.md](SERVER_MODE_V2_PROFILE_MATRIX.md) |
@@ -74,7 +74,7 @@
 - 原理：影片 metadata 與互動是 presentation layer，實際檔案仍由 Cloud Drive 提供。
 - 失敗情境與提示：E2EE 檔案不可發布；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
 - 測試方式：發布、播放、private/unlisted、評論、打賞、權限與解密失敗情境。
-- 相關文件連結：[VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
+- 相關文件連結：[VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
 ### ComfyUI
 

@@ -1383,25 +1383,46 @@ def register_system_admin_routes(app, deps):
         if not re.fullmatch(r"https?://[A-Za-z0-9.\-_\[\]:]+(?::\d+)?(?:/.*)?", target):
             return json_resp({"ok": False, "msg": "target 必須是 http(s) URL"}), 400
         total_requests = _safe_security_test_int(data.get("requests"), 200, 1, 5000)
+        duration_seconds = _safe_security_test_int(data.get("duration_seconds"), 30, 1, 600)
+        max_requests = _safe_security_test_int(data.get("max_requests"), 5000, 1, 20000)
         concurrency = _safe_security_test_int(data.get("concurrency"), 20, 1, 100)
+        burst_size = _safe_security_test_int(data.get("burst_size"), 1, 1, 500)
+        burst_interval_ms = _safe_security_test_int(data.get("burst_interval_ms"), 0, 0, 60000)
         timeout_seconds = _safe_security_test_int(data.get("timeout_seconds"), 8, 1, 120)
+        mode = str(data.get("mode") or "count").strip().lower()
         if total_requests is None:
             return json_resp({"ok": False, "msg": "requests 必須介於 1-5000"}), 400
+        if duration_seconds is None:
+            return json_resp({"ok": False, "msg": "duration_seconds 必須介於 1-600"}), 400
+        if max_requests is None:
+            return json_resp({"ok": False, "msg": "max_requests 必須介於 1-20000"}), 400
         if concurrency is None:
             return json_resp({"ok": False, "msg": "concurrency 必須介於 1-100"}), 400
+        if burst_size is None:
+            return json_resp({"ok": False, "msg": "burst_size 必須介於 1-500"}), 400
+        if burst_interval_ms is None:
+            return json_resp({"ok": False, "msg": "burst_interval_ms 必須介於 0-60000"}), 400
         if timeout_seconds is None:
             return json_resp({"ok": False, "msg": "timeout_seconds 必須介於 1-120"}), 400
+        if mode not in {"count", "duration"}:
+            return json_resp({"ok": False, "msg": "mode 必須是 count 或 duration"}), 400
         paths = str(data.get("paths") or "").strip()
         report_root = _security_test_report_root()
         command = [
             sys.executable,
             os.path.join(BASE_DIR, "security", "stress_test.py"),
             "--target", target,
-            "--requests", str(total_requests),
+            "--mode", mode,
             "--concurrency", str(concurrency),
             "--timeout", str(timeout_seconds),
+            "--burst-size", str(burst_size),
+            "--burst-interval-ms", str(burst_interval_ms),
             "--out", report_root,
         ]
+        if mode == "duration":
+            command.extend(["--duration-seconds", str(duration_seconds), "--max-requests", str(max_requests)])
+        else:
+            command.extend(["--requests", str(total_requests)])
         if paths:
             command.extend(["--paths", paths])
         job = _start_security_test_job(
@@ -1412,8 +1433,8 @@ def register_system_admin_routes(app, deps):
                 "security/stress_test.py",
                 "--target",
                 target,
-                "--requests",
-                str(total_requests),
+                "--mode",
+                mode,
                 "--concurrency",
                 str(concurrency),
             ],

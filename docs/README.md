@@ -37,10 +37,15 @@ The repository root keeps only [README.md](../README.md) and
 
 ## Deep Reference
 
+- [API_REFERENCE.md](API_REFERENCE.md): canonical implemented API route map
+- [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md): curl/cmd playbook for root,
+  admin, and developer operations
 - [For_developer.md](For_developer.md): API, schema, runtime layout, feature flags
 - [WEB.md](WEB.md): detailed page-by-page UI behavior
 - [TRADING.md](TRADING.md): full trading, bots, workflow editor, and backtest details
 - [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md): detailed video module reference
+- [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md): formal
+  HLS / encrypted-media streaming Phase C design
 - [SECURITY.md](SECURITY.md): current security controls and known limits
 - [RUNTIME_RESET_AND_RECOVERY.md](RUNTIME_RESET_AND_RECOVERY.md): detailed
   reset/snapshot/PointsChain boundary notes

@@ -590,7 +590,7 @@
       <div class="mini-title">⚖️ 違規申覆</div>
       <div id="appeal-summary" style="font-size:.82rem;color:var(--muted);margin-bottom:.55rem;"></div>
       <div id="appeal-entries" style="max-height:360px;overflow:auto;margin-bottom:.65rem;"></div>
-      <div class="admin-toolbar" style="grid-template-columns:1fr;margin-bottom:0;">
+      <div class="admin-toolbar" style="margin-bottom:0;">
         <button class="btn" type="button" id="appeal-refresh-btn">刷新申覆</button>
       </div>
       <div id="appeal-msg" class="msg"></div>
@@ -2004,7 +2004,7 @@
       <!-- ── 帳號管理 ── -->
       <div class="form-section active" id="sec-users">
         <div class="admin-tools">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;">
+        <div class="admin-toolbar">
           <button class="btn btn-primary" id="admin-refresh">🔄 重新整理</button>
           <button class="btn" id="admin-bulk-approve" type="button">一鍵通過</button>
           <button class="btn" id="admin-bulk-reject" type="button">一鍵駁回</button>
@@ -2015,15 +2015,17 @@
           <span id="role-limit-info" style="font-size:.75rem;color:var(--muted);margin-left:auto;"></span>
         </div>
           <div id="admin-users-msg" class="msg"></div>
-          <table class="user-table" id="user-table">
-            <thead>
-              <tr>
-                <th>選取</th><th>ID</th><th>在線</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
-                <th>角色</th><th>會員等級</th><th>狀態</th><th>違規</th><th>行為</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+          <div class="table-scroll-wrap">
+            <table class="user-table" id="user-table">
+              <thead>
+                <tr>
+                  <th>選取</th><th>ID</th><th>在線</th><th>帳號</th><th>暱稱</th><th>真實姓名</th>
+                  <th>角色</th><th>會員等級</th><th>狀態</th><th>違規</th><th>行為</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
 
         <div id="admin-manager-view">
@@ -2037,7 +2039,7 @@
       <!-- ── 密碼重設審核 ── -->
       <div class="form-section" id="sec-password-resets">
         <div class="admin-tools">
-          <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.65rem;">
+          <div class="admin-toolbar" style="margin-bottom:.65rem;">
             <button class="btn btn-primary" id="password-reset-review-refresh" type="button">重新整理</button>
             <select id="password-reset-review-status" style="max-width:180px;">
               <option value="pending">待審核</option>
@@ -2054,7 +2056,7 @@
 
       <!-- ── 違規計次 ── -->
       <div class="form-section" id="sec-violations">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <div class="admin-toolbar" style="margin-bottom:.5rem;">
           <button class="btn btn-primary" id="violations-refresh">🔄 重新整理</button>
           <span style="font-size:.75rem;color:var(--muted);">共 <span id="violations-total">0</span> 筆</span>
           <span id="violations-integrity" style="margin-left:.5rem;font-size:.72rem;"></span>
@@ -2067,7 +2069,7 @@
 
       <!-- ── 會員治理 ── -->
       <div class="form-section" id="sec-governance">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.65rem;">
+        <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" id="governance-refresh" type="button">重新整理治理狀態</button>
           <select id="governance-proposal-status" style="padding:.55rem;border-radius:8px;background:rgba(0,0,0,.3);border:1.5px solid rgba(255,255,255,.1);color:#e0e0f0;font-size:.85rem;">
             <option value="pending">待投票</option>
@@ -2172,7 +2174,7 @@
 
       <!-- ── 申覆審核 ── -->
       <div class="form-section" id="sec-appeals">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;grid-template-columns:auto auto auto; margin-bottom:.65rem;">
+        <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" id="admin-appeals-refresh">🔄 重新整理</button>
           <button class="btn" id="admin-appeals-bulk-approve" type="button">一鍵核准撤銷</button>
           <button class="btn" id="admin-appeals-bulk-reject" type="button">一鍵維持處分</button>
@@ -2187,7 +2189,7 @@
           <span id="appeal-selection-info" style="font-size:.72rem;color:var(--muted);">已選 0 筆申覆</span>
           <span style="margin-left:auto;font-size:.72rem;color:var(--muted);">共 <span id="admin-appeals-total">0</span> 筆</span>
         </div>
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <div class="admin-toolbar" style="margin-bottom:.5rem;">
           <button class="btn" id="admin-appeals-prev" style="margin-left:0;">← 上一頁</button>
           <button class="btn" id="admin-appeals-next">下一頁 →</button>
         </div>
@@ -2196,7 +2198,7 @@
 
       <!-- ── 訊息檢舉審核 ── -->
       <div class="form-section" id="sec-reports">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;grid-template-columns:auto auto auto; margin-bottom:.65rem;">
+        <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" id="admin-reports-refresh">重新整理</button>
           <button class="btn" id="admin-reports-bulk-approve" type="button">一鍵核准計點</button>
           <button class="btn" id="admin-reports-bulk-reject" type="button">一鍵駁回</button>
@@ -2211,7 +2213,7 @@
           <span id="report-selection-info" style="font-size:.72rem;color:var(--muted);">已選 0 筆檢舉</span>
           <span style="margin-left:auto;font-size:.72rem;color:var(--muted);">共 <span id="admin-reports-total">0</span> 筆</span>
         </div>
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <div class="admin-toolbar" style="margin-bottom:.5rem;">
           <button class="btn" id="admin-reports-prev" style="margin-left:0;">上一頁</button>
           <button class="btn" id="admin-reports-next">下一頁</button>
         </div>
@@ -2233,7 +2235,7 @@
       </div>
 
       <div class="form-section" id="sec-server-audit">
-        <div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <div class="admin-toolbar" style="margin-bottom:.5rem;">
           <button class="btn btn-primary" id="audit-refresh">🔄 重新整理</button>
           <button class="btn" id="economy-recovery-auto-handle-btn" type="button">一鍵處理異常鏈</button>
           <span style="font-size:.75rem;color:var(--muted);">共 <span id="audit-total">0</span> 筆</span>
@@ -2246,7 +2248,7 @@
       </div>
 
       <div class="form-section active" id="sec-server-security">
-        <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.65rem;">
+        <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" type="button" id="security-center-refresh-btn">重新整理安全中心</button>
           <button class="btn" type="button" id="security-controls-save-btn">儲存安全開關</button>
           <button class="btn" type="button" id="security-thresholds-save-btn">儲存閾值</button>
@@ -2518,7 +2520,7 @@
       </div>
 
       <div class="form-section" id="sec-server-integrity">
-        <div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.65rem;">
+        <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" type="button" id="integrity-refresh-btn">重新整理</button>
           <button class="btn" type="button" id="integrity-rescan-btn">重新掃描</button>
           <button class="btn" type="button" id="integrity-export-btn">匯出報告</button>
@@ -3385,7 +3387,7 @@
                 </div>
               </summary>
               <div class="drive-collapsible-body">
-                <div class="settings-option-grid">
+                <div class="settings-option-grid trading-fusion-settings-grid">
                   <div class="field">
                     <label>價格來源</label>
                     <select id="root-trading-price-source">
@@ -3401,13 +3403,49 @@
                       <option value="manual_weights">root 手動權重</option>
                     </select>
                     <div class="field-hint">自動模式會依各交易所掛單簿深度決定占比；手動模式可由 root 個別調整各交易所權重。</div>
+                    <div class="field-hint">深度分數會統計各交易所前 N 檔，並計算中間價附近 ±1% 範圍內的買賣盤名目量；系統會取較弱一側作為 depth score，再自動正規化成 100% 的融合比例。</div>
+                    <div class="field-hint" style="color:#ffcf85;">這套融合價格目前較適合作為 v1 即時參考價與 sanity check，不建議單獨作為強平、機器人或實際成交的唯一依據。</div>
+                  </div>
+                  <div class="field">
+                    <label>目標深度區間（%）</label>
+                    <div class="trading-fusion-inline-input">
+                      <input type="number" id="root-trading-price-fusion-depth-band-percent" min="0.1" max="10" step="0.1" value="1" />
+                      <span>%</span>
+                    </div>
+                    <div class="field-hint">auto_depth 會以 midpoint 為中心，盡量覆蓋這個價格區間。若來源無法覆蓋完整區間，診斷區會標示 truncated。</div>
+                  </div>
+                  <div class="field">
+                    <label>每家最多採樣檔位數</label>
+                    <input type="number" id="root-trading-price-fusion-depth-levels" min="10" max="1000" step="10" value="100" />
+                    <div class="field-hint">可設定 top 10 / 50 / 100 / 200 / 500 / 1000。不同交易所可實際提供的最大 depth 不同；若碰到供應商上限，診斷區會標示 provider depth limit reached。</div>
+                  </div>
+                  <div class="field">
+                    <label>最低覆蓋門檻（%）</label>
+                    <div class="trading-fusion-inline-input">
+                      <input type="number" id="root-trading-price-fusion-min-coverage-percent" min="0.1" max="10" step="0.1" value="0.5" />
+                      <span>%</span>
+                    </div>
+                    <div class="field-hint">若買盤或賣盤覆蓋不到這個深度，來源會被排除；覆蓋超過門檻但未達完整區間時，會標示 truncated。</div>
+                  </div>
+                  <div class="field">
+                    <label>單一來源權重上限</label>
+                    <div class="trading-fusion-inline-input">
+                      <input type="number" id="root-trading-price-fusion-max-provider-weight" min="0" max="100" step="0.1" value="40" />
+                      <span>%</span>
+                    </div>
+                    <div class="field-hint">避免單一交易所占比過高；若可用來源太少而無法滿足上限，診斷區會明確標示。</div>
+                  </div>
+                  <div class="field">
+                    <label>最少可用來源數</label>
+                    <input type="number" id="root-trading-price-fusion-min-provider-count" min="1" max="6" step="1" value="3" />
+                    <div class="field-hint">低於這個數量時，融合價格會改標示為保守模式，不建議用於高風險判斷。</div>
                   </div>
                   <div class="field" id="root-trading-price-fusion-weights-field">
                     <label>手動權重</label>
-                    <div id="root-trading-price-fusion-weights" class="settings-option-grid"></div>
-                    <div class="field-hint">只有在「root 手動權重」模式下會生效。填 0 代表該交易所不參與融合價格。</div>
+                    <div id="root-trading-price-fusion-weights" class="trading-fusion-weight-list"></div>
+                    <div class="field-hint">只有在「root 手動權重」模式下會生效。填 0 代表該交易所不參與融合價格；不必剛好加總 100，系統會自動正規化。</div>
                   </div>
-                  <div class="field">
+                  <div class="field trading-fusion-status-field">
                     <label>融合價格即時比例（root 專用）</label>
                     <div class="admin-toolbar" style="margin-top:.35rem;gap:.5rem;flex-wrap:wrap;">
                       <select id="root-trading-price-fusion-market"></select>
@@ -3721,7 +3759,7 @@
       </div>
 
       <div class="form-section" id="sec-server-env">
-        <div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">
+        <div class="admin-toolbar" style="margin-bottom:.65rem;">
           <button class="btn btn-primary" type="button" id="env-refresh-btn">重新整理系統環境</button>
         </div>
         <div id="server-env-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.55rem;margin-bottom:.8rem;"></div>
@@ -4259,13 +4297,13 @@
 <script src="/js/30-appeals.js?v=20260428-forum-pages" defer></script>
 <script src="/js/32-notifications.js?v=20260428-forum-pages" defer></script>
 <script src="/js/34-markdown-editor.js?v=20260428-forum-pages" defer></script>
-<script src="/js/35-drive.js?v=20260504-folder-dblclick" defer></script>
+<script src="/js/35-drive.js?v=20260504-drive-media-rename" defer></script>
 <script src="/js/36-comfyui.js?v=20260503-comfyui-mode-badge" defer></script>
 <script src="/js/37-bug-report.js?v=20260502-device-feature" defer></script>
 <script src="/js/38-games.js?v=20260502-mobile-controls" defer></script>
 <script src="/js/39-videos.js?v=20260502-video-platform" defer></script>
 <script src="/js/40-auth-users.js?v=20260503-appearance-reset" defer></script>
-<script src="/js/50-admin.js?v=20260503-appearance-v2" defer></script>
+<script src="/js/50-admin.js?v=20260504-fusion-coverage-v1" defer></script>
 <script src="/js/55-economy.js?v=20260501-wallet-auto-refresh" defer></script>
 <script src="/js/56-trading.js?v=20260502-grid-spot" defer></script>
 <script src="/js/90-bootstrap.js?v=20260503-appearance-v2" defer></script>

@@ -10,6 +10,13 @@ from services.cloud_drive import (
     resolve_file_storage_path,
     store_cloud_upload,
 )
+from services.http_headers import build_content_disposition
+from services.media_streaming import (
+    ensure_media_stream_schema,
+    get_stream_status,
+    prepare_stream_asset,
+    stream_playback_payload,
+)
 from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.upload_security import safe_public_filename
 from services.videos import (
@@ -39,6 +46,8 @@ def register_video_routes(app, deps):
     server_file_fernet = deps.get("server_file_fernet")
     get_system_settings = deps.get("get_system_settings", lambda: {})
     get_member_level_rule = deps["get_member_level_rule"]
+    ffmpeg_bin = deps.get("FFMPEG_BIN", "ffmpeg")
+    ffprobe_bin = deps.get("FFPROBE_BIN", "ffprobe")
 
     def _parse_json_body():
         try:
@@ -81,6 +90,28 @@ def register_video_routes(app, deps):
             return float((get_system_settings() or {}).get(key, default))
         except Exception:
             return float(default)
+
+    def _is_manager_or_root(actor):
+        if not actor:
+            return False
+        role = str(actor.get("role") or "").strip().lower()
+        return actor.get("username") == "root" or role in {"manager", "admin", "super_admin"}
+
+    def _load_stream_file(conn, *, file_id):
+        row = conn.execute(
+            "SELECT * FROM uploaded_files WHERE id=? AND deleted_at IS NULL",
+            (str(file_id or ""),),
+        ).fetchone()
+        if not row:
+            raise ValueError("找不到影音檔案")
+        return row
+
+    def _assert_stream_prepare_allowed(actor, row):
+        if not actor:
+            raise PermissionError("login required")
+        if int(row["owner_user_id"]) == int(actor["id"]) or _is_manager_or_root(actor):
+            return
+        raise PermissionError("只有檔案擁有者或管理者可以準備串流衍生檔")
 
     def _uploaded_file_is_media(file_storage):
         filename = getattr(file_storage, "filename", "") or ""
@@ -190,7 +221,7 @@ def register_video_routes(app, deps):
             response = Response(raw, status=200, mimetype=mimetype or "application/octet-stream")
             response.headers["Content-Length"] = str(total_size)
         response.headers["Accept-Ranges"] = "bytes"
-        response.headers.set("Content-Disposition", "inline", filename=download_name)
+        response.headers["Content-Disposition"] = build_content_disposition("inline", download_name)
         return response
 
     @app.route("/api/videos/publish", methods=["POST"])
@@ -372,6 +403,79 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/media/<file_id>/prepare-stream", methods=["POST"])
+    @require_csrf
+    def media_prepare_stream(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            row = _load_stream_file(conn, file_id=file_id)
+            _assert_stream_prepare_allowed(actor, row)
+            asset = prepare_stream_asset(
+                conn,
+                file_row=row,
+                storage_root=storage_root,
+                server_file_fernet=server_file_fernet,
+                ffprobe_bin=ffprobe_bin,
+                ffmpeg_bin=ffmpeg_bin,
+            )
+            conn.commit()
+            audit(
+                "MEDIA_STREAM_PREPARE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"file_id={file_id},status={asset.get('status')}",
+            )
+            return json_resp({"ok": True, "asset": asset})
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/media/<file_id>/stream-status", methods=["GET"])
+    @require_csrf
+    def media_stream_status(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            row = _load_stream_file(conn, file_id=file_id)
+            _assert_stream_prepare_allowed(actor, row)
+            return json_resp({"ok": True, "asset": get_stream_status(conn, file_row=row)})
+        except Exception as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/playback", methods=["GET"])
+    @require_csrf
+    def video_playback(video_id):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
+            payload["video_id"] = int(video_id)
+            return json_resp({"ok": True, **payload})
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
     @app.route("/api/videos/<int:video_id>/stream", methods=["GET"])
     @require_csrf
     def video_stream(video_id):
@@ -396,6 +500,90 @@ def register_video_routes(app, deps):
                 raw = decrypt_server_encrypted_bytes(path, server_file_fernet)
                 return _send_bytes_with_range(raw, download_name=filename, mimetype=mimetype, range_header=request.headers.get("Range"))
             return send_file(path, as_attachment=False, download_name=filename, mimetype=mimetype, conditional=True)
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/hls/master.m3u8", methods=["GET"])
+    @require_csrf
+    def video_hls_master(video_id):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=row)
+            if not asset or asset.get("status") != "ready" or not asset.get("master_manifest_path"):
+                return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
+            path = resolve_file_storage_path(storage_root, {"storage_path": asset["master_manifest_path"]})
+            return send_file(path, as_attachment=False, download_name="master.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/hls/<variant>/playlist.m3u8", methods=["GET"])
+    @require_csrf
+    def video_hls_variant_playlist(video_id, variant):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=row)
+            if not asset or asset.get("status") != "ready":
+                return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": match["playlist_path"]})
+            return send_file(path, as_attachment=False, download_name="playlist.m3u8", mimetype="application/vnd.apple.mpegurl", conditional=True)
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/hls/<variant>/<segment>", methods=["GET"])
+    @require_csrf
+    def video_hls_segment(video_id, variant, segment):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_media_stream_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            asset = get_stream_status(conn, file_row=row)
+            if not asset or asset.get("status") != "ready":
+                return json_resp({"ok": False, "msg": "影音串流尚未準備完成", "error": "stream_not_ready"}), 409
+            match = next((item for item in (asset.get("variants") or []) if item.get("name") == variant), None)
+            if not match:
+                return json_resp({"ok": False, "msg": "找不到串流變體", "error": "variant_not_found"}), 404
+            if "/" in segment or ".." in segment:
+                return json_resp({"ok": False, "msg": "無效的串流片段", "error": "invalid_segment"}), 400
+            rel = next((item["path"] for item in (match.get("segments") or []) if item.get("filename") == segment), "")
+            if not rel:
+                if segment == "init.mp4" and match.get("init_segment_path"):
+                    rel = match["init_segment_path"]
+                else:
+                    return json_resp({"ok": False, "msg": "找不到串流片段", "error": "segment_not_found"}), 404
+            path = resolve_file_storage_path(storage_root, {"storage_path": rel})
+            mimetype = "video/mp4" if segment.endswith(".mp4") or segment.endswith(".m4s") else "application/octet-stream"
+            return send_file(path, as_attachment=False, download_name=segment, mimetype=mimetype, conditional=True)
         except PermissionError as exc:
             return _error_response(exc)
         except ValueError as exc:

@@ -1,6 +1,72 @@
 # Update Summary
 
-Release ID: `2026.05.04-098`
+Release ID: `2026.05.05-107`
+
+## 2026.05.05-107
+
+- Added three more points-quoted trading markets to the centralized market catalog: `XRP/USDT`, `BNB/USDT`, and `PAXG/USDT` display pairs backed by internal `XRP/POINTS`, `BNB/POINTS`, and `PAXG/POINTS` symbols.
+- Added Phase C-1 media streaming foundation: HLS derivative schema/service, `prepare-stream` and `stream-status` media routes, `playback` decision API, and protected HLS manifest/segment routes for prepared plain or `server_encrypted` video.
+- Video frontend now prefers prepared HLS playback when available and falls back to the existing direct `/stream` route when no derivative exists or the browser lacks native HLS support.
+
+## 2026.05.04-106
+
+- Cloud Drive audio and video preview now use the native `/preview/content` stream URL instead of fetching a blob first, so browsers can handle streaming media previews more reliably.
+- Clarified the attachment-storage wording: chat / DM / announcement attachments only write into `/attachments/` when those attachment actions are actually used; this is a storage path convention, not a separate built-in module.
+- Added `docs/VIDEO_STREAMING_ARCHITECTURE.md` as the canonical Phase C design for HLS / segmented media streaming, including the split between `standard_plain`, `server_encrypted`, and strict `e2ee` media behavior.
+
+## 2026.05.04-105
+
+- Added an in-page explanation beside `設定 -> 交易所參數 -> 價格來源與融合比例`, so root can see exactly how `auto_depth` works: front `10` order-book levels, midpoint `±1%` band, and `depth_score = min(bid_notional, ask_notional)` before the system normalizes weights to `100%`.
+
+## 2026.05.04-104
+
+- Added `docs/API_REFERENCE.md` as the canonical implemented API route map, so developers no longer need to piece together current endpoints from `For_developer.md`, trading docs, and scattered QA notes.
+- Added `docs/CLI_ADMIN_PLAYBOOK.md` as the official `curl` / shell playbook for root, admin, and developer site operations in isolated runtimes.
+- Updated `README.md`, `docs/README.md`, `docs/README.zh-TW.md`, `docs/For_developer.md`, and `docs/11_QA_TESTING.md` to point to these new dedicated API / CLI documents.
+
+## 2026.05.04-103
+
+- The account/admin area no longer hardcodes several toolbars with inline
+  desktop-only flex layouts, so the existing mobile responsive rules can
+  actually collapse those control rows into usable single-column stacks on
+  narrow screens.
+- The admin users table now sits inside a dedicated horizontal scroll wrapper,
+  making large account-management tables usable on phones instead of forcing
+  the full page width to overflow.
+
+## 2026.05.04-102
+
+- The root trading settings UI now renders manual fusion weights as compact
+  per-provider chips instead of a large full-width grid, reducing empty space
+  in `設定 -> 交易所參數 -> 價格來源與融合比例`.
+- Each provider weight input now sits inline beside its exchange label with a
+  trailing `%` marker, while the helper text clarifies that values do not need
+  to sum to exactly `100` because the backend normalizes them automatically.
+
+## 2026.05.04-101
+
+- `security/stress_test.py` now supports a duration-based flood mode in
+  addition to fixed request-count mode, including per-worker burst sizing and a
+  burst interval to simulate short HTTP flood spikes against authorized
+  loopback or owned staging targets.
+- Root security-test jobs can now launch the same duration-based stress mode
+  with `duration_seconds`, `max_requests`, `burst_size`, and
+  `burst_interval_ms`, while keeping the existing count-based mode compatible.
+
+## 2026.05.04-100
+
+- The pre-push workflow now auto-cleans repo-local Python caches and a
+  mistakenly generated repo-root `runtime/` before running the blocking
+  validation suite.
+- `scripts/pre_push_checks.py --clean` now removes both safe cache artifacts
+  and a repo-root `runtime/` directory, while still refusing to touch tracked
+  files or protected runtime/report paths.
+
+## 2026.05.04-099
+
+- Server mode audit export artifacts no longer spill into repo-root `security/audit_exports/`; they now write under `runtime/reports/server_mode_audit/` with the rest of runtime-generated files.
+- `.gitignore` no longer masks `security/audit_exports/`, so any future regression that writes audit exports back into the source tree will show up immediately in `git status`.
+- Snapshot / server-mode regression coverage now asserts the runtime audit export path directly.
 
 ## 2026.05.04-098
 

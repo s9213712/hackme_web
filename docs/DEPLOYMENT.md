@@ -77,11 +77,25 @@ Run a lightweight local traffic estimate:
 security/stress_test.py --target http://127.0.0.1:5000 --requests 500 --concurrency 50
 ```
 
+Run a short duration-based flood simulation against a loopback server you own:
+
+```bash
+python3 security/stress_test.py \
+  --target http://127.0.0.1:5000 \
+  --mode duration \
+  --duration-seconds 20 \
+  --max-requests 4000 \
+  --concurrency 80 \
+  --burst-size 10 \
+  --burst-interval-ms 200
+```
+
 The script reports approximate requests per second, status distribution, and
 latency percentiles. It is not a replacement for production-grade load testing,
 but it gives a repeatable baseline for the current host. It refuses public
 targets by default; use `--i-own-this-target` only for staging or systems you are
-explicitly authorized to test. Concurrency is capped at `100`.
+explicitly authorized to test. Concurrency is capped at `100`, and duration mode
+still honors a safety `--max-requests` cap.
 
 ## Pre-push Validation
 

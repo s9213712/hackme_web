@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.security.scan_plaintext_secrets import parse_allowlist, scan_file
+from security.scan_plaintext_secrets import parse_allowlist, scan_file
 
 
 def _write(path: Path, text: str) -> Path:

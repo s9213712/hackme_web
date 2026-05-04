@@ -134,6 +134,10 @@ out of band with the recipient.
 The `影音` page publishes videos already stored in Cloud Drive. It does not
 upload to a separate filesystem.
 
+The current page behavior described here is still Video Platform v1. The formal
+future HLS / segmented streaming design for large media is documented in
+[VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md).
+
 - owner selects one of their own Cloud Drive video files
 - visibility can be public, unlisted, or private
 - playback uses `/api/videos/<id>/stream`, not a raw storage path
@@ -287,8 +291,9 @@ ledger, and reports manual-required when no trusted backup exists.
 ### Points Exchange
 
 The Economy branch includes a first-stage spot exchange. The UI displays
-`BTC/USDT` and `ETH/USDT`; the internal API symbols remain `BTC/POINTS` and
-`ETH/POINTS`. Spot trading is open to normal users and root. Normal-user
+`BTC/USDT`, `ETH/USDT`, `XRP/USDT`, `BNB/USDT`, and `PAXG/USDT`; the internal
+API symbols remain `BTC/POINTS`, `ETH/POINTS`, `XRP/POINTS`, `BNB/POINTS`, and
+`PAXG/POINTS`. Spot trading is open to normal users and root. Normal-user
 settlement uses the local PointsChain ledger, while root spot settlement uses a
 separate simulated trading balance. POINTS are treated as USDT-equivalent in the
 trading UI (`1 POINT = 1 USDT`) so market prices match the public quote unit.
@@ -298,15 +303,19 @@ then last-good cache within the configured staleness window. The backend applies
 the market jump threshold after live history exists and fails closed when no
 fresh or trusted cached price is available.
 
-The exchange page also shows public candlestick charts for BTC/USDT and
-ETH/USDT. The chart provider chain is Binance, OKX, Coinbase Exchange, Kraken,
-Gemini, then Bitstamp. The default timeframe is 15 minutes, with 1-hour, 4-hour,
-and daily options available. The chart is also used by the frontend to refresh
+The exchange page also shows public candlestick charts for supported display
+markets such as BTC/USDT, ETH/USDT, XRP/USDT, BNB/USDT, and PAXG/USDT. The
+chart provider chain is Binance, OKX, Coinbase Exchange, Kraken, Gemini, then
+Bitstamp. The default timeframe is 15 minutes, with 1-hour, 4-hour, and daily
+options available. The chart is also used by the frontend to refresh
 the displayed current price; the backend still fetches its own price again
 before execution:
 
 - `BTC/POINTS` maps to public BTC/USDT or BTC/USD provider symbols.
 - `ETH/POINTS` maps to public ETH/USDT or ETH/USD provider symbols.
+- `XRP/POINTS` maps to public XRP/USDT or XRP/USD provider symbols.
+- `BNB/POINTS` maps to public BNB/USDT provider symbols where available.
+- `PAXG/POINTS` maps to public PAXG/USDT provider symbols where available.
 - The fixed display conversion is `1 POINT = 1 USDT`.
 - If public providers are unavailable, live-price execution can temporarily use
   the recent last-good price within the configured staleness window. After that

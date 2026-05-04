@@ -26,6 +26,7 @@ def test_root_points_page_is_chain_operations_console():
     admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
     economy_js = (ROOT / "public" / "js" / "55-economy.js").read_text(encoding="utf-8")
     bootstrap_js = (ROOT / "public" / "js" / "90-bootstrap.js").read_text(encoding="utf-8")
+    styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="economy-user-summary-grid"' in index_html
     assert 'id="economy-user-ledger-card"' in index_html
@@ -81,7 +82,7 @@ def test_root_points_page_is_chain_operations_console():
     assert "積分錢包" in index_html
     assert "積分交易所" in index_html
     assert "/js/55-economy.js?v=20260501-wallet-auto-refresh" in index_html
-    assert "/js/50-admin.js?v=20260503-appearance-v2" in index_html
+    assert "/js/50-admin.js?v=20260504-fusion-coverage-v1" in index_html
     assert "/js/56-trading.js?v=" in index_html
     assert 'id="economy-recovery-card"' in index_html
     assert 'id="economy-backup-btn"' in index_html
@@ -171,7 +172,13 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-price-source"' in index_html
     assert 'value="fused_weighted"' in index_html
     assert 'id="root-trading-price-fusion-mode"' in index_html
+    assert 'id="root-trading-price-fusion-depth-band-percent"' in index_html
+    assert 'id="root-trading-price-fusion-depth-levels"' in index_html
+    assert 'id="root-trading-price-fusion-min-coverage-percent"' in index_html
+    assert 'id="root-trading-price-fusion-max-provider-weight"' in index_html
+    assert 'id="root-trading-price-fusion-min-provider-count"' in index_html
     assert 'id="root-trading-price-fusion-weights"' in index_html
+    assert 'class="trading-fusion-weight-list"' in index_html
     assert 'id="root-trading-price-fusion-market"' in index_html
     assert 'id="root-trading-price-fusion-refresh-btn"' in index_html
     assert 'id="root-trading-price-fusion-summary"' in index_html
@@ -199,6 +206,29 @@ def test_root_points_page_is_chain_operations_console():
     assert "function loadRootTradingSettings()" in admin_js
     assert "function saveRootTradingSettings()" in admin_js
     assert "function renderRootTradingFusionWeightInputs" in admin_js
+    assert "trading-fusion-weight-chip" in admin_js
+    assert "trading-fusion-weight-unit" in admin_js
+    assert "top 10 / 50 / 100 / 200 / 500 / 1000" in index_html
+    assert "coverage truncated" in admin_js
+    assert "唯一合格來源" in admin_js
+    assert "reference 來源" in admin_js
+    assert "reference 可用來源" in admin_js
+    assert "請求市場" in admin_js
+    assert "內部市場" in admin_js
+    assert "目前不是正常 fused price" in admin_js
+    assert "reference 占比" in admin_js
+    assert "風控級占比" in admin_js
+    assert "depth score" in admin_js
+    assert "density" in admin_js
+    assert "資料截斷，不代表該交易所真實深度不足" in admin_js
+    assert "provider depth limit reached" in admin_js
+    assert "最低覆蓋門檻（%）" in index_html
+    assert "最少可用來源數" in index_html
+    assert "price_fusion_depth_band_percent" in admin_js
+    assert "price_fusion_min_orderbook_coverage_percent" in admin_js
+    assert "max_single_provider_weight_percent" in admin_js
+    assert "price_fusion_depth_levels" in admin_js
+    assert "price_fusion_min_provider_count" in admin_js
     assert "function renderRootTradingPriceFusionMarketOptions" in admin_js
     assert "function renderRootTradingPriceFusionStatus" in admin_js
     assert "function loadRootTradingPriceFusionStatus" in admin_js
@@ -257,11 +287,19 @@ def test_root_points_page_is_chain_operations_console():
     assert "交易所設定已獨立成單獨分頁" in trading_settings_section
     assert "基本開關與風控" in trading_settings_section
     assert "價格來源與融合比例" in trading_settings_section
+    assert "不必剛好加總 100，系統會自動正規化" in trading_settings_section
+    assert "前 N 檔" in trading_settings_section
+    assert "中間價附近 ±1% 範圍內的買賣盤名目量" in trading_settings_section
+    assert "較弱一側作為 depth score" in trading_settings_section
+    assert "不建議單獨作為強平、機器人或實際成交的唯一依據" in trading_settings_section
     assert "機器人掃描與稽核" in trading_settings_section
     assert "BTC_trade 信號整合" in trading_settings_section
     assert "各交易對參數" in trading_settings_section
     assert "累積利息" in index_html
     assert "下一次計息" in index_html
+    assert ".trading-fusion-weight-list" in styles
+    assert ".trading-fusion-weight-chip" in styles
+    assert ".trading-fusion-inline-input" in styles
 
 
 def test_trading_exchange_is_separate_from_wallet_page():
@@ -645,6 +683,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "price_health" in trading_js
     assert "fallback_reason" in trading_js
     assert "excluded_sources" in trading_js
+    assert "high_risk_block_reason" in trading_js
+    assert "warnings" in trading_js
     assert "defaulted_market" in trading_js
     assert "🟡 價格來源降級" in trading_js
     assert "🟢 價格來源正常" in trading_js

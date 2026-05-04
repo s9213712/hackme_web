@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.04-098`**
+**目前 Release ID：`2026.05.05-107`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -73,10 +73,13 @@ python3 server.py
 
 ### 深層參考
 
+- [API_REFERENCE.md](API_REFERENCE.md)
+- [CLI_ADMIN_PLAYBOOK.md](CLI_ADMIN_PLAYBOOK.md)
 - [For_developer.md](For_developer.md)
 - [WEB.md](WEB.md)
 - [TRADING.md](TRADING.md)
 - [VIDEO_PLATFORM.md](VIDEO_PLATFORM.md)
+- [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md)
 - [DEPLOYMENT.md](DEPLOYMENT.md)
 - [AGENTS/README.md](AGENTS/README.md)
 - [AGENTS/QA_MISSION_FOR_AGENTS.md](AGENTS/QA_MISSION_FOR_AGENTS.md)

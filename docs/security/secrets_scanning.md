@@ -3,7 +3,7 @@
 This project uses two layers of plaintext secret detection before code is merged:
 
 - `gitleaks detect --source "$(git rev-parse --show-toplevel)" --no-git --redact --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"`
-- `python3 scripts/security/scan_plaintext_secrets.py --fail-on high`
+- `python3 security/scan_plaintext_secrets.py --fail-on high`
 
 The custom scanner checks project-specific plaintext patterns such as credential
 assignments, bearer authorization headers, private-key markers, and database
@@ -53,7 +53,7 @@ Run the checks manually:
 
 ```bash
 pre-commit run --all-files
-python3 scripts/security/scan_plaintext_secrets.py --fail-on high
+python3 security/scan_plaintext_secrets.py --fail-on high
 ```
 
 ## Reports
@@ -66,8 +66,8 @@ The custom scanner writes masked reports to:
 CI also uploads `security/reports/gitleaks_report.json` as an artifact. Reports
 must not include complete secret values. Evidence is masked, for example:
 
-- `token=<redacted>`
-- `password=<redacted>`
+- `token field -> <masked>`
+- `password field -> <masked>`
 - `Authorization: Bearer <redacted>`
 - `postgres://<redacted>`
 
@@ -101,4 +101,4 @@ variables or a secret manager. Repository files should only keep examples such
 as `.env.example` placeholders.
 
 Logs must redact sensitive fields before writing them. Examples of acceptable
-logged forms are `token=<redacted>` and `password=<redacted>`.
+logged forms are `token field -> <masked>` and `password field -> <masked>`.

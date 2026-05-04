@@ -76,13 +76,14 @@ def _actor(user_id=1, username="alice", role="user"):
 
 def _depth_snapshot(trading, source, quantity_per_level, *, price=100.0):
     bids = [[price, quantity_per_level] for _ in range(10)] + [[price * 0.98, 9999]]
-    asks = [[price, quantity_per_level] for _ in range(10)] + [[price * 1.02, 9999]]
-    midpoint, depth_score = trading._depth_notional_score(bids, asks)
-    return {
-        "source": source,
-        "price_points": trading._price_points_from_float(midpoint, source=source),
-        "depth_score": depth_score,
-    }
+    asks = [[price * 1.001, quantity_per_level] for _ in range(10)] + [[price * 1.02, 9999]]
+    return trading._build_orderbook_snapshot(
+        source=source,
+        bids=bids,
+        asks=asks,
+        fetch_meta={"fetched_at": trading_engine_module._now(), "latency_ms": 120.0},
+        max_levels=100,
+    )
 
 
 def _notifications(trading, user_id):
@@ -132,6 +133,67 @@ class _FakePriceResponse:
         import json
 
         return json.dumps(self.payload).encode("utf-8")
+
+
+def test_depth_notional_score_accepts_orderbook_rows_with_extra_columns(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    midpoint, depth_score = trading._depth_notional_score(
+        [["100.0", "2.5", "0", "1"], ["99.5", "1.0", "0", "1"]],
+        [["100.5", "3.0", "0", "1"], ["101.0", "1.0", "0", "1"]],
+    )
+
+    assert midpoint == pytest.approx(100.25)
+    assert depth_score > 0
+
+
+@pytest.mark.parametrize(
+    ("method_name", "payload", "expected_source"),
+    [
+        (
+            "_fetch_okx_orderbook_snapshot",
+            {
+                "data": [
+                    {
+                        "bids": [["100", "2", "0", "1"], ["99", "1", "0", "1"]],
+                        "asks": [["101", "3", "0", "1"], ["102", "1", "0", "1"]],
+                    }
+                ]
+            },
+            "okx_public_api",
+        ),
+        (
+            "_fetch_coinbase_orderbook_snapshot",
+            {
+                "bids": [["100", "2", "extra"], ["99", "1", "extra"]],
+                "asks": [["101", "3", "extra"], ["102", "1", "extra"]],
+            },
+            "coinbase_exchange",
+        ),
+        (
+            "_fetch_kraken_orderbook_snapshot",
+            {
+                "error": [],
+                "result": {
+                    "XXBTZUSD": {
+                        "bids": [["100", "2", "1715000000"], ["99", "1", "1715000001"]],
+                        "asks": [["101", "3", "1715000002"], ["102", "1", "1715000003"]],
+                    }
+                },
+            },
+            "kraken_public_api",
+        ),
+    ],
+)
+def test_exchange_orderbook_snapshots_accept_provider_rows_with_extra_columns(tmp_path, monkeypatch, method_name, payload, expected_source):
+    _points, trading = _services(tmp_path)
+    monkeypatch.setattr(trading, "_fetch_json_url", lambda *_args, **_kwargs: payload)
+
+    snapshot = getattr(trading, method_name)("BTC/POINTS")
+
+    assert snapshot["source"] == expected_source
+    assert snapshot["price_points"] > 0
+    assert snapshot["depth_score"] > 0
 
 
 def test_legacy_rate_unit_label_removed_from_repository_text():
@@ -1404,6 +1466,58 @@ def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_live_price_err
     assert "live price down" in str(row["last_error"] or "")
 
 
+def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_conservative_fusion_price(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "conservative fusion bot",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "always",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 2,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    original = trading._current_market_price_points
+
+    def conservative_price(conn, market, *, with_meta=False, high_risk=False):
+        if with_meta:
+            return (
+                100.0,
+                "fused_weighted",
+                {
+                    "price_health": "conservative",
+                    "fallback_reason": "可用 order book 來源不足",
+                    "excluded_sources": ["binance_public_api"],
+                    "warnings": [{"code": "provider_count_low", "message": "可用 order book 來源不足", "severity": "critical"}],
+                    "high_risk_blocked": True,
+                    "high_risk_block_reason": "目前可用來源數不足，只能提供 degraded reference price",
+                },
+            )
+        return original(conn, market, with_meta=with_meta)
+
+    monkeypatch.setattr(trading, "_current_market_price_points", conservative_price)
+
+    result = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute("SELECT last_scan_at, last_error FROM trading_bots WHERE user_id=1 LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+    assert result["ok"] is False
+    assert result["failed"]
+    assert row["last_scan_at"] in (None, "")
+    assert "conservative mode" in str(row["last_error"] or "")
+
+
 def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_candle_fetch_error(tmp_path):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
@@ -2114,6 +2228,7 @@ def test_live_price_provider_falls_back_to_coinbase_when_binance_is_down(tmp_pat
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"price_source": "binance_public_api"}, markets=[])
     urls = []
 
     def fake_urlopen(request, timeout=0):
@@ -2148,6 +2263,7 @@ def test_live_price_provider_walks_public_fallback_chain_to_bitstamp(tmp_path, m
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"price_source": "binance_public_api"}, markets=[])
     urls = []
 
     def fake_urlopen(request, timeout=0):
@@ -2192,8 +2308,8 @@ def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monk
     def boom(_market_symbol):
         raise OSError("provider unavailable")
 
-    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: {"source": "binance_public_api", "price_points": 100, "depth_score": 1.0})
-    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: {"source": "okx_public_api", "price_points": 200, "depth_score": 3.0})
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1, price=100.0))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 3, price=101.0))
     monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", boom)
     monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
     monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", boom)
@@ -2208,9 +2324,9 @@ def test_live_price_fusion_auto_depth_weights_surviving_exchanges(tmp_path, monk
     finally:
         conn.close()
 
-    assert price == 175
+    assert 100.0 < price < 101.1
     assert source == "fused_weighted"
-    assert updated["manual_price_points"] == 175
+    assert updated["manual_price_points"] == pytest.approx(price, abs=0.00000001)
     assert updated["price_source"] == "fused_weighted"
 
 
@@ -2224,13 +2340,29 @@ def test_root_trading_settings_default_to_fused_weighted_auto_depth(tmp_path):
 
     assert settings["price_source"] == "fused_weighted"
     assert settings["price_fusion_mode"] == "auto_depth"
-    assert settings["price_fusion_live_markets"] == ["BTC/POINTS", "ETH/POINTS"]
-    assert [row["symbol"] for row in markets] == ["BTC/POINTS", "ETH/POINTS"]
+    assert settings["price_fusion_live_markets"] == ["BTC/POINTS", "ETH/POINTS", "XRP/POINTS", "BNB/POINTS", "PAXG/POINTS"]
+    assert settings["price_fusion_depth_band_percent"] == 1.0
+    assert settings["price_fusion_depth_levels"] == 100
+    assert settings["price_fusion_min_orderbook_coverage_percent"] == 0.5
+    assert settings["price_fusion_max_single_provider_weight_percent"] == 40.0
+    assert settings["price_fusion_min_provider_count"] == 3
+    assert settings["price_fusion_manual_weights"] == {
+        "binance_public_api": 40.0,
+        "okx_public_api": 25.0,
+        "coinbase_exchange": 15.0,
+        "kraken_public_api": 10.0,
+        "bitstamp_public_api": 8.0,
+        "gemini_public_api": 2.0,
+    }
+    assert [row["symbol"] for row in markets] == ["BTC/POINTS", "ETH/POINTS", "XRP/POINTS", "BNB/POINTS", "PAXG/POINTS"]
     assert markets[0]["display_symbol"] == "BTC/USDT"
     assert markets[0]["live_price_supported"] is True
     assert markets[0]["btc_trade_supported"] is True
     assert markets[1]["display_symbol"] == "ETH/USDT"
     assert markets[1]["btc_trade_supported"] is False
+    assert markets[2]["display_symbol"] == "XRP/USDT"
+    assert markets[3]["display_symbol"] == "BNB/USDT"
+    assert markets[4]["display_symbol"] == "PAXG/USDT"
 
 
 def test_price_fusion_auto_depth_status_uses_depth_scores_and_sums_to_hundred(tmp_path, monkeypatch):
@@ -2256,10 +2388,226 @@ def test_price_fusion_auto_depth_status_uses_depth_scores_and_sums_to_hundred(tm
     assert status["state"] == "healthy"
     assert status["degraded"] is False
     assert status["excluded_providers"] == []
+    assert status["depth_levels"] == 100
+    assert status["max_single_provider_weight_percent"] == 40.0
+    assert status["median_midpoint_points"] == pytest.approx(100.05, abs=0.0001)
     assert status["weights_sum_percent"] == pytest.approx(100.0, abs=0.01)
     assert used["bitstamp_public_api"]["normalized_weight_percent"] > used["gemini_public_api"]["normalized_weight_percent"] > used["kraken_public_api"]["normalized_weight_percent"] > used["coinbase_exchange"]["normalized_weight_percent"] > used["okx_public_api"]["normalized_weight_percent"] > used["binance_public_api"]["normalized_weight_percent"]
     assert used["binance_public_api"]["normalized_weight_percent"] == pytest.approx(100.0 / 21.0, abs=0.01)
     assert used["bitstamp_public_api"]["normalized_weight_percent"] == pytest.approx((6.0 / 21.0) * 100.0, abs=0.01)
+    assert used["binance_public_api"]["best_bid_points"] == pytest.approx(100.0, abs=0.0001)
+    assert used["binance_public_api"]["best_ask_points"] == pytest.approx(100.1, abs=0.0001)
+    assert used["binance_public_api"]["spread_percent"] == pytest.approx(0.09995, abs=0.0002)
+    assert used["binance_public_api"]["bid_notional_points"] == pytest.approx(1000.0, abs=0.01)
+    assert used["binance_public_api"]["ask_notional_points"] == pytest.approx(1001.0, abs=0.02)
+    assert used["binance_public_api"]["bid_coverage_percent"] == pytest.approx(1.0, abs=0.0001)
+    assert used["binance_public_api"]["ask_coverage_percent"] == pytest.approx(1.0, abs=0.0001)
+    assert used["binance_public_api"]["bid_reached_lower_bound"] is True
+    assert used["binance_public_api"]["ask_reached_upper_bound"] is True
+    assert used["binance_public_api"]["orderbook_truncated"] is False
+    assert used["binance_public_api"]["effective_depth_score"] == pytest.approx(used["binance_public_api"]["depth_score"], abs=0.0001)
+    assert used["binance_public_api"]["reference_weight_percent"] == pytest.approx(used["binance_public_api"]["normalized_weight_percent"], abs=0.0001)
+    assert used["binance_public_api"]["risk_grade_weight_percent"] == pytest.approx(used["binance_public_api"]["normalized_weight_percent"], abs=0.0001)
+    assert used["binance_public_api"]["depth_density_score"] >= used["binance_public_api"]["depth_score"]
+    assert used["binance_public_api"]["latency_ms"] == pytest.approx(120.0, abs=0.01)
+    assert used["binance_public_api"]["quantity_unit"] == "base_asset"
+    assert used["binance_public_api"]["quantity_unit_confirmed"] is True
+
+
+def test_price_fusion_status_marks_truncated_and_excludes_insufficient_coverage(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_fusion_depth_band_percent": 1.0,
+            "price_fusion_min_orderbook_coverage_percent": 0.5,
+            "price_fusion_min_provider_count": 2,
+        },
+        markets=[],
+    )
+
+    def partial(source, *, min_bid, max_ask):
+        return trading._build_orderbook_snapshot(
+            source=source,
+            bids=[[100.0, 10.0], [min_bid, 8.0]],
+            asks=[[100.1, 10.0], [max_ask, 8.0]],
+            fetch_meta={"fetched_at": trading_engine_module._now(), "latency_ms": 100.0},
+            max_levels=100,
+            band_percent=1.0,
+        )
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: partial("binance_public_api", min_bid=99.8, max_ask=100.3))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: partial("okx_public_api", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: partial("coinbase_exchange", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: partial("kraken_public_api", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: partial("gemini_public_api", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: partial("bitstamp_public_api", min_bid=99.0, max_ask=101.1))
+
+    status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    used = {row["source"]: row for row in status["providers_used"]}
+
+    assert "binance_public_api" in used
+    assert used["binance_public_api"]["orderbook_truncated"] is True
+    assert used["binance_public_api"]["bid_coverage_percent"] < 0.5
+    assert used["binance_public_api"]["risk_grade_eligible"] is False
+    assert used["binance_public_api"]["risk_grade_weight_percent"] == pytest.approx(0.0, abs=0.0001)
+    assert "資料截斷，不代表該交易所真實深度不足" in used["binance_public_api"]["coverage_warning_message"]
+    assert "okx_public_api" in used
+    assert used["okx_public_api"]["orderbook_truncated"] is False
+    assert status["state"] == "degraded"
+    assert status["reference_provider_count"] == 6
+    assert status["risk_grade_provider_count"] == 5
+
+
+def test_price_fusion_effective_score_keeps_zero_without_restoring_raw_depth_score(tmp_path):
+    _points, trading = _services(tmp_path)
+
+    assert trading._price_fusion_effective_score({"effective_depth_score": 0.0, "depth_score": 123.45}) == pytest.approx(0.0)
+
+
+def test_price_fusion_conservative_mode_keeps_coverage_and_provider_count_warnings(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_fusion_depth_band_percent": 1.0,
+            "price_fusion_depth_levels": 100,
+            "price_fusion_min_orderbook_coverage_percent": 0.5,
+            "price_fusion_min_provider_count": 3,
+        },
+        markets=[],
+    )
+
+    def barely_qualified(source):
+        return trading._build_orderbook_snapshot(
+            source=source,
+            bids=[[100.0, 10.0], [99.22, 8.0]],
+            asks=[[100.1, 10.0], [100.95, 8.0]],
+            fetch_meta={"fetched_at": trading_engine_module._now(), "latency_ms": 120.0},
+            max_levels=100,
+            band_percent=1.0,
+            request_limit=100,
+        )
+
+    def insufficient(source):
+        return trading._build_orderbook_snapshot(
+            source=source,
+            bids=[[100.0, 10.0], [99.95, 8.0]],
+            asks=[[100.1, 10.0], [100.15, 8.0]],
+            fetch_meta={"fetched_at": trading_engine_module._now(), "latency_ms": 120.0},
+            max_levels=100,
+            band_percent=1.0,
+            request_limit=100,
+        )
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: insufficient("binance_public_api"))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: insufficient("okx_public_api"))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: insufficient("coinbase_exchange"))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: insufficient("kraken_public_api"))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: insufficient("gemini_public_api"))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: barely_qualified("bitstamp_public_api"))
+
+    status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+
+    assert status["state"] == "conservative"
+    assert status["high_risk_blocked"] is True
+    used = {row["source"]: row for row in status["providers_used"]}
+    assert used["bitstamp_public_api"]["risk_grade_eligible"] is True
+    assert used["bitstamp_public_api"]["risk_grade_weight_percent"] == pytest.approx(100.0, abs=0.01)
+    assert used["binance_public_api"]["risk_grade_eligible"] is False
+    assert used["binance_public_api"]["reference_weight_percent"] > 0
+    assert used["binance_public_api"]["risk_grade_weight_percent"] == pytest.approx(0.0, abs=0.0001)
+    assert status["reference_provider_count"] == 6
+    assert status["risk_grade_provider_count"] == 1
+    assert {item["code"] for item in status["warnings"]} >= {"provider_coverage_partial", "provider_count_low"}
+    assert "可用 order book 來源只剩 1 家" in status["message"]
+
+
+def test_market_order_rejects_conservative_fusion_price(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="seed")
+
+    def conservative_price(conn, market, *, with_meta=False, high_risk=False):
+        meta = {
+            "price_health": "conservative",
+            "fallback_reason": "可用 order book 來源不足",
+            "excluded_sources": ["binance_public_api", "okx_public_api"],
+            "warnings": [{"code": "provider_count_low", "message": "可用 order book 來源不足", "severity": "critical"}],
+            "high_risk_blocked": True,
+            "high_risk_block_reason": "目前可用來源數不足，只能提供 degraded reference price",
+        }
+        return (100.0, "fused_weighted", meta) if with_meta else (100.0, "fused_weighted")
+
+    monkeypatch.setattr(trading, "_current_market_price_points", conservative_price)
+
+    with pytest.raises(ValueError, match="market order is blocked while fused price is in conservative mode"):
+        trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="0.01")
+
+
+def test_margin_open_rejects_conservative_fusion_price(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10000, action_type="seed")
+    trading.update_root_settings(actor=_actor(3, "root", "super_admin"), settings={"borrowing_enabled": True}, markets=[])
+
+    def conservative_price(conn, market, *, with_meta=False, high_risk=False):
+        meta = {
+            "price_health": "conservative",
+            "fallback_reason": "可用 order book 來源不足",
+            "excluded_sources": ["binance_public_api"],
+            "warnings": [{"code": "provider_count_low", "message": "可用 order book 來源不足", "severity": "critical"}],
+            "high_risk_blocked": True,
+            "high_risk_block_reason": "目前可用來源數不足，只能提供 degraded reference price",
+        }
+        return (5000.0, "fused_weighted", meta) if with_meta else (5000.0, "fused_weighted")
+
+    monkeypatch.setattr(trading, "_current_market_price_points", conservative_price)
+
+    with pytest.raises(ValueError, match="margin financing risk evaluation is blocked while fused price is in conservative mode"):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="margin_long",
+            quantity="0.1",
+            collateral_points=1000,
+        )
+
+
+def test_root_trading_settings_persist_price_fusion_coverage_controls(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_fusion_depth_band_percent": 1.5,
+            "price_fusion_depth_levels": 1000,
+            "price_fusion_min_orderbook_coverage_percent": 0.75,
+            "price_fusion_max_single_provider_weight_percent": 35,
+            "price_fusion_min_provider_count": 4,
+        },
+        markets=[],
+    )
+
+    settings = trading.get_root_settings()["settings"]
+    assert settings["price_fusion_depth_band_percent"] == 1.5
+    assert settings["price_fusion_depth_levels"] == 1000
+    assert settings["price_fusion_min_orderbook_coverage_percent"] == 0.75
+    assert settings["price_fusion_max_single_provider_weight_percent"] == 35.0
+    assert settings["price_fusion_min_provider_count"] == 4
 
 
 def test_price_fusion_status_and_audit_mark_excluded_failed_sources(tmp_path, monkeypatch):
@@ -2329,7 +2677,7 @@ def test_live_price_fusion_manual_weights_renormalize_after_provider_failure(tmp
     def boom(_market_symbol):
         raise OSError("provider unavailable")
 
-    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: {"source": "binance_public_api", "price_points": 123, "depth_score": 10.0})
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1, price=123.0))
     monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", boom)
     monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", boom)
     monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", boom)
@@ -2344,14 +2692,14 @@ def test_live_price_fusion_manual_weights_renormalize_after_provider_failure(tmp
     finally:
         conn.close()
 
-    assert price == 123
+    assert price == pytest.approx(123.0615, abs=0.0001)
     assert source == "fused_weighted"
     settings = trading.get_root_settings()["settings"]
     assert settings["price_fusion_mode"] == "manual_weights"
     assert settings["price_fusion_manual_weights"]["okx_public_api"] == 3
 
 
-def test_price_fusion_manual_weights_default_equal_weight_and_zero_weight_exclusion(tmp_path, monkeypatch):
+def test_price_fusion_manual_weights_default_bias_and_zero_weight_exclusion(tmp_path, monkeypatch):
     get_db = _db(tmp_path)
     points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
     trading = TradingEngineService(get_db=get_db, points_service=points)
@@ -2366,10 +2714,15 @@ def test_price_fusion_manual_weights_default_equal_weight_and_zero_weight_exclus
     monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "bitstamp_public_api", 1))
 
     equal_status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    used = {row["source"]: row for row in equal_status["providers_used"]}
     assert equal_status["requested_mode"] == "manual_weights"
     assert equal_status["resolved_mode"] == "manual_weights"
-    for row in equal_status["providers_used"]:
-        assert row["normalized_weight_percent"] == pytest.approx(100.0 / 6.0, abs=0.02)
+    assert used["binance_public_api"]["reference_weight_percent"] == pytest.approx(40.0, abs=0.05)
+    assert used["okx_public_api"]["reference_weight_percent"] == pytest.approx(25.0, abs=0.05)
+    assert used["coinbase_exchange"]["reference_weight_percent"] == pytest.approx(15.0, abs=0.05)
+    assert used["kraken_public_api"]["reference_weight_percent"] == pytest.approx(10.0, abs=0.05)
+    assert used["bitstamp_public_api"]["reference_weight_percent"] == pytest.approx(8.0, abs=0.05)
+    assert used["gemini_public_api"]["reference_weight_percent"] == pytest.approx(2.0, abs=0.05)
 
     trading.update_root_settings(
         actor=root,
@@ -2420,6 +2773,7 @@ def test_price_fusion_manual_all_zero_reports_invalid_and_logs_auto_depth_fallba
     status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
     assert status["resolved_mode"] == "auto_depth_fallback"
     assert status["warning_code"] == "manual_weights_invalid"
+    assert {item["code"] for item in status["warnings"]} >= {"manual_weights_invalid", "manual_weights_unusable"}
     assert "手動權重全部為 0" in status["message"]
 
     conn = trading.get_db()
@@ -2435,7 +2789,114 @@ def test_price_fusion_manual_all_zero_reports_invalid_and_logs_auto_depth_fallba
     audit = next(row for row in trading.root_report()["audit_events"] if row["event_type"] == "TRADING_PRICE_FUSION_DEGRADED")
     metadata = json.loads(audit["metadata_json"] or "{}")
     assert metadata["warning_code"] == "manual_weights_invalid"
+    assert {item["code"] for item in metadata["warnings"]} >= {"manual_weights_invalid", "manual_weights_unusable"}
     assert metadata["resolved_mode"] == "auto_depth_fallback"
+
+
+def test_current_market_price_uses_risk_grade_value_for_high_risk_paths(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+
+    def fake_fusion(_symbol, *, settings):
+        return 101.0, {
+            "resolved_source": "fused_weighted",
+            "reference_price_points": 101.0,
+            "risk_grade_price_points": 99.0,
+            "reference_provider_count": 6,
+            "risk_grade_provider_count": 3,
+            "providers_used": [],
+            "excluded_providers": [],
+            "warnings": [],
+            "degraded": False,
+            "conservative_mode": False,
+            "high_risk_blocked": False,
+        }
+
+    monkeypatch.setattr(trading, "_fetch_weighted_fused_price_points", fake_fusion)
+
+    conn = trading.get_db()
+    try:
+        trading.ensure_schema(conn)
+        market = trading._market(conn, "BTC/POINTS")
+        reference_price, _source, reference_meta = trading._current_market_price_points(conn, market, with_meta=True)
+        risk_price, _source, risk_meta = trading._current_market_price_points(conn, market, with_meta=True, high_risk=True)
+    finally:
+        conn.close()
+
+    assert reference_price == pytest.approx(101.0, abs=0.0001)
+    assert risk_price == pytest.approx(99.0, abs=0.0001)
+    assert reference_meta["requested_price_mode"] == "reference"
+    assert risk_meta["requested_price_mode"] == "risk_grade"
+    assert risk_meta["risk_grade_price_points"] == pytest.approx(99.0, abs=0.0001)
+
+
+def test_price_fusion_status_applies_single_provider_weight_cap(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_fusion_max_single_provider_weight_percent": 35,
+        },
+        markets=[],
+    )
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "binance_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "okx_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "coinbase_exchange", 1))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "kraken_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "gemini_public_api", 1))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: _depth_snapshot(trading, "bitstamp_public_api", 20))
+
+    status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    used = {row["source"]: row for row in status["providers_used"]}
+
+    assert status["warning_code"] == "provider_weight_cap_applied"
+    assert any(item["code"] == "provider_weight_cap_applied" for item in status["warnings"])
+    assert used["bitstamp_public_api"]["weight_cap_applied"] is True
+    assert used["bitstamp_public_api"]["normalized_weight_percent"] == pytest.approx(35.0, abs=0.05)
+    assert used["bitstamp_public_api"]["raw_normalized_weight_percent"] > used["bitstamp_public_api"]["normalized_weight_percent"]
+
+
+def test_price_fusion_status_excludes_midpoint_outlier_and_one_sided_depth(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(actor=root, settings={"price_source": "fused_weighted", "price_fusion_mode": "auto_depth"}, markets=[])
+
+    balanced = lambda source, price: _depth_snapshot(trading, source, 2, price=price)
+    one_sided = trading._build_orderbook_snapshot(
+        source="coinbase_exchange",
+        bids=[[100.0, 10.0] for _ in range(10)],
+        asks=[[100.1, 0.01] for _ in range(10)],
+        fetch_meta={"fetched_at": trading_engine_module._now(), "latency_ms": 90.0},
+        max_levels=100,
+    )
+    outlier = _depth_snapshot(trading, "kraken_public_api", 2, price=110.0)
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: balanced("binance_public_api", 100.0))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: balanced("okx_public_api", 100.0))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: one_sided)
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: outlier)
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: balanced("gemini_public_api", 100.0))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: balanced("bitstamp_public_api", 100.0))
+
+    status = trading.get_root_price_fusion_status(market_symbol="BTC/POINTS")
+    excluded = {row["source"]: row for row in status["excluded_providers"]}
+    used_sources = {row["source"] for row in status["providers_used"]}
+
+    assert excluded["coinbase_exchange"]["reason"] == "one_sided_depth"
+    assert excluded["kraken_public_api"]["reason"] == "midpoint_deviation_exceeded"
+    assert "coinbase_exchange" not in used_sources
+    assert "kraken_public_api" not in used_sources
 
 
 def test_price_fusion_orderbook_total_failure_enters_conservative_single_source_fallback(tmp_path, monkeypatch):
@@ -3631,6 +4092,56 @@ def test_margin_liquidation_scan_uses_window_low_for_recovered_price(tmp_path):
     assert result["ok"] is True
     assert result["liquidated"][0]["position_uuid"] == opened["position"]["position_uuid"]
     assert result["liquidated"][0]["risk"]["price_points"] == pytest.approx(3300.0)
+
+
+def test_margin_liquidation_scan_skips_when_fused_price_is_conservative(tmp_path, monkeypatch):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_interest_percent_daily": 0,
+            "margin_liquidation_enabled": True,
+        },
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    original = trading._current_market_price_points
+
+    def conservative_price(conn, market, *, with_meta=False, high_risk=False):
+        if with_meta:
+            return (
+                3300.0,
+                "fused_weighted",
+                {
+                    "price_health": "conservative",
+                    "fallback_reason": "可用 order book 來源不足",
+                    "excluded_sources": ["binance_public_api"],
+                    "warnings": [{"code": "provider_count_low", "message": "可用 order book 來源不足", "severity": "critical"}],
+                    "high_risk_blocked": True,
+                    "high_risk_block_reason": "目前可用來源數不足，只能提供 degraded reference price",
+                },
+            )
+        return original(conn, market, with_meta=with_meta)
+
+    monkeypatch.setattr(trading, "_current_market_price_points", conservative_price)
+
+    result = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert result["ok"] is False
+    assert result["liquidated"] == []
+    assert result["errors"]
+    assert result["errors"][0]["position_uuid"] == opened["position"]["position_uuid"]
+    assert result["errors"][0]["price_health"] == "conservative"
 
 
 def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path):

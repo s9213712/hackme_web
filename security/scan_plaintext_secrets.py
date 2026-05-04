@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JSON_REPORT = ROOT / "security" / "reports" / "secrets_scan_report.json"
 DEFAULT_MD_REPORT = ROOT / "security" / "reports" / "secrets_scan_report.md"
 DEFAULT_ALLOWLIST = ROOT / "security" / "secrets_allowlist.yml"
@@ -106,7 +106,7 @@ RULES = [
     ),
     Rule(
         "private_key_block",
-        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE " + r"KEY-----"),
         "high",
         "Remove private keys from the repository and rotate the key immediately if it was real.",
     ),

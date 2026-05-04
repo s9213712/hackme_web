@@ -156,8 +156,15 @@ def _root_price_fusion_status_app(actor, captured):
     class FakeTradingService:
         def get_root_price_fusion_status(self, *, market_symbol=""):
             captured["market_symbol"] = market_symbol
+            normalized = {
+                "BTC/USDT": "BTC/POINTS",
+                "ETH/USDT": "ETH/POINTS",
+            }.get(market_symbol, market_symbol or "BTC/POINTS")
             return {
-                "market_symbol": market_symbol or "BTC/POINTS",
+                "market_symbol": normalized,
+                "requested_market_symbol": market_symbol or "",
+                "resolved_market_symbol": normalized,
+                "display_market_symbol": normalized.replace("/POINTS", "/USDT"),
                 "configured_source": "fused_weighted",
                 "requested_mode": "auto_depth",
                 "resolved_mode": "auto_depth",
@@ -200,18 +207,28 @@ def _live_price_app(actor, captured):
         def get_live_market_quote(self, *, market_symbol=""):
             captured["market_symbol"] = market_symbol
             defaulted = not bool(market_symbol)
+            resolved_symbol = {
+                "BTC/USDT": "BTC/POINTS",
+                "ETH/USDT": "ETH/POINTS",
+            }.get(market_symbol, market_symbol or "BTC/POINTS")
             return {
                 "market": {
-                    "symbol": market_symbol or "BTC/POINTS",
+                    "symbol": resolved_symbol,
                     "manual_price_points": 81234,
                     "price_source": "fused_weighted",
                     "fee_rate_percent": 0.1,
                 },
+                "requested_market_symbol": market_symbol or "",
+                "resolved_market_symbol": resolved_symbol,
+                "display_market_symbol": resolved_symbol.replace("/POINTS", "/USDT"),
                 "refresh_interval_ms": 2000,
                 "server_time": "2026-05-04T00:00:00",
                 "price_health": "fallback" if defaulted else "healthy",
                 "fallback_reason": "orderbook unavailable" if defaulted else "",
                 "excluded_sources": ["okx_public_api"] if defaulted else [],
+                "warnings": [{"code": "provider_count_low", "message": "可用來源不足", "severity": "critical"}] if defaulted else [],
+                "high_risk_blocked": defaulted,
+                "high_risk_block_reason": "目前不是正常 fused price" if defaulted else "",
                 "defaulted_market": defaulted,
             }
 
@@ -1078,6 +1095,9 @@ def test_root_price_fusion_status_route_passes_selected_market_symbol():
     payload = response.get_json()
     assert payload["ok"] is True
     assert payload["status"]["market_symbol"] == "ETH/POINTS"
+    assert payload["status"]["requested_market_symbol"] == "ETH/POINTS"
+    assert payload["status"]["resolved_market_symbol"] == "ETH/POINTS"
+    assert payload["status"]["display_market_symbol"] == "ETH/USDT"
     assert captured["market_symbol"] == "ETH/POINTS"
 
 
@@ -1089,7 +1109,11 @@ def test_root_price_fusion_status_route_normalizes_display_market_symbol():
 
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
-    assert captured["market_symbol"] == "ETH/POINTS"
+    payload = response.get_json()["status"]
+    assert payload["requested_market_symbol"] == "ETH/USDT"
+    assert payload["resolved_market_symbol"] == "ETH/POINTS"
+    assert payload["display_market_symbol"] == "ETH/USDT"
+    assert captured["market_symbol"] == "ETH/USDT"
 
 
 def test_trading_live_price_route_returns_selected_market_quote():
@@ -1107,7 +1131,13 @@ def test_trading_live_price_route_returns_selected_market_quote():
     assert payload["price_health"] == "healthy"
     assert payload["fallback_reason"] == ""
     assert payload["excluded_sources"] == []
+    assert payload["warnings"] == []
+    assert payload["high_risk_blocked"] is False
+    assert payload["high_risk_block_reason"] == ""
     assert payload["defaulted_market"] is False
+    assert payload["requested_market_symbol"] == "BTC/POINTS"
+    assert payload["resolved_market_symbol"] == "BTC/POINTS"
+    assert payload["display_market_symbol"] == "BTC/USDT"
     assert payload["refresh_interval_ms"] == 2000
     assert captured["market_symbol"] == "BTC/POINTS"
 
@@ -1120,7 +1150,11 @@ def test_trading_live_price_route_normalizes_display_market_symbol():
 
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
-    assert captured["market_symbol"] == "BTC/POINTS"
+    payload = response.get_json()
+    assert payload["requested_market_symbol"] == "BTC/USDT"
+    assert payload["resolved_market_symbol"] == "BTC/POINTS"
+    assert payload["display_market_symbol"] == "BTC/USDT"
+    assert captured["market_symbol"] == "BTC/USDT"
 
 
 def test_trading_live_price_route_marks_defaulted_market_when_missing():
@@ -1136,5 +1170,8 @@ def test_trading_live_price_route_marks_defaulted_market_when_missing():
     assert payload["price_health"] == "fallback"
     assert payload["fallback_reason"] == "orderbook unavailable"
     assert payload["excluded_sources"] == ["okx_public_api"]
+    assert payload["warnings"][0]["code"] == "provider_count_low"
+    assert payload["high_risk_blocked"] is True
+    assert payload["high_risk_block_reason"] == "目前不是正常 fused price"
     assert payload["defaulted_market"] is True
     assert captured["market_symbol"] == ""

@@ -219,6 +219,43 @@ def test_video_upload_endpoint_accepts_audio_and_streams_it(tmp_path):
     assert stream.data == b"not-a-real-mp3-but-route-test"
 
 
+def test_video_stream_encodes_unicode_filename_safely_for_range_responses(tmp_path):
+    db_path = tmp_path / "unicode-video.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_video_upload_db(db_path)
+    fernet = Fernet(Fernet.generate_key())
+    client = _build_video_upload_app(db_path, storage_root, fernet).test_client()
+
+    response = client.post(
+        "/api/videos/upload",
+        data={
+            "video": (io.BytesIO(b"unicode-video-stream"), "測試影片.mp4", "video/mp4"),
+            "title": "Unicode video",
+            "description": "server encrypted unicode name",
+            "visibility": "public",
+            "privacy_mode": "server_encrypted",
+        },
+        content_type="multipart/form-data",
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+
+    stream = client.get(f"/api/videos/{body['video']['id']}/stream")
+    assert stream.status_code == 200
+    assert stream.data == b"unicode-video-stream"
+    disposition = stream.headers["Content-Disposition"]
+    assert 'filename="' in disposition
+    assert "filename*=UTF-8''" in disposition
+    assert "%E6%B8%AC%E8%A9%A6%E5%BD%B1%E7%89%87.mp4" in disposition
+
+    ranged = client.get(f"/api/videos/{body['video']['id']}/stream", headers={"Range": "bytes=0-6"})
+    assert ranged.status_code == 206
+    assert ranged.data == b"unicode"
+    assert "filename*=UTF-8''" in ranged.headers["Content-Disposition"]
+
+
 def test_video_publish_endpoint_accepts_cover_upload_for_existing_cloud_media(tmp_path):
     db_path = tmp_path / "publish.db"
     storage_root = tmp_path / "storage"

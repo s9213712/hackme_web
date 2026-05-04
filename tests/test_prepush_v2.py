@@ -48,6 +48,8 @@ def test_db_log_storage_report_artifacts_are_forbidden():
     assert forbidden_paths_check.is_forbidden("logs/server.log")
     assert forbidden_paths_check.is_forbidden("storage/u1/file.bin")
     assert forbidden_paths_check.is_forbidden("reports/bugs/bug.md")
+    assert forbidden_paths_check.is_forbidden("security/audit_exports/server_mode/run.json")
+    assert forbidden_paths_check.is_forbidden("docs/WEBCHAT/AGENT_SKILL_PROPOSAL.md:Zone.Identifier")
 
 
 def test_secret_scanner_allows_fake_examples_and_redacts_real_secret():
@@ -119,6 +121,18 @@ def test_clean_keeps_gitkeep_while_removing_cache_file(tmp_path):
     assert not pyc.exists()
 
 
+def test_clean_removes_zone_identifier_sidecar(tmp_path):
+    sidecar = tmp_path / "docs" / "WEBCHAT" / "AGENT_SKILL_PROPOSAL.md:Zone.Identifier"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text("[ZoneTransfer]\nZoneId=3\n", encoding="utf-8")
+
+    removed, candidates = cleanup_check.clean_repo_caches(yes=True, root=tmp_path, tracked=set())
+
+    assert removed == 1
+    assert sidecar in candidates
+    assert not sidecar.exists()
+
+
 def test_clean_does_not_delete_runtime_or_user_data_dirs(tmp_path):
     protected_paths = [
         tmp_path / "database" / "database.db",
@@ -146,6 +160,35 @@ def test_clean_does_not_delete_runtime_or_user_data_dirs(tmp_path):
     for path in protected_paths:
         assert path.exists(), path
     assert protected_cache.exists()
+
+
+def test_clean_runtime_removes_repo_runtime_root(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "database").mkdir(parents=True)
+    (runtime_root / "database" / "database.db").write_text("db", encoding="utf-8")
+
+    removed, candidates = cleanup_check.clean_repo_runtime(yes=True, root=tmp_path, tracked=set())
+
+    assert removed == 1
+    assert candidates == [runtime_root]
+    assert not runtime_root.exists()
+
+
+def test_clean_runtime_skips_tracked_runtime_placeholder(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    gitkeep = runtime_root / ".gitkeep"
+    gitkeep.write_text("", encoding="utf-8")
+
+    removed, candidates = cleanup_check.clean_repo_runtime(
+        yes=True,
+        root=tmp_path,
+        tracked={"runtime/.gitkeep"},
+    )
+
+    assert removed == 0
+    assert candidates == []
+    assert runtime_root.exists()
 
 
 def test_clean_does_not_delete_tracked_files_except_untracked_cache(tmp_path):

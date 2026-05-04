@@ -13,6 +13,7 @@ from scripts.prepush.result import CheckResult
 REPO_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "htmlcov", "dist", "build"}
 REPO_CACHE_FILE_NAMES = {".coverage"}
 REPO_CACHE_FILE_SUFFIXES = {".pyc", ".pyo"}
+REPO_JUNK_FILE_SUFFIXES = {":Zone.Identifier"}
 PROTECTED_CLEAN_PATHS = {"runtime", "security/reports"}
 PROTECTED_CLEAN_FILES = {
     "bootstrap.schema.sql",
@@ -86,7 +87,11 @@ def collect_repo_cache_candidates(*, root: Path, tracked: set[str] | None = None
                 continue
             if relative in tracked:
                 continue
-            if filename in REPO_CACHE_FILE_NAMES or target.suffix.lower() in REPO_CACHE_FILE_SUFFIXES:
+            if (
+                filename in REPO_CACHE_FILE_NAMES
+                or target.suffix.lower() in REPO_CACHE_FILE_SUFFIXES
+                or any(filename.endswith(suffix) for suffix in REPO_JUNK_FILE_SUFFIXES)
+            ):
                 candidates.append(target)
     return sorted(candidates)
 
@@ -99,6 +104,17 @@ def collect_temp_clean_candidates(*, tmp_root: Path | None = None, keep_latest: 
     candidates = sorted(candidates, key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
     keep = {path.resolve() for path in candidates[: max(0, keep_latest)]}
     return [path for path in candidates if path.resolve() not in keep]
+
+
+def collect_repo_runtime_candidates(*, root: Path, tracked: set[str] | None = None) -> list[Path]:
+    root = Path(root)
+    tracked = set(tracked or set())
+    runtime_root = root / "runtime"
+    if not runtime_root.exists():
+        return []
+    if tree_contains_tracked_or_gitkeep(runtime_root, tracked, root=root):
+        return []
+    return [runtime_root]
 
 
 def remove_candidates(candidates: list[Path]) -> int:
@@ -140,6 +156,13 @@ def clean_repo_caches(*, yes: bool, root: Path, tracked: set[str] | None = None,
     return remove_candidates(candidates), candidates
 
 
+def clean_repo_runtime(*, yes: bool, root: Path, tracked: set[str] | None = None, is_ci: bool = False) -> tuple[int, list[Path]]:
+    candidates = collect_repo_runtime_candidates(root=root, tracked=tracked)
+    if not confirm_delete("clean-runtime", candidates, yes=yes, is_ci=is_ci):
+        return 0, candidates
+    return remove_candidates(candidates), candidates
+
+
 def clean_temp_roots(*, keep_latest: int = 2, yes: bool, tmp_root: Path | None = None, is_ci: bool = False) -> tuple[int, list[Path]]:
     candidates = collect_temp_clean_candidates(tmp_root=tmp_root, keep_latest=keep_latest)
     if not confirm_delete("clean-temp", candidates, yes=yes, is_ci=is_ci):
@@ -149,7 +172,13 @@ def clean_temp_roots(*, keep_latest: int = 2, yes: bool, tmp_root: Path | None =
 
 def run_clean(ctx: PrepushContext) -> CheckResult:
     try:
-        removed, candidates = clean_repo_caches(
+        cache_removed, cache_candidates = clean_repo_caches(
+            yes=ctx.yes,
+            root=ctx.repo_root,
+            tracked=set(ctx.tracked_files),
+            is_ci=ctx.is_ci,
+        )
+        runtime_removed, runtime_candidates = clean_repo_runtime(
             yes=ctx.yes,
             root=ctx.repo_root,
             tracked=set(ctx.tracked_files),
@@ -157,8 +186,14 @@ def run_clean(ctx: PrepushContext) -> CheckResult:
         )
     except Exception as exc:
         return CheckResult.fail("clean repo caches", str(exc), remediation="Use --yes or run interactively.")
+    candidates = cache_candidates + runtime_candidates
+    removed = cache_removed + runtime_removed
     details = [{"path": ctx.relpath(path)} for path in candidates[:80]]
-    return CheckResult.pass_("clean repo caches", f"removed {removed} safe cache item(s)", details=details)
+    return CheckResult.pass_(
+        "clean repo caches/runtime",
+        f"removed {removed} safe repo artifact(s)",
+        details=details,
+    )
 
 
 def run_clean_temp(ctx: PrepushContext, *, keep_latest: int = 2) -> CheckResult:

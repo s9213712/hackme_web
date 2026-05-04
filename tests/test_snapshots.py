@@ -358,6 +358,29 @@ def test_custom_security_profile_can_be_saved_and_applied(tmp_path):
     assert switched["mode"]["current_mode"] == "staging_lockdown"
     assert saved_settings[-1]["ip_blocking_enabled"] is True
     assert saved_settings[-1]["security_pending_chat_reports_threshold"] == 3
+
+
+def test_server_mode_audit_exports_use_runtime_reports_dir(tmp_path):
+    audit_log = []
+    runtime_root = tmp_path / "runtime-root"
+    runtime_root.mkdir()
+    service, db_path, _uploads = _service(tmp_path, audit_log, runtime_base_dir=runtime_root)
+    mode = ServerModeService(
+        snapshot_service=service,
+        get_db=lambda: _db(db_path),
+        audit=lambda *args, **kwargs: audit_log.append((args, kwargs)),
+    )
+    actor = {"id": 1, "username": "root"}
+
+    result = mode.switch_mode(target_mode="maintenance", actor=actor, confirm="ENTER_MAINTENANCE", notes="audit path test")
+
+    assert result["ok"] is True
+    expected_dir = runtime_root / "reports" / "server_mode_audit"
+    assert mode.audit_export_dir == expected_dir
+    assert expected_dir.exists()
+    assert list(expected_dir.glob("*.json"))
+    assert list(expected_dir.glob("server_mode_audit_*.jsonl"))
+    assert list(expected_dir.glob("server_mode_audit_*.sha256"))
     assert any(call[0][0] == "SERVER_MODE_CHANGE" for call in audit_log)
 
 

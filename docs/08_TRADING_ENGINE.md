@@ -17,8 +17,10 @@
 
 ### 目前範圍
 
-- 現貨交易：`BTC/USDT`、`ETH/USDT` 前台顯示
-- 內部符號仍是 `BTC/POINTS`、`ETH/POINTS`
+- 現貨交易：`BTC/USDT`、`ETH/USDT`、`XRP/USDT`、`BNB/USDT`、`PAXG/USDT`
+  前台顯示
+- 內部符號仍是 `BTC/POINTS`、`ETH/POINTS`、`XRP/POINTS`、`BNB/POINTS`、
+  `PAXG/POINTS`
 - DCA / 網格 / workflow bots
 - 回測
 - 實驗性 borrow trading

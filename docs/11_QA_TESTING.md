@@ -25,6 +25,10 @@
 python3 scripts/pre_push_checks.py
 ```
 
+如果有安裝 `hooks/pre-push`，push 前也會先自動執行一輪 `--clean --yes
+--ci`：先清掉 repo 內的 Python 快取與誤生在 repo 根目錄的 `runtime/`，
+再進 blocking gate。
+
 #### 2. 全量 pytest
 
 ```bash
@@ -93,6 +97,9 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   避免污染同一個測試 runtime。
 - `QA_MISSION_FOR_AGENTS.md`
   是 agent 深度 QA runbook，包含人工逐步測試、DB 對帳、異常輸入矩陣與直接修正模式。
+- `CLI_ADMIN_PLAYBOOK.md`
+  是正式的 `curl` / shell 管理與 API 驗證手冊，適合 root / admin / developer
+  在隔離 runtime 直接操作網站。
 - `docs/AGENTS/TRADING_QA_REGRESSION_MATRIX.md`
   是交易系統專用的固定回歸清單；只要改到 backtest / workflow / grid / DCA / liquidation /
   融合價格，就不能只跑 `test_trading_engine.py` 或歷史回測。

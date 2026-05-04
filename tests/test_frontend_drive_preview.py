@@ -25,13 +25,16 @@ def test_cloud_drive_preview_ui_is_wired():
     assert "decryptDriveE2eeFileForSession" in drive_js
     assert "function normalizeDrivePreviewBlobMime(blob, expectedMime = \"\")" in drive_js
     assert "new Blob([blob], { type: targetMime })" in drive_js
-    assert 'fetchDrivePreviewContent(fileId, csrf, preview.mime_type || "")' in drive_js
+    assert "function drivePreviewUsesDirectStream(preview)" in drive_js
+    assert "async function resolveDrivePreviewMediaUrl(fileId, csrf, preview" in drive_js
+    assert 'return drivePreviewContentUrl(fileId);' in drive_js
     assert "driveE2eeSessionPassphrases" in drive_js
     assert "clearDriveE2eeSessionPassphrases" in (ROOT / "public" / "js" / "00-core.js").read_text(encoding="utf-8")
     assert "return previewAlbumFileFullscreen(fileId, options.fileName || \"\")" in drive_js
     assert 'preview.category === "video"' in drive_js
     assert 'preview.category === "audio"' in drive_js
-    assert '<audio controls src="${url}"></audio>' in drive_js
+    assert '<audio controls preload="metadata" src="${url}"></audio>' in drive_js
+    assert '<video controls preload="metadata" playsinline src="${url}"></video>' in drive_js
     assert 'preview.category === "pdf"' in drive_js
     assert 'preview.category === "image"' in drive_js
     assert '"img-src":     "\'self\' data: blob:"' in server_py
@@ -78,7 +81,9 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'form.append("virtual_path", virtualPath)' in drive_js
     assert "async function createStorageFolder()" in drive_js
     assert "async function organizeSelectedStorageFile()" in drive_js
+    assert "async function renameStorageFile(id, currentPath, currentName = \"\")" in drive_js
     assert "async function moveStorageFileFromRow(id, currentPath)" in drive_js
+    assert "async function renameStorageFolder(path, currentName = \"\")" in drive_js
     assert "async function moveCloudFileToStorage(fileId, name)" in drive_js
     assert "async function moveStorageFolder()" in drive_js
     assert "async function createAlbum()" in drive_js
@@ -97,6 +102,8 @@ def test_filemanager_and_albummanager_ui_are_wired():
     assert 'id="storage-breadcrumb"' in index_html
     assert 'id="storage-selection-label"' in index_html
     assert 'data-drive-action="open-storage-folder"' in drive_js
+    assert 'data-drive-action="rename-storage-folder"' in drive_js
+    assert 'data-drive-action="rename-storage-file"' in drive_js
     assert 'data-drive-action="move-storage-file"' in drive_js
     assert 'data-drive-action="move-cloud-to-storage"' in drive_js
     assert 'data-drive-action="folder-to-album"' in drive_js
@@ -147,7 +154,7 @@ def test_album_viewer_has_dedicated_module():
     assert 'class="drive-collapsible-panel album-viewer-panel" id="album-viewer-card"' in index_html
     assert 'data-drive-action="album-preview-prev"' in index_html
     assert 'data-drive-action="album-preview-next"' in index_html
-    assert '/js/35-drive.js?v=20260504-folder-dblclick' in index_html
+    assert '/js/35-drive.js?v=20260504-drive-media-rename' in index_html
     assert '/styles.css?v=20260503-appearance-v2' in index_html
     assert '/js/00-core.js?v=20260503-appearance-v2' in index_html
     assert '/js/40-auth-users.js?v=20260503-appearance-reset' in index_html

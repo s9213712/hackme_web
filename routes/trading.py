@@ -596,7 +596,7 @@ def register_trading_routes(app, deps):
         actor, err = actor_or_401()
         if err:
             return err
-        market_symbol = normalize_market_symbol(request.args.get("market") or request.args.get("market_symbol") or "")
+        market_symbol = request.args.get("market") or request.args.get("market_symbol") or ""
         try:
             quote = trading_service.get_live_market_quote(market_symbol=market_symbol)
             return json_resp({"ok": True, **quote})
@@ -1317,7 +1317,7 @@ def register_trading_routes(app, deps):
         actor, err = root_or_403()
         if err:
             return err
-        market_symbol = normalize_market_symbol(request.args.get("market_symbol") or "")
+        market_symbol = request.args.get("market_symbol") or ""
         try:
             status = trading_service.get_root_price_fusion_status(market_symbol=market_symbol)
             return json_resp({"ok": True, "status": status})

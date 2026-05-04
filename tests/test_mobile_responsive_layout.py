@@ -28,9 +28,17 @@ def test_main_app_has_mobile_responsive_overrides():
     assert ".settings-option-grid" in css
     assert "grid-template-columns: 1fr !important;" in css
     assert ".drive-file-row" in css
+    assert ".table-scroll-wrap" in css
     assert ".trading-indicator-controls" in css
     assert ".trading-bot-tabs" in css
     assert ".chess-board" in css
+    assert '<div class="table-scroll-wrap">' in index_html
+    assert '<div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;">' not in index_html
+    assert '<div class="admin-toolbar" style="display:flex;gap:.5rem;align-items:center;grid-template-columns:auto auto auto; margin-bottom:.65rem;">' not in index_html
+    assert '<div class="admin-toolbar" style="grid-template-columns:1fr;margin-bottom:0;">' not in index_html
+    assert '<div class="admin-toolbar" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.65rem;">' not in index_html
+    assert '<div class="admin-toolbar" style="grid-template-columns:repeat(2,1fr);margin-bottom:.65rem;">' not in index_html
+    assert "min-width: 680px;" in css
 
 
 def test_workflow_editor_has_mobile_responsive_overrides():
