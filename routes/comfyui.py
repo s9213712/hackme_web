@@ -36,7 +36,7 @@ DEFAULT_COMFYUI_URL = os.environ.get("COMFYUI_API_URL", "http://localhost:8192")
 DEFAULT_COMFYUI_PORT = 8192
 SAFE_SAMPLER_FALLBACK = "euler"
 SAFE_SCHEDULER_FALLBACK = "normal"
-DEFAULT_GENERATION_TIMEOUT_SECONDS = 600
+DEFAULT_GENERATION_TIMEOUT_SECONDS = 1800
 MAX_GENERATION_TIMEOUT_SECONDS = 1800
 COMFYUI_BASIC_PRICE_ITEM_KEY = "comfyui_txt2img_basic"
 COMFYUI_HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -51,6 +51,7 @@ COMFYUI_MODEL_DOWNLOAD_TYPES = {
     "embedding": ("embeddings", "Embedding / Textual Inversion"),
     "vae": ("vae", "VAE"),
 }
+COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES = {"sdxl", "pony", "illustrious", "noob"}
 MAX_COMFYUI_MODEL_DOWNLOAD_BYTES = int(os.environ.get("COMFYUI_MODEL_DOWNLOAD_MAX_BYTES", str(20 * 1024 * 1024 * 1024)))
 CIVITAI_ALLOWED_HOSTS = {
     "civitai.com",
@@ -243,9 +244,9 @@ def register_comfyui_routes(app, deps):
         return False
 
     def _register_active_generation(actor, *, backend_url="", backend_scope="primary"):
-        token = secrets.token_hex(12)
+        generation_key = secrets.token_hex(12)
         with active_generations_lock:
-            active_generations[token] = {
+            active_generations[generation_key] = {
                 "user_id": _generation_owner_id(actor),
                 "username": _actor_value(actor, "username", ""),
                 "role": _actor_value(actor, "role", ""),
@@ -253,7 +254,7 @@ def register_comfyui_routes(app, deps):
                 "backend_scope": str(backend_scope or "primary"),
                 "started_at": time.time(),
             }
-        return token
+        return generation_key
 
     def _unregister_active_generation(token):
         with active_generations_lock:
@@ -960,23 +961,23 @@ def register_comfyui_routes(app, deps):
         match = re.search(r'filename="?([^";]+)"?', header, re.IGNORECASE)
         return (match.group(1).strip() if match else "")
 
-    def _append_civitai_token(url, api_key):
-        if not api_key:
+    def _append_civitai_token(url, auth_value):
+        if not auth_value:
             return str(url or "")
         parsed = urlparse(str(url or "").strip())
         if not parsed.scheme or not parsed.netloc:
             return str(url or "")
         query = parse_qs(parsed.query, keep_blank_values=True)
-        query["token"] = [api_key]
+        query["token"] = [auth_value]
         return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
 
-    def _civitai_headers(api_key):
+    def _civitai_headers(auth_value):
         headers = {
             "User-Agent": "hackme_web-comfyui-model-downloader/1.0",
             "Accept": "application/json",
         }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        if auth_value:
+            headers["Authorization"] = f"Bearer {auth_value}"
         return headers
 
     def _comfyui_model_sidecar_path(*, model_type, filename, base_dir=None):
@@ -1019,6 +1020,53 @@ def register_comfyui_routes(app, deps):
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _normalize_lora_base_model_family(value):
+        raw = str(value or "").strip()
+        normalized = re.sub(r"\s+", " ", raw).lower()
+        if not normalized:
+            return raw, "unknown"
+        if "pony" in normalized:
+            return raw, "pony"
+        if "illustrious" in normalized:
+            return raw, "illustrious"
+        if "noob" in normalized:
+            return raw, "noob"
+        if "sdxl" in normalized or "sd xl" in normalized:
+            return raw, "sdxl"
+        if "flux" in normalized:
+            return raw, "flux"
+        if (
+            "sd1.5" in normalized
+            or "sd 1.5" in normalized
+            or "sd15" in normalized
+            or "stable diffusion 1.5" in normalized
+            or "v1-5" in normalized
+        ):
+            return raw, "sd15"
+        return raw, "other"
+
+    def _lora_support_payload(base_model):
+        raw_base_model, family = _normalize_lora_base_model_family(base_model)
+        supported = family in COMFYUI_SUPPORTED_LORA_BASE_MODEL_FAMILIES
+        if supported:
+            support_message = "目前生圖介面支援這個 LoRA base model。"
+        elif raw_base_model:
+            support_message = (
+                f"{raw_base_model} LoRA 目前不支援；"
+                "目前只允許 SDXL、Pony、Illustrious、Noob 系列 LoRA。"
+            )
+        else:
+            support_message = (
+                "這個 LoRA 沒有可辨識的 base model metadata；"
+                "目前只允許 SDXL、Pony、Illustrious、Noob 系列 LoRA。"
+            )
+        return {
+            "base_model": raw_base_model,
+            "base_model_family": family,
+            "supported": supported,
+            "support_message": support_message,
+        }
+
     def _build_lora_details(lora_names, *, base_dir=None):
         details = {}
         for name in list(lora_names or []):
@@ -1026,6 +1074,7 @@ def register_comfyui_routes(app, deps):
             if not clean_name:
                 continue
             meta = _read_comfyui_model_sidecar(model_type="lora", filename=clean_name, base_dir=base_dir)
+            support = _lora_support_payload(meta.get("base_model"))
             details[clean_name] = {
                 "name": clean_name,
                 "trained_words": [
@@ -1035,6 +1084,7 @@ def register_comfyui_routes(app, deps):
                 ],
                 "source": str(meta.get("source") or "").strip(),
                 "version_name": str(meta.get("version_name") or "").strip(),
+                **support,
             }
         return details
 
@@ -1072,12 +1122,12 @@ def register_comfyui_routes(app, deps):
             charset = resp.headers.get_content_charset() or "utf-8"
             return json.loads(resp.read().decode(charset, errors="replace"))
 
-    def _civitai_api_get(path, *, api_key):
-        if not api_key:
+    def _civitai_api_get(path, *, auth_value):
+        if not auth_value:
             raise ValueError("請先在 root 設定填入 Civitai API Key")
         url = f"{CIVITAI_API_BASE}/{path.lstrip('/')}"
         try:
-            return _fetch_json(url, headers=_civitai_headers(api_key), timeout=20), None
+            return _fetch_json(url, headers=_civitai_headers(auth_value), timeout=20), None
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
@@ -1144,7 +1194,7 @@ def register_comfyui_routes(app, deps):
         ref, msg = _parse_civitai_reference(page_url)
         if msg:
             return None, msg
-        model_data, err = _civitai_api_get(f"models/{ref['model_id']}", api_key=_configured_civitai_api_key())
+        model_data, err = _civitai_api_get(f"models/{ref['model_id']}", auth_value=_configured_civitai_api_key())
         if err:
             return None, err
         versions, selected_version_id = _serialize_civitai_versions(model_data, preferred_version_id=ref.get("version_id"))
@@ -1249,7 +1299,7 @@ def register_comfyui_routes(app, deps):
             "base_dir": data.get("base_dir"),
         }, None
 
-    def _download_comfyui_model_file(*, url, model_type, base_dir, filename_hint=None, api_key=None, progress_callback=None):
+    def _download_comfyui_model_file(*, url, model_type, base_dir, filename_hint=None, auth_value=None, progress_callback=None):
         parsed, msg = _public_or_civitai_host(url)
         if msg:
             return None, msg
@@ -1279,8 +1329,8 @@ def register_comfyui_routes(app, deps):
         if destination.exists():
             return None, f"{label} 檔案已存在：{filename}"
         request_obj = urllib.request.Request(
-            _append_civitai_token(str(url), api_key),
-            headers=_civitai_headers(api_key),
+            _append_civitai_token(str(url), auth_value),
+            headers=_civitai_headers(auth_value),
         )
         written = 0
         temp_path = None
@@ -1379,7 +1429,7 @@ def register_comfyui_routes(app, deps):
             model_type=model_type or inspection.get("suggested_model_type"),
             base_dir=base_dir,
             filename_hint=chosen_file.get("name"),
-            api_key=_configured_civitai_api_key(),
+            auth_value=_configured_civitai_api_key(),
             progress_callback=progress_callback,
         )
         if err:
@@ -1389,6 +1439,7 @@ def register_comfyui_routes(app, deps):
             "model_name": inspection["name"],
             "version_id": chosen_version["id"],
             "version_name": chosen_version["name"],
+            "base_model": str(chosen_version.get("base_model") or "").strip(),
             "trained_words": list(chosen_version.get("trained_words") or []),
             "file_id": chosen_file.get("id"),
             "file_name": chosen_file.get("name"),
@@ -1404,6 +1455,7 @@ def register_comfyui_routes(app, deps):
                 "model_name": inspection["name"],
                 "version_id": chosen_version["id"],
                 "version_name": chosen_version["name"],
+                "base_model": str(chosen_version.get("base_model") or "").strip(),
                 "file_id": chosen_file.get("id"),
                 "file_name": chosen_file.get("name"),
                 "trained_words": list(chosen_version.get("trained_words") or []),
@@ -1774,6 +1826,11 @@ def register_comfyui_routes(app, deps):
             if name in seen:
                 continue
             seen.add(name)
+            detail = _build_lora_details([name]).get(name) or {}
+            if detail.get("supported") is not True:
+                return None, detail.get("support_message") or (
+                    "這個 LoRA 目前不支援；只允許 SDXL、Pony、Illustrious、Noob 系列 LoRA。"
+                )
             normalized.append({
                 "name": name[:180],
                 "strength_model": _float_range(item.get("strength_model"), 1.0, -2.0, 2.0),

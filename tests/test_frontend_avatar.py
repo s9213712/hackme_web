@@ -19,7 +19,7 @@ def test_avatar_upload_ui_is_wired():
     assert "async function uploadUserAvatar()" in auth_js
     assert "function selectedUserAvatarFile()" in auth_js
     assert "const avatarFile = selectedUserAvatarFile();" in auth_js
-    assert "if (!Object.keys(payload).length && !avatarFile)" in auth_js
+    assert "if (!Object.keys(payload).length && !avatarFile && !appearanceChanged)" in auth_js
     assert "submitUserAvatarUpload({ reloadUsers: false })" in auth_js
     assert 'apiFetch(API + `/admin/users/${editingUserId}/avatar`' in auth_js
     assert "markUserAvatarUpdated(editingUserId)" in auth_js

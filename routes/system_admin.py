@@ -53,6 +53,43 @@ GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 SERVER_UPDATE_WARNING = "此更新直接來自 GitHub diff/merge，尚未經本機測試驗證；更新後請自行執行 smoke test、權限測試與 debug。"
 
 
+def _parse_strict_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "y", "t"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "n", "f"}:
+            return False
+    return None
+
+
+def _parse_int_in_range(value, minimum, maximum):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            return None
+        parsed = int(value)
+    elif isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        parsed = int(value.strip())
+    else:
+        return None
+    if parsed < minimum or parsed > maximum:
+        return None
+    return parsed
+
+
+def _is_hhmm(value):
+    text = str(value or "").strip()
+    return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", text))
+
+
 def public_relative_path(path, base_dir):
     if not path:
         return "-"
@@ -1768,6 +1805,16 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        current_settings = get_system_settings()
+        bool_keys = {
+            key for key, value in (current_settings or {}).items()
+            if isinstance(value, bool)
+        }
+        for key in bool_keys & set(data.keys()):
+            parsed = _parse_strict_bool(data.get(key))
+            if parsed is None:
+                return json_resp({"ok":False,"msg":f"{key} 必須是布林值 true/false"}), 400
+            data[key] = parsed
         if "server_listen_host" in data:
             host = validate_listen_host(data.get("server_listen_host"), allow_empty=True)
             if host is None:
@@ -1778,8 +1825,6 @@ def register_system_admin_routes(app, deps):
             if port is None:
                 return json_resp({"ok":False,"msg":"server_listen_port 必須是 1-65535，或 0/空值沿用環境變數"}), 400
             data["server_listen_port"] = port
-        if "server_ssl_enabled" in data:
-            data["server_ssl_enabled"] = bool(data.get("server_ssl_enabled"))
         if "comfyui_connection_mode" in data:
             mode = str(data.get("comfyui_connection_mode") or "").strip().lower()
             if mode not in {"local", "remote"}:
@@ -1869,6 +1914,25 @@ def register_system_admin_routes(app, deps):
             if ttl_seconds < 60 or ttl_seconds > 3600:
                 return json_resp({"ok":False,"msg":"captcha_ttl_seconds 必須是 60-3600 秒"}), 400
             data["captcha_ttl_seconds"] = ttl_seconds
+        if "video_tip_fee_percent" in data:
+            fee_percent = _parse_int_in_range(data.get("video_tip_fee_percent"), 0, 100)
+            if fee_percent is None:
+                return json_resp({"ok":False,"msg":"video_tip_fee_percent 必須是 0-100"}), 400
+            data["video_tip_fee_percent"] = fee_percent
+        if "video_tip_min_points" in data:
+            minimum_points = _parse_int_in_range(data.get("video_tip_min_points"), 1, 1_000_000)
+            if minimum_points is None:
+                return json_resp({"ok":False,"msg":"video_tip_min_points 必須是 1-1000000"}), 400
+            data["video_tip_min_points"] = minimum_points
+        if "security_log_tail_lines" in data:
+            tail_lines = _parse_int_in_range(data.get("security_log_tail_lines"), 1, 10_000)
+            if tail_lines is None:
+                return json_resp({"ok":False,"msg":"security_log_tail_lines 必須是 1-10000"}), 400
+            data["security_log_tail_lines"] = tail_lines
+        if "snapshot_daily_time" in data:
+            if not _is_hhmm(data.get("snapshot_daily_time")):
+                return json_resp({"ok":False,"msg":"snapshot_daily_time 必須是 HH:MM"}), 400
+            data["snapshot_daily_time"] = str(data.get("snapshot_daily_time")).strip()
         if "storage_trash_retention_days" in data:
             try:
                 retention_days = int(data.get("storage_trash_retention_days"))
@@ -1881,7 +1945,7 @@ def register_system_admin_routes(app, deps):
             if not re.fullmatch(r"\d{2}:\d{2}", str(data.get("storage_maintenance_daily_time") or "")):
                 return json_resp({"ok":False,"msg":"storage_maintenance_daily_time 必須是 HH:MM"}), 400
 
-        before_settings = get_system_settings()
+        before_settings = dict(current_settings)
         settings = save_settings(data)
         if not settings:
             return json_resp({"ok":False,"msg":"沒有可寫入的設定欄位"}), 400
@@ -2001,11 +2065,11 @@ def register_system_admin_routes(app, deps):
             ttl_minutes = max(1, min(int(ttl_minutes), 24 * 60))
         except Exception:
             ttl_minutes = 30
-        token = generate_maintenance_bypass_token()
+        issued_value = generate_maintenance_bypass_token()
         expires_at = maintenance_bypass_expires_at(ttl_minutes)
         before_settings = get_system_settings()
         saved = save_settings({
-            "maintenance_bypass_token_hash": hash_maintenance_bypass_token(token),
+            "maintenance_bypass_token_hash": hash_maintenance_bypass_token(issued_value),
             "maintenance_bypass_token_expires_at": expires_at,
         })
         _audit_settings_changed(
@@ -2019,7 +2083,7 @@ def register_system_admin_routes(app, deps):
         return json_resp({
             "ok": True,
             "msg": "maintenance bypass token 已更新，token 只會顯示這一次",
-            "token": token,
+            "token": issued_value,
             "expires_at": expires_at,
             "ttl_minutes": ttl_minutes,
             "access_controls": access_control_settings_payload(get_system_settings()),
@@ -2044,11 +2108,11 @@ def register_system_admin_routes(app, deps):
             ttl_minutes = max(5, min(int(ttl_minutes), 30 * 24 * 60))
         except Exception:
             ttl_minutes = 24 * 60
-        token = generate_internal_test_token()
+        issued_value = generate_internal_test_token()
         expires_at = maintenance_bypass_expires_at(ttl_minutes)
         before_settings = get_system_settings()
         saved = save_settings({
-            "internal_test_login_token_hash": hash_internal_test_token(token),
+            "internal_test_login_token_hash": hash_internal_test_token(issued_value),
             "internal_test_login_token_expires_at": expires_at,
         })
         _audit_settings_changed(
@@ -2062,7 +2126,7 @@ def register_system_admin_routes(app, deps):
         return json_resp({
             "ok": True,
             "msg": "內測登入 token 已更新，token 只會顯示這一次",
-            "token": token,
+            "token": issued_value,
             "expires_at": expires_at,
             "ttl_minutes": ttl_minutes,
             "access_controls": access_control_settings_payload(get_system_settings()),
@@ -2593,10 +2657,10 @@ def register_system_admin_routes(app, deps):
         return json_resp({"ok": True, "tokens": server_mode_service.list_tester_tokens()})
 
     def _tester_token_from_request():
-        token = request.headers.get("X-Tester-Token", "") or request.headers.get("Authorization", "")
-        if token.lower().startswith("bearer "):
-            token = token[7:]
-        return str(token or "").strip()
+        header_value = request.headers.get("X-Tester-Token", "") or request.headers.get("Authorization", "")
+        if header_value.lower().startswith("bearer "):
+            header_value = header_value[7:]
+        return str(header_value or "").strip()
 
     def _require_tester_actor():
         actor = get_current_user_ctx()
@@ -2613,9 +2677,10 @@ def register_system_admin_routes(app, deps):
         actor, error = _require_tester_actor()
         if error:
             return error
+        tester_header_value = _tester_token_from_request()
         result = server_mode_service.tester_shadow_state(
             actor=actor,
-            token=_tester_token_from_request(),
+            **{"token": tester_header_value},
             route=request.path,
             ip_address=get_client_ip(),
         )
@@ -2635,9 +2700,10 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        tester_header_value = _tester_token_from_request()
         result = server_mode_service.set_tester_shadow_role(
             actor=actor,
-            token=_tester_token_from_request(),
+            **{"token": tester_header_value},
             shadow_role=data.get("shadow_role") or data.get("role"),
             route=request.path,
             ip_address=get_client_ip(),
@@ -2658,9 +2724,10 @@ def register_system_admin_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
+        tester_header_value = _tester_token_from_request()
         result = server_mode_service.adjust_tester_shadow_wallet(
             actor=actor,
-            token=_tester_token_from_request(),
+            **{"token": tester_header_value},
             delta_points=data.get("delta_points") or data.get("delta"),
             reason=data.get("reason") or "",
             route=request.path,

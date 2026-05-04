@@ -1,12 +1,14 @@
 import sqlite3
 import json
+from datetime import datetime
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 
 import pytest
 
 import services.trading_engine as trading_engine_module
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
-from services.trading_engine import TradingEngineService, ensure_trading_schema
+from services.trading_engine import TradingEngineService, ensure_trading_schema, fee_points, notional_points
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,27 @@ def _services(tmp_path):
     prices = {"BTC/POINTS": 77059, "ETH/POINTS": 5000}
     trading = TradingEngineService(get_db=get_db, points_service=points, live_price_provider=lambda symbol: prices[symbol])
     trading.test_prices = prices
+    return points, trading
+
+
+def _services_with_history(tmp_path, *, prices=None, candles=None):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    live_prices = {"BTC/POINTS": 77059, "ETH/POINTS": 5000}
+    if prices:
+        live_prices.update(prices)
+
+    def history_provider(symbol, interval, limit):
+        data = list(candles or [])
+        return data[-int(limit or len(data)) :]
+
+    trading = TradingEngineService(
+        get_db=get_db,
+        points_service=points,
+        live_price_provider=lambda symbol: live_prices[symbol],
+        historical_candles_provider=history_provider,
+    )
+    trading.test_prices = live_prices
     return points, trading
 
 
@@ -154,8 +177,8 @@ def test_spot_buy_uses_trial_credit_before_points_chain_and_updates_position(tmp
     wallet = points.get_wallet(1)
     assert wallet["points_balance"] == 2000
     dashboard = trading.user_dashboard(user_id=1)
-    assert dashboard["funding"]["trial_credit"]["available_points"] == 498
-    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 502
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 499
+    assert dashboard["funding"]["trial_credit"]["deployed_points"] == 501
     assert dashboard["positions"][0]["market_symbol"] == "ETH/POINTS"
     assert dashboard["positions"][0]["quantity"] == "0.1"
     assert dashboard["futures_positions"] == []
@@ -193,7 +216,7 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     fill = dashboard["fills"][0]
     assert fill["funding_mode"] == "trial_mixed"
     assert fill["notional_points"] == 1250
-    assert fill["fee_points"] == 4
+    assert fill["fee_points"] == 1
     assert dashboard["funding"]["trial_credit"]["available_points"] == 0
     assert dashboard["funding"]["trial_credit"]["deployed_points"] == 1000
 
@@ -201,11 +224,11 @@ def test_mixed_trial_and_real_points_buy_only_records_real_points_on_chain(tmp_p
     trading_rows = [row for row in ledger_rows if row["reference_id"] == result["order"]["order_uuid"]]
     amounts_by_action = {row["action_type"]: row["amount"] for row in trading_rows}
     assert amounts_by_action == {
-        "trading_freeze": 254,
-        "trading_unfreeze": 254,
-        "trading_spot_buy": 254,
+        "trading_freeze": 251,
+        "trading_unfreeze": 251,
+        "trading_spot_buy": 251,
     }
-    assert points.get_wallet(1)["points_balance"] == 1746
+    assert points.get_wallet(1)["points_balance"] == 1749
 
 
 def test_fee_points_rounds_half_up_for_integer_point_ledger():
@@ -704,8 +727,85 @@ def test_grid_backtest_matches_exact_math_at_full_20000_candle_limit(tmp_path):
     assert result["segmented_backtest_batches"] == 2
     assert result["trade_count"] == 7
     assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
-    assert result["final_value_points"] == 1_072
-    assert result["pnl_points"] == 72
+    assert result["final_value_points"] == 1_073
+    assert result["pnl_points"] == 73
+
+
+def test_workflow_backtest_matches_exact_math_at_full_20000_candle_limit_without_legacy_indicator_hot_path(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+
+    candles = [
+        {
+            "time_iso": f"2026-01-{1 + (idx // 1440):02d}T{(idx // 60) % 24:02d}:{idx % 60:02d}:00+00:00",
+            "open_points": 90 if idx == 9_999 else 120 if idx == 19_999 else 200 if idx < 9_999 else 100,
+            "high_points": 90 if idx == 9_999 else 120 if idx == 19_999 else 200 if idx < 9_999 else 100,
+            "low_points": 90 if idx == 9_999 else 120 if idx == 19_999 else 200 if idx < 9_999 else 100,
+            "close_points": 90 if idx == 9_999 else 120 if idx == 19_999 else 200 if idx < 9_999 else 100,
+        }
+        for idx in range(trading_engine_module.MAX_BACKTEST_CANDLES)
+    ]
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "buy_dip",
+                "name": "跌破買入",
+                "priority": 100,
+                "logic": "AND",
+                "cooldown_seconds": 0,
+                "max_runs": 1,
+                "conditions": [{"type": "price_below", "value": 100}],
+                "actions": [{"type": "buy_percent", "percent": 100, "step": 1, "order_type": "market"}],
+            },
+            {
+                "id": "sell_rally",
+                "name": "漲破賣出",
+                "priority": 10,
+                "logic": "AND",
+                "cooldown_seconds": 0,
+                "max_runs": 1,
+                "conditions": [{"type": "price_above", "value": 110}, {"type": "has_position", "value": True}],
+                "actions": [{"type": "close_all", "step": 1, "order_type": "market"}],
+            },
+        ],
+    }
+
+    def _legacy_context_should_not_run(*args, **kwargs):
+        raise AssertionError("legacy workflow indicator context should not be used during 20k workflow backtest")
+
+    trading._workflow_indicator_context = _legacy_context_should_not_run
+
+    result = trading.backtest_trading_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "strategy": "workflow",
+            "workflow_json": workflow,
+            "initial_cash_points": 10_000,
+            "order_points": 1_000,
+            "candles": candles,
+        },
+    )
+
+    buy_spend = 10_000
+    buy_fee = fee_points(buy_spend, 0.1)
+    buy_units = int((Decimal(str(buy_spend - buy_fee)) * Decimal(trading_engine_module.ASSET_SCALE) / Decimal("90")).quantize(Decimal("1"), rounding=ROUND_DOWN))
+    sell_gross = notional_points(buy_units, 120)
+    sell_fee = fee_points(sell_gross, 0.1)
+    expected_final = sell_gross - sell_fee
+
+    assert result["segmented_backtest"] is True
+    assert result["segmented_backtest_batches"] == 2
+    assert result["trade_count"] == 2
+    assert result["trades"][0]["price_points"] == 90
+    assert result["trades"][1]["price_points"] == 120
+    assert result["trades"][0]["fee_points"] == buy_fee
+    assert result["trades"][1]["fee_points"] == sell_fee
+    assert result["end_units"] == 0
+    assert result["final_value_points"] == expected_final
 
 
 def test_trading_bot_workflow_triggers_existing_order_path(tmp_path):
@@ -949,6 +1049,29 @@ def test_workflow_rsi_uses_wilder_smoothing(tmp_path):
     assert context["rsi"] != pytest.approx(simple_rsi)
 
 
+def test_workflow_indicator_series_matches_legacy_context(tmp_path):
+    _, trading = _services(tmp_path)
+    candles = [
+        {
+            "close_points": 4000 + (index * 7.5) + ((index % 5) * 0.2),
+            "high_points": 4001 + (index * 7.5) + ((index % 3) * 0.4),
+            "low_points": 3999 + (index * 7.5) - ((index % 4) * 0.3),
+        }
+        for index in range(240)
+    ]
+
+    series = trading._build_workflow_indicator_series(candles)
+
+    for index in (19, 50, 120, 220):
+        legacy = trading._workflow_indicator_context(candles, index)
+        built = series[index]
+        for key in ("price", "ma20", "ma50", "ma200", "bb_mid", "bb_upper", "bb_lower", "bb_std", "rsi", "kd"):
+            if legacy[key] is None:
+                assert built[key] is None
+            else:
+                assert built[key] == pytest.approx(legacy[key])
+
+
 def test_workflow_bot_uses_branch_priority_and_percent_action(tmp_path):
     _, trading = _services(tmp_path)
     workflow = {
@@ -1057,6 +1180,282 @@ def test_node_graph_bot_live_scan_uses_indicator_context_and_steps(tmp_path):
     assert dashboard["bots"][0]["run_count"] == 2
     assert [row["status"] for row in dashboard["orders"]] == ["filled", "filled"]
     assert len(dashboard["fills"]) == 2
+
+
+def test_workflow_live_scan_uses_window_low_for_stop_loss_after_previous_scan(tmp_path):
+    base_ms = 1_700_000_000_000
+    candles = [
+        {"time_ms": base_ms, "close_points": 100.0, "high_points": 100.0, "low_points": 100.0},
+        {"time_ms": base_ms + 60_000, "close_points": 110.0, "high_points": 110.0, "low_points": 94.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
+    trading.test_prices["ETH/POINTS"] = 110.0
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "stop",
+                "name": "stop",
+                "priority": 100,
+                "logic": "AND",
+                "conditions": [{"type": "stop_loss_percent", "value": 5}],
+                "actions": [{"type": "close_all", "step": 1}],
+            }
+        ],
+    }
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "stop loss replay",
+            "market_symbol": "ETH/POINTS",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "cooldown_seconds": 0,
+            "max_runs": 2,
+            "enabled": True,
+        },
+    )["bot"]
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_bots SET last_scan_at=? WHERE bot_uuid=?",
+            (datetime.fromtimestamp((base_ms + 30_000) / 1000).isoformat(), bot["bot_uuid"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert len(scanned["triggered"]) == 1
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["positions"][0]["quantity_units"] == 0
+
+
+def test_workflow_live_scan_does_not_false_trigger_from_pre_scan_window_break(tmp_path):
+    base_ms = 1_700_000_000_000
+    candles = [
+        {"time_ms": base_ms + 60_000, "close_points": 110.0, "high_points": 110.0, "low_points": 94.0},
+        {"time_ms": base_ms + 120_000, "close_points": 110.0, "high_points": 110.0, "low_points": 105.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
+    trading.test_prices["ETH/POINTS"] = 110.0
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "stop",
+                "name": "stop",
+                "priority": 100,
+                "logic": "AND",
+                "conditions": [{"type": "stop_loss_percent", "value": 5}],
+                "actions": [{"type": "close_all", "step": 1}],
+            }
+        ],
+    }
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "no false stop",
+            "market_symbol": "ETH/POINTS",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "cooldown_seconds": 0,
+            "max_runs": 2,
+            "enabled": True,
+        },
+    )["bot"]
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_bots SET last_scan_at=? WHERE bot_uuid=?",
+            (datetime.fromtimestamp((base_ms + 120_000) / 1000).isoformat(), bot["bot_uuid"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert scanned["triggered"] == []
+    assert scanned["skipped"][0]["reason"] in {"workflow_not_matched", "condition_not_met"}
+
+
+def test_workflow_live_scan_uses_window_high_for_take_profit(tmp_path):
+    base_ms = 1_700_000_000_000
+    candles = [
+        {"time_ms": base_ms, "close_points": 100.0, "high_points": 100.0, "low_points": 100.0},
+        {"time_ms": base_ms + 60_000, "close_points": 96.0, "high_points": 106.0, "low_points": 95.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="1.0")
+    trading.test_prices["ETH/POINTS"] = 96.0
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "tp",
+                "name": "take profit",
+                "priority": 100,
+                "logic": "AND",
+                "conditions": [{"type": "take_profit_percent", "value": 5}],
+                "actions": [{"type": "close_all", "step": 1}],
+            }
+        ],
+    }
+    bot = trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "take profit replay",
+            "market_symbol": "ETH/POINTS",
+            "side": "sell",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "cooldown_seconds": 0,
+            "max_runs": 2,
+            "enabled": True,
+        },
+    )["bot"]
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "UPDATE trading_bots SET last_scan_at=? WHERE bot_uuid=?",
+            (datetime.fromtimestamp((base_ms + 30_000) / 1000).isoformat(), bot["bot_uuid"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    scanned = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    assert scanned["ok"] is True
+    assert len(scanned["triggered"]) == 1
+
+
+def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_live_price_error(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+
+    def _fail_live_price(symbol):
+        raise ValueError("live price down")
+
+    trading = TradingEngineService(
+        get_db=get_db,
+        points_service=points,
+        live_price_provider=_fail_live_price,
+        historical_candles_provider=lambda symbol, interval, limit: [],
+    )
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"max_price_staleness_seconds": 0},
+        markets=[],
+    )
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "name": "price failure bot",
+            "market_symbol": "ETH/POINTS",
+            "trigger_type": "always",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.01",
+            "max_runs": 2,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    result = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute("SELECT last_scan_at, last_error FROM trading_bots WHERE user_id=1 LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+    assert result["ok"] is False
+    assert result["failed"]
+    assert row["last_scan_at"] in (None, "")
+    assert "live price down" in str(row["last_error"] or "")
+
+
+def test_trading_bot_failed_scan_does_not_advance_last_scan_at_on_candle_fetch_error(tmp_path):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+
+    def _history_provider(symbol, interval, limit):
+        raise ValueError("history fetch failed")
+
+    trading = TradingEngineService(
+        get_db=get_db,
+        points_service=points,
+        live_price_provider=lambda symbol: 100.0,
+        historical_candles_provider=_history_provider,
+    )
+    workflow = {
+        "version": 1,
+        "strategy_kind": "workflow",
+        "branches": [
+            {
+                "id": "entry",
+                "name": "entry",
+                "priority": 10,
+                "logic": "AND",
+                "conditions": [{"type": "price_below", "value": 200}],
+                "actions": [{"type": "buy_percent", "percent": 10, "step": 1}],
+            }
+        ],
+    }
+    trading.save_trading_bot(
+        actor=_actor(),
+        payload={
+            "bot_type": "conditional",
+            "name": "history failure bot",
+            "market_symbol": "ETH/POINTS",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": "0.00000001",
+            "trigger_type": "always",
+            "workflow_json": workflow,
+            "max_runs": 2,
+            "cooldown_seconds": 0,
+            "enabled": True,
+        },
+    )
+
+    result = trading.run_trading_bots(actor=_actor(), limit=10)
+
+    conn = trading.get_db()
+    try:
+        row = conn.execute("SELECT last_scan_at, last_error FROM trading_bots WHERE user_id=1 LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+    assert result["ok"] is False
+    assert result["failed"]
+    assert row["last_scan_at"] in (None, "")
+    assert "history fetch failed" in str(row["last_error"] or "")
 
 
 def test_workflow_backtest_can_sell_without_mutating_orders(tmp_path):
@@ -1228,7 +1627,7 @@ def test_grid_backtest_matches_live_grid_order_lifecycle(tmp_path):
     assert result["ok"] is True
     assert result["strategy"] == "grid"
     assert result["trade_count"] == 7
-    assert result["final_value_points"] == 1072
+    assert result["final_value_points"] == 1073
     assert result["trades"][0]["index"] == 1
     assert [row["side"] for row in result["trades"]] == ["buy", "sell", "sell", "sell", "buy", "buy", "buy"]
     assert all(not (row["index"] == 0 and row["price_points"] == 100) for row in result["trades"])
@@ -1291,6 +1690,60 @@ def test_grid_bot_scans_and_fills_when_price_crosses_level_in_cfd_mode(tmp_path)
     assert grid_fill["order_uuid"] == level_90["trading_order_uuid"]
     assert grid_fill["price_points"] == 90
     assert trading.verify_state()["ok"] is True
+
+
+def test_grid_bot_scan_window_low_can_fill_buy_limit(tmp_path):
+    candles = [
+        {"time_ms": 1_700_000_000_000, "close_points": 100.0, "high_points": 100.0, "low_points": 90.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    created = trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "grid window buy",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 80,
+            "upper_price_points": 120,
+            "grid_count": 5,
+            "order_amount_points": 100,
+        },
+    )
+
+    scanned = trading.scan_grid_bots(actor=_actor())
+
+    assert scanned["ok"] is True
+    assert scanned["results"][0]["scan_window_low_points"] == pytest.approx(90.0)
+    assert scanned["results"][0]["fills_processed"] == [{"level_index": 1, "side": "buy", "price_points": 90}]
+    assert scanned["results"][0]["counter_orders_placed"] == [{"level_index": 2, "side": "sell", "price_points": 100}]
+    assert created["ok"] is True
+
+
+def test_grid_bot_scan_window_high_can_fill_sell_limit(tmp_path):
+    candles = [
+        {"time_ms": 1_700_000_000_000, "close_points": 100.0, "high_points": 110.0, "low_points": 100.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 100.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=5000, action_type="test_funding")
+    trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="buy", order_type="market", quantity="2.0")
+    trading.create_grid_bot(
+        actor=_actor(),
+        payload={
+            "name": "grid window sell",
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": 80,
+            "upper_price_points": 120,
+            "grid_count": 5,
+            "order_amount_points": 100,
+        },
+    )
+
+    scanned = trading.scan_grid_bots(actor=_actor())
+
+    assert scanned["ok"] is True
+    assert scanned["results"][0]["scan_window_high_points"] == pytest.approx(110.0)
+    assert scanned["results"][0]["fills_processed"] == [{"level_index": 3, "side": "sell", "price_points": 110}]
+    assert scanned["results"][0]["counter_orders_placed"] == [{"level_index": 2, "side": "buy", "price_points": 100}]
 
 
 def test_increase_trading_bot_max_runs_updates_limit(tmp_path):
@@ -1485,12 +1938,12 @@ def test_emergency_market_close_sells_all_with_double_fee(tmp_path):
 
     assert close["order"]["status"] == "filled"
     assert close["order"]["reason"] == "EMERGENCY_MARKET_CLOSE"
-    assert close["order"]["fee_points"] == 3
+    assert close["order"]["fee_points"] == 1
     dashboard = trading.user_dashboard(user_id=1)
     assert dashboard["positions"][0]["quantity"] == "0"
-    assert dashboard["fills"][0]["fee_points"] == 3
+    assert dashboard["fills"][0]["fee_points"] == 1
     assert points.get_wallet(1)["points_balance"] == 2000
-    assert dashboard["funding"]["trial_credit"]["available_points"] == 995
+    assert dashboard["funding"]["trial_credit"]["available_points"] == 998
     assert dashboard["funding"]["trial_credit"]["deployed_points"] == 0
     with pytest.raises(ValueError, match="emergency close only supports market sell"):
         trading.place_order(
@@ -1523,7 +1976,7 @@ def test_trial_credit_expiry_reclaims_principal_but_keeps_profit(tmp_path):
     assert dashboard["funding"]["trial_credit"]["available_points"] == 0
     assert dashboard["funding"]["trial_credit"]["deployed_points"] == 0
     assert dashboard["positions"][0]["quantity"] == "0"
-    assert points.get_wallet(1)["points_balance"] == 96
+    assert points.get_wallet(1)["points_balance"] == 98
     report = trading.root_report()
     audit_types = [row["event_type"] for row in report["audit_events"]]
     assert "TRADING_TRIAL_CREDIT_FORCED_SELL" in audit_types
@@ -1580,11 +2033,11 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position["quantity"] == "0.1"
     assert position["gross_cost_points"] == 500
     assert position["current_value_points"] == 600
-    assert position["estimated_buy_fee_points"] == 2
-    assert position["estimated_exit_fee_points"] == 2
-    assert position["cost_basis_points"] == 504
-    assert position["unrealized_pnl_points"] == 96
-    assert dashboard_after_buy["spot_summary"]["unrealized_pnl_points"] == 96
+    assert position["estimated_buy_fee_points"] == 1
+    assert position["estimated_exit_fee_points"] == 1
+    assert position["cost_basis_points"] == 502
+    assert position["unrealized_pnl_points"] == 98
+    assert dashboard_after_buy["spot_summary"]["unrealized_pnl_points"] == 98
 
     trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.04")
 
@@ -1593,14 +2046,14 @@ def test_spot_dashboard_reports_backend_pnl_and_fees(tmp_path):
     assert position_after_sell["quantity"] == "0.06"
     assert position_after_sell["gross_cost_points"] == 300
     assert position_after_sell["current_value_points"] == 360
-    assert position_after_sell["estimated_buy_fee_points"] == 1
-    assert position_after_sell["estimated_exit_fee_points"] == 1
-    assert position_after_sell["cost_basis_points"] == 302
-    assert position_after_sell["unrealized_pnl_points"] == 58
-    assert position_after_sell["realized_pnl_points"] == 38
-    assert position_after_sell["total_fee_points"] == 3
-    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 38
-    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 38
+    assert position_after_sell["estimated_buy_fee_points"] == 0
+    assert position_after_sell["estimated_exit_fee_points"] == 0
+    assert position_after_sell["cost_basis_points"] == 300
+    assert position_after_sell["unrealized_pnl_points"] == 60
+    assert position_after_sell["realized_pnl_points"] == 40
+    assert position_after_sell["total_fee_points"] == 1
+    assert dashboard_after_sell["spot_summary"]["realized_pnl_points"] == 40
+    assert dashboard_after_sell["fills"][0]["realized_pnl_points"] == 40
     assert trading.verify_state()["ok"] is True
 
 
@@ -2092,6 +2545,75 @@ def test_live_market_quote_with_fractional_cached_fallback_is_json_serializable(
     assert json.dumps(quote)
 
 
+def test_live_price_provider_preserves_fractional_price_points(tmp_path):
+    _, trading = _services(tmp_path)
+    assert trading._price_points_from_float("123.45678901", source="test_source") == pytest.approx(123.45678901)
+
+
+def test_update_market_and_limit_order_preserve_decimal_price_points(tmp_path):
+    points, trading = _services(tmp_path)
+    root = _actor(3, "root", "super_admin")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(actor=root, settings={"price_source": "manual_root"}, markets=[])
+    updated = trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points="5000.125", confirm_jump=True)
+
+    assert updated["market"]["manual_price_points"] == pytest.approx(5000.125)
+
+    result = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="limit",
+        quantity="0.1",
+        limit_price_points="5000.125",
+    )
+
+    assert result["executed"] is True
+    assert result["order"]["execution_price_points"] == pytest.approx(5000.125)
+
+    dashboard = trading.user_dashboard(user_id=1)
+    assert dashboard["positions"][0]["avg_cost_points"] == pytest.approx(5000.125)
+
+
+def test_bot_condition_checks_preserve_decimal_trigger_price(tmp_path):
+    _, trading = _services(tmp_path)
+    checks = trading._bot_condition_checks(
+        {
+            "trigger_type": "price_below",
+            "trigger_price_points": "5000.55",
+            "run_count": 0,
+            "max_runs": 1,
+        },
+        5000.5,
+    )
+
+    assert checks[0]["met"] is True
+    assert "5000.55" in checks[0]["label"]
+    assert "5000.5" in checks[0]["label"]
+
+
+def test_grid_preview_accepts_decimal_price_bounds(tmp_path):
+    _, trading = _services(tmp_path)
+    preview = trading.preview_grid_bot(
+        actor=_actor(),
+        payload={
+            "market_symbol": "ETH/POINTS",
+            "lower_price_points": "99.5",
+            "upper_price_points": "100.5",
+            "grid_count": 3,
+            "order_amount_points": 1000,
+            "spacing_mode": "arithmetic",
+            "order_mode": "maker",
+        },
+    )
+
+    assert preview["levels"][0] == pytest.approx(99.5)
+    assert preview["levels"][1] == pytest.approx(100.0)
+    assert preview["levels"][2] == pytest.approx(100.5)
+    assert Decimal(preview["grid_profit"]["reference_buy_price_points"]) in {Decimal("99.5"), Decimal("100")}
+    assert Decimal(preview["grid_profit"]["reference_sell_price_points"]) in {Decimal("100"), Decimal("100.5")}
+
+
 def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_path):
     points, trading = _services(tmp_path)
     root = _actor(3, "root", "super_admin")
@@ -2108,7 +2630,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
     assert result["order"]["funding_mode"] == "root_simulated"
     dashboard = trading.user_dashboard(user_id=3)
     assert dashboard["funding"]["mode"] == "root_simulated"
-    assert dashboard["funding"]["available_points"] == 9498
+    assert dashboard["funding"]["available_points"] == 9499
     assert dashboard["funding"]["locked_points"] == 0
     assert dashboard["positions"][0]["quantity"] == "0.1"
     assert trading.root_report()["reserve_pool"]["balance_points"] == 10000
@@ -2133,7 +2655,7 @@ def test_root_spot_and_contract_use_simulated_points_outside_points_chain(tmp_pa
         margin_points=25,
     )
     assert contract["position"]["status"] == "open"
-    assert contract["funding"]["available_points"] == 9473
+    assert contract["funding"]["available_points"] == 9474
     conn = trading.get_db()
     try:
         assert conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] == 0
@@ -2232,7 +2754,7 @@ def test_limit_buy_can_be_cancelled_and_unfreezes_points(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 401
+    assert order["trial_frozen_points"] == 400
 
     cancelled = trading.cancel_order(actor=_actor(), order_uuid=order["order_uuid"])
     assert cancelled["status"] == "cancelled"
@@ -2258,7 +2780,7 @@ def test_limit_order_matcher_executes_when_price_reaches_limit(tmp_path):
     )["order"]
     assert order["status"] == "open"
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert order["trial_frozen_points"] == 401
+    assert order["trial_frozen_points"] == 400
 
     trading.update_market(actor=root, symbol="ETH/POINTS", manual_price_points=3900, confirm_jump=True)
     matched = trading.match_open_limit_orders(actor={"username": "system", "role": "system"}, limit=10)
@@ -2289,7 +2811,7 @@ def test_sell_payout_does_not_consume_experimental_reserve_pool(tmp_path):
 
     high_price_sell = trading.place_order(actor=_actor(), market_symbol="ETH/POINTS", side="sell", order_type="market", quantity="0.05")
     assert high_price_sell["order"]["status"] == "filled"
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10001
 
     trading.update_market(actor=_actor(3, "root", "super_admin"), symbol="ETH/POINTS", manual_price_points=5000, confirm_jump=True)
     trading.test_prices["ETH/POINTS"] = 5000
@@ -2342,7 +2864,11 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
         settings={
             "enabled": True,
             "borrowing_enabled": True,
-            "borrow_interest_percent_daily": 0.25,
+            "borrow_apr_btc_eth_percent": 8.25,
+            "borrow_apr_usdt_points_percent": 10.5,
+            "borrow_interest_interval_hours": 1,
+            "borrow_interest_minimum_hours": 1,
+            "grid_fee_discount_percent": 25,
             "margin_liquidation_enabled": True,
             "margin_maintenance_percent": 12,
             "futures_enabled": False,
@@ -2360,7 +2886,12 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
     )
 
     assert updated["settings"]["borrowing_enabled"] is True
-    assert updated["settings"]["borrow_interest_percent_daily"] == 0.25
+    assert updated["settings"]["borrow_apr_btc_eth_percent"] == pytest.approx(8.25)
+    assert updated["settings"]["borrow_apr_usdt_points_percent"] == pytest.approx(10.5)
+    assert updated["settings"]["borrow_interest_percent_daily"] == pytest.approx(10.5 / 365.0)
+    assert updated["settings"]["borrow_interest_interval_hours"] == 1
+    assert updated["settings"]["borrow_interest_minimum_hours"] == 1
+    assert updated["settings"]["grid_fee_discount_percent"] == pytest.approx(25.0)
     assert updated["settings"]["margin_liquidation_enabled"] is True
     assert updated["settings"]["margin_maintenance_percent"] == 12
     market = next(row for row in updated["markets"] if row["symbol"] == "ETH/POINTS")
@@ -2375,9 +2906,113 @@ def test_root_can_update_trading_billing_settings_and_market_limits(tmp_path):
 def test_borrowing_trading_is_enabled_by_default(tmp_path):
     _, trading = _services(tmp_path)
 
-    settings = trading.get_root_settings()["settings"]
+    report = trading.get_root_settings()
+    settings = report["settings"]
+    eth_market = next(row for row in report["markets"] if row["symbol"] == "ETH/POINTS")
 
     assert settings["borrowing_enabled"] is True
+    assert settings["borrow_apr_btc_eth_percent"] == pytest.approx(8.0)
+    assert settings["borrow_apr_usdt_points_percent"] == pytest.approx(10.0)
+    assert settings["borrow_interest_interval_hours"] == 1
+    assert settings["borrow_interest_minimum_hours"] == 1
+    assert settings["grid_fee_discount_percent"] == pytest.approx(25.0)
+    assert eth_market["fee_rate_percent"] == pytest.approx(0.1)
+    assert trading._grid_fee_rate_percent(eth_market["fee_rate_percent"], settings) == pytest.approx(0.075)
+
+
+def test_margin_positions_use_asset_specific_apr_groups_and_hourly_interest_metadata(tmp_path):
+    _, trading = _services(tmp_path)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_apr_btc_eth_percent": 8,
+            "borrow_apr_usdt_points_percent": 10,
+            "borrow_interest_pool_pressure_multiplier": 0,
+            "borrow_interest_interval_hours": 1,
+            "borrow_interest_minimum_hours": 1,
+            "price_source": "manual_root",
+        },
+        markets=[],
+    )
+
+    opened_long = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    long_position = trading.user_dashboard(user_id=1)["margin_positions"][0]
+
+    assert opened_long["position"]["borrowed_asset_symbol"] == "POINTS"
+    assert opened_long["position"]["interest_percent_daily"] == pytest.approx(10.0 / 365.0)
+    assert long_position["interest_apr_percent"] == pytest.approx(10.0)
+    assert long_position["interest_interval_hours"] == 1
+    assert long_position["interest_minimum_hours"] == 1
+    assert long_position["next_interest_at"]
+
+    trading.close_margin_position(actor=_actor(), position_uuid=opened_long["position"]["position_uuid"])
+
+    opened_short = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="short",
+        quantity="0.1",
+        collateral_points=300,
+    )
+    short_position = trading.user_dashboard(user_id=1)["margin_positions"][0]
+
+    assert opened_short["position"]["borrowed_asset_symbol"] == "ETH"
+    assert opened_short["position"]["interest_percent_daily"] == pytest.approx(8.0 / 365.0)
+    assert short_position["interest_apr_percent"] == pytest.approx(8.0)
+    assert short_position["interest_interval_hours"] == 1
+    assert short_position["interest_minimum_hours"] == 1
+
+
+def test_trading_volume_stats_accumulate_spot_and_margin_activity_for_future_vip_logic(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=2000, action_type="test_funding")
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={"borrowing_enabled": True, "price_source": "manual_root"},
+        markets=[],
+    )
+
+    spot = trading.place_order(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        side="buy",
+        order_type="market",
+        quantity="0.1",
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+    closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
+
+    stats = trading.user_dashboard(user_id=1)["volume_stats"]
+
+    assert stats["spot_notional_points"] == 500
+    assert stats["margin_notional_points"] == 1000
+    assert stats["total_notional_points"] == 1500
+    assert stats["total_trade_count"] == 3
+    assert stats["total_fee_points"] == (
+        spot["order"]["fee_points"]
+        + opened["position"]["open_fee_points"]
+        + closed["close_fee_points"]
+    )
+
+    root_summary = trading.root_report()["volume_summary"]
+    assert root_summary["totals"]["spot_notional_points"] == 500
+    assert root_summary["totals"]["margin_notional_points"] == 1000
+    assert root_summary["totals"]["total_notional_points"] == 1500
+    assert root_summary["totals"]["total_trade_count"] == 3
+    assert root_summary["top_users"][0]["username"] == "alice"
 
 
 def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(tmp_path):
@@ -2414,23 +3049,23 @@ def test_margin_long_requires_root_enabled_borrowing_and_closes_with_fee_stats(t
     assert opened["position"]["position_type"] == "margin_long"
     assert opened["position"]["principal_points"] == 300
     assert opened["position"]["collateral_trial_points"] == 200
-    assert opened["position"]["open_fee_trial_points"] == 2
+    assert opened["position"]["open_fee_trial_points"] == 1
     assert points.get_wallet(1)["points_balance"] == 1000
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert opened["funding"]["trial_credit"]["available_points"] == 798
+    assert opened["funding"]["trial_credit"]["available_points"] == 799
     assert opened["funding"]["trial_credit"]["deployed_points"] == 200
     assert opened["position"]["interest_percent_daily"] == pytest.approx(11.2)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9702
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9701
 
     closed = trading.close_margin_position(actor=_actor(), position_uuid=opened["position"]["position_uuid"])
     assert closed["position"]["status"] == "closed"
     assert closed["interest_points"] == 0
     assert closed["position"]["interest_paid_points"] == 1
-    assert closed["delta_points"] == -2
+    assert closed["delta_points"] == -1
     assert points.get_wallet(1)["points_frozen"] == 0
-    assert closed["funding"]["trial_credit"]["available_points"] == 996
+    assert closed["funding"]["trial_credit"]["available_points"] == 998
     assert closed["funding"]["trial_credit"]["deployed_points"] == 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10005
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
     assert trading.verify_state()["ok"] is True
 
 
@@ -2615,13 +3250,13 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
         markets=[],
     )
 
-    with pytest.raises(ValueError, match="collateral below minimum 78"):
+    with pytest.raises(ValueError, match="collateral below minimum 77"):
         trading.open_margin_position(
             actor=_actor(),
             market_symbol="ETH/POINTS",
             position_type="margin_long",
             quantity="0.1",
-            collateral_points=77,
+            collateral_points=76,
         )
     with pytest.raises(ValueError, match="collateral must be lower than notional 500"):
         trading.open_margin_position(
@@ -2636,26 +3271,26 @@ def test_margin_open_requires_buffer_so_liquidation_price_starts_beyond_entry(tm
         market_symbol="ETH/POINTS",
         position_type="margin_long",
         quantity="0.1",
-        collateral_points=78,
+        collateral_points=77,
     )
     long_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
     assert long_risk["liquidation_price_points"] < long_position["position"]["entry_price_points"]
     trading.close_margin_position(actor=_actor(), position_uuid=long_position["position"]["position_uuid"])
 
-    with pytest.raises(ValueError, match="collateral below minimum 78"):
+    with pytest.raises(ValueError, match="collateral below minimum 77"):
         trading.open_margin_position(
             actor=_actor(),
             market_symbol="ETH/POINTS",
             position_type="short",
             quantity="0.1",
-            collateral_points=77,
+            collateral_points=76,
         )
     short_position = trading.open_margin_position(
         actor=_actor(),
         market_symbol="ETH/POINTS",
         position_type="short",
         quantity="0.1",
-        collateral_points=78,
+        collateral_points=77,
     )
     short_risk = trading.user_dashboard(user_id=1)["margin_positions"][0]["risk"]
     assert short_risk["liquidation_price_points"] > short_position["position"]["entry_price_points"]
@@ -2687,7 +3322,7 @@ def test_margin_open_is_idempotent_for_client_key(tmp_path):
     dashboard = trading.user_dashboard(user_id=1)
     assert len([row for row in dashboard["margin_positions"] if row["status"] == "open"]) == 1
     assert dashboard["margin_positions"][0]["interest_paid_points"] == 0
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9702
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9701
     assert trading.verify_state()["ok"] is True
 
 
@@ -2834,7 +3469,12 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
     points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=1000, action_type="test_funding")
     trading.update_root_settings(
         actor=_actor(3, "root", "super_admin"),
-        settings={"borrowing_enabled": True, "borrow_interest_percent_daily": 1, "price_source": "manual_root"},
+        settings={
+            "borrowing_enabled": True,
+            "borrow_apr_btc_eth_percent": 100,
+            "borrow_interest_pool_pressure_multiplier": 0,
+            "price_source": "manual_root",
+        },
         markets=[],
     )
     opened = trading.open_margin_position(
@@ -2859,9 +3499,9 @@ def test_short_borrow_position_profit_and_interest_enter_reserve_pool(tmp_path):
 
     assert closed["position"]["status"] == "closed"
     assert closed["interest_points"] == 0
-    assert closed["position"]["interest_paid_points"] == 12
-    assert closed["delta_points"] == 99
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 9916
+    assert closed["position"]["interest_paid_points"] == 2
+    assert closed["delta_points"] == 100
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 9903
     assert trading.verify_state()["ok"] is True
 
 
@@ -2900,8 +3540,40 @@ def test_margin_liquidation_scan_closes_underwater_position(tmp_path):
     assert points.get_wallet(1)["points_frozen"] == 0
     notices = _notifications(trading, 1)
     assert any(row["type"] == "trading_margin_liquidated" for row in notices)
-    assert trading.root_report()["reserve_pool"]["balance_points"] == 10003
+    assert trading.root_report()["reserve_pool"]["balance_points"] == 10001
     assert trading.verify_state()["ok"] is True
+
+
+def test_margin_liquidation_scan_uses_window_low_for_recovered_price(tmp_path):
+    candles = [
+        {"time_ms": 1_700_000_000_000, "close_points": 5000.0, "high_points": 5000.0, "low_points": 3300.0},
+    ]
+    points, trading = _services_with_history(tmp_path, prices={"ETH/POINTS": 5000.0}, candles=candles)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=202, action_type="test_funding")
+    _deplete_trial_credit(trading, user_id=1)
+    trading.update_root_settings(
+        actor=_actor(3, "root", "super_admin"),
+        settings={
+            "borrowing_enabled": True,
+            "borrow_interest_percent_daily": 0,
+            "margin_liquidation_enabled": True,
+            "margin_maintenance_percent": 15,
+        },
+        markets=[],
+    )
+    opened = trading.open_margin_position(
+        actor=_actor(),
+        market_symbol="ETH/POINTS",
+        position_type="margin_long",
+        quantity="0.1",
+        collateral_points=200,
+    )
+
+    result = trading.scan_margin_liquidations(actor={"username": "system", "role": "system"}, limit=10)
+
+    assert result["ok"] is True
+    assert result["liquidated"][0]["position_uuid"] == opened["position"]["position_uuid"]
+    assert result["liquidated"][0]["risk"]["price_points"] == pytest.approx(3300.0)
 
 
 def test_cross_margin_free_margin_prevents_single_position_liquidation(tmp_path):

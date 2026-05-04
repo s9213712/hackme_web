@@ -205,7 +205,7 @@ def _live_price_app(actor, captured):
                     "symbol": market_symbol or "BTC/POINTS",
                     "manual_price_points": 81234,
                     "price_source": "fused_weighted",
-                    "fee_rate_percent": 0.3,
+                    "fee_rate_percent": 0.1,
                 },
                 "refresh_interval_ms": 1000,
                 "server_time": "2026-05-04T00:00:00",

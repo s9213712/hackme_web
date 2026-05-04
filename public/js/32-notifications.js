@@ -24,11 +24,7 @@ function renderNotifications(items, unreadCount) {
     list.innerHTML = "<p style='color:var(--muted);'>目前沒有通知</p>";
     return;
   }
-  const unread = Math.max(0, parseInt(unreadCount || 0, 10));
-  const bulkAction = unread > 0
-    ? `<div class="notification-list-actions"><button class="btn btn-primary" type="button" data-notification-read-all>一鍵全部已讀</button></div>`
-    : "";
-  list.innerHTML = bulkAction + notifications.map((item) => {
+  list.innerHTML = notifications.map((item) => {
     const cls = item.is_read ? "notification-item" : "notification-item unread";
     const readAction = item.is_read
       ? ""
@@ -50,9 +46,6 @@ function renderNotifications(items, unreadCount) {
   }).join("");
   list.querySelectorAll("button[data-notification-read]").forEach((btn) => {
     btn.addEventListener("click", () => markNotificationRead(parseInt(btn.getAttribute("data-notification-read"), 10)));
-  });
-  list.querySelectorAll("button[data-notification-read-all]").forEach((btn) => {
-    btn.addEventListener("click", markAllNotificationsRead);
   });
 }
 

@@ -241,6 +241,11 @@ def test_album_viewer_has_dedicated_module():
     assert '"feature_audit_log_enabled"' in admin_js
     assert '"feature_economy_enabled"' in admin_js
     assert "FEATURE_SERVICE_BUNDLES" in admin_js
+    assert '"all-enabled"' in admin_js
+    assert '"minimum-ops"' in admin_js
+    assert "全開" in admin_js
+    assert "最低維運" in admin_js
+    assert "bundle.replace === true" in admin_js
     assert "feature-bundle-toolbar" in index_html
     assert "feature-advisory-list" in index_html
     assert 'id="sc-feature-audit-log-enabled"' in index_html

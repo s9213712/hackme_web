@@ -300,7 +300,7 @@ class ComfyUIClient:
                 updated = True
         return updated
 
-    def wait_for_images(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0, expected_count=1, websocket_conn=None, progress_callback=None):
+    def wait_for_images(self, prompt_id, *, timeout_seconds=1800, poll_interval=1.0, expected_count=1, websocket_conn=None, progress_callback=None):
         deadline = time.time() + int(timeout_seconds)
         last_status = None
         expected = max(1, int(expected_count or 1))
@@ -372,7 +372,7 @@ class ComfyUIClient:
         detail = f"；最後狀態：{last_status}" if last_status else ""
         raise ComfyUIError(f"ComfyUI 產圖逾時{detail}")
 
-    def wait_for_first_image(self, prompt_id, *, timeout_seconds=600, poll_interval=1.0):
+    def wait_for_first_image(self, prompt_id, *, timeout_seconds=1800, poll_interval=1.0):
         return self.wait_for_images(prompt_id, timeout_seconds=timeout_seconds, poll_interval=poll_interval, expected_count=1)[0]
 
     def fetch_image(self, image_ref):
@@ -467,7 +467,7 @@ class ComfyUIClient:
             result["history_deleted"] = True
         return result
 
-    def generate_image(self, params, *, timeout_seconds=600, progress_callback=None):
+    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
         workflow = self.build_text_to_image_workflow(params)
         websocket_conn = None
         client_id = uuid.uuid4().hex

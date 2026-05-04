@@ -23,7 +23,7 @@ let comfyuiSelectedLoras = [];
 let comfyuiConnectionMode = "remote";
 let comfyuiLocalStartPollTimer = null;
 let comfyuiCivitaiInspection = null;
-const COMFYUI_GENERATION_TIMEOUT_SECONDS = 900;
+const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;
 const COMFYUI_MAX_LORAS = 8;
 const COMFYUI_LORA_EXTRA_PRICE = 1;
 const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";
@@ -458,9 +458,7 @@ function renderComfyuiSelectedLoras() {
   box.querySelectorAll("[data-comfyui-remove-lora]").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.getAttribute("data-comfyui-remove-lora"));
-      comfyuiSelectedLoras.splice(index, 1);
-      renderComfyuiSelectedLoras();
-      writeComfyuiDraft();
+      removeComfyuiSelectedLoraByIndex(index);
     });
   });
   box.querySelectorAll("[data-comfyui-lora-strength-model]").forEach((input) => {
@@ -489,8 +487,33 @@ function fillComfyuiLoraSelect(values = []) {
   const select = $("comfyui-lora-select");
   if (!select) return;
   const options = ['<option value="">不使用 LoRA（可略過）</option>']
-    .concat(comfyuiAvailableLoras.map((value) => `<option value="${sanitize(value)}">${sanitize(value)}</option>`));
+    .concat(comfyuiAvailableLoras.map((value) => {
+      const detail = comfyuiLoraDetails?.[value] || {};
+      const supported = detail.supported === true;
+      const reason = detail.base_model
+        ? `${detail.base_model} 不支援`
+        : "base model 未知，暫不可用";
+      const label = supported ? value : `${value}（不可用：${reason}）`;
+      return `<option value="${sanitize(value)}"${supported ? "" : ' disabled="disabled"'}>${sanitize(label)}</option>`;
+    }));
   select.innerHTML = options.join("");
+}
+
+function pruneUnsupportedComfyuiSelectedLoras({ notify = false } = {}) {
+  const removed = [];
+  comfyuiSelectedLoras = comfyuiSelectedLoras.filter((item) => {
+    const detail = comfyuiLoraDetails?.[item?.name] || {};
+    const keep = detail.supported === true;
+    if (!keep && item?.name) removed.push(String(item.name));
+    return keep;
+  });
+  if (!removed.length) return removed;
+  renderComfyuiSelectedLoras();
+  writeComfyuiDraft();
+  if (notify) {
+    setComfyuiMessage(`已移除不支援的 LoRA：${removed.join(", ")}。目前只允許 SDXL、Pony、Illustrious、Noob 系列。`, false);
+  }
+  return removed;
 }
 
 function applyComfyuiPromptTerms(terms = []) {
@@ -509,13 +532,65 @@ function applyComfyuiPromptTerms(terms = []) {
   return missingTerms;
 }
 
+function comfyuiPromptField(promptType = "prompt") {
+  return $(promptType === "negative" ? "comfyui-negative-prompt" : "comfyui-prompt");
+}
+
+function splitComfyuiPromptTerms(text) {
+  return String(text || "")
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinComfyuiPromptTerms(terms = []) {
+  return Array.isArray(terms)
+    ? terms.map((item) => String(item || "").trim()).filter(Boolean).join(", ")
+    : "";
+}
+
+function removeComfyuiPromptTerms(terms = [], { promptType = "prompt" } = {}) {
+  const prompt = comfyuiPromptField(promptType);
+  if (!prompt) return [];
+  const normalizedTerms = Array.isArray(terms)
+    ? terms.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!normalizedTerms.length) return [];
+  const removalSet = new Set(normalizedTerms.map((item) => item.toLowerCase()));
+  const removed = [];
+  const keptTerms = splitComfyuiPromptTerms(prompt.value).filter((term) => {
+    const shouldRemove = removalSet.has(term.toLowerCase());
+    if (shouldRemove) removed.push(term);
+    return !shouldRemove;
+  });
+  if (!removed.length) return [];
+  prompt.value = joinComfyuiPromptTerms(keptTerms);
+  writeComfyuiDraft();
+  return removed;
+}
+
+function isNegativeComfyuiEmbedding(name) {
+  const normalized = String(name || "").trim().toLowerCase();
+  return normalized.includes("negative") || normalized.includes("neg");
+}
+
 function insertComfyuiEmbeddingToken(name) {
-  const prompt = $("comfyui-prompt");
   const cleanName = String(name || "").trim();
+  const promptType = isNegativeComfyuiEmbedding(cleanName) ? "negative" : "prompt";
+  const prompt = comfyuiPromptField(promptType);
+  const otherPromptType = promptType === "negative" ? "prompt" : "negative";
+  const otherPrompt = comfyuiPromptField(otherPromptType);
   if (!prompt || !cleanName) return;
   const embeddingTag = `<embeddings:${cleanName}>`;
   if ((prompt.value || "").includes(embeddingTag)) {
-    setComfyuiMessage("這個 Embedding 已經在提示詞裡。", false);
+    removeComfyuiPromptTerms([embeddingTag], { promptType });
+    setComfyuiMessage(`已從${promptType === "negative" ? "負面" : "正向"}提示詞移除 ${cleanName}。`, true);
+    prompt.focus();
+    return;
+  }
+  if (otherPrompt && (otherPrompt.value || "").includes(embeddingTag)) {
+    removeComfyuiPromptTerms([embeddingTag], { promptType: otherPromptType });
+    setComfyuiMessage(`已從${otherPromptType === "negative" ? "負面" : "正向"}提示詞移除 ${cleanName}。`, true);
     prompt.focus();
     return;
   }
@@ -529,7 +604,7 @@ function insertComfyuiEmbeddingToken(name) {
   prompt.focus();
   if (typeof prompt.setSelectionRange === "function") prompt.setSelectionRange(cursor, cursor);
   writeComfyuiDraft();
-  setComfyuiMessage(`已把 ${cleanName} 插入提示詞。`, true);
+  setComfyuiMessage(`已把 ${cleanName} 插入${promptType === "negative" ? "負面" : "正向"}提示詞。`, true);
 }
 
 function renderComfyuiEmbeddingShortcuts(values = []) {
@@ -548,22 +623,74 @@ function renderComfyuiEmbeddingShortcuts(values = []) {
   });
 }
 
-function addSelectedComfyuiLora() {
-  if (comfyuiSelectedLoras.length >= COMFYUI_MAX_LORAS) {
-    setComfyuiMessage(`已達 LoRA 數量上限 ${COMFYUI_MAX_LORAS} 個。`, false);
+function loraTermsStillNeededAfterRemoving(nameToRemove) {
+  const needed = new Set();
+  comfyuiSelectedLoras.forEach((item) => {
+    if (!item?.name || item.name === nameToRemove) return;
+    const detail = comfyuiLoraDetails?.[item.name] || {};
+    (detail.trained_words || []).forEach((term) => {
+      const cleanTerm = String(term || "").trim();
+      if (cleanTerm) needed.add(cleanTerm.toLowerCase());
+    });
+  });
+  return needed;
+}
+
+function removeComfyuiSelectedLoraByIndex(index) {
+  const current = comfyuiSelectedLoras[index];
+  if (!current) return;
+  const detail = comfyuiLoraDetails?.[current.name] || {};
+  const trainedWords = Array.isArray(detail.trained_words)
+    ? detail.trained_words.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const stillNeeded = loraTermsStillNeededAfterRemoving(current.name);
+  const removableTerms = trainedWords.filter((term) => !stillNeeded.has(term.toLowerCase()));
+  comfyuiSelectedLoras.splice(index, 1);
+  if (removableTerms.length) removeComfyuiPromptTerms(removableTerms, { promptType: "prompt" });
+  renderComfyuiSelectedLoras();
+  writeComfyuiDraft();
+}
+
+function clearSelectedComfyuiLoras() {
+  if (!comfyuiSelectedLoras.length) {
+    setComfyuiMessage("目前沒有已加入的 LoRA。", false);
     return;
   }
+  const removableTerms = [];
+  comfyuiSelectedLoras.forEach((item) => {
+    const detail = comfyuiLoraDetails?.[item?.name] || {};
+    (detail.trained_words || []).forEach((term) => {
+      const cleanTerm = String(term || "").trim();
+      if (cleanTerm) removableTerms.push(cleanTerm);
+    });
+  });
+  comfyuiSelectedLoras = [];
+  if (removableTerms.length) removeComfyuiPromptTerms(removableTerms, { promptType: "prompt" });
+  renderComfyuiSelectedLoras();
+  writeComfyuiDraft();
+  setComfyuiMessage("已清空已選 LoRA，並移除相關 trigger words。", true);
+}
+
+function addSelectedComfyuiLora() {
   const name = $("comfyui-lora-select")?.value || "";
   if (!name) {
-    setComfyuiMessage("請先選擇 LoRA。", false);
+    clearSelectedComfyuiLoras();
+    return;
+  }
+  if (comfyuiSelectedLoras.length >= COMFYUI_MAX_LORAS) {
+    setComfyuiMessage(`已達 LoRA 數量上限 ${COMFYUI_MAX_LORAS} 個。`, false);
     return;
   }
   if (comfyuiSelectedLoras.some((item) => item.name === name)) {
     setComfyuiMessage("這個 LoRA 已經加入。", false);
     return;
   }
-  comfyuiSelectedLoras.push({ name, strength_model: 1, strength_clip: 1 });
   const detail = comfyuiLoraDetails?.[name] || {};
+  if (detail.supported !== true) {
+    setComfyuiMessage(detail.support_message || "這個 LoRA 目前不支援；只允許 SDXL、Pony、Illustrious、Noob 系列。", false);
+    return;
+  }
+  comfyuiSelectedLoras.push({ name, strength_model: 1, strength_clip: 1 });
   const insertedTerms = applyComfyuiPromptTerms(detail.trained_words || []);
   renderComfyuiSelectedLoras();
   writeComfyuiDraft();
@@ -710,13 +837,14 @@ async function loadComfyuiModels() {
     if (!res.ok || !json.ok) throw new Error(json.msg || `ComfyUI 連線失敗（HTTP ${res.status}）`);
     comfyuiConnectionMode = json.connection_mode || comfyuiConnectionMode || "remote";
     fillComfyuiSelect("comfyui-model-select", json.models || [], "");
-    fillComfyuiLoraSelect(json.loras || []);
     comfyuiLoraDetails = json.lora_details && typeof json.lora_details === "object" ? json.lora_details : {};
+    fillComfyuiLoraSelect(json.loras || []);
     fillComfyuiVaeSelect(json.vaes || []);
     renderComfyuiEmbeddingShortcuts(json.embeddings || []);
     fillComfyuiSelect("comfyui-sampler", json.samplers || [], "euler");
     fillComfyuiSelect("comfyui-scheduler", json.schedulers || [], "normal");
     restoreComfyuiDraft();
+    pruneUnsupportedComfyuiSelectedLoras({ notify: true });
     applyComfyuiRuntimeLimits(json);
     comfyuiModelsLoaded = true;
     loadComfyuiAlbums({ force: true }).catch(() => {});

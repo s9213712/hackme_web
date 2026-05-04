@@ -33,6 +33,8 @@
 ## 原理
 
 - 前端報價與圖表是參考值，最終執行價格由後端重抓與驗證
+- 現貨交易 fee 預設為 `0.10%`；Grid-trade 預設不是半價，而是套用
+  `25%` 折扣後的現貨 fee
 - 預設 live 價格來源是多交易所融合價格；系統會抓多家交易所掛單簿中價，
   以深度加權平均生成執行參考價。root 也可改成手動權重，API 失效時會用剩餘健康來源自動補位；
   root 設定頁另有即時比例 dashboard，可直接看到各來源當下的 normalized weight、
@@ -41,8 +43,16 @@
 - root 有獨立模擬餘額，不污染正式點數
 - POINTS 帳本仍是整數制；交易手續費自 `2026.05.03-063` 起改用 `Decimal`
   計算後四捨五入到最近整點，避免舊版小額單一律 `ceil` 造成系統性超收
+- 借貸利率已拆成兩組 root 可調設定：
+  - `BTC / ETH = 8% APR`
+  - `USDT / POINTS = 10% APR`
+  系統會依實際借入資產決定用哪一組
 - 借貸利息自 `2026.05.04-066` 起改成先累積 `micropoints` 殘值，再跨過整點時才入帳；
   這樣 `50 @ 1% / day` 不會再在 1 天後直接被記成 `1` 點
+- 借貸現在預設每 `1` 小時計息，不足 `1` 小時以 `1` 小時計；前台倉位列表
+  會直接顯示 `累積利息`、`已實扣` 與 `下一次計息`
+- 每位使用者的成交名目、成交次數與總 fee 會累積到後端 volume stats，供後續
+  VIP 規則或 root 報表使用，不再只能從單次 fills 臨時重算
 - DCA 機器人的 `max_runs` 支援 `-1`，代表不限制總執行次數
 - 交易機器人稽核已接到後端 scheduler。新 bot 啟用後不會立刻被打燈，
   而是先維持 `未稽核`；等它至少成交 1 筆，或啟用滿 `24h`，才會被列入
@@ -53,6 +63,9 @@
   必要時補跑 `update_data.py` / `retrain_models.py`，最後再執行 `hourly_check.py`
   並等待新的 report。這段已改成背景工作，所以訓練很久時只會顯示執行中，
   不會因 request timeout 被誤報成失敗
+- Grid Bot 建立前不再只顯示每格價差。後端現在會先做 fee-aware preview，
+  以最不利一格計算毛利、手續費、扣費後淨利與損益兩平間距；紅燈直接阻擋，
+  黃燈需二次確認，避免看起來有價差但扣完費其實虧損
 - 價格來源失效、價格跳動過大或借貸池不足時，系統應 fail closed
 - Backtest 現在把「總上限」和「內部分段上限」拆開：單次請求總上限為
   `20,000` 根 K 線，內部分段每批最多 `10,000` 根；因此像
@@ -75,9 +88,18 @@
 - 小額交易顯示成 0 或精度怪異：
   應視為嚴重缺陷，不是純 UI 問題。先確認目前 release 的整數 POINT fee
   rounding 規則，並用同一套規則手算。
+- 你以為 Grid 仍是舊版半價 fee：
+  不是。現在預設是現貨 fee 的 `75%`，也就是 `25%` 折扣；若你手算還在用
+  `0.5x`，結果一定會偏差
+- Grid 預覽看起來是綠燈，但你手算覺得會虧：
+  先確認你看的是否是新版 preview。新版不是只看價差，而是後端直接回
+  `每格毛利 - 手續費 = 扣費後淨利`；若仍不一致，應視為 release blocker
 - 小本金借貸看起來 `interest_points` 還沒跳動：
   先看 `interest_exact_points` 或 `interest_carry_micropoints`；若還沒跨過整點，
   系統現在會先保留殘值，而不是直接進位多收。
+- 借貸顯示和你預期的 APR 不同：
+  先分辨倉位借的是 `BTC / ETH` 還是 `USDT / POINTS`。做多通常借 quote，
+  放空通常借 base，所以同一個市場的多單與空單可以吃不同 APR 組
 - root 把借貸池壓力倍率設成 `0`，但利率還像有加成：
   這在 `2026.05.04-066` 前是 bug；新版會正確尊重 `0`
 - 回測長區間以前會卡在 `5000` 或 `10000`：
@@ -104,13 +126,22 @@
 - 正常買賣、市價 / 限價、取消單
 - 極小額 / 大額 / 負數 / 字串 / 科學記號輸入
 - 多次累加、手續費、PnL、借貸利息手算驗證
+- 驗證預設現貨 fee `0.10%`、Grid 折扣 `25%` 是否反映在 spot / grid / backtest
+- 驗證 Grid preview 是否同時顯示每格毛利、手續費、扣費後淨利、損益兩平間距，
+  且紅 / 黃 / 綠燈判定和後端 API 一致
+- 驗證 `BTC / ETH 8% APR`、`USDT / POINTS 10% APR` 是否會依借入資產正確套用
+- 驗證每 `1` 小時計息、不足 `1` 小時以 `1` 小時計，且前台顯示 `累積利息` /
+  `下一次計息`
 - 小本金借貸利息 carry 驗證，例如 `principal=50, daily_rate=1%, 24h -> interest_points=0, carry=0.5`
+- 驗證現貨與借貸成交後，`volume_stats` / root report `volume_summary` 是否同步增加
 - 融合價格自動權重 / 手動權重 / API 故障補位驗證
 - DCA `max_runs=-1` 長期執行與重啟後續跑驗證
 - `BTC/USDT 1h` 全年回測（約 `8784` 根）是否仍可通過，不再被舊的 `5000` 根上限擋住
 - `10,001 ~ 20,000` 根 K 線時，是否由後端自動分段續跑，且 DCA / workflow / 持倉狀態不會在段與段之間被重置
 - `candles < 2` 時是否明確拒絕；只有顯式 opt-in 才允許後端抓 reference candles
 - flat Bollinger 序列是否仍誤觸發；異常跳躍 candle 是否會被 skip 並在回測結果留下 warning
+- workflow `stop_loss_percent` / `take_profit_percent` 是否明確維持 long-only
+  語義；若測到 short / futures 也需要這種條件，必須獨立設計與驗證
 - 交易機器人稽核 dashboard 是否正確區分 `未稽核` 與綠 / 黃 / 紅燈
 - `security/trading_stress_pentest.py`
 - snapshot / restore 後狀態一致性
@@ -122,3 +153,20 @@
 - [11_QA_TESTING.md](11_QA_TESTING.md)
 - [security/TRADING_STRESS_PENTEST.md](security/TRADING_STRESS_PENTEST.md)
 - [workflows/README.md](../workflows/README.md)
+
+
+---
+
+## PointsChain v2 區塊鏈化規劃 (2026-05-04 拍板, 尚未實作)
+
+本模組未來將與全站 PointsChain v2 區塊鏈化整合：
+
+- 工程設計：[`docs/BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md`](BLOCKCHAIN/POINTSCHAIN_ENGINEERING.md)
+- 用戶白皮書：[`docs/BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md`](BLOCKCHAIN/POINTSCHAIN_WHITEPAPER.md)
+- 地址規格：[`docs/BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md`](BLOCKCHAIN/POINTS_WALLET_ADDRESSING.md)
+- 轉帳 API：[`docs/BLOCKCHAIN/POINTS_TRANSFER_API.md`](BLOCKCHAIN/POINTS_TRANSFER_API.md)
+- 多簽錢包：[`docs/BLOCKCHAIN/MULTISIG_WALLETS.md`](BLOCKCHAIN/MULTISIG_WALLETS.md)
+- QA Mining / 貢獻獎勵 (Phase 7)：[`docs/BLOCKCHAIN/POINTS_MINING_REWARDS.md`](BLOCKCHAIN/POINTS_MINING_REWARDS.md)
+- QA / Release Gate：[`docs/BLOCKCHAIN/POINTSCHAIN_QA.md`](BLOCKCHAIN/POINTSCHAIN_QA.md)
+
+**狀態：設計已拍板（root, 2026-05-04），尚未實作完成。**

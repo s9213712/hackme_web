@@ -213,6 +213,47 @@ def test_admin_users_include_online_status_from_active_sessions(tmp_path):
     assert users["admin"]["is_online"] is False
 
 
+def test_admin_user_block_rejects_self_block_for_root_and_manager(tmp_path):
+    db_path = tmp_path / "admin-self-block.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            role TEXT NOT NULL,
+            blocked_until TEXT
+        );
+        """
+    )
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (1, 'root', 'active', 'super_admin')")
+    conn.execute("INSERT INTO users (id, username, status, role) VALUES (2, 'admin', 'active', 'manager')")
+    conn.commit()
+    conn.close()
+
+    root_box = {"actor": {"id": 1, "username": "root", "role": "super_admin", "status": "active"}}
+    root_client = _build_app(str(db_path), root_box).test_client()
+    root_res = root_client.post("/api/admin/users/1/block", json={"minutes": 60})
+    assert root_res.status_code == 400
+    assert root_res.get_json()["msg"] == "不能封鎖目前登入中的自己"
+
+    admin_box = {"actor": {"id": 2, "username": "admin", "role": "manager", "status": "active"}}
+    admin_client = _build_app(str(db_path), admin_box).test_client()
+    admin_res = admin_client.post("/api/admin/users/2/block", json={"minutes": 60})
+    assert admin_res.status_code == 400
+    assert admin_res.get_json()["msg"] == "不能封鎖目前登入中的自己"
+
+    conn = sqlite3.connect(db_path)
+    rows = {
+        row[0]: row[1:]
+        for row in conn.execute("SELECT username, status, blocked_until FROM users ORDER BY id").fetchall()
+    }
+    conn.close()
+    assert rows["root"] == ("active", None)
+    assert rows["admin"] == ("active", None)
+
+
 def test_reject_registration_deletes_pending_account(tmp_path):
     db_path = tmp_path / "registration-review.db"
     conn = sqlite3.connect(db_path)

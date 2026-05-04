@@ -156,7 +156,11 @@ def test_root_points_page_is_chain_operations_console():
     assert 'id="root-trading-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled"' in index_html
     assert 'id="root-trading-borrowing-enabled" checked' in index_html
-    assert 'id="root-trading-borrow-interest-percent"' in index_html
+    assert 'id="root-trading-borrow-apr-btc-eth"' in index_html
+    assert 'id="root-trading-borrow-apr-usdt-points"' in index_html
+    assert 'id="root-trading-borrow-interest-interval-hours"' in index_html
+    assert 'id="root-trading-borrow-interest-minimum-hours"' in index_html
+    assert 'id="root-trading-grid-fee-discount-percent"' in index_html
     assert 'id="root-trading-margin-long-financing-percent"' in index_html
     assert 'id="root-trading-short-collateral-percent"' in index_html
     assert "融資九成" in index_html
@@ -207,7 +211,18 @@ def test_root_points_page_is_chain_operations_console():
     assert "parseRootTradingSettingsResponse" in admin_js
     assert "交易所參數 API 找不到" in admin_js
     assert "交易所參數儲存中" in admin_js
-    assert "borrow_interest_percent_daily" in admin_js
+    assert 'id="root-trading-borrow-apr-btc-eth"' in index_html
+    assert 'id="root-trading-borrow-apr-usdt-points"' in index_html
+    assert 'id="root-trading-borrow-interest-interval-hours"' in index_html
+    assert 'id="root-trading-borrow-interest-minimum-hours"' in index_html
+    assert 'id="root-trading-grid-fee-discount-percent"' in index_html
+    assert 'id="trading-funding-pool-rate-btc-eth"' in index_html
+    assert 'id="trading-funding-pool-rate-usdt-points"' in index_html
+    assert "borrow_apr_btc_eth_percent" in admin_js
+    assert "borrow_apr_usdt_points_percent" in admin_js
+    assert "borrow_interest_interval_hours" in admin_js
+    assert "borrow_interest_minimum_hours" in admin_js
+    assert "grid_fee_discount_percent" in admin_js
     assert "margin_long_financing_percent" in admin_js
     assert "short_collateral_percent" in admin_js
     assert "price_source" in admin_js
@@ -245,6 +260,8 @@ def test_root_points_page_is_chain_operations_console():
     assert "機器人掃描與稽核" in trading_settings_section
     assert "BTC_trade 信號整合" in trading_settings_section
     assert "各交易對參數" in trading_settings_section
+    assert "累積利息" in index_html
+    assert "下一次計息" in index_html
 
 
 def test_trading_exchange_is_separate_from_wallet_page():
@@ -333,7 +350,10 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "未實現盈虧" in trading_js
     assert "逐倉估算強平價" in trading_js
     assert "實際清算依全倉維持率" in trading_js
-    assert "融資保證金不可大於或等於名目金額" in trading_js
+    assert "你填寫的保證金已超過本次買入名目金額，這不屬於融資交易" in trading_js
+    assert "請改用現貨買入" in trading_js
+    assert "且至少要借 1 點" in trading_js
+    assert "原始保證金不足，至少需要" in trading_js
     assert "renderTradingMarginAccountSummary" in trading_js
     assert "liquidation_price_points" in trading_js
     assert "unrealized_pnl_points" in trading_js
@@ -375,7 +395,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"economy-wallet-download-btn", downloadEconomyWalletCsv' in economy_js
     assert '"economy-trading-export-btn", downloadEconomyTradingCsv' in economy_js
     assert "grid-template-columns: minmax(120px, .85fr) repeat(5" in styles
-    assert "成本價（總額）" in trading_js
+    assert "持有成本" in trading_js
+    assert "損益平均價格" in trading_js
     assert "目前部位價值" in trading_js
     assert "盈虧" in trading_js
     assert "已實現盈虧" in trading_js
@@ -597,10 +618,11 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert '"economy-root-virtual-open-btn", openTradingModuleFromWallet' in trading_js
     assert 'id="trading-current-delta"' in trading_section
     assert 'id="trading-current-health"' in trading_section
-    assert "TRADING_LIVE_PRICE_REFRESH_MS = 1000" in trading_js
+    assert "TRADING_LIVE_PRICE_REFRESH_MS = 2000" in trading_js
     assert "function loadTradingLivePrice()" in trading_js
     assert "function renderTradingCurrentPrice" in trading_js
     assert "/trading/live-price?market=" in trading_js
+    assert "updateTradingOrderEstimate();" in trading_js
     assert "price_health" in trading_js
     assert "fallback_reason" in trading_js
     assert "excluded_sources" in trading_js
@@ -639,12 +661,32 @@ def test_trading_reference_polling_does_not_overwrite_live_execution_price():
     assert 'market.price_source = json.source || "binance_public_api";' not in trading_js
 
 
-def test_trading_live_price_polling_uses_one_second_timer_and_health_badges():
+def test_trading_live_price_polling_uses_two_second_timer_and_health_badges():
     trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
 
     assert "tradingLivePriceTimer = setInterval" in trading_js
     assert "TRADING_LIVE_PRICE_REFRESH_MS" in trading_js
+    assert 'currentModuleTab !== "trading" && currentModuleTab !== "economy"' in trading_js
+    assert "function tradingLivePriceTargetSymbols()" in trading_js
+    assert "function refreshTradingWalletLiveMetrics()" in trading_js
+    assert "refreshTradingWalletLiveMetrics();" in trading_js
+    assert "tradingState.state = state;" in trading_js
+    assert "const marginSummary = payload.margin_summary || tradingLiveMarginSummary(marginPositions);" in trading_js
+    assert "const liveRisk = tradingLiveMarginRisk(row);" in trading_js
     assert "#trading-current-price.trading-price-up" in styles
     assert "#trading-current-price.trading-price-down" in styles
     assert "#trading-current-health.warning" in styles
+
+
+def test_spot_position_details_show_holding_cost_and_break_even_price():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+
+    assert "function tradingSpotHoldingCost(position, market)" in trading_js
+    assert "function tradingSpotHoldingCostPerUnit(position, market)" in trading_js
+    assert "function tradingSpotBreakEvenExitPrice(position, market)" in trading_js
+    assert "持有成本" in trading_js
+    assert "損益平均價格" in trading_js
+    assert "單顆" in trading_js
+    assert "已含預估賣出手續費" in trading_js
+    assert "未實現 · 含預估賣出手續費" in trading_js

@@ -1167,6 +1167,20 @@ def register_trading_routes(app, deps):
 
     # ── Grid Bot Routes ────────────────────────────────────────────────────
 
+    @app.route("/api/trading/grid/preview", methods=["POST"])
+    @require_csrf
+    def trading_grid_preview():
+        actor, err = actor_or_401()
+        if err:
+            return err
+        data, err = parse_json_body()
+        if err:
+            return err
+        try:
+            return json_resp(trading_service.preview_grid_bot(actor=actor, payload=data))
+        except Exception as exc:
+            return service_error(exc)
+
     @app.route("/api/trading/grid-bots", methods=["GET"])
     @require_csrf_safe
     def trading_grid_bots_list():

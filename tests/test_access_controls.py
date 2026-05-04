@@ -264,6 +264,49 @@ def test_invalid_server_bind_settings_are_rejected():
     assert state["server_listen_port"] == 0
 
 
+def test_admin_settings_reject_invalid_boolean_strings_for_security_flags():
+    app, state = _admin_app()
+    state["integrity_guard_enabled"] = True
+    state["audit_chain_enabled"] = True
+    client = app.test_client()
+
+    res = client.put("/api/admin/settings", json={"integrity_guard_enabled": "yes_please"})
+
+    assert res.status_code == 400
+    assert state["integrity_guard_enabled"] is True
+
+    res = client.put("/api/admin/settings", json={"audit_chain_enabled": "enable_me"})
+
+    assert res.status_code == 400
+    assert state["audit_chain_enabled"] is True
+
+
+def test_admin_settings_reject_absurd_ranges_and_invalid_snapshot_time():
+    app, state = _admin_app()
+    state["video_tip_fee_percent"] = 5
+    state["video_tip_min_points"] = 1
+    state["security_log_tail_lines"] = 200
+    state["snapshot_daily_time"] = "03:00"
+    client = app.test_client()
+
+    assert client.put("/api/admin/settings", json={"video_tip_fee_percent": -5}).status_code == 400
+    assert client.put("/api/admin/settings", json={"video_tip_fee_percent": 99999}).status_code == 400
+    assert client.put("/api/admin/settings", data='{"video_tip_fee_percent": NaN}', content_type="application/json").status_code == 400
+    assert client.put("/api/admin/settings", data='{"video_tip_fee_percent": Infinity}', content_type="application/json").status_code == 400
+    assert client.put("/api/admin/settings", json={"video_tip_min_points": -1}).status_code == 400
+    assert client.put("/api/admin/settings", json={"video_tip_min_points": 10**18}).status_code == 400
+    assert client.put("/api/admin/settings", json={"security_log_tail_lines": -1}).status_code == 400
+    assert client.put("/api/admin/settings", json={"security_log_tail_lines": 10**9}).status_code == 400
+    assert client.put("/api/admin/settings", json={"snapshot_daily_time": "25:99"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"snapshot_daily_time": "abcd"}).status_code == 400
+    assert client.put("/api/admin/settings", json={"snapshot_daily_time": "12:30:45"}).status_code == 400
+
+    assert state["video_tip_fee_percent"] == 5
+    assert state["video_tip_min_points"] == 1
+    assert state["security_log_tail_lines"] == 200
+    assert state["snapshot_daily_time"] == "03:00"
+
+
 def test_root_can_configure_comfyui_api_endpoint_without_restart_hint():
     app, state = _admin_app()
     client = app.test_client()

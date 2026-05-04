@@ -1,6 +1,234 @@
 # Update Summary
 
-Release ID: `2026.05.04-074`
+Release ID: `2026.05.04-086`
+
+## 2026.05.04-086
+
+## Highlights
+
+- ComfyUI LoRA / Embedding interaction is now reversible in the AI page. Removing
+  a selected LoRA removes its no-longer-needed trigger words, choosing `不使用
+  LoRA` and pressing `加入` clears the current LoRA list, and clicking an already
+  inserted Embedding removes it again.
+- Embeddings whose filename contains `neg` or `negative` now default to the
+  negative prompt instead of the positive prompt.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-085
+
+## Highlights
+
+- ComfyUI now blocks unsupported LoRA base-model families before generation.
+  Only `SDXL`, `Pony`, `Illustrious`, and `Noob` LoRAs remain selectable in the
+  AI page. `SD1.5`, `Flux`, and unknown-metadata LoRAs are shown as unavailable
+  and the backend rejects crafted requests that try to bypass the UI.
+- Root-downloaded Civitai LoRA sidecars now persist `base_model` metadata so
+  later page loads can enforce the same compatibility rule consistently.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-084
+
+## Highlights
+
+- ComfyUI generation now uses a 30-minute default wait budget end-to-end
+  instead of timing out earlier on the frontend progress poll or the backend
+  generation route. Long model loads or retried queue waits no longer fail just
+  because the default cap was too short.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_comfyui_integration.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-083
+
+## Highlights
+
+- The notification center no longer shows two different `read all` actions for
+  the same API call. The panel keeps the single header-level `全部已讀`
+  button and removes the duplicate in-list `一鍵全部已讀` action.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_notifications.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-082
+
+## Highlights
+
+- Margin-buy collateral validation copy is now humanized. Instead of only
+  showing a mechanical `最高 N 點`, the UI now distinguishes:
+  - collateral below the minimum requirement
+  - a valid financing range
+  - collateral that already exceeds the full notional and therefore should use
+    normal spot buying instead of margin
+- The warning now explicitly explains that margin buy must still borrow at
+  least `1` point, so users understand why `保證金 >= 名目金額` no longer counts
+  as financing.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-081
+
+## Highlights
+
+- Spot wallet detail rows now separate `持有成本` from `損益平均價格`.
+  `持有成本` shows the acquisition cost including the estimated buy-side fee,
+  plus a per-unit cost view. `損益平均價格` shows the fee-aware break-even
+  exit price after also accounting for the estimated sell-side fee.
+- The unrealized PnL copy in spot wallet rows now explicitly says it already
+  includes the estimated sell-side fee, so users no longer have to guess why
+  the break-even price is above the displayed average cost.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-080
+
+## Highlights
+
+- The lightweight `GET /api/trading/live-price` poll still runs every two
+  seconds, but now it also refreshes the Points wallet trading PnL cards on
+  the same cadence instead of waiting for the slower full dashboard reload.
+- Spot position value / unrealized PnL, root virtual total, and margin risk /
+  equity / unrealized PnL now recompute from the latest in-memory live market
+  price, so wallet-side trading numbers no longer stay stale while the current
+  price card keeps moving.
+- Live-price polling now runs on both the `trading` page and the `economy`
+  wallet page. It updates only the active wallet markets plus the currently
+  selected trading market, keeping the refresh lightweight without forcing a
+  full dashboard fetch every two seconds.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py tests/test_release_policy.py`
+- `git diff --check`
+- `python3 scripts/pre_push_checks.py --ci`
+
+## 2026.05.04-079
+
+## Highlights
+
+- Grid Bot creation now uses a backend-owned fee preview instead of a
+  frontend-only spread guess. `POST /api/trading/grid/preview` calculates the
+  worst-case grid spacing, break-even spread, per-grid gross profit, fee, and
+  net profit with `Decimal`, then returns a red / yellow / green risk light.
+- Grid preview red-lights now block creation, while thin-profit yellow-lights
+  require an extra confirmation. This prevents the old UI failure mode where a
+  strategy looked profitable because it only showed raw spread and ignored
+  fees.
+- The trading page keeps the existing capital / inventory estimate, but now
+  shows fee-aware copy such as `最不利一格毛利`, `最不利一格手續費`,
+  `最不利一格扣費後淨利`, and `損益兩平間距`.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_grid_fee_model.py tests/test_grid_preview_api.py tests/test_grid_fee_ui.py`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py -k 'grid' tests/test_frontend_economy.py tests/test_release_policy.py`
+- `git diff --check`
+
+## 2026.05.04-078
+
+## Highlights
+
+- The default Cloud Drive purchase plan is now `1GB / 7 days` instead of
+  `1GB / 30 days`.
+- Existing databases are normalized on startup so the legacy
+  `cloud_storage_1gb_30d` catalog row keeps the same key but gets the new
+  `item_name`, `duration_days`, and label, avoiding mixed `30 天 / 7 天`
+  displays between fresh and old runtimes.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_upload_security.py tests/test_cloud_drive_attachments.py tests/test_release_policy.py`
+- `git diff --check`
+
+## 2026.05.04-077
+
+## Highlights
+
+- The trading page `live-price` polling cadence is now `2` seconds instead of
+  `1`, reducing exchange API load while keeping the current-price card visibly
+  alive.
+- Buy/sell order estimates stay in lockstep with that same `2`-second
+  live-price refresh, so the quoted notional/fee preview no longer lags behind
+  the displayed market price.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py tests/test_release_policy.py`
+- `git diff --check`
+
+## 2026.05.04-076
+
+## Highlights
+
+- The feature-flag settings page now ships with two root-friendly global
+  presets:
+  - `全開`: replace the whole feature matrix with every module enabled
+  - `最低維運`: replace the whole feature matrix with the minimum operational
+    baseline (`accounts`, `audit`, `system health`, `server modes`,
+    `snapshot / restore`)
+- Existing domain bundles such as account governance, community, drive, AI, and
+  trading stay additive; they still only turn on the related module family
+  instead of wiping the rest of the matrix.
+- The feature-page helper text, deployer docs, admin guide, QA checklist, and
+  troubleshooting notes now explain the difference between additive bundles and
+  full-matrix presets so root operators do not accidentally think `最低維運`
+  is a small tweak.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_drive_preview.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-075
+
+## Highlights
+
+- Trading fee and borrowing controls are now aligned to the new defaults:
+  - spot fee `0.10%`
+  - grid fee = spot fee with `25%` discount
+  - `BTC / ETH = 8% APR`
+  - `USDT / POINTS = 10% APR`
+  - hourly billing with `minimum 1 hour`
+- Root trading settings can now adjust those rates directly from the dedicated
+  `交易所` page instead of relying on the older daily-interest mental model.
+- Borrow positions now expose `累積利息`, `已實扣`, and `下一次計息` metadata in the
+  trading UI, so users can see both accrued interest and the next billing time.
+- The backend now accumulates per-user trading volume / fee statistics for
+  future VIP logic, and root reports expose aggregate `volume_summary`.
+- Grid deterministic QA baselines were re-synced after the new fee defaults, so
+  the engine, pytest suite, and `security/trading_exchange_validation.py` all
+  agree on the updated result.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_frontend_economy.py tests/test_trading_reference_prices.py tests/test_release_policy.py`
+- `PYTHONPATH=. python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_validation_fee_apr_followup`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
 
 ## 2026.05.04-074
 

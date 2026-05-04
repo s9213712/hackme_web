@@ -55,7 +55,7 @@ DEFAULT_RULES = (
 DEFAULT_PRICE_CATALOG = (
     ("post_cost_standard", "一般發文成本", "forum", "soft", 1, 0, 1, 10, 1, {"description": "防止洗版的基本回收"}),
     ("post_pin_24h", "文章置頂 24 小時", "forum", "soft", 100, 0, 50, 300, 1, {}),
-    ("cloud_storage_1gb_30d", "雲端容量 1GB / 30 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {}),
+    ("cloud_storage_1gb_30d", "雲端容量 1GB / 7 天", "cloud_drive", "soft", 100, 0, 50, 500, 1, {"storage_bytes": 1024 ** 3, "duration_days": 7, "label": "雲端容量 1GB / 7 天"}),
     ("comfyui_txt2img_basic", "基礎生圖一次", "comfyui", "soft", 5, 1, 1, 25, 1, {}),
     ("comfyui_txt2img_highres", "高解析生圖一次", "comfyui", INTERNAL_CURRENCY, 2, 1, 1, 20, 1, {}),
     ("comfyui_batch_10", "批次生圖 10 張", "comfyui", INTERNAL_CURRENCY, 15, 1, 5, 80, 1, {}),
@@ -154,8 +154,8 @@ def table_columns(conn, table):
 
 
 def public_account_id(chain_secret, user_id):
-    secret = chain_secret.encode("utf-8") if isinstance(chain_secret, str) else bytes(chain_secret or b"")
-    return hmac.new(secret, str(int(user_id)).encode("utf-8"), hashlib.sha256).hexdigest()
+    secret_bytes = chain_secret.encode("utf-8") if isinstance(chain_secret, str) else bytes(chain_secret or b"")
+    return hmac.new(secret_bytes, str(int(user_id)).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def metadata_hash(public_metadata=None, private_metadata=None, sensitive_metadata_encrypted=""):

@@ -132,6 +132,8 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - `Turnstile site key` 是否只在 `turnstile` 模式出現
   - 切到 `none / math / image` 後，token 欄位是否會隱藏而不是殘留在畫面上誤導部署者
 - 若本次改到設定頁 / feature flags，至少補：
+  - `全開` 是否真的把全部 feature flag 勾開，而不是只補勾目前畫面可見那幾個欄位
+  - `最低維運` 是否會把站點收斂到帳號、Audit、健康燈、Server Mode、Snapshot 這組最小骨架，而不是保留舊勾選殘值
   - `設定已儲存` 成功訊息是否會自動消失，而不是長時間誤導 root 以為目前狀態已再次寫入
   - 功能被擋下時，503 / UI 訊息是否有指出真正被關閉的是哪個父功能，而不是只回一句 generic 的 `root 關閉`
   - 若某個父功能關閉，但其子功能仍已開啟，訊息是否有提醒哪些已開功能會一起受影響
@@ -142,13 +144,23 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - 所有手動權重設成 0 時，是否會安全退回自動深度權重，且 root dashboard / log 會明確標成 `manual weights invalid`
   - root-only `融合價格即時比例` dashboard 是否會列出實際 normalized weights、excluded source 與 `價格來源降級`
   - order book 全失敗時，是否明確標示 fallback source，且不把它當成正常 fused price
-  - `GET /api/trading/live-price` 是否每 `1` 秒更新目前價格、漲綠跌紅，且在 fallback / excluded source 時亮黃燈
+  - `GET /api/trading/live-price` 是否每 `2` 秒更新目前價格、漲綠跌紅，且在 fallback / excluded source 時亮黃燈
+  - 買入 / 賣出預估是否會跟著同一輪 `live-price` 更新節奏同步重算，而不是停留在舊價
+  - 積分錢包裡的現貨 / 進階交易浮盈虧、root 虛擬總額是否也跟著同一輪 `live-price` 更新，而不是等 full dashboard reload
   - `live-price` 回應是否含 `price_health / fallback_reason / excluded_sources / defaulted_market`
   - `live-price` 是否會同步刷新 DB 內 `trading_markets.manual_price_points / price_source` 快取，文件也要寫清楚這不是純 read-only API
   - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
 - 若本次改到借貸利息 / backtest 上限，至少補：
+  - 現貨 fee 預設 `0.10%`、Grid fee 預設為 spot fee 的 `75%`（25% 折扣）時，
+    spot / grid / backtest / 預估 UI 是否全部一致
+  - `BTC / ETH 8% APR`、`USDT / POINTS 10% APR` 是否會依實際借入資產正確套用，
+    而不是所有倉位都吃同一組利率
+  - 每 `1` 小時計息、不足 `1` 小時以 `1` 小時計時，前台是否顯示 `累積利息`、
+    `已實扣`、`下一次計息`
   - `principal=50, daily_rate=1%, 24h` 是否改成保留 `0.5` 點殘值，而不是直接記成 `1`
   - root 把 `borrow_interest_pool_pressure_multiplier` 設成 `0` 時，實際利率是否真的不再被額外放大
+  - 現貨 / 借貸成交後，`volume_stats` 與 root report `volume_summary` 是否同步增加，
+    供後續 VIP 系統使用
   - `BTC/USDT 2024-01-01 ~ 2024-12-31 @ 1h` 是否可直接回測，不再被 `5000` 根上限擋住
   - 回測頁在使用者選 `start_time / end_time / timeframe` 時，是否會直接提示另一側日期最遠可設到哪裡，而不是只丟出 `20,000` 根上限
   - 改變 `timeframe` 後，開始 / 結束日期欄位的 `min / max` 是否同步更新
@@ -166,8 +178,15 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - `hourly_check.py` 跑完後是否真的等到新的 `runtime/report_log_4h.jsonl`，或至少明確說明沿用的是仍有效期內的既有預測
   - 長時間執行中途重新整理頁面後，root 是否仍可從背景工作狀態知道目前停在哪個 step
 - 若本次改到任何交易核心邏輯，另外強制補：
+  - Grid Bot preview 是否同時顯示每格毛利、每格手續費、每格扣費後淨利、
+    損益兩平間距與紅 / 黃 / 綠燈，而不是只顯示毛利價差
+  - `grid spacing <= break-even spread` 是否會被標成紅燈並阻擋建立
+  - `0 < net spread < 0.10%` 是否會變成黃燈並要求二次確認
+  - `NaN / Infinity` 是否被 preview API 拒絕
   - `empty candles`、`single candle`、`negative / zero / NaN / missing tick` 是否被正確拒絕或明確標示略過
   - workflow `flat sequence` 是否仍不會誤觸發
+  - workflow `stop_loss_percent` 是否使用 scan window low、`take_profit_percent`
+    是否使用 scan window high，且目前只標示 long-only 語義
   - `100 -> 10 -> 150` 類 jump / gap collapse 是否有風險警示或 filter，不會製造不真實回測幻覺
   - `full tick [100,80,120]` 與 `sampled [100,120]` 是否仍會出現 stop-loss / liquidation 漏觸發
   - `wallet=0 + trial_credit_only` 與小本金利息案例是否仍維持正確帳務

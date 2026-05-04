@@ -6,14 +6,14 @@ from datetime import datetime, timedelta, timezone
 STORAGE_UPGRADE_PRODUCTS = {
     "cloud_storage_1gb_30d": {
         "storage_bytes": 1024 ** 3,
-        "duration_days": 30,
-        "label": "雲端容量 1GB / 30 天",
+        "duration_days": 7,
+        "label": "雲端容量 1GB / 7 天",
     },
 }
 
 STORAGE_UPGRADE_PRICE_DEFAULTS = {
     "cloud_storage_1gb_30d": {
-        "item_name": "雲端容量 1GB / 30 天",
+        "item_name": "雲端容量 1GB / 7 天",
         "category": "cloud_drive",
         "currency_type": "soft",
         "base_price": 100,
@@ -21,7 +21,11 @@ STORAGE_UPGRADE_PRICE_DEFAULTS = {
         "min_price": 50,
         "max_price": 500,
         "enabled": 1,
-        "metadata_json": "{}",
+        "metadata_json": json.dumps({
+            "storage_bytes": 1024 ** 3,
+            "duration_days": 7,
+            "label": "雲端容量 1GB / 7 天",
+        }, ensure_ascii=False, separators=(",", ":")),
     },
 }
 
@@ -89,7 +93,7 @@ def storage_upgrade_product_from_catalog_item(item):
     return {
         "storage_bytes": storage_bytes,
         "duration_days": duration_days,
-        "label": str(metadata.get("label") or item.get("item_name") or static.get("label") or item.get("item_key") or "雲端容量方案"),
+        "label": str(metadata.get("label") or static.get("label") or item.get("item_name") or item.get("item_key") or "雲端容量方案"),
     }
 
 
@@ -174,6 +178,21 @@ def ensure_storage_upgrade_price_catalog(conn):
                 item["metadata_json"],
                 now,
                 now,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE economy_price_catalog
+            SET item_name=?,
+                metadata_json=?,
+                updated_at=?
+            WHERE item_key=? AND category='cloud_drive'
+            """,
+            (
+                item["item_name"],
+                item["metadata_json"],
+                now,
+                item_key,
             ),
         )
 

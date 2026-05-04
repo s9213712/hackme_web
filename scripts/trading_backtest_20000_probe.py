@@ -212,10 +212,10 @@ def workflow_probe(trading):
         },
     )
     buy_spend = 10_000
-    buy_fee = fee_points(buy_spend, 0.3)
+    buy_fee = fee_points(buy_spend, 0.1)
     buy_units = int(((buy_spend - buy_fee) * ASSET_SCALE) // 90)
     sell_gross = int(math.ceil((buy_units * 120) / ASSET_SCALE))
-    sell_fee = fee_points(sell_gross, 0.3)
+    sell_fee = fee_points(sell_gross, 0.1)
     expected_final = sell_gross - sell_fee
     return {
         "scenario": "workflow_branch_buy_then_sell_20000",

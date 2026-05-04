@@ -13,7 +13,7 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.04-074`
+- Release ID: `2026.05.04-086`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -304,6 +304,10 @@ ComfyUI notes:
   download the selected checkpoint or LoRA into the configured local project.
   The model-download UI is intentionally separated from the main generation form
   and rendered as a collapsed panel at the bottom of the AI page.
+- LoRA availability is metadata-driven. The frontend and backend only allow
+  LoRAs whose recorded `base_model` normalizes into `sdxl`, `pony`,
+  `illustrious`, or `noob`. `SD1.5`, `Flux`, and unknown-metadata LoRAs are
+  disabled in the picker and rejected by `POST /api/comfyui/generate`.
 - Local mode supports explicit start and root-only stop operations for the
   shared ComfyUI process.
 - Remote mode is generation-only. Root settings hide Civitai key / download UI
@@ -351,6 +355,7 @@ User trading APIs:
 - `POST /api/trading/bots/{bot_uuid}/increase-runs`
 - `POST /api/trading/bots/scan`
 - `POST /api/trading/bots/backtest`
+- `POST /api/trading/grid/preview`
 - `GET /api/trading/grid-bots`
 - `POST /api/trading/grid-bots`
 - `POST /api/trading/grid-bots/{bot_uuid}/toggle`

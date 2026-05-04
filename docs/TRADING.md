@@ -123,15 +123,27 @@ minutes, with other supported intervals available from the UI.
 The backend always re-checks the execution price before order execution. The
 frontend chart is a reference display, not the source of final settlement.
 
-The trading page current-price card now refreshes once per second through
-`GET /api/trading/live-price`. That route is not purely read-only: when a live
-or fused price is successfully resolved, it also refreshes the cached
-`trading_markets.manual_price_points` and `price_source` fields in SQLite so
-order-entry hints, dashboard reads, and later executions share the same latest
-reference price. If the live price degrades to fallback / cached mode, the API
-returns `price_health`, `fallback_reason`, `excluded_sources`, and
-`defaulted_market`, and the frontend shows a yellow warning badge instead of
-pretending the source is still fully healthy.
+The trading page current-price card now refreshes every two seconds through
+`GET /api/trading/live-price`, and each successful refresh also recomputes the
+order-entry estimate shown beside the buy/sell controls. The same lightweight
+poll also refreshes wallet-side trading metrics on the `economy` page,
+including spot current value / unrealized PnL, margin unrealized PnL, and the
+root virtual total, so those cards move with the latest price instead of
+waiting for the slower full dashboard refresh. That route is not purely
+read-only: when a live or fused price is successfully resolved, it also
+refreshes the cached `trading_markets.manual_price_points` and `price_source`
+fields in SQLite so order-entry hints, wallet valuation, dashboard reads, and
+later executions share the same latest reference price. If the live price
+degrades to fallback / cached mode, the API returns `price_health`,
+`fallback_reason`, `excluded_sources`, and `defaulted_market`, and the frontend
+shows a yellow warning badge instead of pretending the source is still fully
+healthy.
+
+Spot wallet rows also show two unit-price helpers now: `持有成本` is the
+current position acquisition cost including the estimated buy-side fee, and
+`損益平均價格` is the break-even exit price after also accounting for the
+estimated sell-side fee. This prevents the old UI problem where users only saw
+gross PnL and had to mentally back-solve fee-adjusted break-even by hand.
 
 Root manual pricing is not exposed as a production trading fallback. It should
 only exist in legacy/local tests where explicitly enabled by the test harness.
@@ -250,13 +262,18 @@ the root UI from inside the `BTC_trade` directory, then check again.
 
 ## Root Trading Settings
 
-Root settings live under the root settings page, billing/trading section.
+Root settings live under the root settings page, dedicated `交易所` section.
 
 Important fields:
 
 - Trading enabled: enables or disables the trading subsystem.
 - Borrow trading enabled: enables experimental margin long and short selling.
-- Borrow interest percent daily: daily interest percentage for borrow positions.
+- Borrow APR by asset group:
+  - BTC / ETH: default `8% APR`
+  - USDT / POINTS: default `10% APR`
+- Borrow interest interval hours: default `1`, so interest is accrued hourly.
+- Borrow interest minimum hours: default `1`, so even positions shorter than one
+  hour are billed as one full started hour.
 - Margin long financing percent: how much of a long position can be financed.
   Example: `90` means financing 90%, user collateral 10%.
 - Short collateral percent: original collateral requirement for short selling.
@@ -265,14 +282,17 @@ Important fields:
 - Price source: public live price providers with last-good cache fallback.
 - Max price staleness seconds: how long a cached last-good live price can be
   used when all live providers are unavailable.
-- Market fee percent: percentage fee charged on spot/margin orders.
+- Market fee percent: percentage fee charged on spot/margin orders. The default
+  spot fee is `0.10%`.
+- Grid fee discount percent: default `25`, meaning grid orders pay `75%` of the
+  configured spot fee rather than the older `50%` shortcut.
 - Market min/max order points: per-order notional boundaries.
 - BTC_trade project folder: optional local path for the BTC-only signal panel.
   This should point to the `BTC_trade` project root, not to the `runtime`
   subfolder.
 
 All user-facing and API settings use percent values directly. For example,
-`0.3` means `0.3%`; `15` means `15%`.
+`0.10` means `0.10%`; `15` means `15%`.
 
 ## Borrow Trading
 
@@ -293,6 +313,10 @@ Short selling:
 Each open borrow position shows:
 
 - Entry price.
+- Borrowed asset group APR.
+- Accumulated interest.
+- Next interest billing time.
+- Billing cadence (`every N hours`, `minimum M hours`).
 - Principal.
 - Original margin.
 - Maintenance margin.
@@ -366,6 +390,12 @@ Configuration:
 
 Creation flow:
 
+- Before creation, the page calls `POST /api/trading/grid/preview`.
+- The preview is fee-aware and backend-owned. It returns:
+  - buy / sell fee percent after the Grid discount
+  - break-even spread percent
+  - worst-case per-grid gross profit / fee / net profit
+  - risk light (`green` / `yellow` / `red`)
 - The page estimates the sell-side inventory required for the upper grid
   levels.
 - If the user already holds enough spot inventory, the grid can be created
@@ -373,6 +403,11 @@ Creation flow:
 - If inventory is missing, the page offers a底倉 confirmation card so the user
   can buy the missing spot first or continue creating the grid without the
   helper buy.
+- `red`: blocked. The spacing is below fee break-even or the order amount is too
+  small to buy the minimum asset unit.
+- `yellow`: allowed only after a second confirmation because the remaining
+  net spread is too thin and can be eaten by slippage.
+- `green`: spacing stays profitable after fees.
 
 Runtime behavior:
 
@@ -408,6 +443,15 @@ Execution order:
 4. Matching action nodes execute by step order.
 5. Executed step IDs are remembered so the same batch step is not repeated.
 6. Higher-priority actions, such as forced stop loss, win over normal entries.
+
+Current semantics note:
+
+- `stop_loss_percent` and `take_profit_percent` currently use long-position
+  semantics only. They evaluate the scan window low/high against the average
+  entry cost of an existing long spot position.
+- Short / futures stop-loss and take-profit rules must be implemented as a
+  separate condition family; do not assume the current workflow condition types
+  are symmetric for short exposure.
 
 Built-in reference templates:
 

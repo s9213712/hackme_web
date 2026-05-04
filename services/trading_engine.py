@@ -3,7 +3,7 @@ import json
 import math
 import uuid
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -89,6 +89,14 @@ DEFAULT_PRICE_FUSION_MANUAL_WEIGHTS = {
 }
 DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT = 1.0
 DEFAULT_PRICE_FUSION_DEPTH_LEVELS = 10
+DEFAULT_SPOT_FEE_RATE_PERCENT = 0.10
+DEFAULT_GRID_FEE_DISCOUNT_PERCENT = 25.0
+GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT = Decimal("0.10")
+DEFAULT_BORROW_APR_BTC_ETH_PERCENT = 8.0
+DEFAULT_BORROW_APR_USDT_POINTS_PERCENT = 10.0
+DEFAULT_BORROW_INTEREST_INTERVAL_HOURS = 1
+DEFAULT_BORROW_INTEREST_MINIMUM_HOURS = 1
+APR_DAYS_PER_YEAR = Decimal("365")
 UNLIMITED_BOT_MAX_RUNS = 2_147_483_647
 LIVE_PRICE_SOURCE_NAMES = {
     FUSED_PRICE_SOURCE,
@@ -190,6 +198,35 @@ def _to_float(value, *, name, minimum=0.0, maximum=10**12):
     return number
 
 
+def _to_decimal(value, *, name, minimum=None, maximum=None):
+    try:
+        number = Decimal(str(value))
+    except Exception as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if not number.is_finite():
+        raise ValueError(f"{name} must be a finite number")
+    if minimum is not None and number < Decimal(str(minimum)):
+        raise ValueError(f"{name} out of range")
+    if maximum is not None and number > Decimal(str(maximum)):
+        raise ValueError(f"{name} out of range")
+    return number
+
+
+def _to_price_float(value, *, name, minimum=0.00000001, maximum=10**12):
+    return float(
+        _to_decimal(value, name=name, minimum=minimum, maximum=maximum).quantize(
+            Decimal("0.00000001"),
+            rounding=ROUND_HALF_UP,
+        )
+    )
+
+
+def _decimal_text(value, *, places="0.00000001"):
+    dec = Decimal(str(value or 0)).quantize(Decimal(places), rounding=ROUND_HALF_UP)
+    text = format(dec, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def _normalize_price_fusion_manual_weights(raw):
     out = {}
     source = raw if isinstance(raw, dict) else {}
@@ -222,6 +259,45 @@ def _bot_max_runs_has_remaining(run_count, max_runs):
     if max_runs >= UNLIMITED_BOT_MAX_RUNS:
         return True
     return int(run_count or 0) < max_runs
+
+
+def _borrow_apr_group_for_asset(asset_symbol):
+    asset = str(asset_symbol or "").strip().upper()
+    if asset in {"BTC", "ETH"}:
+        return "btc_eth"
+    return "usdt_points"
+
+
+def _daily_percent_from_apr(apr_percent):
+    dec = Decimal(str(apr_percent or 0))
+    if dec <= 0:
+        return 0.0
+    return float((dec / APR_DAYS_PER_YEAR).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+
+
+def _apr_percent_from_daily(daily_percent):
+    dec = Decimal(str(daily_percent or 0))
+    if dec <= 0:
+        return 0.0
+    return float((dec * APR_DAYS_PER_YEAR).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+
+
+def _normalize_borrow_interest_timing(interval_hours=None, minimum_hours=None):
+    interval = int(interval_hours or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)
+    minimum = int(minimum_hours or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)
+    interval = max(1, min(interval, 168))
+    minimum = max(1, min(minimum, 168))
+    return interval, minimum
+
+
+def _billable_interest_hours_from_elapsed_seconds(seconds, *, interval_hours=1, minimum_hours=1):
+    seconds = max(0.0, float(seconds or 0))
+    interval_hours, minimum_hours = _normalize_borrow_interest_timing(interval_hours, minimum_hours)
+    if seconds <= 0:
+        return 0
+    interval_seconds = interval_hours * 3600.0
+    billed_hours = int(math.ceil(seconds / interval_seconds)) * interval_hours
+    return max(minimum_hours, billed_hours)
 
 
 def quantity_to_units(value):
@@ -273,8 +349,13 @@ def _condition_label(cond):
 
 def notional_points(quantity_units, price_points):
     quantity_units = int(quantity_units)
-    price_points = int(price_points)
-    return int(math.ceil((quantity_units * price_points) / ASSET_SCALE))
+    if quantity_units <= 0:
+        return 0
+    price_decimal = _to_decimal(price_points, name="price_points", minimum=0)
+    exact_notional = (Decimal(quantity_units) * price_decimal) / Decimal(ASSET_SCALE)
+    if exact_notional <= 0:
+        return 0
+    return int(exact_notional.quantize(Decimal("1"), rounding=ROUND_CEILING))
 
 
 def fee_points(notional, fee_rate_percent):
@@ -310,7 +391,7 @@ def ensure_trading_schema(conn):
             max_price_jump_percent REAL NOT NULL DEFAULT 10,
             min_order_points INTEGER NOT NULL DEFAULT 1,
             max_order_points INTEGER NOT NULL DEFAULT 100000,
-            fee_rate_percent REAL NOT NULL DEFAULT 0.3,
+            fee_rate_percent REAL NOT NULL DEFAULT 0.1,
             updated_at TEXT NOT NULL,
             updated_by INTEGER,
             price_source TEXT NOT NULL DEFAULT 'fused_weighted',
@@ -560,6 +641,20 @@ def ensure_trading_schema(conn):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS trading_user_volume_stats (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            total_notional_points INTEGER NOT NULL DEFAULT 0 CHECK (total_notional_points >= 0),
+            spot_notional_points INTEGER NOT NULL DEFAULT 0 CHECK (spot_notional_points >= 0),
+            margin_notional_points INTEGER NOT NULL DEFAULT 0 CHECK (margin_notional_points >= 0),
+            total_fee_points INTEGER NOT NULL DEFAULT 0 CHECK (total_fee_points >= 0),
+            total_trade_count INTEGER NOT NULL DEFAULT 0 CHECK (total_trade_count >= 0),
+            last_trade_at TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS trading_audit_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_uuid TEXT NOT NULL UNIQUE,
@@ -757,9 +852,18 @@ def ensure_trading_schema(conn):
     legacy_fee_col = f"fee_{legacy_unit}"
     legacy_jump_col = f"max_price_jump_{legacy_unit}"
     if "fee_rate_percent" not in market_cols:
-        conn.execute("ALTER TABLE trading_markets ADD COLUMN fee_rate_percent REAL NOT NULL DEFAULT 0.3")
+        conn.execute("ALTER TABLE trading_markets ADD COLUMN fee_rate_percent REAL NOT NULL DEFAULT 0.1")
         if legacy_fee_col in market_cols:
             conn.execute(f"UPDATE trading_markets SET fee_rate_percent=CAST({legacy_fee_col} AS REAL) / 100.0")
+    conn.execute(
+        """
+        UPDATE trading_markets
+        SET fee_rate_percent=?, updated_at=?
+        WHERE ABS(COALESCE(fee_rate_percent, 0) - 0.3) < 0.0000001
+          AND updated_by IS NULL
+        """,
+        (DEFAULT_SPOT_FEE_RATE_PERCENT, now),
+    )
     if "max_price_jump_percent" not in market_cols:
         conn.execute("ALTER TABLE trading_markets ADD COLUMN max_price_jump_percent REAL NOT NULL DEFAULT 10")
         if legacy_jump_col in market_cols:
@@ -775,12 +879,17 @@ def ensure_trading_schema(conn):
         ("trading.futures_enabled", "false"),
         ("trading.pvp_matching_enabled", "false"),
         ("trading.borrowing_enabled", "true"),
-        ("trading.borrow_interest_percent_daily", "0.1"),
+        ("trading.borrow_interest_percent_daily", str(_daily_percent_from_apr(DEFAULT_BORROW_APR_USDT_POINTS_PERCENT))),
+        ("trading.borrow_apr_btc_eth_percent", str(DEFAULT_BORROW_APR_BTC_ETH_PERCENT)),
+        ("trading.borrow_apr_usdt_points_percent", str(DEFAULT_BORROW_APR_USDT_POINTS_PERCENT)),
         ("trading.borrow_interest_pool_pressure_multiplier", str(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)),
+        ("trading.borrow_interest_interval_hours", str(DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)),
+        ("trading.borrow_interest_minimum_hours", str(DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)),
         ("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)),
         ("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)),
         ("trading.margin_liquidation_enabled", "true"),
         ("trading.margin_maintenance_percent", "15"),
+        ("trading.grid_fee_discount_percent", str(DEFAULT_GRID_FEE_DISCOUNT_PERCENT)),
         ("trading.max_price_staleness_seconds", "900"),
         ("trading.price_source", FUSED_PRICE_SOURCE),
         ("trading.price_fusion_mode", "auto_depth"),
@@ -804,10 +913,10 @@ def ensure_trading_schema(conn):
         conn.execute(
             """
             INSERT OR IGNORE INTO trading_markets (
-                symbol, base_asset, quote_currency, manual_price_points, updated_at, price_source
-            ) VALUES (?, ?, 'POINTS', ?, ?, ?)
+                symbol, base_asset, quote_currency, manual_price_points, fee_rate_percent, updated_at, price_source
+            ) VALUES (?, ?, 'POINTS', ?, ?, ?, ?)
             """,
-            (symbol, asset, price, now, FUSED_PRICE_SOURCE),
+            (symbol, asset, price, DEFAULT_SPOT_FEE_RATE_PERCENT, now, FUSED_PRICE_SOURCE),
         )
     for table in ("trading_orders", "trading_fills"):
         cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -838,6 +947,16 @@ def ensure_trading_schema(conn):
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_accrued_hours INTEGER NOT NULL DEFAULT 0")
     if "interest_carry_micropoints" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN interest_carry_micropoints INTEGER NOT NULL DEFAULT 0")
+    if "interest_interval_hours" not in margin_cols:
+        conn.execute(
+            f"ALTER TABLE trading_margin_positions ADD COLUMN interest_interval_hours INTEGER NOT NULL DEFAULT {DEFAULT_BORROW_INTEREST_INTERVAL_HOURS}"
+        )
+    if "interest_minimum_hours" not in margin_cols:
+        conn.execute(
+            f"ALTER TABLE trading_margin_positions ADD COLUMN interest_minimum_hours INTEGER NOT NULL DEFAULT {DEFAULT_BORROW_INTEREST_MINIMUM_HOURS}"
+        )
+    if "borrowed_asset_symbol" not in margin_cols:
+        conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN borrowed_asset_symbol TEXT NOT NULL DEFAULT 'POINTS'")
     if "exit_price_points" not in margin_cols:
         conn.execute("ALTER TABLE trading_margin_positions ADD COLUMN exit_price_points INTEGER")
     if "realized_pnl_points" not in margin_cols:
@@ -856,6 +975,8 @@ def ensure_trading_schema(conn):
     if "enabled_at" not in bot_cols:
         conn.execute("ALTER TABLE trading_bots ADD COLUMN enabled_at TEXT")
         conn.execute("UPDATE trading_bots SET enabled_at=COALESCE(created_at, updated_at) WHERE enabled=1 AND COALESCE(enabled_at, '')=''")
+    if "last_scan_at" not in bot_cols:
+        conn.execute("ALTER TABLE trading_bots ADD COLUMN last_scan_at TEXT")
     grid_bot_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_grid_bots)").fetchall()}
     if "enabled_at" not in grid_bot_cols:
         conn.execute("ALTER TABLE trading_grid_bots ADD COLUMN enabled_at TEXT")
@@ -993,7 +1114,24 @@ class TradingEngineService:
         ).fetchone()[0] or 0)
         return max(0, abs(lent) - repaid)
 
-    def _funding_pool_payload(self, conn, *, requested_principal=0):
+    def _borrow_apr_percent_for_asset(self, settings, *, asset_symbol):
+        group = _borrow_apr_group_for_asset(asset_symbol)
+        if group == "btc_eth":
+            return float(settings.get("borrow_apr_btc_eth_percent") or DEFAULT_BORROW_APR_BTC_ETH_PERCENT)
+        return float(settings.get("borrow_apr_usdt_points_percent") or DEFAULT_BORROW_APR_USDT_POINTS_PERCENT)
+
+    def _margin_borrowed_asset_symbol(self, market, position_type):
+        market_row = dict(market) if market is not None and not isinstance(market, dict) else (market or {})
+        if str(position_type or "").strip().lower() == "short":
+            return str(market_row.get("base_asset") or "").strip().upper() or "BTC"
+        return str(market_row.get("quote_currency") or "POINTS").strip().upper() or "POINTS"
+
+    def _grid_fee_rate_percent(self, base_fee_rate_percent, settings):
+        discount = float(settings.get("grid_fee_discount_percent") or DEFAULT_GRID_FEE_DISCOUNT_PERCENT)
+        discount = max(0.0, min(discount, 100.0))
+        return max(0.0, float(base_fee_rate_percent or 0) * ((100.0 - discount) / 100.0))
+
+    def _funding_pool_payload(self, conn, *, requested_principal=0, borrowed_asset=None):
         reserve = self._reserve(conn)
         settings = self._settings_payload(conn)
         balance = int(reserve["balance_points"] or 0)
@@ -1005,7 +1143,9 @@ class TradingEngineService:
         projected_capacity = max(0, projected_balance + projected_outstanding)
         utilization = (outstanding / capacity) if capacity > 0 else 0.0
         projected_utilization = (projected_outstanding / projected_capacity) if projected_capacity > 0 else 1.0
-        base_rate = float(settings.get("borrow_interest_percent_daily") or 0)
+        borrowed_asset = str(borrowed_asset or "POINTS").strip().upper() or "POINTS"
+        base_apr = self._borrow_apr_percent_for_asset(settings, asset_symbol=borrowed_asset)
+        base_rate = _daily_percent_from_apr(base_apr)
         raw_pressure = settings.get("borrow_interest_pool_pressure_multiplier")
         pressure = float(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER if raw_pressure is None else raw_pressure)
         effective_rate = base_rate * (1.0 + max(0.0, utilization) * max(0.0, pressure))
@@ -1019,6 +1159,10 @@ class TradingEngineService:
             "capacity_points": capacity,
             "utilization_percent": round(utilization * 100, 4),
             "projected_utilization_percent": round(projected_utilization * 100, 4),
+            "borrowed_asset_symbol": borrowed_asset,
+            "base_interest_apr_percent": round(base_apr, 8),
+            "effective_interest_apr_percent": round(_apr_percent_from_daily(effective_rate), 8),
+            "projected_interest_apr_percent": round(_apr_percent_from_daily(projected_rate), 8),
             "base_interest_percent_daily": round(base_rate, 8),
             "interest_pool_pressure_multiplier": round(pressure, 8),
             "effective_interest_percent_daily": round(effective_rate, 8),
@@ -1061,6 +1205,51 @@ class TradingEngineService:
 
     def _ledger(self, conn, **kwargs):
         return self.points_service._record_transaction(conn, **kwargs)[0]
+
+    def _user_volume_stats(self, conn, user_id):
+        user_id = int(user_id)
+        now = _now()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO trading_user_volume_stats (
+                user_id, total_notional_points, spot_notional_points, margin_notional_points,
+                total_fee_points, total_trade_count, last_trade_at, updated_at
+            ) VALUES (?, 0, 0, 0, 0, 0, NULL, ?)
+            """,
+            (user_id, now),
+        )
+        return conn.execute("SELECT * FROM trading_user_volume_stats WHERE user_id=?", (user_id,)).fetchone()
+
+    def _record_user_trade_volume(self, conn, *, user_id, trade_kind, notional_points, fee_points=0, occurred_at=None):
+        user_id = int(user_id)
+        notional_points = max(0, int(notional_points or 0))
+        fee_points = max(0, int(fee_points or 0))
+        now = str(occurred_at or _now())
+        current = self._user_volume_stats(conn, user_id)
+        total_notional = int(current["total_notional_points"] or 0) + notional_points
+        spot_notional = int(current["spot_notional_points"] or 0) + (notional_points if trade_kind == "spot" else 0)
+        margin_notional = int(current["margin_notional_points"] or 0) + (notional_points if trade_kind == "margin" else 0)
+        total_fee = int(current["total_fee_points"] or 0) + fee_points
+        total_trade_count = int(current["total_trade_count"] or 0) + 1
+        conn.execute(
+            """
+            UPDATE trading_user_volume_stats
+            SET total_notional_points=?, spot_notional_points=?, margin_notional_points=?,
+                total_fee_points=?, total_trade_count=?, last_trade_at=?, updated_at=?
+            WHERE user_id=?
+            """,
+            (
+                total_notional,
+                spot_notional,
+                margin_notional,
+                total_fee,
+                total_trade_count,
+                now,
+                now,
+                user_id,
+            ),
+        )
+        return conn.execute("SELECT * FROM trading_user_volume_stats WHERE user_id=?", (user_id,)).fetchone()
 
     def _order_payload(self, row):
         item = dict(row)
@@ -1107,17 +1296,26 @@ class TradingEngineService:
     def _settings_payload(self, conn):
         rows = conn.execute("SELECT key, value, updated_at, updated_by FROM trading_settings ORDER BY key").fetchall()
         raw = {row["key"]: row["value"] for row in rows}
+        borrow_apr_btc_eth = _to_float(raw.get("trading.borrow_apr_btc_eth_percent", str(DEFAULT_BORROW_APR_BTC_ETH_PERCENT)), name="borrow_apr_btc_eth_percent", minimum=0, maximum=100000)
+        borrow_apr_usdt_points = _to_float(raw.get("trading.borrow_apr_usdt_points_percent", str(DEFAULT_BORROW_APR_USDT_POINTS_PERCENT)), name="borrow_apr_usdt_points_percent", minimum=0, maximum=100000)
+        borrow_interest_interval_hours = _to_int(raw.get("trading.borrow_interest_interval_hours", str(DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)), name="borrow_interest_interval_hours", minimum=1, maximum=168)
+        borrow_interest_minimum_hours = _to_int(raw.get("trading.borrow_interest_minimum_hours", str(DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)), name="borrow_interest_minimum_hours", minimum=1, maximum=168)
         return {
             "enabled": str(raw.get("trading.enabled", "true")).lower() in {"true", "1", "yes"},
             "futures_enabled": str(raw.get("trading.futures_enabled", "false")).lower() in {"true", "1", "yes"},
             "pvp_matching_enabled": str(raw.get("trading.pvp_matching_enabled", "false")).lower() in {"true", "1", "yes"},
             "borrowing_enabled": str(raw.get("trading.borrowing_enabled", "true")).lower() in {"true", "1", "yes"},
-            "borrow_interest_percent_daily": _to_float(raw.get("trading.borrow_interest_percent_daily", "0.1"), name="borrow_interest_percent_daily", minimum=0, maximum=100),
+            "borrow_apr_btc_eth_percent": borrow_apr_btc_eth,
+            "borrow_apr_usdt_points_percent": borrow_apr_usdt_points,
+            "borrow_interest_percent_daily": _daily_percent_from_apr(borrow_apr_usdt_points),
             "borrow_interest_pool_pressure_multiplier": _to_float(raw.get("trading.borrow_interest_pool_pressure_multiplier", str(TRADING_FUNDING_POOL_PRESSURE_MULTIPLIER)), name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100),
+            "borrow_interest_interval_hours": borrow_interest_interval_hours,
+            "borrow_interest_minimum_hours": borrow_interest_minimum_hours,
             "margin_long_financing_percent": _to_float(raw.get("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)), name="margin_long_financing_percent", minimum=0, maximum=100),
             "short_collateral_percent": _to_float(raw.get("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)), name="short_collateral_percent", minimum=0, maximum=100),
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
             "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
+            "grid_fee_discount_percent": _to_float(raw.get("trading.grid_fee_discount_percent", str(DEFAULT_GRID_FEE_DISCOUNT_PERCENT)), name="grid_fee_discount_percent", minimum=0, maximum=100),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
             "price_source": raw.get("trading.price_source", FUSED_PRICE_SOURCE),
             "price_fusion_mode": raw.get("trading.price_fusion_mode", "auto_depth") if raw.get("trading.price_fusion_mode", "auto_depth") in PRICE_FUSION_MODES else "auto_depth",
@@ -1182,13 +1380,38 @@ class TradingEngineService:
                         (storage_key, value, now, self._actor_id(actor)),
                     )
                     setting_changes[storage_key] = value
-            if "borrow_interest_percent_daily" in settings:
-                value = str(_to_float(settings.get("borrow_interest_percent_daily"), name="borrow_interest_percent_daily", minimum=0, maximum=100))
+            for input_key, storage_key, default_value in (
+                ("borrow_apr_btc_eth_percent", "trading.borrow_apr_btc_eth_percent", DEFAULT_BORROW_APR_BTC_ETH_PERCENT),
+                ("borrow_apr_usdt_points_percent", "trading.borrow_apr_usdt_points_percent", DEFAULT_BORROW_APR_USDT_POINTS_PERCENT),
+            ):
+                if input_key in settings:
+                    numeric = _to_float(settings.get(input_key), name=input_key, minimum=0, maximum=100)
+                    value = str(numeric)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                        (storage_key, value, now, self._actor_id(actor)),
+                    )
+                    setting_changes[storage_key] = value
+                    if input_key == "borrow_apr_usdt_points_percent":
+                        legacy_daily = str(_daily_percent_from_apr(numeric))
+                        conn.execute(
+                            "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                            ("trading.borrow_interest_percent_daily", legacy_daily, now, self._actor_id(actor)),
+                        )
+                        setting_changes["trading.borrow_interest_percent_daily"] = legacy_daily
+            if "borrow_interest_percent_daily" in settings and "borrow_apr_usdt_points_percent" not in settings:
+                legacy_daily = _to_float(settings.get("borrow_interest_percent_daily"), name="borrow_interest_percent_daily", minimum=0, maximum=100)
+                apr_value = str(_apr_percent_from_daily(legacy_daily))
                 conn.execute(
                     "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
-                    ("trading.borrow_interest_percent_daily", value, now, self._actor_id(actor)),
+                    ("trading.borrow_apr_usdt_points_percent", apr_value, now, self._actor_id(actor)),
                 )
-                setting_changes["trading.borrow_interest_percent_daily"] = value
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.borrow_interest_percent_daily", str(legacy_daily), now, self._actor_id(actor)),
+                )
+                setting_changes["trading.borrow_apr_usdt_points_percent"] = apr_value
+                setting_changes["trading.borrow_interest_percent_daily"] = str(legacy_daily)
             if "borrow_interest_pool_pressure_multiplier" in settings:
                 value = str(_to_float(settings.get("borrow_interest_pool_pressure_multiplier"), name="borrow_interest_pool_pressure_multiplier", minimum=0, maximum=100))
                 conn.execute(
@@ -1196,6 +1419,17 @@ class TradingEngineService:
                     ("trading.borrow_interest_pool_pressure_multiplier", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.borrow_interest_pool_pressure_multiplier"] = value
+            for input_key, storage_key in (
+                ("borrow_interest_interval_hours", "trading.borrow_interest_interval_hours"),
+                ("borrow_interest_minimum_hours", "trading.borrow_interest_minimum_hours"),
+            ):
+                if input_key in settings:
+                    value = str(_to_int(settings.get(input_key), name=input_key, minimum=1, maximum=168))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                        (storage_key, value, now, self._actor_id(actor)),
+                    )
+                    setting_changes[storage_key] = value
             for input_key, storage_key in (
                 ("margin_long_financing_percent", "trading.margin_long_financing_percent"),
                 ("short_collateral_percent", "trading.short_collateral_percent"),
@@ -1214,6 +1448,13 @@ class TradingEngineService:
                     ("trading.margin_maintenance_percent", value, now, self._actor_id(actor)),
                 )
                 setting_changes["trading.margin_maintenance_percent"] = value
+            if "grid_fee_discount_percent" in settings:
+                value = str(_to_float(settings.get("grid_fee_discount_percent"), name="grid_fee_discount_percent", minimum=0, maximum=100))
+                conn.execute(
+                    "INSERT OR REPLACE INTO trading_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                    ("trading.grid_fee_discount_percent", value, now, self._actor_id(actor)),
+                )
+                setting_changes["trading.grid_fee_discount_percent"] = value
             if "max_price_staleness_seconds" in settings:
                 value = str(_to_int(settings.get("max_price_staleness_seconds"), name="max_price_staleness_seconds", minimum=0, maximum=86400))
                 conn.execute(
@@ -1368,7 +1609,10 @@ class TradingEngineService:
 
     def _price_points_from_float(self, price, *, source):
         try:
-            price_points = int(round(float(price) * USDT_TO_POINTS_RATE))
+            price_points = _to_price_float(
+                Decimal(str(price)) * Decimal(str(USDT_TO_POINTS_RATE)),
+                name=f"{source} price_points",
+            )
         except Exception as exc:
             raise ValueError(f"{source} price format is invalid") from exc
         if price_points <= 0:
@@ -1621,7 +1865,7 @@ class TradingEngineService:
                     "providers_used": [{
                         "source": fallback_source,
                         "label": PRICE_PROVIDER_LABELS.get(fallback_source, fallback_source),
-                        "price_points": int(fallback_price),
+                        "price_points": float(_to_decimal(fallback_price, name="fallback_price", minimum=0.00000001)),
                         "depth_score": 0.0,
                         "weight": 1.0,
                         "normalized_weight": 1.0,
@@ -1670,7 +1914,7 @@ class TradingEngineService:
         total_weight = sum(weight for _, weight in weighted_rows)
         if total_weight <= 0:
             raise ValueError("weighted fused price has no positive provider weight")
-        weighted_price = sum(int(snap["price_points"]) * float(weight) for snap, weight in weighted_rows) / total_weight
+        weighted_price = sum(float(_to_decimal(snap["price_points"], name="price_points", minimum=0.00000001)) * float(weight) for snap, weight in weighted_rows) / total_weight
         used_sources = {snap["source"] for snap, _weight in weighted_rows}
         excluded_providers = []
         for source, _fetcher in fetchers:
@@ -1693,7 +1937,7 @@ class TradingEngineService:
                     "error": "",
                     "manual_weight": round(float(weight_map.get(source, 0.0)), 8),
                 })
-        return int(Decimal(str(weighted_price)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)), {
+        return float(Decimal(str(weighted_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)), {
             "requested_mode": mode,
             "mode": resolved_mode,
             "warning_code": warning_code,
@@ -1705,7 +1949,7 @@ class TradingEngineService:
                 {
                     "source": snap["source"],
                     "label": PRICE_PROVIDER_LABELS.get(snap["source"], snap["source"]),
-                    "price_points": int(snap["price_points"]),
+                    "price_points": float(_to_decimal(snap["price_points"], name="price_points", minimum=0.00000001)),
                     "depth_score": round(float(snap.get("depth_score") or 0.0), 8),
                     "weight": round(float(weight), 8),
                     "normalized_weight": round(float(weight) / total_weight, 8),
@@ -1793,7 +2037,7 @@ class TradingEngineService:
             "excluded_providers": list((details or {}).get("excluded_providers") or []),
             "resolved_mode": str((details or {}).get("mode") or requested_mode),
             "resolved_source": str((details or {}).get("resolved_source") or FUSED_PRICE_SOURCE),
-            "price_points": int(price_points),
+            "price_points": float(_to_decimal(price_points, name="price_points", minimum=0.00000001)),
             "warning_code": str((details or {}).get("warning_code") or ""),
             "provider_errors": list((details or {}).get("provider_errors") or []),
         })
@@ -1871,6 +2115,8 @@ class TradingEngineService:
         if self.historical_candles_provider:
             candles = self.historical_candles_provider(str(market_symbol or "").strip().upper(), interval, limit)
             return candles if isinstance(candles, list) else []
+        if self.live_price_provider:
+            return []
         query = urlencode({"symbol": symbol, "interval": interval, "limit": max(2, min(int(limit or 240), 1000))})
         req = Request(
             f"https://api.binance.com/api/v3/klines?{query}",
@@ -1882,6 +2128,7 @@ class TradingEngineService:
         for item in payload if isinstance(payload, list) else []:
             try:
                 candles.append({
+                    "time_ms": int(item[0]),
                     "open_points": float(item[1]) * USDT_TO_POINTS_RATE,
                     "high_points": float(item[2]) * USDT_TO_POINTS_RATE,
                     "low_points": float(item[3]) * USDT_TO_POINTS_RATE,
@@ -1891,20 +2138,104 @@ class TradingEngineService:
                 continue
         return candles
 
-    def _workflow_live_context(self, conn, *, market, user_id, observed_price):
+    def _parse_candle_time_ms(self, candle, *, interval_seconds=60):
+        if not isinstance(candle, dict):
+            return None
+        raw = candle.get("time_ms")
+        if raw not in (None, ""):
+            try:
+                return int(raw)
+            except Exception:
+                return None
+        raw = candle.get("time_iso")
+        if raw:
+            try:
+                return int(datetime.fromisoformat(str(raw)).timestamp() * 1000)
+            except Exception:
+                return None
+        raw = candle.get("time")
+        if raw in (None, ""):
+            return None
+        try:
+            value = float(raw)
+        except Exception:
+            return None
+        if value > 10**12:
+            return int(value)
+        if value > 10**9:
+            return int(value * 1000)
+        if value > 10**6:
+            return int(value)
+        return int(value * 1000)
+
+    def _recent_price_window(self, market_symbol, *, lookback_seconds=60, since_time_text=None, interval="1m"):
+        lookback = max(60, int(lookback_seconds or 60))
+        interval_seconds = 60 if interval == "1m" else 900
+        limit = max(2, min(int(math.ceil(lookback / interval_seconds)) + 2, 240))
+        candles = self._fetch_indicator_candles(market_symbol, limit=limit, interval=interval)
+        if not candles:
+            return None
+        since_ms = None
+        if since_time_text:
+            try:
+                since_ms = int(datetime.fromisoformat(str(since_time_text)).timestamp() * 1000)
+            except Exception:
+                since_ms = None
+        lows = []
+        highs = []
+        included = 0
+        for candle in candles:
+            if not isinstance(candle, dict):
+                continue
+            start_ms = self._parse_candle_time_ms(candle, interval_seconds=interval_seconds)
+            if since_ms is not None and start_ms is not None and (start_ms + interval_seconds * 1000) <= since_ms:
+                continue
+            try:
+                low_value = _to_decimal(candle.get("low_points") or candle.get("low_usdt") or 0, name="low_points", minimum=0)
+                high_value = _to_decimal(candle.get("high_points") or candle.get("high_usdt") or 0, name="high_points", minimum=0)
+            except Exception:
+                continue
+            if low_value <= 0 or high_value <= 0:
+                continue
+            lows.append(low_value)
+            highs.append(high_value)
+            included += 1
+        if not lows or not highs:
+            return None
+        return {
+            "interval": interval,
+            "lookback_seconds": lookback,
+            "candle_count": included,
+            "low_points": float(min(lows)),
+            "high_points": float(max(highs)),
+        }
+
+    def _workflow_live_context(self, conn, *, market, user_id, observed_price, observed_low=None, observed_high=None):
         position = self._position(conn, int(user_id), market["symbol"])
         qty = int(position["quantity_units"] or 0)
         locked = int(position["locked_quantity_units"] or 0)
-        avg_cost = int(position["avg_cost_points"] or 0)
+        avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
         has_pos = qty > locked
+        low_price = float(observed_low or observed_price or 0)
+        high_price = float(observed_high or observed_price or 0)
         pnl_percent = None
+        pnl_low_percent = None
+        pnl_high_percent = None
         if has_pos and avg_cost > 0 and observed_price and observed_price > 0:
             pnl_percent = round((observed_price - avg_cost) * 100.0 / avg_cost, 4)
+            if low_price > 0:
+                pnl_low_percent = round((low_price - avg_cost) * 100.0 / avg_cost, 4)
+            if high_price > 0:
+                pnl_high_percent = round((high_price - avg_cost) * 100.0 / avg_cost, 4)
         context = {
             "price": observed_price,
+            "window_low_price": low_price or observed_price,
+            "window_high_price": high_price or observed_price,
             "has_position": has_pos,
             "avg_cost": avg_cost,
             "pnl_percent": pnl_percent,
+            "pnl_low_percent": pnl_low_percent,
+            "pnl_high_percent": pnl_high_percent,
         }
         try:
             candles = self._fetch_indicator_candles(market["symbol"])
@@ -1914,7 +2245,12 @@ class TradingEngineService:
                 candles = [*candles[:-1], latest]
                 context.update(self._workflow_indicator_context(candles, len(candles) - 1))
                 context["price"] = observed_price
+                context["window_low_price"] = low_price or observed_price
+                context["window_high_price"] = high_price or observed_price
                 context["has_position"] = int(position["quantity_units"] or 0) > int(position["locked_quantity_units"] or 0)
+                context["pnl_percent"] = pnl_percent
+                context["pnl_low_percent"] = pnl_low_percent
+                context["pnl_high_percent"] = pnl_high_percent
         except Exception as exc:
             self._audit_event(
                 conn,
@@ -1941,7 +2277,7 @@ class TradingEngineService:
             source = str(market["price_source"] or "manual_root")
             return (price, source, price_meta) if with_meta else (price, source)
         old_price_decimal = Decimal(str(market["manual_price_points"] or "0"))
-        old_price = int(old_price_decimal) if old_price_decimal == old_price_decimal.to_integral_value() else float(old_price_decimal)
+        old_price = float(old_price_decimal)
         old_source = str(market["price_source"] or "")
         fusion_details = None
         try:
@@ -2511,8 +2847,8 @@ class TradingEngineService:
     def _position_payload_with_metrics(self, row, *, market=None, realized_points=0, total_fees=0):
         item = self._position_payload(row)
         quantity_units = int(item["quantity_units"] or 0) + int(item["locked_quantity_units"] or 0)
-        avg_cost = int(item["avg_cost_points"] or 0)
-        current_price = int((market or {}).get("manual_price_points") or 0)
+        avg_cost = float(_to_decimal(item["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
+        current_price = float(_to_decimal((market or {}).get("manual_price_points") or 0, name="manual_price_points", minimum=0))
         fee_rate_percent = float((market or {}).get("fee_rate_percent") or 0)
         gross_cost = notional_points(quantity_units, avg_cost) if quantity_units and avg_cost else 0
         current_value = notional_points(quantity_units, current_price) if quantity_units and current_price else 0
@@ -2547,12 +2883,16 @@ class TradingEngineService:
         item = dict(row)
         item["quantity"] = units_to_quantity(item["quantity_units"])
         item["position_label"] = "融資做多" if item["position_type"] == "margin_long" else "借券放空"
-        item["exit_price_points"] = int(item.get("exit_price_points") or 0) if item.get("exit_price_points") is not None else None
+        item["exit_price_points"] = float(_to_decimal(item.get("exit_price_points") or 0, name="exit_price_points", minimum=0)) if item.get("exit_price_points") is not None else None
         item["realized_pnl_points"] = int(item.get("realized_pnl_points") or 0)
+        item["borrowed_asset_symbol"] = str(item.get("borrowed_asset_symbol") or ("POINTS" if item.get("position_type") == "margin_long" else "")).upper()
+        item["interest_interval_hours"] = int(item.get("interest_interval_hours") or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)
+        item["interest_minimum_hours"] = int(item.get("interest_minimum_hours") or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)
         item["interest_capitalized_points"] = int(item.get("interest_points") or 0)
         item["interest_paid_points"] = int(item.get("interest_paid_points") or 0)
         item["interest_accrued_hours"] = int(item.get("interest_accrued_hours") or 0)
         item["interest_carry_micropoints"] = int(item.get("interest_carry_micropoints") or 0)
+        item["interest_apr_percent"] = round(_apr_percent_from_daily(item.get("interest_percent_daily") or 0), 6)
         item["interest_exact_points"] = round(
             item["interest_capitalized_points"] + (item["interest_carry_micropoints"] / POINT_MICRO_SCALE),
             6,
@@ -2564,8 +2904,14 @@ class TradingEngineService:
             elapsed_sec = max(0.0, (now_dt - opened_at_dt).total_seconds())
             # Display: floor (actual full hours elapsed)
             item["total_elapsed_hours"] = int(elapsed_sec / 3600)
-            # Next interest tick: ceiling (next hourly billing point)
-            next_billing_hours = max(1, int(math.ceil(elapsed_sec / 3600.0))) if elapsed_sec > 0 else 0
+            # Next interest tick respects the stored interval/minimum rules for this position.
+            next_billing_hours = _billable_interest_hours_from_elapsed_seconds(
+                elapsed_sec,
+                interval_hours=item["interest_interval_hours"],
+                minimum_hours=item["interest_minimum_hours"],
+            )
+            if next_billing_hours and next_billing_hours <= item["interest_accrued_hours"]:
+                next_billing_hours = item["interest_accrued_hours"] + item["interest_interval_hours"]
             item["next_interest_at"] = (opened_at_dt + timedelta(seconds=next_billing_hours * 3600)).isoformat() if next_billing_hours > 0 else None
         except Exception:
             item["total_elapsed_hours"] = 0
@@ -2581,7 +2927,8 @@ class TradingEngineService:
         for row in rows:
             payload = self._margin_position_payload(row)
             label = payload["position_label"]
-            notional = notional_points(int(row["quantity_units"] or 0), int(row["entry_price_points"] or 0))
+            entry_price = float(_to_decimal(row["entry_price_points"] or 0, name="entry_price_points", minimum=0))
+            notional = notional_points(int(row["quantity_units"] or 0), entry_price)
             records.append({
                 "record_type": "margin_open",
                 "fill_uuid": f"margin-open:{row['position_uuid']}",
@@ -2589,7 +2936,7 @@ class TradingEngineService:
                 "side": f"{label}開倉",
                 "market_symbol": row["market_symbol"],
                 "quantity": payload["quantity"],
-                "price_points": int(row["entry_price_points"] or 0),
+                "price_points": entry_price,
                 "notional_points": notional,
                 "fee_points": int(row["open_fee_points"] or 0),
                 "interest_points": 0,
@@ -2606,8 +2953,11 @@ class TradingEngineService:
                     "side": f"{label}{'強平' if row['status'] == 'liquidated' else '平倉'}",
                     "market_symbol": row["market_symbol"],
                     "quantity": payload["quantity"],
-                    "price_points": int(row["exit_price_points"] or 0),
-                    "notional_points": notional_points(int(row["quantity_units"] or 0), int(row["exit_price_points"] or 0)) if row["exit_price_points"] else 0,
+                    "price_points": float(_to_decimal(row["exit_price_points"] or 0, name="exit_price_points", minimum=0)),
+                    "notional_points": notional_points(
+                        int(row["quantity_units"] or 0),
+                        float(_to_decimal(row["exit_price_points"] or 0, name="exit_price_points", minimum=0)),
+                    ) if row["exit_price_points"] else 0,
                     "fee_points": int(row["close_fee_points"] or 0),
                     "interest_points": int(row["interest_points"] or 0),
                     "realized_pnl_points": int(row["realized_pnl_points"] or 0),
@@ -2620,8 +2970,12 @@ class TradingEngineService:
         settings = self._settings_payload(conn)
         return {
             "enabled": bool(settings.get("borrowing_enabled")),
+            "borrow_apr_btc_eth_percent": float(settings.get("borrow_apr_btc_eth_percent") or 0),
+            "borrow_apr_usdt_points_percent": float(settings.get("borrow_apr_usdt_points_percent") or 0),
             "interest_percent_daily": float(settings.get("borrow_interest_percent_daily") or 0),
             "pool_pressure_multiplier": float(settings.get("borrow_interest_pool_pressure_multiplier") or 0),
+            "interest_interval_hours": int(settings.get("borrow_interest_interval_hours") or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS),
+            "interest_minimum_hours": int(settings.get("borrow_interest_minimum_hours") or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS),
         }
 
     def _assert_borrowing_enabled(self, conn):
@@ -2655,7 +3009,11 @@ class TradingEngineService:
         except Exception:
             return 0
         seconds = max(0, (closed_at - opened_at).total_seconds())
-        hours = max(1, int(math.ceil(seconds / 3600.0))) if seconds > 0 else 0
+        hours = _billable_interest_hours_from_elapsed_seconds(
+            seconds,
+            interval_hours=int(row["interest_interval_hours"] or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS) if "interest_interval_hours" in row.keys() else DEFAULT_BORROW_INTEREST_INTERVAL_HOURS,
+            minimum_hours=int(row["interest_minimum_hours"] or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS) if "interest_minimum_hours" in row.keys() else DEFAULT_BORROW_INTEREST_MINIMUM_HOURS,
+        )
         return max(0, hours)
 
     def _margin_interest_due_points(self, row, *, hours):
@@ -2790,16 +3148,20 @@ class TradingEngineService:
         )
         return conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (position["id"],)).fetchone()
 
-    def _margin_risk_payload(self, conn, position, market=None, *, now_text=None):
+    def _margin_risk_payload(self, conn, position, market=None, *, now_text=None, price_override_points=None, price_source_override=None):
         market = market or self._market(conn, position["market_symbol"])
-        price, price_source = self._current_market_price_points(conn, market)
+        if price_override_points is None:
+            price, price_source = self._current_market_price_points(conn, market)
+        else:
+            price = float(_to_decimal(price_override_points, name="price_override_points", minimum=0.00000001))
+            price_source = str(price_source_override or "scan_window_replay")
         quantity_units = int(position["quantity_units"])
         exit_notional = notional_points(quantity_units, price)
         close_fee = fee_points(exit_notional, float(market["fee_rate_percent"] or 0))
         interest = self._margin_interest_points(position, now_text=now_text)
         collateral = int(position["collateral_points"] or 0)
         principal = int(position["principal_points"] or 0)
-        entry_price = int(position["entry_price_points"] or price)
+        entry_price = float(_to_decimal(position["entry_price_points"] or price, name="entry_price_points", minimum=0.00000001))
         entry_notional = notional_points(quantity_units, entry_price)
         initial_margin_percent = round((collateral * 100.0) / entry_notional, 4) if entry_notional > 0 else 0.0
         if position["position_type"] == "margin_long":
@@ -2825,7 +3187,11 @@ class TradingEngineService:
                 liquidation_notional = int(math.ceil(liquidation_base * 100.0 / denominator_percent))
         liquidation_price_points = None
         if liquidation_notional is not None and quantity_units > 0:
-            liquidation_price_points = int(math.ceil((liquidation_notional * ASSET_SCALE) / quantity_units))
+            liquidation_price_points = float(
+                (
+                    Decimal(liquidation_notional) * Decimal(ASSET_SCALE) / Decimal(quantity_units)
+                ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+            )
         maintenance_ratio_percent = round((equity_after * 100.0) / maintenance_points, 2) if maintenance_points > 0 else 0.0
         if equity_after <= maintenance_points:
             risk_status = "liquidation"
@@ -2866,10 +3232,10 @@ class TradingEngineService:
             "liquidation_required": equity_after <= maintenance_points,
         }
 
-    def _margin_position_payload_with_risk(self, conn, row, *, market=None):
+    def _margin_position_payload_with_risk(self, conn, row, *, market=None, risk_overrides=None):
         item = self._margin_position_payload(row)
         try:
-            risk = self._margin_risk_payload(conn, row, market=market)
+            risk = self._margin_risk_payload(conn, row, market=market, **(risk_overrides or {}))
         except Exception as exc:
             risk = {
                 "risk_status": "unavailable",
@@ -3089,7 +3455,7 @@ class TradingEngineService:
                 title="交易已成交",
                 body=(
                     f"{fill['market_symbol']} {side_label} {quantity} 已成交，"
-                    f"成交價 {int(fill['price_points'])}，成交額 {int(fill['notional_points'])}，"
+                    f"成交價 {_decimal_text(fill['price_points'])}，成交額 {int(fill['notional_points'])}，"
                     f"手續費 {int(fill['fee_points'] or 0)}。"
                 ),
                 link="/trading",
@@ -3130,7 +3496,7 @@ class TradingEngineService:
                 title="進階交易倉位已被強制平倉",
                 body=(
                     f"{position['market_symbol']} {position['position_type']} 已低於維持保證金並自動清算；"
-                    f"結算價 {int(risk.get('price_points') or 0)}，"
+                    f"結算價 {_decimal_text(risk.get('price_points') or 0)}，"
                     f"損益 {int(risk.get('delta_points') or 0)} 點。"
                 ),
                 link="/trading",
@@ -3158,8 +3524,8 @@ class TradingEngineService:
             position_uuid = str(position["position_uuid"])
             market_symbol = str(position["market_symbol"])
             position_label = "融資做多" if position["position_type"] == "margin_long" else "借券放空"
-            price = int(risk.get("price_points") or 0)
-            entry_price = int(position["entry_price_points"] or 0)
+            price = float(_to_decimal(risk.get("price_points") or 0, name="price_points", minimum=0))
+            entry_price = float(_to_decimal(position["entry_price_points"] or 0, name="entry_price_points", minimum=0))
             ratio = risk.get("maintenance_ratio_percent")
             liquidation_price = risk.get("liquidation_price_points")
             if not risk.get("liquidation_required") and ratio is not None and float(ratio) <= 150.0:
@@ -3308,7 +3674,10 @@ class TradingEngineService:
                 key=lambda item: str(item.get("created_at") or ""),
                 reverse=True,
             )[:50]
-            _market_prices = {m["symbol"]: int(m.get("manual_price_points") or 0) for m in markets}
+            _market_prices = {
+                m["symbol"]: float(_to_decimal(m.get("manual_price_points") or 0, name="manual_price_points", minimum=0))
+                for m in markets
+            }
             bots = []
             for _row in conn.execute("SELECT * FROM trading_bots WHERE user_id=? ORDER BY id DESC LIMIT 50", (int(user_id),)).fetchall():
                 _bot = self._bot_payload(_row)
@@ -3327,6 +3696,7 @@ class TradingEngineService:
                 "settings": self._settings_payload(conn),
                 "funding_pool": self._funding_pool_payload(conn),
                 "funding": self._funding_payload(conn, user_id),
+                "volume_stats": dict(self._user_volume_stats(conn, user_id)),
                 "markets": markets,
                 "positions": positions,
                 "spot_summary": self._spot_summary_payload(positions),
@@ -3344,10 +3714,10 @@ class TradingEngineService:
             conn.close()
 
     def _is_executable(self, market, *, side, order_type, limit_price, current_price):
-        current_price = int(current_price)
+        current_price = float(_to_decimal(current_price, name="current_price", minimum=0))
         if order_type == "market":
             return True, current_price
-        limit_price = int(limit_price or 0)
+        limit_price = float(_to_decimal(limit_price or 0, name="limit_price_points", minimum=0))
         if side == "buy" and limit_price >= current_price:
             return True, current_price
         if side == "sell" and limit_price <= current_price:
@@ -3611,10 +3981,10 @@ class TradingEngineService:
             quantity_to_units(quantity_text)
         limit_price = None
         if order_type == "limit":
-            limit_price = _to_int(payload.get("limit_price_points"), name="limit_price_points", minimum=1, maximum=10**12)
+            limit_price = _to_price_float(payload.get("limit_price_points"), name="limit_price_points", minimum=0.00000001, maximum=10**12)
         trigger_price = None
         if trigger_type != "always":
-            trigger_price = _to_int(payload.get("trigger_price_points"), name="trigger_price_points", minimum=1, maximum=10**12)
+            trigger_price = _to_price_float(payload.get("trigger_price_points"), name="trigger_price_points", minimum=0.00000001, maximum=10**12)
         max_runs = _bot_max_runs_to_storage(
             payload.get("max_runs", 1),
             allow_unlimited=(bot_type == "dca"),
@@ -3665,7 +4035,7 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             market_prices = {
-                row["symbol"]: int(row["manual_price_points"] or 0)
+                row["symbol"]: float(_to_decimal(row["manual_price_points"] or 0, name="manual_price_points", minimum=0))
                 for row in conn.execute("SELECT symbol, manual_price_points FROM trading_markets").fetchall()
             }
             bots = []
@@ -3832,21 +4202,240 @@ class TradingEngineService:
 
     def _grid_levels(self, lower, upper, count, spacing_mode="arithmetic"):
         count = max(2, int(count))
-        lower, upper = int(lower), int(upper)
+        lower = _to_decimal(lower, name="lower_price_points", minimum=0.00000001)
+        upper = _to_decimal(upper, name="upper_price_points", minimum=0.00000002)
         if count == 2:
-            return [lower, upper]
+            return [float(lower), float(upper)]
         if spacing_mode == "geometric":
-            ratio = (upper / lower) ** (1 / (count - 1))
-            return [int(round(lower * (ratio ** i))) for i in range(count)]
-        step = (upper - lower) / (count - 1)
-        return [int(round(lower + step * i)) for i in range(count)]
+            ratio = (float(upper) / float(lower)) ** (1 / (count - 1))
+            return [
+                float(
+                    Decimal(str(float(lower) * (ratio ** i))).quantize(
+                        Decimal("0.00000001"),
+                        rounding=ROUND_HALF_UP,
+                    )
+                )
+                for i in range(count)
+            ]
+        step = (upper - lower) / Decimal(count - 1)
+        return [
+            float((lower + (step * Decimal(i))).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
+            for i in range(count)
+        ]
 
     def _grid_quantity_units(self, amount_points, price_points):
         amount = int(amount_points or 0)
-        price = int(price_points or 0)
+        price = _to_decimal(price_points, name="price_points", minimum=0)
         if amount <= 0 or price <= 0:
             return 0
-        return int((amount * ASSET_SCALE) // price)
+        units = (Decimal(amount) * Decimal(ASSET_SCALE) / price).quantize(Decimal("1"), rounding=ROUND_DOWN)
+        return int(units)
+
+    def _grid_preview_fee_rates(self, market, settings, *, order_mode="maker"):
+        mode = str(order_mode or "maker").strip().lower()
+        if mode not in {"maker", "taker"}:
+            raise ValueError("order_mode must be maker or taker")
+        spot_fee_percent = Decimal(str(market["fee_rate_percent"] or 0))
+        discount_percent = Decimal(str(settings.get("grid_fee_discount_percent") or DEFAULT_GRID_FEE_DISCOUNT_PERCENT))
+        discount_percent = max(Decimal("0"), min(discount_percent, Decimal("100")))
+        grid_fee_percent = (spot_fee_percent * (Decimal("100") - discount_percent) / Decimal("100"))
+        return {
+            "order_mode": mode,
+            "spot_fee_percent": spot_fee_percent,
+            "grid_discount_percent": discount_percent,
+            "maker_fee_percent": spot_fee_percent,
+            "taker_fee_percent": spot_fee_percent,
+            "buy_fee_percent": grid_fee_percent,
+            "sell_fee_percent": grid_fee_percent,
+            "round_trip_fee_percent": grid_fee_percent * Decimal("2"),
+        }
+
+    def _grid_preview_risk(self, *, min_net_spread_percent, break_even_spread_percent, spacing_percent):
+        net_spread = Decimal(str(min_net_spread_percent or 0))
+        break_even = Decimal(str(break_even_spread_percent or 0))
+        spacing = Decimal(str(spacing_percent or 0))
+        if net_spread <= 0:
+            return {
+                "status": "red",
+                "message": f"扣除手續費後預期虧損：每格間距 {_decimal_text(spacing, places='0.0001')}%，但損益兩平至少需要 {_decimal_text(break_even, places='0.0001')}%",
+                "blocked": True,
+                "requires_confirmation": False,
+            }
+        if net_spread < GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT:
+            return {
+                "status": "yellow",
+                "message": f"利潤過薄：每格扣費後僅剩 {_decimal_text(net_spread, places='0.0001')}%，可能被滑價吃掉",
+                "blocked": False,
+                "requires_confirmation": True,
+            }
+        return {
+            "status": "green",
+            "message": f"手續費後仍有利潤：每格預估淨利 {_decimal_text(net_spread, places='0.0001')}%",
+            "blocked": False,
+            "requires_confirmation": False,
+        }
+
+    def _grid_preview_summary(self, *, lower_price_points, upper_price_points, grid_count, order_amount_points, spacing_mode, fee_rates):
+        grid_levels = self._grid_levels(lower_price_points, upper_price_points, grid_count, spacing_mode)
+        if len(grid_levels) < 2:
+            raise ValueError("grid_count must be at least 2")
+        buy_fee_rate = Decimal(str(fee_rates["buy_fee_percent"])) / Decimal("100")
+        sell_fee_rate = Decimal(str(fee_rates["sell_fee_percent"])) / Decimal("100")
+        if sell_fee_rate >= Decimal("1"):
+            raise ValueError("sell_fee_percent out of range")
+
+        pair_summaries = []
+        total_gross = Decimal("0")
+        total_fee = Decimal("0")
+        total_net = Decimal("0")
+        break_even_spread_percent = ((Decimal("1") + buy_fee_rate) / (Decimal("1") - sell_fee_rate) - Decimal("1")) * Decimal("100")
+        blocked_reason = ""
+
+        for level_index in range(len(grid_levels) - 1):
+            buy_price = Decimal(str(grid_levels[level_index]))
+            sell_price = Decimal(str(grid_levels[level_index + 1]))
+            quantity_units = self._grid_quantity_units(order_amount_points, buy_price)
+            if quantity_units <= 0:
+                blocked_reason = "每格金額不足以買入最小單位，請提高每格金額或降低價格區間"
+                break
+            quantity = Decimal(quantity_units) / Decimal(ASSET_SCALE)
+            gross_profit = (sell_price - buy_price) * quantity
+            buy_notional = buy_price * quantity
+            sell_notional = sell_price * quantity
+            buy_fee = buy_notional * buy_fee_rate
+            sell_fee = sell_notional * sell_fee_rate
+            fees = buy_fee + sell_fee
+            net_profit = gross_profit - fees
+            spacing_percent = ((sell_price - buy_price) / buy_price) * Decimal("100")
+            net_spread_percent = (net_profit / buy_notional) * Decimal("100") if buy_notional > 0 else Decimal("0")
+            pair_summary = {
+                "level_index": level_index,
+                "buy_price_points": float(buy_price),
+                "sell_price_points": float(sell_price),
+                "quantity_units": quantity_units,
+                "quantity": quantity,
+                "grid_spacing_points": sell_price - buy_price,
+                "grid_spacing_percent": spacing_percent,
+                "gross_profit_points": gross_profit,
+                "buy_fee_points": buy_fee,
+                "sell_fee_points": sell_fee,
+                "fee_points": fees,
+                "net_profit_points": net_profit,
+                "net_spread_percent": net_spread_percent,
+            }
+            pair_summaries.append(pair_summary)
+            total_gross += gross_profit
+            total_fee += fees
+            total_net += net_profit
+
+        if blocked_reason:
+            risk = {
+                "status": "red",
+                "message": blocked_reason,
+                "blocked": True,
+                "requires_confirmation": False,
+            }
+            return {
+                "grid_levels": grid_levels,
+                "pair_summaries": [],
+                "break_even_spread_percent": break_even_spread_percent,
+                "risk": risk,
+                "pair_count": len(grid_levels) - 1,
+                "estimated_total_gross_profit_points": Decimal("0"),
+                "estimated_total_fee_points": Decimal("0"),
+                "estimated_total_net_profit_points": Decimal("0"),
+                "worst_pair": None,
+            }
+
+        worst_pair = min(pair_summaries, key=lambda item: (item["net_spread_percent"], item["grid_spacing_percent"], item["level_index"]))
+        risk = self._grid_preview_risk(
+            min_net_spread_percent=worst_pair["net_spread_percent"],
+            break_even_spread_percent=break_even_spread_percent,
+            spacing_percent=worst_pair["grid_spacing_percent"],
+        )
+        return {
+            "grid_levels": grid_levels,
+            "pair_summaries": pair_summaries,
+            "break_even_spread_percent": break_even_spread_percent,
+            "risk": risk,
+            "pair_count": len(pair_summaries),
+            "estimated_total_gross_profit_points": total_gross,
+            "estimated_total_fee_points": total_fee,
+            "estimated_total_net_profit_points": total_net,
+            "worst_pair": worst_pair,
+        }
+
+    def preview_grid_bot(self, *, actor, payload):
+        user_id = self._actor_id(actor)
+        if not user_id:
+            raise ValueError("login required")
+        source = payload or {}
+        market_symbol = str(source.get("market_symbol") or "").strip().upper()
+        upper_price = _to_price_float(source.get("upper_price_points", source.get("upper_price")), name="upper_price_points", minimum=0.00000001)
+        lower_price = _to_price_float(source.get("lower_price_points", source.get("lower_price")), name="lower_price_points", minimum=0.00000001)
+        if upper_price <= lower_price:
+            raise ValueError("upper_price_points must be greater than lower_price_points")
+        grid_count = _to_int(source.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
+        order_amount_decimal = _to_decimal(source.get("order_amount_points", source.get("investment_amount")), name="order_amount_points", minimum=1, maximum=10**12)
+        if order_amount_decimal != order_amount_decimal.to_integral_value():
+            raise ValueError("order_amount_points must be an integer")
+        order_amount_points = int(order_amount_decimal)
+        spacing_mode = str(source.get("spacing_mode") or "arithmetic").strip().lower()
+        if spacing_mode not in ("arithmetic", "geometric"):
+            spacing_mode = "arithmetic"
+        order_mode = str(source.get("order_mode") or "maker").strip().lower()
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = self._market(conn, market_symbol)
+            settings = self._settings_payload(conn)
+        finally:
+            conn.close()
+        fee_rates = self._grid_preview_fee_rates(market, settings, order_mode=order_mode)
+        summary = self._grid_preview_summary(
+            lower_price_points=lower_price,
+            upper_price_points=upper_price,
+            grid_count=grid_count,
+            order_amount_points=order_amount_points,
+            spacing_mode=spacing_mode,
+            fee_rates=fee_rates,
+        )
+        worst_pair = summary["worst_pair"] or {}
+        return {
+            "ok": True,
+            "market_symbol": market_symbol,
+            "spacing_mode": spacing_mode,
+            "order_mode": order_mode,
+            "levels": summary["grid_levels"],
+            "pair_count": summary["pair_count"],
+            "fee_model": {
+                "spot_fee_percent": _decimal_text(fee_rates["spot_fee_percent"], places="0.0001"),
+                "grid_discount_percent": _decimal_text(fee_rates["grid_discount_percent"], places="0.0001"),
+                "maker_fee_percent": _decimal_text(fee_rates["maker_fee_percent"], places="0.0001"),
+                "taker_fee_percent": _decimal_text(fee_rates["taker_fee_percent"], places="0.0001"),
+                "buy_fee_percent": _decimal_text(fee_rates["buy_fee_percent"], places="0.0001"),
+                "sell_fee_percent": _decimal_text(fee_rates["sell_fee_percent"], places="0.0001"),
+                "round_trip_fee_percent": _decimal_text(fee_rates["round_trip_fee_percent"], places="0.0001"),
+            },
+            "break_even": {
+                "min_spread_percent": _decimal_text(summary["break_even_spread_percent"], places="0.0001"),
+            },
+            "grid_profit": {
+                "grid_spacing_percent": _decimal_text(worst_pair.get("grid_spacing_percent", 0), places="0.0001"),
+                "grid_spacing_points": _decimal_text(worst_pair.get("grid_spacing_points", 0), places="0.0001"),
+                "estimated_net_spread_percent": _decimal_text(worst_pair.get("net_spread_percent", 0), places="0.0001"),
+                "estimated_gross_profit_per_grid": _decimal_text(worst_pair.get("gross_profit_points", 0)),
+                "estimated_fee_per_grid": _decimal_text(worst_pair.get("fee_points", 0)),
+                "estimated_net_profit_per_grid": _decimal_text(worst_pair.get("net_profit_points", 0)),
+                "estimated_total_gross_profit": _decimal_text(summary["estimated_total_gross_profit_points"]),
+                "estimated_total_fee": _decimal_text(summary["estimated_total_fee_points"]),
+                "estimated_total_net_profit": _decimal_text(summary["estimated_total_net_profit_points"]),
+                "reference_buy_price_points": _decimal_text(worst_pair.get("buy_price_points", 0), places="0.0001"),
+                "reference_sell_price_points": _decimal_text(worst_pair.get("sell_price_points", 0), places="0.0001"),
+                "reference_quantity": _decimal_text(worst_pair.get("quantity", 0)),
+            },
+            "risk": summary["risk"],
+        }
 
     def _grid_bot_payload(self, row, orders=None):
         item = dict(row)
@@ -3866,8 +4455,8 @@ class TradingEngineService:
         if len(name) > 80:
             raise ValueError("grid bot name too long")
         market_symbol = str(payload.get("market_symbol") or "").strip().upper()
-        upper_price = _to_int(payload.get("upper_price_points"), name="upper_price_points", minimum=1)
-        lower_price = _to_int(payload.get("lower_price_points"), name="lower_price_points", minimum=1)
+        upper_price = _to_price_float(payload.get("upper_price_points"), name="upper_price_points", minimum=0.00000001)
+        lower_price = _to_price_float(payload.get("lower_price_points"), name="lower_price_points", minimum=0.00000001)
         if upper_price <= lower_price:
             raise ValueError("upper_price_points must be greater than lower_price_points")
         grid_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=200)
@@ -3875,6 +4464,23 @@ class TradingEngineService:
         spacing_mode = str(payload.get("spacing_mode") or "arithmetic").strip()
         if spacing_mode not in ("arithmetic", "geometric"):
             spacing_mode = "arithmetic"
+        preview = self.preview_grid_bot(
+            actor=actor,
+            payload={
+                "market_symbol": market_symbol,
+                "upper_price_points": upper_price,
+                "lower_price_points": lower_price,
+                "grid_count": grid_count,
+                "order_amount_points": order_amount,
+                "spacing_mode": spacing_mode,
+                "order_mode": "maker",
+            },
+        )
+        risk = preview.get("risk") or {}
+        if risk.get("blocked"):
+            raise ValueError(risk.get("message") or "grid preview blocked")
+        if risk.get("requires_confirmation") and not bool(payload.get("confirm_thin_profit")):
+            raise ValueError(risk.get("message") or "grid profit is too thin; confirmation required")
 
         # Phase 1: validate market and get current price (read-only)
         conn = self.get_db()
@@ -4114,6 +4720,13 @@ class TradingEngineService:
             self.ensure_schema(conn)
             market = self._market(conn, bot["market_symbol"])
             current_price, _ = self._current_market_price_points(conn, market)
+            price_window = self._recent_price_window(
+                market["symbol"],
+                lookback_seconds=65,
+                since_time_text=bot["last_scan_at"] if "last_scan_at" in bot.keys() else None,
+            )
+            window_low = float((price_window or {}).get("low_points") or current_price)
+            window_high = float((price_window or {}).get("high_points") or current_price)
             grid_levels = _json_loads(bot["grid_levels_json"], [])
             if not grid_levels:
                 grid_levels = self._grid_levels(bot["lower_price_points"], bot["upper_price_points"], bot["grid_count"])
@@ -4144,9 +4757,15 @@ class TradingEngineService:
                         limit_price=t_order["limit_price_points"],
                         current_price=current_price,
                     )
+                    if not executable and t_order["order_type"] == "limit":
+                        limit_price = float(_to_decimal(t_order["limit_price_points"] or 0, name="limit_price_points", minimum=0))
+                        if t_order["side"] == "buy" and limit_price > 0 and window_low <= limit_price:
+                            executable = True
+                        elif t_order["side"] == "sell" and limit_price > 0 and window_high >= limit_price:
+                            executable = True
                     if not executable:
                         continue
-                    execution_price = int(t_order["limit_price_points"] or go["price_points"] or current_price)
+                    execution_price = float(t_order["limit_price_points"] or go["price_points"] or current_price)
                     conn.execute(
                         "UPDATE trading_orders SET execution_price_points=?, updated_at=? WHERE id=?",
                         (execution_price, now, t_order["id"]),
@@ -4187,7 +4806,7 @@ class TradingEngineService:
                 fills_processed.append({"level_index": go["level_index"], "side": go["side"], "price_points": go["price_points"]})
                 level_idx = int(go["level_index"])
                 side = str(go["side"])
-                filled_price = int(go["price_points"])
+                filled_price = float(_to_decimal(go["price_points"] or 0, name="grid_price_points", minimum=0))
                 if side == "buy":
                     counter_level_idx = level_idx + 1
                     counter_side = "sell"
@@ -4195,7 +4814,13 @@ class TradingEngineService:
                     counter_level_idx = level_idx - 1
                     counter_side = "buy"
                     buy_price = grid_levels[level_idx - 1] if level_idx > 0 else filled_price
-                    profit_delta += int(round((filled_price - buy_price) * filled_units / ASSET_SCALE))
+                    settings = self._settings_payload(conn)
+                    grid_fee_rate_percent = self._grid_fee_rate_percent(float(market["fee_rate_percent"] or 0), settings)
+                    buy_notional = notional_points(filled_units, buy_price)
+                    sell_notional = notional_points(filled_units, filled_price)
+                    gross_profit = sell_notional - buy_notional
+                    total_fee = fee_points(buy_notional, grid_fee_rate_percent) + fee_points(sell_notional, grid_fee_rate_percent)
+                    profit_delta += gross_profit - total_fee
                     trades_delta += 1
                 if 0 <= counter_level_idx < len(grid_levels):
                     counter_price = int(grid_levels[counter_level_idx])
@@ -4244,34 +4869,129 @@ class TradingEngineService:
             else:
                 conn.execute("UPDATE trading_grid_bots SET last_scan_at=?, updated_at=? WHERE id=?", (now, now, bot_id))
                 conn.commit()
-            return {"bot_uuid": bot["bot_uuid"], "current_price_points": current_price, "fills_processed": fills_processed, "counter_orders_placed": counter_orders_placed, "profit_delta": profit_delta}
+            return {
+                "bot_uuid": bot["bot_uuid"],
+                "current_price_points": current_price,
+                "scan_window_low_points": window_low,
+                "scan_window_high_points": window_high,
+                "fills_processed": fills_processed,
+                "counter_orders_placed": counter_orders_placed,
+                "profit_delta": profit_delta,
+            }
         finally:
             conn.close()
 
     # ── End Grid Trading Bot ─────────────────────────────────────────────────
 
-    def _bot_trigger_hit(self, bot, observed_price):
+    def _bot_trigger_hit(self, bot, observed_price, *, observed_low=None, observed_high=None):
         if str(bot["bot_type"] or "conditional") == "dca":
             return True
         trigger_type = bot["trigger_type"]
         if trigger_type == "always":
             return True
-        trigger_price = int(bot["trigger_price_points"] or 0)
+        trigger_price = float(bot["trigger_price_points"] or 0)
+        low_price = float(observed_low or observed_price or 0)
+        high_price = float(observed_high or observed_price or 0)
         if trigger_type == "price_above":
-            return int(observed_price) >= trigger_price
+            return high_price > 0 and high_price >= trigger_price
         if trigger_type == "price_below":
-            return int(observed_price) <= trigger_price
+            return low_price > 0 and low_price <= trigger_price
         return False
 
     def _quantity_text_from_budget(self, *, budget_points, price_points):
         budget = int(budget_points or 0)
-        price = int(price_points or 0)
+        price = _to_decimal(price_points, name="price_points", minimum=0)
         if budget <= 0 or price <= 0:
             raise ValueError("dca budget or price is invalid")
-        units = int((budget * ASSET_SCALE) // price)
+        units = int((Decimal(budget) * Decimal(ASSET_SCALE) / price).quantize(Decimal("1"), rounding=ROUND_DOWN))
         if units <= 0:
             raise ValueError("dca budget is too small for current price")
         return units_to_quantity(units)
+
+    def _build_workflow_indicator_series(self, candles):
+        candles = candles or []
+        contexts = [{} for _ in candles]
+        closes = []
+        highs = []
+        lows = []
+        prev_close = None
+        gain_count = 0
+        avg_gain = None
+        avg_loss = None
+        for index, candle in enumerate(candles):
+            if not isinstance(candle, dict):
+                continue
+            try:
+                close = float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt") or 0)
+                high = float(candle.get("high_points") or candle.get("high_usdt") or close)
+                low = float(candle.get("low_points") or candle.get("low_usdt") or close)
+            except Exception:
+                continue
+            if not math.isfinite(close) or close <= 0:
+                continue
+            if not math.isfinite(high) or high <= 0:
+                high = close
+            if not math.isfinite(low) or low <= 0:
+                low = close
+            if prev_close is not None:
+                delta = close - prev_close
+                gain = max(delta, 0.0)
+                loss = abs(min(delta, 0.0))
+                gain_count += 1
+                if gain_count == 14:
+                    recent_closes = closes[-13:] + [close]
+                    deltas = [recent_closes[i] - recent_closes[i - 1] for i in range(1, len(recent_closes))]
+                    gains = [max(value, 0.0) for value in deltas]
+                    losses = [abs(min(value, 0.0)) for value in deltas]
+                    avg_gain = sum(gains) / 14.0
+                    avg_loss = sum(losses) / 14.0
+                elif gain_count > 14 and avg_gain is not None and avg_loss is not None:
+                    avg_gain = ((avg_gain * 13.0) + gain) / 14.0
+                    avg_loss = ((avg_loss * 13.0) + loss) / 14.0
+            prev_close = close
+            closes.append(close)
+            highs.append(high)
+            lows.append(low)
+
+            ma20 = sum(closes[-20:]) / 20.0 if len(closes) >= 20 else None
+            ma50 = sum(closes[-50:]) / 50.0 if len(closes) >= 50 else None
+            ma200 = sum(closes[-200:]) / 200.0 if len(closes) >= 200 else None
+            bb_mid = ma20
+            bb_upper = None
+            bb_lower = None
+            bb_std = None
+            if ma20 is not None:
+                window20 = closes[-20:]
+                variance = sum((value - ma20) ** 2 for value in window20) / 20.0
+                bb_std = math.sqrt(variance)
+                if bb_std > 0:
+                    bb_upper = ma20 + 2 * bb_std
+                    bb_lower = ma20 - 2 * bb_std
+            kd_k = None
+            if len(closes) >= 9:
+                high9 = max(highs[-9:])
+                low9 = min(lows[-9:])
+                kd_k = 50.0 if high9 == low9 else ((close - low9) * 100.0 / (high9 - low9))
+            rsi_value = None
+            if gain_count >= 14 and avg_gain is not None and avg_loss is not None:
+                if avg_loss == 0:
+                    rsi_value = 100.0
+                else:
+                    rs = avg_gain / avg_loss
+                    rsi_value = 100.0 - (100.0 / (1.0 + rs))
+            contexts[index] = {
+                "price": close,
+                "ma20": ma20,
+                "ma50": ma50,
+                "ma200": ma200,
+                "bb_mid": bb_mid,
+                "bb_upper": bb_upper,
+                "bb_lower": bb_lower,
+                "bb_std": bb_std,
+                "rsi": rsi_value,
+                "kd": kd_k,
+            }
+        return contexts
 
     def _workflow_indicator_context(self, candles, index):
         candles = candles or []
@@ -4357,13 +5077,15 @@ class TradingEngineService:
             return not self._workflow_condition_hit(target if isinstance(target, dict) else {"type": str(target)}, context)
         ctype = str(condition.get("type") or "always")
         price = float(context.get("price") or 0)
+        low_price = float(context.get("window_low_price") or price or 0)
+        high_price = float(context.get("window_high_price") or price or 0)
         value = float(condition.get("value") or 0)
         if ctype == "always":
             return True
         if ctype == "price_below":
-            return price > 0 and price <= value
+            return low_price > 0 and low_price <= value
         if ctype == "price_above":
-            return price > 0 and price >= value
+            return high_price > 0 and high_price >= value
         if ctype == "has_position":
             return bool(context.get("has_position")) == bool(condition.get("value", True))
         if ctype == "rsi_above":
@@ -4398,10 +5120,14 @@ class TradingEngineService:
                     and price < float(context["bb_lower"])
                 )
         if ctype == "stop_loss_percent":
-            pnl = context.get("pnl_percent")
+            pnl = context.get("pnl_low_percent")
+            if pnl is None:
+                pnl = context.get("pnl_percent")
             return pnl is not None and bool(context.get("has_position")) and pnl <= -abs(value)
         if ctype == "take_profit_percent":
-            pnl = context.get("pnl_percent")
+            pnl = context.get("pnl_high_percent")
+            if pnl is None:
+                pnl = context.get("pnl_percent")
             return pnl is not None and bool(context.get("has_position")) and pnl >= abs(value)
         return False
 
@@ -4449,13 +5175,15 @@ class TradingEngineService:
         if trigger_type == "always":
             checks.append({"label": "無條件觸發", "met": True})
         elif trigger_type == "price_above":
-            threshold = int(bot.get("trigger_price_points") or 0)
-            met = int(current_price or 0) >= threshold
-            checks.append({"label": f"價格 ≥ {threshold} 點（現價 {int(current_price or 0)}）", "met": met})
+            threshold = float(_to_decimal(bot.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
+            live_price = float(_to_decimal(current_price or 0, name="current_price", minimum=0))
+            met = live_price >= threshold
+            checks.append({"label": f"價格 ≥ {_decimal_text(threshold)} 點（現價 {_decimal_text(live_price)}）", "met": met})
         elif trigger_type == "price_below":
-            threshold = int(bot.get("trigger_price_points") or 0)
-            met = int(current_price or 0) <= threshold
-            checks.append({"label": f"價格 ≤ {threshold} 點（現價 {int(current_price or 0)}）", "met": met})
+            threshold = float(_to_decimal(bot.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
+            live_price = float(_to_decimal(current_price or 0, name="current_price", minimum=0))
+            met = live_price <= threshold
+            checks.append({"label": f"價格 ≤ {_decimal_text(threshold)} 點（現價 {_decimal_text(live_price)}）", "met": met})
         if bot.get("run_count") is not None and bot.get("max_runs") is not None:
             run_count = int(bot["run_count"])
             max_runs = int(bot["max_runs"])
@@ -4587,7 +5315,7 @@ class TradingEngineService:
         funding = self._funding_payload(conn, user_id)
         position = self._position(conn, user_id, market["symbol"])
         order_type = str(action.get("order_type") or "market").lower()
-        limit_price = int(action.get("limit_price_points") or 0) or None
+        limit_price = float(_to_decimal(action.get("limit_price_points") or 0, name="limit_price_points", minimum=0)) or None
         if atype in {"buy_percent", "buy_amount"}:
             available = int(funding.get("available_points") or 0)
             amount = int(float(action.get("amount_points") or 0))
@@ -4597,7 +5325,9 @@ class TradingEngineService:
             spend = max(0, min(amount, available))
             if spend <= 0:
                 raise ValueError("workflow buy action has no available funds")
-            units = int((spend / (1 + fee_rate)) * ASSET_SCALE // int(price_points or 1))
+            price_decimal = _to_decimal(price_points or 0, name="price_points", minimum=0.00000001)
+            spend_decimal = Decimal(str(spend)) / Decimal(str(1 + fee_rate))
+            units = int((spend_decimal * Decimal(ASSET_SCALE) / price_decimal).quantize(Decimal("1"), rounding=ROUND_DOWN))
             if units <= 0:
                 raise ValueError("workflow buy action is too small")
             return {"side": "buy", "order_type": order_type, "quantity": units_to_quantity(units), "limit_price_points": limit_price}
@@ -4725,7 +5455,15 @@ class TradingEngineService:
                 price_conn = self.get_db()
                 self.ensure_schema(price_conn)
                 market = self._market(price_conn, row["market_symbol"])
+                settings = self._settings_payload(price_conn)
                 observed_price, price_source = self._current_market_price_points(price_conn, market)
+                price_window = self._recent_price_window(
+                    market["symbol"],
+                    lookback_seconds=max(60, int(settings.get("bot_auto_scan_interval_seconds") or 30) + 5),
+                    since_time_text=row["last_scan_at"] if "last_scan_at" in row.keys() else None,
+                )
+                observed_low = float((price_window or {}).get("low_points") or observed_price)
+                observed_high = float((price_window or {}).get("high_points") or observed_price)
                 workflow = _json_loads(row["workflow_json"], None) if "workflow_json" in row.keys() else None
                 order_payload = None
                 if workflow and str(row["bot_type"] or "conditional") == "conditional":
@@ -4734,6 +5472,8 @@ class TradingEngineService:
                         market=market,
                         user_id=int(row["user_id"]),
                         observed_price=observed_price,
+                        observed_low=observed_low,
+                        observed_high=observed_high,
                     )
                     decision = self._workflow_decision(
                         workflow,
@@ -4765,7 +5505,7 @@ class TradingEngineService:
                         continue
                 price_conn.close()
                 price_conn = None
-                if not workflow and not self._bot_trigger_hit(row, observed_price):
+                if not workflow and not self._bot_trigger_hit(row, observed_price, observed_low=observed_low, observed_high=observed_high):
                     self._record_bot_run(row, status="skipped", observed_price=observed_price, error="condition_not_met")
                     skipped.append({"bot_uuid": row["bot_uuid"], "reason": "condition_not_met", "observed_price_points": observed_price})
                     continue
@@ -4846,7 +5586,9 @@ class TradingEngineService:
         try:
             self.ensure_schema(conn)
             market = self._market(conn, payload.get("market_symbol"))
+            settings = self._settings_payload(conn)
             fee_rate_percent = float(market["fee_rate_percent"] or 0)
+            grid_fee_rate_percent = self._grid_fee_rate_percent(fee_rate_percent, settings)
             if payload.get("max_price_jump_percent") is not None:
                 max_price_jump_percent = float(payload.get("max_price_jump_percent"))
             else:
@@ -4864,7 +5606,7 @@ class TradingEngineService:
         cash = _to_int(payload.get("initial_cash_points", 10_000), name="initial_cash_points", minimum=1, maximum=10**12)
         order_points = _to_int(payload.get("order_points", 100), name="order_points", minimum=1, maximum=10**12)
         trigger_type = str(payload.get("trigger_type") or "price_below").strip().lower()
-        trigger_price = int(payload.get("trigger_price_points") or 0)
+        trigger_price = float(_to_decimal(payload.get("trigger_price_points") or 0, name="trigger_price_points", minimum=0))
         interval_candles = _to_int(payload.get("interval_candles", 1), name="interval_candles", minimum=1, maximum=10_000)
         initial_cash = cash
         initial_workflow_state = payload.get("initial_workflow_state") if isinstance(payload.get("initial_workflow_state"), dict) else {}
@@ -4872,7 +5614,7 @@ class TradingEngineService:
         state = {
             "cash": cash,
             "units": int(payload.get("initial_units") or 0),
-            "avg_cost_bt": int(payload.get("initial_avg_cost") or 0),
+            "avg_cost_bt": float(payload.get("initial_avg_cost") or 0),
             "trades": [],
             "equity_curve": [],
             "peak_value": cash,
@@ -4892,11 +5634,12 @@ class TradingEngineService:
             "grid_state": {},
             "grid_levels": [],
             "grid_order_amount": 0,
-            "grid_fee_rate": fee_rate_percent * 0.5,
+            "grid_fee_rate": grid_fee_rate_percent,
             "last_valid_price": None,
             "recent_valid_prices": [],
             "outlier_skipped_count": 0,
         }
+        workflow_indicator_series = self._build_workflow_indicator_series(candles) if strategy == "workflow" else []
 
         def _record_equity(global_index, candle, price):
             equity = state["cash"] + notional_points(state["units"], price)
@@ -4916,8 +5659,8 @@ class TradingEngineService:
         def _ensure_grid_state(chunk_candles):
             if strategy != "grid" or state["grid_initialized"]:
                 return
-            g_lower = _to_int(payload.get("lower_price_points", 0), name="lower_price_points", minimum=1)
-            g_upper = _to_int(payload.get("upper_price_points", 0), name="upper_price_points", minimum=2)
+            g_lower = _to_price_float(payload.get("lower_price_points", 0), name="lower_price_points", minimum=0.00000001)
+            g_upper = _to_price_float(payload.get("upper_price_points", 0), name="upper_price_points", minimum=0.00000002)
             g_count = _to_int(payload.get("grid_count", 10), name="grid_count", minimum=2, maximum=500)
             state["grid_order_amount"] = _to_int(payload.get("order_amount_points", 100), name="order_amount_points", minimum=1)
             g_mode = str(payload.get("spacing_mode") or "arithmetic").strip().lower()
@@ -4925,14 +5668,36 @@ class TradingEngineService:
                 raise ValueError("upper_price_points must be greater than lower_price_points")
             if g_mode == "geometric":
                 g_ratio = (g_upper / g_lower) ** (1 / (g_count - 1))
-                state["grid_levels"] = [round(g_lower * (g_ratio ** i)) for i in range(g_count)]
+                state["grid_levels"] = [
+                    float(
+                        Decimal(str(g_lower * (g_ratio ** i))).quantize(
+                            Decimal("0.00000001"),
+                            rounding=ROUND_HALF_UP,
+                        )
+                    )
+                    for i in range(g_count)
+                ]
             else:
                 g_step = (g_upper - g_lower) / (g_count - 1)
-                state["grid_levels"] = [round(g_lower + g_step * i) for i in range(g_count)]
+                state["grid_levels"] = [
+                    float(
+                        Decimal(str(g_lower + g_step * i)).quantize(
+                            Decimal("0.00000001"),
+                            rounding=ROUND_HALF_UP,
+                        )
+                    )
+                    for i in range(g_count)
+                ]
             g_start = 0
             for _c in chunk_candles:
                 try:
-                    g_start = int(round(float(_c.get("close_points") or _c.get("price_points") or _c.get("close_usdt") or _c.get("price_usdt") or 0)))
+                    g_start = float(
+                        _to_decimal(
+                            _c.get("close_points") or _c.get("price_points") or _c.get("close_usdt") or _c.get("price_usdt") or 0,
+                            name="grid_start_price",
+                            minimum=0,
+                        )
+                    )
                     if g_start > 0:
                         break
                 except Exception:
@@ -4972,18 +5737,18 @@ class TradingEngineService:
             for local_index, candle in enumerate(chunk_candles):
                 global_index = state["processed_candles"] + local_index
                 try:
-                    price = int(round(float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))))
+                    price = float(candle.get("close_points") or candle.get("price_points") or candle.get("close_usdt") or candle.get("price_usdt"))
                 except Exception:
                     continue
-                if price <= 0:
+                if not math.isfinite(price) or price <= 0:
                     continue
-                anchor_prices = [int(value) for value in (state.get("recent_valid_prices") or []) if int(value or 0) > 0]
+                anchor_prices = [float(value) for value in (state.get("recent_valid_prices") or []) if float(value or 0) > 0]
                 anchor_price = 0
                 if anchor_prices:
                     sorted_anchor = sorted(anchor_prices)
-                    anchor_price = int(sorted_anchor[len(sorted_anchor) // 2])
+                    anchor_price = float(sorted_anchor[len(sorted_anchor) // 2])
                 elif state["last_valid_price"]:
-                    anchor_price = int(state["last_valid_price"])
+                    anchor_price = float(state["last_valid_price"])
                 if anchor_price > 0 and max_price_jump_percent > 0:
                     jump_percent = abs(price - anchor_price) * 100.0 / anchor_price
                     if jump_percent > max_price_jump_percent:
@@ -5000,8 +5765,8 @@ class TradingEngineService:
 
                 if strategy == "grid":
                     try:
-                        low_p = int(round(float(candle.get("low_points") or candle.get("low_usdt") or price)))
-                        high_p = int(round(float(candle.get("high_points") or candle.get("high_usdt") or price)))
+                        low_p = float(candle.get("low_points") or candle.get("low_usdt") or price)
+                        high_p = float(candle.get("high_points") or candle.get("high_usdt") or price)
                     except Exception:
                         low_p = high_p = price
                     state_at_open = dict(state["grid_state"])
@@ -5077,7 +5842,7 @@ class TradingEngineService:
                 if strategy == "dca":
                     should_buy = global_index % interval_candles == 0
                 elif strategy == "workflow":
-                    context = self._workflow_indicator_context(candles, global_index)
+                    context = dict(workflow_indicator_series[global_index] or {})
                     context["price"] = price
                     context["has_position"] = state["units"] > 0
                     context["avg_cost"] = state["avg_cost_bt"]
@@ -5145,7 +5910,7 @@ class TradingEngineService:
                 spend = min(workflow_spend, state["cash"])
                 fee = fee_points(spend, fee_rate_percent)
                 net_spend = max(0, spend - fee)
-                buy_units = int((net_spend * ASSET_SCALE) // price)
+                buy_units = int((Decimal(str(net_spend)) * Decimal(ASSET_SCALE) / Decimal(str(price))).quantize(Decimal("1"), rounding=ROUND_DOWN))
                 if buy_units <= 0:
                     _record_equity(global_index, candle, price)
                     continue
@@ -5153,7 +5918,7 @@ class TradingEngineService:
                 prev_units = state["units"]
                 state["units"] += buy_units
                 if state["units"] > 0:
-                    state["avg_cost_bt"] = int((prev_units * state["avg_cost_bt"] + buy_units * price) // state["units"])
+                    state["avg_cost_bt"] = float(((Decimal(str(prev_units)) * Decimal(str(state["avg_cost_bt"]))) + (Decimal(str(buy_units)) * Decimal(str(price)))) / Decimal(str(state["units"])))
                 state["trades"].append({
                     "index": global_index,
                     "time": candle.get("time") or candle.get("time_iso") or global_index,
@@ -5183,7 +5948,7 @@ class TradingEngineService:
             if chunk:
                 _run_chunk(chunk)
         last_price = 0
-        last_price = int(state["last_valid_price"] or 0)
+        last_price = float(state["last_valid_price"] or 0)
         position_value = notional_points(state["units"], last_price) if last_price else 0
         final_value = state["cash"] + position_value
         all_candles_raw = payload.get("candles") or []
@@ -5268,13 +6033,13 @@ class TradingEngineService:
             if status == "triggered":
                 if execution_state is not None:
                     conn.execute(
-                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, execution_state_json=?, last_error='', updated_at=? WHERE id=?",
-                        (now, _json_dumps(execution_state), now, int(bot["id"])),
+                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, execution_state_json=?, last_error='', last_scan_at=?, updated_at=? WHERE id=?",
+                        (now, _json_dumps(execution_state), now, now, int(bot["id"])),
                     )
                 else:
                     conn.execute(
-                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error='', updated_at=? WHERE id=?",
-                        (now, now, int(bot["id"])),
+                        "UPDATE trading_bots SET run_count=run_count+1, last_run_at=?, last_error='', last_scan_at=?, updated_at=? WHERE id=?",
+                        (now, now, now, int(bot["id"])),
                     )
             elif status == "failed":
                 conn.execute(
@@ -5334,16 +6099,17 @@ class TradingEngineService:
                 raise ValueError("pvp matching interface is reserved but not enabled in v1")
             current_price, price_source = self._current_market_price_points(conn, market)
             if order_type == "limit":
-                limit_price = _to_int(limit_price_points, name="limit_price_points", minimum=1)
+                limit_price = _to_price_float(limit_price_points, name="limit_price_points", minimum=0.00000001)
             else:
                 limit_price = None
-            check_price = int(limit_price or current_price)
+            check_price = float(_to_decimal(limit_price or current_price, name="check_price", minimum=0.00000001))
             estimated_notional = notional_points(quantity_units, check_price)
             base_fee_rate = float(market["fee_rate_percent"] or 0)
+            settings = self._settings_payload(conn)
             if emergency_close:
                 effective_fee_rate_percent = base_fee_rate * 2
             elif is_grid_order:
-                effective_fee_rate_percent = base_fee_rate * 0.5
+                effective_fee_rate_percent = self._grid_fee_rate_percent(base_fee_rate, settings)
             else:
                 effective_fee_rate_percent = base_fee_rate
             fee = fee_points(estimated_notional, effective_fee_rate_percent)
@@ -5581,16 +6347,17 @@ class TradingEngineService:
         side = order["side"]
         user_id = int(order["user_id"])
         quantity_units = int(order["quantity_units"])
-        price = int(order["execution_price_points"] or market["manual_price_points"])
+        price = float(_to_decimal(order["execution_price_points"] or market["manual_price_points"], name="execution_price_points", minimum=0.00000001))
         notional = notional_points(quantity_units, price)
         order_reason = str(order["reason"] or "")
         emergency_close = order_reason == "EMERGENCY_MARKET_CLOSE"
         is_grid_order = order_reason == "GRID_ORDER"
         base_fee_rate = float(market["fee_rate_percent"] or 0)
+        settings = self._settings_payload(conn)
         if emergency_close:
             effective_fee_rate_percent = base_fee_rate * 2
         elif is_grid_order:
-            effective_fee_rate_percent = base_fee_rate * 0.5
+            effective_fee_rate_percent = self._grid_fee_rate_percent(base_fee_rate, settings)
         else:
             effective_fee_rate_percent = base_fee_rate
         fee = fee_points(notional, effective_fee_rate_percent)
@@ -5664,9 +6431,19 @@ class TradingEngineService:
                     )["ledger_uuid"])
             position = self._position(conn, user_id, market["symbol"])
             prev_qty = int(position["quantity_units"])
-            prev_cost = int(position["avg_cost_points"] or 0)
+            prev_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
             next_qty = prev_qty + quantity_units
-            next_avg = int(round(((prev_qty * prev_cost) + (quantity_units * price)) / next_qty)) if next_qty else 0
+            next_avg = (
+                float(
+                    (
+                        (Decimal(prev_qty) * Decimal(str(prev_cost)))
+                        + (Decimal(quantity_units) * Decimal(str(price)))
+                    / Decimal(next_qty)
+                ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                )
+                if next_qty
+                else 0
+            )
             conn.execute(
                 """
                 UPDATE trading_spot_positions
@@ -5726,7 +6503,7 @@ class TradingEngineService:
             position = self._position(conn, user_id, market["symbol"])
             if int(position["locked_quantity_units"]) < quantity_units:
                 raise ValueError("insufficient locked spot position")
-            avg_cost = int(position["avg_cost_points"] or 0)
+            avg_cost = float(_to_decimal(position["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
             gross_cost = notional_points(quantity_units, avg_cost) if avg_cost else 0
             buy_fee_estimate = fee_points(gross_cost, float(market["fee_rate_percent"] or 0)) if gross_cost else 0
             net_pnl = net_credit - gross_cost - buy_fee_estimate
@@ -5775,6 +6552,15 @@ class TradingEngineService:
             ),
         )
         fill_id = cur.lastrowid
+        if funding_mode != "root_simulated":
+            self._record_user_trade_volume(
+                conn,
+                user_id=user_id,
+                trade_kind="spot",
+                notional_points=notional,
+                fee_points=fee,
+                occurred_at=_now(),
+            )
         if sell_pnl_data is not None:
             conn.execute(
                 """
@@ -5935,7 +6721,11 @@ class TradingEngineService:
             if position_type == "margin_long" and collateral >= notional:
                 raise ValueError(f"collateral must be lower than notional {notional} for margin long")
             principal = max(0, notional - collateral) if position_type == "margin_long" else notional
-            funding_pool = self._funding_pool_payload(conn, requested_principal=principal)
+            settings = self._settings_payload(conn)
+            borrowed_asset_symbol = self._margin_borrowed_asset_symbol(market, position_type)
+            interest_interval_hours = int(settings.get("borrow_interest_interval_hours") or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)
+            interest_minimum_hours = int(settings.get("borrow_interest_minimum_hours") or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)
+            funding_pool = self._funding_pool_payload(conn, requested_principal=principal, borrowed_asset=borrowed_asset_symbol)
             if not self._is_root_actor(actor) and principal > int(funding_pool["available_points"] or 0):
                 raise ValueError("funding pool is insufficient for requested borrow amount")
             effective_interest_percent_daily = float(funding_pool["projected_interest_percent_daily"] if principal else funding_pool["effective_interest_percent_daily"])
@@ -6006,9 +6796,10 @@ class TradingEngineService:
                 INSERT INTO trading_margin_positions (
                     position_uuid, user_id, market_symbol, position_type, quantity_units,
                     entry_price_points, principal_points, collateral_points, open_fee_points,
-                    interest_percent_daily, interest_paid_points, interest_accrued_hours, status, opened_at, updated_at,
+                    interest_percent_daily, interest_paid_points, interest_accrued_hours, interest_interval_hours,
+                    interest_minimum_hours, borrowed_asset_symbol, status, opened_at, updated_at,
                     collateral_trial_points, collateral_chain_points, open_fee_trial_points, open_fee_chain_points
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'open', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position_uuid,
@@ -6021,6 +6812,9 @@ class TradingEngineService:
                     collateral,
                     fee,
                     effective_interest_percent_daily,
+                    interest_interval_hours,
+                    interest_minimum_hours,
+                    borrowed_asset_symbol,
                     now,
                     now,
                     trial_collateral,
@@ -6046,8 +6840,13 @@ class TradingEngineService:
                     "principal_points": principal,
                     "funding_pool_available_before": funding_pool["available_points"],
                     "funding_pool_projected_utilization_percent": funding_pool["projected_utilization_percent"],
-                    "base_interest_percent_daily": borrow_settings["interest_percent_daily"],
+                    "borrowed_asset_symbol": borrowed_asset_symbol,
+                    "base_interest_apr_percent": funding_pool["base_interest_apr_percent"],
+                    "effective_interest_apr_percent": funding_pool["projected_interest_apr_percent"] if principal else funding_pool["effective_interest_apr_percent"],
+                    "base_interest_percent_daily": funding_pool["base_interest_percent_daily"],
                     "effective_interest_percent_daily": effective_interest_percent_daily,
+                    "interest_interval_hours": interest_interval_hours,
+                    "interest_minimum_hours": interest_minimum_hours,
                     "collateral_points": collateral,
                     "open_fee_points": fee,
                     "trial_collateral_points": trial_collateral,
@@ -6058,6 +6857,15 @@ class TradingEngineService:
                     "ledger_uuids": ledger_uuids,
                 },
             )
+            if not is_root_simulated:
+                self._record_user_trade_volume(
+                    conn,
+                    user_id=user_id,
+                    trade_kind="margin",
+                    notional_points=notional,
+                    fee_points=fee,
+                    occurred_at=now,
+                )
             conn.commit()
             row = conn.execute("SELECT * FROM trading_margin_positions WHERE id=?", (cur.lastrowid,)).fetchone()
             result = {"ok": True, "position": self._margin_position_payload(row), "funding": self._funding_payload(conn, user_id)}
@@ -6216,7 +7024,7 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def close_margin_position(self, *, actor, position_uuid, force_liquidation=False):
+    def close_margin_position(self, *, actor, position_uuid, force_liquidation=False, price_override_points=None, price_source_override=None):
         actor_user_id = self._actor_id(actor)
         conn = self.get_db()
         try:
@@ -6237,11 +7045,24 @@ class TradingEngineService:
                 raise ValueError("margin position is not open")
             position = self._accrue_margin_interest(conn, position, actor=actor)
             market = self._market(conn, position["market_symbol"])
-            risk = self._margin_risk_payload(conn, position, market)
+            risk = self._margin_risk_payload(
+                conn,
+                position,
+                market,
+                price_override_points=price_override_points,
+                price_source_override=price_source_override,
+            )
             account_risk = None
             if force_liquidation:
                 open_rows = [
-                    self._margin_position_payload_with_risk(conn, row)
+                    self._margin_position_payload_with_risk(
+                        conn,
+                        row,
+                        risk_overrides={
+                            "price_override_points": price_override_points if row["market_symbol"] == position["market_symbol"] else None,
+                            "price_source_override": price_source_override if row["market_symbol"] == position["market_symbol"] else None,
+                        } if price_override_points is not None else None,
+                    )
                     for row in conn.execute(
                         "SELECT * FROM trading_margin_positions WHERE user_id=? AND status='open' ORDER BY id ASC",
                         (user_id,),
@@ -6398,7 +7219,7 @@ class TradingEngineService:
                     "position_id": position["id"],
                     "position_uuid": position["position_uuid"],
                     "position_type": position["position_type"],
-                    "entry_price_points": int(position["entry_price_points"]),
+                    "entry_price_points": float(_to_decimal(position["entry_price_points"], name="entry_price_points", minimum=0)),
                     "exit_price_points": price,
                     "price_source": price_source,
                     "delta_points": delta,
@@ -6410,6 +7231,15 @@ class TradingEngineService:
                     "ledger_uuids": ledger_uuids,
                 },
             )
+            if not is_root_simulated:
+                self._record_user_trade_volume(
+                    conn,
+                    user_id=user_id,
+                    trade_kind="margin",
+                    notional_points=int(risk.get("exit_notional_points") or 0),
+                    fee_points=close_fee,
+                    occurred_at=now,
+                )
             if force_liquidation:
                 self._notify_margin_liquidated(conn, user_id=user_id, position=position, risk=risk)
             conn.commit()
@@ -6455,7 +7285,23 @@ class TradingEngineService:
                 try:
                     position = self._accrue_margin_interest(conn, position, actor=actor)
                     market = self._market(conn, position["market_symbol"])
-                    payload = self._margin_position_payload_with_risk(conn, position, market=market)
+                    current_price, price_source = self._current_market_price_points(conn, market)
+                    price_window = self._recent_price_window(market["symbol"], lookback_seconds=65, interval="1m")
+                    replay_price = float(current_price)
+                    if price_window:
+                        if position["position_type"] == "margin_long":
+                            replay_price = min(float(current_price), float(price_window["low_points"]))
+                        else:
+                            replay_price = max(float(current_price), float(price_window["high_points"]))
+                    payload = self._margin_position_payload_with_risk(
+                        conn,
+                        position,
+                        market=market,
+                        risk_overrides={
+                            "price_override_points": replay_price,
+                            "price_source_override": f"{price_source}+scan_window" if replay_price != current_price else price_source,
+                        },
+                    )
                     risk = payload.get("risk") if isinstance(payload.get("risk"), dict) else {}
                     self._notify_margin_risk_alerts(conn, position=position, risk=risk, market=market)
                     positions_by_user.setdefault(int(position["user_id"]), []).append(payload)
@@ -6496,6 +7342,8 @@ class TradingEngineService:
                     actor=actor,
                     position_uuid=candidate["position_uuid"],
                     force_liquidation=True,
+                    price_override_points=(candidate.get("risk") or {}).get("price_points"),
+                    price_source_override=(candidate.get("risk") or {}).get("price_source"),
                 )
                 liquidated.append({
                     "position_uuid": candidate["position_uuid"],
@@ -6534,8 +7382,8 @@ class TradingEngineService:
                 raise ValueError("market not found")
             updates = {}
             if manual_price_points is not None:
-                new_price = _to_int(manual_price_points, name="manual_price_points", minimum=1)
-                old_price = int(market["manual_price_points"])
+                new_price = _to_price_float(manual_price_points, name="manual_price_points", minimum=0.00000001)
+                old_price = float(_to_decimal(market["manual_price_points"], name="manual_price_points", minimum=0))
                 jump_percent = float(abs(new_price - old_price) * 100 / old_price) if old_price else 0.0
                 allowed_percent = float(market["max_price_jump_percent"] or 0)
                 if jump_percent > allowed_percent and not confirm_jump:
@@ -6644,9 +7492,22 @@ class TradingEngineService:
             now = _now()
             liquidation_price = None
             if side == "long":
-                liquidation_price = max(1, price - int(margin_points * ASSET_SCALE / quantity_units))
+                liquidation_price = max(
+                    0.00000001,
+                    float(
+                        (
+                            Decimal(str(price))
+                            - (Decimal(margin_points) * Decimal(ASSET_SCALE) / Decimal(quantity_units))
+                        ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                    ),
+                )
             else:
-                liquidation_price = price + int(margin_points * ASSET_SCALE / quantity_units)
+                liquidation_price = float(
+                    (
+                        Decimal(str(price))
+                        + (Decimal(margin_points) * Decimal(ASSET_SCALE) / Decimal(quantity_units))
+                    ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+                )
             cur = conn.execute(
                 """
                 INSERT INTO trading_futures_positions (
@@ -6709,7 +7570,7 @@ class TradingEngineService:
                 raise ValueError("contract position is not open")
             market = self._market(conn, position["market_symbol"])
             current_price, price_source = self._current_market_price_points(conn, market)
-            entry_price = int(position["entry_price_points"])
+            entry_price = float(_to_decimal(position["entry_price_points"], name="entry_price_points", minimum=0.00000001))
             quantity_units = int(position["quantity_units"])
             price_delta = notional_points(quantity_units, abs(current_price - entry_price))
             pnl = price_delta if current_price >= entry_price else -price_delta
@@ -7189,7 +8050,7 @@ class TradingEngineService:
                 continue
             if int(row["quantity_units"] or 0) != int(row["fill_quantity_units"] or 0):
                 errors.append({"type": "spot_realized_pnl_quantity_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
-            if int(row["sell_price_points"] or 0) != int(row["price_points"] or 0):
+            if _to_decimal(row["sell_price_points"] or 0, name="sell_price_points", minimum=0) != _to_decimal(row["price_points"] or 0, name="price_points", minimum=0):
                 errors.append({"type": "spot_realized_pnl_price_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
             if int(row["gross_proceeds_points"] or 0) != int(row["notional_points"] or 0):
                 errors.append({"type": "spot_realized_pnl_proceeds_mismatch", "fill_id": fill_id, "pnl_id": row["id"]})
@@ -7710,11 +8571,39 @@ class TradingEngineService:
             markets = [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets ORDER BY symbol").fetchall()]
             reserve_events = [dict(row) for row in conn.execute("SELECT * FROM trading_reserve_pool_events ORDER BY id DESC LIMIT 50").fetchall()]
             audit_events = [dict(row) for row in conn.execute("SELECT * FROM trading_audit_events ORDER BY id DESC LIMIT 80").fetchall()]
+            volume_summary = {
+                "totals": dict(
+                    conn.execute(
+                        """
+                        SELECT
+                            COALESCE(SUM(total_notional_points), 0) AS total_notional_points,
+                            COALESCE(SUM(spot_notional_points), 0) AS spot_notional_points,
+                            COALESCE(SUM(margin_notional_points), 0) AS margin_notional_points,
+                            COALESCE(SUM(total_fee_points), 0) AS total_fee_points,
+                            COALESCE(SUM(total_trade_count), 0) AS total_trade_count
+                        FROM trading_user_volume_stats
+                        """
+                    ).fetchone()
+                ),
+                "top_users": [
+                    dict(row)
+                    for row in conn.execute(
+                        """
+                        SELECT s.*, u.username
+                        FROM trading_user_volume_stats s
+                        JOIN users u ON u.id=s.user_id
+                        ORDER BY s.total_notional_points DESC, s.user_id ASC
+                        LIMIT 20
+                        """
+                    ).fetchall()
+                ],
+            }
             return {
                 "state": state,
                 "settings": self._settings_payload(conn),
                 "reserve_pool": dict(reserve),
                 "funding_pool": self._funding_pool_payload(conn),
+                "volume_summary": volume_summary,
                 "markets": markets,
                 "reserve_events": reserve_events,
                 "audit_events": audit_events,

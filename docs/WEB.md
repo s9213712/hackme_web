@@ -160,6 +160,9 @@ page can keep showing queue/node progress until the image is complete. The page
 also shows the current mode explicitly (`local` vs `remote / cloud API`) so
 users do not need to infer it from start/stop buttons. The mode is shown both
 as a badge and as a short explanation line near the panel title.
+The default generation wait budget is now 30 minutes on both the frontend
+progress poll and the backend route, so large models or slow local GPUs do not
+fail early just because the UI timeout was shorter than the actual job.
 
 Root can configure ComfyUI in two modes from server settings:
 
@@ -185,14 +188,22 @@ Root can configure ComfyUI in two modes from server settings:
   backend still re-validates them into the allowed range before they reach the
   ComfyUI workflow. If that LoRA was downloaded through the root Civitai panel
   and its official `trainedWords` were recorded, adding the LoRA will also
-  auto-append any missing trigger words into the positive prompt.
+  auto-append any missing trigger words into the positive prompt. The current
+  UI only allows LoRAs whose recorded `base_model` is one of `SDXL`, `Pony`,
+  `Illustrious`, or `Noob`; `SD1.5`, `Flux`, and unknown-metadata LoRAs are
+  rendered as unavailable and the backend rejects direct requests too. Removing
+  a selected LoRA now also removes its trigger words unless another selected
+  LoRA still needs the same term; selecting `不使用 LoRA` and pressing `加入`
+  clears the selected LoRA list.
 - The page also exposes a VAE selector. Keeping `use checkpoint builtin VAE`
   uses the model's bundled VAE; selecting another VAE inserts a `VAELoader`
   node into the generated workflow.
 - Available Embeddings are loaded from the ComfyUI API and rendered as clickable
   shortcut buttons. Clicking one inserts `<embeddings:name>` into the positive
   prompt; the backend translates that shortcut into ComfyUI's actual embedding
-  prompt syntax before queueing the workflow.
+  prompt syntax before queueing the workflow. Clicking the same Embedding again
+  removes it. If the Embedding name contains `neg` / `negative`, the shortcut
+  targets the negative prompt by default.
 - While a long ComfyUI task is running, the frontend idle auto-logout countdown
   is paused so the session does not expire mid-task. That currently includes
   local startup polling, async generation, and root's local-model download job.

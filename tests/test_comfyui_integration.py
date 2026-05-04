@@ -317,6 +317,20 @@ class LocalLoraMetadataClient(FakeComfyUIClient):
         return ["fancy_v2.safetensors"]
 
 
+def _write_lora_sidecar(base_dir, filename, *, base_model="", trained_words=None, extra=None):
+    sidecar = Path(base_dir) / "models" / "loras" / f"{filename}.civitai.json"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "source": "civitai",
+        "base_model": base_model,
+        "trained_words": list(trained_words or []),
+    }
+    if extra:
+        payload.update(extra)
+    sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return sidecar
+
+
 def _init_db(db_path):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -379,13 +393,24 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
-    client = _build_app(db_path, storage_root).test_client()
+    comfy_base = tmp_path / "comfyui_portable"
+    _write_lora_sidecar(comfy_base, "detail.safetensors", base_model="SDXL")
+    _write_lora_sidecar(comfy_base, "anime-style.safetensors", base_model="Flux")
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_base_dir": str(comfy_base)},
+    ).test_client()
 
     models = client.get("/api/comfyui/models")
     assert models.status_code == 200
     assert models.get_json()["models"] == ["dream.safetensors", "photo.ckpt"]
     assert models.get_json()["loras"] == ["detail.safetensors", "anime-style.safetensors"]
     assert models.get_json()["lora_details"]["detail.safetensors"]["trained_words"] == []
+    assert models.get_json()["lora_details"]["detail.safetensors"]["base_model"] == "SDXL"
+    assert models.get_json()["lora_details"]["detail.safetensors"]["supported"] is True
+    assert models.get_json()["lora_details"]["anime-style.safetensors"]["base_model"] == "Flux"
+    assert models.get_json()["lora_details"]["anime-style.safetensors"]["supported"] is False
     assert models.get_json()["vaes"] == ["sdxl_vae.safetensors", "anime_vae.pt"]
     assert models.get_json()["embeddings"] == ["badhandv4.pt", "easynegative.safetensors"]
     assert models.get_json()["max_batch_size"] == 1
@@ -425,9 +450,36 @@ def test_comfyui_models_and_generate_routes(tmp_path):
     assert body["image"]["batch_size"] == 1
     assert len(body["images"]) == 1
     assert body["images"][0]["image_ref"]["filename"] == "hackme_web_00001_.png"
-    assert FakeComfyUIClient.last_timeout_seconds == 600
+    assert FakeComfyUIClient.last_timeout_seconds == 1800
     assert FakeComfyUIClient.last_params["loras"] == [{"name": "detail.safetensors", "strength_model": 0.8, "strength_clip": 0.7}]
     assert FakeComfyUIClient.last_params["vae"] == "sdxl_vae.safetensors"
+
+
+def test_comfyui_generate_rejects_unsupported_lora_base_model(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    _write_lora_sidecar(comfy_base, "anime-style.safetensors", base_model="Flux")
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_base_dir": str(comfy_base)},
+    ).test_client()
+
+    generated = client.post(
+        "/api/comfyui/generate",
+        json={
+            "model": "dream.safetensors",
+            "prompt": "reject flux lora",
+            "loras": [{"name": "anime-style.safetensors", "strength_model": 1, "strength_clip": 1}],
+            "confirm_billing": True,
+        },
+    )
+
+    assert generated.status_code == 400
+    assert "Flux LoRA 目前不支援" in generated.get_json()["msg"]
 
 
 def test_comfyui_generate_async_job_reports_progress_and_result(tmp_path):
@@ -689,8 +741,16 @@ def test_comfyui_lora_billing_quote_adds_one_point_per_lora_per_image(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     _init_db(db_path)
+    comfy_base = tmp_path / "comfyui_portable"
+    _write_lora_sidecar(comfy_base, "detail.safetensors", base_model="SDXL")
+    _write_lora_sidecar(comfy_base, "anime-style.safetensors", base_model="Pony")
     points = FakePointsService(balance=100)
-    client = _build_app(db_path, storage_root, points_service=points).test_client()
+    client = _build_app(
+        db_path,
+        storage_root,
+        settings={"comfyui_base_dir": str(comfy_base)},
+        points_service=points,
+    ).test_client()
 
     quoted = client.post(
         "/api/comfyui/billing-quote",
@@ -1403,11 +1463,13 @@ def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
     downloaded_json = downloaded.get_json()
     assert downloaded_json["download"]["filename"] == "fancy_v2.safetensors"
     assert downloaded_json["download"]["civitai"]["version_id"] == 2002
+    assert downloaded_json["download"]["civitai"]["base_model"] == "SDXL"
     assert downloaded_json["download"]["civitai"]["trained_words"] == ["fancy style", "cinematic"]
     assert (comfy_base / "models" / "loras" / "fancy_v2.safetensors").exists()
     sidecar = comfy_base / "models" / "loras" / "fancy_v2.safetensors.civitai.json"
     assert sidecar.exists()
     sidecar_data = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert sidecar_data["base_model"] == "SDXL"
     assert sidecar_data["trained_words"] == ["fancy style", "cinematic"]
     assert sidecar_data["source"] == "civitai"
 
@@ -1420,6 +1482,8 @@ def test_comfyui_civitai_inspect_and_download_flow(tmp_path, monkeypatch):
     listed = metadata_client.get("/api/comfyui/models")
     assert listed.status_code == 200
     listed_json = listed.get_json()
+    assert listed_json["lora_details"]["fancy_v2.safetensors"]["base_model"] == "SDXL"
+    assert listed_json["lora_details"]["fancy_v2.safetensors"]["supported"] is True
     assert listed_json["lora_details"]["fancy_v2.safetensors"]["trained_words"] == ["fancy style", "cinematic"]
 
 
@@ -2186,6 +2250,7 @@ def test_comfyui_frontend_is_wired():
     assert '目前是雲端 / 遠端模式：此頁會直接呼叫遠端 ComfyUI API 生圖' in comfyui_js
     assert "function pollComfyuiJobUntilDone(jobId, controller, timeoutSeconds)" in comfyui_js
     assert "function pollComfyuiModelDownloadJob(jobId)" in comfyui_js
+    assert "const COMFYUI_GENERATION_TIMEOUT_SECONDS = 1800;" in comfyui_js
     assert "function setComfyuiModelDownloadProgress" in comfyui_js
     assert "function comfyuiRequestPayloadExtras()" in comfyui_js
     assert '"async_progress": True' not in comfyui_js
@@ -2196,6 +2261,10 @@ def test_comfyui_frontend_is_wired():
     assert "function fillComfyuiVaeSelect(values = [])" in comfyui_js
     assert "function renderComfyuiEmbeddingShortcuts(values = [])" in comfyui_js
     assert "function insertComfyuiEmbeddingToken(name)" in comfyui_js
+    assert "function removeComfyuiPromptTerms(terms = [], { promptType = \"prompt\" } = {})" in comfyui_js
+    assert "function clearSelectedComfyuiLoras()" in comfyui_js
+    assert "function removeComfyuiSelectedLoraByIndex(index)" in comfyui_js
+    assert "function isNegativeComfyuiEmbedding(name)" in comfyui_js
     assert "function applyComfyuiPromptTerms(terms = [])" in comfyui_js
     assert "function renderComfyuiCivitaiTrainedWords(versionId)" in comfyui_js
     assert 'const COMFYUI_VAE_BUILTIN = "__checkpoint_builtin__";' in comfyui_js
@@ -2203,8 +2272,18 @@ def test_comfyui_frontend_is_wired():
     assert 'fillComfyuiVaeSelect(json.vaes || []);' in comfyui_js
     assert 'renderComfyuiEmbeddingShortcuts(json.embeddings || []);' in comfyui_js
     assert 'comfyuiLoraDetails = json.lora_details' in comfyui_js
+    assert "function pruneUnsupportedComfyuiSelectedLoras" in comfyui_js
+    assert 'disabled="disabled"' in comfyui_js
+    assert 'detail.supported !== true' in comfyui_js
     assert 'const insertedTerms = applyComfyuiPromptTerms(detail.trained_words || []);' in comfyui_js
     assert '已加入 LoRA，並自動補上 trigger words' in comfyui_js
+    assert 'clearSelectedComfyuiLoras();' in comfyui_js
+    assert 'removeComfyuiSelectedLoraByIndex(index);' in comfyui_js
+    assert 'removeComfyuiPromptTerms(removableTerms, { promptType: "prompt" });' in comfyui_js
+    assert 'normalized.includes("negative") || normalized.includes("neg")' in comfyui_js
+    assert '已把 ${cleanName} 插入${promptType === "negative" ? "負面" : "正向"}提示詞。' in comfyui_js
+    assert '已從${promptType === "negative" ? "負面" : "正向"}提示詞移除 ${cleanName}。' in comfyui_js
+    assert '目前只允許 SDXL、Pony、Illustrious、Noob 系列' in comfyui_js
     assert '<embeddings:' in comfyui_js
     assert "trigger words" in comfyui_js
     assert "comfyuiConnectionMode !== \"local\"" in comfyui_js

@@ -444,6 +444,39 @@ def test_storage_upgrade_price_catalog_backfills_missing_items():
         catalog = enrich_storage_upgrade_catalog([dict(row) for row in rows])
         assert [item["item_key"] for item in catalog] == ["cloud_storage_1gb_30d"]
         assert catalog[0]["storage_bytes"] == 1024 * 1024 * 1024
+        assert catalog[0]["duration_days"] == 7
+        assert catalog[0]["label"] == "雲端容量 1GB / 7 天"
+    finally:
+        conn.close()
+
+
+def test_storage_upgrade_price_catalog_updates_legacy_default_duration_and_label():
+    conn = _conn()
+    try:
+        ensure_points_economy_schema(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO economy_price_catalog (
+                item_key, item_name, category, currency_type, base_price,
+                dynamic_pricing, min_price, max_price, enabled, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, 'cloud_drive', 'soft', 100, 0, 50, 500, 1, ?, 'now', 'now')
+            """,
+            (
+                "cloud_storage_1gb_30d",
+                "雲端容量 1GB / 30 天",
+                "{}",
+            ),
+        )
+        ensure_storage_upgrade_price_catalog(conn)
+        row = conn.execute(
+            "SELECT item_name, metadata_json FROM economy_price_catalog WHERE item_key='cloud_storage_1gb_30d'"
+        ).fetchone()
+        product = storage_upgrade_product_from_catalog(conn, "cloud_storage_1gb_30d")
+        assert row["item_name"] == "雲端容量 1GB / 7 天"
+        assert '"duration_days":7' in row["metadata_json"]
+        assert product["duration_days"] == 7
+        assert product["label"] == "雲端容量 1GB / 7 天"
     finally:
         conn.close()
 

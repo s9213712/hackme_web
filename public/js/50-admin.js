@@ -1697,8 +1697,12 @@ function renderRootTradingSettings(payload) {
   const reserve = payload?.reserve_pool || {};
   if ($("root-trading-enabled")) $("root-trading-enabled").checked = settings.enabled !== false;
   if ($("root-trading-borrowing-enabled")) $("root-trading-borrowing-enabled").checked = !!settings.borrowing_enabled;
-  if ($("root-trading-borrow-interest-percent")) $("root-trading-borrow-interest-percent").value = adminPercentValue(settings.borrow_interest_percent_daily ?? 0.1, 0.1);
+  if ($("root-trading-borrow-apr-btc-eth")) $("root-trading-borrow-apr-btc-eth").value = adminPercentValue(settings.borrow_apr_btc_eth_percent ?? 8, 8);
+  if ($("root-trading-borrow-apr-usdt-points")) $("root-trading-borrow-apr-usdt-points").value = adminPercentValue(settings.borrow_apr_usdt_points_percent ?? 10, 10);
   if ($("root-trading-borrow-pressure-multiplier")) $("root-trading-borrow-pressure-multiplier").value = Number(settings.borrow_interest_pool_pressure_multiplier ?? 4);
+  if ($("root-trading-borrow-interest-interval-hours")) $("root-trading-borrow-interest-interval-hours").value = Number(settings.borrow_interest_interval_hours ?? 1);
+  if ($("root-trading-borrow-interest-minimum-hours")) $("root-trading-borrow-interest-minimum-hours").value = Number(settings.borrow_interest_minimum_hours ?? 1);
+  if ($("root-trading-grid-fee-discount-percent")) $("root-trading-grid-fee-discount-percent").value = adminPercentValue(settings.grid_fee_discount_percent ?? 25, 25);
   if ($("root-trading-margin-long-financing-percent")) $("root-trading-margin-long-financing-percent").value = adminPercentValue(settings.margin_long_financing_percent ?? 90, 90);
   if ($("root-trading-short-collateral-percent")) $("root-trading-short-collateral-percent").value = adminPercentValue(settings.short_collateral_percent ?? 60, 60);
   if ($("root-trading-price-source")) $("root-trading-price-source").value = settings.price_source || "fused_weighted";
@@ -1777,7 +1781,7 @@ function renderRootTradingSettings(payload) {
     <div class="drive-file-row billing-catalog-row root-trading-market-row" data-root-trading-market="${sanitize(market.symbol || "")}">
       <div>
         <strong>${sanitize(market.display_symbol || market.symbol || "-")}</strong>
-        <div class="drive-card-sub">目前手續費 ${adminFormatPercent(market.fee_rate_percent || 0)}% · 最低 ${Number(market.min_order_points || 0)} · 最高 ${Number(market.max_order_points || 0)} POINTS</div>
+        <div class="drive-card-sub">現貨手續費 ${adminFormatPercent(market.fee_rate_percent || 0)}% · Grid 折扣後約 ${adminFormatPercent((Number(market.fee_rate_percent || 0) * (100 - Number(settings.grid_fee_discount_percent || 25)) / 100) || 0)}% · 最低 ${Number(market.min_order_points || 0)} · 最高 ${Number(market.max_order_points || 0)} POINTS</div>
       </div>
       <div class="settings-option-grid billing-market-grid">
         <label><input type="checkbox" data-trading-market-field="enabled" ${market.enabled ? "checked" : ""} /> 啟用</label>
@@ -1837,8 +1841,12 @@ async function saveRootTradingSettings() {
     settings: {
       enabled: !!$("root-trading-enabled")?.checked,
       borrowing_enabled: !!$("root-trading-borrowing-enabled")?.checked,
-      borrow_interest_percent_daily: adminInputPercent($("root-trading-borrow-interest-percent")?.value || 0),
+      borrow_apr_btc_eth_percent: adminInputPercent($("root-trading-borrow-apr-btc-eth")?.value || 0),
+      borrow_apr_usdt_points_percent: adminInputPercent($("root-trading-borrow-apr-usdt-points")?.value || 0),
       borrow_interest_pool_pressure_multiplier: Number($("root-trading-borrow-pressure-multiplier")?.value || 0),
+      borrow_interest_interval_hours: Number($("root-trading-borrow-interest-interval-hours")?.value || 1),
+      borrow_interest_minimum_hours: Number($("root-trading-borrow-interest-minimum-hours")?.value || 1),
+      grid_fee_discount_percent: adminInputPercent($("root-trading-grid-fee-discount-percent")?.value || 25),
       margin_long_financing_percent: adminInputPercent($("root-trading-margin-long-financing-percent")?.value || 90, 90),
       short_collateral_percent: adminInputPercent($("root-trading-short-collateral-percent")?.value || 60, 60),
       price_source: ($("root-trading-price-source")?.value || "fused_weighted"),
@@ -2748,7 +2756,29 @@ const FEATURE_DEPENDENCY_RULES = {
   },
 };
 
+const FEATURE_MINIMUM_BUNDLE_FEATURES = [
+  "feature_accounts_enabled",
+  "feature_audit_log_enabled",
+  "feature_system_health_enabled",
+  "feature_server_modes_enabled",
+  "feature_snapshot_restore_enabled",
+];
+
 const FEATURE_SERVICE_BUNDLES = [
+  {
+    key: "all-enabled",
+    label: "全開",
+    description: "所有功能開關全部打開。",
+    features: FEATURE_SETTING_KEYS,
+    replace: true,
+  },
+  {
+    key: "minimum-ops",
+    label: "最低維運",
+    description: "只保留帳號、Audit、健康燈、Server Mode 與 Snapshot 等最小維運骨架。",
+    features: FEATURE_MINIMUM_BUNDLE_FEATURES,
+    replace: true,
+  },
   {
     key: "accounts-suite",
     label: "帳號治理整套",
@@ -2927,12 +2957,21 @@ function renderFeatureBundleToolbar() {
     btn.addEventListener("click", () => {
       const bundle = FEATURE_SERVICE_BUNDLES.find((item) => item.key === btn.dataset.featureBundle);
       if (!bundle) return;
-      bundle.features.forEach((key) => {
-        const el = $(featureSettingInputId(key));
-        if (el) el.checked = true;
-      });
+      const enabledFeatures = new Set(bundle.features || []);
+      if (bundle.replace === true) {
+        FEATURE_SETTING_KEYS.forEach((key) => {
+          const el = $(featureSettingInputId(key));
+          if (el) el.checked = enabledFeatures.has(key);
+        });
+      } else {
+        enabledFeatures.forEach((key) => {
+          const el = $(featureSettingInputId(key));
+          if (el) el.checked = true;
+        });
+      }
       renderFeatureAdvisories();
-      setSettingsStatus(`已套用「${bundle.label}」組合，記得再按「儲存設定」才會真正寫入。`, null);
+      const actionVerb = bundle.replace === true ? "已切換為" : "已套用";
+      setSettingsStatus(`${actionVerb}「${bundle.label}」組合，記得再按「儲存設定」才會真正寫入。`, null);
     });
   });
 }

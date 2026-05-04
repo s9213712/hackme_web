@@ -518,26 +518,26 @@ def register_user_routes(app, deps):
             return True, ""
         return False, "管理員只能審核一般用戶的密碼重設"
 
-    def _apply_reviewed_password_reset(conn, *, request_row, actor, actor_role, password, note):
+    def _apply_reviewed_password_reset(conn, *, request_row, actor, actor_role, new_credential, note):
         allowed, msg = _can_review_password_reset(actor_role, request_row)
         if not allowed:
             return msg, 403
         if request_row["status"] != "pending":
             return "此密碼重設申請已處理", 409
-        ok, msg = validate_password(password)
+        ok, msg = validate_password(new_credential)
         if not ok:
             return msg, 400
         if is_feature_enabled("feature_account_security_enabled"):
-            ok, msg, strength = enforce_password_strength(password, min_score=3)
+            ok, msg, strength = enforce_password_strength(new_credential, min_score=3)
             if not ok:
                 return msg, 400
         else:
-            strength = score_password_strength(password)
+            strength = score_password_strength(new_credential)
         current_row = conn.execute(
             "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
             (request_row["user_id"],),
         ).fetchone()
-        if current_row and verify_password(current_row["password_hash"], password):
+        if current_row and verify_password(current_row["password_hash"], new_credential):
             return "新密碼不可與目前密碼相同", 400
         now = datetime.now().isoformat()
         conn.execute(
@@ -743,8 +743,8 @@ def register_user_routes(app, deps):
             return json_resp({"ok":False,"msg":"Invalid request"}), 400
 
         username = normalize_text(data.get("username"))
-        password = data.get("password", "") if isinstance(data.get("password"), str) else ""
-        password_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
+        credential_text = data.get("password", "") if isinstance(data.get("password"), str) else ""
+        credential_confirm = data.get("password_confirm","") if isinstance(data.get("password_confirm"), str) else ""
         nickname = normalize_text(data.get("nickname"))
         real_name = normalize_text(data.get("real_name"))
         id_number = normalize_text(data.get("id_number"))
@@ -777,24 +777,24 @@ def register_user_routes(app, deps):
             return json_resp({"ok":False,"msg":"生日需為 YYYY-MM-DD"}), 400
         if phone and not validate_phone(phone):
             return json_resp({"ok":False,"msg":"電話格式錯誤"}), 400
-        if password != password_confirm:
+        if credential_text != credential_confirm:
             return json_resp({"ok":False,"msg":"兩次輸入的密碼不一致"}), 400
 
         # 超級管理者可指定任意密碼（繞過複雜度規則，但仍截斷長度）
         is_super = actor_role == "super_admin"
-        if password:
-            password = password[:128]  # 截斷防止超長密碼
+        if credential_text:
+            credential_text = credential_text[:128]  # 截斷防止超長密碼
             if not is_super:
-                ok, msg = validate_password(password)
+                ok, msg = validate_password(credential_text)
                 if not ok:
                     return json_resp({"ok":False,"msg":msg}), 400
                 if is_feature_enabled("feature_account_security_enabled"):
-                    ok, msg, strength = enforce_password_strength(password, min_score=3)
+                    ok, msg, strength = enforce_password_strength(credential_text, min_score=3)
                     if not ok:
                         return json_resp({"ok":False,"msg":msg,"password_strength":strength}), 400
         else:
             return json_resp({"ok":False,"msg":"新建帳號必須指定密碼"}), 400
-        strength = score_password_strength(password)
+        strength = score_password_strength(credential_text)
 
         conn = get_db()
         try:
@@ -809,7 +809,7 @@ def register_user_routes(app, deps):
             )
             conn.execute(
                 "INSERT INTO user_passwords (user_id, password_hash, created_at) VALUES (?, ?, ?)",
-                (cur.lastrowid, hash_password(password), now)
+                (cur.lastrowid, hash_password(credential_text), now)
             )
             new_user_id = cur.lastrowid
             trim_password_history(conn, cur.lastrowid)
@@ -1377,12 +1377,12 @@ def register_user_routes(app, deps):
             return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
         if not isinstance(data, dict):
             return json_resp({"ok": False, "msg": "Invalid request"}), 400
-        password = data.get("temporary_password", "") if isinstance(data.get("temporary_password"), str) else ""
-        password_confirm = data.get("temporary_password_confirm", "") if isinstance(data.get("temporary_password_confirm"), str) else ""
+        temporary_credential = data.get("temporary_password", "") if isinstance(data.get("temporary_password"), str) else ""
+        temporary_credential_confirm = data.get("temporary_password_confirm", "") if isinstance(data.get("temporary_password_confirm"), str) else ""
         note = normalize_text(data.get("note") or "password reset review approved")
-        if not password:
+        if not temporary_credential:
             return json_resp({"ok": False, "msg": "請輸入臨時密碼"}), 400
-        if password != password_confirm:
+        if temporary_credential != temporary_credential_confirm:
             return json_resp({"ok": False, "msg": "兩次密碼輸入不一致"}), 400
         conn = get_db()
         try:
@@ -1395,7 +1395,7 @@ def register_user_routes(app, deps):
                 request_row=row,
                 actor=actor,
                 actor_role=actor_role,
-                password=password[:128],
+                new_credential=temporary_credential[:128],
                 note=note,
             )
             if err:
@@ -1490,6 +1490,8 @@ def register_user_routes(app, deps):
             target = conn.execute("SELECT id, username, role FROM users WHERE id=?", (user_id,)).fetchone()
             if not target:
                 return json_resp({"ok":False,"msg":"找不到帳號"}), 404
+            if int(target["id"]) == int(actor["id"]):
+                return json_resp({"ok": False, "msg": "不能封鎖目前登入中的自己"}), 400
             if target["username"] == "root" and actor_role != "super_admin":
                 return json_resp({"ok":False,"msg":"無權限封鎖最高管理者"}), 403
             if actor["username"] != "root" and role_rank(actor_role) <= role_rank(target["role"]):
