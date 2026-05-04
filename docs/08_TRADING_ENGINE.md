@@ -44,6 +44,15 @@
 - 借貸利息自 `2026.05.04-066` 起改成先累積 `micropoints` 殘值，再跨過整點時才入帳；
   這樣 `50 @ 1% / day` 不會再在 1 天後直接被記成 `1` 點
 - DCA 機器人的 `max_runs` 支援 `-1`，代表不限制總執行次數
+- 交易機器人稽核已接到後端 scheduler。新 bot 啟用後不會立刻被打燈，
+  而是先維持 `未稽核`；等它至少成交 1 筆，或啟用滿 `24h`，才會被列入
+  定期稽核並得到綠 / 黃 / 紅燈結果。root 可在專屬 dashboard 手動重跑稽核，
+  也可同頁看 trading bug reports
+- `BTC_trade` 若有設定 repo / branch / project path，root 現在可在 `交易所參數`
+  直接按 `一鍵啟動預測`。後端會先檢查資料是否過期、模型是否晚於資料，
+  必要時補跑 `update_data.py` / `retrain_models.py`，最後再執行 `hourly_check.py`
+  並等待新的 report。這段已改成背景工作，所以訓練很久時只會顯示執行中，
+  不會因 request timeout 被誤報成失敗
 - 價格來源失效、價格跳動過大或借貸池不足時，系統應 fail closed
 - Backtest 現在把「總上限」和「內部分段上限」拆開：單次請求總上限為
   `20,000` 根 K 線，內部分段每批最多 `10,000` 根；因此像
@@ -74,6 +83,17 @@
 - 回測長區間以前會卡在 `5000` 或 `10000`：
   先確認目前 release 是否已經是 `2026.05.04-067` 之後；新版會由後端自動分段續跑，
   但總量仍受 `20,000` 根保護，超過時會明確要求縮小區間
+- BTC_trade 一鍵啟動等很久卻還沒結束：
+  先看 root 設定頁的狀態列是否仍停在 `重訓 BTC_trade 模型` 或 `等待 BTC_trade 預測資料`。
+  新版會保留背景工作並持續輪詢，不再把長時間訓練直接當 timeout；只有腳本真的失敗，
+  或預測腳本跑完後仍等不到新的 `runtime/report_log_4h.jsonl`，才應視為異常
+- 你刻意送很短或異常的回測資料，但系統卻像是自己換了一套行情：
+  `2026.05.04-070` 之後，這不應再靜默發生。若 `candles < 2`，系統只有在
+  顯式設定 `auto_fetch_reference_candles=true` 時才會抓 reference candles，
+  否則應明確拒絕
+- flat Bollinger 序列竟然出現交易：
+  `2026.05.04-070` 之後，`std=0` 的 flat 序列不應再觸發
+  `below_lower` / `above_upper`
 - root 開了 trading，但 economy / PointsChain 沒先驗證：
   這是不完整部署。
 - 網格 / workflow bot 看得到但不該直接上 production：
@@ -89,6 +109,9 @@
 - DCA `max_runs=-1` 長期執行與重啟後續跑驗證
 - `BTC/USDT 1h` 全年回測（約 `8784` 根）是否仍可通過，不再被舊的 `5000` 根上限擋住
 - `10,001 ~ 20,000` 根 K 線時，是否由後端自動分段續跑，且 DCA / workflow / 持倉狀態不會在段與段之間被重置
+- `candles < 2` 時是否明確拒絕；只有顯式 opt-in 才允許後端抓 reference candles
+- flat Bollinger 序列是否仍誤觸發；異常跳躍 candle 是否會被 skip 並在回測結果留下 warning
+- 交易機器人稽核 dashboard 是否正確區分 `未稽核` 與綠 / 黃 / 紅燈
 - `security/trading_stress_pentest.py`
 - snapshot / restore 後狀態一致性
 

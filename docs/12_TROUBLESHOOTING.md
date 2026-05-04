@@ -173,10 +173,57 @@
 - 目前 release 是否已經是 `2026.05.04-067` 之後；新版總上限是 `20,000` 根，不是舊的 `5,000`
   或單批 `10,000`
 - 你送的 `candles` 是不是超過 `20,000` 根
+
+#### 11-5. 交易頁目前價格不動、和參考 K 線不同、或突然亮黃燈
+
+先分辨：
+
+- 目前價格卡片現在是每 `1` 秒用 `GET /api/trading/live-price` 更新，不是跟著整個 dashboard 的 `5` 秒刷新頻率
+- 交易卡上的 `目前價格` 是實際交易參考價；參考圖表的最新收盤只是 chart reference，不保證完全相同
+- 若看到綠字 / 紅字，表示新版正在用最新一筆價格和上一筆做方向比較
+- 若看到黃燈，代表 `live-price` 已回傳 `price_health != healthy`，常見原因是：
+  - `fallback_reason` 有值
+  - `excluded_sources` 不為空
+  - order book 已降級成 fallback / cached source
+- `GET /api/trading/live-price` 不是純 read-only；它會順便把最新 `manual_price_points / price_source` 快取寫回 DB，方便後端後續撮合共用同一份最新價
 - 若是 API 自動抓歷史 K 線，請確認 `start_time / end_time / timeframe` 是否真的落在你想要的區間
 - 若是 `10,001 ~ 20,000` 根之間，這已改成後端自動分段續跑，不需要再手動拆兩次回測
 - 若你不確定 `20,000` 根到底代表多久，直接看回測頁日期欄位下方提示；
   新版會依目前週期告訴你「若保留開始時間，結束最晚可選到哪裡」或反過來提示開始最早可選日期
+
+#### 11-5. 回測結果看起來像被系統自己換成真實行情
+
+先分辨：
+
+- `2026.05.04-070` 之後，只有在你明確送 `auto_fetch_reference_candles=true`
+  時，後端才會自動下載 reference candles
+- 若你送的 `candles` 太短、但又沒有 opt-in，預期行為應是拒絕而不是自動改抓 live 行情
+- 若你還看到靜默換行情，先確認正在跑的 server 版本是否真的已升到 `2026.05.04-070`
+
+#### 11-6. Bollinger 回測在平盤也亂交易
+
+#### 11-7. BTC_trade 一鍵啟動跑很久，畫面卻以前會直接報 timeout
+
+先分辨：
+
+- 目前 release 是否已經是 `2026.05.04-072` 之後；新版已把 `一鍵啟動預測`
+  改成背景工作，root 端只會輪詢 step 狀態，不再把長時間訓練直接視為失敗
+- 狀態列是不是停在 `重訓 BTC_trade 模型`
+- `update_data.py` / `retrain_models.py` / `hourly_check.py` 是否真的存在於你設定的 BTC_trade 專案目錄
+- `runtime/report_log_4h.jsonl` 在預測腳本完成後是否有更新時間或新的 `generated_at`
+
+若仍失敗，應看到的是：
+
+- 腳本缺失
+- 腳本實際 return code 非 0
+- 或「預測腳本已執行，但在等待時間內沒有看到新的預測資料」
+
+先分辨：
+
+- 目前 release 是否已經是 `2026.05.04-070` 之後；新版 `std=0` 的 flat 序列不應再觸發
+  `below_lower` / `above_upper`
+- 你的測試資料是否真的全部是同價 flat candles
+- 回測結果裡是否已有 `range_warnings` 或其他 warning，表示資料本身被視為異常
 
 ### 恢復 / reset 類
 

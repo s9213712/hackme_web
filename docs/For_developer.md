@@ -13,7 +13,7 @@ deployer.
 
 ## Release and Schema
 
-- Release ID: `2026.05.04-069`
+- Release ID: `2026.05.04-074`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`

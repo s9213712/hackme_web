@@ -1,6 +1,118 @@
 # Update Summary
 
-Release ID: `2026.05.04-069`
+Release ID: `2026.05.04-074`
+
+## 2026.05.04-074
+
+## Highlights
+
+- Root trading settings are now split out of the overloaded `計費` page into a
+  dedicated `交易所` settings tab.
+- The trading settings UI is reorganized into focused groups:
+  - basic trading / borrowing / liquidation controls
+  - price source and fusion diagnostics
+  - bot auto-scan and audit dashboard
+  - BTC_trade integration
+  - per-market overrides
+- Existing field ids and backend payload formats stay intact, so the change is
+  a UI / IA cleanup rather than a breaking settings-schema migration.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-073
+
+## Highlights
+
+- The trading page `目前價格` card now refreshes once per second through a
+  lightweight `GET /api/trading/live-price` route instead of waiting for the
+  heavier 5-second dashboard refresh.
+- Price direction is now visualized directly in the card: up ticks turn green,
+  down ticks turn red, and degraded fallback / cached sources show a yellow
+  warning badge.
+- The `live-price` response now returns `price_health`, `fallback_reason`,
+  `excluded_sources`, and `defaulted_market`, so the frontend can explain why a
+  price is degraded instead of silently treating it as healthy.
+- Cached fallback prices no longer truncate fractional values via `int(...)`;
+  the fallback path now preserves decimal precision so `0.12345678` does not
+  become `0`, and `123.99` does not become `123`.
+- `GET /api/trading/live-price` is documented as a safe-read route that still
+  refreshes the cached `trading_markets.manual_price_points / price_source`
+  fields in SQLite for downstream order-entry and dashboard consistency.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py tests/test_trading_reference_prices.py tests/test_frontend_economy.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
+- `git diff --check`
+
+## 2026.05.04-072
+
+## Highlights
+
+- Root trading settings now expose a `BTC_trade 一鍵啟動預測` button after the
+  repo path is configured. The start flow first checks whether the BTC_trade
+  data file is stale and whether model artifacts are older than the latest
+  data, then only reruns `update_data.py` / `retrain_models.py` when needed,
+  and finally launches `hourly_check.py`.
+- Long BTC_trade model training no longer gets treated as an immediate timeout
+  failure. The start flow now runs as a background job, and the root panel
+  polls job status until it either sees a fresh `runtime/report_log_4h.jsonl`
+  or explicitly reports that the latest prediction is still within the valid
+  freshness window.
+- The root `檢查 BTC_trade` status text now includes a compact summary of
+  data/model/prediction freshness instead of only saying whether the report is
+  available.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py -k 'btc_trade or start_status or start_returns_background_job or artifact_freshness'`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py -k 'btc_trade or reference_polling'`
+- `python3 -m py_compile services/btc_trade_bridge.py routes/trading.py`
+
+## 2026.05.04-071
+
+## Highlights
+
+- The trading page no longer lets single-source reference-price polling
+  overwrite the fused/live execution reference price shown in the order card.
+  Reference candles now stay in the chart lane only, while the visible
+  `目前價格` and order estimate keep using the real market price returned by the
+  trading dashboard.
+- This closes the UI mismatch where users could see the displayed trading price
+  jump between very different values even though the actual execution
+  reference price had not changed the same way.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_frontend_economy.py`
+- `git diff --check`
+
+## 2026.05.04-070
+
+## Highlights
+
+- Trading backtests no longer silently replace a user-supplied short candle set
+  with live public-market history. The route now requires an explicit
+  `auto_fetch_reference_candles=true` opt-in before it downloads reference
+  candles, so isolated QA and hand-built scenarios stay isolated by default.
+- The backtest engine now guards obviously abnormal jump candles and flat
+  Bollinger ranges. Extreme outlier candles are skipped with explicit warnings
+  instead of booking fake profits, and `std=0` flat sequences no longer
+  trigger `below_lower` / `above_upper` Bollinger conditions.
+- Root now has a dedicated trading-bot audit dashboard. Bots remain `未稽核`
+  until they either produce at least one trade or stay enabled for 24 hours;
+  after that the scheduler records green/yellow/red audit runs, surfaces recent
+  findings, and lists trading bug reports in the same root-only panel.
+
+## Validation
+
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_engine.py -k "audit or backtest or bollinger or outlier or 20000"`
+- `PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py tests/test_frontend_economy.py tests/test_bug_reports.py tests/test_release_policy.py`
+- `python3 scripts/pre_push_checks.py --ci`
 
 ## 2026.05.04-069
 

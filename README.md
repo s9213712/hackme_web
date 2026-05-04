@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.04-069`**
+**Current Release ID: `2026.05.04-074`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -68,7 +68,13 @@ curl -k -sS https://127.0.0.1:5000/api/version
 另一側最遠可選到哪裡，避免使用者自己換算資料根數。超過總量時，前後端都會明確要求
 你縮小區間或改大時間週期。
 root 另外可在交易所參數裡看到「融合價格即時比例」dashboard，直接檢查目前各 API 的真實占比、
-被排除來源、以及是否已降級成保守模式。
+被排除來源、以及是否已降級成保守模式。新版也多了 root-only 的「交易機器人定期稽核」
+dashboard：新 bot 會先顯示 `未稽核`，等首筆成交或啟用滿 24 小時後，才會進入綠 / 黃 / 紅燈。
+若你有接 BTC_trade，root 設定頁現在還有 `一鍵啟動預測`；它會先檢查資料與模型是否過期，
+必要時補資料更新與重訓，再在背景執行預測並等待新的 report，不會因長時間訓練直接用 timeout 當失敗。
+交易頁的 `目前價格` 現在每 `1` 秒用輕量 `live-price` API 更新一次，漲綠跌紅；若 live fused price
+已降級到 fallback / cached source，前端會直接亮黃燈，而不是假裝仍是正常來源。
+另外，交易相關 root 設定已從 `計費` 分頁拆成獨立 `交易所` 分頁，不再和一般扣點 catalog 混在一起。
 
 Fresh local databases create `root/root`, `admin/admin`, and `test/test`, then
 force those accounts to change password on first login. Set
@@ -102,7 +108,7 @@ passwords.
 
 - [docs/11_QA_TESTING.md](docs/11_QA_TESTING.md)
 - [docs/12_TROUBLESHOOTING.md](docs/12_TROUBLESHOOTING.md)
-- [docs/DOCUMENTATION_AUDIT_REPORT.md](docs/DOCUMENTATION_AUDIT_REPORT.md)
+- [docs/AGENTS/README.md](docs/AGENTS/README.md)
 
 ### Deep Reference
 

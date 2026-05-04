@@ -123,6 +123,16 @@ minutes, with other supported intervals available from the UI.
 The backend always re-checks the execution price before order execution. The
 frontend chart is a reference display, not the source of final settlement.
 
+The trading page current-price card now refreshes once per second through
+`GET /api/trading/live-price`. That route is not purely read-only: when a live
+or fused price is successfully resolved, it also refreshes the cached
+`trading_markets.manual_price_points` and `price_source` fields in SQLite so
+order-entry hints, dashboard reads, and later executions share the same latest
+reference price. If the live price degrades to fallback / cached mode, the API
+returns `price_health`, `fallback_reason`, `excluded_sources`, and
+`defaulted_market`, and the frontend shows a yellow warning badge instead of
+pretending the source is still fully healthy.
+
 Root manual pricing is not exposed as a production trading fallback. It should
 only exist in legacy/local tests where explicitly enabled by the test harness.
 
@@ -170,8 +180,13 @@ To enable it:
 6. Press `儲存交易所參數`. When the setting changes from disabled to enabled,
    the web UI automatically calls the setup endpoint.
 7. You can also press `下載/更新並建置` manually.
-8. Press `檢查 BTC_trade` to inspect whether the runtime report is available.
-9. Open the trading page and select `BTC/USDT`.
+8. Press `檢查 BTC_trade` to inspect whether the runtime report is available,
+   whether the data file is stale, and whether model / prediction artifacts are
+   older than the latest data.
+9. Press `一鍵啟動預測` to let `hackme_web` decide whether it must run
+   `update_data.py`, `retrain_models.py --timeframe 4h`, and then
+   `hourly_check.py --timeframe 4h`.
+10. Open the trading page and select `BTC/USDT`.
 
 The setup endpoint performs these steps:
 
@@ -186,6 +201,13 @@ python3 backtest_report.py --timeframe 4h
 
 Failures are reported to `root` as build status. They do not block login,
 wallet, trading, or other server functions.
+
+The one-click start path is different from the setup/build path:
+
+- it runs as a background job
+- it does not treat long model training as an immediate timeout failure
+- it polls until a newer `runtime/report_log_4h.jsonl` appears, or explicitly
+  reports that the latest prediction is still within the valid freshness window
 
 The panel reads the latest line from:
 
@@ -361,7 +383,7 @@ Runtime behavior:
 - Existing grid bots can be loaded into the backtest panel for what-if replay.
 
 The earlier design report is still useful background material:
-[Grid Trading Bot Design Report](research/GRID_TRADING_BOT_DESIGN_REPORT.md).
+[Grid Trading Bot Design Report](research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md).
 
 ### Workflow Strategy Bot
 

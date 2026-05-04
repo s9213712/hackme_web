@@ -75,5 +75,5 @@ The repository root keeps only [README.md](../README.md) and
 - [VERSION_STORY.md](VERSION_STORY.md): project history and abandoned branches
 - [archive/research/README.md](archive/research/README.md): archived research
   notes and retired implementation workflows
-- [research/GRID_TRADING_BOT_DESIGN_REPORT.md](research/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
+- [research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md](research/finished/GRID_TRADING_BOT_DESIGN_REPORT.md): future grid-bot research
 - [archive/webterminal/README.md](archive/webterminal/README.md): archived WebTerminal attempts

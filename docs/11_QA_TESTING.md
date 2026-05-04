@@ -142,6 +142,9 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - 所有手動權重設成 0 時，是否會安全退回自動深度權重，且 root dashboard / log 會明確標成 `manual weights invalid`
   - root-only `融合價格即時比例` dashboard 是否會列出實際 normalized weights、excluded source 與 `價格來源降級`
   - order book 全失敗時，是否明確標示 fallback source，且不把它當成正常 fused price
+  - `GET /api/trading/live-price` 是否每 `1` 秒更新目前價格、漲綠跌紅，且在 fallback / excluded source 時亮黃燈
+  - `live-price` 回應是否含 `price_health / fallback_reason / excluded_sources / defaulted_market`
+  - `live-price` 是否會同步刷新 DB 內 `trading_markets.manual_price_points / price_source` 快取，文件也要寫清楚這不是純 read-only API
   - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
 - 若本次改到借貸利息 / backtest 上限，至少補：
   - `principal=50, daily_rate=1%, 24h` 是否改成保留 `0.5` 點殘值，而不是直接記成 `1`
@@ -149,10 +152,19 @@ python3 security/trading_exchange_validation.py --out /tmp/trading_exchange_vali
   - `BTC/USDT 2024-01-01 ~ 2024-12-31 @ 1h` 是否可直接回測，不再被 `5000` 根上限擋住
   - 回測頁在使用者選 `start_time / end_time / timeframe` 時，是否會直接提示另一側日期最遠可設到哪裡，而不是只丟出 `20,000` 根上限
   - 改變 `timeframe` 後，開始 / 結束日期欄位的 `min / max` 是否同步更新
+  - `candles < 2` 不可再靜默覆蓋成 live public history；只能在明確 opt-in 時抓 reference candles
+  - flat Bollinger 序列不應誤觸發
+  - 異常 jump / outlier candle 不能靜默吃成正常高報酬
 - 若本次改到 DCA 機器人，至少補：
   - `max_runs=-1` 是否會被正確保存為不限制，而不是被前端或後端偷偷改回 1
   - 跑過一次後再 backdate/重啟，是否仍可繼續執行，不會被誤判為已達上限
   - 不限制模式下 UI 是否不再顯示「增加次數」這種多餘操作
+- 若本次改到 BTC_trade 整合，至少補：
+  - root 設定 `repo / branch / project path` 後，`檢查 BTC_trade` 是否會正確列出腳本缺漏與資料 / 模型 / 預測狀態
+  - `一鍵啟動預測` 是否先檢查資料過期與模型新舊，再決定是否補跑 `update_data.py` / `retrain_models.py`
+  - 訓練很久時是否改成背景工作持續輪詢，而不是直接因 timeout 顯示失敗
+  - `hourly_check.py` 跑完後是否真的等到新的 `runtime/report_log_4h.jsonl`，或至少明確說明沿用的是仍有效期內的既有預測
+  - 長時間執行中途重新整理頁面後，root 是否仍可從背景工作狀態知道目前停在哪個 step
 - 若本次改到任何交易核心邏輯，另外強制補：
   - `empty candles`、`single candle`、`negative / zero / NaN / missing tick` 是否被正確拒絕或明確標示略過
   - workflow `flat sequence` 是否仍不會誤觸發
