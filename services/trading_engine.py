@@ -10,6 +10,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from services.notifications import create_notification_if_enabled, create_root_notification_if_enabled
+from services.server_mode_context import SmV2Context, current_ctx
+from services.trading_mode_gate import assert_trading_allowed
 from services.trading_markets import (
     list_market_definitions,
     list_live_price_markets,
@@ -1450,6 +1452,22 @@ class TradingEngineService:
         enabled = conn.execute("SELECT value FROM trading_settings WHERE key='trading.enabled'").fetchone()
         if enabled and str(enabled["value"]).lower() not in {"true", "1", "yes"}:
             raise ValueError("trading is disabled")
+
+    def _legacy_production_ctx(self):
+        return SmV2Context(
+            mode="production",
+            tester_id=None,
+            actor_role="system",
+            request_id="legacy-trading",
+        )
+
+    def _resolve_trading_ctx(self, ctx=None, *, action="trade"):
+        if ctx is None:
+            try:
+                ctx = current_ctx()
+            except Exception:
+                ctx = self._legacy_production_ctx()
+        return assert_trading_allowed(ctx, action=action)
 
     def _runtime_market_sort_key(self, item):
         symbol = str((item or {}).get("symbol") if isinstance(item, dict) else item or "").strip().upper()
@@ -9067,7 +9085,8 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False, is_grid_order=False):
+    def place_order(self, *, actor, market_symbol, side, order_type, quantity, limit_price_points=None, emergency_close=False, is_grid_order=False, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="place_order")
         user_id = self._actor_id(actor)
         if not user_id:
             raise ValueError("login required")
@@ -9267,7 +9286,8 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def match_open_limit_orders(self, *, actor=None, market_symbol=None, limit=200):
+    def match_open_limit_orders(self, *, actor=None, market_symbol=None, limit=200, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="match_open_limit_orders")
         limit = _to_int(limit or 200, name="limit", minimum=1, maximum=1000)
         actor = actor or {"username": "system", "role": "system"}
         conn = self.get_db()
@@ -9606,7 +9626,8 @@ class TradingEngineService:
         )
         return conn.execute("SELECT * FROM trading_fills WHERE id=?", (fill_id,)).fetchone()
 
-    def cancel_order(self, *, actor, order_uuid):
+    def cancel_order(self, *, actor, order_uuid, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="cancel_order")
         user_id = self._actor_id(actor)
         conn = self.get_db()
         try:
@@ -9666,7 +9687,8 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points, idempotency_key=None):
+    def open_margin_position(self, *, actor, market_symbol, position_type, quantity, collateral_points, idempotency_key=None, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="open_margin_position")
         user_id = self._actor_id(actor)
         if not user_id:
             raise ValueError("login required")
@@ -9903,7 +9925,8 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def add_margin_collateral(self, *, actor, position_uuid, amount_points, idempotency_key=None):
+    def add_margin_collateral(self, *, actor, position_uuid, amount_points, idempotency_key=None, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="add_margin_collateral")
         actor_user_id = self._actor_id(actor)
         if not actor_user_id:
             raise ValueError("login required")
@@ -10041,7 +10064,8 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def close_margin_position(self, *, actor, position_uuid, force_liquidation=False, price_override_points=None, price_source_override=None):
+    def close_margin_position(self, *, actor, position_uuid, force_liquidation=False, price_override_points=None, price_source_override=None, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="close_margin_position")
         actor_user_id = self._actor_id(actor)
         conn = self.get_db()
         try:
@@ -10275,7 +10299,8 @@ class TradingEngineService:
         finally:
             conn.close()
 
-    def scan_margin_liquidations(self, *, actor=None, limit=100):
+    def scan_margin_liquidations(self, *, actor=None, limit=100, ctx=None):
+        ctx = self._resolve_trading_ctx(ctx, action="scan_margin_liquidations")
         limit = _to_int(limit or 100, name="limit", minimum=1, maximum=500)
         actor = actor or {"username": "system", "role": "system"}
         conn = self.get_db()

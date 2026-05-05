@@ -8,7 +8,9 @@ import pytest
 
 import services.trading_engine as trading_engine_module
 from services.points_chain import PointsLedgerService, ensure_points_economy_schema
+from services.server_mode_context import SmV2Context
 from services.trading_engine import TradingEngineService, ensure_trading_schema, fee_points, notional_points
+from services.trading_mode_gate import TradingDisabledInMode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -145,6 +147,34 @@ def test_depth_notional_score_accepts_orderbook_rows_with_extra_columns(tmp_path
 
     assert midpoint == pytest.approx(100.25)
     assert depth_score > 0
+
+
+def test_place_order_rejects_non_trading_mode_before_sql(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=10_000, action_type="seed")
+    with pytest.raises(TradingDisabledInMode):
+        trading.place_order(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            side="buy",
+            order_type="market",
+            quantity="0.1",
+            ctx=SmV2Context(mode="dev_ready", tester_id=None, actor_role="user", request_id="g1-order"),
+        )
+
+
+def test_margin_open_rejects_non_trading_mode_before_sql(tmp_path):
+    points, trading = _services(tmp_path)
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=20_000, action_type="seed")
+    with pytest.raises(TradingDisabledInMode):
+        trading.open_margin_position(
+            actor=_actor(),
+            market_symbol="ETH/POINTS",
+            position_type="margin_long",
+            quantity="1.0",
+            collateral_points=1_000,
+            ctx=SmV2Context(mode="maintenance", tester_id=None, actor_role="user", request_id="g1-margin"),
+        )
 
 
 @pytest.mark.parametrize(
