@@ -67,6 +67,14 @@ $HOME/.local/share/hackme_web
 2. 你知道 PointsChain restore 與整站 snapshot restore 的界線
 3. 你已在非 production 環境驗證過 restore / reset
 
+補充：
+
+- root 後台的 `上線前檢查` 是 preflight gate，不要求你先把站切成
+  `production`。
+- production profile 的 HTTPS / audit chain / Integrity Guard /
+  browser-only 等安全設定會在 `GO_LIVE` 切換成功時自動套用，不應被理解成
+  「必須先手動打開才能過檢查」。
+
 ### 反向代理建議
 
 本 repo 不綁定單一代理實作，但部署者至少要做到：

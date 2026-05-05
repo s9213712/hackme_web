@@ -2805,12 +2805,13 @@
           <span id="launch-check-summary" style="font-size:.78rem;color:var(--muted);"></span>
         </div>
         <div class="drive-card-sub" style="margin-bottom:.65rem;">
-          切換到 <strong>production</strong> 之前必須兩塊都通過：<strong>(A) 其他上線前條件</strong>（設定 / 鏈 / 完整性）+ <strong>(B) 13 份最新通過報告</strong>。<br>
+          切換到 <strong>production</strong> 之前必須兩塊都通過：<strong>(A) 切換前 blocker / 現況提示</strong>（鏈 / 完整性 / readiness / anomaly）+ <strong>(B) 13 份最新通過報告</strong>。<br>
+          <strong>注意：</strong>production profile 的 HTTPS / audit chain / Integrity Guard / browser-only 等安全設定會在 mode switch 成功時自動套用，<strong>不是</strong>你必須先手動打開的上線前檢查項目。<br>
           ❌ 紅 = 不通過或缺少；⚠ 黃 = 接近 / 警告；✓ 綠 = 通過。各卡片附捷徑與失敗對策。<br>
           詳細產生 / 上傳流程：<code>docs/examples/server_mode_v2/03_production_gate_playbook.md</code>。
         </div>
 
-        <div class="health-section-title" style="margin-top:.4rem;">A. 其他上線前條件（設定 / 鏈 / 完整性）</div>
+        <div class="health-section-title" style="margin-top:.4rem;">A. 切換前 blocker / 現況提示（鏈 / 完整性 / readiness / anomaly）</div>
         <div id="launch-check-conditions" class="health-summary-grid" style="margin-bottom:.65rem;"></div>
 
         <div class="health-section-title">B. 13 份必過 Production Gate Reports</div>

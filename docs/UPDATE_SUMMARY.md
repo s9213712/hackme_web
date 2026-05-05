@@ -1,6 +1,11 @@
 # Update Summary
 
-Release ID: `2026.05.05-133`
+Release ID: `2026.05.05-134`
+
+## 2026.05.05-134
+
+- Server Mode v2 的 `上線前檢查` 不再把「已先切成 production」或「已先手動套 production 等級安全設定」誤當成 preflight 前置條件。A 區現在只保留真正的切換前 blocker（鏈 / 完整性 / readiness / anomaly / reports），而 production profile 的 HTTPS、audit chain、Integrity Guard、browser-only 等會明確標成 `切換時自動套用`。
+- root 若在 `dev_ready`、`test`、`internal_test` 等非 production 模式先做上線前檢查，現在不會再因為目前尚未套用 production posture 而被一排紅燈誤導；真正的 `GO_LIVE` 切換仍由 mode switch 路徑與 production gate 共同把關。
 
 ## 2026.05.05-133
 

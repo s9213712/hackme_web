@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-133`**
+**目前 Release ID：`2026.05.05-134`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -17,6 +17,11 @@
 1. [00_START_HERE.md](00_START_HERE.md)
 2. [01_DEPLOY_QUICKSTART.md](01_DEPLOY_QUICKSTART.md)
 3. [02_DEPLOY_PRODUCTION.md](02_DEPLOY_PRODUCTION.md)
+
+補充：
+- `上線前檢查` 現在是純粹的 preflight gate，不再要求你先切成
+  `production`，也不再把 production profile 會在 mode switch 時自動套用的
+  HTTPS / audit chain / Integrity Guard / browser-only 設定當成手動前置條件。
 
 ### root / admin
 

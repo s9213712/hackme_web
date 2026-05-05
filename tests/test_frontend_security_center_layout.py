@@ -124,6 +124,20 @@ def test_server_update_ui_warns_and_requires_preview_then_apply():
     assert "serverUpdateApply.addEventListener" in bootstrap_js
 
 
+def test_launch_check_treats_production_profile_settings_as_auto_applied_not_manual_blockers():
+    index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "public" / "js" / "50-admin.js").read_text(encoding="utf-8")
+    launch_body = admin_js.split("function launchCheckConditionList(sc, requirements) {", 1)[1].split("function jumpToAnchor", 1)[0]
+
+    assert "production profile 的 HTTPS / audit chain / Integrity Guard / browser-only 等安全設定會在 mode switch 成功時自動套用" in index_html
+    assert "不是</strong>你必須先手動打開的上線前檢查項目" in index_html
+    assert "productionAutoSummary" in launch_body
+    assert "上線前檢查可在非 production 執行；真正切換由 GO_LIVE 完成" in launch_body
+    assert "這些安全設定會在切換到 production 時自動套用，不是上線前檢查的手動前置條件" in launch_body
+    assert "production 必須開 Integrity Guard" not in launch_body
+    assert "請先切到 dev_ready 再開上線檢查" not in launch_body
+
+
 def test_settings_area_uses_collapsible_groups_to_reduce_clutter():
     index_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")

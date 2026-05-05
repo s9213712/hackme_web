@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-133`
+- Release ID: `2026.05.05-134`
 - Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -67,6 +67,12 @@ Server Mode v2 note:
 - `docs/examples/server_mode_v2/` no longer stops at the two token tutorials.
   It now also includes focused pentest, stress, full-feature, and
   privilege-escalation scripts.
+- `launch-check` is a preflight gate, not a requirement to already be in
+  `production`.
+- Production profile controls such as HTTPS, audit chain, Integrity Guard, and
+  browser-only mode are applied during the `GO_LIVE` switch itself, so the
+  launch-check tab shows them as auto-applied posture instead of manual
+  preconditions.
 - `security/server_mode_v2_full_smoke.py` is the isolated runtime harness that
   runs the six-script bundle and then verifies shadow-table activity did not
   leak into production wallet / ledger tables.

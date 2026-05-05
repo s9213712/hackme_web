@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-133`**
+**Current Release ID: `2026.05.05-134`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -20,6 +20,11 @@ root 自建 `custom`，並回報 `seed_version` / `seed_sync_status`。也就是
 catalog 只負責 bootstrap 與版本對照，真正執行期 source of truth 是 DB
 registry；若 seeded 市場被 root 改過，後台會直接顯示 drifted，而不是把
 catalog / DB 差異藏起來。
+
+Server Mode v2 的「上線前檢查」也已收斂成真正的 preflight blocker：
+它不再要求你先手動把站切成 `production`，也不再把 production profile
+會自動套用的 HTTPS / audit chain / Integrity Guard / browser-only 等設定
+列成必須事先打開的紅燈項目。
 
 Recent AI image workflow additions now include `img2img`, `inpaint`,
 `outpaint`, ControlNet-assisted generation, upscale-model selection, and

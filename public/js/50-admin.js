@@ -3011,55 +3011,48 @@ const LAUNCH_CHECK_REPORT_META = {
   },
 };
 
-// 其他上線前條件（settings + integrity + chain）— production gate
-// 不只看 13 報告，還必須這些都綠燈才允許切。每個 condition 函式拿到
+// 其他上線前條件（真正 blocker + 現況提示）— production gate
+// 不把「已經先切成 production」或「已手動套 production 設定」當成前置條件。
+// production profile 會在 mode switch 成功時自動套用；A 區只保留切換前真的
+// 需要先確認的 blocker，外加少量資訊卡。每個 condition 函式拿到
 // (sc, requirements) 回傳 {label, value, color, hint?, shortcut?}.
 function launchCheckConditionList(sc, requirements) {
-  const settings = sc.settings || {};
   const audit = sc.audit_integrity || {};
   const readiness = sc.readiness || {};
   const anomaly = sc.anomaly || {};
   const mode = (sc.mode || {}).current_mode || "dev_ready";
+  const profiles = Array.isArray(sc.profiles) ? sc.profiles : [];
+  const productionProfile = profiles.find((item) => item && item.name === "production") || {};
+  const productionSettings = productionProfile.settings || {};
   const out = [];
 
-  const goSettingsSecurity = () => { switchServerTab("settings"); jumpToAnchor("sec-settings-security"); };
-
-  // Mode posture: production = green, dev_ready = blue (ready), 其他紅
-  const modeOk = (mode === "production");
-  const modeReady = (mode === "dev_ready");
+  // Mode posture: 顯示目前在哪個世界，但不要求先成為 production。
   out.push({
     label: "目前 server mode",
     value: mode,
-    color: modeOk ? "#4caf50" : modeReady ? "#82b1ff" : "#ff4f6d",
-    hint: modeOk ? "已在 production" : modeReady ? "dev_ready：已準備好切 production" : "請先切到 dev_ready 再開上線檢查",
+    color: mode === "production" ? "#4caf50" : "#82b1ff",
+    hint: mode === "production"
+      ? "目前已在 production"
+      : "上線前檢查可在非 production 執行；真正切換由 GO_LIVE 完成",
     shortcut: { kind: "ui", target: "settings", anchor: "server-mode-section", label: "前往伺服器設定 → 模式切換" },
   });
 
-  // Maintenance mode 必須關
+  // Production profile 會在成功切 mode 時自動套用，不應列為前置 blocker。
+  const productionAutoSummary = [
+    productionSettings.server_ssl_enabled ? "HTTPS" : null,
+    productionSettings.audit_chain_enabled ? "audit chain" : null,
+    productionSettings.ip_blocking_enabled ? "IP 封鎖" : null,
+    productionSettings.login_violation_enabled ? "登入暴力鎖" : null,
+    productionSettings.rate_limit_violation_enabled ? "rate limit" : null,
+    productionSettings.integrity_guard_enabled ? `Integrity Guard${productionSettings.integrity_guard_strict_mode ? " strict" : ""}` : null,
+    productionSettings.browser_only_mode_enabled ? "browser-only" : null,
+  ].filter(Boolean);
   out.push({
-    label: "維護模式",
-    value: settings.maintenance_mode ? "啟用" : "關閉",
-    color: settings.maintenance_mode ? "#ff4f6d" : "#4caf50",
-    hint: settings.maintenance_mode ? "production 必須關閉維護模式" : "已關閉",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
-  });
-
-  // SSL / HTTPS 必須開
-  out.push({
-    label: "HTTPS / SSL",
-    value: settings.server_ssl_enabled ? "啟用" : "關閉",
-    color: settings.server_ssl_enabled ? "#4caf50" : "#ff4f6d",
-    hint: settings.server_ssl_enabled ? "已啟用" : "production 必須走 HTTPS",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
-  });
-
-  // Audit chain 必須開
-  out.push({
-    label: "審計 hash chain",
-    value: settings.audit_chain_enabled ? "啟用" : "關閉",
-    color: settings.audit_chain_enabled ? "#4caf50" : "#ff4f6d",
-    hint: settings.audit_chain_enabled ? "已啟用" : "production 必須開 audit chain",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+    label: "production profile 自動套用",
+    value: productionAutoSummary.length ? productionAutoSummary.join(" / ") : "內建 hardening",
+    color: "#82b1ff",
+    hint: "這些安全設定會在切換到 production 時自動套用，不是上線前檢查的手動前置條件",
+    shortcut: { kind: "ui", target: "settings", anchor: "server-mode-section", label: "前往伺服器設定 → 模式切換" },
   });
 
   // Audit chain 完整性
@@ -3067,57 +3060,12 @@ function launchCheckConditionList(sc, requirements) {
   const auditOk = !!audit.ok;
   out.push({
     label: "Audit chain 完整性",
-    value: auditEnabled ? (auditOk ? "完整" : "異常") : "停用",
-    color: auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e",
-    hint: auditEnabled ? (auditOk ? "雜湊鏈無斷點" : "雜湊鏈不完整：先進事故封鎖、查 mode_switch_logs") : "audit chain 已停用 — production 不可放行",
+    value: auditEnabled ? (auditOk ? "完整" : "異常") : "目前未啟用",
+    color: auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#82b1ff",
+    hint: auditEnabled
+      ? (auditOk ? "雜湊鏈無斷點" : "雜湊鏈不完整：先處理 mode_switch_logs / audit 問題再上線")
+      : "目前模式未啟用 audit chain；切 production 時會自動開，但若要先演練請在隔離環境做 production gate rehearsal",
     shortcut: { kind: "ui", target: "health", anchor: "server-health-audit", label: "前往健康度 → 審計與檢查" },
-  });
-
-  // Login violation lock
-  out.push({
-    label: "登入暴力鎖",
-    value: settings.login_violation_enabled ? "啟用" : "關閉",
-    color: settings.login_violation_enabled ? "#4caf50" : "#ff4f6d",
-    hint: settings.login_violation_enabled ? "已啟用" : "production 必須開",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
-  });
-
-  // IP blocking
-  out.push({
-    label: "IP 封鎖",
-    value: settings.ip_blocking_enabled ? "啟用" : "關閉",
-    color: settings.ip_blocking_enabled ? "#4caf50" : "#ff4f6d",
-    hint: settings.ip_blocking_enabled ? "已啟用" : "production 必須開",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
-  });
-
-  // Rate limit
-  out.push({
-    label: "速率限制",
-    value: settings.rate_limit_violation_enabled ? "啟用" : "關閉",
-    color: settings.rate_limit_violation_enabled ? "#4caf50" : "#ff4f6d",
-    hint: settings.rate_limit_violation_enabled ? "已啟用" : "production 必須開",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
-  });
-
-  // Integrity Guard 必須開（strict 推薦）
-  const igOn = !!settings.integrity_guard_enabled;
-  const igStrict = !!settings.integrity_guard_strict_mode;
-  out.push({
-    label: "Integrity Guard",
-    value: igOn ? (igStrict ? "嚴格模式" : "啟用") : "關閉",
-    color: igOn ? (igStrict ? "#4caf50" : "#ffb74d") : "#ff4f6d",
-    hint: igOn ? (igStrict ? "嚴格模式已開（建議）" : "建議切到嚴格模式才上線") : "production 必須開 Integrity Guard",
-    shortcut: { kind: "ui", target: "integrity", anchor: "integrity-findings", label: "前往 Integrity Guard 分頁" },
-  });
-
-  // Browser-only mode（production 預設應啟用）
-  out.push({
-    label: "Browser-only 模式",
-    value: settings.browser_only_mode_enabled ? "啟用" : "關閉",
-    color: settings.browser_only_mode_enabled ? "#4caf50" : "#ffb74d",
-    hint: settings.browser_only_mode_enabled ? "已啟用（推薦）" : "未啟用：production 建議開以阻擋非瀏覽器的 /api 直擊",
-    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
   });
 
   // Readiness
