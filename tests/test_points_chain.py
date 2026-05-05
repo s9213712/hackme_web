@@ -39,7 +39,15 @@ def _db(tmp_path):
 
 
 def _service(tmp_path):
-    return PointsLedgerService(get_db=_db(tmp_path), chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    # Phase 7: chain writes require mode == 'production'. These tests
+    # exercise the production-mode behavior of PointsChain; the new
+    # production-only guard takes a mode_reader and refuses non-prod.
+    return PointsLedgerService(
+        get_db=_db(tmp_path),
+        chain_secret="test-secret",
+        backup_dir=tmp_path / "points_chain_backups",
+        mode_reader=lambda: "production",
+    )
 
 
 def test_points_transaction_updates_wallet_and_hash_chain(tmp_path):

@@ -583,12 +583,41 @@ def ensure_points_economy_schema(conn):
     conn.execute("UPDATE points_pending_rewards SET currency_type=? WHERE currency_type='hard'", (INTERNAL_CURRENCY,))
 
 
+class ChainModeViolation(RuntimeError):
+    """Phase 7 of SERVER_MODE_V2_IMPLEMENTATION_PLAN.md.
+
+    PointsChain block writes are valid in `production` only. Any
+    attempt to seal / mutate `points_chain_blocks` from a non-
+    production runtime mode raises this exception so the call is
+    blocked before the SQL ever executes.
+
+    Treat this exception as a release blocker — it should never
+    surface in normal operation. If you see one, the audit chain has
+    been very nearly polluted.
+    """
+
+    def __init__(self, mode, action="chain_write"):
+        self.mode = mode
+        self.action = action
+        super().__init__(
+            f"chain {action} forbidden in mode={mode!r}; production-only"
+        )
+
+
 class PointsLedgerService:
-    def __init__(self, *, get_db, chain_secret, audit=None, backup_dir=None):
+    def __init__(self, *, get_db, chain_secret, audit=None, backup_dir=None, mode_reader=None, security_event_recorder=None):
         self.get_db = get_db
         self.chain_secret = chain_secret
         self.audit = audit or (lambda *args, **kwargs: None)
         self.backup_dir = Path(backup_dir or os.environ.get("POINTS_CHAIN_BACKUP_DIR") or "./secure_backups/points_chain")
+        # Phase 7: production-only guard. mode_reader is injected so
+        # this module stays decoupled from server / Flask. Default
+        # behavior when no reader is configured: refuse the write —
+        # this is intentional. A non-configured reader means we can't
+        # prove we're in production, and PointsChain MUST default to
+        # safe-locked, never to production-routing.
+        self._mode_reader = mode_reader
+        self._security_event_recorder = security_event_recorder or (lambda *a, **kw: None)
 
     def ensure_schema(self, conn):
         ensure_points_economy_schema(conn)
@@ -654,6 +683,34 @@ class PointsLedgerService:
         row = self._safe_mode_row(conn)
         if row and int(row["safe_mode"] or 0):
             raise ValueError(f"PointsChain safe mode active; {action} is paused until root restores a healthy ledger backup")
+
+    def _assert_production_mode(self, action):
+        """Phase 7 guard. Raise ChainModeViolation unless mode == 'production'.
+
+        Reads the mode every call (no caching) so a switch out of
+        production immediately blocks subsequent writes. If the mode
+        reader is unavailable or raises, we still refuse the write —
+        chain integrity outweighs convenience. The violation is
+        logged as a `chain_mode_violation` security event so the
+        attempt is visible even when the caller swallows the
+        exception.
+        """
+        mode = None
+        try:
+            if callable(self._mode_reader):
+                mode = self._mode_reader()
+        except Exception:
+            mode = None
+        if mode != "production":
+            try:
+                self._security_event_recorder(
+                    "chain_mode_violation",
+                    target_user="-",
+                    detail=f"action={action},mode={mode!r}",
+                )
+            except Exception:
+                pass
+            raise ChainModeViolation(mode, action=action)
 
     def _backup_payload(self, conn):
         def rows(sql):
@@ -2423,6 +2480,10 @@ class PointsLedgerService:
             conn.close()
 
     def seal_block(self, *, actor=None, limit=100):
+        # Phase 7 production-only guard. Runs BEFORE we open a write
+        # transaction so a non-production caller never even reaches
+        # the chain INSERT path.
+        self._assert_production_mode("seal_block")
         conn = self.get_db()
         try:
             self.ensure_schema(conn)
@@ -2514,6 +2575,21 @@ class PointsLedgerService:
         return result
 
     def force_seal_block(self, *, actor=None, reason="", limit=500):
+        # Phase 7: chain writes require mode == 'production'. When mode-
+        # switch / snapshot / restore flows call us from non-production
+        # (e.g. switching to internal_test, where the chain SHOULD NOT
+        # be touched), we degrade gracefully to a no-op rather than
+        # raising — the violation event is still recorded by the guard.
+        try:
+            self._assert_production_mode("force_seal_block")
+        except ChainModeViolation as exc:
+            return {
+                "ok": True,
+                "sealed": False,
+                "skipped": True,
+                "reason": str(reason or ""),
+                "msg": f"skipped: chain writes are production-only (mode={exc.mode!r})",
+            }
         verification = self.verify_chain()
         if verification.get("ok") is not True:
             return {"ok": False, "sealed": False, "msg": "points chain verification failed", "verification": verification}

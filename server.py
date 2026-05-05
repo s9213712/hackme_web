@@ -1146,6 +1146,9 @@ points_service = PointsLedgerService(
     chain_secret=CHAIN_SEED,
     audit=audit,
     backup_dir=POINTS_CHAIN_BACKUP_DIR,
+    # Phase 7: chain writes require mode == 'production'.
+    mode_reader=get_runtime_server_mode,
+    security_event_recorder=lambda event_type, **kwargs: record_security_event(event_type, get_client_ip(), **kwargs),
 )
 trading_price_stream_hub = TradingPriceStreamHub(audit=audit)
 trading_service = TradingEngineService(
