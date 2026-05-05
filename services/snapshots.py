@@ -279,7 +279,7 @@ BUILTIN_SECURITY_PROFILES = {
     },
     "internal_test": {
         "label": "internal test（內測）",
-        "description": "內測模式：只有 root 可直接登入；其他帳號必須提供 root 發出的內測登入 token。",
+        "description": "內測模式：只有 root 可直接登入；其他帳號必須提供 root 發出的內測登入 token。Tester trading 走 shadow tables，不可寫 production wallet。",
         "settings": {
             "maintenance_mode": False,
             "allow_register": False,
@@ -297,6 +297,10 @@ BUILTIN_SECURITY_PROFILES = {
             "feature_server_modes_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
+            # SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 2:
+            # internal_test: trading shadow only / no production wallet write.
+            # Tester actions are routed through test_shadow_* tables.
+            "feature_trading_enabled": False,
         },
         "thresholds": {
             "security_pending_chat_reports_threshold": 10,
@@ -308,8 +312,13 @@ BUILTIN_SECURITY_PROFILES = {
         "color": "orange",
     },
     "test": {
-        "label": "test（測試）",
-        "description": "一般測試設定檔，保留主要安全紀錄但降低啟動阻擋。",
+        "label": "test（隔離 QA 測試場）",
+        "description": (
+            "Isolated QA bench：開發者 / QA agent 跑 curl / 自動化 / fuzz / 例外輸入用。"
+            "Hard rules：不得用在公開正式站；不得接 production wallet / production ledger；"
+            "必須顯示明顯 TEST MODE banner。browser_only 預設關方便自動化；"
+            "密碼強度與強制改密可放寬；測試帳號與測試資料可 reset。"
+        ),
         "settings": {
             "maintenance_mode": False,
             "server_ssl_enabled": True,
@@ -323,6 +332,13 @@ BUILTIN_SECURITY_PROFILES = {
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": False,
             "feature_audit_log_enabled": True,
+            # SERVER_MODE_V2_PROFILE_MATRIX.md §test mode positioning:
+            # test mode is "isolated QA bench" — economy on so that QA can
+            # exercise wallet / ledger flows in isolated runtime, but trading
+            # remains off because trading is the heaviest economic write and
+            # accidentally pointing test runtime at production is high-impact.
+            # If you need trading-flow QA, run it in `internal_test` mode and
+            # let writes land in test_shadow_* tables.
             "feature_economy_enabled": True,
             "feature_trading_enabled": False,
         },
@@ -377,6 +393,12 @@ BUILTIN_SECURITY_PROFILES = {
             "rate_limit_violation_enabled": True,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": False,
+            # SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 4:
+            # maintenance / incident_lockdown: browser_only_mode is "n/a"
+            # because maintenance_mode already blocks normal user UI. We still
+            # set it explicitly True here so that any operator UI surface is
+            # browser-only on top of maintenance_mode (defense in depth).
+            "browser_only_mode_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
             "feature_trading_enabled": False,
@@ -405,6 +427,12 @@ BUILTIN_SECURITY_PROFILES = {
             "rate_limit_violation_enabled": True,
             "integrity_guard_enabled": True,
             "integrity_guard_strict_mode": True,
+            # SERVER_MODE_V2_PROFILE_MATRIX.md §Mode Behavior Matrix footnote 4:
+            # maintenance / incident_lockdown: browser_only_mode is "n/a"
+            # because maintenance_mode already blocks normal user UI. We still
+            # set it explicitly True here so that any operator UI surface is
+            # browser-only on top of maintenance_mode (defense in depth).
+            "browser_only_mode_enabled": True,
             "feature_audit_log_enabled": True,
             "feature_economy_enabled": True,
             "feature_trading_enabled": False,
@@ -563,7 +591,7 @@ def ensure_snapshot_schema(conn):
     conn.execute(
         "INSERT OR IGNORE INTO server_modes "
         "(id, current_mode, previous_mode, active_snapshot_id, checkpoint_id, mode_changed_by, mode_changed_at, notes, reason, config_json) "
-        "VALUES (1, 'test', NULL, NULL, NULL, NULL, ?, '', '', '{}')",
+        "VALUES (1, 'dev_ready', NULL, NULL, NULL, NULL, ?, '', '', '{}')",
         (datetime.now().isoformat(),),
     )
     conn.execute(
@@ -1699,10 +1727,10 @@ class SnapshotService:
             """
             INSERT INTO server_modes
             (id, current_mode, previous_mode, active_snapshot_id, mode_changed_by, mode_changed_at, notes)
-            VALUES (1, 'test', ?, NULL, NULL, ?, 'runtime reset default')
+            VALUES (1, 'dev_ready', ?, NULL, NULL, ?, 'runtime reset default')
             ON CONFLICT(id) DO UPDATE SET
                 previous_mode=excluded.previous_mode,
-                current_mode='test',
+                current_mode='dev_ready',
                 active_snapshot_id=NULL,
                 mode_changed_by=NULL,
                 mode_changed_at=excluded.mode_changed_at,
@@ -1844,7 +1872,7 @@ class SnapshotService:
             "cleared_tables": cleared_tables,
             "points_chain_reset": points_result,
             "audit_chain_reset": audit_result,
-            "server_mode": "test",
+            "server_mode": "dev_ready",
             "management_only_settings": management_settings,
             "runtime_secret_files_removed": secret_result["removed"],
             "runtime_secret_files_skipped": secret_result["skipped"],
@@ -3013,7 +3041,7 @@ class ServerModeService:
             self.ensure_schema(conn)
             method = str(method or "GET").upper()
             mode_row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
-            current_mode = self._normalize_mode(mode_row["current_mode"] if mode_row else "test")
+            current_mode = self._normalize_mode(mode_row["current_mode"] if mode_row else "dev_ready")
             if current_mode not in {"test", "internal_test"}:
                 self._write_tester_token_audit(conn, route=route, method=method, allowed=False, reason="mode_not_allowed", ip_address=ip_address)
                 conn.commit()
