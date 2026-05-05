@@ -1,8 +1,9 @@
 """Trading accounting helpers.
 
-``core`` owns the shared quantity/notional/fee primitives. Smaller
-modules remain as compatibility wrappers while the integration branch
-converges on the final medium-granularity layout.
+``core`` owns the shared quantity/notional/fee primitives. Higher-risk
+accounting helpers such as interest, trial credit, and funding pool
+logic remain in dedicated modules as the trading facade continues to
+shrink.
 """
 
 from services.trading.accounting.core import (
