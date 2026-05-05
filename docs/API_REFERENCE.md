@@ -69,8 +69,8 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/session/idle-timeout` | logged-in | 閒置登出設定 |
 | GET | `/api/me` | logged-in | 目前登入者資訊 |
 | PUT | `/api/me/appearance` | logged-in | 個人外觀 |
-| POST | `/api/password-reset/request` | anonymous | 發起重設密碼 |
-| POST | `/api/password-reset/confirm` | anonymous | 確認重設密碼 |
+| POST | `/api/password-reset/request` | anonymous | 發起重設密碼（`root` 不適用；請改用離線 recovery CLI） |
+| POST | `/api/password-reset/confirm` | anonymous | 確認重設密碼（`root` token 會被拒絕） |
 | POST | `/api/email-verification/request` | logged-in | 發送驗證郵件 |
 | POST | `/api/email-verification/confirm` | anonymous | 確認驗證 |
 

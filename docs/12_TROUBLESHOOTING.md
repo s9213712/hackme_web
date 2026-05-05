@@ -52,6 +52,36 @@ API 會回：
 
 不能。DB、logs、storage、reports、keys、certs 都應留在部署地 runtime。
 
+#### 3-1. root 忘記密碼怎麼辦
+
+不要走登入頁的 `忘記密碼`。
+
+`root` 已刻意排除在一般 web password reset / email token / 管理審核之外。
+正式補救方式是到站台實體 runtime 上執行：
+
+```bash
+python3 scripts/root_recovery.py --json
+```
+
+或互動式輸入新的 root 臨時密碼：
+
+```bash
+python3 scripts/root_recovery.py --prompt-password
+```
+
+這個 CLI 會：
+
+- 直接重設 root 臨時密碼
+- 撤銷 root 現有 session
+- 清掉 root 既有 CSRF token
+- 強制 `must_change_password=1`
+- 盡量寫入離線 recovery 審計紀錄
+
+注意：
+
+- CLI 輸出的臨時密碼只會顯示一次；遺失後只能再次執行工具重設
+- 如果你用 `--password ...` 直接帶值，會留在 shell history；正式環境建議用 `--prompt-password` 或讓工具自動產生
+
 ### 功能關閉 / 權限類
 
 #### 4. 看到「此功能目前已由 root 關閉」

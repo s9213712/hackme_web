@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-117`
+Release ID: `2026.05.05-118`
+
+## 2026.05.05-118
+
+- `root` 已正式脫離一般 Web 忘記密碼流程：`/api/password-reset/request` 與 `/api/password-reset/confirm` 對 root 帳號都會拒絕，避免把最高權限帳號降級成一般 email token / review reset 模式。
+- 新增離線 `scripts/root_recovery.py`，可在實體 runtime 上直接重設 root 臨時密碼、撤銷既有 session、清掉 CSRF token，並要求下次登入立刻修改密碼。
+- README、Admin Guide、CLI Playbook、Troubleshooting、API Reference 與 QA 文件已同步改成以 offline root recovery CLI 為正式補救路徑。
 
 ## 2026.05.05-117
 

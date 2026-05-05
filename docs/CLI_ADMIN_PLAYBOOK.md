@@ -77,6 +77,35 @@ curl -k -sS "$BASE/api/site-config"
 curl -k -sS -b "$JAR" "$BASE/api/me"
 ```
 
+### root 離線密碼補救
+
+`root` 不走一般 web 忘記密碼流程。若 root 忘記密碼，請直接在實體 runtime / repo 上執行：
+
+```bash
+python3 scripts/root_recovery.py --json
+```
+
+互動式自訂臨時密碼：
+
+```bash
+python3 scripts/root_recovery.py --prompt-password
+```
+
+直接指定 DB 路徑：
+
+```bash
+python3 scripts/root_recovery.py --db-path /path/to/runtime/database/database.db --json
+```
+
+這會：
+
+- 重設 root 臨時密碼
+- 撤銷 root 既有 session
+- 清掉 root 的 CSRF token
+- 強制下次登入立刻改密碼
+
+不要把 `--password ...` 寫進 shell history；除非是臨時測試，否則建議使用 `--prompt-password`。
+
 ### 功能開關
 
 讀：

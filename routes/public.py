@@ -100,6 +100,9 @@ def register_public_routes(app, deps):
         mode = str(get_system_settings().get("password_reset_mode") or "admin_review").strip().lower()
         return mode if mode in {"admin_review", "email_token"} else "admin_review"
 
+    def is_root_account_row(row):
+        return bool(row and str(row.get("username") if isinstance(row, dict) else row["username"] or "").strip().lower() == "root")
+
     def current_server_mode(conn):
         try:
             row = conn.execute("SELECT current_mode FROM server_modes WHERE id=1").fetchone()
@@ -695,7 +698,16 @@ def register_public_routes(app, deps):
             ensure_account_recovery_schema(conn)
             row = find_recovery_user(conn, identifier)
             mode = password_reset_mode()
-            if mode == "email_token" and row and row["status"] == "active" and row["email"]:
+            if is_root_account_row(row):
+                audit(
+                    "PASSWORD_RESET_ROOT_BLOCKED",
+                    ip,
+                    user="root",
+                    ua=ua,
+                    success=False,
+                    detail="offline_recovery_required",
+                )
+            if mode == "email_token" and row and row["status"] == "active" and row["email"] and not is_root_account_row(row):
                 token = create_recovery_token(conn, user_id=row["id"], purpose="password_reset", ip=ip, user_agent=ua, ttl_minutes=60)
                 queue_mail(
                     conn,
@@ -705,7 +717,7 @@ def register_public_routes(app, deps):
                     kind="password_reset",
                 )
                 audit("PASSWORD_RESET_REQUESTED", ip, user=row["username"], ua=ua, success=True)
-            elif mode == "admin_review" and row and row["status"] == "active":
+            elif mode == "admin_review" and row and row["status"] == "active" and not is_root_account_row(row):
                 request_id, created = create_password_reset_review_request(
                     conn,
                     user_id=row["id"],
@@ -760,6 +772,9 @@ def register_public_routes(app, deps):
                 audit("PASSWORD_RESET_TOKEN_INVALID", ip, ua=ua, success=False)
                 return json_resp({"ok": False, "msg": "驗證碼無效或已過期"}), 400
             target_is_root = str(token_row["username"] or "").strip().lower() == "root"
+            if target_is_root:
+                audit("PASSWORD_RESET_ROOT_BLOCKED", ip, user="root", ua=ua, success=False, detail="offline_recovery_required_confirm")
+                return json_resp({"ok": False, "msg": "root 帳號不可透過 Web 忘記密碼流程重設，請改用離線 root recovery CLI"}), 403
             if not target_is_root:
                 ok, msg = validate_password(password)
                 if not ok:
@@ -770,8 +785,6 @@ def register_public_routes(app, deps):
                         return json_resp({"ok": False, "msg": msg, "password_strength": strength}), 400
                 else:
                     strength = score_password_strength(password)
-            else:
-                strength = score_password_strength(password)
             current_row = conn.execute(
                 "SELECT password_hash FROM user_passwords WHERE user_id=? ORDER BY id DESC LIMIT 1",
                 (token_row["user_id"],),

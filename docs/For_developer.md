@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-117`
+- Release ID: `2026.05.05-118`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -45,6 +45,11 @@ Required follow-up areas include:
 
 If one of these areas is intentionally left incomplete, the delivery report must
 state that gap explicitly instead of marking the feature as fully complete.
+
+Root account note:
+
+- `root` is intentionally excluded from the public password-reset flow.
+- Offline recovery must go through `scripts/root_recovery.py`.
 
 ## Fast Local Setup
 

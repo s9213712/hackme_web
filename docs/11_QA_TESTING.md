@@ -134,6 +134,11 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
 - 確認 README、Start Here、Feature Overview 都把這份文件列為測試主入口
 - 若改到 Cloud Drive 檔案瀏覽器，至少手動確認資料夾單擊不誤開、雙擊可進入、右側 `開啟` 按鈕仍可用，且雙擊不會誤觸刪除/下載等 action button
 - 確認功能新增後，同步更新 smoke / pentest / QA runbook / troubleshooting
+- 若本次改到帳號復原 / 密碼流程，至少補：
+  - 一般使用者 `password reset request/confirm` 仍可正常運作
+  - `root` 不可再透過 web `忘記密碼`、email token 或審核流程重設
+  - `scripts/root_recovery.py` 是否會撤銷 root 現有 session、清掉 root CSRF token、強制下次登入改密碼
+  - 離線 recovery 後是否留下審計紀錄；若 runtime 缺審計 secret，是否至少不會把 recovery 本身做失敗
 - 若本次改到 ComfyUI，至少補：
   - 設定頁的 `Civitai API Key` 與 root 本地模型下載工具，是否真的只在 `local` 模式出現；切到 `remote` 時不應殘留可操作入口
   - model list 是否回傳 `models / loras / embeddings / vaes / generation_modes / controlnet_types / controlnet_models / upscale_models`

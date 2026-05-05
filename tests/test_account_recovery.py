@@ -4,6 +4,7 @@ import sqlite3
 from flask import Flask, jsonify, make_response
 
 from routes.public import register_public_routes
+from services.account_recovery import create_recovery_token
 
 
 PASSWORD_FIELD = "pass" + "word"
@@ -261,7 +262,7 @@ def test_password_reset_confirm_is_rate_limited(tmp_path):
     assert "過於頻繁" in limited.get_json()["msg"]
 
 
-def test_root_password_reset_bypasses_password_policy(tmp_path):
+def test_root_password_reset_is_offline_only(tmp_path):
     db_path = tmp_path / "root-recovery.db"
     _init_db(db_path)
     conn = sqlite3.connect(db_path)
@@ -281,20 +282,31 @@ def test_root_password_reset_bypasses_password_policy(tmp_path):
     client = _build_app(db_path, password_reset_mode="email_token").test_client()
     requested = client.post("/api/password-reset/request", json={"username_or_email": "root@example.test"})
     assert requested.status_code == 200
+    assert requested.get_json()["ok"] is True
 
-    token = _latest_token(db_path, "password_reset")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        mailed = conn.execute("SELECT COUNT(*) FROM mail_outbox WHERE kind='password_reset'").fetchone()[0]
+        token = create_recovery_token(conn, user_id=2, purpose="password_reset")
+        conn.commit()
+    finally:
+        conn.close()
+    assert mailed == 0
+
     confirmed = client.post(
         "/api/password-reset/confirm",
         json={"token": token, PASSWORD_FIELD: "x", PASSWORD_CONFIRM_FIELD: "x"},
     )
-    assert confirmed.status_code == 200
+    assert confirmed.status_code == 403
+    assert "離線 root recovery CLI" in confirmed.get_json()["msg"]
 
     conn = sqlite3.connect(db_path)
     try:
         latest_pw = conn.execute("SELECT password_hash FROM user_passwords WHERE user_id=2 ORDER BY id DESC LIMIT 1").fetchone()[0]
     finally:
         conn.close()
-    assert latest_pw == "x"
+    assert latest_pw == "old-root-password"
 
 
 def test_email_verification_unblocks_require_email_login(tmp_path):
