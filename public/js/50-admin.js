@@ -2354,86 +2354,288 @@ function renderServerModeRequirements(requirements) {
 }
 
 // ── 上線前檢查分頁（13 份 production gate report）────────────────────────────
+//
+// Each entry: label / purpose / generator / tip (failure remediation) / shortcut
+// shortcut.kind:
+//   "ui"      -> jump to the in-app panel that triggers this report
+//   "doc"     -> link to the playbook / spec file (CLI-only generators)
 const LAUNCH_CHECK_REPORT_META = {
   clean_smoke: {
     label: "Mode v2 乾淨 smoke",
     purpose: "boot path / state-machine / 基線 endpoints 在乾淨狀態下都過。",
     generator: "python3 security/server_mode_v2_clean_smoke.py",
     tip: "失敗多半是某個 mode 切換邏輯被改壞；先看輸出 JSON 的 first failing step。",
+    shortcut: { kind: "doc", label: "playbook §1 No.1", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
   },
   adversarial: {
     label: "Mode v2 對抗測試",
     purpose: "injection / bypass / mode-spoof 等對抗手法都被擋下。",
     generator: "python3 security/server_mode_v2_adversarial.py",
     tip: "失敗代表有可繞過的權限漏洞，**不可** 放行 production；先 fix 再上。",
+    shortcut: { kind: "doc", label: "playbook §1 No.2", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
   },
   redteam_l2: {
     label: "Mode v2 Red-team L2",
     purpose: "Red-team Level 2 攻擊樹（multi-step exploit）。",
     generator: "python3 security/server_mode_v2_redteam_l2.py",
     tip: "失敗代表某條 exploit chain 仍可走；找 chain 中第一個能擋的點補強。",
+    shortcut: { kind: "doc", label: "playbook §1 No.3", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
   },
   pytest: {
     label: "全專案 pytest",
     purpose: "tests/ 全部 pytest 通過。",
     generator: "pytest tests/ -q",
     tip: "失敗就跑 pytest -x 找最前面那條紅燈，先修它。",
+    shortcut: { kind: "doc", label: "tests/ 目錄", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
   },
   log_chain_verify: {
     label: "Log chain 完整性",
     purpose: "mode_switch_logs + audit chain 雜湊鏈完整無破洞。",
     generator: "GET /api/admin/health/audit-chain ＋ services/server_mode_v2_log_chain_verify",
     tip: "失敗代表 audit chain 被改過（極危險）— 立刻進 incident_lockdown 調查。",
+    shortcut: { kind: "ui", target: "health", anchor: "server-health-audit", label: "前往健康度 → 審計與檢查" },
   },
   integrity_guard: {
     label: "Integrity Guard 自檢",
     purpose: "IntegrityGuard 自檢無 high-risk finding。",
     generator: "GET /api/admin/integrity/repair?dry_run=true",
     tip: "若有 high-risk file diff，請先確認是否為合法升級；不是就走 restore。",
+    shortcut: { kind: "ui", target: "integrity", anchor: "integrity-findings", label: "前往 Integrity Guard 分頁" },
   },
   stress: {
     label: "壓力 / 流量壓測",
     purpose: "trading + 一般流量壓測無 OOM / deadlock / 大量錯誤。",
     generator: "python3 security/stress_test.py + python3 security/trading_stress_pentest.py",
     tip: "失敗多半是 worker 飽和或 race condition；先看 server log 的 spike 時間點。",
+    shortcut: { kind: "ui", target: "security", anchor: "security-stress-start-btn", label: "前往總覽 → 壓力測試面板" },
   },
   permission: {
     label: "權限滲透",
     purpose: "role / permission pentest 無越權。",
     generator: "python3 security/functional_permission_pentest.py",
     tip: "失敗代表某條 API 缺 require_role / require_csrf；補上後重跑。",
+    shortcut: { kind: "doc", label: "playbook §1 No.8", href: "docs/examples/server_mode_v2/03_production_gate_playbook.md" },
   },
   functional: {
     label: "全功能 smoke",
     purpose: "全功能流程（登入 / 聊天 / 雲端硬碟 / 交易 / 積分 等）都正常。",
     generator: "bash security/run_functional_smoke.sh ＋ python3 tests/smoke_suite.py",
     tip: "失敗代表某個使用者流程已壞，可能是最近 commit 副作用。",
+    shortcut: { kind: "ui", target: "security", anchor: "security-functional-start-btn", label: "前往總覽 → 全功能測試面板" },
   },
   pentest: {
     label: "安全滲透測試",
     purpose: "session / CSRF / XSS / SQLi 等滲透測試無重大發現。",
     generator: "bash security/run_pentest.sh ＋ python3 security/session_security_pentest.py",
     tip: "失敗代表 web layer 有可利用洞，**絕不**可放上線；fix 後重跑。",
+    shortcut: { kind: "ui", target: "security", anchor: "security-pentest-start-btn", label: "前往總覽 → 滲透測試面板" },
   },
   snapshot_restore: {
     label: "Snapshot / Restore",
     purpose: "snapshot 建立 + restore 回放 + 一致性驗證全程通過。",
     generator: "pytest tests/test_snapshots.py ＋ 手動 1 次 create→restore→verify",
     tip: "失敗代表 disaster recovery 不可靠；不要硬上 production。",
+    shortcut: { kind: "ui", target: "settings", anchor: "snapshot-section", label: "前往伺服器設定 → 快照管理" },
   },
   points_chain_consistency: {
     label: "PointsChain 一致性",
     purpose: "PointsChain 雜湊鏈、區塊內 ledger 對應全部一致。",
     generator: "pytest tests/test_points_chain.py ＋ services/points_chain.verify_chain()",
     tip: "失敗等同帳本被污染，**不可** 上線；走 restore + 重新 verify。",
+    shortcut: { kind: "ui", target: "settings", anchor: "server-mode-section", label: "前往伺服器設定 → 鏈狀態" },
   },
   cloud_drive_quota_permission: {
     label: "雲端硬碟 quota / 權限",
     purpose: "Cloud Drive quota、上傳權限、共享權限規則都正確。",
     generator: "pytest tests/test_cloud_drive_attachments.py tests/test_storage_albums_schema.py",
     tip: "失敗代表 quota 算錯或共享越權；先 fix 再產 report。",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-drive", label: "前往伺服器設定 → 雲端硬碟" },
   },
 };
+
+// 其他上線前條件（settings + integrity + chain）— production gate
+// 不只看 13 報告，還必須這些都綠燈才允許切。每個 condition 函式拿到
+// (sc, requirements) 回傳 {label, value, color, hint?, shortcut?}.
+function launchCheckConditionList(sc, requirements) {
+  const settings = sc.settings || {};
+  const audit = sc.audit_integrity || {};
+  const readiness = sc.readiness || {};
+  const anomaly = sc.anomaly || {};
+  const mode = (sc.mode || {}).current_mode || "dev_ready";
+  const out = [];
+
+  const goSettingsSecurity = () => { switchServerTab("settings"); jumpToAnchor("sec-settings-security"); };
+
+  // Mode posture: production = green, dev_ready = blue (ready), 其他紅
+  const modeOk = (mode === "production");
+  const modeReady = (mode === "dev_ready");
+  out.push({
+    label: "目前 server mode",
+    value: mode,
+    color: modeOk ? "#4caf50" : modeReady ? "#82b1ff" : "#ff4f6d",
+    hint: modeOk ? "已在 production" : modeReady ? "dev_ready：已準備好切 production" : "請先切到 dev_ready 再開上線檢查",
+    shortcut: { kind: "ui", target: "settings", anchor: "server-mode-section", label: "前往伺服器設定 → 模式切換" },
+  });
+
+  // Maintenance mode 必須關
+  out.push({
+    label: "維護模式",
+    value: settings.maintenance_mode ? "啟用" : "關閉",
+    color: settings.maintenance_mode ? "#ff4f6d" : "#4caf50",
+    hint: settings.maintenance_mode ? "production 必須關閉維護模式" : "已關閉",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // SSL / HTTPS 必須開
+  out.push({
+    label: "HTTPS / SSL",
+    value: settings.server_ssl_enabled ? "啟用" : "關閉",
+    color: settings.server_ssl_enabled ? "#4caf50" : "#ff4f6d",
+    hint: settings.server_ssl_enabled ? "已啟用" : "production 必須走 HTTPS",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // Audit chain 必須開
+  out.push({
+    label: "審計 hash chain",
+    value: settings.audit_chain_enabled ? "啟用" : "關閉",
+    color: settings.audit_chain_enabled ? "#4caf50" : "#ff4f6d",
+    hint: settings.audit_chain_enabled ? "已啟用" : "production 必須開 audit chain",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // Audit chain 完整性
+  const auditEnabled = audit.enabled !== false;
+  const auditOk = !!audit.ok;
+  out.push({
+    label: "Audit chain 完整性",
+    value: auditEnabled ? (auditOk ? "完整" : "異常") : "停用",
+    color: auditEnabled ? (auditOk ? "#4caf50" : "#ff4f6d") : "#9e9e9e",
+    hint: auditEnabled ? (auditOk ? "雜湊鏈無斷點" : "雜湊鏈不完整：先進事故封鎖、查 mode_switch_logs") : "audit chain 已停用 — production 不可放行",
+    shortcut: { kind: "ui", target: "health", anchor: "server-health-audit", label: "前往健康度 → 審計與檢查" },
+  });
+
+  // Login violation lock
+  out.push({
+    label: "登入暴力鎖",
+    value: settings.login_violation_enabled ? "啟用" : "關閉",
+    color: settings.login_violation_enabled ? "#4caf50" : "#ff4f6d",
+    hint: settings.login_violation_enabled ? "已啟用" : "production 必須開",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // IP blocking
+  out.push({
+    label: "IP 封鎖",
+    value: settings.ip_blocking_enabled ? "啟用" : "關閉",
+    color: settings.ip_blocking_enabled ? "#4caf50" : "#ff4f6d",
+    hint: settings.ip_blocking_enabled ? "已啟用" : "production 必須開",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // Rate limit
+  out.push({
+    label: "速率限制",
+    value: settings.rate_limit_violation_enabled ? "啟用" : "關閉",
+    color: settings.rate_limit_violation_enabled ? "#4caf50" : "#ff4f6d",
+    hint: settings.rate_limit_violation_enabled ? "已啟用" : "production 必須開",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // Integrity Guard 必須開（strict 推薦）
+  const igOn = !!settings.integrity_guard_enabled;
+  const igStrict = !!settings.integrity_guard_strict_mode;
+  out.push({
+    label: "Integrity Guard",
+    value: igOn ? (igStrict ? "嚴格模式" : "啟用") : "關閉",
+    color: igOn ? (igStrict ? "#4caf50" : "#ffb74d") : "#ff4f6d",
+    hint: igOn ? (igStrict ? "嚴格模式已開（建議）" : "建議切到嚴格模式才上線") : "production 必須開 Integrity Guard",
+    shortcut: { kind: "ui", target: "integrity", anchor: "integrity-findings", label: "前往 Integrity Guard 分頁" },
+  });
+
+  // Browser-only mode（production 預設應啟用）
+  out.push({
+    label: "Browser-only 模式",
+    value: settings.browser_only_mode_enabled ? "啟用" : "關閉",
+    color: settings.browser_only_mode_enabled ? "#4caf50" : "#ffb74d",
+    hint: settings.browser_only_mode_enabled ? "已啟用（推薦）" : "未啟用：production 建議開以阻擋非瀏覽器的 /api 直擊",
+    shortcut: { kind: "ui", target: "settings", anchor: "sec-settings-security", label: "前往伺服器設定 → 安全" },
+  });
+
+  // Readiness
+  out.push({
+    label: "Readiness 檢查",
+    value: readiness.status || "-",
+    color: healthStatusColor(readiness.status),
+    hint: readiness.status === "ok" ? "Readiness ok" : `Readiness=${readiness.status || "-"}：先解決失敗項`,
+    shortcut: { kind: "ui", target: "health", anchor: "server-health-summary", label: "前往健康度 → Readiness" },
+  });
+
+  // Anomaly
+  const signalCount = Array.isArray(anomaly.signals) ? anomaly.signals.length : 0;
+  out.push({
+    label: "異常訊號",
+    value: signalCount === 0 ? "無" : `${signalCount} 筆`,
+    color: signalCount === 0 ? "#4caf50" : (anomaly.status === "critical" ? "#ff4f6d" : "#ffb74d"),
+    hint: signalCount === 0 ? "目前無異常訊號" : `先處理 anomaly signals（${signalCount} 筆）再上線`,
+    shortcut: { kind: "ui", target: "health", anchor: "server-health-summary", label: "前往健康度 → Anomaly" },
+  });
+
+  // 13 reports rollup（同一個 condition 卡，給操作者快速看 B 區概況）
+  const total = (requirements.required || []).length;
+  const missing = (requirements.missing || []).length;
+  const failed = (requirements.failed || []).length;
+  const pass = Math.max(0, total - missing - failed);
+  out.push({
+    label: "13 份 production reports",
+    value: `${pass} / ${total}`,
+    color: missing === 0 && failed === 0 ? "#4caf50" : "#ff4f6d",
+    hint: (missing === 0 && failed === 0) ? "全部通過" : `缺 ${missing} 份、不通過 ${failed} 份；詳見下方 B 區`,
+  });
+
+  return out;
+}
+
+function jumpToAnchor(anchorId) {
+  if (!anchorId) return;
+  const el = document.getElementById(anchorId);
+  if (el && typeof el.scrollIntoView === "function") {
+    setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+  }
+}
+
+function launchCheckShortcutHandler(shortcut) {
+  if (!shortcut) return null;
+  if (shortcut.kind === "ui") {
+    return () => {
+      try { switchServerTab(shortcut.target || "security"); } catch (_) {}
+      jumpToAnchor(shortcut.anchor);
+    };
+  }
+  if (shortcut.kind === "doc") {
+    return () => {
+      const url = shortcut.href || "";
+      if (url) window.open(url, "_blank", "noopener");
+    };
+  }
+  return null;
+}
+
+function launchCheckConditionMarkup(condition, idx) {
+  const escape = (text) => String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const shortcutBtn = condition.shortcut
+    ? `<button class="btn btn-sm" type="button" data-launch-shortcut="cond-${idx}" style="margin-top:.35rem;font-size:.7rem;padding:.18rem .5rem;">${escape(condition.shortcut.label || "前往")}</button>`
+    : "";
+  return `
+    <div class="health-metric-card" style="border-left:4px solid ${condition.color};">
+      <div class="health-metric-label">${escape(condition.label)}</div>
+      <div class="health-metric-value" style="color:${condition.color};">${escape(condition.value)}</div>
+      ${condition.hint ? `<div style="margin-top:.3rem;font-size:.7rem;color:var(--muted);">${escape(condition.hint)}</div>` : ""}
+      ${shortcutBtn}
+    </div>
+  `;
+}
 
 function launchCheckMsg(text, ok = false) {
   const msg = $("launch-check-msg");
@@ -2442,7 +2644,7 @@ function launchCheckMsg(text, ok = false) {
   msg.style.color = ok ? "#4caf50" : "#ff4f6d";
 }
 
-function launchCheckCardMarkup(reportType, reportRow, missing, failed) {
+function launchCheckCardMarkup(reportType, reportRow, missing, failed, idx) {
   const meta = LAUNCH_CHECK_REPORT_META[reportType] || {
     label: reportType,
     purpose: "（未登錄的 report 類型）",
@@ -2474,6 +2676,10 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed) {
   }
   const escape = (text) => String(text == null ? "" : text)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const shortcut = meta.shortcut;
+  const shortcutBtn = shortcut
+    ? `<button class="btn btn-sm" type="button" data-launch-shortcut="report-${idx}" style="margin-top:.5rem;font-size:.72rem;padding:.22rem .55rem;">${escape(shortcut.label || (shortcut.kind === "ui" ? "前往 UI" : "開啟 playbook"))}</button>`
+    : "";
   return `
     <div class="security-profile-preview show" style="border-left:4px solid ${statusColor};padding-left:.7rem;">
       <div style="display:flex;align-items:baseline;gap:.45rem;flex-wrap:wrap;">
@@ -2485,16 +2691,19 @@ function launchCheckCardMarkup(reportType, reportRow, missing, failed) {
       <div style="margin-top:.25rem;"><strong>產生方式</strong>：<code style="font-size:.7rem;">${escape(meta.generator)}</code></div>
       <div style="margin-top:.25rem;"><strong>失敗對策</strong>：${escape(meta.tip)}</div>
       ${stateNote ? `<div style="margin-top:.4rem;color:${statusColor};">⤷ ${escape(stateNote)}</div>` : ""}
+      ${shortcutBtn}
     </div>
   `;
 }
 
 async function loadLaunchCheck() {
   const list = $("launch-check-list");
+  const conditions = $("launch-check-conditions");
   const overall = $("launch-check-overall");
   const summary = $("launch-check-summary");
   if (!list || currentUser !== "root") return;
   list.innerHTML = `<div class="drive-empty">讀取上線前檢查中…</div>`;
+  if (conditions) conditions.innerHTML = "";
   if (overall) {
     overall.textContent = "讀取中…";
     overall.style.color = "var(--muted)";
@@ -2504,30 +2713,66 @@ async function loadLaunchCheck() {
   try {
     await fetchCsrfToken({ force: true });
     const csrf = getCsrfToken();
-    const res = await apiFetch(API + "/root/server-mode/requirements", {
-      credentials: "same-origin",
-      headers: { "X-CSRF-Token": csrf || "" }
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || (typeof json.ok === "boolean" && !json.ok && !Array.isArray(json.required))) {
-      throw new Error(json.msg || `HTTP ${res.status}`);
+    const headers = { "X-CSRF-Token": csrf || "" };
+    // Pull both endpoints in parallel — we need security center for the
+    // settings / readiness / anomaly status lights, and requirements
+    // for the 13-report rollup.
+    const [reqRes, scRes] = await Promise.all([
+      apiFetch(API + "/root/server-mode/requirements", { credentials: "same-origin", headers }),
+      apiFetch(API + "/admin/security-center", { credentials: "same-origin", headers }),
+    ]);
+    const reqJson = await reqRes.json().catch(() => ({}));
+    const scJson = await scRes.json().catch(() => ({}));
+    if (!reqRes.ok || (typeof reqJson.ok === "boolean" && !reqJson.ok && !Array.isArray(reqJson.required))) {
+      throw new Error(reqJson.msg || `HTTP ${reqRes.status}`);
     }
-    const required = Array.isArray(json.required) ? json.required : [];
-    const missing = new Set(Array.isArray(json.missing) ? json.missing : []);
-    const failed = new Set(Array.isArray(json.failed) ? json.failed : []);
-    const reports = json.reports && typeof json.reports === "object" ? json.reports : {};
-    const passingCount = required.filter((key) => !missing.has(key) && !failed.has(key)).length;
+    const sc = (scJson.ok && scJson.security_center) ? scJson.security_center : {};
+
+    const required = Array.isArray(reqJson.required) ? reqJson.required : [];
+    const missing = new Set(Array.isArray(reqJson.missing) ? reqJson.missing : []);
+    const failed = new Set(Array.isArray(reqJson.failed) ? reqJson.failed : []);
+    const reports = reqJson.reports && typeof reqJson.reports === "object" ? reqJson.reports : {};
+    const passingReports = required.filter((key) => !missing.has(key) && !failed.has(key)).length;
+
+    // ── A. 其他上線前條件（status lights） ───────────────────────────
+    const conditionList = launchCheckConditionList(sc, reqJson);
+    const conditionsRedCount = conditionList.filter((c) => c.color === "#ff4f6d").length;
+    const conditionsYellowCount = conditionList.filter((c) => c.color === "#ffb74d").length;
+    if (conditions) {
+      conditions.innerHTML = conditionList
+        .map((cond, idx) => launchCheckConditionMarkup(cond, idx))
+        .join("");
+      conditionList.forEach((cond, idx) => {
+        if (!cond.shortcut) return;
+        const btn = conditions.querySelector(`[data-launch-shortcut="cond-${idx}"]`);
+        const handler = launchCheckShortcutHandler(cond.shortcut);
+        if (btn && handler) btn.addEventListener("click", handler);
+      });
+    }
+
+    // ── B. 13 reports cards + shortcuts ─────────────────────────────
     if (overall) {
-      const allPassed = json.ok === true && missing.size === 0 && failed.size === 0;
-      overall.textContent = allPassed
-        ? `✓ 全部 ${required.length} 份報告已通過，可進 production`
-        : `❌ ${passingCount} / ${required.length} 通過 — 還不能進 production`;
-      overall.style.color = allPassed ? "#4caf50" : "#ff4f6d";
+      const allReportsPassed = reqJson.ok === true && missing.size === 0 && failed.size === 0;
+      const allConditionsPassed = conditionsRedCount === 0;
+      const allGreen = allReportsPassed && allConditionsPassed;
+      const parts = [];
+      if (allGreen) {
+        overall.textContent = `✓ 條件全綠 + 13 份報告全通過，可進 production`;
+      } else {
+        const fragments = [];
+        if (!allConditionsPassed) fragments.push(`A 區紅燈 ${conditionsRedCount}`);
+        if (conditionsYellowCount) fragments.push(`A 區黃燈 ${conditionsYellowCount}`);
+        if (!allReportsPassed) fragments.push(`B 區 ${passingReports}/${required.length}`);
+        overall.textContent = `❌ ${fragments.join(" · ")} — 還不能進 production`;
+      }
+      overall.style.color = allGreen ? "#4caf50" : "#ff4f6d";
     }
     if (summary) {
       const parts = [];
-      if (missing.size) parts.push(`缺 ${missing.size} 份`);
-      if (failed.size) parts.push(`不通過 ${failed.size} 份`);
+      if (missing.size) parts.push(`B 區缺 ${missing.size} 份`);
+      if (failed.size) parts.push(`B 區不通過 ${failed.size} 份`);
+      if (conditionsRedCount) parts.push(`A 區 ${conditionsRedCount} 紅`);
+      if (conditionsYellowCount) parts.push(`A 區 ${conditionsYellowCount} 黃`);
       summary.textContent = parts.join("、");
     }
     if (!required.length) {
@@ -2535,8 +2780,15 @@ async function loadLaunchCheck() {
       return;
     }
     list.innerHTML = required
-      .map((reportType) => launchCheckCardMarkup(reportType, reports[reportType] || null, missing.has(reportType), failed.has(reportType)))
+      .map((reportType, idx) => launchCheckCardMarkup(reportType, reports[reportType] || null, missing.has(reportType), failed.has(reportType), idx))
       .join("");
+    required.forEach((reportType, idx) => {
+      const meta = LAUNCH_CHECK_REPORT_META[reportType];
+      if (!meta || !meta.shortcut) return;
+      const btn = list.querySelector(`[data-launch-shortcut="report-${idx}"]`);
+      const handler = launchCheckShortcutHandler(meta.shortcut);
+      if (btn && handler) btn.addEventListener("click", handler);
+    });
   } catch (err) {
     if (overall) {
       overall.textContent = "讀取失敗";
