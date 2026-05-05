@@ -174,10 +174,23 @@ def test_matching_engine_namespaces_separate():
 # ─────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 6 cache namespace helper not yet landed")
 def test_cache_keys_carry_mode_scope():
-    from services import cache_keys  # noqa: F401 — will not import until Phase 6
-    raise AssertionError("Phase 6 not landed — placeholder")
+    from services.cache_keys import make_cache_key
+    # Forgetting mode= must raise — the strongest spec-promise.
+    with pytest.raises(TypeError):
+        make_cache_key("orderbook", market="BTC/POINTS")  # type: ignore[call-arg]
+    # mode='' rejected.
+    with pytest.raises(ValueError):
+        make_cache_key("orderbook", mode="", market="BTC/POINTS")
+    # internal_test without tester_id rejected.
+    with pytest.raises(ValueError):
+        make_cache_key("orderbook", mode="internal_test", market="BTC/POINTS")
+    # Production / test / internal_test produce distinct keys.
+    prod = make_cache_key("orderbook", mode="production", market="BTC")
+    test = make_cache_key("orderbook", mode="test", market="BTC")
+    inter = make_cache_key("orderbook", mode="internal_test", tester_id=1, market="BTC")
+    assert prod != test != inter
+    assert ":production:" in prod and ":test:" in test and ":internal_test:" in inter
 
 
 # ─────────────────────────────────────────────────────────────────────
