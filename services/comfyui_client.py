@@ -926,8 +926,7 @@ class ComfyUIClient:
             result["history_deleted"] = True
         return result
 
-    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
-        workflow = self.build_generation_workflow(params)
+    def generate_from_workflow(self, workflow, *, timeout_seconds=1800, expected_count=1, progress_callback=None):
         websocket_conn = None
         client_id = uuid.uuid4().hex
         try:
@@ -953,7 +952,7 @@ class ComfyUIClient:
             image_refs = self.wait_for_images(
                 prompt_id,
                 timeout_seconds=timeout_seconds,
-                expected_count=int(params.get("batch_size") or 1),
+                expected_count=expected_count,
                 websocket_conn=websocket_conn,
                 progress_callback=progress_callback,
             )
@@ -985,3 +984,12 @@ class ComfyUIClient:
             "data": image.data,
             "images": serialized_images,
         }
+
+    def generate_image(self, params, *, timeout_seconds=1800, progress_callback=None):
+        workflow = self.build_generation_workflow(params)
+        return self.generate_from_workflow(
+            workflow,
+            timeout_seconds=timeout_seconds,
+            expected_count=int(params.get("batch_size") or 1),
+            progress_callback=progress_callback,
+        )

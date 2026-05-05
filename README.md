@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-124`**
+**Current Release ID: `2026.05.05-125`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -26,7 +26,10 @@ with version / file size / hash / compatible-model hints, and a mandatory
 download confirmation step before anything is written into the local ComfyUI
 models tree. Root password recovery is now intentionally handled offline via
 `python3 scripts/root_recovery.py` instead of the public web forgot-password
-flow.
+flow. ComfyUI 也新增 workflow 工作台：可把目前表單匯出成 sanitized workflow
+JSON、匯入為 preset、日後一鍵套用/重跑，並由 root 發布 official preset；匯入
+與匯出都會阻擋 absolute path、shell/exec 節點與外部 URL，避免 workflow 變成
+本機路徑或命令注入入口。
 
 This README keeps only the shortest entry route. Detailed deployment,
 operations, feature, security, and QA references live under `docs/`.

@@ -31,9 +31,11 @@ class FakeComfyUIClient:
     base_url = "http://fake-comfyui"
     last_timeout_seconds = None
     last_params = {}
+    last_workflow = {}
     discarded = []
     interrupted = 0
     generated_count = 0
+    generated_workflows = []
     uploaded_images = []
 
     def health_check(self, *, timeout=3):
@@ -58,10 +60,12 @@ class FakeComfyUIClient:
         return {
             "available_nodes": [
                 "CheckpointLoaderSimple",
+                "VAELoader",
                 "CLIPTextEncode",
                 "KSampler",
                 "VAEDecode",
                 "SaveImage",
+                "EmptyLatentImage",
                 "LoadImage",
                 "LoadImageMask",
                 "VAEEncode",
@@ -154,6 +158,15 @@ class FakeComfyUIClient:
         FakeComfyUIClient.uploaded_images.append({"image_ref": dict(image_ref), "size": len(data or b"")})
         return image_ref
 
+    _build_text_to_image_base = ComfyUIClient._build_text_to_image_base
+    _attach_controlnet = ComfyUIClient._attach_controlnet
+    build_text_to_image_workflow = ComfyUIClient.build_text_to_image_workflow
+    build_image_to_image_workflow = ComfyUIClient.build_image_to_image_workflow
+    build_inpaint_workflow = ComfyUIClient.build_inpaint_workflow
+    build_outpaint_workflow = ComfyUIClient.build_outpaint_workflow
+    build_upscale_workflow = ComfyUIClient.build_upscale_workflow
+    build_generation_workflow = ComfyUIClient.build_generation_workflow
+
     def generate_image(self, params, *, timeout_seconds=180, progress_callback=None):
         FakeComfyUIClient.generated_count += 1
         FakeComfyUIClient.last_timeout_seconds = timeout_seconds
@@ -178,6 +191,37 @@ class FakeComfyUIClient:
             })
         return {
             "prompt_id": "prompt-1",
+            "image_ref": images[0]["image_ref"],
+            "mime_type": images[0]["mime_type"],
+            "data": images[0]["data"],
+            "images": images,
+        }
+
+    def generate_from_workflow(self, workflow, *, timeout_seconds=180, expected_count=1, progress_callback=None):
+        FakeComfyUIClient.generated_count += 1
+        FakeComfyUIClient.last_timeout_seconds = timeout_seconds
+        FakeComfyUIClient.last_workflow = json.loads(json.dumps(workflow))
+        FakeComfyUIClient.generated_workflows.append(FakeComfyUIClient.last_workflow)
+        if progress_callback:
+            progress_callback({
+                "phase": "running",
+                "percent": 50,
+                "current": 1,
+                "max": max(1, int(expected_count or 1)),
+                "current_node": "workflow",
+                "detail": "workflow 執行中",
+                "queue_remaining": 0,
+            })
+        batch_size = max(1, int(expected_count or 1))
+        images = []
+        for index in range(batch_size):
+            images.append({
+                "image_ref": {"filename": f"hackme_web_workflow_{index + 1:05d}_.png", "subfolder": "", "type": "output"},
+                "mime_type": "image/png",
+                "data": f"fake-workflow-png-bytes-{index + 1}".encode("utf-8"),
+            })
+        return {
+            "prompt_id": "workflow-prompt-1",
             "image_ref": images[0]["image_ref"],
             "mime_type": images[0]["mime_type"],
             "data": images[0]["data"],
@@ -433,6 +477,11 @@ class MissingWorkflowNodeClient(FakeComfyUIClient):
         return payload
 
 
+class MissingWorkflowCheckpointClient(FakeComfyUIClient):
+    def get_models(self):
+        return ["photo.ckpt"]
+
+
 def _write_lora_sidecar(base_dir, filename, *, base_model="", trained_words=None, extra=None):
     sidecar = Path(base_dir) / "models" / "loras" / f"{filename}.civitai.json"
     sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -502,6 +551,20 @@ def _build_app(db_path, storage_root, settings=None, comfyui_client=None, actor=
         deps.update(extra_deps)
     register_comfyui_routes(app, deps)
     return app
+
+
+def _import_workflow_preset(client, workflow, *, title="Workflow Preset", description="", visibility="private", default_params=None):
+    payload = {
+        "title": title,
+        "description": description,
+        "visibility": visibility,
+        "workflow_json": workflow,
+    }
+    if default_params is not None:
+        payload["default_params"] = default_params
+    response = client.post("/api/comfyui/workflows/import", json=payload)
+    assert response.status_code == 200, response.get_json()
+    return response.get_json()["preset"]
 
 
 def test_comfyui_models_and_generate_routes(tmp_path):
@@ -762,6 +825,266 @@ def test_comfyui_history_rerun_reuses_saved_assets(tmp_path):
     assert FakeComfyUIClient.uploaded_images == []
     assert FakeComfyUIClient.last_params["generation_mode"] == "upscale"
     assert FakeComfyUIClient.last_params["source_image_ref"]["filename"] == "source.png"
+
+
+def test_comfyui_workflow_import_rejects_bad_json_and_unsafe_paths(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    bad_json = client.post(
+        "/api/comfyui/workflows/import",
+        json={"title": "broken", "workflow_json": "{not-json"},
+    )
+    assert bad_json.status_code == 400
+    assert "workflow JSON 格式不正確" in bad_json.get_json()["msg"]
+
+    unsafe_path = client.post(
+        "/api/comfyui/workflows/import",
+        json={
+            "title": "unsafe",
+            "workflow_json": {
+                "1": {
+                    "class_type": "LoadImage",
+                    "inputs": {"image": "/tmp/evil.png", "upload": "image"},
+                }
+            },
+        },
+    )
+    assert unsafe_path.status_code == 400
+    assert "絕對路徑" in unsafe_path.get_json()["msg"]
+
+    unsafe_url = client.post(
+        "/api/comfyui/workflows/import",
+        json={
+            "title": "unsafe-url",
+            "workflow_json": {
+                "1": {
+                    "class_type": "LoadImage",
+                    "inputs": {"image": "https://evil.example/payload.png", "upload": "image"},
+                }
+            },
+        },
+    )
+    assert unsafe_url.status_code == 400
+    assert "外部 URL" in unsafe_url.get_json()["msg"]
+
+
+def test_comfyui_private_workflow_preset_cannot_be_read_by_other_user(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO users (id, username, role) VALUES (2, 'bob', 'user')")
+    conn.commit()
+    conn.close()
+
+    alice_actor = lambda: {"id": 1, "username": "alice", "role": "user"}
+    bob_actor = lambda: {"id": 2, "username": "bob", "role": "user"}
+    owner_client = _build_app(db_path, storage_root, actor=alice_actor).test_client()
+    viewer_client = _build_app(db_path, storage_root, actor=bob_actor).test_client()
+
+    workflow = FakeComfyUIClient().build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "dream.safetensors",
+        "prompt": "owner only",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 12,
+        "cfg": 7,
+        "seed": 123,
+        "batch_size": 1,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "filename_prefix": "preset",
+    })
+    preset = _import_workflow_preset(owner_client, workflow, title="Private Flow", visibility="private")
+
+    forbidden = viewer_client.get(f"/api/comfyui/workflows/{preset['id']}")
+    assert forbidden.status_code == 403
+    assert "沒有權限" in forbidden.get_json()["msg"]
+
+
+def test_comfyui_export_current_and_run_workflow_preset_preserve_parameters(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    client = _build_app(db_path, storage_root).test_client()
+
+    exported = client.post(
+        "/api/comfyui/workflows/export-current",
+        json={
+            "generation_mode": "txt2img",
+            "model": "dream.safetensors",
+            "prompt": "workflow export prompt",
+            "negative_prompt": "workflow export negative",
+            "width": 640,
+            "height": 768,
+            "steps": 16,
+            "cfg": 5.5,
+            "seed": 424242,
+            "batch_size": 1,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "vae": "sdxl_vae.safetensors",
+        },
+    )
+    assert exported.status_code == 200, exported.get_json()
+    exported_json = exported.get_json()
+    assert exported_json["ok"] is True
+    assert "/tmp/" not in exported_json["workflow_text"]
+    assert "https://" not in exported_json["workflow_text"]
+    assert exported_json["default_params"]["seed"] == 424242
+    assert exported_json["default_params"]["cfg"] == 5.5
+
+    preset = _import_workflow_preset(
+        client,
+        exported_json["workflow_json"],
+        title="Exported Flow",
+        default_params=exported_json["default_params"],
+    )
+    exported_preset = client.post(f"/api/comfyui/workflows/{preset['id']}/export", json={})
+    assert exported_preset.status_code == 200, exported_preset.get_json()
+    preset_export_json = exported_preset.get_json()
+    assert "/tmp/" not in preset_export_json["workflow_text"]
+    assert "https://" not in preset_export_json["workflow_text"]
+
+    run = client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
+    assert run.status_code == 200, run.get_json()
+    job_id = run.get_json()["job"]["job_id"]
+
+    body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+    for _ in range(40):
+        if body["job"]["status"] == "completed":
+            break
+        time.sleep(0.05)
+        body = client.get(f"/api/comfyui/jobs/{job_id}").get_json()
+    assert body["job"]["status"] == "completed"
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    run_row = conn.execute(
+        "SELECT params_json, workflow_json, status FROM comfyui_workflow_runs WHERE preset_id=? ORDER BY id DESC LIMIT 1",
+        (int(preset["id"]),),
+    ).fetchone()
+    conn.close()
+    assert run_row is not None
+    saved_params = json.loads(run_row["params_json"])
+    assert saved_params["seed"] == 424242
+    assert saved_params["cfg"] == 5.5
+    assert saved_params["steps"] == 16
+    assert saved_params["prompt"] == "workflow export prompt"
+    assert saved_params["negative_prompt"] == "workflow export negative"
+    assert run_row["status"] == "completed"
+    assert FakeComfyUIClient.last_workflow["3"]["inputs"]["seed"] == 424242
+    assert FakeComfyUIClient.last_workflow["3"]["inputs"]["steps"] == 16
+    assert FakeComfyUIClient.last_workflow["3"]["inputs"]["cfg"] == 5.5
+
+
+def test_comfyui_workflow_run_rejects_missing_dependencies(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    workflow = FakeComfyUIClient().build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "dream.safetensors",
+        "prompt": "dependency test",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "cfg": 7,
+        "seed": 7,
+        "batch_size": 1,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "filename_prefix": "dependency",
+    })
+
+    missing_model_client = _build_app(db_path, storage_root, comfyui_client=MissingWorkflowCheckpointClient()).test_client()
+    preset = _import_workflow_preset(missing_model_client, workflow, title="Needs Checkpoint")
+    missing_model = missing_model_client.post(f"/api/comfyui/workflows/{preset['id']}/run", json={})
+    assert missing_model.status_code == 409
+    assert "缺少模型" in missing_model.get_json()["msg"]
+
+    inpaint_workflow = FakeComfyUIClient().build_inpaint_workflow({
+        "generation_mode": "inpaint",
+        "model": "dream.safetensors",
+        "prompt": "fill the gap",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "cfg": 7,
+        "seed": 9,
+        "batch_size": 1,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "source_image_ref": {"filename": "source.png", "subfolder": "", "type": "input"},
+        "mask_image_ref": {"filename": "mask.png", "subfolder": "", "type": "input"},
+        "filename_prefix": "inpaint",
+    })
+    missing_node_client = _build_app(db_path, storage_root, comfyui_client=MissingWorkflowNodeClient()).test_client()
+    preset_inpaint = _import_workflow_preset(missing_node_client, inpaint_workflow, title="Needs Node")
+    missing_node = missing_node_client.post(f"/api/comfyui/workflows/{preset_inpaint['id']}/run", json={})
+    assert missing_node.status_code == 409
+    assert "缺少 workflow node" in missing_node.get_json()["msg"]
+
+
+def test_root_can_publish_official_workflow_preset_with_audit(tmp_path):
+    db_path = tmp_path / "comfyui.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO users (id, username, role) VALUES (9, 'root', 'super_admin')")
+    conn.execute("INSERT INTO users (id, username, role) VALUES (10, 'admin', 'manager')")
+    conn.commit()
+    conn.close()
+
+    audit_events = []
+    root_actor = lambda: {"id": 9, "username": "root", "role": "super_admin"}
+    admin_actor = lambda: {"id": 10, "username": "admin", "role": "manager"}
+    workflow = FakeComfyUIClient().build_generation_workflow({
+        "generation_mode": "txt2img",
+        "model": "dream.safetensors",
+        "prompt": "official preset",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "cfg": 7,
+        "seed": 77,
+        "batch_size": 1,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "filename_prefix": "official",
+    })
+
+    root_client = _build_app(
+        db_path,
+        storage_root,
+        actor=root_actor,
+        extra_deps={"audit": lambda *args, **kwargs: audit_events.append((args, kwargs))},
+    ).test_client()
+    preset = _import_workflow_preset(root_client, workflow, title="Root Preset", visibility="private")
+
+    admin_client = _build_app(db_path, storage_root, actor=admin_actor).test_client()
+    forbidden = admin_client.post(f"/api/admin/comfyui/workflows/{preset['id']}/publish-official", json={})
+    assert forbidden.status_code == 403
+
+    published = root_client.post(f"/api/admin/comfyui/workflows/{preset['id']}/publish-official", json={})
+    assert published.status_code == 200, published.get_json()
+    body = published.get_json()
+    assert body["preset"]["is_official"] is True
+    assert body["preset"]["visibility"] == "public"
+    assert any(args and args[0] == "COMFYUI_WORKFLOW_PUBLISH_OFFICIAL" for args, _kwargs in audit_events)
 
 
 def test_comfyui_image_preview_returns_uploaded_asset_preview(tmp_path):
@@ -2896,8 +3219,8 @@ def test_comfyui_frontend_is_wired():
     assert 'id="s-comfyui-civitai-api-key"' in index_html
     assert 'const show = currentUser === "root";' in comfyui_js
     assert '目前是雲端 / 遠端模式，所以這個區塊只保留說明。若要管理本站的本地 ComfyUI 模型，請先把 backend 切回本地模式。' in comfyui_js
-    assert "/js/36-comfyui.js?v=20260505-civitai-search" in index_html
-    assert "/styles.css?v=20260505-civitai-search" in index_html
+    assert "/js/36-comfyui.js?v=20260505-workflow-preset" in index_html
+    assert "/styles.css?v=20260505-workflow-preset" in index_html
     assert "width: min(420px, 100%);" in css
     assert "max-height: 320px;" in css
     assert ".comfyui-root-details" in css
@@ -2939,6 +3262,27 @@ def test_comfyui_frontend_is_wired():
     assert "function loadComfyuiHistory()" in comfyui_js
     assert "function applyComfyuiHistoryToForm(historyId)" in comfyui_js
     assert "function rerunComfyuiHistory(historyId)" in comfyui_js
+    assert "ComfyUI Workflow 工作台" in index_html
+    assert 'id="comfyui-workflow-title"' in index_html
+    assert 'id="comfyui-workflow-json"' in index_html
+    assert 'id="comfyui-workflow-my-list"' in index_html
+    assert 'id="comfyui-workflow-official-list"' in index_html
+    assert 'id="comfyui-workflow-shared-list"' in index_html
+    assert "function loadComfyuiWorkflowPresets()" in comfyui_js
+    assert "function exportCurrentComfyuiWorkflow()" in comfyui_js
+    assert "function importComfyuiWorkflowPreset()" in comfyui_js
+    assert "function updateComfyuiWorkflowPreset()" in comfyui_js
+    assert "function runComfyuiWorkflowPreset(presetId)" in comfyui_js
+    assert "function publishComfyuiWorkflowPresetOfficial(presetId)" in comfyui_js
+    assert 'apiFetch(API + "/comfyui/workflows/export-current"' in comfyui_js
+    assert 'apiFetch(API + "/comfyui/workflows/import"' in comfyui_js
+    assert 'apiFetch(API + `/comfyui/workflows/${encodeURIComponent(presetId)}/run`' in comfyui_js
+    assert 'apiFetch(API + `/admin/comfyui/workflows/${encodeURIComponent(presetId)}/publish-official`' in comfyui_js
+    assert ".comfyui-workflow-grid" in css
+    assert ".comfyui-workflow-item" in css
+    assert ".comfyui-workflow-chip.warn" in css
+    assert ".comfyui-workflow-chip.bad" in css
+    assert "@media (max-width: 860px)" in css
     assert "function bindComfyuiAdvancedUi()" in comfyui_js
     assert "function updateComfyuiModeNote(modeOverride = null)" in comfyui_js
     assert 'badge.textContent = normalizedMode === "local" ? "本地模式" : "雲端 / 遠端模式";' in comfyui_js

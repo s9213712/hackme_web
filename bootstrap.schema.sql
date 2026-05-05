@@ -962,9 +962,72 @@ CREATE TABLE IF NOT EXISTS notifications (
     read_at         TEXT
 );
 
+CREATE TABLE IF NOT EXISTS comfyui_image_refs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref_key TEXT NOT NULL UNIQUE,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    prompt_id TEXT,
+    backend_url TEXT NOT NULL DEFAULT '',
+    image_ref_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS comfyui_generation_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    backend_url TEXT NOT NULL DEFAULT '',
+    generation_mode TEXT NOT NULL DEFAULT 'txt2img',
+    payload_json TEXT NOT NULL,
+    input_assets_json TEXT NOT NULL DEFAULT '{}',
+    controlnet_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS comfyui_workflow_presets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    visibility TEXT NOT NULL DEFAULT 'private',
+    is_official INTEGER NOT NULL DEFAULT 0,
+    workflow_json TEXT NOT NULL,
+    workflow_hash TEXT NOT NULL,
+    required_models_json TEXT NOT NULL DEFAULT '[]',
+    required_loras_json TEXT NOT NULL DEFAULT '[]',
+    required_controlnets_json TEXT NOT NULL DEFAULT '[]',
+    default_params_json TEXT NOT NULL DEFAULT '{}',
+    published_by_user_id INTEGER,
+    published_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS comfyui_workflow_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preset_id INTEGER NOT NULL REFERENCES comfyui_workflow_presets(id) ON DELETE CASCADE,
+    actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    prompt TEXT NOT NULL DEFAULT '',
+    negative_prompt TEXT NOT NULL DEFAULT '',
+    params_json TEXT NOT NULL DEFAULT '{}',
+    workflow_json TEXT NOT NULL DEFAULT '{}',
+    output_refs_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'queued',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_reports_claimed ON reports(claimed_by_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read, created_at);
+CREATE INDEX IF NOT EXISTS idx_comfyui_image_refs_owner ON comfyui_image_refs(owner_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_comfyui_generation_history_owner ON comfyui_generation_history(owner_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_owner ON comfyui_workflow_presets(owner_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_official ON comfyui_workflow_presets(is_official, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_runs_preset ON comfyui_workflow_runs(preset_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_room     ON chat_messages(room_id);
 

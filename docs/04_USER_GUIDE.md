@@ -46,8 +46,10 @@
 - `img2img / inpaint / outpaint / upscale` 可上傳來源圖；ControlNet 可另外上傳控制圖，並設定類型、強度與作用區間
 - ControlNet 目前支援 `Canny`、`Depth`、`OpenPose`、`Lineart / Scribble`、`SoftEdge`、`Tile`
 - 歷史清單可一鍵把先前的提示詞、LoRA、ControlNet、來源圖 / 遮罩圖設定套回再重跑
+- `ComfyUI Workflow 工作台` 可把目前表單匯出成 workflow JSON，再匯入為個人 preset、日後一鍵套回/重跑；若你是 root，還可把自己的 preset 發布成官方 preset
 - 產圖完成後可儲存到 Cloud Drive、分享到論壇或丟棄
 - 頁面會明確顯示目前是本地模式還是遠端模式
+- workflow 匯入若含絕對路徑、shell/exec 節點、外部 URL 或缺少必要模型 / LoRA / ControlNet，系統會直接拒絕並顯示明確錯誤
 
 #### 個人外觀
 

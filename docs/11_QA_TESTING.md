@@ -167,6 +167,13 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - ControlNet 模型缺失、workflow 缺 node、控制圖格式錯誤、`control strength` 超出範圍時，是否回人性化錯誤而非靜默失敗
   - history replay 是否能套回來源圖、遮罩圖、ControlNet、outpaint 與 upscale 設定，不可只回填純文字 prompt
   - root 模型匯入面板是否可在 `Civitai 網址 / 本地檔案上傳` 兩種來源間切換；本地上傳只允許合法副檔名，remote mode 不得出現誤導性入口
+  - `ComfyUI Workflow 工作台` 是否可把目前表單匯出為 sanitized workflow JSON，再匯入成 private/public preset
+  - workflow 匯入是否會拒絕壞 JSON、absolute path、shell / exec / script 類節點、外部 URL 與可疑敏感欄位
+  - private workflow preset 是否不可被其他使用者讀取、更新或刪除
+  - root 是否可把自己的 preset 發布為官方 preset，manager / user 不可越權發布
+  - workflow preset run 若缺 checkpoint / LoRA / ControlNet / workflow node，是否回 `409` 與明確依賴錯誤，而不是靜默 fallback
+  - 一鍵重跑是否會保留 seed / CFG / steps / LoRA / ControlNet 上下文；匯出 JSON 不得含本機絕對路徑或 server storage path
+  - 手機版 workflow workbench 是否仍可閱讀 preset 清單、依賴狀態、官方標記與主要操作按鈕
   - 若要做 live smoke，可額外跑 `python3 scripts/comfyui_feature_probe.py --base-url https://127.0.0.1:PORT --username root --password ... --insecure --json-out /tmp/comfyui_probe.json`，確認 status、model list、txt2img、img2img、inpaint、outpaint、upscale、history rerun 全都真的能通；ControlNet 若缺模型 / node，應回 `expected_unavailable` 或明確錯誤，而不是卡死
 - 若本次改到影音串流 / E2EE 分享，至少補：
   - Safari 是否仍走原生 HLS，而不是被 `hls.js` 蓋掉

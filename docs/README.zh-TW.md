@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-124`**
+**目前 Release ID：`2026.05.05-125`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -70,6 +70,7 @@ ComfyUI 目前除了一般 txt2img，也支援：
 - ControlNet（Canny / Depth / OpenPose / Lineart / Scribble / SoftEdge / Tile）
 - upscale model
 - 歷史套回 / 重跑
+- workflow JSON 匯入 / 匯出、個人 preset、root 官方 preset
 - root 本地模式下可在同一個折疊面板選擇「Civitai 網址」或「本地檔案上傳」匯入模型
 
 交易系統除了既有 `reference price / risk-grade price` 與 WebSocket provider input，

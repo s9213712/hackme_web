@@ -28,6 +28,12 @@ from services.comfyui_client import (
     ComfyUIClient,
     ComfyUIError,
 )
+from services.comfyui_workflows import (
+    WorkflowValidationError,
+    extract_workflow_summary,
+    sanitize_workflow_json,
+    workflow_json_to_pretty_text,
+)
 from services.notifications import create_notification_if_enabled
 from services.storage_albums import (
     add_album_file,
@@ -90,6 +96,9 @@ COMFYUI_ALLOWED_IMAGE_MIME_TYPES = {
 }
 COMFYUI_ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 COMFYUI_HISTORY_LIMIT = 20
+COMFYUI_WORKFLOW_PRESET_LIMIT = 50
+COMFYUI_WORKFLOW_RUN_LIMIT = 8
+COMFYUI_WORKFLOW_VISIBILITY_VALUES = {"private", "public"}
 
 
 class _MemoryFile:
@@ -345,6 +354,383 @@ def register_comfyui_routes(app, deps):
             "controlnet": _parse_json_field(row["controlnet_json"], {}),
             "result": _parse_json_field(row["result_json"], {}),
         }
+
+    def _ensure_comfyui_workflow_schema(conn):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comfyui_workflow_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                visibility TEXT NOT NULL DEFAULT 'private',
+                is_official INTEGER NOT NULL DEFAULT 0,
+                workflow_json TEXT NOT NULL,
+                workflow_hash TEXT NOT NULL DEFAULT '',
+                required_models_json TEXT NOT NULL DEFAULT '[]',
+                required_loras_json TEXT NOT NULL DEFAULT '[]',
+                required_controlnets_json TEXT NOT NULL DEFAULT '[]',
+                default_params_json TEXT NOT NULL DEFAULT '{}',
+                published_by_user_id INTEGER,
+                published_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comfyui_workflow_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                preset_id INTEGER NOT NULL,
+                actor_user_id INTEGER NOT NULL,
+                prompt TEXT NOT NULL DEFAULT '',
+                negative_prompt TEXT NOT NULL DEFAULT '',
+                params_json TEXT NOT NULL DEFAULT '{}',
+                workflow_json TEXT NOT NULL,
+                output_refs_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'queued',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_workflow_presets)").fetchall()}
+        if "published_by_user_id" not in columns:
+            conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN published_by_user_id INTEGER")
+        if "published_at" not in columns:
+            conn.execute("ALTER TABLE comfyui_workflow_presets ADD COLUMN published_at TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_owner ON comfyui_workflow_presets(owner_user_id, updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_presets_official ON comfyui_workflow_presets(is_official, updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comfyui_workflow_runs_preset ON comfyui_workflow_runs(preset_id, created_at DESC)"
+        )
+
+    def _normalize_workflow_visibility(value):
+        text = str(value or "private").strip().lower() or "private"
+        return text if text in COMFYUI_WORKFLOW_VISIBILITY_VALUES else "private"
+
+    def _workflow_preset_summary(row, *, dependency_status=None, recent_runs=None, actor=None):
+        default_params = _parse_json_field(row["default_params_json"], {}) or {}
+        result = {
+            "id": int(row["id"]),
+            "owner_user_id": int(row["owner_user_id"]),
+            "title": row["title"] or f"Workflow #{row['id']}",
+            "description": row["description"] or "",
+            "visibility": row["visibility"] or "private",
+            "is_official": bool(row["is_official"]),
+            "workflow_hash": row["workflow_hash"] or "",
+            "required_models": _parse_json_field(row["required_models_json"], []) or [],
+            "required_loras": _parse_json_field(row["required_loras_json"], []) or [],
+            "required_controlnets": _parse_json_field(row["required_controlnets_json"], []) or [],
+            "default_params": default_params,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "published_at": row["published_at"],
+            "published_by_user_id": row["published_by_user_id"],
+            "can_edit": actor is not None and int(row["owner_user_id"]) == int(_actor_value(actor, "id")),
+            "can_publish_official": bool(
+                actor is not None
+                and _actor_value(actor, "username") == "root"
+                and int(row["owner_user_id"]) == int(_actor_value(actor, "id"))
+            ),
+        }
+        if dependency_status is not None:
+            result["dependency_status"] = dependency_status
+        if recent_runs is not None:
+            result["recent_runs"] = recent_runs
+        return result
+
+    def _load_workflow_preset_row(conn, *, preset_id):
+        _ensure_comfyui_workflow_schema(conn)
+        return conn.execute("SELECT * FROM comfyui_workflow_presets WHERE id=?", (int(preset_id),)).fetchone()
+
+    def _can_read_workflow_preset(row, actor):
+        if not row or not actor:
+            return False
+        actor_id = int(_actor_value(actor, "id"))
+        return (
+            int(row["owner_user_id"]) == actor_id
+            or bool(row["is_official"])
+            or str(row["visibility"] or "private").strip().lower() == "public"
+        )
+
+    def _can_write_workflow_preset(row, actor):
+        return bool(row and actor and int(row["owner_user_id"]) == int(_actor_value(actor, "id")))
+
+    def _load_workflow_preset(conn, *, preset_id, actor, require_write=False):
+        row = _load_workflow_preset_row(conn, preset_id=preset_id)
+        if not row:
+            return None, json_resp({"ok": False, "msg": "找不到這個 workflow preset"}, 404)
+        if require_write:
+            if not _can_write_workflow_preset(row, actor):
+                return None, json_resp({"ok": False, "msg": "你沒有權限修改這個 workflow preset"}, 403)
+        elif not _can_read_workflow_preset(row, actor):
+            return None, json_resp({"ok": False, "msg": "你沒有權限查看這個 workflow preset"}, 403)
+        return row, None
+
+    def _list_workflow_runs(conn, *, preset_id, limit=COMFYUI_WORKFLOW_RUN_LIMIT):
+        _ensure_comfyui_workflow_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT id, prompt, negative_prompt, params_json, output_refs_json, status, error, created_at, updated_at
+            FROM comfyui_workflow_runs
+            WHERE preset_id=?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(preset_id), int(limit)),
+        ).fetchall()
+        return [{
+            "id": int(row["id"]),
+            "prompt": row["prompt"] or "",
+            "negative_prompt": row["negative_prompt"] or "",
+            "params": _parse_json_field(row["params_json"], {}) or {},
+            "output_refs": _parse_json_field(row["output_refs_json"], {}) or {},
+            "status": row["status"] or "queued",
+            "error": row["error"] or "",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        } for row in rows]
+
+    def _list_workflow_presets(conn, *, actor, active_client=None):
+        _ensure_comfyui_workflow_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM comfyui_workflow_presets
+            WHERE owner_user_id=? OR is_official=1 OR visibility='public'
+            ORDER BY is_official DESC, updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(_actor_value(actor, "id")), COMFYUI_WORKFLOW_PRESET_LIMIT),
+        ).fetchall()
+        dependency_cache = {}
+        items = []
+        for row in rows:
+            dependency_status = None
+            if active_client is not None:
+                dependency_status = _workflow_dependency_status(active_client, row)
+            recent_runs = _list_workflow_runs(conn, preset_id=row["id"], limit=3)
+            items.append(_workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor))
+        return items
+
+    def _normalize_workflow_default_params(data):
+        candidate = data
+        if candidate in (None, ""):
+            return {}
+        if isinstance(candidate, str):
+            candidate = _parse_json_field(candidate, None)
+        if not isinstance(candidate, dict):
+            raise WorkflowValidationError("default params 必須是物件")
+        normalized_candidate = dict(candidate)
+        normalized_candidate["skip_asset_validation"] = True
+        params, msg = _normalize_generation_payload(normalized_candidate)
+        if msg:
+            raise WorkflowValidationError(msg)
+        return params
+
+    def _extract_workflow_payload(data):
+        try:
+            parsed = sanitize_workflow_json(data)
+        except WorkflowValidationError:
+            raise
+        default_params = parsed.get("default_params") or {}
+        return parsed, default_params
+
+    def _upsert_workflow_preset(conn, *, preset_id=None, actor, title, description, visibility, workflow_payload, default_params, is_official=False, published_by_user_id=None):
+        _ensure_comfyui_workflow_schema(conn)
+        now = datetime.now().isoformat()
+        workflow_json = workflow_payload["workflow_json"]
+        workflow_hash = workflow_payload["workflow_hash"]
+        required_models = workflow_payload["required_models"]
+        required_loras = workflow_payload["required_loras"]
+        required_controlnets = workflow_payload["required_controlnets"]
+        default_payload = default_params or workflow_payload["default_params"] or {}
+        args = (
+            title.strip()[:120],
+            _safe_text(description, 1200),
+            _normalize_workflow_visibility(visibility),
+            1 if is_official else 0,
+            json.dumps(workflow_json, ensure_ascii=False, sort_keys=True),
+            workflow_hash,
+            json.dumps(required_models, ensure_ascii=False, sort_keys=True),
+            json.dumps(required_loras, ensure_ascii=False, sort_keys=True),
+            json.dumps(required_controlnets, ensure_ascii=False, sort_keys=True),
+            json.dumps(default_payload, ensure_ascii=False, sort_keys=True),
+            int(published_by_user_id) if published_by_user_id else None,
+            now if is_official else None,
+            now,
+        )
+        if preset_id is None:
+            cur = conn.execute(
+                """
+                INSERT INTO comfyui_workflow_presets (
+                    owner_user_id, title, description, visibility, is_official,
+                    workflow_json, workflow_hash, required_models_json, required_loras_json,
+                    required_controlnets_json, default_params_json, published_by_user_id,
+                    published_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(_actor_value(actor, "id")),
+                    *args,
+                    now,
+                ),
+            )
+            return cur.lastrowid
+        conn.execute(
+            """
+            UPDATE comfyui_workflow_presets
+            SET title=?, description=?, visibility=?, is_official=?, workflow_json=?, workflow_hash=?,
+                required_models_json=?, required_loras_json=?, required_controlnets_json=?,
+                default_params_json=?, published_by_user_id=?, published_at=?, updated_at=?
+            WHERE id=? AND owner_user_id=?
+            """,
+            (
+                *args,
+                int(preset_id),
+                int(_actor_value(actor, "id")),
+            ),
+        )
+        return int(preset_id)
+
+    def _create_workflow_run(conn, *, preset_id, actor, prompt, negative_prompt, params_json, workflow_json):
+        _ensure_comfyui_workflow_schema(conn)
+        now = datetime.now().isoformat()
+        cur = conn.execute(
+            """
+            INSERT INTO comfyui_workflow_runs (
+                preset_id, actor_user_id, prompt, negative_prompt, params_json,
+                workflow_json, output_refs_json, status, error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, '{}', 'queued', '', ?, ?)
+            """,
+            (
+                int(preset_id),
+                int(_actor_value(actor, "id")),
+                _safe_text(prompt, 3000),
+                _safe_text(negative_prompt, 3000),
+                json.dumps(params_json or {}, ensure_ascii=False, sort_keys=True),
+                json.dumps(workflow_json or {}, ensure_ascii=False, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+    def _update_workflow_run(conn, *, run_id, status, output_refs=None, error=""):
+        _ensure_comfyui_workflow_schema(conn)
+        conn.execute(
+            """
+            UPDATE comfyui_workflow_runs
+            SET status=?, output_refs_json=?, error=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                str(status or "queued"),
+                json.dumps(output_refs or {}, ensure_ascii=False, sort_keys=True),
+                _safe_text(error, 500),
+                datetime.now().isoformat(),
+                int(run_id),
+            ),
+        )
+
+    def _active_client_dependency_sets(active_client):
+        capabilities = active_client.get_capabilities() if hasattr(active_client, "get_capabilities") else {}
+        try:
+            models = set(active_client.get_models() if hasattr(active_client, "get_models") else [])
+        except Exception:
+            models = set()
+        try:
+            vaes = set(active_client.get_vaes() if hasattr(active_client, "get_vaes") else [])
+        except Exception:
+            vaes = set()
+        try:
+            loras = set(active_client.get_loras() if hasattr(active_client, "get_loras") else [])
+        except Exception:
+            loras = set()
+        return {
+            "models": models,
+            "vaes": vaes,
+            "loras": loras,
+            "controlnets": set((capabilities or {}).get("controlnet_models") or []),
+            "upscale_models": set((capabilities or {}).get("upscale_models") or []),
+            "available_nodes": set((capabilities or {}).get("available_nodes") or []),
+            "controlnet_types": (capabilities or {}).get("controlnet_types") or {},
+        }
+
+    def _workflow_dependency_status(active_client, row):
+        payload = _parse_json_field(row["workflow_json"], {}) or {}
+        required_models = _parse_json_field(row["required_models_json"], []) or []
+        required_loras = _parse_json_field(row["required_loras_json"], []) or []
+        required_controlnets = _parse_json_field(row["required_controlnets_json"], []) or []
+        sets = _active_client_dependency_sets(active_client)
+        missing_models = []
+        missing_loras = []
+        missing_controlnets = []
+        missing_nodes = []
+        for node in payload.values():
+            class_type = str((node or {}).get("class_type") or "").strip()
+            if class_type and sets["available_nodes"] and class_type not in sets["available_nodes"]:
+                missing_nodes.append(class_type)
+        for item in required_models:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            kind = str(item.get("kind") or "checkpoint").strip().lower()
+            if not name:
+                continue
+            if kind == "vae":
+                if name not in sets["vaes"]:
+                    missing_models.append({"kind": kind, "name": name})
+            elif kind == "upscale":
+                if name not in sets["upscale_models"]:
+                    missing_models.append({"kind": kind, "name": name})
+            elif name not in sets["models"]:
+                missing_models.append({"kind": kind, "name": name})
+        for item in required_loras:
+            name = str((item or {}).get("name") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+            if name and name not in sets["loras"]:
+                missing_loras.append({"name": name})
+        for item in required_controlnets:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            control_type = str(item.get("type") or "").strip().lower()
+            if name and name not in sets["controlnets"]:
+                missing_controlnets.append({"name": name, "type": control_type})
+            elif control_type and not ((sets["controlnet_types"].get(control_type) or {}).get("available")):
+                missing_controlnets.append({"name": name, "type": control_type})
+        available = not (missing_models or missing_loras or missing_controlnets or missing_nodes)
+        issues = []
+        if missing_nodes:
+            issues.append(f"缺少 workflow node：{', '.join(sorted(set(missing_nodes)))}")
+        if missing_models:
+            issues.append("缺少模型：" + ", ".join(sorted({item['name'] for item in missing_models})))
+        if missing_loras:
+            issues.append("缺少 LoRA：" + ", ".join(sorted({item['name'] for item in missing_loras})))
+        if missing_controlnets:
+            issues.append("缺少 ControlNet：" + ", ".join(sorted({item['name'] for item in missing_controlnets})))
+        return {
+            "available": available,
+            "missing_nodes": sorted(set(missing_nodes)),
+            "missing_models": missing_models,
+            "missing_loras": missing_loras,
+            "missing_controlnets": missing_controlnets,
+            "issues": issues,
+        }
+
+    def _assert_workflow_dependencies_or_error(active_client, row):
+        status = _workflow_dependency_status(active_client, row)
+        if status["available"]:
+            return status, None
+        message = "；".join(status["issues"]) if status["issues"] else "workflow 依賴檢查失敗"
+        return status, message
 
     def _parse_generation_request():
         uploaded_assets = {}
@@ -2185,6 +2571,85 @@ def register_comfyui_routes(app, deps):
         finally:
             _unregister_active_generation(generation_token)
 
+    def _run_comfyui_workflow_preset_job(job_id, actor, row, run_id, timeout_seconds, request_meta=None):
+        backend_binding = _comfyui_binding(actor)
+        active_client = _client_for_url(backend_binding["url"])
+        request_meta = request_meta if isinstance(request_meta, dict) else {}
+        audit_ip = request_meta.get("client_ip") or "-"
+        audit_ua = request_meta.get("user_agent") or "-"
+        _update_generation_job(job_id, status="running")
+        workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
+        default_params = _parse_json_field(row["default_params_json"], {}) or {}
+        prompt = str(default_params.get("prompt") or "")
+        negative_prompt = str(default_params.get("negative_prompt") or "")
+        expected_count = max(1, int(default_params.get("batch_size") or 1))
+        try:
+            result = active_client.generate_from_workflow(
+                workflow_json,
+                timeout_seconds=timeout_seconds,
+                expected_count=expected_count,
+                progress_callback=lambda progress: _update_generation_job_progress(job_id, progress),
+            )
+            images = _finalize_generation_records(actor, default_params, result, backend_url=backend_binding.get("url"))
+            output_refs = {
+                "prompt_id": result.get("prompt_id") or "",
+                "images": [
+                    {
+                        "image_ref": item.get("image_ref"),
+                        "mime_type": item.get("mime_type"),
+                        "size_bytes": item.get("size_bytes"),
+                    }
+                    for item in images
+                ],
+            }
+            conn = get_db()
+            try:
+                _update_workflow_run(conn, run_id=run_id, status="completed", output_refs=output_refs, error="")
+                conn.commit()
+            finally:
+                conn.close()
+            payload = {
+                "image": images[0],
+                "images": images,
+                "workflow_run_id": run_id,
+                "preset_id": int(row["id"]),
+            }
+            _update_generation_job(job_id, status="completed", result=payload, error="")
+            _update_generation_job_progress(job_id, {
+                "phase": "completed",
+                "percent": 100,
+                "completed": True,
+                "detail": f"已完成，共 {len(images)} 張",
+            })
+            audit(
+                "COMFYUI_WORKFLOW_RUN",
+                audit_ip,
+                user=_actor_value(actor, "username"),
+                success=True,
+                ua=audit_ua,
+                detail=f"job_id={job_id}, preset_id={row['id']}, run_id={run_id}, prompt_id={result.get('prompt_id') or ''}",
+            )
+        except ComfyUIError as exc:
+            conn = get_db()
+            try:
+                _update_workflow_run(conn, run_id=run_id, status="error", output_refs={}, error=str(exc))
+                conn.commit()
+            finally:
+                conn.close()
+            _update_generation_job(job_id, status="error", error=str(exc), result=None)
+            _update_generation_job_progress(job_id, {"phase": "error", "detail": str(exc), "completed": False})
+            audit("COMFYUI_WORKFLOW_RUN_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
+        except Exception as exc:
+            conn = get_db()
+            try:
+                _update_workflow_run(conn, run_id=run_id, status="error", output_refs={}, error=str(exc))
+                conn.commit()
+            finally:
+                conn.close()
+            _update_generation_job(job_id, status="error", error=str(exc), result=None)
+            _update_generation_job_progress(job_id, {"phase": "error", "detail": str(exc), "completed": False})
+            audit("COMFYUI_WORKFLOW_RUN_ERROR", audit_ip, user=_actor_value(actor, "username"), success=False, ua=audit_ua, detail=str(exc)[:180])
+
     def _run_comfyui_model_download_job(job_id, actor, request_data, request_meta=None):
         request_data = dict(request_data or {})
         request_meta = request_meta if isinstance(request_meta, dict) else {}
@@ -3440,6 +3905,321 @@ def register_comfyui_routes(app, deps):
                 "progress": {"phase": "queued", "percent": 0, "detail": "已建立重跑工作"},
             },
         })
+
+    @app.route("/api/comfyui/workflows", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_workflow_presets():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        binding = _comfyui_binding(actor)
+        active_client = None
+        dependency_warning = ""
+        try:
+            active_client = _client_for_url(binding["url"])
+            if hasattr(active_client, "health_check"):
+                active_client.health_check(timeout=3)
+        except Exception as exc:
+            dependency_warning = str(exc)
+            active_client = None
+        conn = get_db()
+        try:
+            presets = _list_workflow_presets(conn, actor=actor, active_client=active_client)
+        finally:
+            conn.close()
+        return json_resp({
+            "ok": True,
+            "presets": presets,
+            "official_presets": [item for item in presets if item.get("is_official")],
+            "my_presets": [item for item in presets if int(item.get("owner_user_id") or 0) == int(_actor_value(actor, "id")) and not item.get("is_official")],
+            "shared_presets": [item for item in presets if int(item.get("owner_user_id") or 0) != int(_actor_value(actor, "id")) and not item.get("is_official")],
+            "can_publish_official": _actor_value(actor, "username") == "root",
+            "dependency_warning": dependency_warning,
+        })
+
+    @app.route("/api/comfyui/workflows/import", methods=["POST"])
+    @require_csrf
+    def comfyui_workflow_import():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        workflow_candidate = data.get("workflow_json") if "workflow_json" in data else data.get("workflow")
+        if workflow_candidate in (None, ""):
+            return json_resp({"ok": False, "msg": "請提供 workflow JSON"}), 400
+        try:
+            workflow_payload, extracted_defaults = _extract_workflow_payload(workflow_candidate)
+            default_params = (
+                _normalize_workflow_default_params(data.get("default_params_json") if "default_params_json" in data else data.get("default_params"))
+                if ("default_params_json" in data or "default_params" in data)
+                else extracted_defaults
+            )
+        except WorkflowValidationError as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        title = _safe_text(data.get("title") or data.get("name") or f"Workflow {datetime.now().strftime('%Y-%m-%d %H:%M')}", 120)
+        conn = get_db()
+        try:
+            preset_id = _upsert_workflow_preset(
+                conn,
+                actor=actor,
+                title=title,
+                description=data.get("description") or "",
+                visibility=data.get("visibility") or "private",
+                workflow_payload=workflow_payload,
+                default_params=default_params,
+            )
+            row = _load_workflow_preset_row(conn, preset_id=preset_id)
+            conn.commit()
+        finally:
+            conn.close()
+        audit("COMFYUI_WORKFLOW_IMPORT", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}, title={title}")
+        return json_resp({"ok": True, "preset": _workflow_preset_summary(row, actor=actor), "msg": "已匯入 workflow preset"})
+
+    @app.route("/api/comfyui/workflows/export-current", methods=["POST"])
+    @require_csrf
+    def comfyui_workflow_export_current():
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        params, msg = _normalize_generation_payload(data)
+        if msg:
+            return json_resp({"ok": False, "msg": msg}), 400
+        active_client = _client_for_url(_comfyui_binding(actor)["url"])
+        try:
+            capabilities, capability_msg = _validate_generation_capabilities(active_client, params)
+            if capability_msg:
+                return json_resp({"ok": False, "msg": capability_msg, "capabilities": capabilities or {}}), 409
+            workflow = active_client.build_generation_workflow(params)
+            workflow_payload = sanitize_workflow_json(workflow)
+        except (ComfyUIError, WorkflowValidationError) as exc:
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        return json_resp({
+            "ok": True,
+            "workflow_json": workflow_payload["workflow_json"],
+            "workflow_text": workflow_json_to_pretty_text(workflow_payload["workflow_json"]),
+            "workflow_hash": workflow_payload["workflow_hash"],
+            "required_models": workflow_payload["required_models"],
+            "required_loras": workflow_payload["required_loras"],
+            "required_controlnets": workflow_payload["required_controlnets"],
+            "default_params": params,
+        })
+
+    @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["GET"])
+    @require_csrf_safe
+    def comfyui_workflow_detail(preset_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor)
+            if err_resp:
+                return err_resp
+            active_client = None
+            try:
+                active_client = _client_for_url(_comfyui_binding(actor)["url"])
+                if hasattr(active_client, "health_check"):
+                    active_client.health_check(timeout=3)
+            except Exception:
+                active_client = None
+            dependency_status = _workflow_dependency_status(active_client, row) if active_client is not None else None
+            recent_runs = _list_workflow_runs(conn, preset_id=preset_id, limit=COMFYUI_WORKFLOW_RUN_LIMIT)
+            payload = _workflow_preset_summary(row, dependency_status=dependency_status, recent_runs=recent_runs, actor=actor)
+            payload["workflow_json"] = _parse_json_field(row["workflow_json"], {}) or {}
+        finally:
+            conn.close()
+        return json_resp({"ok": True, "preset": payload})
+
+    @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["PUT"])
+    @require_csrf
+    def comfyui_workflow_update(preset_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return json_resp({"ok": False, "msg": "Invalid JSON"}), 400
+        data = data if isinstance(data, dict) else {}
+        conn = get_db()
+        try:
+            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor, require_write=True)
+            if err_resp:
+                return err_resp
+            before = _workflow_preset_summary(row, actor=actor)
+            workflow_candidate = data.get("workflow_json") if "workflow_json" in data else _parse_json_field(row["workflow_json"], {})
+            workflow_payload, extracted_defaults = _extract_workflow_payload(workflow_candidate)
+            if "default_params_json" in data or "default_params" in data:
+                default_params = _normalize_workflow_default_params(data.get("default_params_json") if "default_params_json" in data else data.get("default_params"))
+            elif "workflow_json" in data:
+                default_params = extracted_defaults
+            else:
+                default_params = _parse_json_field(row["default_params_json"], {}) or {}
+            updated_id = _upsert_workflow_preset(
+                conn,
+                preset_id=preset_id,
+                actor=actor,
+                title=data.get("title") or row["title"],
+                description=data.get("description") if "description" in data else row["description"],
+                visibility=data.get("visibility") if "visibility" in data else row["visibility"],
+                workflow_payload=workflow_payload,
+                default_params=default_params,
+                is_official=bool(row["is_official"]),
+                published_by_user_id=row["published_by_user_id"],
+            )
+            row = _load_workflow_preset_row(conn, preset_id=updated_id)
+            conn.commit()
+        except WorkflowValidationError as exc:
+            conn.rollback()
+            return json_resp({"ok": False, "msg": str(exc)}), 400
+        finally:
+            conn.close()
+        after = _workflow_preset_summary(row, actor=actor)
+        audit(
+            "COMFYUI_WORKFLOW_UPDATE",
+            get_client_ip(),
+            user=_actor_value(actor, "username"),
+            success=True,
+            ua=get_ua(),
+            detail=f"preset_id={preset_id}, before={json.dumps(before, ensure_ascii=False)[:180]}, after={json.dumps(after, ensure_ascii=False)[:180]}",
+        )
+        return json_resp({"ok": True, "preset": after, "msg": "已更新 workflow preset"})
+
+    @app.route("/api/comfyui/workflows/<int:preset_id>", methods=["DELETE"])
+    @require_csrf
+    def comfyui_workflow_delete(preset_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor, require_write=True)
+            if err_resp:
+                return err_resp
+            conn.execute("DELETE FROM comfyui_workflow_runs WHERE preset_id=?", (int(preset_id),))
+            conn.execute("DELETE FROM comfyui_workflow_presets WHERE id=? AND owner_user_id=?", (int(preset_id), int(_actor_value(actor, "id"))))
+            conn.commit()
+        finally:
+            conn.close()
+        audit("COMFYUI_WORKFLOW_DELETE", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}")
+        return json_resp({"ok": True, "msg": "已刪除 workflow preset"})
+
+    @app.route("/api/comfyui/workflows/<int:preset_id>/run", methods=["POST"])
+    @require_csrf
+    def comfyui_workflow_run(preset_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor)
+            if err_resp:
+                return err_resp
+            active_client = _client_for_url(_comfyui_binding(actor)["url"])
+            dependency_status, dependency_msg = _assert_workflow_dependencies_or_error(active_client, row)
+            if dependency_msg:
+                return json_resp({"ok": False, "msg": dependency_msg, "dependency_status": dependency_status}), 409
+            default_params = _parse_json_field(row["default_params_json"], {}) or {}
+            workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
+            run_id = _create_workflow_run(
+                conn,
+                preset_id=preset_id,
+                actor=actor,
+                prompt=default_params.get("prompt") or "",
+                negative_prompt=default_params.get("negative_prompt") or "",
+                params_json=default_params,
+                workflow_json=workflow_json,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        job_id = _create_generation_job(actor)
+        request_meta = _capture_request_audit_meta()
+        worker = threading.Thread(
+            target=_run_comfyui_workflow_preset_job,
+            args=(job_id, dict(actor), dict(row), run_id, DEFAULT_GENERATION_TIMEOUT_SECONDS, request_meta),
+            daemon=True,
+        )
+        worker.start()
+        return json_resp({
+            "ok": True,
+            "async": True,
+            "workflow_run_id": run_id,
+            "dependency_status": dependency_status,
+            "job": {
+                "job_id": job_id,
+                "status": "queued",
+                "progress": {"phase": "queued", "percent": 0, "detail": "已建立 workflow 執行工作"},
+            },
+        })
+
+    @app.route("/api/comfyui/workflows/<int:preset_id>/export", methods=["POST"])
+    @require_csrf
+    def comfyui_workflow_export(preset_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor)
+            if err_resp:
+                return err_resp
+            workflow_json = _parse_json_field(row["workflow_json"], {}) or {}
+        finally:
+            conn.close()
+        return json_resp({
+            "ok": True,
+            "filename": f"comfyui-workflow-{preset_id}.json",
+            "workflow_hash": row["workflow_hash"] or "",
+            "workflow_json": workflow_json,
+            "workflow_text": workflow_json_to_pretty_text(workflow_json),
+        })
+
+    @app.route("/api/admin/comfyui/workflows/<int:preset_id>/publish-official", methods=["POST"])
+    @require_csrf
+    def comfyui_workflow_publish_official(preset_id):
+        actor, err = _root_or_403()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            row, err_resp = _load_workflow_preset(conn, preset_id=preset_id, actor=actor, require_write=True)
+            if err_resp:
+                return err_resp
+            updated_id = _upsert_workflow_preset(
+                conn,
+                preset_id=preset_id,
+                actor=actor,
+                title=row["title"],
+                description=row["description"],
+                visibility="public",
+                workflow_payload={
+                    "workflow_json": _parse_json_field(row["workflow_json"], {}) or {},
+                    "workflow_hash": row["workflow_hash"] or "",
+                    "required_models": _parse_json_field(row["required_models_json"], []) or [],
+                    "required_loras": _parse_json_field(row["required_loras_json"], []) or [],
+                    "required_controlnets": _parse_json_field(row["required_controlnets_json"], []) or [],
+                    "default_params": _parse_json_field(row["default_params_json"], {}) or {},
+                },
+                default_params=_parse_json_field(row["default_params_json"], {}) or {},
+                is_official=True,
+                published_by_user_id=_actor_value(actor, "id"),
+            )
+            row = _load_workflow_preset_row(conn, preset_id=updated_id)
+            conn.commit()
+        finally:
+            conn.close()
+        audit("COMFYUI_WORKFLOW_PUBLISH_OFFICIAL", get_client_ip(), user=_actor_value(actor, "username"), success=True, ua=get_ua(), detail=f"preset_id={preset_id}")
+        return json_resp({"ok": True, "preset": _workflow_preset_summary(row, actor=actor), "msg": "已發布為官方 preset"})
 
     @app.route("/api/comfyui/image-preview", methods=["POST"])
     @require_csrf

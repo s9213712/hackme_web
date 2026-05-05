@@ -438,6 +438,14 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/comfyui/jobs/<job_id>` | logged-in | job 狀態 |
 | GET | `/api/comfyui/history` | logged-in | 取得近期生成歷史 |
 | POST | `/api/comfyui/history/<history_id>/rerun` | logged-in | 依歷史設定重跑 |
+| GET | `/api/comfyui/workflows` | logged-in | 取得可讀 workflow preset 列表 |
+| POST | `/api/comfyui/workflows/import` | logged-in | 匯入 workflow JSON 為新 preset |
+| POST | `/api/comfyui/workflows/export-current` | logged-in | 把目前表單匯出為 sanitized workflow JSON |
+| GET | `/api/comfyui/workflows/<preset_id>` | logged-in | 讀取單一 workflow preset |
+| PUT | `/api/comfyui/workflows/<preset_id>` | logged-in | 更新自己可編輯的 workflow preset |
+| DELETE | `/api/comfyui/workflows/<preset_id>` | logged-in | 刪除自己可編輯的 workflow preset |
+| POST | `/api/comfyui/workflows/<preset_id>/run` | logged-in | 執行 workflow preset |
+| POST | `/api/comfyui/workflows/<preset_id>/export` | logged-in | 匯出已保存的 workflow preset JSON |
 | POST | `/api/comfyui/image-preview` | logged-in | 預覽已儲存來源圖 / 遮罩圖 / 控制圖 |
 | POST | `/api/comfyui/interrupt` | logged-in | 中斷生成 |
 | POST | `/api/comfyui/save` | logged-in | 儲存結果 |
@@ -445,11 +453,22 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | POST | `/api/comfyui/share` | logged-in | 分享結果 |
 | POST | `/api/root/comfyui/test-connection` | root | 測試連線 |
 | POST | `/api/root/comfyui/stop` | root | 停止本地 ComfyUI |
+| POST | `/api/admin/comfyui/workflows/<preset_id>/publish-official` | root | 發布官方 workflow preset |
 | POST | `/api/root/comfyui/civitai/search` | root | 用關鍵字 / base model / 類型 / NSFW 篩選搜尋 Civitai 模型 |
 | POST | `/api/root/comfyui/civitai/inspect` | root | 讀 Civitai metadata |
 | POST | `/api/root/comfyui/civitai/download` | root | 下載模型 |
 | POST | `/api/root/comfyui/model-upload` | root | 直接上傳模型檔到本地 ComfyUI models 目錄 |
 | GET | `/api/root/comfyui/download-jobs/<job_id>` | root | 下載 job 狀態 |
+
+Workflow preset 補充：
+
+- 匯入/更新 workflow JSON 會先驗證：
+  - JSON 格式正確
+  - 不含 absolute path
+  - 不含 `shell / exec / script / command` 類節點
+  - 不含外部 URL
+- 缺少模型 / LoRA / ControlNet / workflow node 時，執行 preset 會明確回 `409` 與依賴錯誤，不會靜默 fallback。
+- `private` preset 只能擁有者查看/更新/刪除；`official` preset 只能由 root 發布。
 
 ### Security Center / Server Mode / Snapshots / Root Ops
 

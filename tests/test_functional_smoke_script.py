@@ -37,6 +37,8 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     assert 'request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200"' in script
     assert 'request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200"' in script
     assert 'request "comfyui civitai search missing api key" "POST" "/api/root/comfyui/civitai/search" "400"' in script
+    assert 'request "comfyui workflow presets list" "GET" "/api/comfyui/workflows" "200"' in script
+    assert 'request "comfyui workflow import unsafe path rejected" "POST" "/api/comfyui/workflows/import" "400"' in script
     assert 'python3 scripts/root_recovery.py --help' in script
     assert '"price_type" in data and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data' in script
     assert '"reference_price_context" in data and "risk_grade_price_context" in data' in script
@@ -45,4 +47,5 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     assert "trading extras" in docs
     assert "announcement create/edit" in docs
     assert "Civitai search API key guard" in docs
+    assert "workflow preset list/import guards" in docs
     assert "offline root recovery CLI availability" in docs

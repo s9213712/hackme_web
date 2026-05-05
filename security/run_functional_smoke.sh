@@ -686,6 +686,8 @@ run_checks() {
   request "cloud drive remote downloader task rejects local file" "POST" "/api/cloud-drive/remote-download/tasks" "400" '{"url":"file:///etc/passwd","privacy_mode":"standard_plain"}'
   request "comfyui status" "GET" "/api/comfyui/status" "200"
   request "comfyui models" "GET" "/api/comfyui/models" "200,503"
+  request "comfyui workflow presets list" "GET" "/api/comfyui/workflows" "200"
+  request "comfyui workflow import unsafe path rejected" "POST" "/api/comfyui/workflows/import" "400" '{"title":"smoke unsafe workflow","workflow_json":{"1":{"class_type":"LoadImage","inputs":{"image":"/tmp/evil.png","upload":"image"}}}}'
   if [[ "$(json_expr 'data.get("ok", False)' "$(latest_raw "comfyui models")" || echo false)" == "true" ]]; then
     pass "comfyui integration availability" "ComfyUI model endpoint is reachable"
   else

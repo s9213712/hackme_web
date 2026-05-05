@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-124`
+Release ID: `2026.05.05-125`
+
+## 2026.05.05-125
+
+- ComfyUI 新增 `Workflow 工作台`：可把目前表單匯出成經過安全清洗的 workflow JSON，再匯入成 private/public preset、保存描述與可見性，之後可一鍵套用、一鍵重跑與匯出已保存的 preset JSON。
+- workflow JSON 進入系統前現在會做伺服器端安全驗證：拒絕壞 JSON、absolute path、shell / exec / command 類節點、外部 URL 與可疑敏感欄位；缺少 checkpoint / LoRA / ControlNet / workflow node 時，執行 preset 會明確回 `409`，不再靜默 fallback。
+- root 可把自己的 workflow preset 發布為 official preset，private preset 仍只允許擁有者存取；workflow run 會保存 seed / CFG / steps / LoRA / ControlNet 等完整參數，方便之後比對與重跑。
 
 ## 2026.05.05-124
 

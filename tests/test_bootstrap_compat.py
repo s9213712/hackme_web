@@ -168,6 +168,10 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     trading_position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_spot_positions)").fetchall()}
     trading_margin_position_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_margin_positions)").fetchall()}
     trading_reserve_cols = {row["name"] for row in conn.execute("PRAGMA table_info(trading_reserve_pool)").fetchall()}
+    comfyui_image_ref_cols = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_image_refs)").fetchall()}
+    comfyui_generation_history_cols = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_generation_history)").fetchall()}
+    comfyui_workflow_preset_cols = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_workflow_presets)").fetchall()}
+    comfyui_workflow_run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(comfyui_workflow_runs)").fetchall()}
     migration_versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     default_users = {
         row["username"]: dict(row)
@@ -267,6 +271,17 @@ def test_init_db_repairs_legacy_sessions_before_schema_replay(tmp_path, monkeypa
     assert {"user_id", "market_symbol", "quantity_units", "locked_quantity_units"} <= trading_position_cols
     assert {"position_uuid", "position_type", "principal_points", "collateral_points", "interest_percent_daily"} <= trading_margin_position_cols
     assert {"id", "balance_points", "updated_at"} <= trading_reserve_cols
+    assert {"ref_key", "owner_user_id", "prompt_id", "backend_url", "image_ref_json", "created_at", "last_used_at"} <= comfyui_image_ref_cols
+    assert {"owner_user_id", "backend_url", "generation_mode", "payload_json", "input_assets_json", "controlnet_json", "result_json", "created_at", "updated_at"} <= comfyui_generation_history_cols
+    assert {
+        "owner_user_id", "title", "description", "visibility", "is_official", "workflow_json",
+        "workflow_hash", "required_models_json", "required_loras_json", "required_controlnets_json",
+        "default_params_json", "published_by_user_id", "published_at", "created_at", "updated_at",
+    } <= comfyui_workflow_preset_cols
+    assert {
+        "preset_id", "actor_user_id", "prompt", "negative_prompt", "params_json", "workflow_json",
+        "output_refs_json", "status", "error", "created_at", "updated_at",
+    } <= comfyui_workflow_run_cols
     assert migration_versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
     assert set(default_users) == {"root", "admin", "test"}
 
