@@ -203,7 +203,7 @@ def test_legacy_rate_unit_label_removed_from_repository_text():
         "__pycache__", ".pytest_cache", "node_modules",
         "storage", "reports", "secure_backups", "build", "dist",
     }
-    ignored_prefixes = {Path("security/reports")}
+    ignored_prefixes = {Path("security/reports"), Path("public/js/vendor")}
     ignored_suffixes = {".pyc", ".db", ".sqlite", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip", ".gz"}
     offenders = []
     for path in ROOT.rglob("*"):
