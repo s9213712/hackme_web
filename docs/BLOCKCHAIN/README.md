@@ -30,7 +30,7 @@
 | [MULTISIG_WALLETS.md](MULTISIG_WALLETS.md) | dev | 5-role signer / 3-of-5 / proposal / approve / execute | Phase 4 |
 | [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md) | dev / admin / user | QA Mining 公式 + 雙人審核 + signer 排除 + trust_score + retroactive | **Phase 7** |
 | [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) | qa | 14 項必測 + 各 Phase 出口 gate + invariants + Release Blocker | all |
-| **[GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md)** | dev / governance reviewer | 治理框架主索引：14 維度、role matrix、L0–L5 tier、parameter registry、explorer、MVP 範圍 | **Governance** |
+| **[GOVERNANCE_FRAMEWORK.md](GOVERNANCE_FRAMEWORK.md)** | dev / governance reviewer | 治理框架主索引：14 維度、role matrix、L0–L5 tier、parameter registry、explorer、MVP 範圍 | **Governance** ⚠️ |
 | [GOVERNANCE_PROPOSAL_LIFECYCLE.md](GOVERNANCE_PROPOSAL_LIFECYCLE.md) | dev | 11 lifecycle 狀態 + schema + timelock + deposit + simulation | Governance G-0..G-1 |
 | [GOVERNANCE_VOTING_POWER.md](GOVERNANCE_VOTING_POWER.md) | dev / user-rep | eligibility + 多維 weight 公式 + Bicameral + delegation + sybil scoring | Governance G-5 |
 | [POINTS_MONETARY_POLICY.md](POINTS_MONETARY_POLICY.md) | dev / treasurer | mint / burn / fee / reserve rebalancing 制度 | Governance G-2 |
@@ -38,6 +38,11 @@
 | [EMERGENCY_GOVERNANCE.md](EMERGENCY_GOVERNANCE.md) | dev / emergency committee | emergency action taxonomy + user exit window + postmortem + ratification | Governance G-3 |
 | [GOVERNANCE_QA_GATE.md](GOVERNANCE_QA_GATE.md) | qa | 12 條 governance 必過測試（self-approve / payload integrity / hard cap / 緊急 stop / direct param 直寫禁止） | Governance G-4 |
 | [DISPUTE_AND_APPEALS.md](DISPUTE_AND_APPEALS.md) | dev / mediator | 7 種 dispute kind + mediator + 14d appeal + dispute pool | Governance G-3 / G-6 |
+
+> ⚠️ **Governance docs (8 files above) are design drafts pending root approval.**
+> They are planning references only and **do not authorize governance implementation**.
+> Both PointsChain Phase 1 / 2 / 4 / 6 完成 + governance docs root review pass + Governance Phase G-X 個別授權 三條件全到才會開工。
+> PointsChain core docs (上方 7 份非 governance 設計文件) 是 design approved；governance docs 是 design draft。**兩者層級不同，不要混淆。**
 
 ## Phase 順序與依賴
 
@@ -56,8 +61,11 @@ Phase 5  Self-Custody              opt-in + 前端 ed25519 + 私鑰絕不上 ser
    │
 Phase 6  Explorer                  公開區塊瀏覽器 + merkle proof + RWD
    │
-Phase 7  QA Mining                 ★ 依賴 Phase 0/1/2/4/6
-   ↓                               公式 reward + multisig 升級 + signer 排除 + trust 守護
+Phase 7  QA Mining                 ★ Phase 0 cleanup closed.
+   ↓                               Phase 7 implementation blocked until
+                                   Phase 1 / 2 / 4 / 6 complete and
+                                   root separately authorizes Phase 7.
+                                   公式 reward + multisig 升級 + signer 排除 + trust 守護
         Phase 8 Content Mining (未來)
         Phase 9 Validator Reward (未來)
 

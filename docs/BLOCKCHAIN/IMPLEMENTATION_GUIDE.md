@@ -205,11 +205,13 @@ Phase 5
    │
 Phase 6  ← Phase 7 explorer 依賴此
    │
-Phase 7 (QA Mining)  ← 依賴 Phase 0/1/2/4/6
+Phase 7 (QA Mining)  ← Phase 0 cleanup closed; implementation
+                       blocked until Phase 1 / 2 / 4 / 6 complete and
+                       root separately authorizes Phase 7
 ```
 
 ### 2.1 不允許「先做 Phase 7 prototype 上線」
-- Phase 7 在 Phase 0/1/2/4/6 沒完成前**只允許 DRAFT / mock / dry-run**
+- Phase 0 cleanup 已 closed；但 Phase 1 / 2 / 4 / 6 沒完成前**只允許 DRAFT / mock / dry-run**
 - mock 階段：可以建立 schema、寫 service、跑 unit test，但**不可真實 payout**
 - dry-run 階段：可在 dev_ready 模式下 simulate，但 ledger 寫入要標 `is_dryrun=1` 並在 incident_lockdown 時自動清
 
@@ -313,7 +315,7 @@ and explicit root approval.
 - ❌ 私自修改 `docs/BLOCKCHAIN/` 既有設計取捨而沒先 root 拍板
 - ❌ 跳過 isolated QA 直接動 production runtime
 - ❌ 鏈化分支 fast-forward 整個 trunk
-- ❌ Phase 7 在 Phase 0/1/2/4/6 沒完成前真實 payout
+- ❌ Phase 7 在 Phase 1 / 2 / 4 / 6 完成且 root 個別授權 Phase 7 之前真實 payout（Phase 0 cleanup 已 closed，不再是阻擋條件）
 
 ---
 
@@ -435,12 +437,34 @@ GATE_REPORT.md 模板可沿用既有 `docs/AGENTS/reports/*` 的報告格式：V
 
 - [ ] 我已 push 完所有非區塊鏈相關變更到原分支
 - [ ] 我已 `git checkout -b 04.blockchain`
-- [ ] 我已讀完 `docs/BLOCKCHAIN/` 所有 8 份文件
+- [ ] 我已讀完 **本 phase 必讀**的文件（依下表，非全部 18 份）
 - [ ] 我知道我接的是哪個 phase
 - [ ] 我已通知 root 並獲得「動工」明確授權
 - [ ] 我已建立 `docs/AGENTS/reports/<agent>/pointschain_v2_phase{N}_<date>/` 報告目錄
 - [ ] 我已建立 isolated QA workspace
 - [ ] 我已準備好對應的 pytest 與 evidence 收集
+
+### Phase-specific required reading
+
+不要要求每個 agent 都讀完整個 `docs/BLOCKCHAIN/`（含 governance / mining / dispute）。下表列每個 phase 的**必讀最小集**，其他文件按需查閱：
+
+| Phase | 必讀（依序） |
+|---|---|
+| **Phase 1（地址化）** | README.md → IMPLEMENTATION_GUIDE.md（本檔） → POINTSCHAIN_ENGINEERING.md §1–4 → POINTS_WALLET_ADDRESSING.md → POINTSCHAIN_QA.md §1–3 → PHASE_0_CLEANUP_GATE.md（context） |
+| **Phase 2（Ledger v2）** | README → IMPLEMENTATION_GUIDE → POINTSCHAIN_ENGINEERING.md §4 → POINTSCHAIN_QA.md §4 |
+| **Phase 3（Transfer）** | README → IMPLEMENTATION_GUIDE → POINTS_TRANSFER_API.md → POINTSCHAIN_QA.md §5 |
+| **Phase 4（Multisig）** | README → IMPLEMENTATION_GUIDE → MULTISIG_WALLETS.md → POINTSCHAIN_QA.md §6 |
+| **Phase 5（Self-custody）** | README → IMPLEMENTATION_GUIDE → POINTSCHAIN_ENGINEERING.md §7 → POINTSCHAIN_QA.md §7 |
+| **Phase 6（Explorer）** | README → IMPLEMENTATION_GUIDE → POINTSCHAIN_ENGINEERING.md §8 → POINTSCHAIN_QA.md §8 |
+| **Phase 7（QA Mining）** | README → IMPLEMENTATION_GUIDE → POINTS_MINING_REWARDS.md → POINTSCHAIN_QA.md §8a |
+| **Governance phase G-0 / G-1** | README → IMPLEMENTATION_GUIDE → GOVERNANCE_FRAMEWORK.md → GOVERNANCE_PROPOSAL_LIFECYCLE.md → GOVERNANCE_QA_GATE.md |
+| **Governance phase G-2** | 上 4 份 + POINTS_MONETARY_POLICY.md + TREASURY_BUDGET_POLICY.md |
+| **Governance phase G-3** | 上 6 份 + EMERGENCY_GOVERNANCE.md + DISPUTE_AND_APPEALS.md |
+| **Governance phase G-5** | 上 8 份 + GOVERNANCE_VOTING_POWER.md |
+
+> Phase 1 地址化的 agent **不需要讀完**整套 governance / mining / dispute 文件。
+> 跨 phase 的設計取捨已透過 §10「文件關係圖」串連；需要時用 `grep` 查具體規則即可，不必全文背誦。
+> Governance docs 仍是 **draft / approval pending**，Phase 1–6 動工不依賴它。
 
 任一未勾 → 不要動工。
 

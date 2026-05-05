@@ -14,7 +14,7 @@
 
 | # | 拍板 | 來源 |
 |---|---|---|
-| 1 | 列為 PointsChain v2 **Phase 7**；前置依賴 Phase 0/1/2/4/6 | §1 |
+| 1 | 列為 PointsChain v2 **Phase 7**；Phase 0 cleanup closed，但 Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7 | §1 |
 | 2 | reward 公式：`base × repro × novelty × security × trust_multiplier`；**有 hard cap** | §2 |
 | 3 | reward ≥ 1000 必走 multisig；root 自己領一律 3-of-5；**signer 對自己相關 reward 自動排除投票** | §3 |
 | 4 | reporter ≠ verifier 是紅線；連 root 都不能同人；DB + API + UI + 測試覆蓋 | §4 |

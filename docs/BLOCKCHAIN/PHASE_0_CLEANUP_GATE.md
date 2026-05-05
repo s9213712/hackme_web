@@ -372,15 +372,15 @@ def validate_setting(key, raw_value):
 | 欄位 | 值 |
 |---|---|
 | issue id | （無獨立 issue；對應 §1.1 Silent fallback pattern + [POINTSCHAIN_ENGINEERING.md §10 風險表](POINTSCHAIN_ENGINEERING.md)）|
-| severity | High — Phase 0 末做完 |
+| severity | High — known issue fixes closed; whole-site audit deferred to Phase 1+ hardening |
 | pattern | §1.1 Silent fallback |
 | risk | 系統在使用者輸入不足或外部系統失敗時靜默替換結果（如 #129 backtest fetch binance、#136 silent bool coerce、#139 silent IP skip），鏈化後使用者操作被 silently 改寫並寫進 chain，無從追溯原始意圖 |
-| affected module | `routes/trading.py` (#129 已修)、`services/settings.py` (#136 #137 待修)、`services/access_controls.py` (#139 待修)、`services/comfyui_client.py`、`services/btc_trade_bridge.py`、其他外部依賴的 service |
-| required fix | (a) #129 / #136 / #137 / #139 個別修；(b) 對其餘有 fallback 的路徑全 grep audit：搜尋 `or {}`、`except Exception: ... return ...`、`int(...)... except: return default`、`try: ip_address; except: continue` 等模式；(c) 找出 silent fallback 後改成 `data_source_overridden=true` 警示 + 在 audit event 紀錄；(d) 寫 `tests/test_no_silent_fallback.py` 列白名單模式以外的 fallback 全部報出 |
+| affected module | `routes/trading.py` (#129 已修)、`services/settings.py` (#136 / #137 已修)、`services/access_controls.py` (#139 已修)、`services/comfyui_client.py`、`services/btc_trade_bridge.py`、其他外部依賴的 service（後者三處仍待全站 audit） |
+| required fix | (a) #129 / #136 / #137 / #139 個別修並驗證 — **全部已 close**；(b) 對其餘有 fallback 的路徑全 grep audit：搜尋 `or {}`、`except Exception: ... return ...`、`int(...)... except: return default`、`try: ip_address; except: continue` 等模式；(c) 找出 silent fallback 後改成 `data_source_overridden=true` 警示 + 在 audit event 紀錄；(d) 寫 `tests/test_no_silent_fallback.py` 列白名單模式以外的 fallback 全部報出 — (b) / (c) / (d) 屬 Phase 1+ 架構強化任務 |
 | verification command | `grep -rnE "fallback\|or fetch_\|except [A-Za-z]*Exception\b.*\\n.*return" routes/ services/ \| tee silent_fallback_audit.md`；`PYTHONPATH=. python3 -m pytest -q tests/test_trading_reference_prices.py -k 'silently'`；`PYTHONPATH=. python3 -m pytest -q tests/test_settings_strict_bool.py tests/test_settings_range_validation.py tests/test_root_ip_whitelist_validation.py` |
-| expected result | #129 / #136 / #137 / #139 PASS；全站 grep audit 報告產出，未閉合 fallback 路徑全部 list 並由 root 判定（保留 / 改 opt-in / 移除）；新增的 fallback 一律不靜默 |
-| release gate status | 🟡 **PARTIAL** — #129 已修；#136 / #137 / #139 待修；全站 audit 待 root 授權時連同 Phase 1 一起做 |
-| evidence path | （待補；建議 `docs/AGENTS/reports/<agent>/pointschain_v2_phase0_<date>/evidence/silent_fallback_audit.md`） |
+| expected result | #129 / #136 / #137 / #139 PASS — **all closed**；全站 grep audit 報告產出，未閉合 fallback 路徑全部 list 並由 root 判定（保留 / 改 opt-in / 移除）；新增的 fallback 一律不靜默 |
+| release gate status | 🟡 **PARTIAL** — known issue fixes are closed (#129 / #136 / #137 / #139 all closed and verified); broad whole-site fallback audit remains a Phase 1+ architecture hardening task and **does not block Phase 1 candidate**. |
+| evidence path | （已 closed 部分：見 §3.1 / §3.2 表格內 PASS 紀錄；全站 audit 待補；建議 `docs/AGENTS/reports/<agent>/pointschain_v2_phase0_<date>/evidence/silent_fallback_audit.md`） |
 
 ### Resolved-17. Docs / Tests Sync ✅
 

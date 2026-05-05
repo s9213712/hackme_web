@@ -39,7 +39,7 @@ Phase 7  QA Mining  ~3-4 週  公式 reward + multisig + signer 排除 + trust s
                    ~19-20 週 (~4.5-5 個月)
 ```
 
-> Phase 7 依賴 Phase 0/1/2/4/6；前置未完前只允許 DRAFT / mock / dry-run。
+> Phase 0 cleanup closed. Phase 7 implementation blocked until Phase 1 / 2 / 4 / 6 complete and root separately authorizes Phase 7. 前置未完前只允許 DRAFT / mock / dry-run。
 > 完整 Phase 7 設計見 [POINTS_MINING_REWARDS.md](POINTS_MINING_REWARDS.md)。
 
 每個 phase 完成都必須過 [POINTSCHAIN_QA.md](POINTSCHAIN_QA.md) 的對應 gate 才能進下一個。
