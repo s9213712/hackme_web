@@ -38,7 +38,7 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXAMPLES = REPO_ROOT / "docs" / "examples" / "server_mode_v2"
+EXAMPLES = REPO_ROOT / "scripts" / "server_mode_v2"
 
 
 def free_port() -> int:
@@ -118,7 +118,7 @@ def main() -> int:
     log_fp = open(log_path, "ab")
     proc = subprocess.Popen(
         [sys.executable, str(REPO_ROOT / "server.py")],
-        cwd=str(REPO_ROOT), env=env, stdout=log_fp, stderr=subprocess.STDOUT,
+        cwd=str(runtime), env=env, stdout=log_fp, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
 
@@ -168,6 +168,7 @@ def main() -> int:
                 # branch is a no-op here, so the password stays the same.
                 "ROOT_INITIAL_PW": new_pw,
                 "ROOT_NEW_PW": new_pw,
+                "TESTER_USER": "test",
                 "TESTER_USER_ID": str(test_user_id),
             }),
             ("07_privilege_escalation_smv2.sh", {

@@ -27,7 +27,7 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXAMPLES = REPO_ROOT / "docs" / "examples" / "server_mode_v2"
+EXAMPLES = REPO_ROOT / "scripts" / "server_mode_v2"
 
 
 def free_port() -> int:
