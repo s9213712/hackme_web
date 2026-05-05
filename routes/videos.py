@@ -486,6 +486,25 @@ def register_video_routes(app, deps):
     el.textContent = text || "";
     el.style.color = bad ? "#ff9da1" : "#b9c2f0";
   }}
+  function isSharePasswordResponse(res, json) {{
+    const reason = String(json?.reason || "").trim();
+    return [401, 403, 429].includes(Number(res?.status || 0))
+      || !!json?.password_required
+      || ["password_required", "password_invalid", "password_locked"].includes(reason);
+  }}
+  function showSharePasswordPrompt(message) {{
+    const form = $("share-password-form");
+    if (form) form.classList.remove("hidden");
+    const input = $("share-password");
+    if (input) {{
+      try {{ input.focus(); }} catch (_err) {{}}
+    }}
+    const meta = $("meta");
+    if (meta && (!meta.textContent || meta.textContent === "讀取中...")) {{
+      meta.textContent = "此分享影音需要先解鎖";
+    }}
+    setMsg(message || "這部影音需要分享密碼");
+  }}
   function formatProgressBytes(value) {{
     const num = Number(value || 0);
     if (!Number.isFinite(num) || num <= 0) return "0 B";
@@ -771,10 +790,11 @@ def register_video_routes(app, deps):
     return {{ res, json }};
   }}
   async function loadSharedVideo() {{
+    const metaEl = $("meta");
+    if (metaEl) metaEl.textContent = "正在讀取分享資訊...";
     const meta = await fetchJson(`/api/videos/shared/${{encodeURIComponent(TOKEN)}}`);
-    if (meta.res.status === 401 || meta.res.status === 403) {{
-      $("share-password-form").classList.remove("hidden");
-      setMsg(meta.json.msg || "這部影音需要分享密碼", true);
+    if (isSharePasswordResponse(meta.res, meta.json)) {{
+      showSharePasswordPrompt(meta.json.msg || "這部影音需要分享密碼");
       return;
     }}
     if (!meta.res.ok || !meta.json.ok) throw new Error(meta.json.msg || `HTTP ${{meta.res.status}}`);
@@ -788,7 +808,12 @@ def register_video_routes(app, deps):
       requirements.push("若遺失連結片段金鑰，分享者只能重新產生分享。");
       setMsg(requirements.join(" · "));
     }}
+    if (metaEl) metaEl.textContent = `${{video.owner_nickname || video.owner_username || "使用者"}} · 準備讀取播放資訊`;
     const playback = await fetchJson(`/api/videos/shared/${{encodeURIComponent(TOKEN)}}/playback`);
+    if (isSharePasswordResponse(playback.res, playback.json)) {{
+      showSharePasswordPrompt(playback.json.msg || "這部影音需要分享密碼");
+      return;
+    }}
     if (!playback.res.ok || !playback.json.ok) throw new Error(playback.json.msg || `HTTP ${{playback.res.status}}`);
     await renderPlayback(video, playback.json);
   }}

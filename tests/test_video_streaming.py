@@ -746,6 +746,9 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "正在下載加密影音檔" in html
     assert "正在瀏覽器端解密影音" in html
     assert "不會把密碼或金鑰送到伺服器" in html
+    assert "isSharePasswordResponse" in html
+    assert "showSharePasswordPrompt" in html
+    assert "此分享影音需要先解鎖" in html
 
 
 def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(tmp_path):

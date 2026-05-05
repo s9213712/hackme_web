@@ -1,6 +1,11 @@
 # Update Summary
 
-Release ID: `2026.05.05-130`
+Release ID: `2026.05.05-131`
+
+## 2026.05.05-131
+
+- Shared unlisted video pages no longer get stuck on a generic `讀取中...` state when the playback step discovers that a share password is still required. The browser now treats `password_required` / `password_invalid` / `password_locked` responses from any shared-video API step as a signal to reopen the unlock form instead of leaving the page looking frozen.
+- The shared-video page also now updates its loading copy from a static `讀取中...` placeholder to concrete states such as `正在讀取分享資訊...` and `此分享影音需要先解鎖`, so E2EE shared playback failures are easier to distinguish from password-gated shares.
 
 ## 2026.05.05-130
 
