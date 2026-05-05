@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-112`
+Release ID: `2026.05.05-113`
+
+## 2026.05.05-113
+
+- Trading price semantics are now explicit across the site instead of treating every number as a generic market price: `reference price` is for display, charting, and general valuation, while `risk-grade price` is reserved for financing, liquidation, margin maintenance, unrealized PnL, bot risk checks, and trading limits.
+- `GET /api/trading/live-price` now returns canonical `price_type`, `source`, `confidence`, `stale`, `degraded`, and `provider_count` fields plus `reference_price_context` / `risk_grade_price_context`; `GET /api/trading/reference-prices` now returns the same canonical reference-price context metadata.
+- The trading UI now labels current price, spot valuation, spot PnL, margin risk, and order-entry estimates with their actual price usage, and high-risk operations now show human-readable "risk-grade price unavailable" blocking messages instead of silently relying on ambiguous fallback pricing.
 
 ## 2026.05.05-112
 

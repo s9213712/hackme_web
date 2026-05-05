@@ -30,10 +30,13 @@ def test_functional_smoke_covers_latest_trading_and_announcement_paths():
     docs = (ROOT / "docs" / "security" / "FUNCTIONAL_SMOKE.md").read_text(encoding="utf-8")
 
     assert 'request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"' in script
+    assert 'request "trading reference prices" "GET" "/api/trading/reference-prices?market=ETH/POINTS&interval=15m&limit=24" "200"' in script
     assert 'request "trading grid preview" "POST" "/api/trading/grid/preview" "200"' in script
     assert 'request "trading root price fusion status" "GET" "/api/root/trading/price-fusion-status?market_symbol=ETH/POINTS" "200"' in script
     assert 'request "trading root bot audit dashboard" "GET" "/api/root/trading/bot-audit/dashboard?limit=10" "200"' in script
     assert 'request "trading root bot audit manual run" "POST" "/api/root/trading/bot-audit/run" "200"' in script
     assert 'request "community edit announcement" "PUT" "/api/community/announcements/${ANNOUNCEMENT_ID}" "200"' in script
+    assert '"price_type" in data and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data' in script
+    assert '"reference_price_context" in data and "risk_grade_price_context" in data' in script
     assert "trading extras" in docs
     assert "announcement create/edit" in docs

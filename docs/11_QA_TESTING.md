@@ -179,6 +179,10 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - 買入 / 賣出預估是否會跟著同一輪 `live-price` 更新節奏同步重算，而不是停留在舊價
   - 積分錢包裡的現貨 / 進階交易浮盈虧、root 虛擬總額是否也跟著同一輪 `live-price` 更新，而不是等 full dashboard reload
   - `live-price` 回應是否含 `price_health / fallback_reason / excluded_sources / defaulted_market`
+  - `live-price` 是否另外明確回 `price_type / source / confidence / stale / degraded / provider_count`
+  - `reference-prices` 是否明確標成 `price_type=reference`，且帶 `price_context`
+  - 目前價格、現貨估值、現貨盈虧、融資維持率、強平價、下單預估是否都有清楚標示自己用的是 `reference price` 還是 `risk-grade price`
+  - 高風險價格降級時，市價單 / 融資估算 / bot 風控是否都顯示人性化阻擋訊息，而不是靜默沿用 generic market price
   - `live-price` 是否會同步刷新 DB 內 `trading_markets.manual_price_points / price_source` 快取，文件也要寫清楚這不是純 read-only API
   - `security/trading_exchange_validation.py` 是否已和目前引擎結果同步，不再出現過時 expected value
   - `security/trading_exchange_validation.py` 是否會額外檢查連續加倉後 `avg_cost_points` 仍維持合理，不會悄悄爆成異常大值

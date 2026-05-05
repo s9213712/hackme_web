@@ -364,13 +364,13 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | Method | Path | 角色 | 用途 |
 |---|---|---|---|
 | GET | `/api/trading/markets` | logged-in | 市場列表 |
-| GET | `/api/trading/dashboard` | logged-in | 交易頁摘要 |
-| GET | `/api/trading/live-price` | logged-in | 即時價格 / price health |
+| GET | `/api/trading/dashboard` | logged-in | 交易頁摘要（含 reference / risk-grade contexts） |
+| GET | `/api/trading/live-price` | logged-in | 即時 reference 價格 / price health / price contexts |
 | GET | `/api/trading/history/export.csv` | logged-in | 匯出交易歷史 |
 | GET | `/api/trading/btc-signal` | logged-in | BTC_trade signal |
 | GET | `/api/trading/workflow-templates` | logged-in | workflow 模板 |
 | POST | `/api/trading/workflow-templates/custom` | logged-in | 儲存自訂模板 |
-| GET | `/api/trading/reference-prices` | logged-in | K 線 / 指標資料 |
+| GET | `/api/trading/reference-prices` | logged-in | K 線 / 指標資料 / reference price context |
 | GET/POST | `/api/trading/orders` | logged-in | 訂單列表 / 下現貨單 |
 | POST | `/api/trading/orders/<order_uuid>/cancel` | logged-in | 取消現貨單 |
 | GET/POST | `/api/trading/bots` | logged-in | DCA / workflow bot 列表 / 建立 |
@@ -512,6 +512,8 @@ curl -k -sS https://127.0.0.1:5000/api/version
 - `200 OK` 不代表輸入一定原樣存入。若你在驗證設定、ACL、交易或風控，請同步查回讀 API 或 DB evidence。
 - `docs/BLOCKCHAIN/*` 有些是已拍板但未實作規格，不可直接當成現行 API。
 - `live-price` 不是純 read-only，它會同步刷新後端快取價格狀態，請不要把它當成完全無副作用的 health probe。
+- `live-price` 目前回傳 canonical `price_type`、`source`、`confidence`、`stale`、`degraded`、`provider_count`，並附 `reference_price_context` / `risk_grade_price_context`；UI 展示價與風控價不可再混用。
+- `reference-prices` 明確屬於 `reference price` 類型，只能作為展示 / K 線 / 一般估值參考，不可直接拿來推導保證金、強平或 bot 風控。
 
 ## 測試方式
 

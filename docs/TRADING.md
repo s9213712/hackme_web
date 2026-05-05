@@ -159,6 +159,16 @@ degrades to fallback / cached mode, the API returns `price_health`,
 shows a yellow warning badge instead of pretending the source is still fully
 healthy.
 
+The price model is now explicitly split into two categories. `reference price`
+is the only price type that should be used for current-price display, charting,
+general valuation, and other non-risk informational surfaces. `risk-grade
+price` is the canonical price for financing, liquidation, maintenance margin,
+unrealized PnL, bot risk checks, and trading limits. The key trading APIs now
+return `price_type`, `source`, `confidence`, `stale`, `degraded`, and
+`provider_count` plus nested `reference_price_context` /
+`risk_grade_price_context` payloads, and the frontend labels important numbers
+accordingly instead of treating every market number as interchangeable.
+
 Spot wallet rows also show two unit-price helpers now: `持有成本` is the
 current position acquisition cost including the estimated buy-side fee, and
 `損益平均價格` is the break-even exit price after also accounting for the

@@ -584,10 +584,16 @@ run_checks() {
     login_smoke_user || return 1
     request "trading user dashboard" "GET" "/api/trading/dashboard" "200"
     request "trading live price" "GET" "/api/trading/live-price?market=ETH/POINTS" "200"
-    if json_bool '"price_health" in data and "fallback_reason" in data and "excluded_sources" in data and "defaulted_market" in data and int(data.get("refresh_interval_ms") or 0) == 2000' "$(latest_raw "trading live price")"; then
-      pass "trading live price metadata" "price_health/fallback_reason/excluded_sources/defaulted_market/refresh_interval_ms=2000 present"
+    if json_bool '"price_health" in data and "price_type" in data and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data and "reference_price_context" in data and "risk_grade_price_context" in data and "fallback_reason" in data and "excluded_sources" in data and "defaulted_market" in data and int(data.get("refresh_interval_ms") or 0) == 2000' "$(latest_raw "trading live price")"; then
+      pass "trading live price metadata" "canonical price_type/source/confidence/stale/degraded/provider_count plus contexts present"
     else
       fail "trading live price metadata" "missing live-price metadata fields or unexpected refresh interval"
+    fi
+    request "trading reference prices" "GET" "/api/trading/reference-prices?market=ETH/POINTS&interval=15m&limit=24" "200"
+    if json_bool 'data.get("price_type") == "reference" and "source" in data and "confidence" in data and "stale" in data and "degraded" in data and "provider_count" in data and "price_context" in data' "$(latest_raw "trading reference prices")"; then
+      pass "trading reference price metadata" "reference price payload includes canonical context fields"
+    else
+      fail "trading reference price metadata" "reference price payload missing canonical context fields"
     fi
     request "trading grid preview" "POST" "/api/trading/grid/preview" "200" '{"market_symbol":"ETH/POINTS","lower_price_points":4500.5,"upper_price_points":5500.5,"grid_count":5,"order_amount_points":1000,"order_mode":"maker"}'
     if json_bool '"fee_model" in data and "break_even" in data and "grid_profit" in data and "risk" in data' "$(latest_raw "trading grid preview")"; then

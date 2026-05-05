@@ -884,15 +884,35 @@ def register_trading_routes(app, deps):
             if cached:
                 fallback = dict(cached["payload"])
                 fallback["source"] = f"{fallback.get('source') or 'reference_price'}_cached"
+                fallback["price_type"] = "reference"
+                fallback["confidence"] = "low"
                 fallback["stale"] = True
+                fallback["degraded"] = True
+                fallback["provider_count"] = 1
                 fallback["msg"] = "參考價格來源暫時無法讀取，已使用最後可用快取"
                 fallback["cache_age_seconds"] = round(now - cached["cached_at"], 3)
+                fallback["price_context"] = {
+                    "price_type": "reference",
+                    "source": fallback["source"],
+                    "source_label": "參考價格快取",
+                    "confidence": "low",
+                    "stale": True,
+                    "degraded": True,
+                    "provider_count": 1,
+                    "purpose": "展示 / 一般估值 / K 線 / 非風控參考",
+                    "warning_message": fallback["msg"],
+                }
                 return json_resp(fallback)
             return json_resp({"ok": False, "msg": "參考價格讀取失敗", "detail": str(exc)[:240]}), 502
         candles = provider_result["candles"]
         result = {
             "ok": True,
             "source": provider_result["source"],
+            "price_type": "reference",
+            "confidence": "medium",
+            "stale": False,
+            "degraded": False,
+            "provider_count": 1,
             "market": market_symbol,
             "display_market": display_market_symbol(market_symbol),
             "symbol": provider_result["symbol"],
@@ -901,6 +921,17 @@ def register_trading_routes(app, deps):
             "usdt_to_points_rate": USDT_TO_POINTS_RATE,
             "candles": candles,
             "points": candles,
+            "price_context": {
+                "price_type": "reference",
+                "source": provider_result["source"],
+                "source_label": "參考價格來源",
+                "confidence": "medium",
+                "stale": False,
+                "degraded": False,
+                "provider_count": 1,
+                "purpose": "展示 / 一般估值 / K 線 / 非風控參考",
+                "warning_message": "",
+            },
         }
         REFERENCE_PRICE_CACHE[cache_key] = {"cached_at": now, "payload": result}
         return json_resp(result)

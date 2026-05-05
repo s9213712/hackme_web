@@ -686,8 +686,8 @@ def test_trading_exchange_is_separate_from_wallet_page():
     assert "high_risk_block_reason" in trading_js
     assert "warnings" in trading_js
     assert "defaulted_market" in trading_js
-    assert "🟡 價格來源降級" in trading_js
-    assert "🟢 價格來源正常" in trading_js
+    assert "🟡 reference 價格降級" in trading_js
+    assert "🟢 reference 價格正常" in trading_js
 
     workflow_editor = (ROOT / "public" / "trading-workflow-editor.html").read_text(encoding="utf-8")
     workflow_editor_js = (ROOT / "public" / "js" / "trading-workflow-editor.js").read_text(encoding="utf-8")
@@ -748,4 +748,18 @@ def test_spot_position_details_show_holding_cost_and_break_even_price():
     assert "損益平均價格" in trading_js
     assert "單顆" in trading_js
     assert "已含預估賣出手續費" in trading_js
-    assert "未實現 · 含預估賣出手續費" in trading_js
+    assert "risk-grade 價計算未實現盈虧" in trading_js
+
+
+def test_trading_ui_labels_reference_and_risk_grade_price_usage():
+    trading_js = (ROOT / "public" / "js" / "56-trading.js").read_text(encoding="utf-8")
+    trading_html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+
+    assert "function tradingMarketPriceContext" in trading_js
+    assert "function tradingPriceContextSummary" in trading_js
+    assert "目前價格（reference）" in trading_html
+    assert "用途：展示 / 一般估值" in trading_html
+    assert "市價單估值採用風控級價格" in trading_js
+    assert "風控級價格用途：融資 / 強平 / 保證金 / PnL" in trading_js
+    assert "目前部位價值採 reference price；未實現盈虧採 risk-grade price" in trading_js
+    assert "reference price：" in trading_js

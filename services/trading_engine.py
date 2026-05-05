@@ -1821,6 +1821,153 @@ class TradingEngineService:
                 return warning
         return {}
 
+    def _price_usage_label(self, price_type):
+        normalized = str(price_type or "reference").strip().lower()
+        if normalized == "risk_grade":
+            return "融資 / 強平 / 保證金 / PnL / bot 風控 / 交易限制"
+        return "展示 / 一般估值 / K 線 / 非風控參考"
+
+    def _price_source_label(self, source):
+        normalized = str(source or "").strip()
+        if not normalized:
+            return "未知價格來源"
+        if normalized == "manual_root":
+            return "root 手動價格"
+        if normalized.endswith("_cached"):
+            base = normalized[:-7]
+            return f"{self._price_source_label(base)}（最後健康快取）"
+        if normalized == FUSED_PRICE_SOURCE:
+            return "融合價格"
+        if normalized == "ticker_fallback":
+            return "單一 ticker 降級價格"
+        if normalized == "scan_window_replay":
+            return "掃描視窗回放價格"
+        if normalized == "reference_price":
+            return "參考價格"
+        if normalized == "test_live_price_provider":
+            return "測試 live price provider"
+        return PRICE_PROVIDER_LABELS.get(normalized, normalized)
+
+    def _price_context_confidence(self, *, price_type, source, health, degraded, stale, provider_count, high_risk_blocked):
+        normalized_source = str(source or "").strip()
+        normalized_health = str(health or "healthy").strip().lower()
+        normalized_type = str(price_type or "reference").strip().lower()
+        providers = max(0, int(provider_count or 0))
+        if normalized_source == "manual_root":
+            return "manual"
+        if stale or high_risk_blocked or normalized_health in {"conservative", "fallback"}:
+            return "low"
+        if degraded:
+            return "medium"
+        if normalized_type == "risk_grade" and providers < max(1, DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT):
+            return "medium"
+        return "high"
+
+    def _build_price_context(self, *, market_symbol, price_type, price_points, price_source, price_meta):
+        meta = price_meta or {}
+        normalized_type = str(price_type or "reference").strip().lower() or "reference"
+        health = str(meta.get("price_health") or "healthy").strip() or "healthy"
+        warnings = list(meta.get("warnings") or [])
+        source = str(meta.get("resolved_source") or price_source or "manual_root").strip() or "manual_root"
+        stale = bool(meta.get("stale"))
+        degraded = bool(meta.get("degraded")) or health in {"fallback", "degraded", "conservative"} or bool(warnings) or bool(meta.get("excluded_sources"))
+        provider_key = "risk_grade_provider_count" if normalized_type == "risk_grade" else "reference_provider_count"
+        provider_count = max(0, int(meta.get(provider_key) or 0))
+        high_risk_blocked = bool(meta.get("high_risk_blocked")) if normalized_type == "risk_grade" else False
+        warning_message = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "").strip()
+        if not warning_message:
+            warning_message = str(self._primary_price_fusion_warning(warnings).get("message") or "").strip()
+        if not warning_message and source == "manual_root":
+            warning_message = "目前使用手動價格，請勿將此價格視為正常即時市場深度。"
+        if not warning_message and stale:
+            warning_message = "目前使用最後健康快取，請留意價格可能已過時。"
+        confidence = self._price_context_confidence(
+            price_type=normalized_type,
+            source=source,
+            health=health,
+            degraded=degraded,
+            stale=stale,
+            provider_count=provider_count,
+            high_risk_blocked=high_risk_blocked,
+        )
+        return {
+            "price_type": normalized_type,
+            "market_symbol": str(market_symbol or "").strip().upper(),
+            "price_points": None if price_points in (None, "") else float(_to_decimal(price_points, name="price_points", minimum=0)),
+            "source": source,
+            "source_label": self._price_source_label(source),
+            "confidence": confidence,
+            "stale": stale,
+            "degraded": degraded,
+            "provider_count": provider_count,
+            "health": health,
+            "purpose": self._price_usage_label(normalized_type),
+            "warning_message": warning_message,
+            "high_risk_blocked": high_risk_blocked,
+            "excluded_sources": list(meta.get("excluded_sources") or []),
+            "warnings": warnings,
+        }
+
+    def _attach_market_price_contexts(self, market, *, reference_context, risk_grade_context):
+        item = dict(market or {})
+        item["reference_price_points"] = reference_context.get("price_points")
+        item["risk_grade_price_points"] = risk_grade_context.get("price_points")
+        item["reference_price_context"] = reference_context
+        item["risk_grade_price_context"] = risk_grade_context
+        return item
+
+    def _stored_market_price_contexts(self, market):
+        source = str((market or {}).get("price_source") or "manual_root").strip() or "manual_root"
+        price_value = (market or {}).get("manual_price_points") or 0
+        price_meta = {
+            "price_health": "healthy",
+            "fallback_reason": "",
+            "excluded_sources": [],
+            "warnings": [],
+            "high_risk_blocked": False,
+            "high_risk_block_reason": "",
+            "requested_price_mode": "reference",
+            "reference_price_points": price_value,
+            "risk_grade_price_points": price_value,
+            "resolved_source": source,
+            "reference_provider_count": 1 if source and source != "manual_root" else 0,
+            "risk_grade_provider_count": 1 if source and source != "manual_root" else 0,
+            "stale": source.endswith("_cached"),
+            "degraded": source == "manual_root" or source.endswith("_cached"),
+        }
+        if source == "manual_root":
+            price_meta["warnings"] = self._append_price_fusion_warning(
+                [],
+                "manual_price_active",
+                "目前使用手動價格，請勿視為正常即時市場深度。",
+                severity="warning",
+            )
+            price_meta["fallback_reason"] = "目前使用手動價格"
+        elif source.endswith("_cached"):
+            price_meta["price_health"] = "fallback"
+            price_meta["warnings"] = self._append_price_fusion_warning(
+                [],
+                "cached_price_active",
+                "目前使用最後健康快取，請留意價格可能已過時。",
+                severity="warning",
+            )
+            price_meta["fallback_reason"] = "目前使用最後健康快取"
+        reference_context = self._build_price_context(
+            market_symbol=(market or {}).get("symbol"),
+            price_type="reference",
+            price_points=price_value,
+            price_source=source,
+            price_meta=price_meta,
+        )
+        risk_context = self._build_price_context(
+            market_symbol=(market or {}).get("symbol"),
+            price_type="risk_grade",
+            price_points=price_value,
+            price_source=source,
+            price_meta=price_meta,
+        )
+        return reference_context, risk_context
+
     def _price_fusion_effective_score(self, snapshot):
         try:
             return max(float(snapshot.get("effective_depth_score")), 0.0)
@@ -2943,6 +3090,25 @@ class TradingEngineService:
             payload["manual_price_points"] = current_price
             payload["price_source"] = str(price_source or payload.get("price_source") or "manual_root")
             resolved_symbol = str(payload.get("symbol") or "").strip().upper()
+            reference_context = self._build_price_context(
+                market_symbol=resolved_symbol,
+                price_type="reference",
+                price_points=(price_meta or {}).get("reference_price_points") if price_meta else current_price,
+                price_source=payload["price_source"],
+                price_meta=price_meta,
+            )
+            risk_grade_context = self._build_price_context(
+                market_symbol=resolved_symbol,
+                price_type="risk_grade",
+                price_points=(price_meta or {}).get("risk_grade_price_points") if price_meta else current_price,
+                price_source=payload["price_source"],
+                price_meta=price_meta,
+            )
+            payload = self._attach_market_price_contexts(
+                payload,
+                reference_context=reference_context,
+                risk_grade_context=risk_grade_context,
+            )
             return {
                 "market": payload,
                 "requested_market_symbol": requested_symbol,
@@ -2950,6 +3116,12 @@ class TradingEngineService:
                 "display_market_symbol": market_display_symbol(resolved_symbol),
                 "refresh_interval_ms": 2000,
                 "server_time": _now(),
+                "price_type": reference_context["price_type"],
+                "source": reference_context["source"],
+                "confidence": reference_context["confidence"],
+                "stale": reference_context["stale"],
+                "degraded": reference_context["degraded"],
+                "provider_count": reference_context["provider_count"],
                 "price_health": str((price_meta or {}).get("price_health") or "healthy"),
                 "fallback_reason": str((price_meta or {}).get("fallback_reason") or ""),
                 "excluded_sources": list((price_meta or {}).get("excluded_sources") or []),
@@ -2957,6 +3129,8 @@ class TradingEngineService:
                 "high_risk_blocked": bool((price_meta or {}).get("high_risk_blocked")),
                 "high_risk_block_reason": str((price_meta or {}).get("high_risk_block_reason") or ""),
                 "defaulted_market": defaulted_market,
+                "reference_price_context": reference_context,
+                "risk_grade_price_context": risk_grade_context,
             }
         finally:
             conn.close()
@@ -3154,12 +3328,26 @@ class TradingEngineService:
             "requested_price_mode": "risk_grade" if high_risk else "reference",
             "reference_price_points": None,
             "risk_grade_price_points": None,
+            "resolved_source": "",
+            "reference_provider_count": 0,
+            "risk_grade_provider_count": 0,
+            "stale": False,
+            "degraded": False,
         }
         if configured_source == "manual_root" or not self._live_price_symbol(symbol):
             price = market["manual_price_points"]
             source = str(market["price_source"] or "manual_root")
             price_meta["reference_price_points"] = float(Decimal(str(price or "0")))
             price_meta["risk_grade_price_points"] = float(Decimal(str(price or "0")))
+            price_meta["resolved_source"] = source
+            price_meta["degraded"] = True
+            price_meta["warnings"] = self._append_price_fusion_warning(
+                price_meta.get("warnings"),
+                "manual_price_active",
+                "目前使用手動價格，請勿將此價格視為正常即時市場深度。",
+                severity="warning",
+            )
+            price_meta["fallback_reason"] = "目前使用手動價格"
             return (price, source, price_meta) if with_meta else (price, source)
         old_price_decimal = Decimal(str(market["manual_price_points"] or "0"))
         old_price = float(old_price_decimal)
@@ -3182,12 +3370,18 @@ class TradingEngineService:
                 stale_seconds = max_stale + 1
             cached_source = old_source[:-7] if old_source.endswith("_cached") else old_source
             if old_price_decimal > 0 and max_stale > 0 and stale_seconds <= max_stale and cached_source in LIVE_PRICE_SOURCE_NAMES:
+                source = f"{cached_source}_cached"
                 price_meta.update({
                     "price_health": "fallback",
                     "fallback_reason": str(exc),
                     "excluded_sources": [],
                     "reference_price_points": old_price,
                     "risk_grade_price_points": old_price,
+                    "resolved_source": source,
+                    "reference_provider_count": 1,
+                    "risk_grade_provider_count": 1,
+                    "stale": True,
+                    "degraded": True,
                 })
                 self._audit_event(
                     conn,
@@ -3197,7 +3391,6 @@ class TradingEngineService:
                     severity="warning",
                     metadata={"error": str(exc), "cached_price_points": old_price, "stale_seconds": stale_seconds, "max_stale_seconds": max_stale},
                 )
-                source = f"{cached_source}_cached"
                 return (old_price, source, price_meta) if with_meta else (old_price, source)
             raise ValueError(f"live trading price unavailable for {symbol}: {exc}") from exc
         has_live_history = bool(conn.execute(
@@ -3254,6 +3447,11 @@ class TradingEngineService:
                 "high_risk_block_reason": str(fusion_details.get("high_risk_block_reason") or ""),
                 "reference_price_points": fusion_details.get("reference_price_points"),
                 "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
+                "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
+                "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
+                "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
+                "stale": False,
+                "degraded": True,
             })
             self._audit_event(
                 conn,
@@ -3284,11 +3482,21 @@ class TradingEngineService:
             price_meta.update({
                 "reference_price_points": fusion_details.get("reference_price_points"),
                 "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
+                "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
+                "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
+                "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
+                "stale": False,
+                "degraded": False,
             })
         else:
             live_price = float(_to_decimal(price, name="live_price_points", minimum=0.00000001))
             price_meta["reference_price_points"] = live_price
             price_meta["risk_grade_price_points"] = live_price
+            price_meta["resolved_source"] = str(live_source or configured_source or "manual_root")
+            price_meta["reference_provider_count"] = 1
+            price_meta["risk_grade_provider_count"] = 1
+            price_meta["stale"] = False
+            price_meta["degraded"] = False
         if configured_source == FUSED_PRICE_SOURCE and fusion_details and high_risk and fusion_details.get("risk_grade_price_points") is not None:
             price = float(_to_decimal(fusion_details.get("risk_grade_price_points"), name="risk_grade_price_points", minimum=0.00000001))
         now = _now()
@@ -3769,30 +3977,62 @@ class TradingEngineService:
         item = self._position_payload(row)
         quantity_units = int(item["quantity_units"] or 0) + int(item["locked_quantity_units"] or 0)
         avg_cost = float(_to_decimal(item["avg_cost_points"] or 0, name="avg_cost_points", minimum=0))
-        current_price = float(_to_decimal((market or {}).get("manual_price_points") or 0, name="manual_price_points", minimum=0))
+        reference_price = float(
+            _to_decimal(
+                (market or {}).get("reference_price_points")
+                or (market or {}).get("manual_price_points")
+                or 0,
+                name="reference_price_points",
+                minimum=0,
+            )
+        )
+        risk_grade_price = float(
+            _to_decimal(
+                (market or {}).get("risk_grade_price_points")
+                or (market or {}).get("reference_price_points")
+                or (market or {}).get("manual_price_points")
+                or 0,
+                name="risk_grade_price_points",
+                minimum=0,
+            )
+        )
         fee_rate_percent = float((market or {}).get("fee_rate_percent") or 0)
         gross_cost = notional_points(quantity_units, avg_cost) if quantity_units and avg_cost else 0
-        current_value = notional_points(quantity_units, current_price) if quantity_units and current_price else 0
+        reference_current_value = notional_points(quantity_units, reference_price) if quantity_units and reference_price else 0
+        risk_grade_current_value = notional_points(quantity_units, risk_grade_price) if quantity_units and risk_grade_price else 0
         estimated_buy_fee = fee_points(gross_cost, fee_rate_percent) if gross_cost else 0
-        estimated_exit_fee = fee_points(current_value, fee_rate_percent) if current_value else 0
-        cost_basis = gross_cost + estimated_buy_fee + estimated_exit_fee
-        unrealized = current_value - cost_basis if quantity_units else 0
+        reference_exit_fee = fee_points(reference_current_value, fee_rate_percent) if reference_current_value else 0
+        risk_grade_exit_fee = fee_points(risk_grade_current_value, fee_rate_percent) if risk_grade_current_value else 0
+        reference_cost_basis = gross_cost + estimated_buy_fee + reference_exit_fee
+        risk_grade_cost_basis = gross_cost + estimated_buy_fee + risk_grade_exit_fee
+        reference_unrealized = reference_current_value - reference_cost_basis if quantity_units else 0
+        risk_grade_unrealized = risk_grade_current_value - risk_grade_cost_basis if quantity_units else 0
         item.update({
             "available_quantity_units": int(item["quantity_units"] or 0),
             "total_quantity_units": quantity_units,
             "total_quantity": units_to_quantity(quantity_units),
-            "current_price_points": current_price,
+            "reference_price_points": reference_price,
+            "risk_grade_price_points": risk_grade_price,
+            "current_price_points": reference_price,
             "gross_cost_points": gross_cost,
-            "current_value_points": current_value,
+            "reference_current_value_points": reference_current_value,
+            "current_value_points": reference_current_value,
+            "risk_grade_current_value_points": risk_grade_current_value,
             "estimated_buy_fee_points": estimated_buy_fee,
-            "estimated_exit_fee_points": estimated_exit_fee,
-            "cost_basis_points": cost_basis,
-            "unrealized_pnl_points": unrealized,
+            "reference_estimated_exit_fee_points": reference_exit_fee,
+            "estimated_exit_fee_points": risk_grade_exit_fee,
+            "reference_cost_basis_points": reference_cost_basis,
+            "cost_basis_points": risk_grade_cost_basis,
+            "reference_unrealized_pnl_points": reference_unrealized,
+            "risk_grade_unrealized_pnl_points": risk_grade_unrealized,
+            "unrealized_pnl_points": risk_grade_unrealized,
             "realized_pnl_points": int(realized_points or 0),
-            "total_pnl_points": int(realized_points or 0) + unrealized,
+            "total_pnl_points": int(realized_points or 0) + risk_grade_unrealized,
             "total_fee_points": int(total_fees or 0),
+            "reference_price_context": (market or {}).get("reference_price_context") if isinstance(market, dict) else None,
+            "risk_grade_price_context": (market or {}).get("risk_grade_price_context") if isinstance(market, dict) else None,
         })
-        item["pnl_percent"] = round((unrealized / cost_basis) * 100, 4) if cost_basis else 0
+        item["pnl_percent"] = round((risk_grade_unrealized / risk_grade_cost_basis) * 100, 4) if risk_grade_cost_basis else 0
         return item
 
     def _futures_position_payload(self, row):
@@ -4072,10 +4312,26 @@ class TradingEngineService:
     def _margin_risk_payload(self, conn, position, market=None, *, now_text=None, price_override_points=None, price_source_override=None):
         market = market or self._market(conn, position["market_symbol"])
         if price_override_points is None:
-            price, price_source = self._current_market_price_points(conn, market)
+            price, price_source, price_meta = self._current_market_price_points(conn, market, with_meta=True, high_risk=True)
         else:
             price = float(_to_decimal(price_override_points, name="price_override_points", minimum=0.00000001))
             price_source = str(price_source_override or "scan_window_replay")
+            price_meta = {
+                "price_health": "healthy",
+                "fallback_reason": "",
+                "excluded_sources": [],
+                "warnings": [],
+                "high_risk_blocked": False,
+                "high_risk_block_reason": "",
+                "requested_price_mode": "risk_grade",
+                "reference_price_points": price,
+                "risk_grade_price_points": price,
+                "resolved_source": price_source,
+                "reference_provider_count": 1,
+                "risk_grade_provider_count": 1,
+                "stale": False,
+                "degraded": False,
+            }
         quantity_units = int(position["quantity_units"])
         exit_notional = notional_points(quantity_units, price)
         close_fee = fee_points(exit_notional, float(market["fee_rate_percent"] or 0))
@@ -4151,6 +4407,13 @@ class TradingEngineService:
         return {
             "price_points": price,
             "price_source": price_source,
+            "price_context": self._build_price_context(
+                market_symbol=position["market_symbol"],
+                price_type="risk_grade",
+                price_points=price,
+                price_source=price_source,
+                price_meta=price_meta,
+            ),
             "exit_notional_points": exit_notional,
             "close_fee_points": close_fee,
             "interest_points": interest,
@@ -4380,13 +4643,27 @@ class TradingEngineService:
         }
 
     def _spot_summary_payload(self, positions):
+        reference_context = None
+        risk_context = None
+        for row in positions:
+            if not reference_context and isinstance(row.get("reference_price_context"), dict):
+                reference_context = row.get("reference_price_context")
+            if not risk_context and isinstance(row.get("risk_grade_price_context"), dict):
+                risk_context = row.get("risk_grade_price_context")
         return {
             "current_value_points": sum(int(row.get("current_value_points") or 0) for row in positions),
+            "reference_current_value_points": sum(int(row.get("reference_current_value_points") or row.get("current_value_points") or 0) for row in positions),
+            "risk_grade_current_value_points": sum(int(row.get("risk_grade_current_value_points") or 0) for row in positions),
             "cost_basis_points": sum(int(row.get("cost_basis_points") or 0) for row in positions),
+            "reference_cost_basis_points": sum(int(row.get("reference_cost_basis_points") or 0) for row in positions),
             "unrealized_pnl_points": sum(int(row.get("unrealized_pnl_points") or 0) for row in positions),
+            "reference_unrealized_pnl_points": sum(int(row.get("reference_unrealized_pnl_points") or 0) for row in positions),
+            "risk_grade_unrealized_pnl_points": sum(int(row.get("risk_grade_unrealized_pnl_points") or row.get("unrealized_pnl_points") or 0) for row in positions),
             "realized_pnl_points": sum(int(row.get("realized_pnl_points") or 0) for row in positions),
             "total_pnl_points": sum(int(row.get("total_pnl_points") or 0) for row in positions),
             "total_fee_points": sum(int(row.get("total_fee_points") or 0) for row in positions),
+            "reference_price_context": reference_context,
+            "risk_grade_price_context": risk_context,
         }
 
     def _notify_trade_filled(self, conn, fill):
@@ -4527,10 +4804,18 @@ class TradingEngineService:
             self._ensure_trial_credit(conn, user_id)
             conn.commit()
             state = self._state(conn)
-            markets = sorted(
-                [self._market_payload(row) for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1").fetchall()],
-                key=lambda item: market_sort_key(item.get("symbol")),
-            )
+            markets = []
+            for row in conn.execute("SELECT * FROM trading_markets WHERE enabled=1").fetchall():
+                market_item = self._market_payload(row)
+                reference_context, risk_grade_context = self._stored_market_price_contexts(market_item)
+                markets.append(
+                    self._attach_market_price_contexts(
+                        market_item,
+                        reference_context=reference_context,
+                        risk_grade_context=risk_grade_context,
+                    )
+                )
+            markets = sorted(markets, key=lambda item: market_sort_key(item.get("symbol")))
             market_map = {row["symbol"]: row for row in markets}
             realized_map = self._spot_realized_map(conn, user_id)
             fee_map = self._spot_fee_map(conn, user_id)

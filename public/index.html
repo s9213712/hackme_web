@@ -1623,7 +1623,7 @@
         <div class="settings-option-grid economy-wallet-grid" style="margin-top:.75rem;">
           <div><span class="drive-card-sub">交易總可用</span><strong id="trading-funding-available">-</strong><small id="trading-funding-mode">-</small></div>
           <div><span class="drive-card-sub">交易所體驗金</span><strong id="trading-trial-credit-available">-</strong><small id="trading-trial-credit-note">root 不適用</small></div>
-          <div><span class="drive-card-sub">目前價格</span><strong id="trading-current-price">-</strong><small id="trading-current-delta">即時輪詢 1 秒</small><small id="trading-current-health">🟢 價格來源正常</small><small id="trading-current-market">-</small></div>
+          <div><span class="drive-card-sub" id="trading-current-label">目前價格（reference）</span><strong id="trading-current-price">-</strong><small id="trading-current-delta">即時輪詢 2 秒</small><small id="trading-current-purpose">用途：展示 / 一般估值</small><small id="trading-current-health">🟢 價格來源正常</small><small id="trading-current-market">-</small></div>
           <div><span class="drive-card-sub">我的部位</span><strong id="trading-position-quantity">-</strong><small id="trading-position-locked">鎖定 -</small></div>
           <div><span class="drive-card-sub">手續費</span><strong id="trading-fee-rate-percent">-</strong><small>%</small></div>
         </div>
@@ -1897,7 +1897,7 @@
           <div class="drive-card-heading compact-heading">
             <div>
               <div class="drive-card-title">Binance 參考價格</div>
-              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖會作為交易參考；API 故障時使用最後健康快取。</div>
+              <div class="drive-card-sub" id="trading-reference-price-meta">公開 API 蠟燭圖會作為 reference price 參考；API 故障時使用最後健康快取，不能直接當風控價格。</div>
             </div>
             <select id="trading-reference-interval" class="compact-select">
               <option value="5m">5 分</option>

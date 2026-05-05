@@ -117,22 +117,86 @@ function selectedTradingMarket() {
   return tradingState.markets.find((market) => market.symbol === symbol) || tradingState.markets[0] || null;
 }
 
+function tradingMarketPriceContext(market, priceType = "reference") {
+  const type = priceType === "risk_grade" ? "risk_grade" : "reference";
+  const contextKey = type === "risk_grade" ? "risk_grade_price_context" : "reference_price_context";
+  const symbol = String(market?.symbol || "");
+  const liveMeta = tradingState.livePriceMeta || {};
+  const liveContext = liveMeta[symbol]?.[contextKey];
+  if (liveContext && typeof liveContext === "object") return liveContext;
+  if (market?.[contextKey] && typeof market[contextKey] === "object") return market[contextKey];
+  const source = String(market?.price_source || "manual_root");
+  const pricePoints = type === "risk_grade"
+    ? tradingNumber(market?.risk_grade_price_points ?? market?.manual_price_points, 0)
+    : tradingNumber(market?.reference_price_points ?? market?.manual_price_points, 0);
+  return {
+    price_type: type,
+    price_points: pricePoints,
+    source,
+    source_label: source,
+    confidence: source === "manual_root" ? "manual" : "unknown",
+    stale: source.endsWith("_cached"),
+    degraded: source === "manual_root" || source.endsWith("_cached"),
+    provider_count: source === "manual_root" ? 0 : 1,
+    purpose: type === "risk_grade" ? "融資 / 強平 / 保證金 / PnL / bot 風控 / 交易限制" : "展示 / 一般估值 / K 線 / 非風控參考",
+    warning_message: source === "manual_root" ? "目前使用手動價格" : (source.endsWith("_cached") ? "目前使用最後健康快取" : ""),
+    high_risk_blocked: false,
+    warnings: [],
+    excluded_sources: [],
+  };
+}
+
+function tradingMarketPricePoints(market, priceType = "reference") {
+  const context = tradingMarketPriceContext(market, priceType);
+  return tradingNumber(context?.price_points ?? (priceType === "risk_grade" ? market?.risk_grade_price_points : market?.reference_price_points), 0);
+}
+
+function tradingPriceConfidenceLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "high") return "高";
+  if (normalized === "medium") return "中";
+  if (normalized === "low") return "低";
+  if (normalized === "manual") return "手動";
+  return normalized || "-";
+}
+
+function tradingPriceContextSummary(context, { compact = false } = {}) {
+  const safe = context && typeof context === "object" ? context : {};
+  const sourceLabel = safe.source_label || safe.source || "未知來源";
+  const providerText = Number.isFinite(Number(safe.provider_count))
+    ? `來源 ${Number(safe.provider_count)} 家`
+    : "來源數未知";
+  const confidenceText = `信心 ${tradingPriceConfidenceLabel(safe.confidence)}`;
+  const stateText = safe.stale ? "stale" : (safe.degraded ? "degraded" : "正常");
+  const warning = String(safe.warning_message || "").trim();
+  if (compact) {
+    return `${sourceLabel} · ${confidenceText} · ${stateText}${warning ? ` · ${warning}` : ""}`;
+  }
+  return `${safe.purpose || ""} · ${sourceLabel} · ${providerText} · ${confidenceText} · ${stateText}${warning ? ` · ${warning}` : ""}`;
+}
+
 function renderTradingCurrentPrice(market, options = {}) {
   const priceEl = $("trading-current-price");
+  const labelEl = $("trading-current-label");
   const marketEl = $("trading-current-market");
   const deltaEl = $("trading-current-delta");
+  const purposeEl = $("trading-current-purpose");
   const healthEl = $("trading-current-health");
   const animate = options.animate !== false;
   const symbol = String(market?.symbol || "");
-  const nextPrice = Number(market?.manual_price_points || 0);
+  const referenceContext = options.referencePriceContext || tradingMarketPriceContext(market, "reference");
+  const riskContext = options.riskGradePriceContext || tradingMarketPriceContext(market, "risk_grade");
+  const nextPrice = tradingMarketPricePoints(market, "reference");
   const priceHistory = tradingState.livePriceHistory || (tradingState.livePriceHistory = {});
   const liveMeta = tradingState.livePriceMeta || {};
-  const health = options.priceHealth || liveMeta[symbol]?.price_health || "healthy";
-  const fallbackReason = options.fallbackReason || liveMeta[symbol]?.fallback_reason || "";
-  const excludedSources = Array.isArray(options.excludedSources) ? options.excludedSources : (liveMeta[symbol]?.excluded_sources || []);
-  const warnings = Array.isArray(options.warnings) ? options.warnings : (liveMeta[symbol]?.warnings || []);
-  const highRiskBlockReason = options.highRiskBlockReason || liveMeta[symbol]?.high_risk_block_reason || "";
+  const health = options.priceHealth || referenceContext?.health || liveMeta[symbol]?.price_health || "healthy";
+  const fallbackReason = options.fallbackReason || referenceContext?.warning_message || liveMeta[symbol]?.fallback_reason || "";
+  const excludedSources = Array.isArray(options.excludedSources) ? options.excludedSources : (referenceContext?.excluded_sources || liveMeta[symbol]?.excluded_sources || []);
+  const warnings = Array.isArray(options.warnings) ? options.warnings : (referenceContext?.warnings || liveMeta[symbol]?.warnings || []);
+  const highRiskBlockReason = options.highRiskBlockReason || riskContext?.warning_message || liveMeta[symbol]?.high_risk_block_reason || "";
   const defaultedMarket = options.defaultedMarket === true || liveMeta[symbol]?.defaulted_market === true;
+  if (labelEl) labelEl.textContent = "目前價格（reference）";
+  if (purposeEl) purposeEl.textContent = `用途：展示 / 一般估值 · ${tradingPriceContextSummary(referenceContext, { compact: true })}`;
   const previousPrice = symbol && Number.isFinite(priceHistory[symbol]) ? Number(priceHistory[symbol]) : null;
   if (priceEl) {
     priceEl.textContent = market ? formatTradingPointsValue(nextPrice) : "-";
@@ -140,7 +204,7 @@ function renderTradingCurrentPrice(market, options = {}) {
   }
   if (marketEl) {
     marketEl.textContent = market
-      ? `${tradingDisplaySymbol(market.symbol)} · ${market.price_source || "last_good_cache"} · ${TRADING_LIVE_PRICE_REFRESH_MS / 1000} 秒更新`
+      ? `${tradingDisplaySymbol(market.symbol)} · ${referenceContext?.source_label || market.price_source || "last_good_cache"} · ${TRADING_LIVE_PRICE_REFRESH_MS / 1000} 秒更新`
       : "-";
   }
   if (!market || !Number.isFinite(nextPrice)) {
@@ -188,7 +252,7 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
       if (highRiskBlockReason) notes.push(highRiskBlockReason);
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
-      healthEl.textContent = `🟡 價格來源保守模式${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.textContent = `🟡 reference 價格保守模式 · 風控級價格不可用${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
     } else if (health === "fallback" || health === "degraded" || excludedSources.length) {
       const notes = [];
@@ -196,13 +260,13 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (fallbackReason) notes.push(fallbackReason);
       if (!fallbackReason && warnings.length) notes.push(String(warnings[0]?.message || warnings[0]?.code || ""));
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
-      healthEl.textContent = `🟡 價格來源降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.textContent = `🟡 reference 價格降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
     } else if (defaultedMarket) {
       healthEl.textContent = `🟢 未指定市場，已自動選用 ${tradingDisplaySymbol(symbol)}`;
       healthEl.classList.remove("warning");
     } else {
-      healthEl.textContent = "🟢 價格來源正常";
+      healthEl.textContent = `🟢 reference 價格正常 · 風控級來源信心 ${tradingPriceConfidenceLabel(riskContext?.confidence)}`;
       healthEl.classList.remove("warning");
     }
   }
@@ -459,7 +523,9 @@ function tradingOrderDraftEstimate() {
   const inputMode = tradingOrderInputMode();
   const inputValue = tradingNumber($("trading-quantity")?.value, 0);
   const limitPrice = tradingNumber($("trading-limit-price")?.value, 0);
-  const price = orderType === "limit" ? limitPrice : tradingNumber(market.manual_price_points, 0);
+  const referenceContext = tradingMarketPriceContext(market, "reference");
+  const riskContext = tradingMarketPriceContext(market, "risk_grade");
+  const price = orderType === "limit" ? limitPrice : tradingMarketPricePoints(market, "risk_grade");
   const feeRate = tradingNumber(market.fee_rate_percent, 0) / 100;
   if (!inputValue || inputValue <= 0) {
     return {
@@ -470,6 +536,13 @@ function tradingOrderDraftEstimate() {
   }
   if (!price || price <= 0) {
     return { ok: false, blocking: true, message: orderType === "limit" ? "請輸入有效限價" : "目前市場價格不可用，暫停下單" };
+  }
+  if (orderType !== "limit" && riskContext?.high_risk_blocked) {
+    return {
+      ok: false,
+      blocking: true,
+      message: `市價單暫停：${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`,
+    };
   }
   let quantity = inputValue;
   if (inputMode === "points") {
@@ -490,6 +563,9 @@ function tradingOrderDraftEstimate() {
   const positionQuantity = tradingNumber(position?.quantity, 0);
   const lockedQuantity = tradingNumber(position?.locked_quantity, 0);
   const sellableQuantity = Math.max(0, positionQuantity - lockedQuantity);
+  const orderPriceNote = orderType === "limit"
+    ? `限價單以你輸入的價格為準；目前 reference 價 ${formatTradingPointsValue(tradingMarketPricePoints(market, "reference"))} · ${tradingPriceContextSummary(referenceContext, { compact: true })}`
+    : `市價單估值採用風控級價格；${tradingPriceContextSummary(riskContext, { compact: true })}`;
   if (side === "buy") {
     const total = notional + fee;
     return {
@@ -503,8 +579,8 @@ function tradingOrderDraftEstimate() {
       total,
       availablePoints,
       message: total > availablePoints
-        ? `買入預估 ${formatTradingPointsValue(total)} 點${quantityNote}（含手續費 ${formatTradingPointsValue(fee)}），超過可用 ${formatTradingPointsValue(availablePoints)} 點`
-        : `買入預估 ${formatTradingPointsValue(total)} 點${quantityNote}（成交 ${formatTradingPointsValue(notional)} + 手續費 ${formatTradingPointsValue(fee)}）`,
+        ? `買入預估 ${formatTradingPointsValue(total)} 點${quantityNote}（含手續費 ${formatTradingPointsValue(fee)}），超過可用 ${formatTradingPointsValue(availablePoints)} 點 · ${orderPriceNote}`
+        : `買入預估 ${formatTradingPointsValue(total)} 點${quantityNote}（成交 ${formatTradingPointsValue(notional)} + 手續費 ${formatTradingPointsValue(fee)}） · ${orderPriceNote}`,
     };
   }
   const net = Math.max(0, notional - fee);
@@ -519,8 +595,8 @@ function tradingOrderDraftEstimate() {
     total: net,
     sellableQuantity,
     message: quantity > sellableQuantity
-      ? `賣出 ${formatTradingQuantityValue(quantity)} 超過可賣現貨 ${formatTradingQuantityValue(sellableQuantity)}`
-      : `賣出預估收入 ${formatTradingPointsValue(net)} 點${quantityNote}（成交 ${formatTradingPointsValue(notional)} - 手續費 ${formatTradingPointsValue(fee)}）`,
+      ? `賣出 ${formatTradingQuantityValue(quantity)} 超過可賣現貨 ${formatTradingQuantityValue(sellableQuantity)} · ${orderPriceNote}`
+      : `賣出預估收入 ${formatTradingPointsValue(net)} 點${quantityNote}（成交 ${formatTradingPointsValue(notional)} - 手續費 ${formatTradingPointsValue(fee)}） · ${orderPriceNote}`,
   };
 }
 
@@ -552,7 +628,7 @@ function syncTradingOrderSideTheme() {
 }
 
 function rootVirtualSpotValue(positions = [], markets = []) {
-  const marketMap = new Map(markets.map((market) => [market.symbol, Number(market.manual_price_points || 0)]));
+  const marketMap = new Map(markets.map((market) => [market.symbol, tradingMarketPricePoints(market, "reference")]));
   return positions.reduce((total, row) => {
     const quantity = Number(row.quantity || 0);
     const price = marketMap.get(row.market_symbol) || 0;
@@ -578,12 +654,12 @@ function spotPositionTotalQuantity(position) {
 }
 
 function tradingSpotPnl(position, market) {
-  if (position && position.unrealized_pnl_points !== undefined && !market) {
-    return tradingNumber(position.unrealized_pnl_points, 0);
+  if (position && position.risk_grade_unrealized_pnl_points !== undefined && !market) {
+    return tradingNumber(position.risk_grade_unrealized_pnl_points, tradingNumber(position.unrealized_pnl_points, 0));
   }
   const quantity = spotPositionTotalQuantity(position);
   const costBasis = tradingSpotCostBasis(position, market);
-  const currentValue = tradingSpotCurrentValue(position, market);
+  const currentValue = tradingSpotRiskGradeValue(position, market);
   if (!quantity || !costBasis || !currentValue) return 0;
   return currentValue - costBasis;
 }
@@ -618,11 +694,11 @@ function tradingSpotBreakEvenExitPrice(position, market) {
 }
 
 function tradingSpotCurrentValue(position, market) {
-  if (position && position.current_value_points !== undefined && !market) {
-    return tradingNumber(position.current_value_points, 0);
+  if (position && position.reference_current_value_points !== undefined && !market) {
+    return tradingNumber(position.reference_current_value_points, tradingNumber(position.current_value_points, 0));
   }
   const quantity = spotPositionTotalQuantity(position);
-  const currentPrice = tradingNumber(market?.manual_price_points, 0);
+  const currentPrice = tradingMarketPricePoints(market, "reference");
   return quantity > 0 && currentPrice > 0 ? quantity * currentPrice : 0;
 }
 
@@ -635,6 +711,15 @@ function tradingSpotCostBasis(position, market) {
   if (!holdingCost) return 0;
   const sellFeeEstimate = tradingSpotFee(currentValue, market);
   return holdingCost + sellFeeEstimate;
+}
+
+function tradingSpotRiskGradeValue(position, market) {
+  if (position && position.risk_grade_current_value_points !== undefined && !market) {
+    return tradingNumber(position.risk_grade_current_value_points, 0);
+  }
+  const quantity = spotPositionTotalQuantity(position);
+  const currentPrice = tradingMarketPricePoints(market, "risk_grade");
+  return quantity > 0 && currentPrice > 0 ? quantity * currentPrice : 0;
 }
 
 const TRADING_POINT_MICRO_SCALE = 1000000;
@@ -722,7 +807,8 @@ function tradingLiveMarginRisk(row, market = null) {
   const resolvedMarket = market || tradingMarketBySymbol(row?.market_symbol || "");
   if (!row || !resolvedMarket) return fallback;
   const quantity = tradingNumber(row.quantity, 0);
-  const currentPrice = tradingNumber(resolvedMarket.manual_price_points, tradingNumber(fallback.price_points, 0));
+  const riskContext = tradingMarketPriceContext(resolvedMarket, "risk_grade");
+  const currentPrice = tradingMarketPricePoints(resolvedMarket, "risk_grade") || tradingNumber(fallback.price_points, 0);
   const principal = tradingNumber(row.principal_points, 0);
   const collateral = tradingNumber(row.collateral_points, 0);
   const dynamicInterest = tradingMarginLiveInterest(row);
@@ -776,6 +862,7 @@ function tradingLiveMarginRisk(row, market = null) {
   return {
     ...fallback,
     price_points: currentPrice,
+    price_context: riskContext,
     close_fee_points: closeFee,
     exit_notional_points: exitNotional,
     interest_points: interest,
@@ -869,7 +956,9 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
     const locked = spotPositionNumber(position, "locked_quantity");
     const quantity = availableQuantity + locked;
     const sellable = Math.max(0, availableQuantity);
-    const currentPrice = tradingNumber(market.manual_price_points, 0);
+    const referenceContext = tradingMarketPriceContext(market, "reference");
+    const riskContext = tradingMarketPriceContext(market, "risk_grade");
+    const currentPrice = tradingMarketPricePoints(market, "reference");
     const holdingCost = tradingSpotHoldingCost(position, market);
     const holdingCostPerUnit = tradingSpotHoldingCostPerUnit(position, market);
     const breakEvenPrice = tradingSpotBreakEvenExitPrice(position, market);
@@ -904,12 +993,12 @@ function renderEconomySpotPositionDetails(positions = [], markets = []) {
         <div class="trading-spot-metric">
           <span>目前部位價值</span>
           <b>${currentValue ? formatTradingPointsValue(currentValue) : "-"}</b>
-          <small class="drive-card-sub">現價 ${currentPrice ? formatTradingPointsValue(currentPrice) : "-"}</small>
+          <small class="drive-card-sub">reference 價 ${currentPrice ? formatTradingPointsValue(currentPrice) : "-"} · ${sanitize(tradingPriceContextSummary(referenceContext, { compact: true }))}</small>
         </div>
         <div class="trading-spot-metric">
           <span>盈虧</span>
           <b class="trading-spot-pnl ${pnlClass}">${pnl >= 0 ? "+" : ""}${formatTradingPointsValue(pnl)} 點</b>
-          <small class="drive-card-sub">未實現 · 含預估賣出手續費</small>
+          <small class="drive-card-sub">risk-grade 價計算未實現盈虧 · ${sanitize(tradingPriceContextSummary(riskContext, { compact: true }))}</small>
         </div>
         <div class="trading-spot-metric">
           <span>已實現盈虧</span>
@@ -991,6 +1080,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
     : "尚未開始計息";
   const entry = tradingNumber(row.entry_price_points, 0);
   const currentPrice = tradingNumber(liveRisk.price_points ?? row.current_price_points, 0);
+  const riskContext = liveRisk.price_context || tradingMarketPriceContext(tradingMarketBySymbol(row.market_symbol || ""), "risk_grade");
   const equity = tradingNumber(liveRisk.equity_after_points ?? row.equity_after_points, 0);
   const maintenance = tradingNumber(liveRisk.maintenance_margin_points ?? liveRisk.maintenance_points ?? row.maintenance_margin_points ?? row.maintenance_points, 0);
   const initialMarginRatePercent = tradingNumber(liveRisk.initial_margin_percent ?? row.initial_margin_percent, 0);
@@ -1009,6 +1099,7 @@ function tradingMarginPositionRow(row, scope = "trading") {
         <div class="drive-card-sub">
           入場 ${formatTradingPointsValue(entry)} · 現價 ${currentPrice ? formatTradingPointsValue(currentPrice) : "-"} · 本金 ${formatTradingPointsValue(principal)} · 原始保證金 ${formatTradingPointsValue(collateral)}
         </div>
+        <div class="drive-card-sub">風控級價格用途：融資 / 強平 / 保證金 / PnL · ${sanitize(tradingPriceContextSummary(riskContext, { compact: true }))}</div>
         <div class="drive-card-sub">
           原始保證金率 ${formatTradingPointsValue(initialMarginRatePercent)}% · 維持率 ${sanitize(riskText.ratioText)} · 權益 ${formatTradingPointsValue(equity)} · 維持保證金 ${formatTradingPointsValue(maintenance)}（${formatTradingPointsValue(maintenanceRatePercent)}%） · ${sanitize(riskText.statusLabel)}
         </div>
@@ -1121,7 +1212,7 @@ function renderTradingSummary() {
   if ($("trading-position-locked")) $("trading-position-locked").textContent = `鎖定 ${position ? sanitize(position.locked_quantity || "0") : "0"}`;
   const limit = $("trading-limit-price");
   if (limit && market && !$("trading-root-price")?.matches(":focus")) {
-    limit.placeholder = `目前 ${Number(market.manual_price_points || 0)}`;
+    limit.placeholder = `目前 ${formatTradingPointsValue(tradingMarketPricePoints(market, "reference"))}`;
   }
   syncTradingOrderSideTheme();
   syncTradingOrderInputMode();
@@ -1779,6 +1870,7 @@ async function loadTradingReferencePrices(options = {}) {
       signal,
     });
     const responseCandles = tradingReferenceCandles(json);
+    const referenceContext = json.price_context && typeof json.price_context === "object" ? json.price_context : null;
     let nextPayload = null;
     if (!isPriceOnly) {
       nextPayload = latestOnly
@@ -1797,7 +1889,11 @@ async function loadTradingReferencePrices(options = {}) {
       // by the trading dashboard, otherwise single-source reference candles can
       // visually overwrite the real execution reference price.
       if ($("trading-reference-price-meta")) {
-        $("trading-reference-price-meta").textContent = `參考價格來源：${json.source || "reference_price"} · 最新收盤 ${Number(last.close_points || 0)}`;
+        const providerLabel = Number.isFinite(Number(json.provider_count)) ? ` · 來源 ${Number(json.provider_count)} 家` : "";
+        const staleLabel = json.stale ? " · stale" : "";
+        const degradedLabel = json.degraded ? " · degraded" : "";
+        const contextLabel = referenceContext ? ` · ${tradingPriceContextSummary(referenceContext, { compact: true })}` : "";
+        $("trading-reference-price-meta").textContent = `reference price：${json.display_market || json.market || market.symbol} · ${json.interval || interval} · ${json.source || "reference_price"} · 信心 ${tradingPriceConfidenceLabel(json.confidence)}${providerLabel}${staleLabel}${degradedLabel} · 最新收盤 ${Number(last.close_points || 0)}${contextLabel}`;
       }
     }
     if (!isPriceOnly && tradingReferencePayloadHasCandles(tradingState.referencePrices)) {
@@ -1903,7 +1999,8 @@ function updateTradingMarginEstimate() {
   if (!estimate || !market) return { ok: false, blocking: true, message: "沒有可用進階交易市場" };
   const quantity = tradingNumber($("trading-margin-quantity")?.value, 0);
   const collateral = tradingNumber($("trading-margin-collateral")?.value, 0);
-  const price = tradingNumber(market.manual_price_points, 0);
+  const riskContext = tradingMarketPriceContext(market, "risk_grade");
+  const price = tradingMarketPricePoints(market, "risk_grade");
   const notional = quantity > 0 && price > 0 ? Math.ceil(quantity * price) : 0;
   const positionType = $("trading-margin-type")?.value || "margin_long";
   const marginLongFinancingRatePercent = tradingNumber(tradingState.settings?.margin_long_financing_percent, 90);
@@ -1935,13 +2032,21 @@ function updateTradingMarginEstimate() {
     if (openBtn) openBtn.disabled = true;
     return { ok: false, blocking: true, message: estimate.textContent };
   }
-  let message = `${typeLabel} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
+  let blocking = false;
+  if (riskContext?.high_risk_blocked) {
+    const message = `${typeLabel} 暫停：${riskContext.warning_message || "風控級價格目前不可用"} · ${tradingPriceContextSummary(riskContext, { compact: true })}`;
+    blocking = true;
+    estimate.textContent = message;
+    estimate.style.color = "#ff6b7a";
+    if (openBtn) openBtn.disabled = true;
+    return { ok: false, blocking, message };
+  }
+  let message = `${typeLabel} · 風控級價格 ${formatTradingPointsValue(price)} 點 · ${tradingPriceContextSummary(riskContext, { compact: true })} · 名目金額約 ${notional} 點 · 開倉費 ${fee} 點 · 原始保證金最低需求 ${minCollateral} 點 · 目前填寫 ${collateral} 點`;
   if (positionType === "short") {
     message = `${message}；借券放空風險：價格上漲會虧損並降低維持率；借券保證金比例 ${formatTradingPercent(shortCollateralRatePercent)}%`;
   } else {
     message = `${message}；融資可貸比例 ${formatTradingPercent(marginLongFinancingRatePercent)}%`;
   }
-  let blocking = false;
   if (positionType === "margin_long" && maxLongCollateral < minCollateral) {
     message = `${message}；這筆名目金額太小，扣除至少借 1 點後，已無法同時滿足最低原始保證金需求。請提高買入數量，或改用現貨買入。`;
     blocking = true;
@@ -2460,7 +2565,7 @@ function renderMyBotsList() {
   }
   const priceMap = {};
   for (const m of (tradingState.markets || [])) {
-    priceMap[m.symbol] = Number(m.current_price_points || m.manual_price_points || 0);
+    priceMap[m.symbol] = tradingMarketPricePoints(m, "reference");
   }
 
   const rows = [];
@@ -2825,7 +2930,7 @@ async function renderGridBotPreview({ quiet = true } = {}) {
   const midStepPct = ((upper - lower) / (count - 1) / ((upper + lower) / 2) * 100).toFixed(2);
 
   // Estimate current price from market or use midpoint
-  const marketPrice = market ? Number(market.manual_price_points || 0) : 0;
+  const marketPrice = market ? tradingMarketPricePoints(market, "reference") : 0;
   const refPrice = marketPrice || Math.round((upper + lower) / 2);
   const buyLevels = levels.filter((p) => p < refPrice);
   const sellLevels = levels.filter((p) => p > refPrice);
@@ -3062,7 +3167,7 @@ async function loadGridBots() {
     tradingGridBots = Array.isArray(json.bots) ? json.bots : [];
     const priceMap = {};
     for (const m of (tradingState.markets || [])) {
-      priceMap[m.symbol] = m.manual_price_points || 0;
+      priceMap[m.symbol] = tradingMarketPricePoints(m, "reference");
     }
     renderGridBotList(tradingGridBots, priceMap);
     renderMyBotsList();
@@ -3074,7 +3179,7 @@ async function loadGridBots() {
 
 function computeGridSpotSituation(marketSymbol, lower, upper, count, amount, mode) {
   const market = (tradingState.markets || []).find((m) => m.symbol === marketSymbol);
-  const currentPrice = market ? tradingNumber(market.manual_price_points, 0) : 0;
+  const currentPrice = market ? tradingMarketPricePoints(market, "reference") : 0;
   if (!currentPrice || lower >= upper || count < 2) return null;
   const levels = gridComputeLevels(lower, upper, count, mode);
   const sellLevels = levels.filter((p) => p > currentPrice);
@@ -3301,14 +3406,14 @@ function renderTradingWalletSummary(payload = {}) {
   }
   if ($("economy-spot-position-summary")) {
     $("economy-spot-position-summary").textContent = activePositions.length
-      ? "BTC、ETH 等交易對分開顯示"
+      ? "目前部位價值採 reference price；未實現盈虧採 risk-grade price"
       : "各交易對分開計算";
   }
   const activeMarginPositions = marginPositions.filter((row) => row.status === "open");
   if ($("economy-margin-position-count")) $("economy-margin-position-count").textContent = String(activeMarginPositions.length);
   if ($("economy-margin-position-summary")) {
     $("economy-margin-position-summary").textContent = activeMarginPositions.length
-      ? `整戶維持率 ${marginSummary.maintenance_ratio_percent == null ? "無法計算" : `${formatTradingPointsValue(marginSummary.maintenance_ratio_percent)}%`} · ${marginSummary.reason || "風險正常"}`
+      ? `整戶維持率 ${marginSummary.maintenance_ratio_percent == null ? "無法計算" : `${formatTradingPointsValue(marginSummary.maintenance_ratio_percent)}%`} · 全部使用 risk-grade price · ${marginSummary.reason || "風險正常"}`
       : "融資 / 借券";
   }
   const activeFuturesPositions = futuresPositions.filter((row) => row.status === "open" && Number(row.quantity || 0) !== 0);
@@ -3485,6 +3590,12 @@ async function loadTradingLivePrice() {
           tradingState.markets.unshift(nextMarket);
         }
         liveMeta[nextMarket.symbol] = {
+          price_type: json.price_type || "reference",
+          source: json.source || nextMarket.price_source || "",
+          confidence: json.confidence || "",
+          stale: !!json.stale,
+          degraded: !!json.degraded,
+          provider_count: Number.isFinite(Number(json.provider_count)) ? Number(json.provider_count) : null,
           price_health: json.price_health || "healthy",
           fallback_reason: json.fallback_reason || "",
           excluded_sources: Array.isArray(json.excluded_sources) ? json.excluded_sources : [],
@@ -3492,6 +3603,8 @@ async function loadTradingLivePrice() {
           high_risk_blocked: !!json.high_risk_blocked,
           high_risk_block_reason: json.high_risk_block_reason || "",
           defaulted_market: !!json.defaulted_market,
+          reference_price_context: json.reference_price_context && typeof json.reference_price_context === "object" ? json.reference_price_context : null,
+          risk_grade_price_context: json.risk_grade_price_context && typeof json.risk_grade_price_context === "object" ? json.risk_grade_price_context : null,
         };
         if (nextMarket.symbol === selectedSymbol) selectedMeta = liveMeta[nextMarket.symbol];
         updated = true;
@@ -3513,7 +3626,7 @@ async function loadTradingLivePrice() {
       updateTradingMarginEstimate();
       const limit = $("trading-limit-price");
       if (limit) {
-        limit.placeholder = `目前 ${Number(selected.manual_price_points || 0)}`;
+        limit.placeholder = `目前 ${formatTradingPointsValue(tradingMarketPricePoints(selected, "reference"))}`;
       }
     }
     refreshTradingWalletLiveMetrics();

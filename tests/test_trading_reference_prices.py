@@ -217,12 +217,20 @@ def _live_price_app(actor, captured):
                     "manual_price_points": 81234,
                     "price_source": "fused_weighted",
                     "fee_rate_percent": 0.1,
+                    "reference_price_points": 81234,
+                    "risk_grade_price_points": 81198,
                 },
                 "requested_market_symbol": market_symbol or "",
                 "resolved_market_symbol": resolved_symbol,
                 "display_market_symbol": resolved_symbol.replace("/POINTS", "/USDT"),
                 "refresh_interval_ms": 2000,
                 "server_time": "2026-05-04T00:00:00",
+                "price_type": "reference",
+                "source": "fused_weighted",
+                "confidence": "high" if not defaulted else "low",
+                "stale": defaulted,
+                "degraded": defaulted,
+                "provider_count": 4 if not defaulted else 1,
                 "price_health": "fallback" if defaulted else "healthy",
                 "fallback_reason": "orderbook unavailable" if defaulted else "",
                 "excluded_sources": ["okx_public_api"] if defaulted else [],
@@ -230,6 +238,29 @@ def _live_price_app(actor, captured):
                 "high_risk_blocked": defaulted,
                 "high_risk_block_reason": "目前不是正常 fused price" if defaulted else "",
                 "defaulted_market": defaulted,
+                "reference_price_context": {
+                    "price_type": "reference",
+                    "source": "fused_weighted",
+                    "source_label": "融合參考價",
+                    "confidence": "high" if not defaulted else "low",
+                    "stale": defaulted,
+                    "degraded": defaulted,
+                    "provider_count": 4 if not defaulted else 1,
+                    "purpose": "展示 / 一般估值 / K 線 / 非風控參考",
+                    "warning_message": "目前使用最後健康快取" if defaulted else "",
+                },
+                "risk_grade_price_context": {
+                    "price_type": "risk_grade",
+                    "source": "fused_weighted",
+                    "source_label": "風控級融合價",
+                    "confidence": "high" if not defaulted else "low",
+                    "stale": defaulted,
+                    "degraded": defaulted,
+                    "provider_count": 4 if not defaulted else 1,
+                    "purpose": "融資 / 強平 / 保證金 / PnL / bot 風控 / 交易限制",
+                    "warning_message": "目前不是正常 fused price" if defaulted else "",
+                    "high_risk_blocked": defaulted,
+                },
             }
 
     def passthrough(fn):
@@ -272,6 +303,11 @@ def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch
     payload = response.get_json()
     assert payload["ok"] is True
     assert payload["source"] == "binance_public_api"
+    assert payload["price_type"] == "reference"
+    assert payload["confidence"] == "medium"
+    assert payload["stale"] is False
+    assert payload["degraded"] is False
+    assert payload["provider_count"] == 1
     assert payload["market"] == "BTC/POINTS"
     assert payload["display_market"] == "BTC/USDT"
     assert payload["display_market"] == "BTC/USDT"
@@ -283,6 +319,8 @@ def test_trading_reference_prices_proxy_maps_usdt_markets_to_binance(monkeypatch
     assert payload["candles"][0]["close_usdt"] == 60500.5
     assert payload["candles"][0]["close_points"] == 60500.5
     assert payload["points"][0]["price_points"] == 60500.5
+    assert payload["price_context"]["price_type"] == "reference"
+    assert payload["price_context"]["source"] == "binance_public_api"
     assert "symbol=BTCUSDT" in captured["url"]
     assert "interval=1h" in captured["url"]
     assert captured["timeout"] == 6
@@ -1129,6 +1167,12 @@ def test_trading_live_price_route_returns_selected_market_quote():
     assert payload["market"]["manual_price_points"] == 81234
     assert payload["market"]["price_source"] == "fused_weighted"
     assert payload["price_health"] == "healthy"
+    assert payload["price_type"] == "reference"
+    assert payload["source"] == "fused_weighted"
+    assert payload["confidence"] == "high"
+    assert payload["stale"] is False
+    assert payload["degraded"] is False
+    assert payload["provider_count"] == 4
     assert payload["fallback_reason"] == ""
     assert payload["excluded_sources"] == []
     assert payload["warnings"] == []
@@ -1138,6 +1182,9 @@ def test_trading_live_price_route_returns_selected_market_quote():
     assert payload["requested_market_symbol"] == "BTC/POINTS"
     assert payload["resolved_market_symbol"] == "BTC/POINTS"
     assert payload["display_market_symbol"] == "BTC/USDT"
+    assert payload["reference_price_context"]["price_type"] == "reference"
+    assert payload["risk_grade_price_context"]["price_type"] == "risk_grade"
+    assert payload["risk_grade_price_context"]["purpose"].startswith("融資 / 強平")
     assert payload["refresh_interval_ms"] == 2000
     assert captured["market_symbol"] == "BTC/POINTS"
 
@@ -1174,4 +1221,8 @@ def test_trading_live_price_route_marks_defaulted_market_when_missing():
     assert payload["high_risk_blocked"] is True
     assert payload["high_risk_block_reason"] == "目前不是正常 fused price"
     assert payload["defaulted_market"] is True
+    assert payload["stale"] is True
+    assert payload["degraded"] is True
+    assert payload["provider_count"] == 1
+    assert payload["risk_grade_price_context"]["high_risk_blocked"] is True
     assert captured["market_symbol"] == ""
