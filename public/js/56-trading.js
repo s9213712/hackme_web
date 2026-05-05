@@ -276,7 +276,15 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (transportState.stale) notes.push("provider input stale");
       healthEl.textContent = `🟡 ${TRADING_RISK_GRADE_UNAVAILABLE_MESSAGE}${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
-    } else if (health === "fallback" || health === "degraded" || excludedSources.length || riskContext?.risk_grade_usable === false) {
+    } else if (
+      health === "fallback"
+      || health === "degraded"
+      || transportState.fallback
+      || transportState.stale
+      || transportState.degraded
+      || riskContext?.high_risk_blocked
+      || riskContext?.risk_grade_usable === false
+    ) {
       const notes = [];
       if (excludedSources.length) notes.push(`排除 ${excludedSources.join(", ")}`);
       if (fallbackReason) notes.push(fallbackReason);
@@ -288,6 +296,12 @@ function renderTradingCurrentPrice(market, options = {}) {
       if (defaultedMarket) notes.push(`未指定市場，已改用 ${tradingDisplaySymbol(symbol)}`);
       healthEl.textContent = `🟡 reference 價格降級${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
       healthEl.classList.add("warning");
+    } else if (excludedSources.length || warnings.length || referenceContext?.warning_only || riskContext?.warning_only) {
+      const notes = [];
+      if (excludedSources.length) notes.push(`已自動排除 ${excludedSources.join(", ")}`);
+      if (warnings.length) notes.push(String(warnings[0]?.message || warnings[0]?.code || ""));
+      healthEl.textContent = `🟢 reference 價格正常 · 風控級價格仍可用${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+      healthEl.classList.remove("warning");
     } else if (defaultedMarket) {
       healthEl.textContent = `🟢 未指定市場，已自動選用 ${tradingDisplaySymbol(symbol)}`;
       healthEl.classList.remove("warning");

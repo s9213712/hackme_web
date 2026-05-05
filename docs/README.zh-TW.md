@@ -2,7 +2,7 @@
 
 [English README](../README.md)
 
-**目前 Release ID：`2026.05.05-140`**
+**目前 Release ID：`2026.05.05-141`**
 
 這份文件是中文捷徑版入口，不再承擔全部教學。它只回答三件事：
 
@@ -31,6 +31,10 @@
   audit chain 斷裂只會顯示 `critical` 與 `需人工處理`，不會因單純查狀態就自動把站
   切進維護模式；Integrity Guard strict mode 在重啟 / 更新後若看到高風險 findings，
   會保留警告並阻擋 `GO_LIVE`，但不會直接拒絕啟動。
+- 交易價格信任等級也已收斂：若只是部分 order-book coverage 不完整、或系統自動排除
+  少數不合格來源，但剩餘來源仍足以形成健康的 risk-grade price，前台會維持綠燈並說明
+  「已自動排除部分來源，但風控級價格仍可使用」。只有真的遇到 stale / fallback /
+  provider 斷線 / conservative mode / 異常價格狀態時，才會顯示黃色警示並暫停高風險交易。
 
 ### root / admin
 

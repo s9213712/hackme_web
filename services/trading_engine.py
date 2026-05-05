@@ -3882,11 +3882,12 @@ class TradingEngineService:
         warnings = list(meta.get("warnings") or [])
         source = str(meta.get("resolved_source") or price_source or "manual_root").strip() or "manual_root"
         stale = bool(meta.get("stale"))
-        degraded = bool(meta.get("degraded")) or health in {"fallback", "degraded", "conservative"} or bool(warnings) or bool(meta.get("excluded_sources"))
+        degraded = bool(meta.get("degraded")) or health in {"fallback", "degraded", "conservative"}
         provider_key = "risk_grade_provider_count" if normalized_type == "risk_grade" else "reference_provider_count"
         provider_count = max(0, int(meta.get(provider_key) or 0))
         high_risk_blocked = bool(meta.get("high_risk_blocked")) if normalized_type == "risk_grade" else False
         synthetic_test_provider = bool(meta.get("synthetic_test_provider"))
+        warning_only = bool(meta.get("warning_only")) or ((bool(warnings) or bool(meta.get("excluded_sources"))) and not degraded)
         warning_message = str(meta.get("high_risk_block_reason") or meta.get("fallback_reason") or "").strip()
         if not warning_message:
             warning_message = str(self._primary_price_fusion_warning(warnings).get("message") or "").strip()
@@ -3936,6 +3937,7 @@ class TradingEngineService:
             "high_risk_blocked": high_risk_blocked,
             "risk_grade_usable": risk_grade_usable,
             "synthetic_test_provider": synthetic_test_provider,
+            "warning_only": warning_only,
             "excluded_sources": list(meta.get("excluded_sources") or []),
             "warnings": warnings,
         }
@@ -4026,6 +4028,23 @@ class TradingEngineService:
             return max(float(snapshot.get("depth_score") or 0.0), 0.0)
         except Exception:
             return 0.0
+
+    def _price_fusion_warning_is_degrading(self, warning):
+        code = str((warning or {}).get("code") or "").strip()
+        if not code:
+            return False
+        return code not in {
+            "provider_coverage_partial",
+            "provider_weight_cap_applied",
+        }
+
+    def _price_fusion_exclusion_is_degrading(self, exclusion):
+        reason = str((exclusion or {}).get("reason") or "").strip()
+        if not reason:
+            return False
+        return reason not in {
+            "manual_weight_zero",
+        }
 
     def _transport_state_from_provider_rows(self, provider_rows, *, warnings=None, degraded=False, conservative_mode=False, min_provider_count=0, ws_enabled=True):
         rows = [row for row in (provider_rows or []) if isinstance(row, dict)]
@@ -5136,7 +5155,11 @@ class TradingEngineService:
             for warning in warnings
             if isinstance(warning, dict) and str(warning.get("message") or "").strip()
         )
-        degraded = bool(excluded_providers) or bool(warnings) or reference_model["resolved_mode"] != mode or conservative_mode
+        degrading_warning_present = any(self._price_fusion_warning_is_degrading(item) for item in warnings)
+        degrading_exclusion_present = any(self._price_fusion_exclusion_is_degrading(item) for item in excluded_providers)
+        fallback_active = reference_model["resolved_mode"] in {"auto_depth_fallback", "equal_weight_fallback"}
+        degraded = bool(degrading_exclusion_present or degrading_warning_present or fallback_active or conservative_mode)
+        warning_only = bool((warnings or excluded_providers)) and not degraded
         reference_value = float(Decimal(str(reference_price)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
         transport_state = self._transport_state_from_provider_rows(
             snapshots,
@@ -5147,6 +5170,8 @@ class TradingEngineService:
             ws_enabled=self._price_stream_ws_enabled(settings),
         )
         degraded = bool(degraded or transport_state.get("degraded"))
+        if degraded:
+            warning_only = False
         if not warning_message and str(transport_state.get("message") or "").strip():
             warning_message = str(transport_state.get("message") or "").strip()
         risk_value = (
@@ -5164,7 +5189,8 @@ class TradingEngineService:
             "warning_code": str(primary_warning.get("code") or ""),
             "warning_message": warning_message,
             "degraded": degraded,
-            "fallback_active": reference_model["resolved_mode"] in {"auto_depth_fallback", "equal_weight_fallback"},
+            "warning_only": warning_only,
+            "fallback_active": fallback_active,
             "conservative_mode": conservative_mode,
             "high_risk_blocked": conservative_mode,
             "high_risk_block_reason": "目前風控級可用來源數不足，只能提供 reference price" if conservative_mode else "",
@@ -5849,7 +5875,9 @@ class TradingEngineService:
                 )
                 raise ValueError(f"live trading price jump {jump_percent:.2f}% exceeds max {allowed_percent:.2f}% for {symbol}")
         if configured_source == FUSED_PRICE_SOURCE and fusion_details and (
-            fusion_details.get("degraded") or fusion_details.get("warning_code") or fusion_details.get("excluded_providers")
+            fusion_details.get("conservative_mode")
+            or fusion_details.get("fallback_active")
+            or fusion_details.get("degraded")
         ):
             warnings = list(fusion_details.get("warnings") or [])
             primary_warning = self._primary_price_fusion_warning(warnings)
@@ -5888,6 +5916,7 @@ class TradingEngineService:
                 "exclusion_reason": str((fusion_details.get("transport_state") or {}).get("exclusion_reason") or reason_text),
                 "confidence": str((fusion_details.get("transport_state") or {}).get("confidence") or "low"),
                 "synthetic_test_provider": bool(fusion_details.get("synthetic_test_provider")),
+                "warning_only": False,
                 "transport_state": dict((fusion_details.get("transport_state") or {})),
             })
             self._audit_event(
@@ -5916,22 +5945,39 @@ class TradingEngineService:
                 },
             )
         elif configured_source == FUSED_PRICE_SOURCE and fusion_details:
+            transport_state = dict((fusion_details.get("transport_state") or {}))
+            risk_grade_usable = bool(
+                (fusion_details.get("risk_grade_provider_count") or 0)
+                and not bool(transport_state.get("stale"))
+                and not bool(transport_state.get("degraded"))
+                and not bool(transport_state.get("fallback"))
+                and not bool(fusion_details.get("conservative_mode"))
+            )
             price_meta.update({
                 "reference_price_points": fusion_details.get("reference_price_points"),
                 "risk_grade_price_points": fusion_details.get("risk_grade_price_points"),
                 "resolved_source": str(fusion_details.get("resolved_source") or live_source or FUSED_PRICE_SOURCE),
                 "reference_provider_count": int(fusion_details.get("reference_provider_count") or 0),
                 "risk_grade_provider_count": int(fusion_details.get("risk_grade_provider_count") or 0),
-                "risk_grade_usable": bool((fusion_details.get("risk_grade_provider_count") or 0) and not bool((fusion_details.get("transport_state") or {}).get("stale")) and not bool((fusion_details.get("transport_state") or {}).get("degraded")) and not bool((fusion_details.get("transport_state") or {}).get("fallback"))),
-                "stale": bool((fusion_details.get("transport_state") or {}).get("stale")),
-                "degraded": bool((fusion_details.get("transport_state") or {}).get("degraded")),
-                "connected": bool((fusion_details.get("transport_state") or {}).get("connected")),
-                "fallback": bool((fusion_details.get("transport_state") or {}).get("fallback")),
-                "last_update_at": str((fusion_details.get("transport_state") or {}).get("last_update_at") or ""),
-                "exclusion_reason": str((fusion_details.get("transport_state") or {}).get("exclusion_reason") or ""),
-                "confidence": str((fusion_details.get("transport_state") or {}).get("confidence") or "high"),
+                "warnings": list(fusion_details.get("warnings") or []),
+                "excluded_sources": [
+                    str(item.get("source") or "")
+                    for item in (fusion_details.get("excluded_providers") or [])
+                    if str(item.get("source") or "").strip()
+                ],
+                "risk_grade_usable": risk_grade_usable,
+                "high_risk_blocked": False,
+                "high_risk_block_reason": "",
+                "stale": bool(transport_state.get("stale")),
+                "degraded": bool(transport_state.get("degraded")),
+                "connected": bool(transport_state.get("connected")),
+                "fallback": bool(transport_state.get("fallback")),
+                "last_update_at": str(transport_state.get("last_update_at") or ""),
+                "exclusion_reason": str(transport_state.get("exclusion_reason") or ""),
+                "confidence": str(transport_state.get("confidence") or "high"),
                 "synthetic_test_provider": bool(fusion_details.get("synthetic_test_provider")),
-                "transport_state": dict((fusion_details.get("transport_state") or {})),
+                "warning_only": bool(fusion_details.get("warning_only")),
+                "transport_state": transport_state,
             })
         else:
             live_price = float(_to_decimal(price, name="live_price_points", minimum=0.00000001))

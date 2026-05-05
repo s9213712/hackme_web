@@ -60,6 +60,22 @@ high-risk use.
 contexts can still be useful as `reference price`, but they are marked
 `risk_grade_usable=false`.
 
+By contrast, some fused-price conditions are only `warning-only`:
+
+- one provider has incomplete coverage
+- a small number of providers are auto-excluded, but enough healthy providers
+  remain
+- weight-cap normalization is applied successfully
+
+In those cases the system may still keep:
+
+- `risk_grade_usable=true`
+- green trading-page status
+- high confidence for risk-grade price
+
+So warning-only diagnostics must not be conflated with actual degraded price
+health.
+
 ## Fusion Dashboard Meaning
 
 The root dashboard showing provider weights does **not** represent the real
@@ -126,6 +142,20 @@ while:
 - reference display remains available
 - charts remain available
 - normal limit-order flow can remain open if backend checks still pass
+
+### What should actually trigger low trust
+
+Low-trust / yellow-state behavior should be reserved for conditions such as:
+
+- provider transport fallback
+- stale WebSocket/provider input
+- conservative mode (`risk_grade_provider_count` too low)
+- cached/manual/synthetic test price paths
+- abnormal live-price movement that trips backend guardrails
+
+It should **not** be triggered merely because a provider had partial depth
+coverage while the remaining healthy providers still produced a valid
+`risk-grade price`.
 
 ## API Fields To Trust
 

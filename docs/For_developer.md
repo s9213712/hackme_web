@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-140`
+- Release ID: `2026.05.05-141`
 - Schema version: `30`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -89,6 +89,12 @@ Server Mode v2 note:
   normal restart/update drift. Startup records an audit warning and continues,
   while `GO_LIVE`/pre-production entry remains blocked until the findings are
   reviewed.
+- Fused trading prices now distinguish `warning-only` conditions from real
+  `degraded/fallback/conservative` conditions. Coverage-partial or
+  auto-excluded provider rows can remain green if enough healthy providers
+  still produce a valid risk-grade price; only true provider transport issues,
+  stale data, fallback, or conservative mode should downgrade confidence and
+  block high-risk trading.
 - `internal_test` login token is no longer a shared singleton gate. Root must
   bind it to one target account at issuance time, and only that account may use
   the token at `/api/login` while the server is in `internal_test`.

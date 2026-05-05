@@ -3020,6 +3020,7 @@ def test_price_fusion_status_marks_truncated_and_excludes_insufficient_coverage(
             "price_fusion_depth_band_percent": 1.0,
             "price_fusion_min_orderbook_coverage_percent": 0.5,
             "price_fusion_min_provider_count": 2,
+            "price_stream_ws_enabled": False,
         },
         markets=[],
     )
@@ -3052,7 +3053,9 @@ def test_price_fusion_status_marks_truncated_and_excludes_insufficient_coverage(
     assert "資料截斷，不代表該交易所真實深度不足" in used["binance_public_api"]["coverage_warning_message"]
     assert "okx_public_api" in used
     assert used["okx_public_api"]["orderbook_truncated"] is False
-    assert status["state"] == "degraded"
+    assert status["state"] == "healthy"
+    assert status["degraded"] is False
+    assert {item["code"] for item in status["warnings"]} >= {"provider_coverage_partial"}
     assert status["reference_provider_count"] == 6
     assert status["risk_grade_provider_count"] == 5
 
@@ -3290,6 +3293,53 @@ def test_live_price_fusion_manual_weights_renormalize_after_provider_failure(tmp
     settings = trading.get_root_settings()["settings"]
     assert settings["price_fusion_mode"] == "manual_weights"
     assert settings["price_fusion_manual_weights"]["okx_public_api"] == 3
+
+
+def test_live_quote_keeps_risk_grade_usable_when_only_reference_coverage_is_partial(tmp_path, monkeypatch):
+    get_db = _db(tmp_path)
+    points = PointsLedgerService(get_db=get_db, chain_secret="test-secret", backup_dir=tmp_path / "points_chain_backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points)
+    root = _actor(3, "root", "super_admin")
+    trading.update_root_settings(
+        actor=root,
+        settings={
+            "price_source": "fused_weighted",
+            "price_fusion_mode": "auto_depth",
+            "price_fusion_depth_band_percent": 1.0,
+            "price_fusion_min_orderbook_coverage_percent": 0.5,
+            "price_fusion_min_provider_count": 2,
+            "price_stream_ws_enabled": False,
+        },
+        markets=[],
+    )
+
+    def partial(source, *, min_bid, max_ask):
+        return trading._build_orderbook_snapshot(
+            source=source,
+            bids=[[100.0, 10.0], [min_bid, 8.0]],
+            asks=[[100.1, 10.0], [max_ask, 8.0]],
+            fetch_meta={"fetched_at": trading_engine_module._now(), "latency_ms": 100.0},
+            max_levels=100,
+            band_percent=1.0,
+        )
+
+    monkeypatch.setattr(trading, "_fetch_binance_orderbook_snapshot", lambda _symbol: partial("binance_public_api", min_bid=99.8, max_ask=100.3))
+    monkeypatch.setattr(trading, "_fetch_okx_orderbook_snapshot", lambda _symbol: partial("okx_public_api", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_coinbase_orderbook_snapshot", lambda _symbol: partial("coinbase_exchange", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_kraken_orderbook_snapshot", lambda _symbol: partial("kraken_public_api", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_gemini_orderbook_snapshot", lambda _symbol: partial("gemini_public_api", min_bid=99.0, max_ask=101.1))
+    monkeypatch.setattr(trading, "_fetch_bitstamp_orderbook_snapshot", lambda _symbol: partial("bitstamp_public_api", min_bid=99.0, max_ask=101.1))
+
+    payload = trading.get_live_market_quote(market_symbol="BTC/USDT")
+
+    assert payload["degraded"] is False
+    assert payload["risk_grade_usable"] is True
+    assert payload["reference_price_context"]["warning_only"] is True
+    assert payload["reference_price_context"]["degraded"] is False
+    assert payload["risk_grade_price_context"]["warning_only"] is True
+    assert payload["risk_grade_price_context"]["degraded"] is False
+    assert payload["risk_grade_price_context"]["risk_grade_usable"] is True
+    assert any(item["code"] == "provider_coverage_partial" for item in payload["warnings"])
 
 
 def test_price_fusion_manual_weights_default_bias_and_zero_weight_exclusion(tmp_path, monkeypatch):

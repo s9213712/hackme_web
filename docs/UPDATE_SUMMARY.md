@@ -1,6 +1,20 @@
 # Update Summary
 
-Release ID: `2026.05.05-140`
+Release ID: `2026.05.05-141`
+
+## 2026.05.05-141
+
+- Trading fused-price trust semantics are now less sensitive in normal market
+  conditions. Partial order-book coverage or auto-excluding a few unhealthy
+  provider rows no longer automatically forces the frontend into
+  `reference 價格降級` / `risk_grade_usable=false` as long as enough healthy
+  providers still produce a valid risk-grade price.
+- The trading page now keeps a green state for `warning-only` price fusion
+  diagnostics and explicitly says that some providers were excluded while the
+  current risk-grade price remains usable.
+- Yellow/low-trust trading warnings are now reserved for actual degraded
+  conditions such as stale/fallback provider input, conservative mode, cached
+  or manual price paths, or other real high-risk price-health failures.
 
 ## 2026.05.05-140
 
