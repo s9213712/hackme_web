@@ -54,6 +54,24 @@ from services.trading.settings_schema import (
     text_input_value,
     write_apr_from_daily,
 )
+from services.trading.price_fusion.context import (
+    price_context_confidence,
+    price_context_risk_grade_usable,
+    price_source_label,
+    price_usage_label,
+)
+from services.trading.price_fusion.orderbook import (
+    depth_notional_score,
+    depth_notional_snapshot,
+    parse_orderbook_side,
+    provider_depth_request_limit,
+)
+from services.trading.price_fusion.weights import (
+    apply_price_fusion_weight_cap,
+    build_price_fusion_weight_model,
+    price_fusion_effective_score,
+    price_fusion_reference_score,
+)
 from services.trading.validators import (
     _apr_percent_from_daily,
     _billable_interest_hours_from_elapsed_seconds,
@@ -3706,48 +3724,22 @@ class TradingEngineService:
         return {}
 
     def _price_usage_label(self, price_type):
-        normalized = str(price_type or "reference").strip().lower()
-        if normalized == "risk_grade":
-            return "融資 / 強平 / 保證金 / PnL / bot 風控 / 交易限制"
-        return "展示 / 一般估值 / K 線 / 非風控參考"
+        return price_usage_label(price_type)
 
     def _price_source_label(self, source):
-        normalized = str(source or "").strip()
-        if not normalized:
-            return "未知價格來源"
-        if normalized == "manual_root":
-            return "root 手動價格"
-        if normalized.endswith("_cached"):
-            base = normalized[:-7]
-            return f"{self._price_source_label(base)}（最後健康快取）"
-        if normalized == FUSED_PRICE_SOURCE:
-            return "融合價格"
-        if normalized == "ticker_fallback":
-            return "單一 ticker 降級價格"
-        if normalized == "scan_window_replay":
-            return "掃描視窗回放價格"
-        if normalized == "reference_price":
-            return "參考價格"
-        if normalized == "test_live_price_provider":
-            return "測試 live price provider"
-        return PRICE_PROVIDER_LABELS.get(normalized, normalized)
+        return price_source_label(source, PRICE_PROVIDER_LABELS, fused_price_source=FUSED_PRICE_SOURCE)
 
     def _price_context_confidence(self, *, price_type, source, health, degraded, stale, provider_count, high_risk_blocked):
-        normalized_source = str(source or "").strip()
-        normalized_health = str(health or "healthy").strip().lower()
-        normalized_type = str(price_type or "reference").strip().lower()
-        providers = max(0, int(provider_count or 0))
-        if normalized_source == "manual_root":
-            return "manual"
-        if normalized_source == "test_live_price_provider":
-            return "low"
-        if stale or high_risk_blocked or normalized_health in {"conservative", "fallback"}:
-            return "low"
-        if degraded:
-            return "medium"
-        if normalized_type == "risk_grade" and providers < max(1, DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT):
-            return "medium"
-        return "high"
+        return price_context_confidence(
+            price_type=price_type,
+            source=source,
+            health=health,
+            degraded=degraded,
+            stale=stale,
+            provider_count=provider_count,
+            high_risk_blocked=high_risk_blocked,
+            minimum_provider_count=DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT,
+        )
 
     def _price_context_risk_grade_usable(
         self,
@@ -3762,21 +3754,17 @@ class TradingEngineService:
         fallback,
         synthetic_test_provider=False,
     ):
-        normalized_type = str(price_type or "reference").strip().lower() or "reference"
-        normalized_source = str(source or "").strip()
-        normalized_health = str(health or "healthy").strip().lower()
-        providers = max(0, int(provider_count or 0))
-        if normalized_type != "risk_grade":
-            return False
-        if synthetic_test_provider or normalized_source == "test_live_price_provider":
-            return False
-        if normalized_source == "manual_root" or normalized_source.endswith("_cached"):
-            return False
-        if high_risk_blocked or stale or degraded or fallback:
-            return False
-        if normalized_health in {"fallback", "conservative", "degraded"}:
-            return False
-        return providers > 0
+        return price_context_risk_grade_usable(
+            price_type=price_type,
+            source=source,
+            health=health,
+            degraded=degraded,
+            stale=stale,
+            provider_count=provider_count,
+            high_risk_blocked=high_risk_blocked,
+            fallback=fallback,
+            synthetic_test_provider=synthetic_test_provider,
+        )
 
     def _build_price_context(self, *, market_symbol, price_type, price_points, price_source, price_meta):
         meta = price_meta or {}
@@ -3912,25 +3900,10 @@ class TradingEngineService:
         return reference_context, risk_context
 
     def _price_fusion_effective_score(self, snapshot):
-        try:
-            return max(float(snapshot.get("effective_depth_score")), 0.0)
-        except Exception:
-            try:
-                return max(float(snapshot.get("depth_score") or 0.0), 0.0)
-            except Exception:
-                return 0.0
+        return price_fusion_effective_score(snapshot)
 
     def _price_fusion_reference_score(self, snapshot):
-        try:
-            density_score = max(float(snapshot.get("depth_density_score") or 0.0), 0.0)
-            if density_score > 0:
-                return density_score
-        except Exception:
-            pass
-        try:
-            return max(float(snapshot.get("depth_score") or 0.0), 0.0)
-        except Exception:
-            return 0.0
+        return price_fusion_reference_score(snapshot)
 
     def _price_fusion_warning_is_degrading(self, warning):
         code = str((warning or {}).get("code") or "").strip()
@@ -4053,114 +4026,30 @@ class TradingEngineService:
         raise ValueError(f"{usage or 'high-risk trading action'} is blocked while fused price is in conservative mode: {reason}")
 
     def _provider_depth_request_limit(self, source, depth_levels):
-        requested = max(1, int(depth_levels or DEFAULT_PRICE_FUSION_DEPTH_LEVELS))
-        if source == "binance_public_api":
-            for value in (5, 10, 20, 50, 100, 500, 1000, 5000):
-                if requested <= value:
-                    return value
-            return 5000
-        if source == "okx_public_api":
-            return max(1, min(requested, 400))
-        if source == "kraken_public_api":
-            return max(1, min(requested, 500))
-        if source == "gemini_public_api":
-            return max(1, min(requested, 500))
-        return requested
+        return provider_depth_request_limit(
+            source,
+            depth_levels,
+            default_depth_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS,
+        )
 
     def _parse_orderbook_side(self, rows, *, max_levels):
-        raw_rows = list(rows or [])
-        parsed = []
-        for row in raw_rows[:max_levels]:
-            if isinstance(row, dict):
-                price = row.get("price")
-                quantity = row.get("amount", row.get("quantity", row.get("size")))
-            elif isinstance(row, (list, tuple)) and len(row) >= 2:
-                price, quantity = row[0], row[1]
-            else:
-                continue
-            try:
-                parsed.append((float(price), float(quantity)))
-            except Exception:
-                continue
-        return {
-            "raw_count": len(raw_rows),
-            "used_count": len(parsed),
-            "levels": parsed,
-        }
+        return parse_orderbook_side(rows, max_levels=max_levels)
 
     def _depth_notional_snapshot(self, bids, asks, *, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        bid_info = self._parse_orderbook_side(bids, max_levels=max_levels)
-        ask_info = self._parse_orderbook_side(asks, max_levels=max_levels)
-        bid_levels = bid_info["levels"]
-        ask_levels = ask_info["levels"]
-        if not bid_levels or not ask_levels:
-            raise ValueError("order book is empty")
-        best_bid = bid_levels[0][0]
-        best_ask = ask_levels[0][0]
-        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
-            raise ValueError("order book spread is invalid")
-        midpoint = (best_bid + best_ask) / 2.0
-        lower_bound = midpoint * (1.0 - band_percent / 100.0)
-        upper_bound = midpoint * (1.0 + band_percent / 100.0)
-        min_bid = min(price for price, _quantity in bid_levels)
-        max_ask = max(price for price, _quantity in ask_levels)
-        bid_coverage_percent = min(
-            max(((midpoint - min_bid) / midpoint) * 100.0, 0.0) if midpoint > 0 else 0.0,
-            float(band_percent),
+        return depth_notional_snapshot(
+            bids,
+            asks,
+            max_levels=max_levels,
+            band_percent=band_percent,
         )
-        ask_coverage_percent = min(
-            max(((max_ask - midpoint) / midpoint) * 100.0, 0.0) if midpoint > 0 else 0.0,
-            float(band_percent),
-        )
-        bid_reached_lower_bound = min_bid <= lower_bound + 1e-12
-        ask_reached_upper_bound = max_ask >= upper_bound - 1e-12
-        orderbook_truncated = not (bid_reached_lower_bound and ask_reached_upper_bound)
-        bid_notional = sum(price * quantity for price, quantity in bid_levels if price >= lower_bound)
-        ask_notional = sum(price * quantity for price, quantity in ask_levels if price <= upper_bound)
-        score = min(bid_notional, ask_notional)
-        if score <= 0:
-            score = (bid_notional + ask_notional) / 2.0
-        if score <= 0:
-            raise ValueError("order book depth score is invalid")
-        coverage_ratio = 1.0
-        if float(band_percent) > 0:
-            coverage_ratio = max(0.0, min(min(bid_coverage_percent, ask_coverage_percent) / float(band_percent), 1.0))
-        effective_depth_score = score * coverage_ratio
-        min_coverage_percent = min(float(bid_coverage_percent or 0.0), float(ask_coverage_percent or 0.0))
-        depth_density_score = (score / min_coverage_percent) if min_coverage_percent > 0 else 0.0
-        spread_points = best_ask - best_bid
-        spread_percent = (spread_points / midpoint * 100.0) if midpoint > 0 else 0.0
-        stronger_side = max(bid_notional, ask_notional)
-        side_balance_ratio = (score / stronger_side) if stronger_side > 0 else 0.0
-        return {
-            "midpoint": midpoint,
-            "depth_score": score,
-            "effective_depth_score": effective_depth_score,
-            "depth_density_score": depth_density_score,
-            "best_bid": best_bid,
-            "best_ask": best_ask,
-            "spread_points": spread_points,
-            "spread_percent": spread_percent,
-            "bid_notional": bid_notional,
-            "ask_notional": ask_notional,
-            "side_balance_ratio": side_balance_ratio,
-            "bid_coverage_percent": bid_coverage_percent,
-            "ask_coverage_percent": ask_coverage_percent,
-            "bid_reached_lower_bound": bid_reached_lower_bound,
-            "ask_reached_upper_bound": ask_reached_upper_bound,
-            "orderbook_truncated": orderbook_truncated,
-            "coverage_ratio_percent": coverage_ratio * 100.0,
-            "raw_bid_levels_count": bid_info["raw_count"],
-            "raw_ask_levels_count": ask_info["raw_count"],
-            "used_bid_levels_count": bid_info["used_count"],
-            "used_ask_levels_count": ask_info["used_count"],
-            "band_percent": float(band_percent),
-            "depth_levels_requested": int(max_levels),
-        }
 
     def _depth_notional_score(self, bids, asks, *, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT):
-        snapshot = self._depth_notional_snapshot(bids, asks, max_levels=max_levels, band_percent=band_percent)
-        return snapshot["midpoint"], snapshot["depth_score"]
+        return depth_notional_score(
+            bids,
+            asks,
+            max_levels=max_levels,
+            band_percent=band_percent,
+        )
 
     def _build_orderbook_snapshot(self, *, source, bids, asks, fetch_meta=None, max_levels=DEFAULT_PRICE_FUSION_DEPTH_LEVELS, band_percent=DEFAULT_PRICE_FUSION_DEPTH_BAND_PERCENT, request_limit=None, transport_meta=None):
         stats = self._depth_notional_snapshot(bids, asks, max_levels=max_levels, band_percent=band_percent)
@@ -4375,83 +4264,19 @@ class TradingEngineService:
         return _normalize_price_fusion_manual_weights((settings or {}).get("price_fusion_manual_weights"))
 
     def _apply_price_fusion_weight_cap(self, weighted_rows, *, max_single_provider_weight_percent):
-        total_raw = sum(max(float(weight), 0.0) for _snap, weight in weighted_rows)
-        if total_raw <= 0:
-            raise ValueError("weighted fused price has no positive provider weight")
-        normalized = {
-            snap["source"]: max(float(weight), 0.0) / total_raw
-            for snap, weight in weighted_rows
-        }
-        cap_fraction = max(0.0, min(float(max_single_provider_weight_percent or 0.0), 100.0)) / 100.0
-        if cap_fraction <= 0 or cap_fraction >= 1.0:
-            return normalized, False, False
-        if len(weighted_rows) * cap_fraction < 1.0 - 1e-9:
-            return normalized, False, True
-        remaining = {snap["source"]: max(float(weight), 0.0) for snap, weight in weighted_rows}
-        capped = {}
-        remaining_fraction = 1.0
-        while remaining:
-            raw_sum = sum(remaining.values())
-            if raw_sum <= 0 or remaining_fraction <= 1e-9:
-                break
-            over = [
-                source
-                for source, value in remaining.items()
-                if (value / raw_sum) * remaining_fraction > cap_fraction + 1e-12
-            ]
-            if not over:
-                for source, value in remaining.items():
-                    capped[source] = (value / raw_sum) * remaining_fraction
-                remaining = {}
-                break
-            for source in over:
-                capped[source] = cap_fraction
-                del remaining[source]
-                remaining_fraction -= cap_fraction
-                if remaining_fraction <= 1e-9:
-                    remaining_fraction = 0.0
-                    break
-        if remaining:
-            raw_sum = sum(remaining.values())
-            if raw_sum > 0 and remaining_fraction > 0:
-                for source, value in remaining.items():
-                    capped[source] = (value / raw_sum) * remaining_fraction
-        cap_applied = any(abs(capped.get(source, 0.0) - normalized.get(source, 0.0)) > 1e-12 for source in normalized)
-        return capped or normalized, cap_applied, False
-
-    def _build_price_fusion_weight_model(self, snapshots, *, mode, weight_map, max_single_provider_weight_percent, score_getter):
-        rows = []
-        resolved_mode = mode
-        if mode == "manual_weights":
-            manual_positive_total = 0.0
-            for snap in snapshots:
-                weight = float(weight_map.get(snap["source"], 0.0))
-                if weight > 0:
-                    rows.append((snap, weight))
-                    manual_positive_total += weight
-            if manual_positive_total <= 0:
-                resolved_mode = "auto_depth_fallback"
-                rows = []
-        if not rows:
-            rows = [(snap, float(score_getter(snap))) for snap in snapshots]
-        total_raw_weight = sum(max(float(weight), 0.0) for _snap, weight in rows)
-        if total_raw_weight <= 0:
-            equal_weight = 1.0 / len(snapshots)
-            resolved_mode = "equal_weight_fallback"
-            rows = [(snap, equal_weight) for snap in snapshots]
-            total_raw_weight = sum(weight for _snap, weight in rows)
-        normalized_weights, cap_applied, cap_unenforceable = self._apply_price_fusion_weight_cap(
-            rows,
+        return apply_price_fusion_weight_cap(
+            weighted_rows,
             max_single_provider_weight_percent=max_single_provider_weight_percent,
         )
-        return {
-            "rows": rows,
-            "resolved_mode": resolved_mode,
-            "total_raw_weight": total_raw_weight,
-            "normalized_weights": normalized_weights,
-            "cap_applied": cap_applied,
-            "cap_unenforceable": cap_unenforceable,
-        }
+
+    def _build_price_fusion_weight_model(self, snapshots, *, mode, weight_map, max_single_provider_weight_percent, score_getter):
+        return build_price_fusion_weight_model(
+            snapshots,
+            mode=mode,
+            weight_map=weight_map,
+            max_single_provider_weight_percent=max_single_provider_weight_percent,
+            score_getter=score_getter,
+        )
 
     def _fetch_weighted_fused_price_points(self, market_symbol, *, settings, conn=None):
         market_symbol = str(market_symbol or "").strip().upper()
