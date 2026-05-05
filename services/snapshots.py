@@ -829,6 +829,81 @@ def ensure_snapshot_schema(conn):
         )
         """
     )
+    # SERVER_MODE_V2_IMPLEMENTATION_PLAN.md Phase 4: shadow tables
+    # mirroring the production trading_orders / trading_spot_positions /
+    # points_ledger schemas. Phase 5 (trading dual-engine) will route
+    # internal_test orders / fills / ledger entries here. Schemas are
+    # intentionally simplified vs production — shadow only captures the
+    # fields needed for matching + isolation verification, not every
+    # production refinement (futures / margin / fills detail). Phase 5
+    # may extend these as it lands the routing logic.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_shadow_orders (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_uuid          TEXT NOT NULL UNIQUE,
+            tester_user_id      INTEGER NOT NULL,
+            market_symbol       TEXT NOT NULL,
+            side                TEXT NOT NULL,
+            order_type          TEXT NOT NULL,
+            quantity_units      INTEGER NOT NULL CHECK (quantity_units > 0),
+            limit_price_points  INTEGER,
+            execution_price_points INTEGER,
+            status              TEXT NOT NULL DEFAULT 'open',
+            frozen_points       INTEGER NOT NULL DEFAULT 0,
+            fee_points          INTEGER NOT NULL DEFAULT 0,
+            filled_quantity_units INTEGER NOT NULL DEFAULT 0,
+            reason              TEXT,
+            token_id            TEXT,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT NOT NULL,
+            CHECK (side IN ('buy', 'sell')),
+            CHECK (order_type IN ('market', 'limit')),
+            CHECK (status IN ('open', 'partially_filled', 'filled', 'cancelled', 'rejected'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_orders_tester ON test_shadow_orders(tester_user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_orders_market_status ON test_shadow_orders(market_symbol, status)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_shadow_positions (
+            tester_user_id      INTEGER NOT NULL,
+            market_symbol       TEXT NOT NULL,
+            quantity_units      INTEGER NOT NULL DEFAULT 0 CHECK (quantity_units >= 0),
+            locked_quantity_units INTEGER NOT NULL DEFAULT 0 CHECK (locked_quantity_units >= 0),
+            avg_cost_points     INTEGER NOT NULL DEFAULT 0,
+            token_id            TEXT,
+            updated_at          TEXT NOT NULL,
+            PRIMARY KEY (tester_user_id, market_symbol)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_positions_tester ON test_shadow_positions(tester_user_id)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_shadow_ledger (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            ledger_uuid         TEXT NOT NULL UNIQUE,
+            tester_user_id      INTEGER NOT NULL,
+            currency_type       TEXT NOT NULL,
+            direction           TEXT NOT NULL,
+            amount              INTEGER NOT NULL CHECK (amount > 0),
+            balance_before      INTEGER NOT NULL,
+            balance_after       INTEGER NOT NULL,
+            action_type         TEXT NOT NULL,
+            reference_type      TEXT,
+            reference_id        TEXT,
+            reason              TEXT,
+            token_id            TEXT,
+            created_at          TEXT NOT NULL,
+            CHECK (currency_type IN ('soft', 'hard')),
+            CHECK (direction IN ('credit', 'debit', 'freeze', 'unfreeze', 'reverse', 'transfer_in', 'transfer_out'))
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ledger_tester ON test_shadow_ledger(tester_user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_ledger_action ON test_shadow_ledger(action_type, created_at)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS production_entry_reports (
