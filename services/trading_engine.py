@@ -22,6 +22,33 @@ from services.points_chain import (
 )
 from services.server_mode_context import SmV2Context, current_ctx
 from services.server_mode_routing import resolve_table
+from services.trading.accounting.fees import fee_points
+from services.trading.accounting.notional import notional_points
+from services.trading.accounting.units import (
+    _decimal_units,
+    _quantity_step_units_from_precision,
+    quantity_to_units,
+    units_to_quantity,
+)
+from services.trading.constants import (
+    APR_DAYS_PER_YEAR,
+    ASSET_SCALE,
+    DEFAULT_GRID_FEE_DISCOUNT_PERCENT,
+    DEFAULT_SPOT_FEE_RATE_PERCENT,
+    GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT,
+    POINT_MICRO_SCALE,
+)
+from services.trading.validators import (
+    _apr_percent_from_daily,
+    _billable_interest_hours_from_elapsed_seconds,
+    _daily_percent_from_apr,
+    _decimal_text,
+    _normalize_borrow_interest_timing,
+    _to_decimal,
+    _to_float,
+    _to_int,
+    _to_price_float,
+)
 from services.trading_mode_gate import (
     assert_same_world,
     assert_trading_allowed,
@@ -46,8 +73,6 @@ from services.trading_markets import (
 from services.trading_price_streams import TradingPriceStreamHub, WS_CAPABLE_PRICE_PROVIDERS
 
 
-ASSET_SCALE = 100_000_000
-POINT_MICRO_SCALE = 1_000_000
 USDT_TO_POINTS_RATE = 1
 ROOT_SIMULATED_INITIAL_POINTS = 10_000
 TRIAL_CREDIT_INITIAL_POINTS = 1_000
@@ -134,14 +159,10 @@ DEFAULT_PRICE_FUSION_MAX_MIDPOINT_DEVIATION_PERCENT = 0.50
 DEFAULT_PRICE_FUSION_MIN_SIDE_BALANCE_RATIO = 0.10
 DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT = 3
 DEFAULT_PRICE_STREAM_WS_STALE_SECONDS = 10
-DEFAULT_SPOT_FEE_RATE_PERCENT = 0.10
-DEFAULT_GRID_FEE_DISCOUNT_PERCENT = 25.0
-GRID_PREVIEW_YELLOW_NET_SPREAD_PERCENT = Decimal("0.10")
 DEFAULT_BORROW_APR_BTC_ETH_PERCENT = 8.0
 DEFAULT_BORROW_APR_USDT_POINTS_PERCENT = 10.0
 DEFAULT_BORROW_INTEREST_INTERVAL_HOURS = 1
 DEFAULT_BORROW_INTEREST_MINIMUM_HOURS = 1
-APR_DAYS_PER_YEAR = Decimal("365")
 REFERENCE_PRICE_CAPABLE_PROVIDERS = {
     "binance_public_api",
     "okx_public_api",
@@ -189,55 +210,6 @@ def _client_idempotency_key(value, *, prefix):
         return ""
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return f"{prefix}:{digest}"
-
-
-def _to_int(value, *, name, minimum=0, maximum=10**12):
-    try:
-        number = int(value)
-    except Exception as exc:
-        raise ValueError(f"{name} must be an integer") from exc
-    if number < minimum or number > maximum:
-        raise ValueError(f"{name} out of range")
-    return number
-
-
-def _to_float(value, *, name, minimum=0.0, maximum=10**12):
-    try:
-        number = float(value)
-    except Exception as exc:
-        raise ValueError(f"{name} must be a number") from exc
-    if number < minimum or number > maximum:
-        raise ValueError(f"{name} out of range")
-    return number
-
-
-def _to_decimal(value, *, name, minimum=None, maximum=None):
-    try:
-        number = Decimal(str(value))
-    except Exception as exc:
-        raise ValueError(f"{name} must be a number") from exc
-    if not number.is_finite():
-        raise ValueError(f"{name} must be a finite number")
-    if minimum is not None and number < Decimal(str(minimum)):
-        raise ValueError(f"{name} out of range")
-    if maximum is not None and number > Decimal(str(maximum)):
-        raise ValueError(f"{name} out of range")
-    return number
-
-
-def _to_price_float(value, *, name, minimum=0.00000001, maximum=10**12):
-    return float(
-        _to_decimal(value, name=name, minimum=minimum, maximum=maximum).quantize(
-            Decimal("0.00000001"),
-            rounding=ROUND_HALF_UP,
-        )
-    )
-
-
-def _decimal_text(value, *, places="0.00000001"):
-    dec = Decimal(str(value or 0)).quantize(Decimal(places), rounding=ROUND_HALF_UP)
-    text = format(dec, "f")
-    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _normalize_price_fusion_manual_weights(raw):
@@ -291,68 +263,6 @@ def _borrow_apr_group_for_asset(asset_symbol):
     return "usdt_points"
 
 
-def _daily_percent_from_apr(apr_percent):
-    dec = Decimal(str(apr_percent or 0))
-    if dec <= 0:
-        return 0.0
-    return float((dec / APR_DAYS_PER_YEAR).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
-
-
-def _apr_percent_from_daily(daily_percent):
-    dec = Decimal(str(daily_percent or 0))
-    if dec <= 0:
-        return 0.0
-    return float((dec * APR_DAYS_PER_YEAR).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP))
-
-
-def _normalize_borrow_interest_timing(interval_hours=None, minimum_hours=None):
-    interval = int(interval_hours or DEFAULT_BORROW_INTEREST_INTERVAL_HOURS)
-    minimum = int(minimum_hours or DEFAULT_BORROW_INTEREST_MINIMUM_HOURS)
-    interval = max(1, min(interval, 168))
-    minimum = max(1, min(minimum, 168))
-    return interval, minimum
-
-
-def _billable_interest_hours_from_elapsed_seconds(seconds, *, interval_hours=1, minimum_hours=1):
-    seconds = max(0.0, float(seconds or 0))
-    interval_hours, minimum_hours = _normalize_borrow_interest_timing(interval_hours, minimum_hours)
-    if seconds <= 0:
-        return 0
-    interval_seconds = interval_hours * 3600.0
-    billed_hours = int(math.ceil(seconds / interval_seconds)) * interval_hours
-    return max(minimum_hours, billed_hours)
-
-
-def quantity_to_units(value):
-    try:
-        dec = Decimal(str(value or "")).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError("quantity must be a positive number") from exc
-    if not dec.is_finite():
-        raise ValueError("quantity must be a positive number")
-    if dec <= 0:
-        raise ValueError("quantity must be positive")
-    units = int(dec * ASSET_SCALE)
-    if units <= 0:
-        raise ValueError("quantity is too small")
-    return units
-
-
-def units_to_quantity(units):
-    units = int(units or 0)
-    text = f"{units // ASSET_SCALE}.{units % ASSET_SCALE:08d}"
-    return text.rstrip("0").rstrip(".") if "." in text else text
-
-
-def _quantity_step_units_from_precision(precision):
-    precision_value = max(0, min(8, int(precision or 0)))
-    return 10 ** max(0, 8 - precision_value)
-
-
-def _decimal_units(value):
-    return int((Decimal(str(value)) * Decimal(ASSET_SCALE)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
 def _condition_label(cond):
     if not isinstance(cond, dict):
         return str(cond)
@@ -377,24 +287,6 @@ def _condition_label(cond):
         "stop_loss_percent": f"止損≤-{value}%", "take_profit_percent": f"止盈≥{value}%",
     }
     return labels.get(ctype, ctype)
-
-
-def notional_points(quantity_units, price_points):
-    quantity_units = int(quantity_units)
-    if quantity_units <= 0:
-        return 0
-    price_decimal = _to_decimal(price_points, name="price_points", minimum=0)
-    exact_notional = (Decimal(quantity_units) * price_decimal) / Decimal(ASSET_SCALE)
-    if exact_notional <= 0:
-        return 0
-    return int(exact_notional.quantize(Decimal("1"), rounding=ROUND_CEILING))
-
-
-def fee_points(notional, fee_rate_percent):
-    exact_fee = (Decimal(int(notional or 0)) * Decimal(str(fee_rate_percent or 0))) / Decimal("100")
-    if exact_fee <= 0:
-        return 0
-    return int(exact_fee.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _registry_display_quote_currency(definition):
