@@ -7,7 +7,7 @@
 ![database](https://img.shields.io/badge/database-SQLite-0f6ab4)
 ![security](https://img.shields.io/badge/focus-auth%20%2B%20RBAC%20%2B%20audit-b31d28)
 
-**Current Release ID: `2026.05.05-128`**
+**Current Release ID: `2026.05.05-129`**
 
 `hackme_web` is a security-focused Flask web application that combines
 authentication, RBAC, moderation, per-user appearance overrides, Cloud Drive,
@@ -45,10 +45,11 @@ PYTHONPATH=. python3 security/server_mode_v2_full_smoke.py
 ```
 
 補充：Server Mode v2 的 trading Phase 5b 目前已做到 SQL routing、matching
-orderbook namespacing 與 liquidation source/sink mode-lock。production liquidation
-仍正常運作，但 `internal_test` liquidation 目前會先明確拒絕，不讓 shadow world
-有任何機會去碰 production wallet / ledger / chain；完整的 shadow funding /
-liquidation settlement world 仍是後續 follow-up。
+orderbook namespacing、liquidation source/sink mode-lock，以及 funding publish /
+settlement world split。production liquidation 仍正常運作，但 `internal_test`
+liquidation 目前會先明確拒絕，不讓 shadow world 有任何機會去碰 production
+wallet / ledger / chain；funding 則已改為依 `funding_channel_key(market, ctx)`
+分 channel，shadow funding settlement 也只會寫到 shadow wallet / ledger。
 
 ## Fast Route
 

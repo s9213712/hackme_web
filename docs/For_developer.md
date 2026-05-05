@@ -18,7 +18,7 @@ Related technical references:
 
 ## Release and Schema
 
-- Release ID: `2026.05.05-128`
+- Release ID: `2026.05.05-129`
 - Schema version: `29`
 - Release ID source: `services/release_info.py`
 - Runtime version endpoint: `GET /api/version`
@@ -68,6 +68,11 @@ Server Mode v2 note:
   `liquidation_settle_table(ctx)`. Production liquidation remains enabled, but
   `internal_test` liquidation is intentionally rejected before any reserve /
   ledger / chain mutation until a full shadow funding world exists.
+- Trading Phase 5b G-5 now splits funding publish / settlement by world:
+  funding snapshots are published under `funding_channel_key(market, ctx)`,
+  and `settle_funding_adjustment(...)` writes to production or shadow
+  wallet/ledger strictly by `ctx`. Enabling shadow funding publish does not let
+  `internal_test` funding touch production wallet / ledger state.
 
 ## Fast Local Setup
 

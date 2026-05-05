@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-128`
+Release ID: `2026.05.05-129`
+
+## 2026.05.05-129
+
+- Server Mode v2 的 Trading Phase 5b G-5 已把 funding publish / settlement world split 打通：funding snapshot 現在會依 `funding_channel_key(market, ctx)` 發佈到 mode-aware channel，production 與 `internal_test` 不再共用 funding state。
+- 新增 `publish_funding_rate_snapshot(...)`、`get_funding_rate_snapshot(...)` 與 `settle_funding_adjustment(...)` 這組 canonical funding path；若 settlement 想拿 production snapshot 去結算 shadow world（或反過來），會先觸發 `assert_same_world(...)` 拒絕，而不是錯寫 wallet / ledger。
+- `internal_test` funding settlement 現在只會落到 `test_shadow_wallets` / `test_shadow_ledger`，即使 shadow funding feature flag 被打開，也不會污染 production `points_ledger`、wallet balance 或 chain block 計數。
 
 ## 2026.05.05-128
 

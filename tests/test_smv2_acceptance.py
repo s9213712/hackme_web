@@ -28,6 +28,8 @@ Phase status at this commit:
 """
 
 import pytest
+import tempfile
+from pathlib import Path
 
 from services import server_mode_routing as routing
 from services.points_chain import ChainModeViolation, PointsLedgerService
@@ -193,6 +195,54 @@ def test_funding_rate_does_not_cross_world():
     for bad_mode in ("dev_ready", "maintenance", "incident_lockdown", "superweak"):
         with pytest.raises(TradingDisabledInMode):
             funding_channel_key("BTC", _ctx(bad_mode))
+
+    # Runtime publish path must also stay isolated by world.
+    import sqlite3
+    from services.points_chain import ensure_points_economy_schema
+    from services.trading_engine import TradingEngineService, ensure_trading_schema
+
+    db_path = Path(tempfile.mkdtemp(prefix="smv2_funding_acceptance_")) / "funding.sqlite"
+
+    def get_db():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    conn = get_db()
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active')")
+    conn.execute("INSERT INTO users (username, role, status) VALUES ('alice', 'user', 'active')")
+    ensure_points_economy_schema(conn)
+    ensure_trading_schema(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO trading_settings (key, value, updated_at) VALUES ('trading.shadow_funding_publish_enabled', 'true', datetime('now'))"
+    )
+    conn.commit()
+    conn.close()
+
+    points = PointsLedgerService(get_db=get_db, chain_secret="acceptance-funding", backup_dir=db_path.parent / "backups")
+    trading = TradingEngineService(get_db=get_db, points_service=points, live_price_provider=lambda symbol: 77059)
+    prod_snapshot = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.01,
+        actor={"id": 1, "username": "alice", "role": "user"},
+        ctx=SmV2Context(mode="production", tester_id=None, actor_role="user", request_id="prod"),
+    )["snapshot"]
+    shadow_snapshot = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.77,
+        actor={"id": 1, "username": "alice", "role": "user"},
+        ctx=SmV2Context(mode="internal_test", tester_id=7, actor_role="user", request_id="shadow"),
+    )["snapshot"]
+    assert prod_snapshot["channel_key"] != shadow_snapshot["channel_key"]
+    assert trading.get_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        ctx=SmV2Context(mode="production", tester_id=None, actor_role="user", request_id="prod-read"),
+    )["snapshot"]["rate_percent"] == pytest.approx(0.01)
+    assert trading.get_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        ctx=SmV2Context(mode="internal_test", tester_id=7, actor_role="user", request_id="shadow-read"),
+    )["snapshot"]["rate_percent"] == pytest.approx(0.77)
 
 
 # ─────────────────────────────────────────────────────────────────────

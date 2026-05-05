@@ -25,6 +25,7 @@ from services.server_mode_routing import resolve_table
 from services.trading_mode_gate import (
     assert_same_world,
     assert_trading_allowed,
+    funding_channel_key,
     liquidation_settle_table,
     liquidation_target_table,
     matching_orderbook_key,
@@ -1308,6 +1309,7 @@ def ensure_trading_schema(conn):
         ("trading.price_fusion_min_provider_count", str(DEFAULT_PRICE_FUSION_MIN_PROVIDER_COUNT)),
         ("trading.price_stream_ws_enabled", "true"),
         ("trading.price_stream_ws_stale_seconds", str(DEFAULT_PRICE_STREAM_WS_STALE_SECONDS)),
+        ("trading.shadow_funding_publish_enabled", "false"),
         ("trading.btc_trade_enabled", "false"),
         ("trading.btc_trade_repo_url", "https://github.com/s9213712/BTC_trade.git"),
         ("trading.btc_trade_branch", "strategy/v15b-plus"),
@@ -1396,6 +1398,7 @@ class TradingEngineService:
         self.historical_candles_provider = historical_candles_provider
         self.stream_hub = stream_hub
         self._matching_orderbooks = {}
+        self._funding_channels = {}
 
     def ensure_schema(self, conn):
         self.points_service.ensure_schema(conn)
@@ -1576,6 +1579,161 @@ class TradingEngineService:
                 items.extend((book.get(side_name) or {}).values())
         items.sort(key=lambda item: int(item.get("id") or 0))
         return [str(item.get("order_uuid") or "") for item in items[: int(limit)] if str(item.get("order_uuid") or "")]
+
+    def _funding_snapshot_ctx(self, snapshot):
+        if not isinstance(snapshot, dict):
+            raise ValueError("funding snapshot is invalid")
+        return SmV2Context(
+            mode=str(snapshot.get("mode") or "").strip(),
+            tester_id=snapshot.get("tester_id"),
+            actor_role="system",
+            request_id=f"funding-{snapshot.get('mode') or 'unknown'}-{snapshot.get('tester_id') or 'prod'}",
+        )
+
+    def publish_funding_rate_snapshot(
+        self,
+        *,
+        market_symbol,
+        rate_percent,
+        actor=None,
+        ctx=None,
+        provider_count=1,
+        confidence="medium",
+        stale=False,
+        degraded=False,
+        exclusion_reason="",
+    ):
+        route_ctx = self._resolve_trading_ctx(ctx, action="funding_publish")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = self._market(conn, market_symbol)
+            settings = self._settings_payload(conn)
+            if route_ctx.mode == "internal_test" and not settings.get("shadow_funding_publish_enabled"):
+                return {
+                    "ok": True,
+                    "enabled": False,
+                    "reason": "shadow_funding_publish_disabled",
+                    "market_symbol": market["symbol"],
+                    "mode": route_ctx.mode,
+                    "tester_id": route_ctx.tester_id,
+                }
+            channel_key = funding_channel_key(market["symbol"], route_ctx)
+            snapshot = {
+                "channel_key": channel_key,
+                "market_symbol": market["symbol"],
+                "mode": route_ctx.mode,
+                "tester_id": route_ctx.tester_id,
+                "rate_percent": float(rate_percent or 0),
+                "provider_count": max(0, int(provider_count or 0)),
+                "confidence": str(confidence or "medium").strip() or "medium",
+                "stale": bool(stale),
+                "degraded": bool(degraded),
+                "exclusion_reason": str(exclusion_reason or "").strip(),
+                "last_update_at": _now(),
+                "published_by": self._actor_id(actor),
+            }
+            self._funding_channels[channel_key] = snapshot
+            return {"ok": True, "snapshot": dict(snapshot)}
+        finally:
+            conn.close()
+
+    def get_funding_rate_snapshot(self, *, market_symbol, ctx=None):
+        route_ctx = self._resolve_trading_ctx(ctx, action="funding_read")
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            market = self._market(conn, market_symbol)
+            channel_key = funding_channel_key(market["symbol"], route_ctx)
+            snapshot = self._funding_channels.get(channel_key)
+            if not snapshot:
+                return {
+                    "ok": True,
+                    "channel_key": channel_key,
+                    "snapshot": None,
+                    "market_symbol": market["symbol"],
+                    "mode": route_ctx.mode,
+                    "tester_id": route_ctx.tester_id,
+                }
+            return {"ok": True, "channel_key": channel_key, "snapshot": dict(snapshot)}
+        finally:
+            conn.close()
+
+    def settle_funding_adjustment(
+        self,
+        *,
+        actor,
+        user_id,
+        market_symbol,
+        delta_points,
+        published_snapshot=None,
+        ctx=None,
+        idempotency_key=None,
+    ):
+        route_ctx = self._resolve_trading_ctx(ctx, action="funding_settlement")
+        amount = int(delta_points or 0)
+        conn = self.get_db()
+        try:
+            self.ensure_schema(conn)
+            if route_ctx.mode == "internal_test":
+                from services.snapshots import ensure_snapshot_schema
+                ensure_snapshot_schema(conn)
+            settings = self._settings_payload(conn)
+            if route_ctx.mode == "internal_test" and not settings.get("shadow_funding_publish_enabled"):
+                raise ValueError("shadow funding publish is disabled")
+            market = self._market(conn, market_symbol)
+            if published_snapshot is None:
+                published_snapshot = self.get_funding_rate_snapshot(market_symbol=market["symbol"], ctx=route_ctx).get("snapshot")
+            if not published_snapshot:
+                raise ValueError("funding snapshot not found")
+            source_ctx = self._funding_snapshot_ctx(published_snapshot)
+            assert_same_world(source_ctx, route_ctx, "funding_settlement")
+            if amount == 0:
+                return {
+                    "ok": True,
+                    "no_op": True,
+                    "wallet": self._wallet_payload(conn, user_id, ctx=route_ctx),
+                    "channel_key": funding_channel_key(market["symbol"], route_ctx),
+                }
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            self._assert_writable(conn)
+            direction = "credit" if amount > 0 else "debit"
+            ledger = self._ledger(
+                conn,
+                ctx=route_ctx,
+                user_id=int(user_id),
+                currency_type="points",
+                direction=direction,
+                amount=abs(amount),
+                action_type="trading_funding_settlement",
+                reference_type="trading_market",
+                reference_id=market["symbol"],
+                idempotency_key=idempotency_key or f"trading:funding:settle:{market['symbol']}:{user_id}:{uuid.uuid4()}",
+                reason="TRADING_FUNDING_SETTLEMENT",
+                public_metadata={
+                    "market_symbol": market["symbol"],
+                    "funding_rate_percent": float(published_snapshot.get("rate_percent") or 0),
+                    "funding_channel_key": str(published_snapshot.get("channel_key") or ""),
+                    "mode": route_ctx.mode,
+                    "tester_id": route_ctx.tester_id,
+                },
+                actor=actor,
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "wallet": self._wallet_payload(conn, user_id, ctx=route_ctx),
+                "ledger_uuid": str(ledger["ledger_uuid"]),
+                "channel_key": str(published_snapshot.get("channel_key") or ""),
+                "mode": route_ctx.mode,
+                "tester_id": route_ctx.tester_id,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _legacy_production_ctx(self):
         return SmV2Context(
@@ -2311,6 +2469,7 @@ class TradingEngineService:
             "margin_long_financing_percent": _to_float(raw.get("trading.margin_long_financing_percent", str(MARGIN_LONG_FINANCING_RATE_PERCENT)), name="margin_long_financing_percent", minimum=0, maximum=100),
             "short_collateral_percent": _to_float(raw.get("trading.short_collateral_percent", str(SHORT_COLLATERAL_RATE_PERCENT)), name="short_collateral_percent", minimum=0, maximum=100),
             "margin_liquidation_enabled": str(raw.get("trading.margin_liquidation_enabled", "true")).lower() in {"true", "1", "yes"},
+            "shadow_funding_publish_enabled": str(raw.get("trading.shadow_funding_publish_enabled", "false")).lower() in {"true", "1", "yes"},
             "margin_maintenance_percent": _to_float(raw.get("trading.margin_maintenance_percent", "15"), name="margin_maintenance_percent", minimum=0, maximum=100),
             "grid_fee_discount_percent": _to_float(raw.get("trading.grid_fee_discount_percent", str(DEFAULT_GRID_FEE_DISCOUNT_PERCENT)), name="grid_fee_discount_percent", minimum=0, maximum=100),
             "max_price_staleness_seconds": _to_int(raw.get("trading.max_price_staleness_seconds", "900"), name="max_price_staleness_seconds", minimum=0, maximum=86400),
@@ -2377,6 +2536,7 @@ class TradingEngineService:
                 "pvp_matching_enabled": "trading.pvp_matching_enabled",
                 "borrowing_enabled": "trading.borrowing_enabled",
                 "margin_liquidation_enabled": "trading.margin_liquidation_enabled",
+                "shadow_funding_publish_enabled": "trading.shadow_funding_publish_enabled",
                 "bot_auto_scan_enabled": "trading.bot_auto_scan_enabled",
                 "bot_audit_enabled": "trading.bot_audit_enabled",
                 "btc_trade_enabled": "trading.btc_trade_enabled",

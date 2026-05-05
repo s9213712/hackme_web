@@ -11,7 +11,7 @@ from services.points_chain import PointsLedgerService, ensure_points_economy_sch
 from services.snapshots import ensure_snapshot_schema
 from services.server_mode_context import SmV2Context
 from services.trading_engine import TradingEngineService, ensure_trading_schema, fee_points, notional_points
-from services.trading_mode_gate import TradingDisabledInMode
+from services.trading_mode_gate import CrossWorldContamination, TradingDisabledInMode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +79,18 @@ def _actor(user_id=1, username="alice", role="user"):
 
 def _sm_ctx(mode="production", *, tester_id=None):
     return SmV2Context(mode=mode, tester_id=tester_id, actor_role="user", request_id=f"test-{mode}-{tester_id or 'prod'}")
+
+
+def _set_trading_setting(trading, key, value):
+    conn = trading.get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO trading_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+            (str(key), str(value)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _depth_snapshot(trading, source, quantity_per_level, *, price=100.0):
@@ -179,6 +191,143 @@ def test_margin_open_rejects_non_trading_mode_before_sql(tmp_path):
             quantity="1.0",
             collateral_points=1_000,
             ctx=SmV2Context(mode="maintenance", tester_id=None, actor_role="user", request_id="g1-margin"),
+        )
+
+
+def test_funding_publish_channels_are_isolated_by_mode_and_tester(tmp_path):
+    _points, trading = _services(tmp_path)
+    _set_trading_setting(trading, "trading.shadow_funding_publish_enabled", "true")
+
+    prod = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.01,
+        actor=_actor(),
+        ctx=_sm_ctx("production"),
+        provider_count=4,
+        confidence="high",
+    )["snapshot"]
+    shadow = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.77,
+        actor=_actor(),
+        ctx=_sm_ctx("internal_test", tester_id=7),
+        provider_count=1,
+        confidence="low",
+        degraded=True,
+    )["snapshot"]
+
+    prod_latest = trading.get_funding_rate_snapshot(market_symbol="BTC/POINTS", ctx=_sm_ctx("production"))["snapshot"]
+    shadow_latest = trading.get_funding_rate_snapshot(market_symbol="BTC/POINTS", ctx=_sm_ctx("internal_test", tester_id=7))["snapshot"]
+
+    assert prod["channel_key"] != shadow["channel_key"]
+    assert prod_latest["rate_percent"] == pytest.approx(0.01)
+    assert shadow_latest["rate_percent"] == pytest.approx(0.77)
+    assert prod_latest["mode"] == "production"
+    assert shadow_latest["mode"] == "internal_test"
+    assert shadow_latest["tester_id"] == 7
+
+
+def test_internal_test_funding_settlement_writes_only_shadow_wallet_and_ledger(tmp_path):
+    points, trading = _services(tmp_path)
+    _set_trading_setting(trading, "trading.shadow_funding_publish_enabled", "true")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=500, action_type="seed")
+
+    snapshot = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.25,
+        actor=_actor(),
+        ctx=_sm_ctx("internal_test", tester_id=1),
+        provider_count=1,
+        confidence="low",
+        degraded=True,
+    )["snapshot"]
+
+    conn = trading.get_db()
+    try:
+        ensure_snapshot_schema(conn)
+        prod_wallet_before = int(conn.execute("SELECT COALESCE(soft_balance, 0) + COALESCE(hard_balance, 0) FROM points_wallets WHERE user_id=1").fetchone()[0] or 0)
+        prod_ledger_before = int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0)
+        prod_chain_before = int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+    result = trading.settle_funding_adjustment(
+        actor=_actor(),
+        user_id=1,
+        market_symbol="BTC/POINTS",
+        delta_points=125,
+        published_snapshot=snapshot,
+        ctx=_sm_ctx("internal_test", tester_id=1),
+    )
+
+    assert result["wallet"]["points_balance"] == 125
+    conn = trading.get_db()
+    try:
+        shadow_wallet = conn.execute("SELECT * FROM test_shadow_wallets WHERE user_id=1").fetchone()
+        shadow_ledger = conn.execute("SELECT * FROM test_shadow_ledger WHERE ledger_uuid=?", (result["ledger_uuid"],)).fetchone()
+        assert shadow_wallet is not None
+        assert int(shadow_wallet["balance_points"] or 0) == 125
+        assert shadow_ledger is not None
+        assert shadow_ledger["action_type"] == "trading_funding_settlement"
+        assert int(conn.execute("SELECT COUNT(*) FROM points_ledger").fetchone()[0] or 0) == prod_ledger_before
+        assert int(conn.execute("SELECT COUNT(*) FROM points_chain_blocks").fetchone()[0] or 0) == prod_chain_before
+        assert int(conn.execute("SELECT COALESCE(soft_balance, 0) + COALESCE(hard_balance, 0) FROM points_wallets WHERE user_id=1").fetchone()[0] or 0) == prod_wallet_before
+    finally:
+        conn.close()
+
+
+def test_shadow_funding_flag_misopen_still_cannot_pollute_production(tmp_path):
+    points, trading = _services(tmp_path)
+    _set_trading_setting(trading, "trading.shadow_funding_publish_enabled", "true")
+    points.record_transaction(user_id=1, currency_type="points", direction="credit", amount=500, action_type="seed")
+
+    prod_snapshot = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.03,
+        actor=_actor(),
+        ctx=_sm_ctx("production"),
+    )["snapshot"]
+    trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.99,
+        actor=_actor(),
+        ctx=_sm_ctx("internal_test", tester_id=9),
+    )
+    prod_wallet_before = points.get_wallet(1)["points_balance"]
+    result = trading.settle_funding_adjustment(
+        actor=_actor(),
+        user_id=1,
+        market_symbol="BTC/POINTS",
+        delta_points=50,
+        published_snapshot=prod_snapshot,
+        ctx=_sm_ctx("production"),
+    )
+
+    assert result["wallet"]["points_balance"] == prod_wallet_before + 50
+    shadow_latest = trading.get_funding_rate_snapshot(market_symbol="BTC/POINTS", ctx=_sm_ctx("internal_test", tester_id=9))["snapshot"]
+    prod_latest = trading.get_funding_rate_snapshot(market_symbol="BTC/POINTS", ctx=_sm_ctx("production"))["snapshot"]
+    assert shadow_latest["rate_percent"] == pytest.approx(0.99)
+    assert prod_latest["rate_percent"] == pytest.approx(0.03)
+
+
+def test_funding_settlement_rejects_cross_world_snapshot(tmp_path):
+    _points, trading = _services(tmp_path)
+    _set_trading_setting(trading, "trading.shadow_funding_publish_enabled", "true")
+    prod_snapshot = trading.publish_funding_rate_snapshot(
+        market_symbol="BTC/POINTS",
+        rate_percent=0.05,
+        actor=_actor(),
+        ctx=_sm_ctx("production"),
+    )["snapshot"]
+
+    with pytest.raises(CrossWorldContamination):
+        trading.settle_funding_adjustment(
+            actor=_actor(),
+            user_id=1,
+            market_symbol="BTC/POINTS",
+            delta_points=25,
+            published_snapshot=prod_snapshot,
+            ctx=_sm_ctx("internal_test", tester_id=1),
         )
 
 
