@@ -26,7 +26,7 @@ import urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
 
-REPO_ROOT = Path("/home/s92137/hackme_web").resolve()
+REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO_ROOT / "docs" / "examples" / "server_mode_v2"
 
 
