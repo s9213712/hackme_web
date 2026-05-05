@@ -1,4 +1,5 @@
 import io
+import json
 import sqlite3
 from pathlib import Path
 
@@ -590,9 +591,10 @@ def test_shared_e2ee_video_requires_password_fragment_and_exposes_browser_side_p
     playback_json = playback.get_json()
     assert playback_json["mode"] == "e2ee_direct"
     assert playback_json["requires_fragment_key"] is True
-    assert playback_json["player_strategy"] == "browser_e2ee"
+    assert playback_json["player_strategy"] == "browser_e2ee_full_fallback"
     assert playback_json["stream_warning"]
     assert playback_json["hls_js_url"] == ""
+    assert playback_json["stream_v2_available"] is False
 
     e2ee_key = client.get(f"/api/videos/shared/{token}/e2ee-key")
     assert e2ee_key.status_code == 200
@@ -744,6 +746,243 @@ def test_shared_video_page_mentions_hls_js_fallback_and_fragment_loss(tmp_path):
     assert "正在下載加密影音檔" in html
     assert "正在瀏覽器端解密影音" in html
     assert "不會把密碼或金鑰送到伺服器" in html
+
+
+def test_shared_e2ee_stream_v2_manifest_and_chunk_routes_work_and_stay_off_hls(tmp_path):
+    db_path = tmp_path / "shared-e2ee-stream-v2.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            owner_conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"ciphertext-video",
+        )
+        _mark_file_as_e2ee(owner_conn, "e2ee-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-video",
+            title="Secret",
+            visibility="unlisted",
+            share_password="SharePass123",
+            share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+            share_max_views=8,
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+
+    manifest = {
+        "e2ee_stream_version": 2,
+        "chunk_size": 8,
+        "chunk_count": 2,
+        "content_type": "video/mp4",
+        "duration_hint": 3.5,
+        "byte_range_hint": {"total_plaintext_bytes": 9},
+        "chunks": [
+            {
+                "chunk_index": 0,
+                "nonce": "AAAAAAAAAAAAAAAA",
+                "ciphertext_offset": 0,
+                "ciphertext_size": 5,
+                "plaintext_offset": 0,
+                "plaintext_size": 4,
+                "ciphertext_sha256": "11" * 32,
+            },
+            {
+                "chunk_index": 1,
+                "nonce": "BBBBBBBBBBBBBBBB",
+                "ciphertext_offset": 5,
+                "ciphertext_size": 4,
+                "plaintext_offset": 4,
+                "plaintext_size": 5,
+                "ciphertext_sha256": "22" * 32,
+            },
+        ],
+    }
+    prepared = owner_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2",
+        data={
+            "manifest_json": json.dumps(manifest),
+            "bundle": (io.BytesIO(b"abcdeWXYZ"), "bundle.bin"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert prepared.status_code == 200
+    assert prepared.get_json()["asset"]["available"] is True
+
+    viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    unlocked = viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert unlocked.status_code == 200
+
+    playback = viewer.get(f"/api/videos/shared/{token}/playback")
+    assert playback.status_code == 200
+    playback_json = playback.get_json()
+    assert playback_json["mode"] == "e2ee_stream_v2"
+    assert playback_json["player_strategy"] == "browser_e2ee_stream_v2"
+    assert playback_json["stream_v2_available"] is True
+    assert playback_json["high_performance_streaming"] is False
+    assert playback_json["master_url"] == ""
+    assert playback_json["hls_js_url"] == ""
+    assert "manifest_url" in playback_json
+    assert "chunk_url_template" in playback_json
+
+    shared_manifest = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest")
+    assert shared_manifest.status_code == 200
+    shared_manifest_json = shared_manifest.get_json()
+    assert shared_manifest_json["available"] is True
+    assert shared_manifest_json["player_strategy"] == "browser_e2ee_stream_v2"
+    assert shared_manifest_json["chunk_count"] == 2
+    assert shared_manifest_json["chunks"][0]["ciphertext_size"] == 5
+    assert "ciphertext_offset" not in shared_manifest_json["chunks"][0]
+
+    chunk0 = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/0")
+    assert chunk0.status_code == 200
+    assert chunk0.data == b"abcde"
+    assert chunk0.headers["Cache-Control"] == "private, max-age=0, no-store"
+
+    missing_chunk = viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/chunks/9")
+    assert missing_chunk.status_code == 404
+    assert missing_chunk.get_json()["error"] == "chunk_not_found"
+
+    direct_manifest = owner_client.get(f"/api/videos/{video_id}/e2ee-stream-v2/manifest")
+    assert direct_manifest.status_code == 200
+    assert direct_manifest.get_json()["available"] is True
+
+
+def test_shared_e2ee_stream_v2_endpoints_respect_revoked_expired_and_view_limits(tmp_path):
+    db_path = tmp_path / "shared-e2ee-stream-v2-guards.db"
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    _init_db(db_path)
+    owner_conn = sqlite3.connect(db_path)
+    owner_conn.row_factory = sqlite3.Row
+    try:
+        _seed_uploaded_file(
+            owner_conn,
+            storage_root,
+            file_id="e2ee-video",
+            owner_user_id=1,
+            filename="secret.mp4",
+            mime="video/mp4",
+            privacy_mode="e2ee",
+            payload=b"ciphertext-video",
+        )
+        _mark_file_as_e2ee(owner_conn, "e2ee-video")
+        video = publish_video(
+            owner_conn,
+            actor={"id": 1, "username": "alice", "role": "user"},
+            cloud_file_id="e2ee-video",
+            title="Secret",
+            visibility="unlisted",
+            share_password="SharePass123",
+            share_wrapped_file_key_envelope='{"alg":"AES-GCM","v":1,"nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AQIDBA=="}',
+            share_max_views=1,
+        )
+        owner_conn.commit()
+        video_id = video["id"]
+        token = video["share_url"].rsplit("/", 1)[-1]
+    finally:
+        owner_conn.close()
+
+    owner_client = _build_app(
+        db_path,
+        storage_root,
+        Fernet(Fernet.generate_key()),
+        current_user={"id": 1, "username": "alice", "role": "user", "member_level": "trusted", "effective_level": "trusted"},
+    ).test_client()
+    manifest = {
+        "e2ee_stream_version": 2,
+        "chunk_size": 8,
+        "chunk_count": 1,
+        "content_type": "video/mp4",
+        "duration_hint": 1.0,
+        "byte_range_hint": {"total_plaintext_bytes": 4},
+        "chunks": [
+            {
+                "chunk_index": 0,
+                "nonce": "AAAAAAAAAAAAAAAA",
+                "ciphertext_offset": 0,
+                "ciphertext_size": 4,
+                "plaintext_offset": 0,
+                "plaintext_size": 4,
+                "ciphertext_sha256": "11" * 32,
+            }
+        ],
+    }
+    prepared = owner_client.post(
+        "/api/media/e2ee-video/e2ee-stream-v2",
+        data={
+            "manifest_json": json.dumps(manifest),
+            "bundle": (io.BytesIO(b"ABCD"), "bundle.bin"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert prepared.status_code == 200
+
+    expired_conn = sqlite3.connect(db_path)
+    expired_conn.row_factory = sqlite3.Row
+    expired_conn.execute(
+        "UPDATE video_share_links SET expires_at='2000-01-01T00:00:00' WHERE video_id=?",
+        (video_id,),
+    )
+    expired_conn.commit()
+    expired_conn.close()
+    expired_client = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    expired_manifest = expired_client.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest")
+    assert expired_manifest.status_code == 410
+    assert expired_manifest.get_json()["reason"] == "expired"
+
+    reopen_conn = sqlite3.connect(db_path)
+    reopen_conn.row_factory = sqlite3.Row
+    reopen_conn.execute(
+        "UPDATE video_share_links SET expires_at=NULL, access_count=0 WHERE video_id=?",
+        (video_id,),
+    )
+    reopen_conn.commit()
+    reopen_conn.close()
+    first_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    assert first_viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"}).status_code == 200
+    assert first_viewer.get(f"/api/videos/shared/{token}/e2ee-stream-v2/manifest").status_code == 200
+
+    second_viewer = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client()
+    exhausted = second_viewer.post(f"/api/videos/shared/{token}/unlock", json={"password": "SharePass123"})
+    assert exhausted.status_code == 410
+    assert exhausted.get_json()["reason"] == "view_limit_reached"
+
+    regenerated = owner_client.put(
+        f"/api/videos/{video_id}/share-link",
+        json={
+            "regenerate": True,
+            "share_wrapped_file_key_envelope": '{"alg":"AES-GCM","v":1,"nonce":"BBBBBBBBBBBBBBBB","ciphertext":"BQYHCA=="}',
+        },
+    )
+    assert regenerated.status_code == 200
+    new_token = regenerated.get_json()["share_link"]["url"].rsplit("/", 1)[-1]
+    revoked = owner_client.delete(f"/api/videos/{video_id}/share-link")
+    assert revoked.status_code == 200
+    revoked_manifest = _build_app(db_path, storage_root, Fernet(Fernet.generate_key()), current_user=None).test_client().get(
+        f"/api/videos/shared/{new_token}/e2ee-stream-v2/manifest"
+    )
+    assert revoked_manifest.status_code == 404
 
 
 def test_shared_video_regeneration_for_e2ee_requires_new_browser_side_envelope(tmp_path):

@@ -1,6 +1,12 @@
 # Update Summary
 
-Release ID: `2026.05.05-122`
+Release ID: `2026.05.05-123`
+
+## 2026.05.05-123
+
+- strict E2EE 影音新增 `E2EE Streaming v2` 基礎：瀏覽器可使用 encrypted chunk manifest、逐段密文下載、Web Worker 解密與 `MediaSource` 播放；若沒有 v2 manifest、裝置不支援 Worker / MediaSource / WebCrypto，會明確退回舊版完整解密播放，而不是假裝成功或誤走 HLS。
+- 新增 `/api/videos/<id>/e2ee-stream-v2/manifest`、`/api/videos/<id>/e2ee-stream-v2/chunks/<chunk_index>` 與對應 shared token 路由；這些端點永遠只回密文 chunk，不接收 `raw_file_key`、`e2ee_password`、`vk`，也沿用分享 token 的過期、撤銷與最大觀看次數保護。
+- 影音前端現在可在 strict E2EE 路徑下區分 `browser_e2ee_stream_v2` 與 `browser_e2ee_full_fallback`，共享頁也會明確顯示「讀取分享授權 / 下載加密影音 / 瀏覽器端解密」等階段提示，並在分享授權無效或被竄改時顯示人性化錯誤。
 
 ## 2026.05.05-122
 

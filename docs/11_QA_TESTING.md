@@ -173,6 +173,9 @@ PYTHONPATH=. python3 scripts/trading_backtest_20000_probe.py --include-route --j
   - 桌機 Chrome / Firefox / Edge 是否能載入同源 `hls.js` 並播放 prepared HLS
   - `hls.js` 初始化或 fatal error 時，是否會自動退回 direct `/stream` 並顯示人性化錯誤
   - strict `e2ee` 是否仍只走瀏覽器端解密播放，不可偷偷走伺服器端 HLS
+  - strict `e2ee` 若有 `Streaming v2` manifest，是否改走 encrypted chunk + Worker + `MediaSource`；沒有 manifest 時是否明確退回完整解密播放
+  - strict `e2ee` 的 manifest / chunk endpoint 是否只回密文、不接收 `raw_file_key` / `e2ee_password` / `vk`
+  - chunk index 越界、token 過期 / 撤銷 / 觀看次數耗盡時，manifest / chunk endpoint 是否一致拒絕
   - `持連結可看` 的 E2EE 影音分享管理面板，是否會顯示分享狀態、剩餘觀看次數、到期日、分享密碼狀態與重新產生 / 撤銷入口
   - manager/root 若能管理 unlisted 影音分享，是否能更新或撤銷 share-link，不可只在 UI 顯示按鈕卻在後端被 owner-only 擋掉
   - 分享頁若沒有 fragment，是否會明確提示「無法復原，只能重新產生分享」

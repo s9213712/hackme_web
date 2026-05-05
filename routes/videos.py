@@ -1,5 +1,6 @@
 from pathlib import Path
 import mimetypes
+import json
 from datetime import datetime, timedelta
 
 from flask import Response, request, send_file, session
@@ -19,6 +20,13 @@ from services.media_streaming import (
     prepare_stream_asset,
     should_auto_prepare_stream,
     stream_playback_payload,
+)
+from services.e2ee_streaming import (
+    ensure_e2ee_stream_v2_schema,
+    get_e2ee_stream_v2_status,
+    resolve_e2ee_chunk_response,
+    serialize_manifest_for_client,
+    upsert_e2ee_stream_v2_asset,
 )
 from services.storage_albums import create_storage_file_entry, ensure_storage_album_schema
 from services.upload_security import safe_public_filename
@@ -380,14 +388,21 @@ def register_video_routes(app, deps):
     def _playback_payload_for_file(conn, *, row, video_id, shared_token=None):
         media_type = "audio" if str(row["original_filename_plain_for_public"] or "").lower().endswith((".mp3", ".m4a", ".aac", ".flac", ".wav", ".weba", ".opus", ".oga", ".ogg")) else "video"
         if is_e2ee_file(row):
+            ensure_e2ee_stream_v2_schema(conn)
             if shared_token:
                 ciphertext_url = f"/api/videos/shared/{shared_token}/ciphertext"
                 e2ee_key_url = f"/api/videos/shared/{shared_token}/e2ee-key"
+                manifest_url = f"/api/videos/shared/{shared_token}/e2ee-stream-v2/manifest"
+                chunk_url_template = f"/api/videos/shared/{shared_token}/e2ee-stream-v2/chunks/__INDEX__"
             else:
                 ciphertext_url = f"/api/cloud-drive/files/{row['id']}/preview/content"
                 e2ee_key_url = f"/api/cloud-drive/files/{row['id']}/e2ee-key"
-            return {
-                "mode": "e2ee_direct",
+                manifest_url = f"/api/videos/{video_id}/e2ee-stream-v2/manifest"
+                chunk_url_template = f"/api/videos/{video_id}/e2ee-stream-v2/chunks/__INDEX__"
+            stream_v2 = get_e2ee_stream_v2_status(conn, file_row=row, storage_root=storage_root)
+            available = bool(stream_v2 and stream_v2.get("available"))
+            payload = {
+                "mode": "e2ee_stream_v2" if available else "e2ee_direct",
                 "media_type": media_type,
                 "source_mode": "e2ee",
                 "fallback_url": ciphertext_url,
@@ -397,12 +412,20 @@ def register_video_routes(app, deps):
                 "requires_fragment_key": bool(shared_token),
                 "master_url": "",
                 "hls_js_url": "",
-                "player_strategy": "browser_e2ee",
-                "stream_warning": "strict E2EE 影音只支援瀏覽器端解密播放，速度會較慢，且不支援伺服器端 HLS 加速。",
-                "streaming_ready": False,
+                "player_strategy": "browser_e2ee_stream_v2" if available else "browser_e2ee_full_fallback",
+                "stream_warning": (
+                    "正在使用 E2EE Streaming v2：密文分段下載、瀏覽器端解密；伺服器無法看到明文。"
+                    if available
+                    else "此 strict E2EE 影音尚未建立 Streaming v2 manifest，將退回舊版完整解密播放。"
+                ),
+                "streaming_ready": available,
                 "high_performance_streaming": False,
-                "status": _e2ee_direct_status(row),
+                "status": stream_v2 if stream_v2 else _e2ee_direct_status(row),
+                "manifest_url": manifest_url,
+                "chunk_url_template": chunk_url_template,
+                "stream_v2_available": available,
             }
+            return payload
         payload = stream_playback_payload(conn, file_row=row, video_id=video_id)
         payload["high_performance_streaming"] = payload.get("mode") == "hls"
         return payload
@@ -537,6 +560,60 @@ def register_video_routes(app, deps):
     const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
     return b64ToBytes(padded);
   }}
+  function playerTimeBuffered(player, timeSeconds) {{
+    if (!player?.buffered) return false;
+    const target = Number(timeSeconds || 0);
+    for (let i = 0; i < player.buffered.length; i += 1) {{
+      if (target >= player.buffered.start(i) && target <= player.buffered.end(i)) return true;
+    }}
+    return false;
+  }}
+  function browserSupportsE2eeStreamV2() {{
+    return Boolean(window.MediaSource && window.Worker && window.crypto?.subtle);
+  }}
+  function createSharedE2eeWorker() {{
+    return new Worker("/js/workers/e2ee-stream-v2-worker.js?v=20260505-e2eev2");
+  }}
+  function decryptSharedChunkWithWorker(worker, keyBytes, nonce, ciphertext) {{
+    return new Promise((resolve, reject) => {{
+      const id = `${{Date.now()}}:${{Math.random().toString(16).slice(2)}}`;
+      const keyBuffer = keyBytes.buffer.slice(0);
+      const onMessage = (event) => {{
+        const payload = event?.data || {{}};
+        if (payload.id !== id) return;
+        worker.removeEventListener("message", onMessage);
+        if (payload.type === "decrypt-chunk-ok") resolve(payload.plaintext);
+        else reject(new Error(payload.message || "E2EE chunk 解密失敗"));
+      }};
+      worker.addEventListener("message", onMessage);
+      worker.postMessage({{
+        type: "decrypt-chunk",
+        id,
+        keyBytes: keyBuffer,
+        nonce,
+        ciphertext,
+      }}, [keyBuffer, ciphertext]);
+    }});
+  }}
+  function appendSharedSourceBufferAsync(sourceBuffer, payload) {{
+    return new Promise((resolve, reject) => {{
+      const cleanup = () => {{
+        sourceBuffer.removeEventListener("updateend", onEnd);
+        sourceBuffer.removeEventListener("error", onErr);
+      }};
+      const onEnd = () => {{
+        cleanup();
+        resolve();
+      }};
+      const onErr = () => {{
+        cleanup();
+        reject(new Error("MediaSource append 失敗"));
+      }};
+      sourceBuffer.addEventListener("updateend", onEnd, {{ once: true }});
+      sourceBuffer.addEventListener("error", onErr, {{ once: true }});
+      sourceBuffer.appendBuffer(payload);
+    }});
+  }}
   function shareKeyFromFragment() {{
     const hash = String(window.location.hash || "");
     const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
@@ -549,17 +626,24 @@ def register_video_routes(app, deps):
       }}
       return crypto.subtle.importKey("raw", bytes, {{ name: "AES-GCM", length: 256 }}, false, ["decrypt"]);
     }}
-  async function unwrapSharedFileKey(envelopeText, fragmentKey) {{
+  async function unwrapSharedFileKeyBytes(envelopeText, fragmentKey) {{
     const envelope = JSON.parse(envelopeText || "{{}}");
     if (String(envelope.alg || "") !== "AES-GCM" || Number(envelope.v || 0) !== 1) {{
       throw new Error("分享金鑰封裝格式不支援，請分享者重新產生分享連結。");
     }}
-    const wrappingKey = await importShareKey(fragmentKey);
-    const rawKey = await crypto.subtle.decrypt(
-      {{ name: "AES-GCM", iv: b64ToBytes(envelope.nonce) }},
-      wrappingKey,
-      b64ToBytes(envelope.ciphertext)
-    );
+    try {{
+      const wrappingKey = await importShareKey(fragmentKey);
+      return await crypto.subtle.decrypt(
+        {{ name: "AES-GCM", iv: b64ToBytes(envelope.nonce) }},
+        wrappingKey,
+        b64ToBytes(envelope.ciphertext)
+      );
+    }} catch (_) {{
+      throw new Error("分享授權無效或已被竄改。請確認你持有完整分享連結；若分享者遺失 fragment，只能重新產生分享。");
+    }}
+  }}
+  async function unwrapSharedFileKey(envelopeText, fragmentKey) {{
+    const rawKey = await unwrapSharedFileKeyBytes(envelopeText, fragmentKey);
     return crypto.subtle.importKey("raw", rawKey, {{ name: "AES-GCM" }}, true, ["decrypt"]);
   }}
   async function decryptJsonMetadata(fileKey, encryptedMetadata) {{
@@ -575,6 +659,100 @@ def register_video_routes(app, deps):
       blob: new Blob([plaintext], {{ type: metadata.mime_type || "application/octet-stream" }}),
       filename: metadata.filename || "media",
     }};
+  }}
+  async function fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, message, seekTarget = null) {{
+    setMsg(message || "已退回舊版完整解密播放。", false);
+    setMsg("正在讀取 E2EE 分享授權：伺服器只會提供密文與分享封裝，不會接收原始密碼、raw file key 或 #vk。");
+    const keyRes = await fetch(playback.e2ee_key_url, {{ credentials: "same-origin" }});
+    const keyJson = await keyRes.json().catch(() => ({{}}));
+    if (!keyRes.ok || !keyJson.ok || !keyJson.e2ee_share) throw new Error(keyJson.msg || "E2EE 分享解密資訊讀取失敗");
+    const cipherRes = await fetch(playback.ciphertext_url, {{ credentials: "same-origin" }});
+    if (!cipherRes.ok) throw new Error("E2EE 密文讀取失敗");
+    const cipherBlob = await readBlobWithProgress(cipherRes, (loaded, total) => {{
+      const summary = total > 0
+        ? `${{formatProgressBytes(loaded)}} / ${{formatProgressBytes(total)}}`
+        : formatProgressBytes(loaded);
+      setMsg(`正在下載加密影音檔：${{summary}}。完成後會在瀏覽器端解密，不會把密碼或金鑰送到伺服器。`);
+    }});
+    setMsg("正在瀏覽器端解密影音。這一步不會把原始 E2EE 密碼、raw file key 或 #vk 傳到伺服器。");
+    const decrypted = await decryptSharedE2eeBlob(cipherBlob, keyJson.e2ee_share, fragmentKey);
+    player.src = URL.createObjectURL(decrypted.blob);
+    if (seekTarget !== null) {{
+      player.addEventListener("loadedmetadata", () => {{
+        try {{ player.currentTime = seekTarget; }} catch (_) {{}}
+      }}, {{ once: true }});
+    }}
+  }}
+  async function attachSharedE2eeStreamV2(player, playback, fragmentKey) {{
+    if (!browserSupportsE2eeStreamV2()) {{
+      await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, "目前裝置不支援 E2EE Streaming v2，已退回舊版完整解密播放。");
+      return;
+    }}
+    setMsg("正在讀取 E2EE 分享授權：strict E2EE 仍由瀏覽器端持有 fragment 與解密能力。");
+    const manifestRes = await fetch(playback.manifest_url, {{ credentials: "same-origin" }});
+    const manifestJson = await manifestRes.json().catch(() => ({{}}));
+    if (!manifestRes.ok || manifestJson.available === false) {{
+      await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, manifestJson.msg || "此 strict E2EE 影音尚未建立 Streaming v2 manifest，已退回舊版完整解密播放。");
+      return;
+    }}
+    const rawKey = new Uint8Array(await unwrapSharedFileKeyBytes((await (await fetch(playback.e2ee_key_url, {{ credentials: "same-origin" }})).json()).e2ee_share.wrapped_file_key_envelope, fragmentKey));
+    const mediaSource = new MediaSource();
+    const objectUrl = URL.createObjectURL(mediaSource);
+    player.src = objectUrl;
+    setMsg("正在使用 E2EE Streaming v2：密文分段下載、瀏覽器端 Web Worker 解密，伺服器無法看到明文。");
+    const worker = createSharedE2eeWorker();
+    let nextChunk = 0;
+    let sourceBuffer = null;
+    let closed = false;
+    const cleanup = () => {{
+      if (closed) return;
+      closed = true;
+      try {{ worker.terminate(); }} catch (_) {{}}
+    }};
+    const fallback = async (message, seekTarget = null) => {{
+      cleanup();
+      await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, message, seekTarget);
+    }};
+    player.addEventListener("seeking", () => {{
+      const target = Number(player.currentTime || 0);
+      if (!playerTimeBuffered(player, target) && nextChunk < Number(manifestJson.chunk_count || 0)) {{
+        fallback("偵測到尚未緩衝區段的快轉，已退回舊版完整解密播放以確保可用性。", target).catch((err) => setMsg(err.message || "E2EE fallback 失敗", true));
+      }}
+    }});
+    mediaSource.addEventListener("sourceopen", () => {{
+      try {{
+        sourceBuffer = mediaSource.addSourceBuffer(manifestJson.content_type || "video/mp4");
+      }} catch (err) {{
+        fallback("目前裝置無法以 MediaSource 播放此 strict E2EE 影音，已退回舊版完整解密播放。").catch((fallbackErr) => setMsg(fallbackErr.message || "E2EE fallback 失敗", true));
+        return;
+      }}
+      const pump = async () => {{
+        if (closed || !sourceBuffer) return;
+        if (nextChunk >= Number(manifestJson.chunk_count || 0)) {{
+          if (mediaSource.readyState === "open" && !sourceBuffer.updating) {{
+            try {{ mediaSource.endOfStream(); }} catch (_) {{}}
+          }}
+          cleanup();
+          setMsg("正在使用 E2EE Streaming v2；若裝置或格式不支援快轉，系統會退回舊版完整解密播放。");
+          return;
+        }}
+        const meta = manifestJson.chunks?.[nextChunk];
+        const chunkRes = await fetch(playback.chunk_url_template.replace("__INDEX__", String(meta.chunk_index)), {{ credentials: "same-origin" }});
+        if (!chunkRes.ok) {{
+          const payload = await chunkRes.json().catch(() => ({{}}));
+          throw new Error(payload.msg || `HTTP ${{chunkRes.status}}`);
+        }}
+        const cipher = await chunkRes.arrayBuffer();
+        const plain = await decryptSharedChunkWithWorker(worker, new Uint8Array(rawKey), meta.nonce, cipher);
+        await appendSharedSourceBufferAsync(sourceBuffer, new Uint8Array(plain));
+        nextChunk += 1;
+        setMsg(`正在使用 E2EE Streaming v2：已解密分段 ${{nextChunk}} / ${{manifestJson.chunk_count}}。`);
+        queueMicrotask(() => {{
+          pump().catch((err) => fallback(`E2EE Streaming v2 分段播放失敗，已退回舊版完整解密播放。 (${{err.message || "unknown"}})`));
+        }});
+      }};
+      pump().catch((err) => fallback(err.message || "E2EE Streaming v2 初始化失敗"));
+    }}, {{ once: true }});
   }}
   async function unlockShare(password) {{
     const res = await fetch(`/api/videos/shared/${{encodeURIComponent(TOKEN)}}/unlock`, {{
@@ -624,34 +802,22 @@ def register_video_routes(app, deps):
     const player = $("shared-player");
     if (!player) return;
     destroySharedPlaybackArtifacts();
+    if (playback.mode === "e2ee_stream_v2") {{
+      $("e2ee-note").classList.remove("hidden");
+      const fragmentKey = shareKeyFromFragment();
+      if (!fragmentKey) {{
+        throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
+      }}
+      await attachSharedE2eeStreamV2(player, playback, fragmentKey);
+      return;
+    }}
     if (playback.mode === "e2ee_direct") {{
       $("e2ee-note").classList.remove("hidden");
       const fragmentKey = shareKeyFromFragment();
       if (!fragmentKey) {{
         throw new Error("此 E2EE 分享影音缺少連結片段金鑰，無法復原。請向分享者重新取得完整連結；若分享者也遺失，只能重新產生分享。");
       }}
-      try {{
-        setMsg("正在讀取 E2EE 分享授權...");
-        const keyRes = await fetch(playback.e2ee_key_url, {{ credentials: "same-origin" }});
-        const keyJson = await keyRes.json().catch(() => ({{}}));
-        if (!keyRes.ok || !keyJson.ok || !keyJson.e2ee_share) throw new Error(keyJson.msg || "E2EE 分享解密資訊讀取失敗");
-        setMsg("正在下載加密影音檔。E2EE 影音會先在瀏覽器端讀取密文，因此大檔案會較慢。");
-        const cipherRes = await fetch(playback.ciphertext_url, {{ credentials: "same-origin" }});
-        if (!cipherRes.ok) throw new Error("E2EE 密文讀取失敗");
-        const cipherBlob = await readBlobWithProgress(cipherRes, (loaded, total) => {{
-          const summary = total > 0
-            ? `${{formatProgressBytes(loaded)}} / ${{formatProgressBytes(total)}}`
-            : formatProgressBytes(loaded);
-          setMsg(`正在下載加密影音檔：${{summary}}。完成後會在瀏覽器端解密，不會把密碼或金鑰送到伺服器。`);
-        }});
-        setMsg("正在瀏覽器端解密影音。這一步不會把原始 E2EE 密碼、raw file key 或 #vk 傳到伺服器。");
-        const decrypted = await decryptSharedE2eeBlob(cipherBlob, keyJson.e2ee_share, fragmentKey);
-        player.src = URL.createObjectURL(decrypted.blob);
-        setMsg("已在瀏覽器端以分享授權解密播放；strict E2EE 不支援伺服器端轉檔、縮圖與內容掃描，速度會較慢。");
-        return;
-      }} catch (err) {{
-        throw new Error(err?.message || "分享授權無效或已被竄改，無法解密播放。");
-      }}
+      await fallbackSharedE2eeToFullDecrypt(player, playback, fragmentKey, "正在使用舊版完整解密播放。strict E2EE 不支援伺服器端轉檔、縮圖與內容掃描，速度會較慢。");
       return;
     }}
     if (playback.mode === "hls" && browserSupportsNativeHls(video.media_type)) {{
@@ -1028,6 +1194,50 @@ def register_video_routes(app, deps):
         finally:
             conn.close()
 
+    @app.route("/api/videos/shared/<token>/e2ee-stream-v2/manifest", methods=["GET"])
+    def shared_video_e2ee_stream_v2_manifest(token):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            payload = serialize_manifest_for_client(conn, file_row=file_row, storage_root=storage_root)
+            conn.commit()
+            return json_resp(payload)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/shared/<token>/e2ee-stream-v2/chunks/<int:chunk_index>", methods=["GET"])
+    def shared_video_e2ee_stream_v2_chunk(token, chunk_index):
+        conn = get_db()
+        try:
+            row, reason, _password_verified, _counted_in_session = _resolve_shared_video(conn, token)
+            if not row:
+                if reason in {"password_invalid", "password_locked"}:
+                    conn.commit()
+                return _shared_video_error_response(reason)
+            _count_shared_video_access(conn, row, token, _counted_in_session)
+            file_row = _load_stream_file(conn, file_id=row["cloud_file_id"])
+            if not is_e2ee_file(file_row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            resolved, error = resolve_e2ee_chunk_response(conn, file_row=file_row, storage_root=storage_root, chunk_index=chunk_index)
+            if error:
+                status = 404 if error.get("error") == "chunk_not_found" else 409
+                return json_resp(error), status
+            conn.commit()
+            response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
+            response.headers["Content-Length"] = str(len(resolved["payload"]))
+            response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            return response
+        finally:
+            conn.close()
+
     @app.route("/api/videos/shared/<token>/ciphertext", methods=["GET"])
     def shared_video_ciphertext(token):
         conn = get_db()
@@ -1259,6 +1469,106 @@ def register_video_routes(app, deps):
             return json_resp({"ok": True, "asset": asset})
         except Exception as exc:
             conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/media/<file_id>/e2ee-stream-v2", methods=["POST"])
+    @require_csrf
+    def media_prepare_e2ee_stream_v2(file_id):
+        actor, err = _actor_or_401()
+        if err:
+            return err
+        conn = get_db()
+        try:
+            ensure_e2ee_stream_v2_schema(conn)
+            row = _load_stream_file(conn, file_id=file_id)
+            _assert_stream_prepare_allowed(actor, row)
+            if not is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "只有 strict E2EE 影音可建立 Streaming v2", "error": "not_e2ee"}), 400
+            if request.is_json:
+                return json_resp({"ok": False, "msg": "E2EE Streaming v2 準備需要 multipart bundle 上傳", "error": "multipart_required"}), 400
+            bundle = request.files.get("bundle")
+            manifest_json = request.form.get("manifest_json") or ""
+            if not bundle or not getattr(bundle, "filename", ""):
+                return json_resp({"ok": False, "msg": "缺少 E2EE Streaming v2 bundle", "error": "missing_bundle"}), 400
+            if not manifest_json.strip():
+                return json_resp({"ok": False, "msg": "缺少 E2EE Streaming v2 manifest", "error": "missing_manifest"}), 400
+            try:
+                manifest_payload = json.loads(manifest_json)
+            except Exception:
+                return json_resp({"ok": False, "msg": "E2EE Streaming v2 manifest JSON 不正確", "error": "invalid_manifest_json"}), 400
+            sensitive = _reject_sensitive_share_fields(manifest_payload)
+            if sensitive:
+                return sensitive
+            asset = upsert_e2ee_stream_v2_asset(
+                conn,
+                file_row=row,
+                storage_root=storage_root,
+                manifest_payload=manifest_payload,
+                bundle_bytes=bundle.read(),
+            )
+            conn.commit()
+            audit(
+                "MEDIA_E2EE_STREAM_V2_PREPARE",
+                get_client_ip(),
+                user=actor["username"],
+                success=True,
+                ua=get_ua(),
+                detail=f"file_id={file_id},chunks={asset.get('chunk_count', 0)}",
+            )
+            return json_resp({"ok": True, "asset": asset})
+        except Exception as exc:
+            conn.rollback()
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/e2ee-stream-v2/manifest", methods=["GET"])
+    @require_csrf
+    def video_e2ee_stream_v2_manifest(video_id):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_e2ee_stream_v2_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            if not is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            return json_resp(serialize_manifest_for_client(conn, file_row=row, storage_root=storage_root))
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
+            return _error_response(exc)
+        finally:
+            conn.close()
+
+    @app.route("/api/videos/<int:video_id>/e2ee-stream-v2/chunks/<int:chunk_index>", methods=["GET"])
+    @require_csrf
+    def video_e2ee_stream_v2_chunk(video_id, chunk_index):
+        actor = get_current_user_ctx()
+        conn = get_db()
+        try:
+            ensure_e2ee_stream_v2_schema(conn)
+            video = get_video(conn, video_id, actor=actor, for_stream=True)
+            if not video:
+                return json_resp({"ok": False, "msg": "找不到影片", "error": "not_found"}), 404
+            row = _load_stream_file(conn, file_id=video["cloud_file_id"])
+            if not is_e2ee_file(row):
+                return json_resp({"ok": False, "msg": "此影音不是端到端加密檔案", "error": "not_e2ee"}), 400
+            resolved, error = resolve_e2ee_chunk_response(conn, file_row=row, storage_root=storage_root, chunk_index=chunk_index)
+            if error:
+                status = 404 if error.get("error") == "chunk_not_found" else 409
+                return json_resp(error), status
+            response = Response(resolved["payload"], status=200, mimetype=resolved.get("content_type") or "application/octet-stream")
+            response.headers["Content-Length"] = str(len(resolved["payload"]))
+            response.headers["Cache-Control"] = "private, max-age=0, no-store"
+            return response
+        except PermissionError as exc:
+            return _error_response(exc)
+        except ValueError as exc:
             return _error_response(exc)
         finally:
             conn.close()

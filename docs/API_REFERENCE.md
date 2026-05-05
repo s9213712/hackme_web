@@ -242,8 +242,11 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | PUT | `/api/videos/<video_id>/share-link` | logged-in / manager | 更新或重建分享連結 |
 | DELETE | `/api/videos/<video_id>/share-link` | logged-in / manager | 撤銷分享連結 |
 | POST | `/api/media/<file_id>/prepare-stream` | logged-in / manager | 建立 HLS 衍生檔 |
+| POST | `/api/media/<file_id>/e2ee-stream-v2` | logged-in / manager | 上傳 strict E2EE Streaming v2 manifest 與密文 bundle |
 | GET | `/api/media/<file_id>/stream-status` | logged-in / manager | 查影音衍生狀態 |
 | GET | `/api/videos/<video_id>/playback` | anonymous | 取得 direct / HLS 播放決策 |
+| GET | `/api/videos/<video_id>/e2ee-stream-v2/manifest` | logged-in / manager | 取得 strict E2EE Streaming v2 manifest |
+| GET | `/api/videos/<video_id>/e2ee-stream-v2/chunks/<chunk_index>` | logged-in / manager | 取得 strict E2EE Streaming v2 密文 chunk |
 | GET | `/api/videos/<video_id>/stream` | anonymous | 串流 |
 | GET | `/api/videos/<video_id>/hls/master.m3u8` | anonymous | HLS master manifest |
 | GET | `/api/videos/<video_id>/hls/<variant>/playlist.m3u8` | anonymous | HLS variant manifest |
@@ -262,6 +265,8 @@ curl -k -sS https://127.0.0.1:5000/api/version
 | GET | `/api/videos/shared/<token>/cover` | anonymous | 分享影音封面 |
 | GET | `/api/videos/shared/<token>/e2ee-key` | anonymous | E2EE 分享 envelope metadata |
 | GET | `/api/videos/shared/<token>/ciphertext` | anonymous | E2EE 分享密文內容 |
+| GET | `/api/videos/shared/<token>/e2ee-stream-v2/manifest` | anonymous | 分享頁 strict E2EE Streaming v2 manifest |
+| GET | `/api/videos/shared/<token>/e2ee-stream-v2/chunks/<chunk_index>` | anonymous | 分享頁 strict E2EE Streaming v2 密文 chunk |
 | GET | `/api/videos/shared/<token>/hls/master.m3u8` | anonymous | 分享影音 HLS master |
 | GET | `/api/videos/shared/<token>/hls/<variant>/playlist.m3u8` | anonymous | 分享影音 HLS variant |
 | GET | `/api/videos/shared/<token>/hls/<variant>/<segment>` | anonymous | 分享影音 HLS segment |
@@ -270,10 +275,13 @@ curl -k -sS https://127.0.0.1:5000/api/version
 
 - `/api/videos/<video_id>/playback` 與 `/api/videos/shared/<token>/playback`
   現在會回：
-  - `mode`: `direct` / `hls` / `e2ee_direct`
-  - `player_strategy`: `direct_only` / `native_hls_or_hlsjs` / `browser_e2ee`
+  - `mode`: `direct` / `hls` / `e2ee_direct` / `e2ee_stream_v2`
+  - `player_strategy`: `direct_only` / `native_hls_or_hlsjs` / `browser_e2ee_full_fallback` / `browser_e2ee_stream_v2`
   - `stream_warning`
   - `hls_js_url`
+- strict E2EE Streaming v2 補充：
+  - manifest / chunk endpoint 永遠只回密文，不回明文、不接收 `raw_file_key`、`e2ee_password`、`vk`
+  - 若沒有 v2 manifest，API 會明確回 `available=false` 與 fallback 指示，前端應退回舊版完整解密播放
 - `/api/videos/<video_id>` 若影片為 `unlisted` 且目前 actor 可管理分享，`video.share_link`
   會回：
   - `state`

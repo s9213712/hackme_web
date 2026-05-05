@@ -39,7 +39,11 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert "data-video-prepare-stream" in videos_js
     assert "prepareVideoStream" in videos_js
     assert "VIDEO_SHARE_FRAGMENT_STORAGE_KEY" in videos_js
+    assert "VIDEO_E2EE_STREAM_V2_WORKER_URL" in videos_js
     assert "buildVideoE2eeShareEnvelope" in videos_js
+    assert "prepareVideoE2eeShareArtifacts" in videos_js
+    assert "buildVideoE2eeStreamV2Package" in videos_js
+    assert "uploadVideoE2eeStreamV2Package" in videos_js
     assert 'share_wrapped_file_key_envelope' in videos_js
     assert 'share_expires_at' in videos_js
     assert 'share_max_views' in videos_js
@@ -52,6 +56,8 @@ def test_video_platform_accepts_audio_media_in_ui():
     assert 'data-video-share-clear-password' in videos_js
     assert 'share_fragment_key' in videos_js
     assert 'getRememberedVideoShareFragment' in videos_js
+    assert 'mode === "e2ee_stream_v2"' in videos_js
+    assert 'mode === "e2ee_direct"' in videos_js
     assert '完整分享連結' in videos_js
     assert '伺服器無法復原，只能重新產生分享' in videos_js
     assert '重新產生此分享時，瀏覽器會要求發布者再次輸入原始 E2EE 密碼' in videos_js
@@ -78,6 +84,9 @@ def test_video_platform_uses_separate_watch_view_and_mobile_layout():
     assert "#t=0.1" in videos_js
     assert 'share_requires_fragment_key' in videos_js
     assert 'strict E2EE' in videos_js
+    assert '正在使用 E2EE Streaming v2' in videos_js
+    assert 'MediaSource' in videos_js
+    assert 'Web Worker' in videos_js
     assert '分享連結與設定已更新。' in videos_js
     assert '分享連結已撤銷' in videos_js
     assert 'videoShareStateSummary' in videos_js

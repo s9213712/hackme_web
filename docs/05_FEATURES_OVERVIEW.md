@@ -70,9 +70,9 @@
 
 - 一句話說明：把 Cloud Drive 內的影片檔變成可觀看、評論、按讚、打賞的影音頁。
 - 設計目的：重用既有 storage/permission/PointsChain，而不是再造第二套媒體系統。
-- 使用方法：先上傳影片到 Cloud Drive，再從影音頁發布；不論是直接上傳影音，或從既有 Cloud Drive 影音檔發布，都可附上自訂封面圖。prepared HLS 影片在 Safari 會走原生 HLS，桌機 Chrome / Firefox / Edge 會用同源 `hls.js`，若 HLS 失敗才退回直接串流。`持連結可看` 的 strict E2EE 影音則會在同頁顯示分享管理面板，讓擁有者查看分享狀態、剩餘觀看次數、是否有第二層分享密碼、到期日與重新產生 / 撤銷入口。
+- 使用方法：先上傳影片到 Cloud Drive，再從影音頁發布；不論是直接上傳影音，或從既有 Cloud Drive 影音檔發布，都可附上自訂封面圖。prepared HLS 影片在 Safari 會走原生 HLS，桌機 Chrome / Firefox / Edge 會用同源 `hls.js`，若 HLS 失敗才退回直接串流。`持連結可看` 的 strict E2EE 影音則會在同頁顯示分享管理面板，讓擁有者查看分享狀態、剩餘觀看次數、是否有第二層分享密碼、到期日與重新產生 / 撤銷入口；若已建立 `E2EE Streaming v2` manifest，播放端會走密文分段下載與瀏覽器端分段解密，否則退回舊版完整解密。
 - 原理：影片 metadata 與互動是 presentation layer，實際檔案仍由 Cloud Drive 提供。
-- 失敗情境與提示：strict E2EE 檔案不可作為一般 server-side/HLS 影音發布；若要發布成 `持連結可看` 的 E2EE 影音，擁有者需在瀏覽器端輸入一次原始 E2EE 密碼建立分享授權；分享頁現在會明確顯示「讀取分享授權 / 下載加密影音 / 瀏覽器端解密」階段，避免大檔案只看起來像卡住；若完整分享連結 fragment 遺失，伺服器無法復原，只能重新產生分享；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
+- 失敗情境與提示：strict E2EE 檔案不可作為一般 server-side/HLS 影音發布；若要發布成 `持連結可看` 的 E2EE 影音，擁有者需在瀏覽器端輸入一次原始 E2EE 密碼建立分享授權；若沒有 `E2EE Streaming v2` manifest、裝置不支援 MediaSource / Worker / WebCrypto、或密文 chunk 驗證失敗，系統會明確退回舊版完整解密播放，不會假裝成功；分享頁現在會明確顯示「讀取分享授權 / 下載加密影音 / 瀏覽器端解密」階段，避免大檔案只看起來像卡住；若完整分享連結 fragment 遺失，伺服器無法復原，只能重新產生分享；server_encrypted 若遇舊 key 不可解會回 `decrypt_unavailable`。
 - 測試方式：發布、播放、private/unlisted、評論、打賞、權限與解密失敗情境。
 - 相關文件連結：[VIDEO_PLATFORM.md](VIDEO_PLATFORM.md), [VIDEO_STREAMING_ARCHITECTURE.md](VIDEO_STREAMING_ARCHITECTURE.md), [07_POINTSCHAIN.md](07_POINTSCHAIN.md), [11_QA_TESTING.md](11_QA_TESTING.md)
 
